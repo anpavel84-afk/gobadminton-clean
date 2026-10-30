@@ -30,11 +30,14 @@ import { Button } from "../Button";
 import { isBrowseConfirmedRequestOutcome, PlayerBrowseFriendship, type BrowseFriendshipApi } from "./PlayerBrowseFriendship";
 import {
   browseMediaNeighborhood,
+  browsePeerMediaKey,
   disposePreparedBrowseMedia,
+  nextBrowseIntentAfterFailure,
   PLAYER_BROWSE_MEDIA_DEADLINE_MS,
   prepareBrowsePeerMedia,
   PreparedBrowseAvatar,
   PreparedBrowseCover,
+  type BrowseMediaCacheStatus,
   type PreparedBrowsePeerMedia,
 } from "./PlayerBrowseMedia";
 import "../../../styles/player-browse.css";
@@ -118,6 +121,7 @@ export function PlayerBrowseDeck({
   const [tutorialMemory, setTutorialMemory] = useState(false);
   const [dragStamp, setDragStamp] = useState<{ opacity: number; skip: boolean; label: string }>({ opacity: 0, skip: false, label: "" });
   const [slideDir, setSlideDir] = useState<PlayerBrowseSlideDirection | null>(null);
+  const [mediaUnavailable, setMediaUnavailable] = useState(false);
   const deckRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
   const slideFrameRef = useRef<HTMLDivElement>(null);
@@ -134,7 +138,8 @@ export function PlayerBrowseDeck({
   const reducedMotionRef = useRef(false);
   const pendingDirectionRef = useRef<PlayerBrowseSlideDirection | null>(null);
   const mediaCacheRef = useRef<Map<string, {
-    status: "loading" | "ready" | "unauthorized" | "unavailable";
+    status: BrowseMediaCacheStatus;
+    mediaKey: string;
     media?: PreparedBrowsePeerMedia;
     controller: AbortController;
     generation: number;
@@ -150,15 +155,31 @@ export function PlayerBrowseDeck({
     () => ordinaryBrowsePlayers(players, ownPublicPlayerId),
     [players, ownPublicPlayerId],
   );
-  const current = browsePlayers[index] ?? null;
+  const catalogPeer = browsePlayers[index] ?? null;
+  // Name/metadata/pixels stay on the committed snapshot; catalog mediaKey changes re-prep in place.
+  const current = (
+    committedMedia?.peer
+    && catalogPeer
+    && committedMedia.peerId === catalogPeer.publicPlayerId
+  )
+    ? committedMedia.peer
+    : catalogPeer;
   const intentPlayer = browsePlayers[intentIndex] ?? null;
+  const catalogMediaStale = Boolean(
+    catalogPeer
+    && committedMedia
+    && committedMedia.peerId === catalogPeer.publicPlayerId
+    && committedMedia.mediaKey !== browsePeerMediaKey(catalogPeer),
+  );
   const commitPending = Boolean(
     browsePlayers.length
+    && !mediaUnavailable
     && (
       intentIndex !== index
       || !committedMedia
       || !current
       || committedMedia.peerId !== current.publicPlayerId
+      || (catalogMediaStale && intentIndex === index)
     ),
   );
   // In-flight POST locks browse navigation; media wait stays cancelable by further navigation.
@@ -184,7 +205,43 @@ export function PlayerBrowseDeck({
     }
     committedMediaRef.current = next;
     setCommittedMedia(next);
+    if (next) setMediaUnavailable(false);
   }, []);
+
+  const settleIntentFailure = useCallback((
+    reason: "unauthorized" | "unavailable",
+    failedIndex: number,
+  ) => {
+    if (!slideMounted.current) return;
+    setAnnounce(reason === "unauthorized"
+      ? "Этот игрок сейчас недоступен в каталоге."
+      : "Не удалось подготовить карточку игрока.");
+    pendingDirectionRef.current = null;
+    const decision = nextBrowseIntentAfterFailure(
+      browsePlayers.length,
+      failedIndex,
+      (i) => {
+        const peer = browsePlayers[i];
+        if (!peer) return undefined;
+        const entry = mediaCacheRef.current.get(peer.publicPlayerId);
+        if (!entry || entry.mediaKey !== browsePeerMediaKey(peer)) return undefined;
+        return entry.status;
+      },
+      Boolean(committedMediaRef.current),
+      indexRef.current,
+    );
+    if (decision.kind === "revert") {
+      setMediaUnavailable(false);
+      setIntentIndex(decision.index);
+      return;
+    }
+    if (decision.kind === "advance") {
+      setMediaUnavailable(false);
+      setIntentIndex(decision.index);
+      return;
+    }
+    setMediaUnavailable(true);
+  }, [browsePlayers]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -248,6 +305,7 @@ export function PlayerBrowseDeck({
     slideGen.current += 1;
     clearMediaCache();
     replaceCommittedMedia(null);
+    setMediaUnavailable(false);
     const frame = slideFrameRef.current;
     if (frame && typeof frame.getAnimations === "function") {
       for (const anim of frame.getAnimations()) anim.cancel();
@@ -269,6 +327,7 @@ export function PlayerBrowseDeck({
     viewerGen.current += 1;
     clearMediaCache();
     replaceCommittedMedia(null);
+    setMediaUnavailable(false);
     const frame = slideFrameRef.current;
     if (frame && typeof frame.getAnimations === "function") {
       for (const anim of frame.getAnimations()) anim.cancel();
@@ -404,8 +463,10 @@ export function PlayerBrowseDeck({
     if (!slideMounted.current) return;
     const peer = browsePlayers[nextIndex];
     if (!peer || peer.publicPlayerId !== media.peerId) return;
+    if (browsePeerMediaKey(peer) !== media.mediaKey) return;
     if (
       committedMediaRef.current?.peerId === media.peerId
+      && committedMediaRef.current.mediaKey === media.mediaKey
       && indexRef.current === nextIndex
       && committedMediaRef.current === media
     ) {
@@ -444,20 +505,30 @@ export function PlayerBrowseDeck({
 
     for (const i of ordered) {
       const peer = browsePlayers[i]!;
+      const mediaKey = browsePeerMediaKey(peer);
       const existing = mediaCacheRef.current.get(peer.publicPlayerId);
-      if (existing && (existing.status === "loading" || existing.status === "ready")) continue;
-      if (existing && (existing.status === "unauthorized" || existing.status === "unavailable")) continue;
+      if (existing && existing.mediaKey !== mediaKey) {
+        existing.controller.abort();
+        if (existing.media && existing.media !== committedMediaRef.current) {
+          disposePreparedBrowseMedia(existing.media);
+        }
+        mediaCacheRef.current.delete(peer.publicPlayerId);
+      } else if (existing && (existing.status === "loading" || existing.status === "ready")) {
+        continue;
+      } else if (existing && (existing.status === "unauthorized" || existing.status === "unavailable")) {
+        continue;
+      }
 
       const controller = new AbortController();
       const generation = ++prepSeq.current;
-      mediaCacheRef.current.set(peer.publicPlayerId, { status: "loading", controller, generation });
+      mediaCacheRef.current.set(peer.publicPlayerId, { status: "loading", mediaKey, controller, generation });
       void prepareBrowsePeerMedia(peer, controller.signal, PLAYER_BROWSE_MEDIA_DEADLINE_MS).then(result => {
         if (!slideMounted.current || scopeGen.current !== scope || viewerGen.current !== viewer) {
           if (result.ok) disposePreparedBrowseMedia(result.media);
           return;
         }
         const entry = mediaCacheRef.current.get(peer.publicPlayerId);
-        if (!entry || entry.generation !== generation) {
+        if (!entry || entry.generation !== generation || entry.mediaKey !== mediaKey) {
           if (result.ok) disposePreparedBrowseMedia(result.media);
           return;
         }
@@ -471,23 +542,21 @@ export function PlayerBrowseDeck({
           if (
             (result.reason === "unauthorized" || result.reason === "unavailable")
             && peer.publicPlayerId === browsePlayers[latestIntent]?.publicPlayerId
+            && browsePeerMediaKey(browsePlayers[latestIntent]!) === mediaKey
           ) {
-            setAnnounce(result.reason === "unauthorized"
-              ? "Этот игрок сейчас недоступен в каталоге."
-              : "Не удалось подготовить карточку игрока.");
-            pendingDirectionRef.current = null;
-            if (committedMediaRef.current) {
-              setIntentIndex(indexRef.current);
-            } else if (latestIntent + 1 < browsePlayers.length) {
-              setIntentIndex(latestIntent + 1);
-            }
+            settleIntentFailure(result.reason, latestIntent);
           }
           return;
         }
         entry.status = "ready";
         entry.media = result.media;
         const latestIntent = intentIndexRef.current;
-        if (peer.publicPlayerId === browsePlayers[latestIntent]?.publicPlayerId) {
+        const intentPeerNow = browsePlayers[latestIntent];
+        if (
+          intentPeerNow
+          && peer.publicPlayerId === intentPeerNow.publicPlayerId
+          && browsePeerMediaKey(intentPeerNow) === result.media.mediaKey
+        ) {
           commitPreparedPeer(latestIntent, result.media, pendingDirectionRef.current);
         }
       });
@@ -495,23 +564,34 @@ export function PlayerBrowseDeck({
 
     const intentPeer = browsePlayers[targetIndex];
     if (intentPeer) {
-      const ready = mediaCacheRef.current.get(intentPeer.publicPlayerId);
-      if (ready?.status === "ready" && ready.media) {
+      const intentKey = browsePeerMediaKey(intentPeer);
+      const cached = mediaCacheRef.current.get(intentPeer.publicPlayerId);
+      if (cached && cached.mediaKey === intentKey && cached.status === "ready" && cached.media) {
         if (
           !committedMediaRef.current
           || committedMediaRef.current.peerId !== intentPeer.publicPlayerId
+          || committedMediaRef.current.mediaKey !== intentKey
           || index !== targetIndex
         ) {
-          commitPreparedPeer(targetIndex, ready.media, pendingDirectionRef.current);
+          commitPreparedPeer(targetIndex, cached.media, pendingDirectionRef.current);
         }
+      } else if (
+        cached
+        && cached.mediaKey === intentKey
+        && (cached.status === "unauthorized" || cached.status === "unavailable")
+      ) {
+        settleIntentFailure(cached.status, targetIndex);
+      } else {
+        setMediaUnavailable(false);
       }
     }
-  }, [browsePlayers, intentIndex, index, authReload, ordinaryScope, commitPreparedPeer]);
+  }, [browsePlayers, intentIndex, index, authReload, ordinaryScope, commitPreparedPeer, settleIntentFailure]);
 
   const moveTo = useCallback((next: number, direction?: PlayerBrowseSlideDirection) => {
     if (navigationLocked) return;
     if (next < 0 || next >= browsePlayers.length) return;
     pendingDirectionRef.current = direction ?? null;
+    setMediaUnavailable(false);
     setIntentIndex(next);
   }, [browsePlayers.length, navigationLocked]);
 
@@ -868,7 +948,15 @@ export function PlayerBrowseDeck({
         aria-describedby="player-browse-live"
         data-slide={slideDir ?? undefined}
       >
-        {!mediaReady && (
+        {!mediaReady && mediaUnavailable && (
+          <div className="pb-surface" role="status" data-media-unavailable="true">
+            <div className={`pb-card${desktop ? " pb-card--desktop" : ""}`}>
+              <h2>Карточка недоступна</h2>
+              <p className="pb-action-caption">Не удалось подготовить карточку игрока.</p>
+            </div>
+          </div>
+        )}
+        {!mediaReady && !mediaUnavailable && (
           <div className="pb-surface" role="status" aria-busy="true">
             <div className={`pb-card${desktop ? " pb-card--desktop" : ""}`} data-media-pending="true">
               <p className="pb-action-caption">Готовим карточку игрока…</p>

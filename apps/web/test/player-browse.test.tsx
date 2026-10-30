@@ -2,11 +2,15 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { PublicPlayer } from "../src/lib/consumer-types";
 import {
   browseMediaNeighborhood,
+  browsePeerMediaKey,
   isSafeBrowseCoverUrl,
+  nextBrowseIntentAfterFailure,
   PLAYER_BROWSE_MEDIA_DEADLINE_MS,
+  PreparedBrowseCover,
 } from "../src/components/consumer/players/PlayerBrowseMedia";
 import {
   browseSlideDirection,
@@ -260,6 +264,56 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toContain("viewerGen");
     expect(deckSource).not.toContain("coverById");
     expect(deckSource).not.toContain("setCoverById");
+  });
+
+  it("F1: cached terminal failures settle intent — revert, skip, or explicit unavailable", () => {
+    const status = (map: Record<number, "unauthorized" | "unavailable" | "ready" | "loading">) =>
+      (i: number) => map[i];
+    expect(nextBrowseIntentAfterFailure(3, 1, status({ 1: "unauthorized" }), true, 0)).toEqual({
+      kind: "revert",
+      index: 0,
+    });
+    expect(nextBrowseIntentAfterFailure(3, 0, status({ 0: "unauthorized", 1: "unavailable" }), false, 0)).toEqual({
+      kind: "advance",
+      index: 2,
+    });
+    expect(nextBrowseIntentAfterFailure(2, 0, status({ 0: "unauthorized", 1: "unavailable" }), false, 0)).toEqual({
+      kind: "unavailable",
+    });
+    expect(deckSource).toContain("settleIntentFailure");
+    expect(deckSource).toContain('data-media-unavailable="true"');
+  });
+
+  it("F2: media key changes with avatar/cover URLs for the same player id", () => {
+    const base = player("p1");
+    const withAvatar = {
+      ...base,
+      avatar: { uploadedUrl: "/v1/media/avatars/" + "a".repeat(64) + ".png", providerUrl: null },
+    };
+    const withCover = {
+      ...withAvatar,
+      cover: { uploadedUrl: "/v1/media/covers/" + "b".repeat(64) + ".png" },
+    };
+    const replacedCover = {
+      ...withAvatar,
+      cover: { uploadedUrl: "/v1/media/covers/" + "c".repeat(64) + ".png" },
+    };
+    expect(browsePeerMediaKey(base)).not.toBe(browsePeerMediaKey(withAvatar));
+    expect(browsePeerMediaKey(withCover)).not.toBe(browsePeerMediaKey(replacedCover));
+    expect(browsePeerMediaKey(withCover)).toBe(browsePeerMediaKey({ ...withCover, displayName: "Other" }));
+    expect(deckSource).toContain("browsePeerMediaKey");
+    expect(mediaSource).toContain("mediaKey");
+    expect(mediaSource).toContain("peer: player");
+  });
+
+  it("F3: empty prepared cover is terminal without a fresh img request; single 5s deadline", () => {
+    expect(PLAYER_BROWSE_MEDIA_DEADLINE_MS).toBe(5000);
+    expect(mediaSource).not.toMatch(/Math\.min\(2000/);
+    expect(mediaSource).not.toContain("settleFallbackSignal");
+    const empty = renderToStaticMarkup(<PreparedBrowseCover media={{ kind: "default", node: null }} />);
+    expect(empty).toContain('data-cover-settled="empty"');
+    expect(empty).not.toContain("<img");
+    expect(empty).not.toContain("/canonical/ce252.svg");
   });
 
   it("hides DEV synthetic label only for directory-compact presentation", () => {

@@ -16,6 +16,16 @@ export function isSafeBrowseCoverUrl(raw: string): boolean {
   return COVER_URL_RE.test(raw);
 }
 
+/** Media identity for cache fencing; same publicPlayerId with new URLs must not reuse prep. */
+export function browsePeerMediaKey(player: PublicPlayer): string {
+  const uploaded = player.avatar?.uploadedUrl ?? "";
+  const provider = player.avatar?.providerUrl ?? "";
+  const cover = player.cover && "uploadedUrl" in player.cover
+    ? `c:${player.cover.uploadedUrl ?? "null"}`
+    : "c:missing";
+  return `${player.publicPlayerId}|a:${uploaded}|p:${provider}|${cover}`;
+}
+
 export type PreparedBrowseAvatar =
   | { kind: "image"; src: string; node: HTMLImageElement }
   | { kind: "initials"; text: string };
@@ -26,6 +36,9 @@ export type PreparedBrowseCover =
 
 export type PreparedBrowsePeerMedia = {
   peerId: string;
+  mediaKey: string;
+  /** Exact catalog snapshot prepared with these pixels. */
+  peer: PublicPlayer;
   avatar: PreparedBrowseAvatar;
   cover: PreparedBrowseCover;
 };
@@ -33,6 +46,24 @@ export type PreparedBrowsePeerMedia = {
 export type PrepareBrowsePeerResult =
   | { ok: true; media: PreparedBrowsePeerMedia }
   | { ok: false; reason: "aborted" | "unauthorized" | "unavailable" };
+
+export type BrowseMediaCacheStatus = "loading" | "ready" | "unauthorized" | "unavailable";
+
+/** Resolve navigation after a terminal prep failure for the current intent. */
+export function nextBrowseIntentAfterFailure(
+  length: number,
+  failedIndex: number,
+  statusAt: (index: number) => BrowseMediaCacheStatus | undefined,
+  hasCommitted: boolean,
+  committedIndex: number,
+): { kind: "revert"; index: number } | { kind: "advance"; index: number } | { kind: "unavailable" } {
+  if (hasCommitted) return { kind: "revert", index: committedIndex };
+  for (let i = failedIndex + 1; i < length; i += 1) {
+    const status = statusAt(i);
+    if (status !== "unauthorized" && status !== "unavailable") return { kind: "advance", index: i };
+  }
+  return { kind: "unavailable" };
+}
 
 export function browseMediaNeighborhood(index: number, length: number): number[] {
   if (length <= 0 || index < 0 || index >= length) return [];
@@ -141,7 +172,7 @@ async function prepareAvatar(
   signal: AbortSignal,
 ): Promise<PreparedBrowseAvatar> {
   const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter(
-    (url): url is string => Boolean(url) && safeAvatarUrl(url),
+    (url): url is string => typeof url === "string" && Boolean(url) && safeAvatarUrl(url),
   );
   for (const src of candidates) {
     if (signal.aborted) break;
@@ -149,13 +180,6 @@ async function prepareAvatar(
     if (node) return { kind: "image", src, node };
   }
   return { kind: "initials", text: initialsFromName(name) };
-}
-
-async function prepareDefaultCoverNode(signal: AbortSignal): Promise<HTMLImageElement | null> {
-  return loadRetainedImage(DEFAULT_COVER_SRC, signal, {
-    className: "profile-cover__fallback",
-    alt: "",
-  });
 }
 
 async function prepareCoverFromUrl(
@@ -167,7 +191,10 @@ async function prepareCoverFromUrl(
     if (node) return { kind: "uploaded", src: url, node };
   }
   if (signal.aborted) return { kind: "default", node: null };
-  const fallback = await prepareDefaultCoverNode(signal);
+  const fallback = await loadRetainedImage(DEFAULT_COVER_SRC, signal, {
+    className: "profile-cover__fallback",
+    alt: "",
+  });
   return { kind: "default", node: fallback };
 }
 
@@ -203,6 +230,7 @@ export async function prepareBrowsePeerMedia(
   deadlineMs: number = PLAYER_BROWSE_MEDIA_DEADLINE_MS,
 ): Promise<PrepareBrowsePeerResult> {
   const peerId = player.publicPlayerId;
+  const mediaKey = browsePeerMediaKey(player);
   if (signal.aborted) return { ok: false, reason: "aborted" };
 
   const work = new AbortController();
@@ -234,7 +262,7 @@ export async function prepareBrowsePeerMedia(
       const meta = await resolveBrowseCoverUrl(player, work.signal);
       if (parentAborted || signal.aborted) {
         await avatarPromise.catch(() => undefined);
-        disposePreparedBrowseMedia({ peerId, avatar, cover });
+        disposePreparedBrowseMedia({ peerId, mediaKey, peer: player, avatar, cover });
         return { ok: false, reason: "aborted" };
       }
       if (meta.ok) {
@@ -250,43 +278,30 @@ export async function prepareBrowsePeerMedia(
 
     if (authFail) {
       await avatarPromise.catch(() => undefined);
-      disposePreparedBrowseMedia({ peerId, avatar, cover });
+      disposePreparedBrowseMedia({ peerId, mediaKey, peer: player, avatar, cover });
       return { ok: false, reason: authFail };
     }
 
-    const settleFallbackSignal = () => {
-      const fallback = new AbortController();
-      window.setTimeout(() => fallback.abort(), Math.min(2000, deadlineMs));
-      return fallback.signal;
-    };
-
-    const coverWork = work.signal.aborted && !parentAborted
-      ? prepareCoverFromUrl(coverMetaReady ? coverUrl : null, settleFallbackSignal())
-      : prepareCoverFromUrl(coverMetaReady ? coverUrl : null, work.signal);
-
-    const [coverResult] = await Promise.all([coverWork, avatarPromise.catch(() => undefined)]);
+    // Single end-to-end deadline only — no extra primary/fallback retry windows.
+    const [coverResult] = await Promise.all([
+      prepareCoverFromUrl(coverMetaReady ? coverUrl : null, work.signal),
+      avatarPromise.catch(() => undefined),
+    ]);
     cover = coverResult;
 
     if (parentAborted || signal.aborted) {
-      disposePreparedBrowseMedia({ peerId, avatar, cover });
+      disposePreparedBrowseMedia({ peerId, mediaKey, peer: player, avatar, cover });
       return { ok: false, reason: "aborted" };
     }
 
-    // Timed-out primary loads must not paint later: work is aborted; only settled nodes remain.
-    if (cover.kind === "default" && !cover.node && !parentAborted) {
-      cover = {
-        kind: "default",
-        node: await prepareDefaultCoverNode(settleFallbackSignal()),
-      };
-    }
-
-    return { ok: true, media: { peerId, avatar, cover } };
+    // Timed-out loads stay terminal: no second request; null default is a stable settle.
+    return { ok: true, media: { peerId, mediaKey, peer: player, avatar, cover } };
   } catch {
     if (parentAborted || signal.aborted) {
-      disposePreparedBrowseMedia({ peerId, avatar, cover });
+      disposePreparedBrowseMedia({ peerId, mediaKey, peer: player, avatar, cover });
       return { ok: false, reason: "aborted" };
     }
-    disposePreparedBrowseMedia({ peerId, avatar, cover });
+    disposePreparedBrowseMedia({ peerId, mediaKey, peer: player, avatar, cover });
     return { ok: false, reason: "unavailable" };
   } finally {
     window.clearTimeout(timer);
@@ -352,9 +367,6 @@ export function PreparedBrowseCover({ media }: { media: PreparedBrowseCover | nu
       </div>
     );
   }
-  return (
-    <div className="profile-cover" data-cover="default">
-      <img src={DEFAULT_COVER_SRC} alt="" className="profile-cover__fallback" />
-    </div>
-  );
+  // Terminal settle with no decoded node: CSS surface only — no fresh image request.
+  return <div className="profile-cover" data-cover="default" data-cover-settled="empty" />;
 }
