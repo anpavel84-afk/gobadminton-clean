@@ -2,7 +2,16 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { PublicPlayer } from "../src/lib/consumer-types";
+import {
+  browseMediaNeighborhood,
+  browsePeerMediaKey,
+  isSafeBrowseCoverUrl,
+  nextBrowseIntentAfterFailure,
+  PLAYER_BROWSE_MEDIA_DEADLINE_MS,
+  PreparedBrowseCover,
+} from "../src/components/consumer/players/PlayerBrowseMedia";
 import {
   browseSlideDirection,
   browseSlideDurationMs,
@@ -33,6 +42,7 @@ import {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const deckSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseDeck.tsx"), "utf8");
+const mediaSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseMedia.tsx"), "utf8");
 const pageSource = readFileSync(join(root, "src/components/consumer/pages/PlayersDirectoryPage.tsx"), "utf8");
 const toolbarSource = readFileSync(join(root, "src/components/consumer/players/PlayersDirectoryToolbar.tsx"), "utf8");
 const radarSource = readFileSync(join(root, "src/components/consumer/radar/RadarControls.tsx"), "utf8");
@@ -220,11 +230,110 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toContain("cancelSlideAnimation");
     expect(deckSource).toContain("frame.animate");
     expect(deckSource).toContain("getAnimations()");
-    expect(deckSource).toMatch(/moveTo\(index \+ 1, "next"\)/);
-    expect(deckSource).toMatch(/moveTo\(index - 1, "prev"\)/);
+    expect(deckSource).toContain("runSlideAfterCommit");
+    expect(deckSource).toMatch(/moveTo\(intentIndex \+ 1, "next"\)/);
+    expect(deckSource).toMatch(/moveTo\(intentIndex - 1, "prev"\)/);
     expect(cssSource).toContain("is-sliding-next");
     expect(cssSource).toContain("is-sliding-prev");
     expect(cssSource).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("prepares bounded neighborhood media before identity commit", () => {
+    expect(PLAYER_BROWSE_MEDIA_DEADLINE_MS).toBe(5000);
+    expect(browseMediaNeighborhood(0, 5)).toEqual([0, 1]);
+    expect(browseMediaNeighborhood(2, 5)).toEqual([1, 2, 3]);
+    expect(browseMediaNeighborhood(4, 5)).toEqual([3, 4]);
+    expect(browseMediaNeighborhood(0, 0)).toEqual([]);
+    expect(isSafeBrowseCoverUrl("/v1/media/covers/" + "a".repeat(64) + ".png")).toBe(true);
+    expect(isSafeBrowseCoverUrl("https://example.com/x.png")).toBe(false);
+    expect(mediaSource).toContain("prepareBrowsePeerMedia");
+    expect(mediaSource).toContain("getPlayer(player.publicPlayerId, signal)");
+    expect(mediaSource).toContain("naturalWidth");
+    expect(mediaSource).toContain("img.decode");
+    expect(mediaSource).toContain("RetainedBrowseImage");
+    expect(mediaSource).not.toContain("new Image(");
+    expect(deckSource).toContain("intentIndex");
+    expect(deckSource).toContain("commitPreparedPeer");
+    expect(deckSource).toContain("prepareBrowsePeerMedia");
+    expect(deckSource).toContain("browseMediaNeighborhood");
+    expect(deckSource).toContain("PLAYER_BROWSE_MEDIA_DEADLINE_MS");
+    expect(deckSource).toContain("PreparedBrowseCover");
+    expect(deckSource).toContain("PreparedBrowseAvatar");
+    expect(deckSource).toContain("commitPending");
+    expect(deckSource).toContain("navigationLocked={commitPending}");
+    expect(deckSource).toContain("viewerGen");
+    expect(deckSource).not.toContain("coverById");
+    expect(deckSource).not.toContain("setCoverById");
+  });
+
+  it("F1: cached terminal failures settle intent — revert, skip, or explicit unavailable", () => {
+    const status = (map: Record<number, "unauthorized" | "unavailable" | "ready" | "loading">) =>
+      (i: number) => map[i];
+    expect(nextBrowseIntentAfterFailure(3, 1, status({ 1: "unauthorized" }), true, 0)).toEqual({
+      kind: "revert",
+      index: 0,
+    });
+    expect(nextBrowseIntentAfterFailure(3, 0, status({ 0: "unauthorized", 1: "unavailable" }), false, 0)).toEqual({
+      kind: "advance",
+      index: 2,
+    });
+    expect(nextBrowseIntentAfterFailure(2, 0, status({ 0: "unauthorized", 1: "unavailable" }), false, 0)).toEqual({
+      kind: "unavailable",
+    });
+    expect(deckSource).toContain("settleIntentFailure");
+    expect(deckSource).toContain('data-media-unavailable="true"');
+  });
+
+  it("F2: media key changes with avatar/cover URLs for the same player id", () => {
+    const base = player("p1");
+    const withAvatar = {
+      ...base,
+      avatar: { uploadedUrl: "/v1/media/avatars/" + "a".repeat(64) + ".png", providerUrl: null },
+    };
+    const withCover = {
+      ...withAvatar,
+      cover: { uploadedUrl: "/v1/media/covers/" + "b".repeat(64) + ".png" },
+    };
+    const replacedCover = {
+      ...withAvatar,
+      cover: { uploadedUrl: "/v1/media/covers/" + "c".repeat(64) + ".png" },
+    };
+    expect(browsePeerMediaKey(base)).not.toBe(browsePeerMediaKey(withAvatar));
+    expect(browsePeerMediaKey(withCover)).not.toBe(browsePeerMediaKey(replacedCover));
+    expect(browsePeerMediaKey(withCover)).toBe(browsePeerMediaKey({ ...withCover, displayName: "Other" }));
+    expect(deckSource).toContain("browsePeerMediaKey");
+    expect(mediaSource).toContain("mediaKey");
+    expect(mediaSource).toContain("peer: player");
+  });
+
+  it("F3: empty prepared cover is terminal without a fresh img request; single 5s deadline", () => {
+    expect(PLAYER_BROWSE_MEDIA_DEADLINE_MS).toBe(5000);
+    expect(mediaSource).not.toMatch(/Math\.min\(2000/);
+    expect(mediaSource).not.toContain("settleFallbackSignal");
+    const empty = renderToStaticMarkup(<PreparedBrowseCover media={{ kind: "default", node: null }} />);
+    expect(empty).toContain('data-cover-settled="empty"');
+    expect(empty).not.toContain("<img");
+    expect(empty).not.toContain("/canonical/ce252.svg");
+  });
+
+  it("F4: displayed-index replacement failure clears committed into terminal unavailable", () => {
+    const settleStart = deckSource.indexOf("const settleIntentFailure");
+    expect(settleStart).toBeGreaterThan(-1);
+    const afterSettle = deckSource.slice(settleStart);
+    const settleEnd = afterSettle.indexOf("}, [browsePlayers");
+    expect(settleEnd).toBeGreaterThan(-1);
+    const settleBody = afterSettle.slice(0, settleEnd);
+    expect(settleBody).toContain("failedIndex === indexRef.current");
+    expect(settleBody).toContain("replaceCommittedMedia(null)");
+    expect(settleBody).toContain("setMediaUnavailable(true)");
+    expect(settleBody).toMatch(/committed\.mediaKey !== browsePeerMediaKey\(failedPeer\)/);
+    expect(deckSource).toMatch(/const navigationLocked = friendBusy/);
+  });
+
+  it("F5: current uses catalogPeer when mediaKey matches; old peer only while replacement pending", () => {
+    expect(deckSource).toMatch(
+      /committedMedia\.peerId === catalogPeer\.publicPlayerId\s*\n\s*&&\s*committedMedia\.mediaKey !== browsePeerMediaKey\(catalogPeer\)/,
+    );
   });
 
   it("hides DEV synthetic label only for directory-compact presentation", () => {

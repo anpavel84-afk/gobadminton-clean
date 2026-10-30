@@ -18,7 +18,12 @@ export function safeAvatarUrl(raw: string): boolean {
   if (raw.length > 2048 || !httpUrlAgreesWithOriginalAuthority(raw, forbiddenUrlScalars)) return false;
   try { const url = new URL(raw); return url.protocol === "https:" && !url.username && !url.password && !url.port && (url.hostname === "avatars.yandex.net" || url.hostname.endsWith(".userapi.com")); } catch { return false; }
 }
-export function Avatar({ name, tone = "lime", avatar, className }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar; className?: string }) {
+export function Avatar({ name, tone = "lime", avatar, className }: {
+  name: string;
+  tone?: "lime" | "purple" | "yellow";
+  avatar?: PlayerAvatar;
+  className?: string;
+}) {
   const [failed, setFailed] = useState<string[]>([]);
   const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter((url): url is string => Boolean(url) && safeAvatarUrl(url!));
   const src = candidates.find(url => !failed.includes(url));
