@@ -96,23 +96,23 @@
 .fr3 .own-profile-pagehead { margin-bottom: 20px; }
 .fr3 .own-profile-pagehead p { margin: 8px 0 0; color: var(--gb-ink-soft); max-width: 640px; }
 .fr3 .own-profile-guest__panel { padding: 28px; border: 1px solid var(--gb-line); border-radius: 20px; background: var(--gb-white); display: grid; gap: 16px; max-width: 720px; }
-.fr3 .own-profile-identity { position: relative; margin-bottom: 24px; padding: 24px 28px; border: 1px solid var(--gb-line); border-radius: 20px; background: var(--gb-white); display: grid; gap: 16px; }
-.fr3 .own-profile-identity__row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.fr3 .own-profile-identity__copy { flex: 1; min-width: 0; }
-.fr3 .own-profile-identity__copy > strong { display: block; font-size: 22px; }
-.fr3 .own-profile-identity__copy > span { color: var(--gb-ink-soft); font-size: 14px; }
-.fr3 .own-profile-identity__copy > p { margin: 8px 0 0; color: var(--gb-ink-soft); font-size: 14px; line-height: 1.5; }
-.fr3 .own-profile-identity > .profile-cover-controls { margin: 0; padding: 0; }
+/* Own profile: reuse shared player-profile-hero; controls sit below, not on the photo. */
+.fr3 .own-profile-identity { position: relative; margin-bottom: 24px; display: grid; gap: 16px; }
+.fr3 .own-profile-actionband { margin-top: 0; }
+.fr3 .own-profile-actionband > .profile-cover-controls { margin: 0; padding: 0; }
+.fr3 .own-profile-actionband .player-profile-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+/* Legacy cover-frame alias: CoverEditor / older selectors may still query this class on the shared visual. */
+.fr3 .own-profile-identity .player-profile-visual.own-profile-avatar,
 .fr3 .own-profile-avatar { position: relative; overflow: hidden; background: var(--gb-lime); display: grid; place-items: center; }
 .fr3 .own-profile-avatar--compact { min-height: 120px; border-radius: 16px; }
-/* No-upload fallback: keep crop measure without the 120px lime banner displacing the field panel. */
+/* No-upload fallback measure box (unused when shared hero visual is on-screen). */
 .fr3 .own-profile-avatar--measure {
   position: absolute; left: 28px; right: 28px; top: 0; width: auto; height: auto;
   aspect-ratio: 3 / 1; min-height: 0; margin: 0; padding: 0; border: 0;
   background: transparent; visibility: hidden; pointer-events: none; z-index: -1;
 }
-.fr3 .own-profile-avatar > .avatar { z-index: 2; width: 96px; height: 96px; border-width: 6px; font-size: 28px; }
-.fr3 .own-profile-avatar > img { position: absolute; left: -35px; bottom: -55px; opacity: .2; animation: float 8s ease-in-out infinite; }
+.fr3 .own-profile-avatar:not(.player-profile-visual) > .avatar { z-index: 2; width: 96px; height: 96px; border-width: 6px; font-size: 28px; }
+.fr3 .own-profile-avatar:not(.player-profile-visual) > img { position: absolute; left: -35px; bottom: -55px; opacity: .2; animation: float 8s ease-in-out infinite; }
 .fr3 .own-profile-hero { min-height: 0; overflow: hidden; border-radius: var(--gb-radius-lg); background: var(--gb-white); display: grid; grid-template-columns: 280px minmax(0, 1fr); }
 .fr3 .own-profile-intro { padding: 28px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
 .fr3 .own-profile-intro h1 { margin: 12px 0 8px; font: 700 48px/1.06 var(--gb-font); letter-spacing: -.04em; }
@@ -396,7 +396,9 @@
   .fr3 .upcoming-game-row > .gb-c23-btn { grid-column:1 / -1; width:calc(100% - 14px); margin:0 0 14px 14px; }
   .fr3 .own-profile-avatar--compact { min-height:180px; }
   .fr3 .own-profile-avatar--measure { min-height: 0; }
-  .fr3 .own-profile-avatar > .avatar { width:108px; height:108px; font-size:25px; }
+  .fr3 .own-profile-avatar:not(.player-profile-visual) > .avatar { width:108px; height:108px; font-size:25px; }
+  .fr3 .own-profile-actionband .player-profile-actions { flex-direction:column; align-items:stretch; }
+  .fr3 .own-profile-actionband .player-profile-actions .gb-c23-btn { width:100%; }
   .fr3 .own-profile-intro .gb-c23-btn { width:100%; }
   .fr3 .own-profile-main { gap:12px; min-width:0; }
   .fr3 .profile-section { padding:20px; }
