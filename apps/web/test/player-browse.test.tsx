@@ -90,6 +90,23 @@ describe("player browse view URL", () => {
     expect(writeBrowseViewSearch("?cityId=1", "cards")).toBe("?cityId=1&view=cards");
     expect(writeBrowseViewSearch("?view=cards&cityId=1", "list")).toBe("?cityId=1");
   });
+
+  it("QA-01: server route initialBrowseView matches client parseBrowseView for encoded/normal/duplicate view", async () => {
+    const { default: PlayersPage } = await import("../src/app/players/page");
+    const serverView = async (view: string | string[] | undefined) => {
+      const el = await PlayersPage({ searchParams: Promise.resolve({ view }) });
+      return (el as { props: { initialBrowseView: "cards" | "list" } }).props.initialBrowseView;
+    };
+    // Encoded cases: Next hands decoded searchParams; client parses the raw search string.
+    expect(await serverView("cards&x=1")).toBe(parseBrowseView("?view=cards%26x%3D1"));
+    expect(await serverView("%63ards")).toBe(parseBrowseView("?view=%2563ards"));
+    expect(await serverView("cards")).toBe(parseBrowseView("?view=cards"));
+    expect(await serverView("list")).toBe(parseBrowseView("?view=list"));
+    expect(await serverView(undefined)).toBe(parseBrowseView(""));
+    // First duplicate wins on both sides.
+    expect(await serverView(["list", "cards"])).toBe(parseBrowseView("?view=list&view=cards"));
+    expect(await serverView(["cards", "list"])).toBe(parseBrowseView("?view=cards&view=list"));
+  });
 });
 
 describe("player browse navigation and skip order", () => {
