@@ -13,7 +13,12 @@ export function DiscoveryHero({ city }: { city: string }) {
       <p>Настоящие люди. Большой бадминтон. Выбирайте игру или тренировку и выходите на корт.</p>
     </div>
     <div className="gb-discovery-hero__visual" aria-hidden="true">
-      <div className="gb-discovery-hero__photo"><img src="/discovery/badminton-gear.jpg" alt="" /></div>
+      <div className="gb-discovery-hero__scene">
+        <img className="gb-discovery-shape gb-discovery-shape--lime" src="/discovery/hero-lime.svg" alt="" width={200} height={200} />
+        <img className="gb-discovery-shape gb-discovery-shape--purple" src="/discovery/purple-shape.svg" alt="" width={200} height={200} />
+        <div className="gb-discovery-hero__photo"><img src="/discovery/badminton-gear.jpg" alt="" /></div>
+        <span className="gb-discovery-hero__note">Game first.<br />Always.</span>
+      </div>
     </div>
   </section>;
 }
