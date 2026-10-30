@@ -36,6 +36,8 @@ type Props = {
   onApi: (api: BrowseFriendshipApi | null) => void;
   onSkip: () => void;
   onAuthRetry: () => void;
+  /** desktop: Add-to-friends only (Next lives in the deck). mobile: Skip + request. */
+  chrome?: "mobile" | "desktop";
 };
 
 export function PlayerBrowseFriendship({
@@ -52,7 +54,9 @@ export function PlayerBrowseFriendship({
   onApi,
   onSkip,
   onAuthRetry,
+  chrome = "mobile",
 }: Props) {
+  const desktopChrome = chrome === "desktop";
   const [view, setView] = useState<FriendshipView | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "guest" | "unavailable" | "error">("loading");
   const [reload, setReload] = useState(0);
@@ -249,10 +253,16 @@ export function PlayerBrowseFriendship({
     return <div className="pb-status is-warning" role="status">
       <div className="pb-status__title">Слишком много попыток</div>
       <p>Просмотр доступен. Новые запросы временно недоступны.</p>
-      <div className="pb-main-actions" style={{ marginTop: 12 }}>
-        <button type="button" className="pb-btn-skip" disabled={navigationLocked} onClick={onSkip}>Пропустить</button>
-        <button type="button" className="pb-btn-request" disabled>В друзья · позже</button>
-      </div>
+      {desktopChrome ? (
+        <div className="pb-main-actions pb-main-actions--desktop" style={{ marginTop: 12 }}>
+          <button type="button" className="pb-btn-request" disabled>В друзья · позже</button>
+        </div>
+      ) : (
+        <div className="pb-main-actions" style={{ marginTop: 12 }}>
+          <button type="button" className="pb-btn-skip" disabled={navigationLocked} onClick={onSkip}>Пропустить</button>
+          <button type="button" className="pb-btn-request" disabled>В друзья · позже</button>
+        </div>
+      )}
     </div>;
   }
 
@@ -290,13 +300,21 @@ export function PlayerBrowseFriendship({
     </div>;
   }
 
-  return <div className="pb-action-slot" data-browse-no-drag="">
+  return <div className={`pb-action-slot${desktopChrome ? " pb-action-slot--desktop" : ""}`} data-browse-no-drag="">
     {mutation.notice && !mutation.pending && <p className="pb-status" role="status" style={{ marginBottom: 12 }}>{mutation.notice}</p>}
-    <div className="pb-main-actions">
-      <button type="button" className="pb-btn-skip" disabled={locked} onClick={onSkip}>Пропустить</button>
-      <button type="button" className="pb-btn-request" disabled={!canRequest || locked} onClick={() => { void runRequest(); }}>
-        {mutation.busy ? "Отправляем…" : "Предложить дружбу"}
-      </button>
-    </div>
+    {desktopChrome ? (
+      <div className="pb-main-actions pb-main-actions--desktop">
+        <button type="button" className="pb-btn-request" disabled={!canRequest || locked} onClick={() => { void runRequest(); }}>
+          {mutation.busy ? "Отправляем…" : "Добавить в друзья"}
+        </button>
+      </div>
+    ) : (
+      <div className="pb-main-actions">
+        <button type="button" className="pb-btn-skip" disabled={locked} onClick={onSkip}>Пропустить</button>
+        <button type="button" className="pb-btn-request" disabled={!canRequest || locked} onClick={() => { void runRequest(); }}>
+          {mutation.busy ? "Отправляем…" : "Предложить дружбу"}
+        </button>
+      </div>
+    )}
   </div>;
 }
