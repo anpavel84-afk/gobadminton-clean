@@ -27,6 +27,7 @@ import {
   nextEligibleBrowseIndex,
   normalizeBrowseBio,
   ordinaryBrowsePlayers,
+  parseBrowseCssTransformPose,
   parseBrowseView,
   PLAYER_BROWSE_AXIS_DOMINANCE,
   PLAYER_BROWSE_AXIS_LOCK_PX,
@@ -172,6 +173,23 @@ describe("player browse swipe boundaries", () => {
     expect(Math.abs(exit)).toBeGreaterThan(390 + 48);
     expect(browseExitDurationMs(400, 2)).toBeGreaterThanOrEqual(PLAYER_BROWSE_EXIT_MS_MIN);
     expect(browseExitDurationMs(400, 2)).toBeLessThanOrEqual(PLAYER_BROWSE_EXIT_MS_MAX);
+  });
+
+  it("parses spring re-grab base pose so origin + finger delta does not jump opposite the finger", () => {
+    // CDP receipt: grabbed e=-26.1489, finger -15 → visual must be ~-41.15, not absolute -15.
+    const pose = parseBrowseCssTransformPose("matrix(0.998629, -0.052336, 0.052336, 0.998629, -26.1489, 0)");
+    expect(pose.x).toBeCloseTo(-26.1489, 4);
+    expect(pose.y).toBe(0);
+    expect(pose.x + -15).toBeCloseTo(-41.1489, 4);
+    expect(parseBrowseCssTransformPose("none")).toEqual({ x: 0, y: 0, rotDeg: 0 });
+    expect(parseBrowseCssTransformPose("matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -30.4696, 0, 0, 1)").x)
+      .toBeCloseTo(-30.4696, 4);
+    expect(deckSource).toContain("originX");
+    expect(deckSource).toContain("parseBrowseCssTransformPose");
+    expect(cssSource).toMatch(/\.gb-player-browse \.pb-avatar img/);
+    expect(cssSource).toMatch(/\.gb-player-browse \.pb-details-avatar img/);
+    expect(cssSource).toContain("object-fit: cover");
+    expect(cssSource).toContain("overflow: clip");
   });
 
   it("excludes interactive targets from drag start", () => {

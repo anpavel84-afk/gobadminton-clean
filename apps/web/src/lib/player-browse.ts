@@ -127,6 +127,39 @@ export function browseDragRotationDeg(dx: number, width: number, reducedMotion =
   return Math.max(-PLAYER_BROWSE_MAX_ROTATION_DEG, Math.min(PLAYER_BROWSE_MAX_ROTATION_DEG, raw));
 }
 
+export type BrowseCssTransformPose = { x: number; y: number; rotDeg: number };
+
+/**
+ * Parse translate + rotation from a computed CSS transform (matrix / matrix3d / none).
+ * Used to preserve spring base pose on re-grab so the first move applies delta relative to it.
+ */
+export function parseBrowseCssTransformPose(transform: string): BrowseCssTransformPose {
+  if (!transform || transform === "none") return { x: 0, y: 0, rotDeg: 0 };
+  const matrix3d = /^matrix3d\((.+)\)$/i.exec(transform.trim());
+  if (matrix3d) {
+    const parts = matrix3d[1]!.split(",").map((part) => Number.parseFloat(part.trim()));
+    if (parts.length >= 16 && parts.every(Number.isFinite)) {
+      return {
+        x: parts[12]!,
+        y: parts[13]!,
+        rotDeg: Math.atan2(parts[1]!, parts[0]!) * (180 / Math.PI),
+      };
+    }
+  }
+  const matrix = /^matrix\((.+)\)$/i.exec(transform.trim());
+  if (matrix) {
+    const parts = matrix[1]!.split(",").map((part) => Number.parseFloat(part.trim()));
+    if (parts.length >= 6 && parts.every(Number.isFinite)) {
+      return {
+        x: parts[4]!,
+        y: parts[5]!,
+        rotDeg: Math.atan2(parts[1]!, parts[0]!) * (180 / Math.PI),
+      };
+    }
+  }
+  return { x: 0, y: 0, rotDeg: 0 };
+}
+
 /**
  * Recent-window velocity (px/ms) along an axis.
  * Includes the release sample; returns 0 when the last motion is older than the pause window.

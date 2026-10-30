@@ -20,6 +20,7 @@ import {
   nextEligibleBrowseIndex,
   normalizeBrowseBio,
   ordinaryBrowsePlayers,
+  parseBrowseCssTransformPose,
   persistTutorialDismissed,
   PLAYER_BROWSE_DESKTOP_MQ,
   PLAYER_BROWSE_MAX_ROTATION_DEG,
@@ -75,6 +76,9 @@ type DragState = {
   y: number;
   dx: number;
   dy: number;
+  /** Card pose at pointerdown (spring re-grab base); fresh dx/dy apply relative to this. */
+  originX: number;
+  originY: number;
   t: number;
   samples: PlayerBrowseVelocitySample[];
   axis: PlayerBrowseGestureAxis;
@@ -1124,21 +1128,22 @@ export function PlayerBrowseDeck({
     if (!card) return;
     const width = card.clientWidth || window.innerWidth;
     if (state.axis === "horizontal") {
-      const rot = browseDragRotationDeg(state.dx, width, reducedMotionRef.current);
+      const x = state.originX + state.dx;
+      const rot = browseDragRotationDeg(x, width, reducedMotionRef.current);
       card.style.transition = "none";
       card.style.transformOrigin = `${state.pivotX}px ${state.pivotY}px`;
-      card.style.setProperty("--pb-drag-x", `${state.dx}px`);
+      card.style.setProperty("--pb-drag-x", `${x}px`);
       card.style.setProperty("--pb-drag-y", "0px");
       card.style.setProperty("--pb-drag-rot", `${rot}deg`);
-      // Direct 1:1 tracking — no damping.
-      card.style.transform = `translate3d(${state.dx}px, 0, 0) rotate(${rot}deg)`;
+      // Direct 1:1 tracking from re-grab base — no damping.
+      card.style.transform = `translate3d(${x}px, 0, 0) rotate(${rot}deg)`;
       card.classList.add("is-dragging");
-      const abs = Math.abs(state.dx);
+      const abs = Math.abs(x);
       const saturateAt = Math.max(8, width * 0.45 - 4);
       const u = Math.max(0, Math.min(1, (abs - 4) / saturateAt));
       // Smoothstep saturating tint (OUR feedback curve).
       const progress = u * u * (3 - 2 * u);
-      const skip = state.dx < 0;
+      const skip = x < 0;
       card.style.setProperty("--pb-intent-skip", skip ? String(progress) : "0");
       card.style.setProperty("--pb-intent-request", !skip ? String(progress) : "0");
       const blocked = rateBlockedUntilRef.current != null && Date.now() < rateBlockedUntilRef.current;
@@ -1150,13 +1155,14 @@ export function PlayerBrowseDeck({
       return;
     }
     if (state.axis === "vertical") {
-      const dy = detailsOpenRef.current ? Math.max(0, state.dy) : Math.min(0, state.dy);
+      const rawY = state.originY + state.dy;
+      const y = detailsOpenRef.current ? Math.max(0, rawY) : Math.min(0, rawY);
       card.style.transition = "none";
       card.style.transformOrigin = "";
       card.style.setProperty("--pb-drag-x", "0px");
-      card.style.setProperty("--pb-drag-y", `${dy}px`);
+      card.style.setProperty("--pb-drag-y", `${y}px`);
       card.style.setProperty("--pb-drag-rot", "0deg");
-      card.style.transform = `translate3d(0, ${dy}px, 0)`;
+      card.style.transform = `translate3d(0, ${y}px, 0)`;
       card.classList.add("is-dragging");
       card.style.setProperty("--pb-intent-skip", "0");
       card.style.setProperty("--pb-intent-request", "0");
@@ -1208,12 +1214,22 @@ export function PlayerBrowseDeck({
         cancelActiveGesture(true);
         return;
       }
-      // Re-grab an in-progress spring: pin computed pose, then cancel transition without jump.
+      // Re-grab an in-progress spring: pin computed pose as drag origin, then cancel transition.
       const card = cardRef.current;
       if (card?.classList.contains("is-flying")) return;
+      let originX = 0;
+      let originY = 0;
       if (card && card.style.transition && card.style.transition !== "none") {
         const computed = window.getComputedStyle(card);
-        if (computed.transform && computed.transform !== "none") card.style.transform = computed.transform;
+        if (computed.transform && computed.transform !== "none") {
+          card.style.transform = computed.transform;
+          const pose = parseBrowseCssTransformPose(computed.transform);
+          originX = pose.x;
+          originY = pose.y;
+          card.style.setProperty("--pb-drag-x", `${originX}px`);
+          card.style.setProperty("--pb-drag-y", `${originY}px`);
+          card.style.setProperty("--pb-drag-rot", `${pose.rotDeg}deg`);
+        }
         clearTransitionTimer();
         card.style.transition = "none";
       }
@@ -1226,6 +1242,8 @@ export function PlayerBrowseDeck({
         y: event.clientY,
         dx: 0,
         dy: 0,
+        originX,
+        originY,
         t: now,
         samples: [{ t: now, x: event.clientX, y: event.clientY }],
         axis: "none",
@@ -1283,7 +1301,8 @@ export function PlayerBrowseDeck({
       const axis = state.axis;
       const velocity = sampleBrowseVelocity(state.samples, axis, now);
       const peerAtStart = state.peerId;
-      const fromX = state.dx;
+      // Visual release pose includes spring re-grab base; classifier still uses fresh dx/dy.
+      const fromX = state.originX + state.dx;
       const width = surface.clientWidth || window.innerWidth;
       const fromRot = browseDragRotationDeg(fromX, width, reducedMotionRef.current);
       drag.current = null;
