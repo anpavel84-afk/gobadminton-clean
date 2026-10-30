@@ -67,6 +67,10 @@ Ordinary `/players` may switch **По одному / Списком**. Owner-app
 
 Accepted Spacious40 overlay foundations, mobile sheets, gestures, history, and focus remain. Local overlay titles stay inside overlay inset; do not promote them to page headers or invent extra Back actions.
 
+## Messages composition (#394 desktop repair)
+
+Owner-ordered desktop messenger repair (UAT followup): two-pane host on the existing shell rail (`336px` inbox ≥901, `320px` at 721–900); shared 88px pane-header baseline; single-row native filter select (`all` / `unread` / `attention`) instead of wrapping pills or rubricator headers; pending request as directional first message in the scroll body with compact status/decision footer outside scroll; independent inbox-list and conversation-body scroll. Dialogs keep Spacious40; mobile focused host, Back, RootNav, and keyboard/safe-area behavior stay as today (one nav reserve). No new tokens.
+
 ## Out of scope
 
 Backend/API/migrations, new features, feed rewrite, gallery JS/synthetic data in the app, PROD deploy, mass cleanup migration to `main`.

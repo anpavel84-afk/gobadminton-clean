@@ -77,8 +77,15 @@ export function MessagesPage() {
   return <ConsumerShell active="none" title="Сообщения" mode={splitPane ? "page" : "focused"} hideHeading={splitPane}>
     {splitPane ? <header className="gb-page-heading gb-messages-page-heading"><div><h1>Сообщения</h1><p>Личные и игровые сообщения</p></div></header> : null}
     <div className={`fr3 fr4 messages-page ${selected ? "show-conversation" : ""}`}>
-    <aside className="inbox-panel" aria-label="Входящие"><div className="inbox-header">{splitPane ? <span><small>Входящие</small><strong className="inbox-header__title">Переписки</strong></span> : <span><small>Личные и игровые</small><h1>Сообщения</h1></span>}</div>
-      <div className="inbox-tabs" aria-label="Фильтры сообщений">{([["all", "Все"], ["unread", "Непрочитанные"], ["attention", "Требуют ответа"]] as const).map(([key, label]) => <button key={key} className={`chip ${filter === key ? "chip--active" : ""}`} aria-pressed={filter === key} onClick={() => { if (key !== filter) chooseFilter(key); }}>{label}</button>)}</div>
+    <aside className="inbox-panel" aria-label="Входящие"><div className="inbox-header">{!splitPane ? <span><small>Личные и игровые</small><h1>Сообщения</h1></span> : null}
+      <label className="inbox-filter"><span className="gb-visually-hidden">Фильтр сообщений</span>
+        <select aria-label="Фильтр сообщений" value={filter} onChange={e => { const next = e.target.value as InboxFilter; if (next !== filter) chooseFilter(next); }}>
+          <option value="all">Все</option>
+          <option value="unread">Непрочитанные</option>
+          <option value="attention">Требуют ответа</option>
+        </select>
+      </label>
+    </div>
       <div className="inbox-list">
         {auth === "loading" && <ProfileState title="Загружаем сообщения…" state="loading" />}
         {auth === "guest" && <><ProfileState title="Войдите, чтобы общаться">Личные сообщения и чаты игр доступны после входа.</ProfileState><div className="message-auth"><AuthEntry returnPath={`/messages?${params}`} /></div></>}
