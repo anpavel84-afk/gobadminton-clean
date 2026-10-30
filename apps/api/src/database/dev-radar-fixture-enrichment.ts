@@ -260,7 +260,7 @@ export async function assertFixtureActor(client: PoolClient, userId: string): Pr
   return { sessionId: current.session_id, publicPlayerId: current.public_player_id, version: current.version };
 }
 
-export async function loadDryRunReport(pool: Pool, manifest: EnrichmentManifest): Promise<object[]> {
+export async function loadDryRunReport(pool: Pool, _manifest: EnrichmentManifest): Promise<object[]> {
   const report: object[] = [];
   for (const persona of FIXTURE_PERSONAS) {
     const profile = (await pool.query(

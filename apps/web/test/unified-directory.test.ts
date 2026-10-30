@@ -125,17 +125,30 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.view.stale).toBe(false);
     expect(c.view.mode).toBe("unified");
   });
-  it("keeps a still-valid window on activation version churn during initial cooldown", async () => {
-    const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
-    const c = new UnifiedDirectoryController(request, () => now); c.bind(me);
+  it("rejects activation version key churn during cooldown; same-key soft refresh stays renderable", async () => {
+    let time = now;
+    const request = vi.fn(async () => ok({
+      ...snapshot(),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:2");
     expect(request).toHaveBeenCalledTimes(1);
-    expect(c.view.snapshot).not.toBeNull();
-    expect(c.view.rows).toHaveLength(1);
-    expect(c.view.stale).toBe(false);
-    expect(c.view.mode).toBe("unified");
-    expect(c.renderable(filters, "activation:2")).toBe(true);
+    expect(c.renderable(filters, "activation:2")).toBe(false);
+    expect(c.view.stale).toBe(true);
+    expect(c.view.mode).toBe("ordinary");
+    time = now + 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    time = now + 60000;
+    expect(c.matches(filters, "activation:1")).toBe(false);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    await c.refresh();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
   });
 
   it("keeps renderable authorized window at +30s of 45s while matches is false and expiry is false", async () => {

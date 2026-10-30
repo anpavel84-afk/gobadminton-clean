@@ -1527,15 +1527,29 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       expect((await pool.query("SELECT activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows.map(r=>r.activation_id)).toEqual(evidence.rows.sort((a,b)=>a.user_id.localeCompare(b.user_id)).map(r=>r.activation_id));
       await clearBudget(viewer);
       expect((await service.query(viewer.id,viewer.issued.session.id,initial())).items.filter(r=>r.player.displayName.startsWith("TEST"))).toHaveLength(6);
+      // Live-but-due (<30s remaining, not expired): in-place renewal keeps activation continuity.
+      await pool.query(
+        `UPDATE radar_presences SET
+           foreground_until=clock_timestamp()+interval '20 seconds',
+           location_valid_until=clock_timestamp()+interval '20 seconds',
+           expires_at=clock_timestamp()+interval '20 seconds'
+         WHERE user_id=ANY($1::uuid[])`,
+        [DEV_MOSCOW_PEER_IDS]);
+      await clearBudget(owner);
+      await clearBudget(viewer);
+      const beforeDueRenew = (await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows;
+      const dueRefreshed = await service.query(viewer.id,viewer.issued.session.id,initial(), false);
+      expect(dueRefreshed.items.filter(r=>r.player.displayName.startsWith("TEST"))).toHaveLength(6);
+      expect((await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows).toEqual(beforeDueRenew);
+      // Forced expiry: mint fresh authority; old result proof must remain rejected.
       await pool.query("UPDATE radar_presences SET foreground_until=clock_timestamp()-interval '1 second' WHERE user_id=ANY($1::uuid[])",[DEV_MOSCOW_PEER_IDS]);
       await clearBudget(owner);
       await clearBudget(viewer);
-      const beforeRenew = (await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows;
+      const beforeExpire = (await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows;
       const refreshed = await service.query(viewer.id,viewer.issued.session.id,initial(), false);
       expect(refreshed.items.filter(r=>r.player.displayName.startsWith("TEST"))).toHaveLength(6);
       expect(refreshed.items.find(r=>r.publicPlayerId===peers[0]!.publicPlayerId)!.radar!.resultRef).not.toBe(peers[0]!.radar!.resultRef);
-      // Due renew extends leases in place; activation churn is not required for fixture stability.
-      expect((await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows).toEqual(beforeRenew);
+      expect((await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows).not.toEqual(beforeExpire);
       const expiredClient = await pool.connect();
       try { await expect(redeemUnifiedProof(expiredClient,proof,false,false,env)).rejects.toThrow(); }
       finally { expiredClient.release(); }

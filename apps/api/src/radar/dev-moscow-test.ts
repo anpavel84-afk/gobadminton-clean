@@ -54,11 +54,20 @@ export async function ensureDevMoscowFixtureSessions(client: PoolClient, env: Ap
     const name = `TEST · DEV Москва ${i + 1}`;
     if (existing.rows[0] && (existing.rows[0].display_name !== name || existing.rows[0].credentials || !existing.rows[0].fixture)) throw new Error("DEV fixture identity collision");
     if (fresh.has(id)) continue;
+    // In-place renew only while every authority deadline is still future and consent is current.
+    // Already-expired/revoked fixtures must mint a fresh generation so old result proofs stay rejected.
     const renewable = await client.query<{ owner_session_id: string; consent_evidence_id: string; activation_id: string }>(
       `SELECT r.owner_session_id,r.consent_evidence_id,r.activation_id FROM radar_presences r
        JOIN app_sessions s ON s.id=r.owner_session_id AND s.user_id=r.user_id
+       JOIN player_social_profiles p ON p.user_id=r.user_id
+       JOIN radar_consent_events e ON e.id=r.consent_evidence_id AND e.id=p.radar_consent_evidence_id AND e.user_id=r.user_id
        WHERE r.user_id=$1 AND s.csrf_ciphertext='!fixture-no-login' AND s.revoked_at IS NULL
-         AND r.policy_version=$2`, [id, UNIFIED_POLICY]);
+         AND r.policy_version=$2
+         AND e.event_type='accepted' AND e.policy_version=$2
+         AND p.radar_consented AND p.radar_consent_policy_version=$2
+         AND NOT EXISTS(SELECT 1 FROM radar_consent_events w WHERE w.reverses_event_id=e.id)
+         AND LEAST(r.foreground_until,r.location_valid_until,r.expires_at,r.hard_expires_at,s.expires_at)>clock_timestamp()`,
+      [id, UNIFIED_POLICY]);
     if (renewable.rows[0]) {
       // In-place lease extend: keep activation/session to limit revision churn vs delete+reinsert.
       await client.query(

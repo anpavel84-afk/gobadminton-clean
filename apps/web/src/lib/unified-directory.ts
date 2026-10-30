@@ -251,20 +251,8 @@ export class UnifiedDirectoryController {
     }
     if (this.clock() < Math.max(this.nextInitial, this.retryAt)) {
       if (changed) {
-        const sameActivationId = Boolean(activationKey && this.activationOriginKey &&
-          activationKey.split(":")[0] === this.activationOriginKey.split(":")[0]);
-        const filterSame = JSON.stringify(this.filters) === JSON.stringify(filters);
-        const liveSnapshot = this.view.mode === "unified" && !this.view.stale && this.view.snapshot !== null
-          && Number.isFinite(Date.parse(this.view.snapshot.validUntil))
-          && Date.parse(this.view.snapshot.validUntil) > this.clock();
-        // Activation version churn during the 30s initial gate: keep the still-valid
-        // authorized window instead of blanking list/map until the gate opens.
-        if (filterSame && sameActivationId && liveSnapshot) {
-          // Keep the authorized window renderable; do not mark stale (mergeRadarCatalog hides stale).
-          this.activationOriginKey = activationKey;
-          this.set({ notice: "Обновляем участников Radar…" });
-          return;
-        }
+        // Any filter/full activation key change (including version) keeps strict invalidation.
+        // Same-key soft refresh retaining a valid window while matches() is due is handled below.
         this.invalidate();
         this.set({ mode: "ordinary" });
         // Never retain a raw foreground fix while waiting for the cooldown.
