@@ -10,6 +10,11 @@ import { AuthEntry } from "./ProfileComposition";
 import { useSocialMutation } from "../messages/useSocialMutation";
 import { Button } from "../Button";
 
+/**
+ * Legacy browse friendship chrome. Player browse deck (#404) now uses
+ * PlayerBrowsePlayInterest; keep this module for any non-deck reuse and honest
+ * friendship pending-scope semantics (`${me}:friends:${peer}`).
+ */
 export type BrowseFriendshipApi = {
   request: () => boolean;
   busy: boolean;
@@ -17,7 +22,7 @@ export type BrowseFriendshipApi = {
   canRequest: boolean;
 };
 
-/** True only for send/accept receipts that may toast and auto-advance the browse deck. */
+/** True only for send/accept receipts that may toast and auto-advance a friendship deck. */
 export function isBrowseConfirmedRequestOutcome(outcome: FriendshipReceipt["outcome"]): boolean {
   return outcome === "pending" || outcome === "accepted";
 }

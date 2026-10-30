@@ -66,7 +66,7 @@ const pageSource = readFileSync(join(root, "src/components/consumer/pages/Player
 const toolbarSource = readFileSync(join(root, "src/components/consumer/players/PlayersDirectoryToolbar.tsx"), "utf8");
 const radarSource = readFileSync(join(root, "src/components/consumer/radar/RadarControls.tsx"), "utf8");
 const cssSource = readFileSync(join(root, "src/styles/player-browse.css"), "utf8");
-const friendshipSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseFriendship.tsx"), "utf8");
+const friendshipSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowsePlayInterest.tsx"), "utf8");
 const mapSource = readFileSync(join(root, "src/components/consumer/radar/GeographicRadarMap.tsx"), "utf8");
 const sessionSource = readFileSync(join(root, "src/components/consumer/radar/RadarSessionProvider.tsx"), "utf8");
 
@@ -130,8 +130,8 @@ describe("player browse navigation and skip order", () => {
   it("auto-next skips known non-eligible peers and respects local skips", () => {
     const rows = [player("a"), player("b"), player("c"), player("d")];
     const known = new Map([
-      ["b", "outgoing_pending" as const],
-      ["c", "friends" as const],
+      ["b", "outgoing" as const],
+      ["c", "mutual" as const],
     ]);
     expect(nextEligibleBrowseIndex(rows, 0, known, new Set())).toBe(3);
     expect(nextEligibleBrowseIndex(rows, 0, known, new Set(["d"]))).toBe(-1);
@@ -293,6 +293,7 @@ describe("player browse swipe boundaries", () => {
     expect(deckSource).toContain('className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}');
     expect(deckSource).toContain("Single retained avatar host");
     expect(deckSource).toContain("Stable friendship slot");
+    expect(deckSource).toContain("PlayerBrowsePlayInterest");
   });
 
   it("mobile details use fixed info pages (facts / about chunks / games) with pager outside clip", () => {
@@ -434,7 +435,7 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toMatch(/if \(desktop\) \{\s*setTutorialOpen\(false\)/);
     expect(deckSource).toContain('chrome={desktop ? "desktop" : "mobile"}');
     expect(friendshipSource).toContain('chrome = "mobile"');
-    expect(friendshipSource).toContain("Добавить в друзья");
+    expect(friendshipSource).toContain("Хочу сыграть");
   });
 
   it("locks details geometry via CSS contract for normal and expanded", () => {
