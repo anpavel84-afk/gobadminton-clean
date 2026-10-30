@@ -9,11 +9,13 @@ import { apiFetch } from "./api-client";
 
 export type PlayInterestAction = "send" | "withdraw";
 
+/** User-facing browse status only — domain API/relationship names stay play-interest. */
 export const playInterestStatus: Record<PlayInterestView["relationship"], string> = {
-  none: "Можно отметить интерес к игре",
-  outgoing: "Интерес отправлен",
-  mutual: "Вы хотите сыграть вместе",
-  unavailable: "Интерес к игре сейчас недоступен",
+  none: "Давай сыграем",
+  outgoing: "Предложение отправлено",
+  mutual: "Вы оба хотите сыграть",
+  /** Not shown as a technical panel; definitive unavailable uses deck Next/Skip eligibility. */
+  unavailable: "",
 };
 
 export const getPlayInterestState = (id: string) =>

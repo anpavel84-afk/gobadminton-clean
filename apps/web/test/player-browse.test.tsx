@@ -436,7 +436,7 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toMatch(/if \(desktop\) \{\s*setTutorialOpen\(false\)/);
     expect(deckSource).toContain('chrome={desktop ? "desktop" : "mobile"}');
     expect(friendshipSource).toContain('chrome = "mobile"');
-    expect(friendshipSource).toContain("Хочу сыграть");
+    expect(friendshipSource).toContain("Давай сыграем");
   });
 
   it("locks details geometry via CSS contract for normal and expanded", () => {
