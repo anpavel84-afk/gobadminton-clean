@@ -32,7 +32,7 @@ export function GameCard({
   return (
     <Link
       href={href}
-      className={`gb-c23-card${trainer ? " gb-c23-card--trainer" : ""}`}
+      className="gb-c23-card"
       data-activity={game.activityKind}
     >
       <GameCover className="gb-c23-card__media" game={game} />
@@ -46,7 +46,9 @@ export function GameCard({
         <p className="gb-c23-card__meta">{levelFormatLine(game)}</p>
         <div className="gb-discovery-host"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></div>
         <div className="gb-c23-card__row">
-          {trainer ? <span className="gb-c23-chip gb-c23-chip--trainer">С тренером</span> : null}
+          <span className={`gb-c23-chip${trainer ? " gb-c23-chip--trainer" : ""}`}>
+            {trainer ? "С тренером" : "Обычная игра"}
+          </span>
           {ownStatus ? (
             <span className={`gb-c23-chip gb-c23-chip--${participationChipKind(ownStatus)}`}>
               {participationLabel(ownStatus)}

@@ -24,7 +24,7 @@ describe("venue cover presentation / mutation wire protocol",()=>{
       { element: <VenueCover />, fallback: "court", image: "badminton-courts.jpg", alt: "Бадминтонный корт" },
       { element: <VenueCover cover={{uploadedUrl:"https://evil.invalid/photo.png"}} fallback="trainer" />, fallback: "trainer", image: "badminton-gear.jpg", alt: "Ракетка и воланы на корте" },
       { element: <DiscoveryGameCard game={{...game,activityKind:"regular"}} />, fallback: "court", image: "badminton-courts.jpg", alt: "Бадминтонный корт" },
-      { element: <DiscoveryGameCard game={{...game,activityKind:"trainer_led"}} />, fallback: "trainer", image: "badminton-gear.jpg", alt: "Ракетка и воланы на корте" },
+      { element: <DiscoveryGameCard game={{...game,activityKind:"trainer_led"}} />, fallback: "court", image: "badminton-courts.jpg", alt: "Бадминтонный корт" },
     ];
     for (const {element,fallback,image,alt} of cases) {
       const markup = renderToStaticMarkup(element);

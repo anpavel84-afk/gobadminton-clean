@@ -79,7 +79,6 @@
 .gb-discovery-cards { display: grid; gap: 14px; }
 .gb-discovery-card { display: grid; grid-template-columns: minmax(210px, 280px) minmax(0, 1fr); min-height: 0; align-items: stretch; overflow: hidden; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-md); background: var(--gb-white); transition: transform .25s ease, box-shadow .25s ease; }
 .gb-discovery-card:hover { transform: translateY(-3px); box-shadow: var(--gb-shadow-elevated); }
-.gb-discovery-card--trainer { border-color: rgba(121,69,222,.35); box-shadow: inset 5px 0 0 var(--gb-purple); }
 .gb-discovery-card__image { position: relative; width: 100%; min-height: 0; height: 100%; max-width: 300px; aspect-ratio: auto; align-self: stretch; overflow: hidden; }
 .gb-discovery-card__image > img,
 .gb-discovery-card__image > .gb-venue-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform .7s ease; }
@@ -91,7 +90,7 @@
   .gb-discovery-card[data-layout="stacked"] .gb-discovery-card__image { width: 100%; max-width: none; height: auto; aspect-ratio: 16 / 10; max-height: 280px; align-self: start; }
 }
 .gb-discovery-type { position: absolute; left: 14px; top: 14px; display: inline-flex; min-height: 29px; align-items: center; padding: 0 10px; border-radius: 8px; color: var(--gb-ink); background: var(--gb-lime-soft); font-size: 12px; font-weight: 600; }
-.gb-discovery-card--trainer .gb-discovery-type { color: var(--gb-purple); background: var(--gb-purple-soft); }
+.gb-discovery-card[data-activity="trainer_led"] .gb-discovery-type { color: var(--gb-purple); background: var(--gb-purple-soft); }
 .gb-discovery-card__content { min-width: 0; padding: 20px 20px 16px; overflow-wrap: anywhere; }
 .gb-discovery-card__topline { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; justify-content: space-between; color: var(--gb-ink-soft); font-size: 12px; }
 .gb-discovery-spots { padding: 5px 9px; border-radius: 7px; color: var(--gb-ink); background: var(--gb-lime-soft); font-weight: 600; }
@@ -103,14 +102,12 @@
 .gb-discovery-address { margin: 0; display: flex; align-items: center; gap: 7px; color: var(--gb-ink-soft); font-size: 13px; }
 .gb-discovery-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 8px; color: var(--gb-ink-soft); font-size: 12px; }
 .gb-discovery-terms { margin: 0 0 12px; color: var(--gb-ink-soft); font-size: 12px; }
-.gb-discovery-card--trainer .gb-discovery-terms { color: var(--gb-purple); }
 .gb-discovery-host { padding-top: 12px; border-top: 1px solid var(--gb-line); display: flex; align-items: center; gap: 10px; }
 .gb-discovery-host > span:nth-child(2) { min-width: 0; flex: 1 1 0; }
 .gb-discovery-host small, .gb-discovery-host strong { display: block; }
 .gb-discovery-host small { color: var(--gb-ink-soft); font-size: 10px; }
 .gb-discovery-host strong { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gb-discovery-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--gb-lime); }
-.gb-discovery-card--trainer .gb-discovery-avatar { background: var(--gb-purple-soft); color: var(--gb-purple); }
 .gb-consumer .gb-discovery-host .gb-c23-btn { margin-left: auto; min-height: 44px; padding: 0 13px; font-size: 12px; flex: none; }
 .gb-discovery-host .gb-c23-btn--dark .gb-discovery-icon { filter: brightness(0) invert(1); }
 .gb-discovery-sidebar { position: sticky; top: 104px; display: grid; gap: 16px; }
@@ -238,7 +235,6 @@
 .gb-game-identity strong { font-size: 13px; font-weight: 600; }
 .gb-personal-card__organizer { margin-top: 8px; }
 .gb-game-facts .gb-game-identity .gb-discovery-avatar { width: 24px; height: 24px; font-size: 10px; }
-.gb-discovery-trainer { margin-bottom: 12px; }
 
 /* #61 Owner: map follows compact canonical selectors/tabs, list keeps its banners. */
 .gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-site-footer { display: none; }

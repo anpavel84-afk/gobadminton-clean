@@ -100,7 +100,7 @@ describe("production venue popup presentation with real React", () => {
   });
   it("keeps trainer fallback distinct from organizer identity", () => {
     const html = ssr(<VenueSheetGameRow game={{ ...game, activityKind: "trainer_led" }} timezone={venue.timezone} onOpen={noop} />);
-    expect(html).toContain('src="/discovery/badminton-gear.jpg"');
+    expect(html).toContain('src="/discovery/badminton-courts.jpg"');
     expect(html).toContain(`src="${avatar}"`);
   });
   it.each([null, undefined, [], {}, { phone: "123\n4567", website: "javascript:alert(1)", messengers: [{ kind: "telegram", url: "https://t.me/a/.." }] }])("renders the honest empty contact state (%j)", value => {
