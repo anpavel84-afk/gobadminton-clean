@@ -177,6 +177,10 @@ function textOf(node: unknown): string {
 }
 function elements(node: unknown, out: Node[] = []): Node[] {
   if (!node || typeof node !== "object") return out;
+  if (Array.isArray(node)) {
+    node.forEach(child => elements(child, out));
+    return out;
+  }
   const value = node as Node & { props?: { children?: unknown } };
   out.push(value);
   const children = value.props?.children;
@@ -290,5 +294,29 @@ describe("InvitationChooser open-for-invite filtering", () => {
     await Promise.resolve();
     expect(mutation.run).not.toHaveBeenCalled();
     expect(mutation.setNotice).toHaveBeenCalledWith(expect.stringContaining("уже началась"));
+  });
+
+  it("keeps a far-future open game listed after a clamped timer tick", async () => {
+    vi.mocked(listMyManagedGames).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        items: [
+          clock({
+            id: "far",
+            title: "Через полгода",
+            status: "published",
+            startsAt: "2027-04-30T15:00:00.000Z",
+            applicationDeadlineAt: "2027-04-30T14:00:00.000Z",
+          }),
+        ],
+        nextCursor: null,
+      },
+    });
+    expect(await settle()).toContain("Через полгода");
+    await vi.advanceTimersByTimeAsync(2147483647);
+    const html = await settle();
+    expect(html).toContain("Через полгода");
+    expect(html).not.toContain("Загружаем игры");
   });
 });

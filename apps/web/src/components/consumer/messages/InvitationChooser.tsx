@@ -48,7 +48,7 @@ export function InvitationChooser({ me, playerId, resultRef, preferredGameId, on
     const watch = preferredGameId ? open.filter(g => g.id === preferredGameId) : open;
     const boundary = nextInvitationEligibilityBoundary(watch, now);
     if (boundary == null) return;
-    const delay = Math.max(0, boundary - Date.now());
+    const delay = Math.min(2147483647, Math.max(0, boundary - Date.now()));
     const timer = setTimeout(() => setNow(Date.now()), delay);
     return () => clearTimeout(timer);
   }, [managed, now, preferredGameId]);
