@@ -41,7 +41,16 @@ describe("WEB94 responsive consumer navigation", () => {
   });
 
   it("reserves bottom navigation space for a selected mobile conversation", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/styles/messages.css"), "utf8");
-    expect(css).toContain(".fr4.messages-page.show-conversation { margin-bottom: calc(76px + env(safe-area-inset-bottom)); }");
+    const messagesCss = readFileSync(resolve(process.cwd(), "src/styles/messages.css"), "utf8");
+    const foundationCss = readFileSync(resolve(process.cwd(), "src/styles/foundation.css"), "utf8");
+    const mobileMessages = messagesCss.slice(messagesCss.indexOf("@media (max-width: 720px)"));
+
+    expect(foundationCss).toContain(".gb-app-shell--focused { height: 100dvh;");
+    expect(foundationCss).toContain(".gb-shell-content--focused { width: 100%; min-height: 0; flex: 1;");
+    expect(mobileMessages).toContain(".gb-shell-content--focused .fr4.messages-page");
+    expect(mobileMessages).toContain("padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));");
+    expect(mobileMessages).toMatch(/\.gb-shell-content--focused \.fr4\.messages-page \{[^}]*flex:\s*1;[^}]*min-height:\s*0;[^}]*margin:\s*0;/s);
+    expect(mobileMessages).toContain(".fr4.show-conversation .conversation-panel { display: flex; flex: 1; min-height: 0; }");
+    expect(messagesCss).not.toContain(".fr4.messages-page.show-conversation { margin-bottom: calc(76px + env(safe-area-inset-bottom)); }");
   });
 });
