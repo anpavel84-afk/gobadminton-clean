@@ -765,7 +765,7 @@
 /* Desktop cards directory: local height budget so closed deck + actions fit 1440×900; grow on 1920×1080. */
 @media (min-width: 721px) {
   .gb-player-browse[data-browse-view="cards"] .pb-surface {
-    min-height: calc(100dvh - 280px);
+    min-height: calc(100dvh - 320px);
   }
 
   .gb-player-browse[data-browse-view="cards"] .pb-cover {
@@ -778,7 +778,7 @@
 
   .gb-player-browse[data-browse-view="cards"] .pb-empty,
   .gb-player-browse[data-browse-view="cards"] .pb-loading {
-    min-height: calc(100dvh - 280px);
+    min-height: calc(100dvh - 320px);
   }
 }
 
@@ -793,6 +793,14 @@
 }
 
 @media (max-width: 720px) {
+  /* Cards-only compact header: reclaim height vs inherited column+center stack. List header untouched. */
+  .gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    text-align: left;
+  }
+
   .gb-player-browse .pb-view-switch .pb-view-switch__label { display: none; }
   .gb-player-browse .pb-slider-stage { padding: 0; }
   .gb-player-browse .pb-slider-nav {
@@ -825,21 +833,25 @@
   .gb-player-browse .pb-bio { font-size: 12px; margin-top: 9px; }
   .gb-player-browse .pb-details { margin: 0 20px 12px; }
   .gb-player-browse .pb-facts { grid-template-columns: 1fr; }
+  /* Reserve space under in-flow controls so undo/status reading clears the viewport-fixed action bar. */
   .gb-player-browse .pb-controls {
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
-    padding: 0 20px 16px;
+    padding: 0 20px calc(16px + 70px);
   }
+  /* Viewport-fixed action bar above 64px bottom nav + safe area (not sticky inside long surface). */
   .gb-player-browse .pb-action-slot {
-    position: sticky;
+    position: fixed;
+    left: 0;
+    right: 0;
     bottom: calc(64px + env(safe-area-inset-bottom, 0px));
     width: auto;
-    margin: 0 -20px;
+    margin: 0;
     padding: 10px 20px;
     background: #fffffff5;
     border-top: 1px solid var(--pb-line);
-    z-index: 4;
+    z-index: 30;
   }
   .gb-player-browse .pb-main-actions { grid-template-columns: 1fr 1.65fr; gap: 8px; }
   .gb-player-browse .pb-main-actions .btn,
