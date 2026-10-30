@@ -25,11 +25,12 @@ import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileCompositi
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
 import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
 
-/** Approximate-distance success copy stays out of the fixed /players toolbar. */
-function directoryInFlowNotice(notice: string): string | null {
-  if (!notice) return null;
-  if (notice.startsWith("Расстояние приблизительное") || notice.startsWith("Участники Radar по городу")) return null;
-  return notice;
+/**
+ * Unified Radar notices (distance, transient, stale, auth) live in the header affordance.
+ * Ordinary catalog errors keep ProfileState — do not mirror Radar notices in either layout.
+ */
+function directoryInFlowNotice(_notice: string): string | null {
+  return null;
 }
 
 /** Client-only desktop directory composition; first paint false until effect (SSR-safe). */

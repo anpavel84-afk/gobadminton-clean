@@ -5,6 +5,7 @@ import type { PlayerAvatar, SocialLevel } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import { ProfileCover } from "./CoverEditor";
 import { Avatar, Badge } from "./ProfileComposition";
+import { PreparedBrowseAvatar, type PreparedBrowsePeerMedia } from "./PlayerBrowseMedia";
 import "../../../styles/players-profiles.css";
 
 /** Fields the shared public-profile presentation can show without inventing values. */
@@ -28,6 +29,7 @@ export function PlayerProfileHero({
   titleAs = "h1",
   visualRef,
   visualClassName,
+  preparedMedia,
 }: {
   player: PlayerProfileFields;
   city?: string;
@@ -38,6 +40,8 @@ export function PlayerProfileHero({
   visualRef?: Ref<HTMLDivElement>;
   /** Optional extra class on the cover/avatar panel (e.g. legacy own-profile frame alias). */
   visualClassName?: string;
+  /** Optional Radar-prepared cover/avatar nodes — one physical node per visible slot. */
+  preparedMedia?: PreparedBrowsePeerMedia | null;
 }) {
   const Title = titleAs;
   const levelLabel = formatSocialLevel(player.level);
@@ -45,10 +49,15 @@ export function PlayerProfileHero({
   const looking = player.lookingForGame === true;
   const trainer = player.trainer === true;
   const visualClass = visualClassName ? `player-profile-visual ${visualClassName}` : "player-profile-visual";
+  const tone = trainer ? "purple" : "yellow";
   return <section className="player-profile-hero">
     <div ref={visualRef} className={visualClass}>
-      {player.cover?.uploadedUrl && <ProfileCover url={player.cover.uploadedUrl} />}
-      <Avatar avatar={player.avatar ?? undefined} name={player.displayName} tone={trainer ? "purple" : "yellow"} />
+      {preparedMedia
+        ? <ProfileCover prepared={preparedMedia.cover} url={player.cover?.uploadedUrl} />
+        : player.cover?.uploadedUrl ? <ProfileCover url={player.cover.uploadedUrl} /> : null}
+      {preparedMedia
+        ? <PreparedBrowseAvatar media={preparedMedia.avatar} name={player.displayName} tone={tone} />
+        : <Avatar avatar={player.avatar ?? undefined} name={player.displayName} tone={tone} />}
       <img src="/canonical/bb5a8.svg" alt="" />
     </div>
     <div className="player-profile-copy">
@@ -73,6 +82,7 @@ export function PlayerProfileContent({
   note,
   titleAs = "h1",
   className,
+  preparedMedia,
 }: {
   player: PlayerProfileFields;
   city?: string;
@@ -82,11 +92,12 @@ export function PlayerProfileContent({
   note?: ReactNode;
   titleAs?: "h1" | "h2";
   className?: string;
+  preparedMedia?: PreparedBrowsePeerMedia | null;
 }) {
   const levelLabel = formatSocialLevel(player.level);
   const trainer = player.trainer === true;
   return <div className={className ? `player-profile-content ${className}` : "player-profile-content"} data-player-profile-content="">
-    <PlayerProfileHero player={player} city={city} distance={distance} titleAs={titleAs} />
+    <PlayerProfileHero player={player} city={city} distance={distance} titleAs={titleAs} preparedMedia={preparedMedia} />
     {(actions || note) ? <div className="player-profile-actionband">
       {actions ? <div className="player-profile-actions" data-surface="pp-actions">{actions}</div> : null}
       {note}

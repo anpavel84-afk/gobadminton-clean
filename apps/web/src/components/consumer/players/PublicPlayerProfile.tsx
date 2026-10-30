@@ -9,6 +9,7 @@ import { ContactAction, ContactNote, useContactState } from "./ContactAction";
 import { Button } from "../Button";
 import { AuthEntry, ProfileDialog, ProfileState } from "./ProfileComposition";
 import { PlayerProfileContent } from "./PlayerProfileContent";
+import { preparedMediaFitsPublicPlayer, type PreparedBrowsePeerMedia } from "./PlayerBrowseMedia";
 import { ProfileFriendship } from "../friends/ProfileFriendship";
 
 /** Stable viewer/peer key for Radar-held unknown-report latches across internal remounts. */
@@ -31,6 +32,7 @@ export function PublicPlayerProfile({
   className,
   reportUnknown: reportUnknownProp,
   onReportUnknown,
+  preparedMedia,
 }: {
   publicPlayerId: string;
   embedded?: boolean;
@@ -49,6 +51,11 @@ export function PublicPlayerProfile({
   reportUnknown?: boolean;
   /** Latch the original viewer/peer scope even if this body unmounts before the POST settles. */
   onReportUnknown?: (scopeKey: string) => void;
+  /**
+   * Optional Radar-prepared cover/avatar. Ordinary route omits this.
+   * Still fetches fresh public profile; prepared nodes are used only when they fit.
+   */
+  preparedMedia?: PreparedBrowsePeerMedia | null;
 }) {
   const [me, setMe] = useState<Me | null>(null);
   const [authState, setAuthState] = useState("loading");
@@ -142,6 +149,7 @@ export function PublicPlayerProfile({
         city={city}
         distance={distance}
         titleAs={titleAs}
+        preparedMedia={preparedMedia && preparedMediaFitsPublicPlayer(preparedMedia, player) ? preparedMedia : null}
         actions={useDefaultContact
           ? <ContactAction key={`${me?.id}:${me?.csrfToken}:${publicPlayerId}`} retryAuth={() => setReload(n => n + 1)} result={contact} auth={authState} peer={publicPlayerId} canInvite={player.canRequestContact === true} />
           : contactActions}

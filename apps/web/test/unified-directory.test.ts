@@ -314,6 +314,75 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered"]);
     expect(c.view.mode).toBe("unified");
   });
+  it("503 soft refresh retries within valid TTL instead of waiting out the 30s nextInitial gate", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      if (calls === 2) return { ok: false as const, status: 503, error: "upstream" };
+      return ok({
+        ...snapshot([row("recovered-after-503")]),
+        generatedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 45000).toISOString(),
+      });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["before"]);
+    expect(c.view.mode).toBe("unified");
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    // Bounded ~2s retry — not requestStart+30s which would land after validUntil.
+    expect(c.nextRefreshAt()).toBe(time + 2000);
+    time += 2000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(3);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered-after-503"]);
+    expect(c.view.mode).toBe("unified");
+  });
+  it("clears expired displayed peers while allowing an in-flight refresh to commit after latency", async () => {
+    let time = now;
+    let resolveRefresh!: (value: ReturnType<typeof ok>) => void;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      return new Promise<ReturnType<typeof ok>>(resolve => { resolveRefresh = resolve; });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    const pending = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 15000;
+    c.tick();
+    expect(c.view.snapshot).toBeNull();
+    expect(c.view.rows).toEqual([]);
+    expect(c.view.mode).toBe("ordinary");
+    resolveRefresh(ok({
+      ...snapshot([row("fresh-after-expiry")]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    }));
+    await pending;
+    expect(calls).toBe(2);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["fresh-after-expiry"]);
+    expect(c.view.mode).toBe("unified");
+    expect(c.view.stale).toBe(false);
+  });
 });
 describe("distance and map authority", () => {
   const estimate = (meters: number, step: 100 | 500 | 1000 = 100) => ({ kind: "estimate", roundedMeters: meters, roundingStepMeters: step }) as UnifiedDistance;

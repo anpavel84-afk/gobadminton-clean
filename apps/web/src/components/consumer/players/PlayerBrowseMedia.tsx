@@ -10,7 +10,8 @@ import { safeAvatarUrl } from "./ProfileComposition";
 export const PLAYER_BROWSE_MEDIA_DEADLINE_MS = 5000;
 /** Bounded Radar pin/open prewarm — never a global unbounded media queue. */
 export const RADAR_PIN_MEDIA_DEADLINE_MS = 1200;
-export const RADAR_PIN_MEDIA_CAP = 12;
+/** Hard retained-node cap for authorized Radar peers (neighbors + selected). */
+export const RADAR_PIN_MEDIA_CAP = 4;
 
 const DEFAULT_COVER_SRC = "/canonical/ce252.svg";
 const COVER_URL_RE = /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/;
@@ -319,9 +320,22 @@ export async function prepareBrowsePeerMedia(
 }
 
 type RadarMediaSlot = { sessionKey: string; media: PreparedBrowsePeerMedia };
+type RadarInflight = { key: string; abort: AbortController; listeners: Set<() => void> };
 const radarMediaByPeer = new Map<string, RadarMediaSlot>();
-const radarMediaInflight = new Map<string, AbortController>();
+const radarMediaInflight = new Map<string, RadarInflight>();
+const radarMediaListeners = new Set<() => void>();
 let radarMediaSessionKey = "";
+let radarMediaEpoch = 0;
+
+function notifyRadarMediaReady() {
+  for (const listener of [...radarMediaListeners]) listener();
+}
+
+/** Subscribe to Radar prepared-media commit/eviction (end-of-load, not a fixed timeout). */
+export function subscribeRadarPreparedMedia(listener: () => void) {
+  radarMediaListeners.add(listener);
+  return () => { radarMediaListeners.delete(listener); };
+}
 
 /** Drop retained Radar pin media; optional keep predicate for still-authorized peers. */
 export function clearRadarPreparedMedia(keep?: (peerId: string) => boolean) {
@@ -330,27 +344,53 @@ export function clearRadarPreparedMedia(keep?: (peerId: string) => boolean) {
     radarMediaByPeer.delete(peerId);
     disposePreparedBrowseMedia(slot.media);
   }
-  for (const [peerId, abort] of [...radarMediaInflight.entries()]) {
+  for (const [peerId, inflight] of [...radarMediaInflight.entries()]) {
     if (keep?.(peerId)) continue;
-    abort.abort();
+    inflight.abort.abort();
     radarMediaInflight.delete(peerId);
   }
-  if (!keep) radarMediaSessionKey = "";
+  if (!keep) {
+    radarMediaSessionKey = "";
+    radarMediaEpoch += 1;
+  }
+  notifyRadarMediaReady();
 }
 
-export function takeRadarPreparedMedia(peerId: string, mediaKey: string, sessionKey = radarMediaSessionKey): PreparedBrowsePeerMedia | null {
+export function takeRadarPreparedMedia(peerId: string, mediaKey?: string, sessionKey = radarMediaSessionKey): PreparedBrowsePeerMedia | null {
   const hit = radarMediaByPeer.get(peerId);
-  if (!hit || hit.sessionKey !== sessionKey || hit.media.mediaKey !== mediaKey) return null;
+  if (!hit || hit.sessionKey !== sessionKey) return null;
+  if (mediaKey && hit.media.mediaKey !== mediaKey) return null;
   return hit.media;
 }
 
+/** True when prepared cover/avatar still matches a freshly loaded public profile. */
+export function preparedMediaFitsPublicPlayer(media: PreparedBrowsePeerMedia, player: PublicPlayer): boolean {
+  if (media.peerId !== player.publicPlayerId) return false;
+  if (media.avatar.kind === "image") {
+    const src = media.avatar.src;
+    if (src !== player.avatar?.uploadedUrl && src !== player.avatar?.providerUrl) return false;
+  }
+  if (media.cover.kind === "uploaded") {
+    return player.cover?.uploadedUrl === media.cover.src;
+  }
+  // Default/empty prepared cover is valid only when the profile has no uploaded cover.
+  return !player.cover?.uploadedUrl;
+}
+
 /**
- * Bounded prewarm for authorized Radar pins. Avatar-only by default (no speculative
- * profile GET). Pass resolveCover after the viewer explicitly opens a pin.
+ * Bounded prewarm for authorized Radar pins.
+ * Public GET cover metadata is allowed for known authorized peers (resolveCover);
+ * never speculative private proofs. Same peer+mediaKey+cover intent reuses inflight
+ * work instead of abort/restart on every render.
  */
 export function prewarmRadarPeerMedia(
   player: PublicPlayer,
-  options?: { resolveCover?: boolean; deadlineMs?: number; sessionKey?: string },
+  options?: {
+    resolveCover?: boolean;
+    deadlineMs?: number;
+    sessionKey?: string;
+    onReady?: () => void;
+  },
 ) {
   if (typeof document === "undefined") return;
   const sessionKey = options?.sessionKey ?? radarMediaSessionKey;
@@ -358,35 +398,82 @@ export function prewarmRadarPeerMedia(
     clearRadarPreparedMedia();
     radarMediaSessionKey = sessionKey;
   }
+  const resolveCover = options?.resolveCover === true;
   const mediaKey = browsePeerMediaKey(player);
+  const inflightKey = `${player.publicPlayerId}|${mediaKey}|${resolveCover ? "cover" : "avatar"}`;
   const existing = radarMediaByPeer.get(player.publicPlayerId);
-  if (existing?.sessionKey === sessionKey && existing.media.mediaKey === mediaKey && (options?.resolveCover !== true || existing.media.cover.kind === "uploaded" || (player.cover && "uploadedUrl" in player.cover && player.cover.uploadedUrl === null))) {
+  const coverReady = existing?.media.cover.kind === "uploaded"
+    || (player.cover && "uploadedUrl" in player.cover && player.cover.uploadedUrl === null)
+    || existing?.media.cover.kind === "default";
+  if (existing?.sessionKey === sessionKey && existing.media.mediaKey === mediaKey && (!resolveCover || coverReady)) {
+    options?.onReady?.();
     return;
   }
   const prior = radarMediaInflight.get(player.publicPlayerId);
-  if (prior) prior.abort();
-  const work = new AbortController();
-  radarMediaInflight.set(player.publicPlayerId, work);
-  void prepareBrowsePeerMedia(player, work.signal, options?.deadlineMs ?? RADAR_PIN_MEDIA_DEADLINE_MS, {
-    resolveCover: options?.resolveCover === true,
-  }).then(result => {
-    if (radarMediaInflight.get(player.publicPlayerId) !== work) return;
+  if (prior) {
+    // Same immutable key: join listeners; do not abort/restart.
+    if (prior.key === inflightKey) {
+      if (options?.onReady) prior.listeners.add(options.onReady);
+      return;
+    }
+    prior.abort.abort();
     radarMediaInflight.delete(player.publicPlayerId);
-    if (!result.ok || radarMediaSessionKey !== sessionKey) {
+  }
+  const work = new AbortController();
+  const listeners = new Set<() => void>();
+  if (options?.onReady) listeners.add(options.onReady);
+  const inflight: RadarInflight = { key: inflightKey, abort: work, listeners };
+  radarMediaInflight.set(player.publicPlayerId, inflight);
+  const epoch = radarMediaEpoch;
+  void prepareBrowsePeerMedia(player, work.signal, options?.deadlineMs ?? RADAR_PIN_MEDIA_DEADLINE_MS, {
+    resolveCover,
+  }).then(result => {
+    if (radarMediaInflight.get(player.publicPlayerId) !== inflight) return;
+    radarMediaInflight.delete(player.publicPlayerId);
+    if (!result.ok || radarMediaSessionKey !== sessionKey || epoch !== radarMediaEpoch) {
       if (result.ok) disposePreparedBrowseMedia(result.media);
+      for (const listener of listeners) listener();
+      notifyRadarMediaReady();
       return;
     }
     const previous = radarMediaByPeer.get(player.publicPlayerId);
     if (previous && previous.media !== result.media) disposePreparedBrowseMedia(previous.media);
     radarMediaByPeer.set(player.publicPlayerId, { sessionKey, media: result.media });
+    // Selected peer stays; evict oldest others beyond the bounded cap.
     while (radarMediaByPeer.size > RADAR_PIN_MEDIA_CAP) {
-      const oldest = radarMediaByPeer.keys().next().value;
-      if (!oldest || oldest === player.publicPlayerId) break;
+      const oldest = [...radarMediaByPeer.keys()].find(id => id !== player.publicPlayerId);
+      if (!oldest) break;
       const slot = radarMediaByPeer.get(oldest);
       radarMediaByPeer.delete(oldest);
       disposePreparedBrowseMedia(slot?.media);
     }
+    for (const listener of listeners) listener();
+    notifyRadarMediaReady();
   });
+}
+
+/**
+ * Choose up to `cap` authorized peers for prewarm: selected first, then pin/row order.
+ */
+export function selectRadarMediaPrewarmPeers<T extends { publicPlayerId: string }>(
+  peers: T[],
+  selectedId: string | null | undefined,
+  cap = RADAR_PIN_MEDIA_CAP,
+): T[] {
+  if (peers.length === 0 || cap <= 0) return [];
+  const seen = new Set<string>();
+  const out: T[] = [];
+  const push = (peer: T) => {
+    if (seen.has(peer.publicPlayerId) || out.length >= cap) return;
+    seen.add(peer.publicPlayerId);
+    out.push(peer);
+  };
+  if (selectedId) {
+    const selected = peers.find(peer => peer.publicPlayerId === selectedId);
+    if (selected) push(selected);
+  }
+  for (const peer of peers) push(peer);
+  return out;
 }
 
 /** Mount a retained decoded <img> into a React host without remounting a new fetch. */

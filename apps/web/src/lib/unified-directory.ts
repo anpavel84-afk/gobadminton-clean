@@ -241,11 +241,17 @@ export class UnifiedDirectoryController {
     const transient = result.status === 429 || result.status === 0 || result.status >= 500;
     // Soft same-key refresh: keep only currently authorized non-expired rows/pins across 429/network/5xx.
     if (softRetain && transient && this.retainableWindow()) {
-      if (result.status === 429 && this.retryAt > Date.parse(this.view.snapshot!.validUntil)) {
+      const until = Date.parse(this.view.snapshot!.validUntil);
+      if (result.status === 429 && this.retryAt > until) {
         this.origin = { kind: "none" };
         this.invalidate(notice, true);
         this.set({ mode: "ordinary" });
         return;
+      }
+      // Drop the pre-request 30s nextInitial gate; retry soon within the still-valid TTL.
+      // 429 already schedules via retryAt; other transients use a bounded ~2s retry.
+      if (result.status !== 429) {
+        this.nextInitial = Math.min(this.clock() + 2000, until);
       }
       this.set({ busy: false, notice, stale: false });
       return;
@@ -266,6 +272,17 @@ export class UnifiedDirectoryController {
       this.origin = { kind: "none" };
       // Allow immediate current_activation recovery; expired markers must not linger.
       this.nextInitial = 0;
+      // Clear displayed private data promptly. An in-flight same-epoch refresh that is still
+      // authorized must not be aborted solely because the old displayed window expired —
+      // its successful commit may restore a fresh window; fence only when nothing is pending.
+      if (this.pending) {
+        ++this.selectionEpoch;
+        this.set({
+          mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null,
+          busy: false, previewBusy: false, notice: "Список участников Radar устарел. Обновляем данные.", stale: true,
+        });
+        return;
+      }
       // Fence + mode + clear publish atomically so subscribers cannot re-arm unified mid-transition.
       this.fence();
       this.set({

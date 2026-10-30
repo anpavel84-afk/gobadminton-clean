@@ -13,6 +13,8 @@ import { useRadarSession } from "./RadarSessionProvider";
 import { shuttlecockElement } from "../NavIcon";
 import { createRoot } from "react-dom/client";
 import { Avatar } from "../players/ProfileComposition";
+import { prewarmRadarPeerMedia } from "../players/PlayerBrowseMedia";
+import type { PublicPlayer } from "../../../lib/consumer-types";
 import type { UnifiedDirectoryController } from "../../../lib/unified-directory";
 let protocol: Protocol | undefined;
 function installProtocol() {
@@ -79,14 +81,29 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
       return;
     }
     const previous = markers.current;
-    const byId = new Map(previous.map(entry => [entry.id, entry]));
-    const next: PeerMarker[] = [];
-    const keep = new Set<string>();
+    // Validate every peer row before any marker mutation so an invalid mid-list
+    // row cannot leave a mix of old markers and a partial new set.
+    type ValidPeer = { row: UnifiedRow; geo: NonNullable<NonNullable<UnifiedRow["radar"]>["geo"]>; mediaKey: string };
+    const valid: ValidPeer[] = [];
     for (const row of rows) {
       if (row.publicPlayerId === ownProfile?.publicPlayerId) continue;
       const geo = row.radar?.geo;
-      if (!geo || geo.crs !== "EPSG:4326" || !Number.isFinite(geo.latitude) || !Number.isFinite(geo.longitude) || geo.longitude < 36 || geo.longitude > 39.5 || geo.latitude < 54.5 || geo.latitude > 56.5) { callbacks.current.onUnavailable(); return; }
-      const mediaKey = `${row.player.avatar?.uploadedUrl ?? ""}|${row.player.avatar?.providerUrl ?? ""}|${row.player.displayName}`;
+      if (!geo || geo.crs !== "EPSG:4326" || !Number.isFinite(geo.latitude) || !Number.isFinite(geo.longitude) || geo.longitude < 36 || geo.longitude > 39.5 || geo.latitude < 54.5 || geo.latitude > 56.5) {
+        previous.forEach(entry => { entry.marker.remove(); entry.dispose?.(); });
+        markers.current = [];
+        callbacks.current.onUnavailable();
+        return;
+      }
+      valid.push({
+        row,
+        geo,
+        mediaKey: `${row.player.avatar?.uploadedUrl ?? ""}|${row.player.avatar?.providerUrl ?? ""}|${row.player.displayName}`,
+      });
+    }
+    const byId = new Map(previous.map(entry => [entry.id, entry]));
+    const next: PeerMarker[] = [];
+    const keep = new Set<string>();
+    for (const { row, geo, mediaKey } of valid) {
       const existing = byId.get(row.publicPlayerId);
       if (existing && existing.mediaKey === mediaKey) {
         existing.row = row;
@@ -104,6 +121,9 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
         button, id: row.publicPlayerId, mediaKey, dispose: () => root.unmount(), row,
       };
       button.addEventListener("click", () => { button.focus({ preventScroll: true }); callbacks.current.onSelect(entry.row); });
+      const warm = () => prewarmRadarPeerMedia(entry.row.player as PublicPlayer, { resolveCover: true });
+      button.addEventListener("pointerenter", warm);
+      button.addEventListener("focus", warm);
       entry.marker.setLngLat([geo.longitude, geo.latitude]).addTo(map.current!);
       keep.add(row.publicPlayerId);
       next.push(entry);

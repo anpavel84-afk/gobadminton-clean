@@ -86,9 +86,10 @@ export function RadarSwitchControl({
 export type RadarStatusPresentation = "default" | "directory-compact";
 
 export function RadarStatusControls({
-  map = false,
+  map: _map = false,
   presentation = "default",
 }: {
+  /** Retained for call-site compatibility with RadarSwitchControl; status UI does not branch on map. */
   map?: boolean;
   /** directory-compact: desktop /players strip — hide DEV synthetic label; keep permission/error/recovery/consent. */
   presentation?: RadarStatusPresentation;

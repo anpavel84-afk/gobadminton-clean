@@ -4,14 +4,21 @@ import { changeMyCover, reconcileMyCover, type CoverReceipt } from "../../../lib
 import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import { AvatarSourceError, preprocessAvatar } from "../../../lib/avatar-preprocess";
 import { Button } from "../Button";
+import { PreparedBrowseCover, type PreparedBrowseCover as PreparedCover } from "./PlayerBrowseMedia";
 import { ProfileDialog } from "./ProfileComposition";
 
-export function ProfileCover({ url }: { url?: string | null }) {
+function FetchedProfileCover({ url }: { url?: string | null }) {
   const [failed, setFailed] = useState<string | null>(null);
   const safe = url && /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/.test(url) && failed !== url;
   return <div className="profile-cover" data-cover={safe ? "uploaded" : "default"}>
     {safe ? <img src={url ?? undefined} alt="Обложка профиля" onError={() => setFailed(url ?? null)} /> : <img src="/canonical/ce252.svg" alt="" className="profile-cover__fallback" />}
   </div>;
+}
+
+export function ProfileCover({ url, prepared }: { url?: string | null; prepared?: PreparedCover | null }) {
+  // Prefer already-decoded retained nodes when the parent supplied matching prepared media.
+  if (prepared) return <PreparedBrowseCover media={prepared} />;
+  return <FetchedProfileCover url={url} />;
 }
 
 export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onReconcile, onUnauthorized }: {
