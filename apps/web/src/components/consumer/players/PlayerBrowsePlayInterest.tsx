@@ -137,8 +137,9 @@ export function PlayerBrowsePlayInterest({
     const result = await getPlayInterestState(peer);
     if (gen !== generation.current || peer !== peerRef.current) return;
     if (!result.ok) {
-      // Network/auth/503 — not an explicit peer opt-out; do not invent privacy state.
-      const next = result.status === 401 ? "guest" : [403, 404, 503].includes(result.status) ? "unavailable" : "error";
+      // 401 → guest. 403/404 → definitive unavailable (privacy/eligibility). Transport/server
+      // failures including 503 → error + human retry; never invent peer opt-out from 503.
+      const next = result.status === 401 ? "guest" : [403, 404].includes(result.status) ? "unavailable" : "error";
       setView(null); setLoadState(next); onRelationship(null); return;
     }
     const nextView = result.data.items[0] ?? null;
@@ -275,37 +276,8 @@ export function PlayerBrowsePlayInterest({
     );
   }
 
-  if (authState === "error" || loadState === "error") {
-    return (
-      <StableActionFooter
-        desktop={desktopChrome}
-        status="Не удалось проверить. Повторите."
-        statusTone="warning"
-        showSkip={!desktopChrome}
-        skipDisabled={navigationLocked}
-        onSkip={onSkip}
-        primary={
-          <Button variant="outline" onClick={onAuthRetry}>Повторить</Button>
-        }
-      />
-    );
-  }
-
-  // Definitive peer unavailable (relationship) or empty/403/404/503 load: no technical panel,
-  // no disabled send. Deck Next/Skip + known eligibility handle navigation.
-  if (loadState === "unavailable" || view?.relationship === "unavailable") {
-    return (
-      <StableActionFooter
-        desktop={desktopChrome}
-        status=""
-        showSkip={!desktopChrome}
-        skipDisabled={navigationLocked}
-        onSkip={onSkip}
-        primary={null}
-      />
-    );
-  }
-
+  // Still-authenticated pending UNKNOWN: keep receipt / check-status / no-repeat before
+  // temporary error or unavailable blanking. No new POST; checkStatusReadonly only.
   if (mutation.pending) {
     const knownLine = (view?.relationship === "outgoing" || view?.relationship === "mutual")
       ? playInterestStatus[view.relationship]
@@ -327,6 +299,37 @@ export function PlayerBrowsePlayInterest({
             {checking ? "Проверяем…" : "Проверить статус"}
           </Button>
         }
+      />
+    );
+  }
+
+  if (authState === "error" || loadState === "error") {
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status="Не удалось проверить. Повторите."
+        statusTone="warning"
+        showSkip={!desktopChrome}
+        skipDisabled={navigationLocked}
+        onSkip={onSkip}
+        primary={
+          <Button variant="outline" onClick={onAuthRetry}>Повторить</Button>
+        }
+      />
+    );
+  }
+
+  // Definitive peer unavailable (relationship) or empty/403/404 load: no technical panel,
+  // no disabled send. Deck Next/Skip + known eligibility handle navigation.
+  if (loadState === "unavailable" || view?.relationship === "unavailable") {
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status=""
+        showSkip={!desktopChrome}
+        skipDisabled={navigationLocked}
+        onSkip={onSkip}
+        primary={null}
       />
     );
   }

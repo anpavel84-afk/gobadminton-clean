@@ -104,6 +104,30 @@ describe("player browse play-interest intent and capabilities", () => {
     expect(playInterestSource).toMatch(/guest:play-interest:\$\{peerId\}/);
   });
 
+  it("classifies GET 503 as error not unavailable and keeps pending UNKNOWN above error/unavailable", () => {
+    // Transport/server 503 must use human retry; never treat as peer privacy opt-out.
+    expect(playInterestSource).toMatch(
+      /result\.status === 401 \? "guest" : \[403, 404\]\.includes\(result\.status\) \? "unavailable" : "error"/,
+    );
+    expect(playInterestSource).not.toMatch(/\[403,\s*404,\s*503\]/);
+    const pendingIdx = playInterestSource.indexOf("if (mutation.pending)");
+    const errorIdx = playInterestSource.indexOf('authState === "error" || loadState === "error"');
+    const unavailableIdx = playInterestSource.indexOf(
+      'loadState === "unavailable" || view?.relationship === "unavailable"',
+    );
+    const guestIdx = playInterestSource.indexOf('authState === "guest" || loadState === "guest"');
+    expect(pendingIdx).toBeGreaterThan(-1);
+    expect(errorIdx).toBeGreaterThan(-1);
+    expect(unavailableIdx).toBeGreaterThan(-1);
+    expect(guestIdx).toBeGreaterThan(-1);
+    expect(guestIdx).toBeLessThan(pendingIdx);
+    expect(pendingIdx).toBeLessThan(errorIdx);
+    expect(pendingIdx).toBeLessThan(unavailableIdx);
+    expect(playInterestSource).toContain("Проверить статус");
+    expect(playInterestSource).toContain("Не повторяйте отправку");
+    expect(playInterestSource).toContain("Не удалось проверить. Повторите.");
+  });
+
   it("tutorial and status copy say Давай сыграем / mutual-only match, never auto-friend", () => {
     expect(deckSource).toContain("Давай сыграем — предложение сыграть");
     expect(deckSource).toContain("Совпадение только когда оба хотите сыграть");
