@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import time
 
-from core import digest, need
+from core import Refused, digest, need
 from native_cursor import export as cursor_export, snapshot, source_name, _source, MAX_FILE, MAX_TREE
 from native_guard import no_new_privileges, _landlock
 from native_antigravity import (
@@ -540,7 +540,7 @@ _FAILURE_FIELDS = (
     'charge_state', 'error_code', 'oauth_refresh', 'cleanup',
     'cleanup_restore_guard', 'cleanup_private_tree', 'cleanup_oauth_copy',
     'cleanup_cgroup', 'cleanup_evidence', 'cleanup_reap', 'receipt_persist',
-    'processing_stage', 'safe_exception_class',
+    'processing_stage', 'safe_exception_class', 'failure_reason',
     'stdout_sha256', 'stderr_sha256', 'transcript_sha256',
 )
 
@@ -893,7 +893,7 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         evidence_id=ev.id, rules_context=dict(choice['rules_context']), executor_reap=None,
         source_export_sha256=None, output_manifest_sha256=None, changed_paths=[],
         transcript_sha256=None, provider_reported_usage=None, charge_state='not_charged',
-        processing_stage='prepared', safe_exception_class=None,
+        processing_stage='prepared', safe_exception_class=None, failure_reason=None,
         stdout_sha256=None, stderr_sha256=None, **transport)
     path = rt.layout.outbox/'agy-author-receipt.json'
     def save(phase):
@@ -980,6 +980,7 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         ev.record(phase='launch', charge_state='unknown')
         rt.budget.charge(rt.slot, 'agy', 'author')
         receipt['charge_state'] = 'charged'; save('charged')
+        transport_error = None
         with (out/'stdout').open('xb') as stdout, (out/'stderr').open('xb') as stderr:
             try:
                 process = popen(command(max(1, timeout-10), model), cwd=work, env=env,
@@ -987,24 +988,34 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                                 preexec_fn=child, close_fds=True)
                 membership = _observe_cgroup_membership(getattr(process, 'pid', None), cgroup)
                 save('running')
-                process.communicate(input=wire, timeout=timeout)
+                try:
+                    process.communicate(input=wire, timeout=timeout)
+                except Exception as exc:
+                    # Reap before reading. Preserve even partial diagnostics after
+                    # credential scanning, without replaying a charged operation.
+                    transport_error = exc
             finally:
                 if process is not None: reap(process)
                 receipt['executor_reap'] = _executor_reap_state(cgroup, membership)
                 receipt['exit_code'] = process.returncode if process is not None else None
         need(receipt['executor_reap'] != 'cgroup-busy', 'AGY_CANDIDATE_CHANGED')
         need(_candidate_state(bridge.work) == candidate_before, 'AGY_CANDIDATE_CHANGED')
-        need(process.returncode == 0 and getattr(process, '_input_offset', None) == len(wire),
-             'author exit or stdin delivery failed')
         # Retain a possible refresh before scanning ANY provider-controlled output.
         retain_oauth_refresh(auth, original)
         original = trusted(AUTH, owner=EXECUTOR_UID); tokens += _credentials(original)
         streams = {}
         for name in ('stdout', 'stderr'):
             streams[name] = _source(out/name, out)
-            need(len(streams[name]) <= MAX_OUT, 'author output exceeds bound')
-            # Secret-safety scan is independent of protocol acceptance.
-            _stream_events(streams[name], tokens, strict=False)
+            if len(streams[name]) > MAX_OUT:
+                receipt['failure_reason'] = 'provider_output_oversize'
+                need(False, 'author output exceeds bound')
+            # Secret-safety scan is independent of protocol acceptance. On
+            # refusal, retain only this finite reason, NEVER the unsafe bytes.
+            try:
+                _stream_events(streams[name], tokens, strict=False)
+            except (ReviewError, Refused):
+                receipt['failure_reason'] = 'provider_output_scan_refused'
+                raise
         receipt['processing_stage'] = 'streams_scanned'
         receipt['stdout_sha256'] = hashlib.sha256(streams['stdout']).hexdigest()
         receipt['stderr_sha256'] = hashlib.sha256(streams['stderr']).hexdigest()
@@ -1013,6 +1024,19 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         for name, raw in streams.items():
             ev.write(name, raw)
         receipt['processing_stage'] = 'streams_retained'
+        # A provider exit!=0 or interrupted communicate() is still a failure.
+        # The critical ordering is retaining safe raw BEFORE this terminal gate.
+        if transport_error is not None:
+            receipt['failure_reason'] = ('provider_timeout' if
+                isinstance(transport_error, subprocess.TimeoutExpired)
+                else 'provider_transport_error')
+            raise transport_error
+        if process.returncode != 0:
+            receipt['failure_reason'] = 'provider_nonzero_exit'
+            need(False, 'author exit or stdin delivery failed')
+        if getattr(process, '_input_offset', None) != len(wire):
+            receipt['failure_reason'] = 'stdin_delivery_unconfirmed'
+            need(False, 'author exit or stdin delivery failed')
         result = parse_stream(streams['stdout'], model, tokens=tokens)
         # Validate in private memory BEFORE touching the receipt shared with stage.
         _decoded_credentials(result, tokens)
