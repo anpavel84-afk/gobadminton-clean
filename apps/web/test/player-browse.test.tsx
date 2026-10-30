@@ -341,8 +341,9 @@ describe("player browse tutorial marker", () => {
     expect(surfaceCloseBeforeTutorial).toMatch(/pb-controls|pb-profile-bottom|pb-friend-slot/);
   });
 
-  it("ignores cancel/decline receipts in onConfirmedRequest toast/auto-advance", () => {
-    expect(deckSource).toMatch(/if \(!isBrowseConfirmedRequestOutcome\(receipt\.outcome\)\) return/);
+  it("ignores withdrawn play-interest receipts in onConfirmed toast/auto-advance", () => {
+    expect(deckSource).toMatch(/if \(!isBrowseConfirmedPlayInterestOutcome\(receipt\.outcome\)\) return/);
+    expect(deckSource).toMatch(/Withdraw succeeds as a mutation but must not toast "sent" or auto-advance/);
   });
 });
 

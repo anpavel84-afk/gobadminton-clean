@@ -54,7 +54,9 @@ describe("profile friendship remains intact outside browse deck", () => {
   it("browse deck no longer mounts PlayerBrowseFriendship; legacy component keeps friends pending scope for non-deck reuse", () => {
     expect(deckSource).not.toContain("PlayerBrowseFriendship");
     expect(deckSource).toContain("PlayerBrowsePlayInterest");
-    expect(friendshipSource).toContain(":friends:");
-    expect(friendshipSource).toContain("/v1/friend-requests");
+    expect(friendshipSource).toContain('from "../../../lib/friendships"');
+    expect(friendshipSource).toMatch(/\$\{me\.id\}:friends:\$\{peerId\}/);
+    expect(friendshipSource).toMatch(/friendCommand\(/);
+    expect(friendCommand(none, "peer-1", "request")?.path).toBe("/v1/friend-requests");
   });
 });

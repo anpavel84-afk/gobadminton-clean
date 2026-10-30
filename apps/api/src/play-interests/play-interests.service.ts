@@ -85,14 +85,14 @@ export class PlayInterestsService {
     const peer = rows.find(r => r.peer_user_id === actor);
     const enabled = playInterestsEnabled(this.env);
     const relationship = actorRelationship(own, peer, ctx.profiles, ctx.blocked, enabled);
-    const ownLive = effectiveActive(own, ctx.profiles, ctx.blocked);
+    const ownLive = Boolean(own && effectiveActive(own, ctx.profiles, ctx.blocked));
     return {
-      interestId: ownLive ? own!.interest_id : null,
+      interestId: ownLive && own ? own.interest_id : null,
       relationship,
-      version: ownLive ? own!.version : null,
+      version: ownLive && own ? own.version : null,
       capabilities: {
         canSend: canSend(own, ctx.profiles, ctx.blocked, enabled),
-        canWithdraw: Boolean(ownLive && own),
+        canWithdraw: ownLive && Boolean(own),
       },
     };
   }

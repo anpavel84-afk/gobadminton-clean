@@ -56,12 +56,15 @@ export type PlayInterestRow = {
 export { eligible };
 export type { Availability };
 
-/** Current directed intent is live only when both peers and epochs still match. */
+/**
+ * Current directed intent is live only when both peers and epochs still match.
+ * Returns a plain boolean — false may mean an existing inactive/stale row, not absence.
+ */
 export function effectiveActive(
   row: PlayInterestRow | undefined,
   profiles: Availability[],
   blocked: boolean,
-): row is PlayInterestRow {
+): boolean {
   if (!row || row.state !== "active" || blocked || profiles.length !== 2 || !profiles.every(eligible)) {
     return false;
   }

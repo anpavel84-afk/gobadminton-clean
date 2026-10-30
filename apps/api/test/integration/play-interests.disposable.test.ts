@@ -21,14 +21,18 @@ const DB_NAME = "gobadminton_play_interests_disposable";
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 const origin = "http://127.0.0.1:3001";
 
+/** Dedicated local DB, or the exact existing ephemeral Actions recipe. No fallback. */
 function disposableUrl(): string {
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error("DATABASE_URL must explicitly identify the play-interests disposable DB");
   const url = new URL(raw);
-  if (!["postgres:", "postgresql:"].includes(url.protocol)
-    || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-    || decodeURIComponent(url.pathname) !== `/${DB_NAME}` || url.search || url.hash
-    || process.env.NODE_ENV !== "test") {
+  const dedicated = decodeURIComponent(url.pathname) === `/${DB_NAME}`;
+  const hosted = url.pathname === "/gobadminton" && process.env.GITHUB_ACTIONS === "true"
+    && process.env.GMAP1_DISPOSABLE_DB === "1" && /^gb-ci-\d+-\d+-\d+$/.test(process.env.PG_CONTAINER ?? "")
+    && url.port === process.env.CI_DB_PORT;
+  if (process.env.NODE_ENV !== "test" || !["postgres:", "postgresql:"].includes(url.protocol)
+    || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || url.search || url.hash
+    || !(dedicated || hosted)) {
     throw new Error("Refusing nonlocal/non-test/nonisolated play-interests DB before connecting");
   }
   return raw;

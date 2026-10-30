@@ -6,6 +6,7 @@ import type { PlayInterestReceipt, PlayInterestView } from "@gobadminton/contrac
 import {
   isBrowseConfirmedPlayInterestOutcome,
   playInterestCommand,
+  playInterestStatus,
 } from "../src/lib/play-interests";
 import { canOfferPlayInterest, playInterestBlocksNewSend } from "../src/lib/player-browse";
 
@@ -63,7 +64,8 @@ describe("player browse confirmed play-interest outcomes", () => {
     const outcomes: PlayInterestReceipt["outcome"][] = ["outgoing", "mutual", "withdrawn"];
     expect(outcomes.filter(isBrowseConfirmedPlayInterestOutcome)).toEqual(["outgoing", "mutual"]);
     expect(isBrowseConfirmedPlayInterestOutcome("withdrawn")).toBe(false);
-    expect(playInterestSource).toContain("export function isBrowseConfirmedPlayInterestOutcome");
+    expect(playInterestSource).toContain('from "../../../lib/play-interests"');
+    expect(playInterestSource).toContain("export { isBrowseConfirmedPlayInterestOutcome }");
     expect(playInterestSource).toMatch(/if \(isBrowseConfirmedPlayInterestOutcome\(receipt\.outcome\)\) onConfirmedInterest\(receipt\)/);
   });
 });
@@ -98,15 +100,17 @@ describe("player browse play-interest intent and capabilities", () => {
     const meId = "actor";
     const peerId = "peer-9";
     expect(`${meId}:play-interest:${peerId}`).toBe("actor:play-interest:peer-9");
-    expect(playInterestSource).toContain(":play-interest:");
-    expect(playInterestSource).not.toContain(":friends:");
+    expect(playInterestSource).toMatch(/\$\{me\.id\}:play-interest:\$\{peerId\}/);
+    expect(playInterestSource).toMatch(/guest:play-interest:\$\{peerId\}/);
   });
 
   it("tutorial and status copy say want-to-play / mutual-only match, never auto-friend", () => {
     expect(deckSource).toContain("Хочу сыграть — явная команда интереса");
     expect(deckSource).toContain("Совпадение только при взаимном интересе");
-    expect(playInterestSource).toContain("Интерес отправлен");
-    expect(playInterestSource).toContain("Вы хотите сыграть вместе");
+    expect(playInterestStatus.outgoing).toBe("Интерес отправлен");
+    expect(playInterestStatus.mutual).toBe("Вы хотите сыграть вместе");
+    expect(playInterestSource).toContain("playInterestStatus.outgoing");
+    expect(playInterestSource).toContain("playInterestStatus.mutual");
     expect(playInterestSource).not.toContain("Добавить в друзья");
     expect(playInterestSource).not.toContain("Предложить дружбу");
   });

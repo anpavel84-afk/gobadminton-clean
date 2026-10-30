@@ -70,7 +70,11 @@ describe("Play interest policy and HTTP authentication", () => {
   });
 
   it("never discloses unilateral inbound: actor sees none while peer intent is live alone", () => {
-    const peerOnly: PlayInterestRow = { ...row, actor_user_id: b, peer_user_id: a, interest_id: interestId };
+    // Reverse directed actors and swap epochs so peer→actor matches profiles[b]=3 / profiles[a]=2.
+    const peerOnly: PlayInterestRow = {
+      ...row, actor_user_id: b, peer_user_id: a, interest_id: interestId,
+      actor_epoch: "3", peer_epoch: "2",
+    };
     expect(actorRelationship(undefined, peerOnly, profiles, false, true)).toBe("none");
     expect(canSend(undefined, profiles, false, true)).toBe(true);
     expect(actorRelationship(row, undefined, profiles, false, true)).toBe("outgoing");
