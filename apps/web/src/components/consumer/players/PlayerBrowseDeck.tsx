@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
 import { getMe, getMySocialProfile } from "../../../lib/api-client";
 import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
@@ -352,7 +352,12 @@ export function PlayerBrowseDeck({
     })();
     const expire = () => {
       live = false;
+      // Synchronously invalidate in-flight card exit so completion cannot skip/advance after auth change.
       viewerGen.current += 1;
+      flyGen.current += 1;
+      flyingRef.current = false;
+      actionConsumedRef.current = false;
+      awaitingRightRef.current = null;
       clearMediaCache();
       replaceCommittedMedia(null);
       setMe(null);
@@ -768,7 +773,13 @@ export function PlayerBrowseDeck({
     const card = cardRef.current;
     const peerId = opts?.peerId ?? currentPeerRef.current;
     const generation = ++flyGen.current;
-    if (!card) return Promise.resolve({ ok: true, generation, peerId });
+    const capturedViewer = viewerGen.current;
+    const flightLive = () => (
+      flyGen.current === generation
+      && viewerGen.current === capturedViewer
+      && slideMounted.current
+    );
+    if (!card) return Promise.resolve({ ok: flightLive(), generation, peerId });
     flyingRef.current = true;
     clearTransitionTimer();
     card.classList.remove("is-dragging");
@@ -797,7 +808,7 @@ export function PlayerBrowseDeck({
     });
     if (reducedMotionRef.current) {
       clearCardMotion(true);
-      return Promise.resolve({ ok: flyGen.current === generation, generation, peerId });
+      return Promise.resolve({ ok: flightLive(), generation, peerId });
     }
     const distance = Math.abs(x - fromX);
     const duration = browseExitDurationMs(distance, opts?.velocity ?? 0);
@@ -819,14 +830,10 @@ export function PlayerBrowseDeck({
         settled = true;
         card.removeEventListener("transitionend", onEnd);
         clearTransitionTimer();
-        const live = flyGen.current === generation && slideMounted.current;
-        if (!live) {
-          flyingRef.current = false;
-          resolve({ ok: false, generation, peerId });
-          return;
-        }
+        // Fence against flyGen and viewer/auth generation; always settle the promise (no hang on unmount).
+        const live = flightLive();
         flyingRef.current = false;
-        resolve({ ok: true, generation, peerId });
+        resolve({ ok: live, generation, peerId });
       };
       const onEnd = (event: TransitionEvent) => {
         if (event.target === card && event.propertyName === "transform") finish();
@@ -1204,16 +1211,16 @@ export function PlayerBrowseDeck({
     };
 
     const onDown = (event: PointerEvent) => {
+      // Second contact cancels BEFORE primary / interactive exclusions; never adopt secondary pointer.
+      if (drag.current && event.pointerId !== drag.current.id) {
+        cancelActiveGesture(true);
+        return;
+      }
       if (navigationLockedRef.current || tutorialOpenRef.current || flyingRef.current || awaitingRightRef.current) return;
       if (actionConsumedRef.current) return;
       if (!mediaReadyRef.current || !currentPeerRef.current) return;
       if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
       if (isBrowseDragExcludedTarget(event.target)) return;
-      if (drag.current) {
-        // Second contact cancels current manipulation; does not reassign pointerId.
-        cancelActiveGesture(true);
-        return;
-      }
       // Re-grab an in-progress spring: pin computed pose as drag origin, then cancel transition.
       const card = cardRef.current;
       if (card?.classList.contains("is-flying")) return;
@@ -1411,12 +1418,19 @@ export function PlayerBrowseDeck({
       if (drag.current) finishPointer(event, true);
     };
     const onBlur = () => cancelActiveGesture(true);
+    // Capture second contacts outside the gesture surface while a mobile drag is active.
+    // Do not stopPropagation — close/help and other chrome buttons must still receive the event.
+    const onDocPointerDownCapture = (event: PointerEvent) => {
+      if (!drag.current || event.pointerId === drag.current.id) return;
+      cancelActiveGesture(true);
+    };
 
     surface.addEventListener("pointerdown", onDown);
     surface.addEventListener("pointermove", onMove);
     surface.addEventListener("pointerup", onUp);
     surface.addEventListener("pointercancel", onCancel);
     surface.addEventListener("lostpointercapture", onLost);
+    document.addEventListener("pointerdown", onDocPointerDownCapture, true);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
     window.addEventListener("blur", onBlur);
@@ -1427,6 +1441,7 @@ export function PlayerBrowseDeck({
       surface.removeEventListener("pointerup", onUp);
       surface.removeEventListener("pointercancel", onCancel);
       surface.removeEventListener("lostpointercapture", onLost);
+      document.removeEventListener("pointerdown", onDocPointerDownCapture, true);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("blur", onBlur);
@@ -1434,24 +1449,65 @@ export function PlayerBrowseDeck({
   }, [desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer]);
   const blank = catalogState === "loading" || (!browsePlayers.length && (catalogState === "empty" || catalogState === "ready"));
   const showHelp = !desktop && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
+  const counter = browsePlayers.length
+    ? `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`
+    : "00 / 00";
+  // Shared mobile fullscreen chrome — used by early catalog states and the ready deck (one X/counter/help).
+  const mobileFsChrome = mobileFullscreen ? (
+    <header className="pb-fs-chrome">
+      <div className="pb-fs-chrome__meta">
+        <span className="pb-counter" aria-live="polite">{counter}</span>
+        <span className="pb-fs-place">{placeLabel}</span>
+      </div>
+      <div className="pb-fs-chrome__tools">
+        <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
+        <button
+          ref={closeBtnRef}
+          type="button"
+          className="pb-fs-close"
+          aria-label="Закрыть карточки"
+          onClick={() => onCloseFullscreenRef.current?.()}
+        >
+          ×
+        </button>
+      </div>
+    </header>
+  ) : null;
+  const wrapCatalogState = (body: ReactNode) => (
+    <div
+      className={`gb-player-browse${mobileFullscreen ? " pb-browse--fs" : ""}`}
+      data-surface="player-browse-deck"
+      data-browse-desktop={desktop ? "true" : "false"}
+      data-mobile-fs={mobileFullscreen ? "true" : "false"}
+    >
+      {mobileFsChrome}
+      {body}
+    </div>
+  );
 
   if (catalogState === "loading" && !players.length) {
-    return <div className="gb-player-browse"><div className="pb-loading" role="status"><h2>Ищем игроков…</h2><p>Загружаем публичный каталог.</p></div></div>;
+    return wrapCatalogState(
+      <div className="pb-loading" role="status"><h2>Ищем игроков…</h2><p>Загружаем публичный каталог.</p></div>,
+    );
   }
   if (catalogState === "unavailable") {
-    return <div className="gb-player-browse"><div className="pb-empty" role="status"><h2>Каталог игроков сейчас недоступен</h2><p>Попробуйте вернуться позже.</p></div></div>;
+    return wrapCatalogState(
+      <div className="pb-empty" role="status"><h2>Каталог игроков сейчас недоступен</h2><p>Попробуйте вернуться позже.</p></div>,
+    );
   }
   if (catalogState === "error") {
-    return <div className="gb-player-browse"><div className="pb-empty" role="alert"><h2>Не удалось загрузить каталог</h2><p>Проверьте соединение и попробуйте снова.</p></div></div>;
+    return wrapCatalogState(
+      <div className="pb-empty" role="alert"><h2>Не удалось загрузить каталог</h2><p>Проверьте соединение и попробуйте снова.</p></div>,
+    );
   }
   if (!browsePlayers.length) {
-    return <div className="gb-player-browse">
+    return wrapCatalogState(
       <div className="pb-empty" role="status">
         <h2>Никого не нашли</h2>
         <p>Попробуйте изменить фильтры или загрузить ещё, если доступно.</p>
         {hasMore && <Button variant="outline" disabled={moreBusy} onClick={onLoadMore}>{moreBusy ? "Загрузка…" : "Загрузить ещё"}</Button>}
-      </div>
-    </div>;
+      </div>,
+    );
   }
 
   const levelLabel = formatSocialLevel(current?.level);
@@ -1460,7 +1516,6 @@ export function PlayerBrowseDeck({
   const atEnd = index >= browsePlayers.length - 1;
   const intentAtStart = intentIndex <= 0;
   const intentAtEnd = intentIndex >= browsePlayers.length - 1;
-  const counter = `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`;
   const friendship = current && mediaReady && (
     <PlayerBrowseFriendship
       key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
@@ -1530,26 +1585,8 @@ export function PlayerBrowseDeck({
   );
 
   return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}${mobileFullscreen ? " pb-browse--fs" : ""}`} data-surface="player-browse-deck" data-browse-desktop={desktop ? "true" : "false"} data-mobile-fs={mobileFullscreen ? "true" : "false"}>
-    {mobileFullscreen ? (
-      <header className="pb-fs-chrome">
-        <div className="pb-fs-chrome__meta">
-          <span className="pb-counter" aria-live="polite">{counter}</span>
-          <span className="pb-fs-place">{placeLabel}</span>
-        </div>
-        <div className="pb-fs-chrome__tools">
-          <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
-          <button
-            ref={closeBtnRef}
-            type="button"
-            className="pb-fs-close"
-            aria-label="Закрыть карточки"
-            onClick={() => onCloseFullscreenRef.current?.()}
-          >
-            ×
-          </button>
-        </div>
-      </header>
-    ) : !desktop ? (
+    {mobileFsChrome}
+    {!mobileFullscreen && !desktop ? (
       <div className="pb-deck-context">
         <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
         <div className="pb-deck-context__tools">
@@ -1733,14 +1770,14 @@ export function PlayerBrowseDeck({
 
                 <div ref={gestureRef} className="pb-gesture-surface" style={{ touchAction: "pinch-zoom" }}>
                   <div className={`pb-mobile-stage${detailsOpen ? " is-details" : ""}`}>
-                    <div className="pb-cover" aria-hidden={detailsOpen ? true : undefined}>
+                    <div className="pb-cover" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}>
                       <PreparedBrowseCover media={committedMedia!.cover} />
                       {/* Single retained avatar host: cover OR details — never both (second host steals the node). */}
                       {!detailsOpen && (
                         <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
                       )}
                     </div>
-                    <div className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined}>
+                    <div className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}>
                       {current.lookingForGame && <span className="pb-pill">● Ищу игру</span>}
                       {current.trainer && !current.lookingForGame && <span className="pb-pill">Тренер</span>}
                       <h2>{current.displayName}</h2>
@@ -1752,8 +1789,12 @@ export function PlayerBrowseDeck({
                       </button>
                     </div>
 
-                    {/* No data-browse-no-drag on the whole details surface — vertical gestures on text/background must work. */}
-                    <div className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`}>
+                    {/* Closed details stay mounted for stable layout but are inert/hidden; gesture surface still receives swipes. */}
+                    <div
+                      className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`}
+                      inert={!detailsOpen ? true : undefined}
+                      aria-hidden={!detailsOpen ? true : undefined}
+                    >
                       <div className="pb-mobile-details__panel">
                         <div className="pb-mobile-details__head">
                           {detailsOpen && (

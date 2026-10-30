@@ -221,6 +221,56 @@ describe("player browse swipe boundaries", () => {
     expect(cssSource).toContain("pb-intent--skip");
     expect(cssSource).toContain("dialog.pb-mobile-fs");
   });
+
+  it("QA-01: mobile fullscreen chrome wraps early catalog loading/unavailable/error/empty", () => {
+    expect(deckSource).toContain("wrapCatalogState");
+    expect(deckSource).toContain("mobileFsChrome");
+    const chromeDef = deckSource.indexOf("const mobileFsChrome");
+    const wrapDef = deckSource.indexOf("const wrapCatalogState");
+    expect(chromeDef).toBeGreaterThan(-1);
+    expect(wrapDef).toBeGreaterThan(chromeDef);
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-loading\"");
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"status\"><h2>Каталог игроков сейчас недоступен");
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"alert\"");
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"status\">\n        <h2>Никого не нашли");
+    expect(deckSource).toContain('className="pb-fs-close"');
+    expect(deckSource.match(/className="pb-fs-close"/g)?.length).toBe(1);
+    expect(deckSource.match(/return wrapCatalogState\(/g)?.length).toBe(4);
+  });
+
+  it("QA-02: second contact cancels active gesture before primary/interactive exclusions", () => {
+    const onDown = deckSource.indexOf("const onDown = (event: PointerEvent)");
+    expect(onDown).toBeGreaterThan(-1);
+    const body = deckSource.slice(onDown, onDown + 900);
+    const secondContact = body.indexOf("event.pointerId !== drag.current.id");
+    const primaryGate = body.indexOf("!event.isPrimary");
+    const excluded = body.indexOf("isBrowseDragExcludedTarget");
+    expect(secondContact).toBeGreaterThan(-1);
+    expect(secondContact).toBeLessThan(primaryGate);
+    expect(secondContact).toBeLessThan(excluded);
+    expect(deckSource).toContain('document.addEventListener("pointerdown", onDocPointerDownCapture, true)');
+    expect(deckSource).toContain("document.removeEventListener(\"pointerdown\", onDocPointerDownCapture, true)");
+  });
+
+  it("QA-03: flight completion fences viewerGen; auth expiry invalidates flyGen", () => {
+    expect(deckSource).toContain("const capturedViewer = viewerGen.current");
+    expect(deckSource).toContain("viewerGen.current === capturedViewer");
+    const expire = deckSource.indexOf("const expire = () =>");
+    expect(expire).toBeGreaterThan(-1);
+    const expireBody = deckSource.slice(expire, expire + 520);
+    expect(expireBody).toContain("viewerGen.current += 1");
+    expect(expireBody).toContain("flyGen.current += 1");
+  });
+
+  it("QA-04: closed mobile details are inert/aria-hidden; cover/identity inert while open", () => {
+    expect(deckSource).toContain('className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`}');
+    expect(deckSource).toContain("inert={!detailsOpen ? true : undefined}");
+    expect(deckSource).toContain("aria-hidden={!detailsOpen ? true : undefined}");
+    expect(deckSource).toContain('className="pb-cover" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}');
+    expect(deckSource).toContain('className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}');
+    expect(deckSource).toContain("Single retained avatar host");
+    expect(deckSource).toContain("Stable friendship slot");
+  });
 });
 
 describe("player browse tutorial marker", () => {

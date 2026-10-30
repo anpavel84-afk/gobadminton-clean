@@ -74,7 +74,7 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 
 ### Shell
 - Cards mode on viewport `<1024` opens a **native `<dialog>` portal** with `showModal()` (focus containment + top layer), covering app header / nav / footer, with safe-area insets and exact fullscreen CSS reset (`margin/border/padding/max-width` cleared).
-- Chrome: small counter + place, help `?`, close **X** ≥44px top-right.
+- Chrome: small counter + place, help `?`, close **X** ≥44px top-right. Same chrome wraps early catalog states (loading / unavailable / error / empty) so **X** works with no API / zero items; native parent `<dialog>` unchanged.
 - Underlying directory is `inert` + `body` scroll locked; focus returns to the opener and list scroll restores on close.
 - Close paths: **X**, **Escape** (`cancel` → same close), **browser Back**. `pushState` only when entering from list; close uses `history.back()` or `replaceState` for direct `?view=cards` — no history growth loop. Unmount / resize-to-desktop closes the dialog **without** calling the history close path again.
 - Nested auth `ProfileDialog` (`<dialog>.showModal`) remains a separate top layer; safe with the browse shell.
@@ -84,15 +84,15 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 - Full-viewport cover + avatar + **compact** identity. No fixed huge bio excerpt on the cover; details are a separate page covering the photo.
 - **Single retained avatar host**: mount `PreparedBrowseAvatar` on cover **or** details, never both — a second host steals the same `HTMLImageElement`. Friendship controls stay in the stable bottom slot (not remounted / not cloned).
 - Avatar render (portal-safe): `.pb-avatar` / `.pb-details-avatar` hosts clip to a circle (`overflow: clip`, `border-radius: 50%`); **descendant** `img` (not only direct-child) uses `width/height: 100%`, `object-fit: cover`, `border-radius: inherit`. Do not rely on `.fr3 .avatar > img` — the mobile `<dialog>` portal drops `.fr3`, and `RetainedBrowseImage` wraps with `display: contents`.
-- Swipe **up** opens details; **down** on details text/background returns to cover / previous page. `data-browse-no-drag` only on actual buttons/links/pager — **not** on the whole `.pb-mobile-details` surface.
+- Swipe **up** opens details; **down** on details text/background returns to cover / previous page. `data-browse-no-drag` only on actual buttons/links/pager — **not** on the whole `.pb-mobile-details` surface. Closed details stay mounted with `inert` + `aria-hidden`; while details are open, cover/identity controls are inert (not tabbable). One retained avatar host and stable friendship slot unchanged.
 - Long bio/details page via up/down and accessible pager buttons — **no ordinary vertical scroll** inside the card when content fits; pager remains for overflow chunks.
 - Minimal persistent **Пропустить** / **В друзья** buttons remain accessible alternatives. Actions must remain usable at 390×844 and 375×667 without horizontal overflow.
 - Last card left must settle to a visible honest end / «Загрузить ещё» terminal (`pb-deck-end--fs`), not leave only a flown-off card forever.
 - One-time gesture hint (`gb-player-gallery-tutorial-v2`); help reopens. Existing real metadata only; games copy stays honest unavailable.
 
 ### Gestures · OUR tuning (`player-browse.ts`)
-- Register only after the pending card is **media-ready**. Single active pointer; stable **pointer capture**; handlers use refs so the controller is not recreated mid-drag. Second contact cancels; does not reassign `pointerId`.
-- `touch-action: pinch-zoom` on the gesture surface (app owns pans; browser keeps pinch). Interactive targets (`button,a,…`, `[data-browse-no-drag]`) excluded. `pointercancel` / non-primary / multitouch / blur / unmount / auth / scope / breakpoint → **no mutation**, cancel timers, spring-back.
+- Register only after the pending card is **media-ready**. Single active pointer; stable **pointer capture**; handlers use refs so the controller is not recreated mid-drag. Second contact cancels **before** primary/interactive exclusions (document capture while drag active, including outside the gesture surface); never adopts the secondary pointer; close/help still receive the event; cancel / late primary release → zero POST/skip.
+- `touch-action: pinch-zoom` on the gesture surface (app owns pans; browser keeps pinch). Interactive targets (`button,a,…`, `[data-browse-no-drag]`) excluded. `pointercancel` / non-primary / multitouch / blur / unmount / auth / scope / breakpoint → **no mutation**, cancel timers, spring-back. Flight completion and skip/advance are fenced with captured `flyGen` **and** `viewerGen` (auth expiry/session bumps both synchronously).
 - Horizontal drag is **1:1** via RAF + CSS transform from release pose — **no damping**. Grab-pivot `transform-origin` at pointerdown; rotation bounded `±12°` (`browseDragRotationDeg`), not unbounded `dx/28`. Full-surface **red (left / skip)** and **green (right / request)** saturating intent layers (smoothstep). Green while touching is **intent**, not server PASS.
 - Axis lock after **8px** with **1.3×** dominance.
 - Recent velocity: last **80ms** window including the release sample; **0** after ~100ms pause; capped ±2.5 px/ms (`sampleBrowseVelocity`).
