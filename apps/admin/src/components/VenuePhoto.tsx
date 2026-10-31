@@ -217,7 +217,8 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
  <label className="form-field"><span>{replaceId?"JPEG, PNG или WebP для замены":`Выбрать JPEG, PNG или WebP (до ${remaining} из 8)`}</span>
   <input type="file" accept="image/jpeg,image/png,image/webp" multiple={!replaceId} disabled={fileDisabled}
    onChange={e=>{const files=e.target.files;e.target.value="";void select(files);}}/></label>
- {preview&&<><img className="venue-cover" src={preview} alt={replaceId?"Предпросмотр замены":"Предпросмотр нового изображения"}/><p>{replaceId?"Замена подготовлена. Старое изображение видно до успешного сохранения.":`В очереди: ${queue.length}. Публикация — после проверки изображения сервером.`}</p></>}
+ {preview&&<img className="venue-cover" src={preview} alt={replaceId?"Предпросмотр замены":"Предпросмотр нового изображения"}/>}
+ {queue.length>0&&<p role="status">{replaceId?"Замена подготовлена. Старое изображение видно до успешного сохранения.":`В очереди: ${queue.length}. Публикация — после проверки изображения сервером.`}</p>}
  <fieldset className="venue-gallery-evidence" disabled={busy||reading||!!pending||!receipt}>
   <legend>Источник и основание права (без выдуманной лицензии)</legend>
   <label className="form-field"><span>Тип</span><select value={evidence.creditKind} onChange={e=>{

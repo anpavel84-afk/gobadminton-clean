@@ -345,16 +345,18 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     const a0 = await add(v.id, 1, uploaderA);
     expect(a0.statusCode, a0.body).toBe(200);
     // Insert B at position 1 and second A at position 2 via direct rows so both uploaders own media.
+    const fpB = "e1".repeat(32);
+    const fpA2 = "e2".repeat(32);
     const approvalB = (await pool.query<{ id: string }>(
       "INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id",
-      ["b".repeat(64)],
+      [fpB],
     )).rows[0]!.id;
     const approvalA2 = (await pool.query<{ id: string }>(
       "INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id",
-      ["c".repeat(64)],
+      [fpA2],
     )).rows[0]!.id;
-    const keyB = `${"b".repeat(64)}.png`;
-    const keyA2 = `${"c".repeat(64)}.png`;
+    const keyB = `${fpB}.png`;
+    const keyA2 = `${fpA2}.png`;
     await pool.query(
       `INSERT INTO venue_gallery_items(
          venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,

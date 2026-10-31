@@ -61,9 +61,8 @@ function resetHooks() {
 }
 function ssr(node: ReactNode) {
   resetHooks();
-  const html = renderToStaticMarkup(node);
-  hooks.effects.splice(0).forEach(fn => fn());
-  return html;
+  // SSR markup only — do not flush browser effects (Image/window preload/listeners).
+  return renderToStaticMarkup(node);
 }
 
 beforeEach(() => { resetHooks(); });
@@ -194,6 +193,12 @@ describe("VenuePopup + VenueGallery compact composition gestures", () => {
   }
 
   it("keeps horizontal gallery capture; vertical still expands popup; swipe suppresses click", () => {
+    class FakeImage {
+      decoding = "";
+      src = "";
+    }
+    vi.stubGlobal("Image", FakeImage);
+    if (typeof window === "undefined") vi.stubGlobal("window", new EventTarget());
     const galleryCapture = new Set<number>();
     const previewCapture = new Set<number>();
     const galleryTarget = {

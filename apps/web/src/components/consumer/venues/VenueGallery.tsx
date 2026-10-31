@@ -197,8 +197,8 @@ export function VenueGallery({
   }
 
   if (items.length === 0) {
-    // Unattributed legacy cover: keep VenueCover (no invented illustration credit).
-    if (coverSlot && venueCoverUrl(venue.cover?.uploadedUrl)) return <>{coverSlot}</>;
+    // Preserve parent morph/fallback slot when gallery has no items; do not invent credit.
+    if (coverSlot) return <>{coverSlot}</>;
     return <VenueCover cover={venue.cover} name={venue.name} className={className} />;
   }
 

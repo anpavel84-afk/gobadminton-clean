@@ -177,9 +177,12 @@ describe("VenuePhoto parent integration: multi-upload queue survives version ref
     const fileInput = view().find(node => node.type === "input" && node.props.type === "file")!;
     const fileA = new File([new Uint8Array([1])], "a.png", { type: "image/png" });
     const fileB = new File([new Uint8Array([2])], "b.png", { type: "image/png" });
+    const selected = Object.assign([fileA, fileB], {
+      item: (index: number) => [fileA, fileB][index] ?? null,
+    });
     await (fileInput.props.onChange as (e: { target: { files: FileList; value: string } }) => void)({
       target: {
-        files: { 0: fileA, 1: fileB, length: 2, item: (i: number) => (i === 0 ? fileA : fileB) } as FileList,
+        files: selected as FileList,
         value: "",
       },
     });
