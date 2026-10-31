@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Pool } from "pg";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadEnv } from "../../src/config/env";
 import { importVenueCovers, importVenueGallery } from "../../src/database/import-venue-covers";
 import { validateManifest } from "../../src/venues/venue-cover-import";
@@ -65,6 +65,11 @@ run("venue gallery import: disposable PostGIS", () => {
     const idempotency = new IdempotencyService(db(), env);
     const mutations = new MutationRunner(db(), idempotency, new ActorFenceService(env), env);
     media = new AvatarService(db(), env, mutations, moderation, idempotency);
+  }, 120000);
+
+  // Fresh user/principal per independent it — moderation reserveAttempt is 10 image attempts / 15min per user_id.
+  // Shared beforeAll actor exhausted the real guard across tests 3–4; do not reset budgets or weaken the limit.
+  beforeEach(async () => {
     const user = (await db().query<{ id: string }>("INSERT INTO users(display_name) VALUES('Synthetic gallery importer') RETURNING id")).rows[0];
     if (!user) throw new Error("fixture user");
     userId = user.id;
@@ -72,7 +77,7 @@ run("venue gallery import: disposable PostGIS", () => {
     if (!principal) throw new Error("fixture actor");
     actor = principal.id;
     await db().query("INSERT INTO admin_role_grants(principal_id,role,reason_code) VALUES($1,'superadmin','synthetic')", [actor]);
-  }, 120000);
+  });
 
   afterAll(async () => {
     await pool?.end();
@@ -120,7 +125,9 @@ run("venue gallery import: disposable PostGIS", () => {
       }),
       images: new Map([[venueId, bytes]]),
     };
-    expect(await importVenueCovers(db(), coverBatch, actor, true, { media, moderation }, () => undefined)).toBe(0);
+    const lines: object[] = [];
+    const code = await importVenueCovers(db(), coverBatch, actor, true, { media, moderation }, (l) => lines.push(l));
+    expect(code, `seedMainCover import failed code=${code} lines=${JSON.stringify(lines)}`).toBe(0);
     return sha;
   }
 
