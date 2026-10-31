@@ -191,6 +191,30 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(styleGuide).toContain("NOT implemented");
     expect(styleGuide).not.toMatch(/smart ranking[\s\S]{0,80}delivered/i);
   });
+
+  it("mobile FS last-card end stays out of flow; modal status sits below chrome not over actions", () => {
+    const css = readFileSync(join(root, "src/styles/player-browse.css"), "utf8");
+    // Plain end → chrome out-of-flow; no in-flow --fs footer that shrinks the last card.
+    expect(deckSource).toContain("pb-fs-end");
+    expect(deckSource).toContain("atEndFsPlain");
+    expect(deckSource).toContain("!(mobileFullscreen && !hasMore)");
+    expect(deckSource).toContain("pb-deck-end--fs-more");
+    expect(css).toMatch(/\.pb-deck-end--fs\s*\{[^}]*position:\s*absolute/s);
+    expect(css).toContain(".pb-fs-end");
+    // Modal notice: top under chrome/X — not bottom:~112 over Undo/primary.
+    expect(css).toMatch(/\.pb-offer-status--modal\s*\{[^}]*top:\s*calc\(56px/s);
+    expect(css).not.toMatch(/\.pb-offer-status--modal\s*\{[^}]*bottom:\s*calc\(112px/s);
+    expect(styleGuide).toContain("below chrome/X and above Undo/primary");
+    expect(styleGuide).toContain("pb-deck-end--fs-more");
+  });
+
+  it("offer status refines single extraUnknown under noUncheckedIndexedAccess", () => {
+    expect(offersUiSource).toContain("const onlyExtraUnknown = extraUnknown.length === 1 ? extraUnknown[0] : undefined");
+    expect(offersUiSource).toContain("onlyExtraUnknown");
+    expect(offersUiSource).toContain("renderUnresolved(onlyExtraUnknown)");
+    expect(offersUiSource).not.toContain("renderUnresolved(extraUnknown[0])");
+    expect(offersUiSource).not.toMatch(/@ts-ignore|as any/);
+  });
 });
 
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0 }));

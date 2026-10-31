@@ -1605,12 +1605,18 @@ export function PlayerBrowseDeck({
   const counter = browsePlayers.length
     ? `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`
     : "00 / 00";
+  // Last-card end on mobile FS: plain copy lives in chrome/counter (no in-flow footer that shrinks the card).
+  const atEndFs = mobileFullscreen && browsePlayers.length > 0 && index >= browsePlayers.length - 1;
+  const atEndFsPlain = atEndFs && !hasMore;
   // Shared mobile fullscreen chrome — used by early catalog states and the ready deck (one X/counter/help).
   const mobileFsChrome = mobileFullscreen ? (
     <header className="pb-fs-chrome">
       <div className="pb-fs-chrome__meta">
         <span className="pb-counter" aria-live="polite">{counter}</span>
         <span className="pb-fs-place">{placeLabel}</span>
+        {atEndFsPlain ? (
+          <span className="pb-fs-end" role="status">Больше игроков в текущей выборке нет.</span>
+        ) : null}
       </div>
       <div className="pb-fs-chrome__tools">
         <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
@@ -2147,8 +2153,15 @@ export function PlayerBrowseDeck({
       </div>
     </div>
 
-    {atEnd && (
-      <div className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs" : ""}`} role="status">
+    {/*
+      Mobile FS: plain end → chrome `.pb-fs-end` (counter/live path); hasMore → out-of-flow
+      `.pb-deck-end--fs-more` so the last visible card keeps full stage height. Desktop in-flow footer unchanged.
+    */}
+    {atEnd && !(mobileFullscreen && !hasMore) && (
+      <div
+        className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs pb-deck-end--fs-more" : ""}`}
+        role="status"
+      >
         {hasMore
           ? <Button variant="outline" disabled={moreBusy || navigationLocked} onClick={onLoadMore}>{moreBusy ? "Загрузка…" : "Загрузить ещё"}</Button>
           : <p className="pb-counter">Больше игроков в текущей выборке нет.</p>}

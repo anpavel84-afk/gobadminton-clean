@@ -148,6 +148,8 @@ export function PlayerBrowseOfferStatus({
       )}
     </div>
   );
+  // noUncheckedIndexedAccess: length===1 does not narrow [0]; refine locally.
+  const onlyExtraUnknown = extraUnknown.length === 1 ? extraUnknown[0] : undefined;
   return (
     <div className={`pb-offer-status ${className ?? ""}`.trim()} role="status" aria-live="polite">
       {showPrimary ? (
@@ -156,8 +158,8 @@ export function PlayerBrowseOfferStatus({
       {status.canCheckStatus && onCheckStatus && (
         <Button variant="outline" onClick={onCheckStatus}>Проверить статус</Button>
       )}
-      {extraUnknown.length === 1
-        ? renderUnresolved(extraUnknown[0])
+      {onlyExtraUnknown
+        ? renderUnresolved(onlyExtraUnknown)
         : extraUnknown.length > 1
           ? (
             <details className="pb-offer-status__more">
