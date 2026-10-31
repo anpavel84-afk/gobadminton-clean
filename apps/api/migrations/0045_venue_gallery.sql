@@ -129,14 +129,19 @@ BEGIN
         SELECT storage_key, moderation_approval_id, actor_id, credit_kind, credit_text, credit_url
           INTO main_key, main_approval, main_actor, main_kind, main_text, main_url
           FROM venue_gallery_items WHERE id = main_id;
+        -- Key/approval/uploader first (one version bump). 0037 clear_stale clears credit when
+        -- cover_key changes and credit columns look unchanged; reapply selected main credit after.
         UPDATE venues SET
           cover_key = main_key,
           cover_moderation_approval_id = main_approval,
           cover_actor_id = main_actor,
+          version = version + 1,
+          updated_at = now()
+          WHERE id = vid;
+        UPDATE venues SET
           cover_credit_kind = main_kind,
           cover_credit_text = main_text,
           cover_credit_url = main_url,
-          version = version + 1,
           updated_at = now()
           WHERE id = vid;
         DELETE FROM avatar_media_gc WHERE storage_key IN (

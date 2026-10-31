@@ -428,6 +428,16 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     expect(cover.cover_actor_id).toBe(otherOwner.userId);
     expect(cover.cover_key).toBe(keyOther);
     expect(cover.version).toBe(beforeMain.version + 1);
+    // Same illustration credit on retired main and survivor: projection must keep credit after key swap.
+    const coverCredit = (await pool.query<{
+      cover_credit_kind: string | null; cover_credit_text: string | null; cover_credit_url: string | null;
+    }>("SELECT cover_credit_kind, cover_credit_text, cover_credit_url FROM venues WHERE id=$1", [v2.id])).rows[0]!;
+    expect(coverCredit).toEqual({
+      cover_credit_kind: "illustration", cover_credit_text: "Иллюстрация", cover_credit_url: null,
+    });
+    expect((await publicVenue(v2.id)).json().cover.credit).toEqual({
+      kind: "illustration", text: "Иллюстрация", url: null,
+    });
     expect((await publicVenue(v2.id)).json().profile.gallery.items).toHaveLength(1);
     // Earlier-retired B media stays hidden even after B reactivation.
     expect((await pool.query(
@@ -442,6 +452,33 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     expect((await publicVenue(v.id)).json().profile.gallery.items.every(
       (entry: { url: string }) => !entry.url.includes("b".repeat(16)),
     )).toBe(true);
+  });
+
+  it("keeps legacy cover credit when switching main between same-credit approved gallery items", async () => {
+    const v = await venue();
+    const first = await add(v.id, 1, owner, png, "illustration");
+    expect(first.statusCode, first.body).toBe(200);
+    const secondBody = await sharp({ create: { width: 900, height: 600, channels: 3, background: "blue" } }).png().toBuffer();
+    const second = await add(v.id, first.json().version, owner, secondBody, "illustration");
+    expect(second.statusCode, second.body).toBe(200);
+    const targetId = (second.json().items as { id: string; isMain: boolean }[]).find((x) => !x.isMain)!.id;
+    const setMain = await app.inject({
+      method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${targetId}/main`,
+      headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(second.json().version) }),
+      payload: { expectedVersion: second.json().version },
+    });
+    expect(setMain.statusCode, setMain.body).toBe(200);
+    const mainItem = (setMain.json().items as { id: string; isMain: boolean; credit: { kind: string; text: string; url: string | null } }[])
+      .find((x) => x.isMain)!;
+    expect(mainItem.id).toBe(targetId);
+    expect(mainItem.credit).toEqual({ kind: "illustration", text: "Иллюстрация", url: null });
+    const projected = (await pool.query<{
+      cover_credit_kind: string | null; cover_credit_text: string | null; cover_credit_url: string | null;
+    }>("SELECT cover_credit_kind, cover_credit_text, cover_credit_url FROM venues WHERE id=$1", [v.id])).rows[0]!;
+    expect(projected).toEqual({
+      cover_credit_kind: "illustration", cover_credit_text: "Иллюстрация", cover_credit_url: null,
+    });
+    expect((await publicVenue(v.id)).json().cover.credit).toEqual(mainItem.credit);
   });
 
   it("preserves original uploader on projected cover when superadmin setMain; retirement clears public gallery+cover without resurrection", async () => {

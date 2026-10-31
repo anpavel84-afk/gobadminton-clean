@@ -76,12 +76,18 @@ export class VenueGalleryService {
       );
       return;
     }
+    // Key/approval/uploader first: 0037 clear_stale_venue_cover_credit clears credit when
+    // cover_key changes and credit columns look unchanged. Reapply real main credit in a
+    // second UPDATE in this same transaction (no extra version bump, no external calls).
     await c.query(
-      `UPDATE venues SET cover_key=$2, cover_moderation_approval_id=$3, cover_actor_id=$4,
-        cover_credit_kind=$5, cover_credit_text=$6, cover_credit_url=$7, updated_at=now()
+      `UPDATE venues SET cover_key=$2, cover_moderation_approval_id=$3, cover_actor_id=$4, updated_at=now()
        WHERE id=$1`,
-      [venueId, main.storage_key, main.moderation_approval_id, main.actor_id,
-        main.credit_kind, main.credit_text, main.credit_url],
+      [venueId, main.storage_key, main.moderation_approval_id, main.actor_id],
+    );
+    await c.query(
+      `UPDATE venues SET cover_credit_kind=$2, cover_credit_text=$3, cover_credit_url=$4, updated_at=now()
+       WHERE id=$1`,
+      [venueId, main.credit_kind, main.credit_text, main.credit_url],
     );
     await c.query(
       `DELETE FROM avatar_media_gc WHERE storage_key IN (
