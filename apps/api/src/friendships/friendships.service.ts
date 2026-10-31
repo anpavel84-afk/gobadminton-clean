@@ -209,7 +209,7 @@ export class FriendshipsService {
   async capabilities(actor: string, sessionId: string) {
     return this.read(actor, sessionId, async client => {
       // Cap tracks existing Friends admission + recommendation schema only.
-      // No separate env toggle; PROD/outside-DEV stay false via friendsEnabled.
+      // No separate env toggle; outside exact local/DEV/canonical PROD stays false via friendsEnabled.
       const tables = (await client.query(
         "SELECT to_regclass('friendships') AS friendships, to_regclass('game_recommendations') AS recommendations",
       )).rows[0];

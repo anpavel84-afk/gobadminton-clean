@@ -5,7 +5,7 @@ import type { Availability } from "../friendships/friendships.policy";
 import { eligible } from "../friendships/friendships.policy";
 import type { PlayInterestView } from "@gobadminton/contracts/friendship-types";
 
-/** Bounded DEV/local send policy — no new env keys and independent of Friends ON. */
+/** Bounded local/DEV/PROD send policy — no new env keys and independent of Friends ON. */
 export const PLAY_INTEREST_RATE_WINDOW_SECONDS = 600;
 export const PLAY_INTEREST_SEND_LIMIT = 40;
 
@@ -27,15 +27,18 @@ export function unavailable(): never {
 }
 
 /**
- * DEV/local opt-in via existing app-env/origin + social directory.
- * Does not require FRIENDS_INTERNAL_ENABLED or PROD/env changes.
+ * Local/DEV/canonical PROD opt-in via existing app-env/origin + social directory.
+ * Independent of FRIENDS_INTERNAL_ENABLED; does not auto-create interests or mutate user data.
  */
 export function playInterestsEnabled(env: AppEnv): boolean {
   const local = env.NODE_ENV === "test" && env.APP_ENV === "local";
   const dev = env.NODE_ENV === "production" && ["mvp", "stage"].includes(env.APP_ENV)
     && env.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
     && env.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru";
-  return (local || dev) && env.SOCIAL_DIRECTORY_ENABLED;
+  const prod = env.NODE_ENV === "production" && env.APP_ENV === "prod"
+    && env.PUBLIC_WEB_ORIGIN === "https://gobadminton.ru"
+    && env.PUBLIC_API_ORIGIN === "https://gobadminton.ru";
+  return (local || dev || prod) && env.SOCIAL_DIRECTORY_ENABLED;
 }
 
 export type PlayInterestRow = {
