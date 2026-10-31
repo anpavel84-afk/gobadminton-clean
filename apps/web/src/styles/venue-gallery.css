@@ -169,3 +169,24 @@
 @media (max-width: 1023px) {
   .gb-venue-gallery:not([data-size="compact"]) { max-height: none; }
 }
+/* Compact morph (#422): outer .gb-venue-preview-cover wrap already animates via
+   venue-popup --gb-venue-cover-*; keep the physical SelectedVenueCover image in-place
+   and let the compact gallery frame grow with that wrap (not stay locked at 64).
+   Fallback/no-gallery slot morph is unchanged — these selectors require the wrap+gallery. */
+.gb-venue-popup[data-compact-morph="true"] .gb-venue-gallery-wrap.gb-venue-preview-cover > .gb-venue-gallery[data-size="compact"] {
+  width: 100%;
+  height: 100%;
+}
+/* Nested MAIN slot must fill the gallery frame; do not re-apply outer morph left/top. */
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-gallery__frame > .gb-venue-preview-cover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] .gb-venue-gallery__frame > .gb-venue-preview-cover {
+  transition: none;
+}
