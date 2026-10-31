@@ -649,6 +649,15 @@ describeIntegration("LS-03 text DM", () => {
       (created.json() as { conversation: { requestState: string } }).conversation
         .requestState,
     ).toBe("accepted");
+    // Explicit legacy pending fixture — API create is accepted by default.
+    // First half keeps pending→closed-on-block coverage; do not relax to accepted.
+    await pool.query(
+      `UPDATE conversations
+       SET request_state = 'pending',
+           request_expires_at = now() + interval '1 day'
+       WHERE id = $1`,
+      [convId],
+    );
 
     const block = await app.inject({
       method: "PUT",
@@ -1181,6 +1190,98 @@ WHERE c.id = $1
     } finally {
       client.release();
     }
+  });
+
+  it("DM contact_policy opt-out denies incoming without bumping shared social epoch", async () => {
+    const a = await login("vk");
+    const b = await login("yandex");
+    await ensureOpenProfile(a, "Epoch Actor", "epoch-a");
+    const peerB = await ensureOpenProfile(b, "Epoch Peer", "epoch-b");
+
+    const epochBefore = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    const beforeEpoch = epochBefore.rows[0]!.social_action_epoch;
+
+    const cur = await app.inject({
+      method: "GET",
+      url: "/v1/me/social-profile",
+      cookies: b.cookies,
+    });
+    expect(cur.statusCode).toBe(200);
+    const version = (cur.json() as { version: number }).version;
+    const closed = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/social-profile",
+      headers: mutationHeaders(b, `epoch-dm-${uniqueSuffix("k")}-xxxxx`),
+      payload: { expectedVersion: version, contactPolicy: "closed" },
+    });
+    expect(closed.statusCode).toBe(200);
+    expect((closed.json() as { contactPolicy: string }).contactPolicy).toBe(
+      "closed",
+    );
+
+    const epochAfterDm = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    expect(epochAfterDm.rows[0]!.social_action_epoch).toBe(beforeEpoch);
+
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/requests",
+      headers: mutationHeaders(a, `epoch-deny-${uniqueSuffix("k")}-xxxx`),
+      payload: {
+        targetPublicPlayerId: peerB.publicPlayerId,
+        text: "dm opt-out must deny",
+        clientMessageId: `epoch-${uniqueSuffix("m")}`,
+      },
+    });
+    expect(denied.statusCode).toBe(404);
+
+    const hide = await app.inject({
+      method: "PUT",
+      url: "/v1/me/social-profile/visibility",
+      headers: mutationHeaders(b, `epoch-hide-${uniqueSuffix("k")}-xxxx`),
+      payload: {
+        directoryVisible: false,
+        expectedVersion: (closed.json() as { version: number }).version,
+      },
+    });
+    expect(hide.statusCode).toBe(200);
+    const epochAfterHide = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    expect(Number(epochAfterHide.rows[0]!.social_action_epoch)).toBe(
+      Number(beforeEpoch) + 1,
+    );
+
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET directory_visible = true, contact_policy = 'requests'
+       WHERE user_id = $1`,
+      [b.userId],
+    );
+    const epochMid = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    const midEpoch = epochMid.rows[0]!.social_action_epoch;
+    await optOutSocialEligible(b, "epoch-revoke");
+    const epochAfterRevoke = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    expect(Number(epochAfterRevoke.rows[0]!.social_action_epoch)).toBe(
+      Number(midEpoch) + 1,
+    );
   });
 
   it("new profile upsert defaults contact_policy to requests without overwriting closed", async () => {

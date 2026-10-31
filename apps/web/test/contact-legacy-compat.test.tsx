@@ -14,22 +14,27 @@ describe("legacy contact action fails closed while preserving messaging navigati
   it("renders 404 as unavailable without permission, retry loop, conversation or invitation", () => {
     const html = render(failure(404));
     expect(html).toContain("Общение сейчас недоступно");
-    expect(html).not.toMatch(/href=|Пригласить|Запрос отправлен|Первый контакт|Повторить|К переписке/);
+    expect(html).not.toMatch(/href=|Пригласить|Запрос отправлен|Первый контакт|Запрос на общение|Дождитесь принятия|Повторить|К переписке/);
   });
   it.each([[401, "Войти, чтобы написать"], [403, "Нет доступа"], [409, "Возможность общения изменилась"], [429, "немного позже"], [500, "Не удалось проверить"]])("keeps HTTP %i truthful", (status, title) => {
     const html = render(failure(status as number)); expect(html).toContain(title);
-    expect(html).not.toMatch(/Пригласить|Запрос отправлен|К переписке/);
+    expect(html).not.toMatch(/Пригласить|Запрос отправлен|К переписке|Первый контакт|Запрос на общение/);
     if (status !== 401) expect(html).not.toContain('href="/messages');
   });
   it("does not suppress auth errors with the legacy fallback", () => {
     expect(render(failure(404), "error")).toContain("Не удалось проверить возможность общения");
     expect(render(null)).toContain("Проверяем");
   });
-  it("preserves authoritative accepted/pending/first-contact routing and rejects mismatched targets", () => {
+  it("preserves authoritative accepted/pending/first-contact routing without approval copy and rejects mismatched targets", () => {
     for (const state of ["accepted", "pending_incoming", "pending_outgoing"] as const) {
-      expect(render({ ok: true, status: 200, data: { state, targetPublicPlayerId: "peer", conversationId: "conversation", version: 1 } })).toContain('href="/messages?conversation=conversation"');
+      const html = render({ ok: true, status: 200, data: { state, targetPublicPlayerId: "peer", conversationId: "conversation", version: 1 } });
+      expect(html).toContain('href="/messages?conversation=conversation"');
+      expect(html).not.toMatch(/Запрос отправлен|Первый контакт|Запрос на общение|Дождитесь принятия|Ответить на запрос|Открыть запрос/);
     }
-    expect(render({ ok: true, status: 200, data: { state: "none", targetPublicPlayerId: "peer", canRequestContact: true } })).toContain('href="/messages?to=peer"');
+    const none = render({ ok: true, status: 200, data: { state: "none", targetPublicPlayerId: "peer", canRequestContact: true } });
+    expect(none).toContain('href="/messages?to=peer"');
+    expect(none).toContain("Написать");
+    expect(none).not.toMatch(/Первый контакт|Запрос на общение|first-contact-note/);
     expect(render({ ok: true, status: 200, data: { state: "accepted", targetPublicPlayerId: "another", conversationId: "secret", version: 1 } })).not.toContain("secret");
     expect(contactAction({ state: "none", targetPublicPlayerId: "peer", canRequestContact: false } as unknown as ContactState).href).toBeUndefined();
   });

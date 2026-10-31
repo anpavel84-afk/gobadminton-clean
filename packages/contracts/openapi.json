@@ -3602,7 +3602,7 @@
         "tags": [
           "Messaging"
         ],
-        "summary": "Create pending 1:1 text DM request with first payload",
+        "summary": "Open or continue a 1:1 text DM; first message creates an accepted conversation when eligible",
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -17937,7 +17937,8 @@
             "enum": [
               "requests",
               "closed"
-            ]
+            ],
+            "description": "DM-only personal-message switch. `requests` allows new incoming DMs (first message opens an accepted conversation when eligible); `closed` refuses new incoming DMs while preserving history. Enum wire values retained for compatibility; not a friendship/play/invite approval gate."
           },
           "consentPolicyVersion": {
             "type": [
@@ -18058,7 +18059,7 @@
           },
           "canRequestContact": {
             "type": "boolean",
-            "description": "Current server-owned first-contact eligibility for this authenticated viewer. False for guests/self, feature-off, ineligible actors/targets, blocks or an existing direct conversation. Missing on an older server must be treated as unavailable. Read only; POST revalidates current state. No private policy or location fields are exposed."
+            "description": "Current server-owned eligibility for this authenticated viewer to send a personal message (immediate DM when none exists). False for guests/self, feature-off, ineligible actors/targets, blocks, recipient DM opt-out, or an existing direct conversation. Missing on an older server must be treated as unavailable. Read only; POST revalidates current state. No private policy or location fields are exposed. Wire name retained for compatibility."
           },
           "cover": {
             "$ref": "#/components/schemas/PlayerCover"
@@ -18135,7 +18136,8 @@
             "enum": [
               "requests",
               "closed"
-            ]
+            ],
+            "description": "DM-only personal-message switch. `requests` allows new incoming DMs; `closed` refuses them. Wire enum retained for compatibility."
           },
           "radarConsented": {
             "type": "boolean"
@@ -18575,7 +18577,7 @@
           },
           "canRequestContact": {
             "type": "boolean",
-            "description": "Current server-owned first-contact eligibility for this authenticated viewer. False for guests/self, feature-off, ineligible actors/targets, blocks or an existing direct conversation. Missing on an older server must be treated as unavailable. Read only; POST revalidates current state. No private policy or location fields are exposed."
+            "description": "Current server-owned eligibility for this authenticated viewer to send a personal message (immediate DM when none exists). False for guests/self, feature-off, ineligible actors/targets, blocks, recipient DM opt-out, or an existing direct conversation. Missing on an older server must be treated as unavailable. Read only; POST revalidates current state. No private policy or location fields are exposed. Wire name retained for compatibility."
           }
         }
       },

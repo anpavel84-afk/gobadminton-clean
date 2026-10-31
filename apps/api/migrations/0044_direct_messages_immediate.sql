@@ -2,9 +2,25 @@
 -- requests wire value means allow personal messages (not approval gate). Existing closed rows are preserved.
 -- Historical pending→accepted promotion is one-way; expiry jobs fence on version/state and must not touch accepted.
 -- Rollback restores DB default only — do NOT demote accepted/new message history; use pre-migration backup for full recovery.
+--
+-- Epoch fence: contact_policy is DM-only. requests→closed must NOT bump shared social_action_epoch
+-- (friend/play rows share that epoch). Incoming DM refusal is the receiver-policy guard under existing locks.
+-- Directory hide and socialEligible revoke still bump. Do not edit historical 0032; no epoch decrement/backfill.
 
 ALTER TABLE player_social_profiles
   ALTER COLUMN contact_policy SET DEFAULT 'requests';
+
+CREATE OR REPLACE FUNCTION friendship_profile_epoch_fence() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (OLD.directory_visible AND NOT NEW.directory_visible)
+    OR (OLD.social_eligible AND NOT NEW.social_eligible)
+  THEN
+    NEW.social_action_epoch = OLD.social_action_epoch + 1;
+  ELSIF NEW.social_action_epoch < OLD.social_action_epoch THEN
+    RAISE EXCEPTION 'social epoch may not decrease' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
 
 -- Promote currently-valid pending direct conversations only.
 -- Eligible: recipient active/public/social_eligible/contact_policy=requests;

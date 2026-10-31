@@ -143,6 +143,8 @@ describe("WEB-02 Players / Profile", () => {
     expect(page).toContain('data-surface="op-05"');
     expect(page).toContain("putMyLookingForGame");
     expect(page).toContain("putMySocialProfileVisibility");
+    expect(page).toContain('label="Разрешать личные сообщения"');
+    expect(page).not.toContain('label="Принимать запросы на общение"');
     expect(page).toContain('href="/players"');
     expect(page).toContain("deactivateTrainerProfile");
     expect(page).not.toContain('data-gated="PX-01"');
