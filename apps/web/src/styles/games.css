@@ -219,6 +219,73 @@
 .gb-game-stepper { display: flex; align-items: center; gap: 8px; }
 .gb-game-stepper button { flex: none; width: 44px; height: 44px; border: 1px solid var(--gb-line); border-radius: 12px; background: var(--gb-paper); font-size: 22px; cursor: pointer; }
 .gb-game-stepper input { text-align: center; }
+/* #432 create level range — two native ranges; shared form/trainer/embedded. */
+.gb-game-level-range {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.gb-game-level-range__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.gb-game-level-range__summary {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--gb-ink);
+}
+.gb-game-level-range__row {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) 2.75rem;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+.gb-game-level-range__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gb-ink-soft);
+}
+.gb-game-field .gb-game-level-range__input[type="range"],
+.gb-game-level-range__input[type="range"] {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--gb-lime);
+  cursor: pointer;
+}
+.gb-game-level-range__input[type="range"]:focus {
+  outline: none;
+}
+.gb-game-level-range__input[type="range"]:focus-visible {
+  outline: 3px solid var(--gb-purple);
+  outline-offset: 3px;
+}
+.gb-game-level-range__value {
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--gb-ink);
+}
 .gb-game-form-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 .gb-game-preview-heading { margin: 10px 0 24px; }
 .gb-game-preview-heading h2 { font-size: 28px; margin: 0 0 8px; }

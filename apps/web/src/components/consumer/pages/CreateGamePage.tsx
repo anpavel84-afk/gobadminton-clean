@@ -5,6 +5,7 @@ import { inviteGameAuthReturnPath, pendingInviteeFromSearch } from "../../../lib
 import { InvitationChooser } from "../messages/InvitationChooser";
 
 import { GamePhotoSelection } from "../games/GamePhotoSelection";
+import { GameLevelRange } from "../games/GameLevelRange";
 import { gameCoverRequest } from "../../../lib/game-cover-api";
 import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -535,7 +536,7 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
           <section className="gb-game-form-group" aria-labelledby="gb-create-game-section-3"><h2 id="gb-create-game-section-3" className="gb-game-form-group-title">Для кого</h2><div className="gb-game-fields">
             <div className="gb-game-field"><label htmlFor="capacity">Количество мест</label><div className="gb-game-stepper"><button type="button" aria-label="Уменьшить количество мест" disabled={draft.capacity <= 1} onClick={() => setDraft({ ...draft, capacity: draft.capacity - 1 })}>−</button><input id="capacity" type="number" min={1} max={1000} required value={draft.capacity} onChange={e => setDraft({ ...draft, capacity: Number(e.target.value) })} /><button type="button" aria-label="Увеличить количество мест" disabled={draft.capacity >= 1000} onClick={() => setDraft({ ...draft, capacity: draft.capacity + 1 })}>+</button></div></div>
             <label className="gb-game-field">Формат<select id="format" value={draft.formatKey} onChange={e => setDraft({ ...draft, formatKey: e.target.value })}><option value="doubles">Парная игра</option><option value="singles">Одиночная игра</option><option value="mixed">Микст</option></select></label>
-            <label className="gb-game-field">Уровни игроков<input id="levels" required value={draft.levelIds} onChange={e => setDraft({ ...draft, levelIds: e.target.value })} /><small>Укажите уровни через запятую, например: 3.0, 3.5.</small></label>
+            <div className="gb-game-field gb-game-field--wide"><GameLevelRange value={draft.levelIds} onChange={levelIds => setDraft({ ...draft, levelIds })} /></div>
             <label className="gb-game-field">Видимость<select id="visibility" value={draft.visibility} onChange={e => setDraft({ ...draft, visibility: e.target.value as GameVisibility })}><option value="public">В поиске</option><option value="unlisted">Только по ссылке</option></select></label>
           </div></section>
           <section className="gb-game-form-group" aria-labelledby="gb-create-game-section-4"><h2 id="gb-create-game-section-4" className="gb-game-form-group-title">Условия участия</h2><div className="gb-game-fields">
