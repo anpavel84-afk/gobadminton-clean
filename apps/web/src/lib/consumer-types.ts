@@ -67,7 +67,8 @@ export type City = {
 
 export type VenueSummary = {
   publicContacts?: PublicVenueContacts | null;
-  cover?: { uploadedUrl: string | null };
+  profile?: VenueProfile | null;
+  cover?: { uploadedUrl: string | null; credit?: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null } | null };
   id: string;
   name: string;
   cityId: string;
@@ -236,11 +237,17 @@ export type CreateVenueInput = {
 export type VenueProfile = {
   courtCount: number | null;
   amenities: { parking: boolean | null; showers: boolean | null };
+  /** Short public description; never private booking_note. Omitted on older API versions. */
+  description?: string | null;
   /** Server-recorded public content edit, not verification/factual freshness. */
   updatedAt: string | null;
   gallery: {
-    coverage: "cover_only";
-    items: { url: string; credit: { kind: "photo"; text: string; url: string } }[];
+    coverage: "ordered" | "cover_only";
+    items: {
+      id?: string;
+      url: string;
+      credit: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null };
+    }[];
   };
 };
 

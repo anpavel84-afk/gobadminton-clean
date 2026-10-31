@@ -72,7 +72,7 @@ function venue(id = a, name = "Зал А") {
     address: "Проверенный адрес", timezone: "Europe/Moscow", latitude: 55.75, longitude: 37.62,
     identityDiscriminator: "", lifecycleState: "unverified", canonicalVenueId: null, version: 7,
     publicContacts: { phone: "+79991234567", website: "https://venue.example/", messengers: [{ kind: "telegram", url: "https://t.me/venue" }] },
-    profile: { courtCount: 0, amenities: { parking: false, showers: null }, updatedAt: "2026-10-22T10:00:00Z", gallery: { coverage: "cover_only", items: [] } },
+    profile: { courtCount: 0, amenities: { parking: false, showers: null }, updatedAt: "2026-10-22T10:00:00Z", gallery: { coverage: "ordered", items: [] } },
     history: [{ version: 7, action: "edit" }],
   };
 }

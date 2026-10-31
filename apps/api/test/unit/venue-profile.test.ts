@@ -76,7 +76,7 @@ describe("venue profile production validation and safe mapping", () => {
     expect(venueCommand.safeParse({ ...command(facts), injected: true }).success).toBe(false);
   });
   it("unknown values stay null, explicit 0/false survive and no timestamps are borrowed", () => {
-    expect(readVenueProfile({})).toEqual({ courtCount: null, amenities: { parking: null, showers: null }, updatedAt: null, gallery: { coverage: "cover_only", items: [] } });
+    expect(readVenueProfile({})).toEqual({ courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null, gallery: { coverage: "ordered", items: [] } });
     expect(readVenueProfile(base)).toMatchObject({ ...facts, updatedAt: date });
     for (const value of [undefined, null, "0", -1, 2147483648, NaN, Infinity, 0.1, {}, []]) {
       expect(readVenueProfile({ court_count: value, amenity_parking: value, public_profile_updated_at: "invalid" })).toMatchObject({ courtCount: null, amenities: { parking: null }, updatedAt: null });
@@ -86,12 +86,12 @@ describe("venue profile production validation and safe mapping", () => {
   });
   it("gallery fails closed; never claims more than current eligible cover photo", () => {
     expect(readVenueProfile({ ...base, cover_credit_url: "https://example.com" }).gallery.items[0]?.credit.url).toBe("https://example.com");
-    expect(readVenueProfile(base).gallery).toEqual({ coverage: "cover_only", items: [{ url: coverUrl, credit: { kind: "photo", text: "Фото: Клуб", url: "https://example.com/" } }] });
+    expect(readVenueProfile(base).gallery).toEqual({ coverage: "ordered", items: [{ id: "00000000-0000-4000-8000-000000000000", url: coverUrl, credit: { kind: "photo", text: "Фото: Клуб", url: "https://example.com/" } }] });
     for (const row of [{ ...base, cover_url: null }, { ...base, cover_url: "https://arbitrary.invalid/photo" },
       ...[null, "logo", "illustration", "unknown"].map(cover_credit_kind => ({ ...base, cover_credit_kind })),
       ...[null, "http://example.com/", "https://user@example.com/", "https://example.com/\n", "https://example.com/\\x", "javascript:x"].map(cover_credit_url => ({ ...base, cover_credit_url })),
       { ...base, cover_credit_text: "Фото: " }, { ...base, cover_credit_text: "Фото: Club\nprivate" }]) {
-      expect(readVenueProfile(row).gallery).toEqual({ coverage: "cover_only", items: [] });
+      expect(readVenueProfile(row).gallery).toEqual({ coverage: "ordered", items: [] });
     }
   });
   it("retains #142 phone/WHATWG/messenger boundaries and tolerant safe neighbors", () => {
@@ -125,7 +125,7 @@ describe("production service bindings and runtime responses against actual OpenA
       const service = publicService((async () => result([row])) as Pool["query"]);
       const detail = await service.getById(id), page = await service.searchCatalog({ cityId });
       for (const response of [detail, page.items[0]!]) {
-        expect(response.profile?.gallery).toEqual({ coverage: "cover_only", items: [] });
+        expect(response.profile?.gallery).toEqual({ coverage: "ordered", items: [] });
         matches(validVenue, response);
       }
       const admin: Pick<AdminService, "privilegedRead"> = {
@@ -200,6 +200,8 @@ describe("production service bindings and runtime responses against actual OpenA
         if (sql.startsWith("SELECT venue_id FROM")) return result(mode === "collision" ? [{ venue_id: targetId }] : []);
         if (sql.startsWith("UPDATE venues SET name=")) {
           if (values[14]) row = { ...row, court_count: values[15] as number | null, amenity_parking: values[16] as boolean | null, amenity_showers: values[17] as boolean | null };
+          if (values[18]) row = { ...row, public_description: values[19] as string | null };
+          else if (values[20]) row = { ...row, public_description: null };
           row = { ...row, version: row.version + 1 };
         }
         if (sql.includes("INSERT INTO privileged_audit_events")) return result([{ id }]);
@@ -224,10 +226,11 @@ describe("production service bindings and runtime responses against actual OpenA
       const update = calls.find(call => call.sql.startsWith("UPDATE venues SET name="));
       if (mode === "stale" || mode === "collision") expect(update).toBeUndefined();
       else {
-        expect(update?.values.slice(14)).toEqual(mode === "omit" ? [false, null, null, null] : mode === "clear" ? [true, null, null, null] : [true, 0, false, null]);
+        expect(update?.values.slice(14)).toEqual(mode === "omit" ? [false, null, null, null, false, null, false] : mode === "clear" ? [true, null, null, null, false, null, true] : [true, 0, false, null, false, null, false]);
         expect(update?.sql).toContain("CASE WHEN $15::boolean THEN $16::integer ELSE court_count END");
+        expect(update?.sql).toContain("public_description=CASE WHEN $19::boolean THEN $20::text WHEN $21::boolean THEN NULL ELSE public_description END");
         expect(update?.sql).not.toContain("public_profile_updated_at=");
-        expect(row).toMatchObject(mode === "clear" ? { court_count: null, amenity_parking: null, amenity_showers: null } : { court_count: 0, amenity_parking: false });
+        expect(row).toMatchObject(mode === "clear" ? { court_count: null, amenity_parking: null, amenity_showers: null, public_description: null } : { court_count: 0, amenity_parking: false });
       }
       for (const call of calls.filter(c => /INSERT INTO (privileged_audit_events|outbox_events)/.test(c.sql))) expect(JSON.stringify(call.values)).not.toMatch(/courtCount|amenities|1234567|example.com|private/);
       expect(validAdmin({ ...base, profile: readVenueProfile(base) })).toBe(false);

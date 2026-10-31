@@ -3,7 +3,7 @@ import { initializeVenueProfile, validateVenueProfile, type MessengerKind, type 
 
 const full: VenueProfileSource = {
   publicContacts: { phone: "+7 (999) 123-45-67", website: "https://example.org/", messengers: [{ kind: "telegram", url: "https://t.me/venue" }] },
-  profile: { courtCount: 0, amenities: { parking: false, showers: true }, updatedAt: "2026-10-22T10:00:00Z", gallery: { coverage: "cover_only", items: [] } },
+  profile: { courtCount: 0, amenities: { parking: false, showers: true }, updatedAt: "2026-10-22T10:00:00Z", gallery: { coverage: "ordered", items: [] } },
 };
 
 describe("venue public profile form against the existing edit contract", () => {
@@ -15,8 +15,8 @@ describe("venue public profile form against the existing edit contract", () => {
     expect(full.publicContacts!.messengers[0]!.url).toBe("https://t.me/venue");
     const result = validateVenueProfile({ ...draft, profileChanged: true, contactsChanged: true });
     expect(result.errors).toEqual({});
-    expect(result.patch.profile).toEqual({ courtCount: 0, amenities: { parking: false, showers: true } });
-    expect(Object.keys(result.patch.profile!)).toEqual(["courtCount", "amenities"]);
+    expect(result.patch.profile).toEqual({ courtCount: 0, amenities: { parking: false, showers: true }, description: null });
+    expect(Object.keys(result.patch.profile!)).toEqual(["courtCount", "amenities", "description"]);
   });
 
   for (const source of [{}, { publicContacts: null, profile: null }, { profile: { courtCount: null, amenities: { parking: null, showers: null } } }]) {
@@ -36,15 +36,15 @@ describe("venue public profile form against the existing edit contract", () => {
   it("preserves unchanged neighbors when editing one field; intentional field clear differs from omission", () => {
     const draft = initializeVenueProfile(full);
     expect(validateVenueProfile({ ...draft, phone: "", contactsChanged: true }).patch).toEqual({ publicContacts: { ...full.publicContacts, phone: null } });
-    expect(validateVenueProfile({ ...draft, courtCount: "", profileChanged: true }).patch).toEqual({ profile: { courtCount: null, amenities: { parking: false, showers: true } } });
-    expect(validateVenueProfile({ ...draft, parking: "unknown", profileChanged: true }).patch.profile).toEqual({ courtCount: 0, amenities: { parking: null, showers: true } });
+    expect(validateVenueProfile({ ...draft, courtCount: "", profileChanged: true }).patch).toEqual({ profile: { courtCount: null, amenities: { parking: false, showers: true }, description: null } });
+    expect(validateVenueProfile({ ...draft, parking: "unknown", profileChanged: true }).patch.profile).toEqual({ courtCount: 0, amenities: { parking: null, showers: true }, description: null });
   });
 
   for (const value of ["0", "1", "2147483647", " 12 "]) {
     it("accepts integer count " + value, () => {
       const result = validateVenueProfile({ ...initializeVenueProfile({}), profileChanged: true, courtCount: value, parking: "no" });
       expect(result.errors).toEqual({});
-      expect(result.patch.profile).toEqual({ courtCount: Number(value), amenities: { parking: false, showers: null } });
+      expect(result.patch.profile).toEqual({ courtCount: Number(value), amenities: { parking: false, showers: null }, description: null });
     });
   }
   for (const value of ["-1", "0.5", "2147483648", "NaN", "Infinity", "1e10", "abc"]) {

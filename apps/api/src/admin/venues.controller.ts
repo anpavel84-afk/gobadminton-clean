@@ -1,4 +1,5 @@
 import { VenueCoverService } from "../venues/venue-cover.service";
+import { VenueGalleryService } from "../venues/venue-gallery.service";
 import { AdminService } from "./admin.service";
 import { Body, Controller, Delete, Put, Get, Header, Headers, Param, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
@@ -6,10 +7,17 @@ import { z } from "zod";
 import { AdminVenuesService } from "../venues/admin-venues.service";
 import { parse, reason, uuid } from "./dto";
 import { venueCommand, venueCreate, venuePage } from "./venues.dto";
+import { galleryItemCommandSchema, galleryReorderSchema, parseGalleryEvidenceHeaders } from "../venues/venue-gallery";
 const cursor=z.object({beforeId:uuid.optional()}).strict();
+const venueVersion=z.string().regex(/^[1-9][0-9]{0,9}$/).transform(Number).pipe(z.number().int().max(2147483647));
 @Controller("admin/venues")
 export class AdminVenuesController {
-  constructor(private readonly venues:AdminVenuesService, private readonly admin:AdminService, private readonly covers:VenueCoverService) {}
+  constructor(
+    private readonly venues:AdminVenuesService,
+    private readonly admin:AdminService,
+    private readonly covers:VenueCoverService,
+    private readonly gallery:VenueGalleryService,
+  ) {}
   @Get(":id/cover/access") @Header("Cache-Control","no-store")
   async coverAccess(@Req() r:FastifyRequest,@Param("id") id:string) {
     this.admin.enabled();
@@ -21,13 +29,50 @@ export class AdminVenuesController {
   @Put(":id/cover") @Header("Cache-Control","no-store")
   replaceCover(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined) {
     this.admin.enabled();
-    const version=parse(z.string().regex(/^[1-9][0-9]{0,9}$/).transform(Number).pipe(z.number().int().max(2147483647)),r.headers["x-venue-version"]);
+    const version=parse(venueVersion,r.headers["x-venue-version"]);
     return this.covers.mutate(r,k,parse(uuid,id),version,{body:r.body,mime:r.headers["content-type"]??""});
   }
   @Delete(":id/cover") @Header("Cache-Control","no-store")
   removeCover(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
     this.admin.enabled();const input=parse(z.object({expectedVersion:z.number().int().positive().max(2147483647)}).strict(),b);
     return this.covers.mutate(r,k,parse(uuid,id),input.expectedVersion);
+  }
+  @Get(":id/gallery") @Header("Cache-Control","no-store")
+  listGallery(@Req() r:FastifyRequest,@Param("id") id:string) {
+    this.admin.enabled();
+    return this.gallery.get(r, parse(uuid, id));
+  }
+  @Post(":id/gallery") @Header("Cache-Control","no-store")
+  addGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined) {
+    this.admin.enabled();
+    const version=parse(venueVersion,r.headers["x-venue-version"]);
+    const evidence=parseGalleryEvidenceHeaders(r.headers as Record<string, unknown>);
+    return this.gallery.add(r,k,parse(uuid,id),version,{body:r.body,mime:r.headers["content-type"]??""},evidence);
+  }
+  @Put(":id/gallery/:itemId") @Header("Cache-Control","no-store")
+  replaceGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Param("itemId") itemId:string,@Headers("idempotency-key") k:string|undefined) {
+    this.admin.enabled();
+    const version=parse(venueVersion,r.headers["x-venue-version"]);
+    const evidence=parseGalleryEvidenceHeaders(r.headers as Record<string, unknown>);
+    return this.gallery.replace(r,k,parse(uuid,id),parse(uuid,itemId),version,{body:r.body,mime:r.headers["content-type"]??""},evidence);
+  }
+  @Delete(":id/gallery/:itemId") @Header("Cache-Control","no-store")
+  removeGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Param("itemId") itemId:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
+    this.admin.enabled();
+    const input=parse(galleryItemCommandSchema,b);
+    return this.gallery.remove(r,k,parse(uuid,id),parse(uuid,itemId),input.expectedVersion);
+  }
+  @Post(":id/gallery/reorder") @Header("Cache-Control","no-store")
+  reorderGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
+    this.admin.enabled();
+    const input=parse(galleryReorderSchema,b);
+    return this.gallery.reorder(r,k,parse(uuid,id),input.expectedVersion,input.orderedIds);
+  }
+  @Post(":id/gallery/:itemId/main") @Header("Cache-Control","no-store")
+  setMainGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Param("itemId") itemId:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
+    this.admin.enabled();
+    const input=parse(galleryItemCommandSchema,b);
+    return this.gallery.setMain(r,k,parse(uuid,id),parse(uuid,itemId),input.expectedVersion);
   }
   @Get() @Header("Cache-Control","no-store")
   list(@Req() r:FastifyRequest,@Query() q:unknown){this.admin.enabled();return this.venues.list(r,parse(venuePage,q));}

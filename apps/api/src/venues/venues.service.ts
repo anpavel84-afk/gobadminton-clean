@@ -1,5 +1,5 @@
 import { httpsCreditUrl } from "../lib/original-http-authority";
-import { readVenueProfile, venueProfileSelectSql, type VenueProfile, type VenueProfileRow } from "./venue-profile";
+import { readVenueProfile, venueGallerySelectSql, venueProfileSelectSql, type VenueProfile, type VenueProfileRow } from "./venue-profile";
 import { readPublicVenueContacts, type PublicVenueContacts } from "./public-venue-contacts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
@@ -175,7 +175,7 @@ export class VenuesService {
     let pointSql = "";
     let sql = `
       SELECT
-        ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
+        ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, ${venueGallerySelectSql("venues")}, id, name, city_id, address, timezone, data_status, provenance,
         lifecycle_state, identity_discriminator,
         normalized_name, normalized_address, canonical_venue_id,
         ST_Y(location::geometry) AS latitude,
@@ -469,7 +469,7 @@ export class VenuesService {
          'unverified',$9,$10,$11,$12
        )
        RETURNING
-         ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
+         ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, ${venueGallerySelectSql("venues")}, id, name, city_id, address, timezone, data_status, provenance,
          lifecycle_state, identity_discriminator,
          normalized_name, normalized_address, canonical_venue_id,
          ST_Y(location::geometry) AS latitude,
@@ -615,7 +615,7 @@ export class VenuesService {
   ): Promise<VenueRow[]> {
     const result = await client.query<VenueRow>(
       `SELECT
-         ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
+         ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, ${venueGallerySelectSql("venues")}, id, name, city_id, address, timezone, data_status, provenance,
          lifecycle_state, identity_discriminator,
          normalized_name, normalized_address, canonical_venue_id,
          ST_Y(location::geometry) AS latitude,
@@ -760,7 +760,7 @@ function buildIdentity(parsed: ParsedVenueInput): BuiltIdentity {
 function venueSelectSql(where: string): string {
   return `
     SELECT
-      ${venueProfileSelectSql("v")}, to_jsonb(v)->'public_contacts' AS public_contacts, venue_cover_url(v.id) AS cover_url, v.cover_credit_kind, v.cover_credit_text, v.cover_credit_url, v.id, v.name, v.city_id, v.address, v.timezone, v.data_status, v.provenance,
+      ${venueProfileSelectSql("v")}, to_jsonb(v)->'public_contacts' AS public_contacts, venue_cover_url(v.id) AS cover_url, v.cover_credit_kind, v.cover_credit_text, v.cover_credit_url, ${venueGallerySelectSql("v")}, v.id, v.name, v.city_id, v.address, v.timezone, v.data_status, v.provenance,
       v.lifecycle_state, v.identity_discriminator,
       v.normalized_name, v.normalized_address, v.canonical_venue_id,
       ST_Y(v.location::geometry) AS latitude,

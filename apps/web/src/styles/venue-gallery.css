@@ -1,0 +1,85 @@
+/* Reuses existing cover shell, icon buttons, 16:9 ratio; no new design system. */
+.gb-venue-gallery {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  max-height: 200px;
+  border-radius: var(--gb-radius-md);
+  overflow: hidden;
+  background: var(--gb-paper, #f3f4f1);
+  touch-action: pan-y;
+}
+.gb-venue-gallery[data-size="compact"] {
+  max-height: none;
+  aspect-ratio: 1 / 1;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--gb-radius-sm);
+}
+.gb-venue-gallery__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+.gb-venue-gallery__frame > img,
+.gb-venue-gallery__frame > .gb-venue-cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.gb-venue-gallery__frame > .gb-venue-cover { position: absolute; inset: 0; }
+.gb-venue-gallery__nav {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+  padding: 0 8px;
+}
+.gb-venue-gallery__nav > button {
+  pointer-events: auto;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gb-white, #fff) 88%, transparent);
+  color: var(--gb-ink, #111);
+  font: inherit;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.gb-venue-gallery__count {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  min-width: 44px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gb-ink, #111) 62%, transparent);
+  color: var(--gb-white, #fff);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  pointer-events: none;
+}
+.gb-venue-gallery__credit {
+  display: block;
+  margin-top: 8px;
+}
+.gb-desktop-map-inspector .gb-venue-gallery,
+.gb-venue-sheet[data-desktop="true"] .gb-venue-gallery {
+  max-height: 200px;
+}
+@media (max-width: 1023px) {
+  .gb-venue-gallery:not([data-size="compact"]) { max-height: none; }
+}
