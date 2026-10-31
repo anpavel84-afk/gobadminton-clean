@@ -252,13 +252,15 @@ describe("player browse swipe boundaries", () => {
     expect(cssSource).toContain("dialog.pb-mobile-fs");
   });
 
-  it("QA-01: mobile fullscreen chrome wraps early catalog loading/unavailable/error/empty", () => {
+  it("QA-01: mobile fullscreen CloseButton wraps early catalog loading/unavailable/error/empty", () => {
     expect(deckSource).toContain("wrapCatalogState");
-    expect(deckSource).toContain("mobileFsChrome");
-    const chromeDef = deckSource.indexOf("const mobileFsChrome");
+    expect(deckSource).toContain("mobileFsClose");
+    expect(deckSource).toContain("CloseButton");
+    expect(deckSource).not.toContain("pb-fs-chrome");
+    const closeDef = deckSource.indexOf("const mobileFsClose");
     const wrapDef = deckSource.indexOf("const wrapCatalogState");
-    expect(chromeDef).toBeGreaterThan(-1);
-    expect(wrapDef).toBeGreaterThan(chromeDef);
+    expect(closeDef).toBeGreaterThan(-1);
+    expect(wrapDef).toBeGreaterThan(closeDef);
     expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-loading\"");
     expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"status\"><h2>Каталог игроков сейчас недоступен");
     expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"alert\"");
@@ -366,6 +368,7 @@ describe("player browse tutorial marker", () => {
     expect(surfaceCloseBeforeTutorial).toContain("</div>}");
     expect(surfaceCloseBeforeTutorial).toMatch(/pb-controls|pb-profile-bottom|pb-friend-slot/);
     expect(deckSource).toContain("Свайп влево — пропустить");
+    expect(deckSource).toContain("Игрок не получит уведомления");
     expect(deckSource).toContain("Коснитесь, чтобы продолжить");
     expect(deckSource).toContain("Свайп вправо — давай сыграем");
     expect(deckSource).toContain("advanceTutorial");
@@ -376,7 +379,8 @@ describe("player browse tutorial marker", () => {
     // QA-01: open/render/finish only on ready auth or confirmed guest — not loading/error.
     expect(deckSource).toMatch(/const identityReady = authState === "ready" \|\| authState === "guest"/);
     expect(deckSource).toMatch(/showHelp = !desktop && identityReady && tutorialOpen/);
-    expect(deckSource).toMatch(/disabled=\{!identityReady\} onClick=\{openTutorial\}/g);
+    // Non-FS mobile context may still expose ?; mobile FS close-only (no header help).
+    expect(deckSource).toMatch(/disabled=\{!identityReady\} onClick=\{openTutorial\}/);
     expect(deckSource).toMatch(/const openTutorial = useCallback\(\(\) => \{[\s\S]*?if \(!identityReady\) return;/);
     expect(deckSource).toMatch(/if \(!identityReady \|\| \(authState === "ready" && !me\?\.id\)\)/);
     expect(deckSource).toMatch(/tutorialActorSeenRef\.current !== null && tutorialActorSeenRef\.current !== actor/);

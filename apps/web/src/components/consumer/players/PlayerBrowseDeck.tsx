@@ -41,6 +41,7 @@ import {
   withBrowseHistoryState,
 } from "../../../lib/player-browse";
 import { Button } from "../Button";
+import { CloseButton } from "../CloseButton";
 import {
   isBrowseConfirmedPlayInterestOutcome,
   PlayerBrowsePlayInterest,
@@ -936,7 +937,9 @@ export function PlayerBrowseDeck({
       return;
     }
     setSkipStack(stack => pushSkip(stack, peerId));
-    setToast("Пропущено. Игрок не получит уведомления.");
+    // Mobile: no repeated skip toast — one-time hint lives in left onboarding cue.
+    // Desktop keeps a short visual notice.
+    if (desktop) setToast("Пропущено. Игрок не получит уведомления.");
     const liveIndex = indexRef.current;
     if (liveIndex < browsePlayers.length - 1) {
       actionConsumedRef.current = false;
@@ -1027,8 +1030,11 @@ export function PlayerBrowseDeck({
       return next;
     });
     offersRef.current?.noteRelationship(peerId, relationship);
-    setToast(receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено");
-    setAnnounce(receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено");
+    const confirmedLine = receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено";
+    // Mobile: aria-only announce — no visual success toast / bottom overlay.
+    // Desktop keeps short toast + announce.
+    setAnnounce(confirmedLine);
+    if (desktop) setToast(confirmedLine);
     // Fluid mobile: flight + next card already ran at admission; receipt must not advance again.
     if (fluidMobile) {
       awaitingRightRef.current = null;
@@ -1693,32 +1699,17 @@ export function PlayerBrowseDeck({
   const counter = browsePlayers.length
     ? `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`
     : "00 / 00";
-  // Last-card end on mobile FS: plain copy lives in chrome/counter (no in-flow footer that shrinks the card).
+  // Last-card end on mobile FS: out-of-flow end/continue (no header strip; card keeps full stage).
   const atEndFs = mobileFullscreen && browsePlayers.length > 0 && index >= browsePlayers.length - 1;
   const atEndFsPlain = atEndFs && !hasMore;
-  // Shared mobile fullscreen chrome — used by early catalog states and the ready deck (one X/counter/help).
-  const mobileFsChrome = mobileFullscreen ? (
-    <header className="pb-fs-chrome">
-      <div className="pb-fs-chrome__meta">
-        <span className="pb-counter" aria-live="polite">{counter}</span>
-        <span className="pb-fs-place">{placeLabel}</span>
-        {atEndFsPlain ? (
-          <span className="pb-fs-end" role="status">Больше игроков в текущей выборке нет.</span>
-        ) : null}
-      </div>
-      <div className="pb-fs-chrome__tools">
-        <button type="button" className="pb-help" aria-label="Подсказка по жестам" disabled={!identityReady} onClick={openTutorial}>?</button>
-        <button
-          ref={closeBtnRef}
-          type="button"
-          className="pb-fs-close"
-          aria-label="Закрыть карточки"
-          onClick={() => onCloseFullscreenRef.current?.()}
-        >
-          ×
-        </button>
-      </div>
-    </header>
+  // Mobile FS: only canonical CloseButton overlaid top-right — no counter/place/help strip.
+  const mobileFsClose = mobileFullscreen ? (
+    <CloseButton
+      ref={closeBtnRef}
+      className="pb-fs-close"
+      aria-label="Закрыть карточки"
+      onClick={() => onCloseFullscreenRef.current?.()}
+    />
   ) : null;
   const wrapCatalogState = (body: ReactNode) => (
     <div
@@ -1727,7 +1718,7 @@ export function PlayerBrowseDeck({
       data-browse-desktop={desktop ? "true" : "false"}
       data-mobile-fs={mobileFullscreen ? "true" : "false"}
     >
-      {mobileFsChrome}
+      {mobileFsClose}
       {body}
     </div>
   );
@@ -1750,6 +1741,7 @@ export function PlayerBrowseDeck({
             unresolved={mobileOffers.unresolved}
             onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
             className="pb-offer-status--modal"
+            presentation="quietRoutine"
           />
         )}
         <PlayerBrowseFinderGate
@@ -1905,7 +1897,7 @@ export function PlayerBrowseDeck({
   );
 
   return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}${mobileFullscreen ? " pb-browse--fs" : ""}`} data-surface="player-browse-deck" data-browse-desktop={desktop ? "true" : "false"} data-mobile-fs={mobileFullscreen ? "true" : "false"}>
-    {mobileFsChrome}
+    {mobileFsClose}
     {!mobileFullscreen && !desktop ? (
       <div className="pb-deck-context">
         <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
@@ -2244,7 +2236,7 @@ export function PlayerBrowseDeck({
               aria-live="polite"
               aria-label={
                 tutorialStep === 1
-                  ? "Шаг 1 из 2. Свайп влево — пропустить. Коснитесь, чтобы продолжить"
+                  ? "Шаг 1 из 2. Свайп влево — пропустить. Игрок не получит уведомления. Коснитесь, чтобы продолжить"
                   : "Шаг 2 из 2. Свайп вправо — давай сыграем. Совпадение только когда оба хотите сыграть. Коснитесь, чтобы закончить"
               }
               onClick={advanceTutorial}
@@ -2258,7 +2250,10 @@ export function PlayerBrowseDeck({
                   {tutorialStep === 1 ? "Свайп влево — пропустить" : "Свайп вправо — давай сыграем"}
                 </span>
                 {tutorialStep === 1 ? (
-                  <span className="pb-tutorial-cue__hint">Коснитесь, чтобы продолжить</span>
+                  <>
+                    <span className="pb-tutorial-cue__hint">Игрок не получит уведомления</span>
+                    <span className="pb-tutorial-cue__hint">Коснитесь, чтобы продолжить</span>
+                  </>
                 ) : (
                   <span className="pb-tutorial-cue__hint">Совпадение только когда оба хотите сыграть</span>
                 )}
@@ -2270,12 +2265,13 @@ export function PlayerBrowseDeck({
     </div>
 
     {/*
-      Mobile FS: plain end → chrome `.pb-fs-end` (counter/live path); hasMore → out-of-flow
-      `.pb-deck-end--fs-more` so the last visible card keeps full stage height. Desktop in-flow footer unchanged.
+      Mobile FS: end/continue out-of-flow (no header strip) so the last visible card keeps
+      full stage height. Plain end uses `.pb-fs-end`; hasMore uses `.pb-deck-end--fs-more`.
+      FinderGate still owns eligibility empty/continue. Desktop in-flow footer unchanged.
     */}
-    {atEnd && !(mobileFullscreen && !hasMore) && (
+    {atEnd && (
       <div
-        className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs pb-deck-end--fs-more" : ""}`}
+        className={`pb-deck-end${mobileFullscreen ? ` pb-deck-end--fs${hasMore ? " pb-deck-end--fs-more" : ""}${atEndFsPlain ? " pb-fs-end" : ""}` : ""}`}
         role="status"
       >
         {hasMore
@@ -2293,6 +2289,7 @@ export function PlayerBrowseDeck({
         unresolved={mobileOffers.unresolved}
         onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
         className="pb-offer-status--modal"
+        presentation="quietRoutine"
       />
     )}
   </div>;

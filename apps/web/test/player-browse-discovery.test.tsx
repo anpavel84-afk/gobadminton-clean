@@ -233,25 +233,31 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(styleGuide).toContain("mobile and desktop");
     expect(styleGuide).toContain("Ordinary list remains complete");
     expect(styleGuide).toContain("Desktop guest public preview");
+    expect(styleGuide).toContain("compact mobile Radar");
+    expect(styleGuide).toContain("directory-desktop");
     expect(styleGuide).toContain("PROPOSED · smart ranking");
     expect(styleGuide).toContain("NOT implemented");
     expect(styleGuide).not.toMatch(/smart ranking[\s\S]{0,80}delivered/i);
   });
 
-  it("mobile FS last-card end stays out of flow; modal status sits below chrome not over actions", () => {
+  it("mobile FS last-card end stays out of flow; modal status sits below CloseButton not over actions", () => {
     const css = readFileSync(join(root, "src/styles/player-browse.css"), "utf8");
-    // Plain end → chrome out-of-flow; no in-flow --fs footer that shrinks the last card.
+    // Plain end / hasMore → out-of-flow; no in-flow header or footer that shrinks the last card.
     expect(deckSource).toContain("pb-fs-end");
     expect(deckSource).toContain("atEndFsPlain");
-    expect(deckSource).toContain("!(mobileFullscreen && !hasMore)");
     expect(deckSource).toContain("pb-deck-end--fs-more");
-    expect(css).toMatch(/\.pb-deck-end--fs\s*\{[^}]*position:\s*absolute/s);
+    expect(deckSource).toContain("mobileFsClose");
+    expect(deckSource).toContain("CloseButton");
+    expect(deckSource).not.toContain("pb-fs-chrome");
+    expect(deckSource).toContain('presentation="quietRoutine"');
+    expect(css).toMatch(/\.pb-deck-end--fs[\s,.{][^}]*position:\s*absolute/s);
     expect(css).toContain(".pb-fs-end");
-    // Modal notice: top under chrome/X — not bottom:~112 over Undo/primary.
-    expect(css).toMatch(/\.pb-offer-status--modal\s*\{[^}]*top:\s*calc\(56px/s);
+    // Modal notice: top under CloseButton/X — not bottom:~112 over Undo/primary.
+    expect(css).toMatch(/\.pb-offer-status--modal\s*\{[^}]*top:\s*calc\(52px/s);
     expect(css).not.toMatch(/\.pb-offer-status--modal\s*\{[^}]*bottom:\s*calc\(112px/s);
-    expect(styleGuide).toContain("below chrome/X and above Undo/primary");
+    expect(styleGuide).toContain("below CloseButton/X and above Undo/primary");
     expect(styleGuide).toContain("pb-deck-end--fs-more");
+    expect(styleGuide).toContain("quietRoutine");
   });
 
   it("offer status refines single extraUnknown under noUncheckedIndexedAccess", () => {
@@ -260,6 +266,21 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(offersUiSource).toContain("renderUnresolved(onlyExtraUnknown)");
     expect(offersUiSource).not.toContain("renderUnresolved(extraUnknown[0])");
     expect(offersUiSource).not.toMatch(/@ts-ignore|as any/);
+  });
+
+  it("quietRoutine hides sending/outgoing/mutual visuals and keeps failed/unknown", () => {
+    expect(offersUiSource).toContain('presentation = "default"');
+    expect(offersUiSource).toContain('presentation?: "default" | "quietRoutine"');
+    expect(offersUiSource).toContain("quietRoutine");
+    expect(offersUiSource).toMatch(/status\.phase === "sending" \|\| status\.phase === "outgoing" \|\| status\.phase === "mutual"/);
+    expect(offersUiSource).toContain("!quietRoutine");
+    expect(deckSource).toContain('presentation="quietRoutine"');
+    // Mobile list/finder offer status uses quietRoutine; compact Radar reuses directory-desktop switch.
+    expect(pageSource).toContain('presentation={desktop ? "default" : "quietRoutine"}');
+    expect(pageSource).toContain('presentation="directory-desktop"');
+    expect(pageSource).toContain('presentation="directory-compact"');
+    expect(pageSource).toContain("players-radar-band--compact");
+    expect(pageSource).not.toContain("Игроки рядом с вами");
   });
 });
 

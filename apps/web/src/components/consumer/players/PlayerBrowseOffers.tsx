@@ -118,6 +118,7 @@ export function PlayerBrowseOfferStatus({
   unresolved = [],
   onCheckUnresolved,
   className,
+  presentation = "default",
 }: {
   status: BrowseOfferStatus;
   onCheckStatus?: () => void;
@@ -125,11 +126,19 @@ export function PlayerBrowseOfferStatus({
   unresolved?: ReadonlyArray<{ peerId: string; peerName: string }>;
   onCheckUnresolved?: (peerId: string) => void;
   className?: string;
+  /**
+   * `quietRoutine` (mobile finder/list only): hide sending/outgoing/mutual visual
+   * routine panels; keep failed/unknown + peer-bound extraUnknown exactly.
+   * Default unchanged for desktop and other callers.
+   */
+  presentation?: "default" | "quietRoutine";
 }) {
   const extraUnknown = unresolved.filter(
     (entry) => entry.peerId && entry.peerId !== status.peerId,
   );
-  const showPrimary = status.phase !== "idle" && Boolean(status.message);
+  const quietRoutine = presentation === "quietRoutine"
+    && (status.phase === "sending" || status.phase === "outgoing" || status.phase === "mutual");
+  const showPrimary = status.phase !== "idle" && Boolean(status.message) && !quietRoutine;
   if (!showPrimary && extraUnknown.length === 0) return null;
   const tone = status.phase === "outgoing" || status.phase === "mutual"
     ? "is-success"
