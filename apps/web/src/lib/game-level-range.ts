@@ -44,7 +44,9 @@ export function serializeNtrpLevelIds(lower: number, upper: number): string {
 export function parseNtrpLevelRange(value: string): { lower: number; upper: number } {
   const parsed = String(value ?? "")
     .split(",")
-    .map((part) => Number(part.trim()))
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => Number(part))
     .filter((n) => Number.isFinite(n));
   if (!parsed.length) {
     return { lower: NTRP_LEVEL_DEFAULT_LOWER, upper: NTRP_LEVEL_DEFAULT_UPPER };

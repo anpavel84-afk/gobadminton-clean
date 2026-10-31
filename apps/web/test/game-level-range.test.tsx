@@ -55,6 +55,8 @@ describe("inclusive NTRP level payload", () => {
     expect(parseNtrpLevelRange("3.0, 3.5")).toEqual({ lower: 3, upper: 3.5 });
     expect(parseNtrpLevelRange("4.0,3.0,3.5")).toEqual({ lower: 3, upper: 4 });
     expect(parseNtrpLevelRange("")).toEqual({ lower: 3, upper: 3.5 });
+    expect(parseNtrpLevelRange("  ,  , ")).toEqual({ lower: 3, upper: 3.5 });
+    expect(parseNtrpLevelRange("3.0, , 3.5,")).toEqual({ lower: 3, upper: 3.5 });
   });
 });
 
@@ -93,6 +95,14 @@ describe("GameLevelRange native controls", () => {
     const upper = ranges[1]!;
     expect(lower.props.value).toBe(3);
     expect(upper.props.value).toBe(3.5);
+    expect(lower.props.min).toBe(1);
+    expect(lower.props.max).toBe(3.5);
+    expect(lower.props["aria-valuemin"]).toBe(1);
+    expect(lower.props["aria-valuemax"]).toBe(3.5);
+    expect(upper.props.min).toBe(3);
+    expect(upper.props.max).toBe(7);
+    expect(upper.props["aria-valuemin"]).toBe(3);
+    expect(upper.props["aria-valuemax"]).toBe(7);
     expect(lower.props["aria-label"]).toBe("Нижний уровень");
     expect(upper.props["aria-label"]).toBe("Верхний уровень");
 
@@ -116,5 +126,19 @@ describe("GameLevelRange native controls", () => {
       target: { value: "NaN" },
     });
     expect(seen.length).toBe(before);
+
+    const equalTree = GameLevelRange({
+      value: "4.0",
+      onChange: () => {},
+    });
+    const equalRanges = elements(equalTree).filter(
+      (node) => node.type === "input" && node.props.type === "range",
+    );
+    expect(equalRanges[0]!.props.min).toBe(1);
+    expect(equalRanges[0]!.props.max).toBe(4);
+    expect(equalRanges[0]!.props["aria-valuemax"]).toBe(4);
+    expect(equalRanges[1]!.props.min).toBe(4);
+    expect(equalRanges[1]!.props.max).toBe(7);
+    expect(equalRanges[1]!.props["aria-valuemin"]).toBe(4);
   });
 });
