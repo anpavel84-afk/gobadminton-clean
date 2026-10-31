@@ -233,7 +233,8 @@ describe("Consumer v002.3 shell and gate integrity", () => {
     const players = await readSource("../src/components/consumer/pages/PlayersDirectoryPage.tsx");
     const discovery = await readSource("../src/components/consumer/pages/GamesDiscoveryPage.tsx");
     expect(profile).not.toContain('href="/profile/settings/messages"');
-    expect(profile).toContain('label="Принимать запросы на общение"');
+    expect(profile).toContain('label="Разрешать личные сообщения"');
+    expect(profile).not.toContain('label="Принимать запросы на общение"');
     expect(profile).not.toContain("Позже");
     expect(profile).not.toContain("Настройка пока недоступна");
     expect(profile).toContain("logout(me.csrfToken)");
