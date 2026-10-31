@@ -30,7 +30,7 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 
 ## Catalog & Radar boundary
 
-- Deck reads the **ordinary public catalog** (`listPlayers`) only. No private Radar rows / `resultRef` in the deck.
+- Deck / finder eligibility reads the **ordinary public catalog** (`listPlayers` / page `players`) only — independent of `mergeRadarCatalog` presentation dedupe. Radar ON must not remove public peers from finder input. Never inject Radar-only private projection into the PublicPlayer finder. Ordinary **list** still uses `mergeRadarCatalog` (radar rows + ordinary remainder, deduped) for display. No private Radar rows / `resultRef` in the deck.
 - Existing Radar semantics, TTL, and privacy fences stay as on `/players`. Desktop compact strip must not auto-toggle or stop Radar.
 - Filters, dedup by `publicPlayerId`, cursor pagination, and explicit «Загрузить ещё» / «Показать ещё» when the loaded page + cursor are exhausted — no eager multi-page scanning for the next candidate.
 - Filter/scope change invalidates selection and local skips immediately so previous-scope rows/actions cannot flash.

@@ -371,7 +371,8 @@
   .fr3 .player-card__title { align-items:flex-start; flex-direction:column; gap:5px; }
   .fr3 .player-card__title h3 { font-size:19px; }
   .fr3 .player-card__arrow-label { display:none; }
-  .fr3 .player-card__arrow { width:40px; height:40px; padding:0; border-radius:50%; place-items:center; }
+  /* Circle: inline-flex ignores place-items for main-axis; justify + gap 0 centers the icon. Desktop rect+label unchanged. */
+  .fr3 .player-card__arrow { width:40px; height:40px; padding:0; border-radius:50%; justify-content:center; gap:0; }
   .gb-page-local-header--profile { margin-bottom: 24px; }
   .fr3 .player-contact-row { min-height: 0; align-items: center; }
   .fr3 .player-contact-row__status { min-height: 32px; white-space: normal; }

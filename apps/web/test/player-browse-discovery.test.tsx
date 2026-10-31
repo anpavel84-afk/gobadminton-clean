@@ -116,7 +116,12 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(pageSource).toMatch(/mobileOffers=\{mobileCards \? offers : null\}/);
     // Desktop guest keeps ordinary catalog; auth loading/error avoid flashing sent peers.
     expect(pageSource).toContain("offers.authState !== \"guest\"");
-    expect(pageSource).toContain("catalog.ordinary");
+    // Finder input = full public `players` (not mergeRadarCatalog.ordinary presentation dedupe).
+    expect(pageSource).toMatch(/catalogPlayers:\s*players\b/);
+    expect(pageSource).not.toMatch(/catalogPlayers:\s*catalog\.ordinary/);
+    // Guest fallback cards also use public page players; list display keeps catalog.ordinary.
+    expect(pageSource).toMatch(/:\s*players;\s*\n\s*\/\/ Readonly eligibility/);
+    expect(pageSource).toContain("catalog.ordinary.map");
     expect(deckSource).toContain("finderEligibility");
     expect(deckSource).toContain("onContinueFinder");
     expect(deckSource).toContain("onRetryFinder");
