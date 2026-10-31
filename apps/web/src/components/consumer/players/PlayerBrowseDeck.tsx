@@ -223,6 +223,7 @@ export function PlayerBrowseDeck({
   const mediaReadyRef = useRef(false);
   const skipCurrentRef = useRef<(opts?: { alreadyFlying?: boolean; generation?: number; peerId?: string | null }) => void>(() => {});
   const applySkipAdvanceRef = useRef<(peerId: string, generation: number | null) => void>(() => {});
+  const applySendAdvanceRef = useRef<(peerId: string, generation: number | null) => void>(() => {});
   const requestFriendshipRef = useRef<() => void>(() => {});
   const openDetailsRef = useRef<() => void>(() => {});
   const closeDetailsRef = useRef<() => void>(() => {});
@@ -1231,6 +1232,7 @@ export function PlayerBrowseDeck({
   currentPeerRef.current = current?.publicPlayerId ?? null;
   skipCurrentRef.current = skipCurrent;
   applySkipAdvanceRef.current = applySkipAdvance;
+  applySendAdvanceRef.current = applySendAdvance;
   requestFriendshipRef.current = requestFriendship;
   openDetailsRef.current = openDetails;
   closeDetailsRef.current = closeDetails;
@@ -1523,7 +1525,7 @@ export function PlayerBrowseDeck({
               actionConsumedRef.current = false;
               return;
             }
-            applySendAdvance(peerAtStart, fly.generation);
+            applySendAdvanceRef.current(peerAtStart, fly.generation);
           });
           return;
         }
@@ -1588,7 +1590,9 @@ export function PlayerBrowseDeck({
     window.addEventListener("pointercancel", onCancel);
     window.addEventListener("blur", onBlur);
     return () => {
-      cancelActiveGesture(false);
+      // Real peer/auth/scope/breakpoint teardown: restore a readable pose (do not leave a stuck transform).
+      // Ordinary applySendAdvance identity churn must not reach here — it is ref-bound, not an effect dep.
+      cancelActiveGesture(true);
       surface.removeEventListener("pointerdown", onDown);
       surface.removeEventListener("pointermove", onMove);
       surface.removeEventListener("pointerup", onUp);
@@ -1599,7 +1603,7 @@ export function PlayerBrowseDeck({
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("blur", onBlur);
     };
-  }, [desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer, applySendAdvance]);
+  }, [desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer]);
   const blank = catalogState === "loading" || (!browsePlayers.length && (catalogState === "empty" || catalogState === "ready"));
   const showHelp = !desktop && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
   const counter = browsePlayers.length
@@ -1792,7 +1796,7 @@ export function PlayerBrowseDeck({
               actionConsumedRef.current = false;
               return;
             }
-            applySendAdvance(peer, fly.generation);
+            applySendAdvanceRef.current(peer, fly.generation);
           });
         }
         : null}

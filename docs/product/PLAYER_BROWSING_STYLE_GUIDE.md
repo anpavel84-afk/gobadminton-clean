@@ -24,7 +24,7 @@ This document records product contracts for the integrated consumer surface. Do 
 
 Superseded by the **Mobile fullscreen contract** appendix below for cards mode. Do not apply desktop v5 composition globally.
 
-**Delivered (#404 fluid finder slice):** list mode has no segmented «Списком / По одному» control (hidden from layout and tab order). Entry is the floating CTA **«Найти напарника»** (full label, dark pill) sharing one overlay zone with optional compact **«На карте»** when Radar is active. Desktop ≥1024 segmented switch and layout stay unchanged.
+**Delivered (#404 fluid finder slice):** list mode has no segmented «Списком / По одному» control — CSS `@media (max-width: 1023px)` hides `.pb-view-switch` unconditionally (independent of JS `mqReady` / `hidden` / `aria-hidden`; those attrs still keep mobile tab order). Entry is the floating CTA **«Найти напарника»** (full label, dark pill) sharing one overlay zone with optional compact **«На карте»** when Radar is active. Desktop ≥1024 segmented switch and layout stay unchanged.
 
 ## Catalog & Radar boundary
 

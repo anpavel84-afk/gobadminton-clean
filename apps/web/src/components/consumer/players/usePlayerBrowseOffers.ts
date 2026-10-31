@@ -181,6 +181,8 @@ export function usePlayerBrowseOffers({
   const admitLockRef = useRef(false);
   const batchGen = useRef(0);
   const batchInFlight = useRef(false);
+  /** Per-peer mutation revision: admission / settlement / authoritative note bump this so late batch cannot overwrite. */
+  const peerMutationRevRef = useRef<Map<string, number>>(new Map());
   const scopeRef = useRef(ordinaryScope);
   const continueArmedRef = useRef(false);
   const peerNamesRef = useRef<Map<string, string>>(new Map());
@@ -189,6 +191,21 @@ export function usePlayerBrowseOffers({
   opPhaseRef.current = opPhase;
   activeTokenRef.current = activeOperation?.token ?? null;
   unresolvedRef.current = unresolved;
+
+  const bumpPeerMutation = useCallback((peerId: string) => {
+    if (!peerId) return;
+    const map = peerMutationRevRef.current;
+    map.set(peerId, (map.get(peerId) ?? 0) + 1);
+  }, []);
+
+  const retireEligibilityBookkeeping = useCallback(() => {
+    batchGen.current += 1;
+    batchInFlight.current = false;
+    peerMutationRevRef.current = new Map();
+    setCheckedIds(new Set());
+    setEligibleIds([]);
+    setContinueArmed(false);
+  }, []);
 
   useEffect(() => {
     const names = peerNamesRef.current;
@@ -243,8 +260,16 @@ export function usePlayerBrowseOffers({
       opPhaseRef.current = "idle";
       setKnown(new Map());
       setUnresolved([]);
+      // Invalidate batch ownership + checked/continuation so A→B→A cannot inherit a false empty/exhausted page.
+      // Do not touch sessionStorage pending markers or invent historical UNKNOWN replay.
+      batchGen.current += 1;
+      batchInFlight.current = false;
+      peerMutationRevRef.current = new Map();
+      setCheckedIds(new Set());
       setEligibleIds([]);
+      setContinueArmed(false);
       setEligibilityKind("guest");
+      setEligibilityMessage("Войдите, чтобы предложить игру");
     };
     const session = () => { expire(); setAuthReload(n => n + 1); };
     window.addEventListener("gb-private-expired", expire);
@@ -259,14 +284,10 @@ export function usePlayerBrowseOffers({
   useEffect(() => {
     if (scopeRef.current === ordinaryScope) return;
     scopeRef.current = ordinaryScope;
-    batchGen.current += 1;
-    batchInFlight.current = false;
-    setCheckedIds(new Set());
-    setEligibleIds([]);
+    retireEligibilityBookkeeping();
     setEligibilityKind(finderActive ? "checking" : "idle");
     setEligibilityMessage("");
-    setContinueArmed(false);
-  }, [ordinaryScope, finderActive]);
+  }, [ordinaryScope, finderActive, retireEligibilityBookkeeping]);
 
   const runBatch = useCallback(async (players: PublicPlayer[], mode: "replace" | "append") => {
     if (!me || authState !== "ready") return;
@@ -289,12 +310,18 @@ export function usePlayerBrowseOffers({
     const actor = me.id;
     const priv = privateViews.currentGeneration;
     const scope = ordinaryScope;
+    // Capture per-peer mutation revisions with this owned batch; later admission/settlement bumps invalidate that peer only.
+    const capturedRevs = new Map<string, number>();
+    for (const id of frozen) {
+      capturedRevs.set(id, peerMutationRevRef.current.get(id) ?? 0);
+    }
     batchInFlight.current = true;
     setEligibilityKind("checking");
     setEligibilityMessage("Подбираем игроков…");
     const result = await getPlayInterestStates(frozen);
-    batchInFlight.current = false;
+    // Only the current owned batch may clear occupancy; obsolete callbacks must not release a newer request.
     if (gen !== batchGen.current) return;
+    batchInFlight.current = false;
     if (actor !== actorIdRef.current || priv !== privateViews.currentGeneration) return;
     if (scope !== scopeRef.current) return;
     if (!result.ok) {
@@ -308,17 +335,26 @@ export function usePlayerBrowseOffers({
       setEligibilityMessage("Не удалось проверить подборку");
       return;
     }
+    const peerStillOwned = (id: string) =>
+      (peerMutationRevRef.current.get(id) ?? 0) === (capturedRevs.get(id) ?? 0);
     setKnown(prev => {
       const next = new Map(prev);
-      for (const [id, view] of bound) next.set(id, view.relationship);
+      for (const [id, view] of bound) {
+        if (!peerStillOwned(id)) continue;
+        next.set(id, view.relationship);
+      }
       return next;
     });
     setCheckedIds(prev => {
       const next = new Set(prev);
-      for (const id of frozen) next.add(id);
+      for (const id of frozen) {
+        if (!peerStillOwned(id)) continue;
+        next.add(id);
+      }
       return next;
     });
     const nextEligible = frozen.filter(id => {
+      if (!peerStillOwned(id)) return false;
       if (!isFinderSendEligible(bound.get(id))) return false;
       // Own unresolved/pending markers are not new-session recommendations.
       if (unresolvedRef.current.some(entry => entry.peerId === id)) return false;
@@ -326,8 +362,12 @@ export function usePlayerBrowseOffers({
       return true;
     });
     setEligibleIds(prev => {
+      // Drop peers that mutated after this batch captured them so stale none cannot re-admit.
+      const retained = mode === "append"
+        ? prev.filter(id => peerStillOwned(id) || !frozen.includes(id))
+        : [];
       const merged = mode === "append"
-        ? [...prev, ...nextEligible.filter(id => !prev.includes(id))]
+        ? [...retained, ...nextEligible.filter(id => !retained.includes(id))]
         : nextEligible;
       if (merged.length > 0) {
         setEligibilityKind("ready");
@@ -427,16 +467,12 @@ export function usePlayerBrowseOffers({
   const prevFinder = useRef(false);
   useEffect(() => {
     if (finderActive && !prevFinder.current) {
-      batchGen.current += 1;
-      batchInFlight.current = false;
-      setCheckedIds(new Set());
-      setEligibleIds([]);
-      setContinueArmed(false);
+      retireEligibilityBookkeeping();
       setEligibilityKind(authState === "guest" ? "guest" : "checking");
       setEligibilityMessage(authState === "guest" ? "Войдите, чтобы предложить игру" : "Подбираем игроков…");
     }
     prevFinder.current = finderActive;
-  }, [finderActive, authState]);
+  }, [finderActive, authState, retireEligibilityBookkeeping]);
 
   const opMatchesCurrentActor = useCallback((op: BrowseOfferOperation): boolean => {
     return op.actorId === actorIdRef.current
@@ -451,18 +487,20 @@ export function usePlayerBrowseOffers({
     if (!opMatchesCurrentActor(op)) return;
     const peer = op.peerId;
     const relationship = receipt.outcome === "mutual" ? "mutual" : "outgoing";
+    bumpPeerMutation(peer);
     setKnown(prev => {
       const next = new Map(prev);
       next.set(peer, relationship);
       return next;
     });
+    setEligibleIds(prev => prev.filter(id => id !== peer));
     setUnresolved(prev => prev.filter(entry => entry.peerId !== peer));
     setOpPeerId(peer);
     setOpPeerName(op.peerName);
     setOpPhase(relationship);
     setOpNotice("");
     opPhaseRef.current = relationship;
-  }, [opMatchesCurrentActor]);
+  }, [opMatchesCurrentActor, bumpPeerMutation]);
 
   const onOperationFailed = useCallback((op: BrowseOfferOperation, notice: string) => {
     if (activeTokenRef.current !== op.token) return;
@@ -521,6 +559,8 @@ export function usePlayerBrowseOffers({
     admitLockRef.current = true;
     activeTokenRef.current = token;
     peerNamesRef.current.set(input.peerId, input.peerName);
+    bumpPeerMutation(input.peerId);
+    setEligibleIds(prev => prev.filter(id => id !== input.peerId));
     setActiveOperation(operation);
     setOpPeerId(input.peerId);
     setOpPeerName(input.peerName);
@@ -528,7 +568,7 @@ export function usePlayerBrowseOffers({
     setOpNotice("");
     opPhaseRef.current = "sending";
     return true;
-  }, [me, authState]);
+  }, [me, authState, bumpPeerMutation]);
 
   const canSendTo = useCallback((peerId: string): { ok: boolean; reason: string } => {
     if (opPhase === "sending" || activeOperation) {
@@ -548,13 +588,17 @@ export function usePlayerBrowseOffers({
   }, [opPhase, activeOperation, unresolved, known, me]);
 
   const noteRelationship = useCallback((peerId: string, relationship: PlayInterestView["relationship"]) => {
+    bumpPeerMutation(peerId);
     setKnown(prev => {
       if (prev.get(peerId) === relationship) return prev;
       const next = new Map(prev);
       next.set(peerId, relationship);
       return next;
     });
-  }, []);
+    if (relationship === "outgoing" || relationship === "mutual" || relationship === "unavailable") {
+      setEligibleIds(prev => prev.filter(id => id !== peerId));
+    }
+  }, [bumpPeerMutation]);
 
   const checkStatusReadonly = useCallback((peerId?: string) => {
     if (!me || checkingStatus) return;
@@ -579,11 +623,13 @@ export function usePlayerBrowseOffers({
       }
       const view = result.data.items[0] ?? null;
       if (view && (view.relationship === "outgoing" || view.relationship === "mutual")) {
+        bumpPeerMutation(peer);
         setKnown(prev => {
           const next = new Map(prev);
           next.set(peer, view.relationship);
           return next;
         });
+        setEligibleIds(prev => prev.filter(id => id !== peer));
         setUnresolved(prev => prev.filter(entry => entry.peerId !== peer));
         setOpPeerId(peer);
         setOpPeerName(name);
@@ -601,7 +647,7 @@ export function usePlayerBrowseOffers({
         return [...prev, { peerId: peer, peerName: name }];
       });
     });
-  }, [me, opPeerId, opPeerName, checkingStatus]);
+  }, [me, opPeerId, opPeerName, checkingStatus, bumpPeerMutation]);
 
   const continueSearch = useCallback(() => {
     if (!hasMore || moreBusy || batchInFlight.current || continueArmedRef.current) return;
@@ -612,14 +658,10 @@ export function usePlayerBrowseOffers({
   }, [hasMore, moreBusy, onLoadMore]);
 
   const retryEligibility = useCallback(() => {
-    batchGen.current += 1;
-    batchInFlight.current = false;
-    setCheckedIds(new Set());
-    setEligibleIds([]);
-    setContinueArmed(false);
+    retireEligibilityBookkeeping();
     setEligibilityKind("checking");
     setEligibilityMessage("Подбираем игроков…");
-  }, []);
+  }, [retireEligibilityBookkeeping]);
 
   const eligiblePlayers = useMemo(() => {
     const byId = new Map(catalogPlayers.map(p => [p.publicPlayerId, p]));

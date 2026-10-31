@@ -1323,10 +1323,13 @@
   display: none;
 }
 
-/* Mobile <1024: hide segmented list/cards (desktop ≥1024 keeps it). */
+/*
+ * Mobile <1024: hide segmented list/cards unconditionally by viewport.
+ * Independent of JS mqReady / hidden / aria-hidden (SSR first paint leaves attrs unset).
+ * Root .pb-view-switch { display:inline-flex } applies only until this MQ; desktop ≥1024 unchanged.
+ */
 @media (max-width: 1023px) {
-  .gb-player-browse .pb-view-switch[hidden],
-  .gb-player-browse .pb-view-switch[aria-hidden="true"] {
+  .gb-player-browse .pb-view-switch {
     display: none !important;
   }
 }

@@ -77,6 +77,8 @@ export function PlayersDirectoryPage({
   const cardsHistoryPushed = useRef(false);
   const listScrollY = useRef(0);
   const cardsTrigger = useRef<HTMLElement | null>(null);
+  /** Set true on cards→list close so layout can focus the remounted finder CTA. */
+  const pendingFinderFocus = useRef(false);
   const mobileFsDialogRef = useRef<HTMLDialogElement | null>(null);
   const closingFsRef = useRef(false);
   const mobileCtaZoneRef = useRef<HTMLDivElement | null>(null);
@@ -156,19 +158,23 @@ export function PlayersDirectoryPage({
   }, []);
   useEffect(() => { setPortalReady(true); }, []);
   useEffect(() => {
-    const restoreListChrome = () => {
+    const restoreListChromeOnPop = () => {
       const trigger = cardsTrigger.current;
       cardsTrigger.current = null;
       cardsHistoryPushed.current = false;
+      pendingFinderFocus.current = true;
       requestAnimationFrame(() => {
         window.scrollTo(0, listScrollY.current);
-        if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+        if (trigger?.isConnected) {
+          pendingFinderFocus.current = false;
+          trigger.focus({ preventScroll: true });
+        }
       });
     };
     const readView = () => {
       const next = parseBrowseView(window.location.search);
       setBrowseView(prev => {
-        if (prev === "cards" && next === "list") restoreListChrome();
+        if (prev === "cards" && next === "list") restoreListChromeOnPop();
         return next;
       });
       setViewReady(true);
@@ -195,9 +201,14 @@ export function PlayersDirectoryPage({
     const trigger = cardsTrigger.current;
     cardsTrigger.current = null;
     cardsHistoryPushed.current = false;
+    // Focus after list/CTA remount (X / Escape / replaceState close). Do not steal focus from late receipts.
+    pendingFinderFocus.current = true;
     requestAnimationFrame(() => {
       window.scrollTo(0, listScrollY.current);
-      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+      if (trigger?.isConnected) {
+        pendingFinderFocus.current = false;
+        trigger.focus({ preventScroll: true });
+      }
     });
   }
   function closeMobileCards() {
@@ -252,6 +263,16 @@ export function PlayersDirectoryPage({
   const showCards = viewReady && browseView === "cards";
   // Wait for MQ before mobile portal — avoids fullscreen flash when desktop ≥1024 hydrates.
   const mobileCards = showCards && mqReady && !desktop;
+  // After cards→list remount, focus current finder CTA when the captured trigger was detached (X/Escape/Back).
+  useLayoutEffect(() => {
+    if (showCards || !pendingFinderFocus.current) return;
+    pendingFinderFocus.current = false;
+    window.scrollTo(0, listScrollY.current);
+    const cta = mobileCtaZoneRef.current?.querySelector<HTMLElement>(".pb-finder-cta") ?? null;
+    if (cta && typeof cta.focus === "function") {
+      cta.focus({ preventScroll: true });
+    }
+  }, [showCards]);
   const loadMore = () => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); };
   // Batch eligibility for authenticated cards on both mobile and desktop; list stays complete.
   const offers = usePlayerBrowseOffers({

@@ -101,6 +101,10 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(pageSource).toContain("pb-view-switch");
     expect(pageSource).toContain("Списком");
     expect(pageSource).toContain("По одному");
+    // QA404-05: viewport MQ hides switch unconditionally (not only [hidden]/aria-hidden]).
+    const css = readFileSync(join(root, "src/styles/player-browse.css"), "utf8");
+    expect(css).toMatch(/@media \(max-width: 1023px\)\s*\{\s*\.gb-player-browse \.pb-view-switch\s*\{\s*display:\s*none !important;/);
+    expect(css).not.toMatch(/\.gb-player-browse \.pb-view-switch\[hidden\]/);
   });
 
   it("authenticated cards eligibility covers desktop without mobile operation host", () => {
@@ -118,6 +122,48 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(deckSource).toContain("onRetryFinder");
     expect(offersHookSource).toContain("readValidatedPending");
     expect(offersHookSource).toContain("unresolvedRef.current.some");
+  });
+
+  it("QA404-01: send advance is ref-bound so gesture registration stays stable mid-drag", () => {
+    expect(deckSource).toContain("applySendAdvanceRef");
+    expect(deckSource).toContain("applySendAdvanceRef.current = applySendAdvance");
+    expect(deckSource).toContain("applySendAdvanceRef.current(peerAtStart, fly.generation)");
+    // Gesture effect must not list applySendAdvance (identity churn tore down mid-finger).
+    const gestureEffect = deckSource.indexOf("// Gestures attach only after the pending card is ready");
+    expect(gestureEffect).toBeGreaterThan(-1);
+    const depsSlice = deckSource.slice(gestureEffect, gestureEffect + 12000);
+    expect(depsSlice).toMatch(/\}, \[desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer\]\)/);
+    expect(depsSlice).not.toMatch(/applySendAdvance\]/);
+    expect(depsSlice).toContain("cancelActiveGesture(true)");
+    expect(depsSlice).toContain("applySendAdvanceRef.current(peerAtStart, fly.generation)");
+  });
+
+  it("QA404-02/03: batch ownership fence + peer mutation revision; actor retire resets bookkeeping", () => {
+    expect(offersHookSource).toContain("peerMutationRevRef");
+    expect(offersHookSource).toContain("capturedRevs");
+    expect(offersHookSource).toContain("peerStillOwned");
+    expect(offersHookSource).toContain("Only the current owned batch may clear occupancy");
+    expect(offersHookSource).toMatch(/if \(gen !== batchGen\.current\) return;\s*batchInFlight\.current = false/);
+    expect(offersHookSource).toContain("bumpPeerMutation");
+    expect(offersHookSource).toContain("retireEligibilityBookkeeping");
+    // Actor/private retirement resets checkedIds / batch gen / continuation — not only known/eligible.
+    const expire = offersHookSource.indexOf("const expire = () =>");
+    expect(expire).toBeGreaterThan(-1);
+    const expireBody = offersHookSource.slice(expire, expire + 900);
+    expect(expireBody).toContain("batchGen.current += 1");
+    expect(expireBody).toContain("batchInFlight.current = false");
+    expect(expireBody).toContain("setCheckedIds(new Set())");
+    expect(expireBody).toContain("setContinueArmed(false)");
+    expect(expireBody).toContain("peerMutationRevRef.current = new Map()");
+  });
+
+  it("QA404-04: finder close restores focus to remounted CTA after list paint", () => {
+    expect(pageSource).toContain("pendingFinderFocus");
+    expect(pageSource).toContain('querySelector<HTMLElement>(".pb-finder-cta")');
+    expect(pageSource).toContain("preventScroll: true");
+    // Connected captured trigger still preferred; detached falls through to current CTA.
+    expect(pageSource).toContain("trigger?.isConnected");
+    expect(pageSource).toMatch(/if \(showCards \|\| !pendingFinderFocus\.current\) return/);
   });
 
   it("deck admits then flies right without waiting for receipt on mobile offers path", () => {
