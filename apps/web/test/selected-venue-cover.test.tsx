@@ -201,12 +201,13 @@ beforeEach(() => {
 afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount()); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 import { SelectedVenueCover, useSelectedVenueCover } from "../src/components/consumer/venues/SelectedVenueCover";
+import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
 import { useEffect, useMemo, useState } from "react";
 const uploaded = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
-const court = "/discovery/badminton-courts.jpg";
 let city = "city"; let venue = { id: "venue", name: "Зал", cover: { uploadedUrl: uploaded as string | null } };
 let info = false;
 let resource: ReturnType<typeof useSelectedVenueCover>;
+function illustration() { return venueIllustrationUrl(venue.id); }
 function Selected() {
   resource = useSelectedVenueCover(city, venue);
   return <><SelectedVenueCover slotRef={resource.compact} className="gb-venue-preview-cover" />{info && <SelectedVenueCover slotRef={resource.info} className="gb-venue-sheet-cover" />}</>;
@@ -236,21 +237,21 @@ it("initializes the same image from the info slot without a compact preview", as
   expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
   expect(image.parentNode?.dataset).toEqual({ cover: "uploaded" });
   venue = { ...venue, cover: { uploadedUrl: null } };
-  // Identity change via city/venue/url remounts resource; info-only null cover uses court fallback.
+  // Identity change via city/venue/url remounts resource; info-only null cover uses illustration by venue id.
   renderer.unmount();
   await Promise.resolve();
   venue = { id: "venue", name: "Зал", cover: { uploadedUrl: null } };
   mount(() => <InfoOnly />);
   const fallback = imageAt(1);
-  expect(fallback.srcWrites).toEqual([court]);
-  expect(fallback.parentNode?.dataset).toEqual({ cover: "default", fallback: "court" });
-  expect(fallback.alt).toBe("Бадминтонный корт");
+  expect(fallback.srcWrites).toEqual([illustration()]);
+  expect(fallback.parentNode?.dataset).toEqual({ cover: "default", fallback: "illustration" });
+  expect(fallback.alt).toBe(VENUE_ILLUSTRATION_ALT);
 });
-it.each([null, "invalid", "https://external.invalid/photo.png"])("uses court for %s", value => {
+it.each([null, "invalid", "https://external.invalid/photo.png"])("uses stable illustration for %s when venue id is present", value => {
   venue.cover.uploadedUrl = value; mount(() => <Selected />);
-  const image = imageAt(); expect(image.srcWrites).toEqual([court]); expect(image.alt).toBe("Бадминтонный корт");
-  expect(image.parentNode?.dataset).toEqual({ cover: "default", fallback: "court" });
-  image.dispatchEvent(new Event("error")); expect(image.srcWrites).toEqual([court]);
+  const image = imageAt(); expect(image.srcWrites).toEqual([illustration()]); expect(image.alt).toBe(VENUE_ILLUSTRATION_ALT);
+  expect(image.parentNode?.dataset).toEqual({ cover: "default", fallback: "illustration" });
+  image.dispatchEvent(new Event("error")); expect(image.srcWrites).toEqual([illustration()]);
 });
 it.each([false, true])("falls back once in info=%s, rejects stale fallback and cleanup callbacks", async expanded => {
   info = expanded;
@@ -259,9 +260,9 @@ it.each([false, true])("falls back once in info=%s, rejects stale fallback and c
   const stale = add.mock.calls.find(([type]) => type === "error")?.[1];
   const fireStale = () => { if (typeof stale === "function") stale.call(image, new Event("error")); };
   image.dispatchEvent(new Event("error")); fireStale(); image.dispatchEvent(new Event("error"));
-  expect(image.srcWrites).toEqual([uploaded, court]); expect(image.parentNode?.dataset.fallback).toBe("court");
+  expect(image.srcWrites).toEqual([uploaded, illustration()]); expect(image.parentNode?.dataset.fallback).toBe("illustration");
   renderer.unmount(); await Promise.resolve(); fireStale(); image.dispatchEvent(new Event("load")); image.dispatchEvent(new Event("error"));
-  expect(image.src).toBe(""); expect(image.parentNode).toBeNull(); expect(image.srcWrites).toEqual([uploaded, court]);
+  expect(image.src).toBe(""); expect(image.parentNode).toBeNull(); expect(image.srcWrites).toEqual([uploaded, illustration()]);
   expect(remove.mock.calls.filter(([type]) => type === "error")).toHaveLength(2);
 });
 it.each(["city", "venue", "url"])("invalidates %s identity, including identical URLs", async identity => {
@@ -326,11 +327,11 @@ it("preserves one image/source across StrictMode ref and passive-effect replay",
   expect(image.src).toBe(uploaded);
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   image.dispatchEvent(new Event("error"));
-  expect(image.srcWrites).toEqual([uploaded, court]);
+  expect(image.srcWrites).toEqual([uploaded, illustration()]);
   info = true; renderer.render(); renderer.replayRefs(); renderer.replayEffects();
   await Promise.resolve();
   expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
-  expect(image.srcWrites).toEqual([uploaded, court]);
+  expect(image.srcWrites).toEqual([uploaded, illustration()]);
   renderer.unmount();
   await Promise.resolve();
   expect(image.parentNode).toBeNull(); expect(image.src).toBe("");

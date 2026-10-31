@@ -8,6 +8,7 @@ import { initialCreateVenue, selectCreateVenue } from "../src/lib/venue-popup-cr
 import { venueCreatePath } from "../src/lib/games-venue-map";
 import { safeAuthReturnPath } from "../src/lib/auth-return";
 import { formatSeats } from "../src/lib/game-presentation";
+import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
 // Real React SSR throughout. No hook substitution, component mocks or event/effect claims.
@@ -102,6 +103,13 @@ describe("production venue popup presentation with real React", () => {
     const html = ssr(<VenueSheetGameRow game={{ ...game, activityKind: "trainer_led" }} timezone={venue.timezone} onOpen={noop} />);
     expect(html).toContain('src="/discovery/badminton-courts.jpg"');
     expect(html).toContain(`src="${avatar}"`);
+  });
+  it("uses generic illustration for selected create-game venue without uploaded cover", () => {
+    const html = ssr(<CreateGamePresentation {...presentation()} />);
+    expect(html).toContain(`src="${venueIllustrationUrl(venue.id)}"`);
+    expect(html).toContain('data-fallback="illustration"');
+    expect(html).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(html).not.toContain("Бадминтонный корт");
   });
   it.each([null, undefined, [], {}, { phone: "123\n4567", website: "javascript:alert(1)", messengers: [{ kind: "telegram", url: "https://t.me/a/.." }] }])("renders the honest empty contact state (%j)", value => {
     const html = ssr(<VenuePublicContacts value={value} />);

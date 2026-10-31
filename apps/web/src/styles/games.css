@@ -429,6 +429,44 @@
 .gb-venue-cover__default { display:grid; width:100%; height:100%; place-items:center; color:var(--c23-muted); background:var(--c23-surface); }
 .gb-venue-cover__default > span { font-size:3rem; }
 .gb-venue-cover--thumb { width:80px; height:45px; flex:0 0 80px; border-radius:8px; }
+/* Informational badge for generic equipment illustrations only (not uploaded photos). */
+.gb-venue-cover[data-fallback="illustration"]::after {
+  content: "Иллюстрация";
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gb-ink) 72%, transparent);
+  color: var(--gb-white);
+  font: 600 11px/1.2 var(--gb-font);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+.gb-venue-cover.gb-venue-preview-cover[data-fallback="illustration"]::after,
+.gb-venue-picker-option .gb-venue-cover[data-fallback="illustration"]::after,
+.gb-venue-picker-option > .gb-venue-gallery-wrap .gb-venue-cover[data-fallback="illustration"]::after {
+  left: 3px;
+  bottom: 3px;
+  max-width: calc(100% - 6px);
+  padding: 1px 4px;
+  font-size: 8px;
+  border-radius: 6px;
+}
+.gb-venue-cover--thumb[data-fallback="illustration"]::after {
+  left: 4px;
+  bottom: 4px;
+  max-width: calc(100% - 8px);
+  padding: 2px 5px;
+  font-size: 9px;
+  border-radius: 6px;
+}
 .gb-venue-media { width:100%; max-height:300px; aspect-ratio:auto; height:300px; overflow:hidden; border-radius:24px; }
 .gb-venue-page { max-width:none; width:100%; margin:0; padding:0; }
 .gb-venue-page__address { margin:8px 0 0; color:var(--gb-ink-soft); }

@@ -1,13 +1,14 @@
 "use client";
 import { useEffect, useMemo } from "react";
 import type { RefCallback } from "react";
+import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../../../lib/venue-illustration";
 import { venueCoverUrl } from "./VenueCover";
 
 const court = "/discovery/badminton-courts.jpg";
 type Position = "compact" | "info";
 
 /** A selected venue owns one image; slots only lend it a DOM parent. */
-function createCover(url: string | null, initialName: string) {
+function createCover(url: string | null, initialName: string, venueId?: string) {
   const slots: Record<Position, HTMLSpanElement | null> = { compact: null, info: null };
   let image: HTMLImageElement | null = null;
   let name = initialName;
@@ -15,14 +16,20 @@ function createCover(url: string | null, initialName: string) {
   let generation = 0;
   let detach: (() => void) | undefined;
   let releaseVersion = 0;
+  const useIllustration = Boolean(venueId);
+  const fallbackSrc = useIllustration && venueId ? venueIllustrationUrl(venueId) : court;
   const describe = () => {
     for (const slot of Object.values(slots)) {
       if (!slot) continue;
       slot.dataset.cover = fallback ? "default" : "uploaded";
-      if (fallback) slot.dataset.fallback = "court";
+      if (fallback) slot.dataset.fallback = useIllustration ? "illustration" : "court";
       else delete slot.dataset.fallback;
     }
-    if (image) image.alt = fallback ? "Бадминтонный корт" : `Обложка: ${name}`;
+    if (image) {
+      image.alt = fallback
+        ? (useIllustration ? VENUE_ILLUSTRATION_ALT : "Бадминтонный корт")
+        : `Обложка: ${name}`;
+    }
   };
   const listen = () => {
     if (!image) return;
@@ -40,7 +47,7 @@ function createCover(url: string | null, initialName: string) {
   };
   const source = () => {
     listen();
-    if (image) image.src = fallback ? court : url ?? court;
+    if (image) image.src = fallback ? fallbackSrc : url ?? fallbackSrc;
   };
   const dispose = () => {
     ++generation;
@@ -87,7 +94,7 @@ function createCover(url: string | null, initialName: string) {
 export function useSelectedVenueCover(cityId: string, venue?: { id: string; name: string; cover?: { uploadedUrl: string | null } }) {
   const url = venueCoverUrl(venue?.cover?.uploadedUrl);
   const id = venue?.id;
-  const resource = useMemo(() => createCover(url, venue?.name ?? ""), [cityId, id, url]);
+  const resource = useMemo(() => createCover(url, venue?.name ?? "", id), [cityId, id, url]);
   useEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
   useEffect(() => { resource.retain(); return () => resource.release(); }, [resource]);
   return resource;

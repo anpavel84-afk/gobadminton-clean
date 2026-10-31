@@ -24,7 +24,7 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
         index={galleryIndex}
         onIndexChange={onGalleryIndexChange}
       />
-    : <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-preview-cover" />;
+    : <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-preview-cover" venueId={venue.id} />;
   return <div className="gb-venue-preview" role="region" aria-label="Выбранная площадка">
     {!embedded && <button type="button" className="gb-venue-handle" aria-label="Развернуть площадку" onClick={onOpen}><span /></button>}
     <button type="button" className="gb-venue-preview-button" aria-label={`Открыть площадку ${venue.name}`} onClick={onOpen}>

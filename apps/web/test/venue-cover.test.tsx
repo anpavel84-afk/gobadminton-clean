@@ -5,6 +5,7 @@ import { VenueCoverEditor } from "../src/components/consumer/venues/VenueCoverEd
 import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
 import { GameHero } from "../src/components/consumer/games/GameDetailComposition";
 import { VenueCoverError, venueCoverRequest } from "../src/lib/venue-cover-api";
+import { VENUE_ILLUSTRATION_ALT, VENUE_ILLUSTRATION_URLS, venueIllustrationUrl } from "../src/lib/venue-illustration";
 import type { Game } from "../src/lib/consumer-types";
 afterEach(()=>vi.unstubAllGlobals());
 const url="/v1/media/venue-covers/"+"a".repeat(64)+".png";
@@ -36,6 +37,25 @@ describe("venue cover presentation / mutation wire protocol",()=>{
       expect(markup).toContain('decoding="async"');
       expect(markup).not.toContain("▱");
     }
+  });
+  it("uses stable equipment illustration when venueId is supplied without uploaded cover",()=>{
+    const idA="00000037-1111-4111-8111-111111111111";
+    const idB="00000037-1111-4111-8111-111111111112";
+    const a=renderToStaticMarkup(<VenueCover venueId={idA}/>);
+    const b=renderToStaticMarkup(<VenueCover venueId={idB}/>);
+    const again=renderToStaticMarkup(<VenueCover venueId={idA}/>);
+    expect(a).toContain(`src="${venueIllustrationUrl(idA)}"`);
+    expect(a).toContain('data-fallback="illustration"');
+    expect(a).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(a).not.toContain("Бадминтонный корт");
+    expect(again).toContain(`src="${venueIllustrationUrl(idA)}"`);
+    expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idA) as typeof VENUE_ILLUSTRATION_URLS[number]);
+    expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idB) as typeof VENUE_ILLUSTRATION_URLS[number]);
+    // Uploaded cover still wins over the generic illustration.
+    const uploaded=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="Synthetic"/>);
+    expect(uploaded).toContain(url);
+    expect(uploaded).not.toContain('data-fallback="illustration"');
+    expect(uploaded).toContain('data-cover="uploaded"');
   });
   it("does not grant an editor by venueId; no controls until scoped server access",()=>{
     expect(renderToStaticMarkup(<VenueCoverEditor venueId="00000037-1111-4111-8111-111111111111" onChange={vi.fn()}/>)).toBe("");
