@@ -373,6 +373,13 @@ describe("player browse tutorial marker", () => {
     expect(deckSource).toContain("abortTutorial");
     expect(deckSource).toContain("browseTutorialLocalStorage");
     expect(deckSource).toContain("identityReady");
+    // QA-01: open/render/finish only on ready auth or confirmed guest — not loading/error.
+    expect(deckSource).toMatch(/const identityReady = authState === "ready" \|\| authState === "guest"/);
+    expect(deckSource).toMatch(/showHelp = !desktop && identityReady && tutorialOpen/);
+    expect(deckSource).toMatch(/disabled=\{!identityReady\} onClick=\{openTutorial\}/g);
+    expect(deckSource).toMatch(/const openTutorial = useCallback\(\(\) => \{[\s\S]*?if \(!identityReady\) return;/);
+    expect(deckSource).toMatch(/if \(!identityReady \|\| \(authState === "ready" && !me\?\.id\)\)/);
+    expect(deckSource).toMatch(/tutorialActorSeenRef\.current !== null && tutorialActorSeenRef\.current !== actor/);
     expect(deckSource).not.toContain("Свайп вверх");
     expect(deckSource).not.toContain("pb-tutorial-shade");
     expect(cssSource).not.toContain("backdrop-filter: blur");
@@ -389,7 +396,8 @@ describe("player browse tutorial marker", () => {
     expect(deckSource).not.toContain("setTutorialMemory(true)");
     expect(deckSource).not.toContain("setTutorialMemory(false)");
     expect(deckSource).not.toMatch(/const \[tutorialMemory, setTutorialMemory\] = useState\(false\)/);
-    // Identity change re-arms gate without clearing the completed-actor latch.
+    // Unresolved identity retires teaching without updating actor-seen; resolved actor change re-arms.
+    expect(deckSource).toMatch(/if \(!identityReady\) \{\s*setTutorialOpen\(false\);\s*setTutorialStep\(1\);\s*return;/);
     const identityFx = deckSource.indexOf("tutorialActorSeenRef.current !== tutorialActor");
     expect(identityFx).toBeGreaterThan(-1);
     const identityBlock = deckSource.slice(identityFx, identityFx + 280);

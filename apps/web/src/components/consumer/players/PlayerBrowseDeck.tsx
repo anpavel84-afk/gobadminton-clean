@@ -526,15 +526,21 @@ export function PlayerBrowseDeck({
     }
   }, [current?.publicPlayerId, clearTransitionTimer]);
 
-  const identityReady = authState !== "loading";
+  // Resolved identity only — loading/error must not open, render, or finish the guide as guest.
+  const identityReady = authState === "ready" || authState === "guest";
   const tutorialActor = tutorialActorKey(me?.id);
   // Derive memory only for the current actor — same-render A→B must not see A's completion.
   const tutorialMemory = tutorialCompletedActor === tutorialActor;
 
   useEffect(() => {
+    // Pending/error: retire open teaching without poisoning actor-seen (me is null while loading).
+    if (!identityReady) {
+      setTutorialOpen(false);
+      setTutorialStep(1);
+      return;
+    }
     // On actor change: re-arm blank gate + close open guide. Do not clear completed-actor latch
     // (derivation above already excludes the previous actor from memory).
-    if (!identityReady) return;
     if (tutorialActorSeenRef.current !== null && tutorialActorSeenRef.current !== tutorialActor) {
       setTutorialStep(1);
       setTutorialOpen(false);
@@ -1070,9 +1076,12 @@ export function PlayerBrowseDeck({
     finishAdvance(null);
   }, [current, skipStack, browsePlayers, index, known, desktop, flyOffCard, clearCardMotion, fluidMobile]);
   const openTutorial = useCallback(() => {
+    // Explicit ? open: only when auth is ready or confirmed guest — never while /v1/me pending/error.
+    if (!identityReady) return;
+    if (authState === "ready" && !me?.id) return;
     setTutorialStep(1);
     setTutorialOpen(true);
-  }, []);
+  }, [identityReady, authState, me?.id]);
 
   /** X / Escape: leave unfinished — no persistent completion. Reopening may restart. */
   const abortTutorial = useCallback(() => {
@@ -1083,14 +1092,26 @@ export function PlayerBrowseDeck({
 
   /** Step-2 finish only: durable per-actor localStorage (memory fallback if blocked). */
   const finishTutorial = useCallback(() => {
+    // Refuse pending/error and ready-without-id — never write the guest marker for an unresolved viewer.
+    if (!identityReady || (authState === "ready" && !me?.id)) {
+      setTutorialOpen(false);
+      setTutorialStep(1);
+      return;
+    }
     const actor = tutorialActorKey(me?.id);
+    // Captured open-session actor must still match; identity flip mid-teaching must not finish wrong key.
+    if (tutorialActorSeenRef.current !== null && tutorialActorSeenRef.current !== actor) {
+      setTutorialOpen(false);
+      setTutorialStep(1);
+      return;
+    }
     setTutorialOpen(false);
     setTutorialStep(1);
     persistTutorialCompleted(browseTutorialLocalStorage(), actor);
     // Latch this actor only — other actors must not inherit memory in the same session.
     setTutorialCompletedActor(actor);
     requestAnimationFrame(() => deckRef.current?.focus({ preventScroll: true }));
-  }, [me?.id]);
+  }, [identityReady, authState, me?.id]);
 
   const advanceTutorial = useCallback(() => {
     if (tutorialStep === 1) {
@@ -1668,7 +1689,7 @@ export function PlayerBrowseDeck({
     };
   }, [desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer]);
   const blank = catalogState === "loading" || (!browsePlayers.length && (catalogState === "empty" || catalogState === "ready"));
-  const showHelp = !desktop && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
+  const showHelp = !desktop && identityReady && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
   const counter = browsePlayers.length
     ? `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`
     : "00 / 00";
@@ -1686,7 +1707,7 @@ export function PlayerBrowseDeck({
         ) : null}
       </div>
       <div className="pb-fs-chrome__tools">
-        <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={openTutorial}>?</button>
+        <button type="button" className="pb-help" aria-label="Подсказка по жестам" disabled={!identityReady} onClick={openTutorial}>?</button>
         <button
           ref={closeBtnRef}
           type="button"
@@ -1890,7 +1911,7 @@ export function PlayerBrowseDeck({
         <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
         <div className="pb-deck-context__tools">
           <span className="pb-counter" aria-live="polite">{counter}</span>
-          <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={openTutorial}>?</button>
+          <button type="button" className="pb-help" aria-label="Подсказка по жестам" disabled={!identityReady} onClick={openTutorial}>?</button>
         </div>
       </div>
     ) : null}
