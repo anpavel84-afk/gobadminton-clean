@@ -201,7 +201,7 @@ export function PlayerBrowseFinderGate({
   if (eligibility.kind === "guest") {
     return (
       <div className="pb-finder-gate" role="status">
-        <h2>Найти напарника</h2>
+        <h2>Свайп</h2>
         <p>{eligibility.message || "Войдите, чтобы предложить игру"}</p>
         {guestAction}
       </div>

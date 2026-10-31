@@ -240,7 +240,7 @@ describe("player browse swipe boundaries", () => {
     expect(deckSource).toContain("flyGen");
     expect(deckSource).toContain("actionConsumedRef");
     expect(deckSource).toContain("fluidMobile");
-    expect(pageSource).toContain("Найти напарника");
+    expect(pageSource).toContain("Свайп");
     expect(pageSource).toContain("pb-mobile-finder-zone");
     expect(deckSource).toContain("Single retained avatar host");
     expect(deckSource).not.toContain('pb-mobile-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag');
