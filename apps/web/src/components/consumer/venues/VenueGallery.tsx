@@ -74,6 +74,7 @@ export function VenueGallery({
   className = "",
   size = "sheet",
   coverSlot,
+  coverFallback = false,
   showCredit = true,
   index: controlledIndex,
   onIndexChange,
@@ -83,6 +84,8 @@ export function VenueGallery({
   size?: "sheet" | "compact" | "page";
   /** Reuse SelectedVenueCover morph slot for the current main-matching image. */
   coverSlot?: ReactNode;
+  /** Shared SelectedVenueCover resource already shows the generic after main-loan failure. */
+  coverFallback?: boolean;
   showCredit?: boolean;
   /** Parent-owned index keeps compact↔expanded selection aligned for one venue. */
   index?: number;
@@ -109,7 +112,9 @@ export function VenueGallery({
   const safeIndex = items.length === 0 ? 0 : ((index % items.length) + items.length) % items.length;
   const current = items[safeIndex] ?? null;
   const mainUrl = venueCoverUrl(venue.cover?.uploadedUrl);
+  // Keep the morph main-loan slot after shared-resource fallback (one image); local failed still leaves morph.
   const useMorphSlot = Boolean(coverSlot && current && mainUrl && current.url === mainUrl && failed !== current.url);
+  const mainLoanFallback = Boolean(coverSlot && coverFallback && current && mainUrl && current.url === mainUrl);
 
   useEffect(() => {
     setFailed(null);
@@ -260,7 +265,7 @@ export function VenueGallery({
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>
       </>}
     </div>
-    {showCredit && current ? <div className="gb-venue-gallery__credit"><VenueCoverCredit credit={failed === current.url
+    {showCredit && current ? <div className="gb-venue-gallery__credit"><VenueCoverCredit credit={failed === current.url || mainLoanFallback
       ? { kind: "illustration", text: "Иллюстрация", url: null }
       : current.credit} /></div> : null}
   </div>;

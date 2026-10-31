@@ -51,7 +51,21 @@ vi.mock("react", async original => {
     useEffect: effect, useLayoutEffect: effect,
     useId() { const store = active(); return `id-${store.cursor++}`; },
     useContext(context: { _currentValue: unknown }) { return context._currentValue; },
-    useSyncExternalStore(_subscribe: unknown, snapshot: () => unknown) { return snapshot(); },
+    useSyncExternalStore(subscribe: (onStoreChange: () => void) => () => void, getSnapshot: () => unknown) {
+      const store = active(); const index = store.cursor++;
+      let slot = store.slots[index] as { value: unknown; unsub?: () => void } | undefined;
+      if (!slot) {
+        const owned: { value: unknown; unsub?: () => void } = { value: getSnapshot() };
+        owned.unsub = subscribe(() => {
+          const next = getSnapshot();
+          if (store.alive && !Object.is(owned.value, next)) { owned.value = next; runtime.dirty = true; }
+        });
+        store.slots[index] = owned;
+        return owned.value;
+      }
+      slot.value = getSnapshot();
+      return slot.value;
+    },
   };
 });
 
@@ -201,9 +215,11 @@ beforeEach(() => {
 afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount()); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 import { SelectedVenueCover, useSelectedVenueCover } from "../src/components/consumer/venues/SelectedVenueCover";
+import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
 import { useEffect, useMemo, useState } from "react";
 const uploaded = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
+const uploadedB = `/v1/media/venue-covers/${"b".repeat(64)}.png`;
 let city = "city"; let venue = { id: "venue", name: "Зал", cover: { uploadedUrl: uploaded as string | null } };
 let info = false;
 let resource: ReturnType<typeof useSelectedVenueCover>;
@@ -335,4 +351,70 @@ it("preserves one image/source across StrictMode ref and passive-effect replay",
   renderer.unmount();
   await Promise.resolve();
   expect(image.parentNode).toBeNull(); expect(image.src).toBe("");
+});
+
+it("F1: compact main error then expanded remount keeps morph illustration credit; non-main and new venue isolated", () => {
+  const galleryVenue = {
+    id: "a0000000-0000-4000-8000-000000000001",
+    name: "Зал",
+    cover: { uploadedUrl: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+    profile: {
+      courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+      gallery: {
+        coverage: "ordered" as const,
+        items: [
+          { id: "a0000000-0000-4000-8000-000000000011", url: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+          { id: "a0000000-0000-4000-8000-000000000012", url: uploadedB, credit: { kind: "logo" as const, text: "Логотип: Клуб", url: "https://club.example/logo" } },
+        ],
+      },
+    },
+  };
+  venue = { id: galleryVenue.id, name: galleryVenue.name, cover: { uploadedUrl: uploaded } };
+  let expanded = false;
+  let galleryIndex = 0;
+  function MapSurfaces() {
+    resource = useSelectedVenueCover(city, venue);
+    const slot = expanded
+      ? <SelectedVenueCover slotRef={resource.info} className="gb-venue-sheet-cover" />
+      : <SelectedVenueCover slotRef={resource.compact} className="gb-venue-preview-cover" />;
+    return <VenueGallery
+      venue={galleryVenue}
+      size={expanded ? "sheet" : "compact"}
+      showCredit={expanded}
+      coverSlot={slot}
+      coverFallback={resource.fallback}
+      index={galleryIndex}
+    />;
+  }
+  const renderer = mount(() => <MapSurfaces />);
+  const image = imageAt();
+  expect(image.srcWrites).toEqual([uploaded]);
+  expect(resource.fallback).toBe(false);
+  image.dispatchEvent(new Event("error"));
+  renderer.render();
+  expect(resource.fallback).toBe(true);
+  expect(image.srcWrites).toEqual([uploaded, illustration()]);
+  expect(image.alt).toBe(VENUE_ILLUSTRATION_ALT);
+  // Expanded remount: new gallery instance reads shared fallback; same morph node, illustration credit.
+  expanded = true;
+  renderer.render();
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(image.src).toBe(illustration());
+  expect(image.alt).toBe(VENUE_ILLUSTRATION_ALT);
+  expect(text(renderer.tree[0]!)).toContain("Иллюстрация");
+  expect(text(renderer.tree[0]!)).not.toContain("Фото: Клуб");
+  // Healthy non-main keeps its own credit even when main loan failed.
+  galleryIndex = 1;
+  renderer.render();
+  expect(text(renderer.tree[0]!)).toContain("Логотип: Клуб");
+  expect(text(renderer.tree[0]!)).not.toContain("Иллюстрация");
+  // New venue resource does not inherit prior fallback.
+  venue = { id: "a0000000-0000-4000-8000-000000000099", name: "Другой", cover: { uploadedUrl: uploaded } };
+  galleryVenue.id = venue.id;
+  galleryIndex = 0;
+  renderer.render();
+  expect(resource.fallback).toBe(false);
+  expect(text(renderer.tree[0]!)).toContain("Фото: Клуб");
+  expect(text(renderer.tree[0]!)).not.toContain("Иллюстрация");
 });

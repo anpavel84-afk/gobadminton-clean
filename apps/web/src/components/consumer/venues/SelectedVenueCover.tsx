@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { RefCallback } from "react";
 import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../../../lib/venue-illustration";
 import { venueCoverUrl } from "./VenueCover";
@@ -16,8 +16,15 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   let generation = 0;
   let detach: (() => void) | undefined;
   let releaseVersion = 0;
+  const listeners = new Set<() => void>();
   const useIllustration = Boolean(venueId);
   const fallbackSrc = useIllustration && venueId ? venueIllustrationUrl(venueId) : court;
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  };
+  const getSnapshot = () => fallback;
+  const emit = () => { for (const listener of listeners) listener(); };
   const describe = () => {
     for (const slot of Object.values(slots)) {
       if (!slot) continue;
@@ -41,6 +48,7 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
       fallback = true;
       describe();
       source();
+      emit();
     };
     current.addEventListener("error", error);
     detach = () => current.removeEventListener("error", error);
@@ -88,7 +96,7 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   };
   const compact: RefCallback<HTMLSpanElement> = node => attach("compact", node);
   const info: RefCallback<HTMLSpanElement> = node => attach("info", node);
-  return { compact, info, release, retain, rename(value: string) { name = value; describe(); } };
+  return { compact, info, release, retain, subscribe, getSnapshot, rename(value: string) { name = value; describe(); } };
 }
 
 export function useSelectedVenueCover(cityId: string, venue?: { id: string; name: string; cover?: { uploadedUrl: string | null } }) {
@@ -97,7 +105,8 @@ export function useSelectedVenueCover(cityId: string, venue?: { id: string; name
   const resource = useMemo(() => createCover(url, venue?.name ?? "", id), [cityId, id, url]);
   useEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
   useEffect(() => { resource.retain(); return () => resource.release(); }, [resource]);
-  return resource;
+  const fallback = useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);
+  return { ...resource, fallback };
 }
 
 /** Empty React-owned slot: the resource moves its image only during commit. */
