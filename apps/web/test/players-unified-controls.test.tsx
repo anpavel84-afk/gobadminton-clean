@@ -15,8 +15,19 @@ describe("Players automatic Radar composition", () => {
   it("adds only the map action during active Radar, even while capability loads", () => {
     session.on = true; const html = renderToStaticMarkup(<PlayersDirectoryPage />);
     expect(html).toContain("Игроки на карте"); expect(html).toContain('href="/players/radar"');
-    expect(html).toContain("gb-players-map-cta");
-    expect(html).toContain("gb-games-view-action");
+    // Combined mobile finder overlay (Owner-approved): partner CTA + map secondary share one zone.
+    const zoneAt = html.indexOf("pb-mobile-finder-zone");
+    expect(zoneAt).toBeGreaterThan(-1);
+    expect(html.slice(zoneAt, zoneAt + 80)).toContain('data-radar="on"');
+    const ctaAt = html.indexOf("pb-finder-cta", zoneAt);
+    const mapAt = html.indexOf("pb-finder-map-secondary", zoneAt);
+    expect(ctaAt).toBeGreaterThan(zoneAt);
+    expect(mapAt).toBeGreaterThan(ctaAt);
+    const sharedZone = html.slice(zoneAt, mapAt + 200);
+    expect(sharedZone).toContain("pb-finder-cta");
+    expect(sharedZone).toContain("pb-finder-map-secondary");
+    expect(sharedZone).toContain('href="/players/radar"');
+    expect(sharedZone).toContain('aria-label="Игроки на карте"');
     for (const label of ["Смотреть участников Radar", "Сортировать по близости", "Обычный каталог", "Обновить участников Radar", "Никого не нашли", "Показать на карте"]) expect(html).not.toContain(label);
     expect(html).toContain("Ищем игроков…");
   });
