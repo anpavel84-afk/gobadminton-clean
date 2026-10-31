@@ -181,13 +181,17 @@ export const envSchema = z
       const dev = ["mvp", "stage"].includes(raw.APP_ENV)
         && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
         && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru";
+      const prod = raw.APP_ENV === "prod"
+        && raw.NODE_ENV === "production"
+        && raw.PUBLIC_WEB_ORIGIN === "https://gobadminton.ru"
+        && raw.PUBLIC_API_ORIGIN === "https://gobadminton.ru";
       const bounded = raw.FRIENDS_REQUEST_TTL_SECONDS !== undefined && raw.FRIENDS_REQUEST_TTL_SECONDS <= 30 * 86400
         && raw.FRIENDS_RATE_WINDOW_SECONDS !== undefined && raw.FRIENDS_RATE_WINDOW_SECONDS <= 86400
         && raw.FRIENDS_SEND_LIMIT !== undefined && raw.FRIENDS_SEND_LIMIT <= 100
         && raw.FRIENDS_RECEIVE_LIMIT !== undefined && raw.FRIENDS_RECEIVE_LIMIT <= 100;
-      if (!dev || !raw.SOCIAL_DIRECTORY_ENABLED || !bounded) {
+      if ((!dev && !prod) || !raw.SOCIAL_DIRECTORY_ENABLED || !bounded) {
         ctx.addIssue({code:"custom", path:["FRIENDS_INTERNAL_ENABLED"],
-          message:"Friends production runtime requires exact DEV origins, mvp/stage, directory and bounded explicit TTL/rate limits; PROD forbidden"});
+          message:"Friends production runtime requires exact DEV (mvp/stage + https://dev.gobadminton.ru) or PROD (prod + production + https://gobadminton.ru) origins, directory and bounded explicit TTL/rate limits"});
       }
     }
     if (raw.POST_GAME_INTERNAL_ENABLED === "1" && (raw.NODE_ENV === "production" || raw.APP_ENV === "prod")) {

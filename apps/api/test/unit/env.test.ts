@@ -101,4 +101,50 @@ describe("loadEnv", () => {
       }),
     ).toThrow(/DATABASE_URL/);
   });
+
+  const friendsRuntime = {
+    DATABASE_URL: "postgres://synthetic:synthetic@localhost/friends_disposable",
+    CONTENT_MODERATION_PROVIDER: "openai",
+    CONTENT_MODERATION_FINGERPRINT_SECRET: "synthetic-fingerprint-secret-32chars",
+    OPENAI_MODERATION_API_KEY: "synthetic-not-a-real-key",
+    FRIENDS_INTERNAL_ENABLED: "1",
+    SOCIAL_DIRECTORY_ENABLED: "1",
+    FRIENDS_REQUEST_TTL_SECONDS: "604800",
+    FRIENDS_RATE_WINDOW_SECONDS: "3600",
+    FRIENDS_SEND_LIMIT: "20",
+    FRIENDS_RECEIVE_LIMIT: "50",
+  } as const;
+
+  it("accepts exact production Friends origins with APP_ENV prod", () => {
+    const env = loadEnv({
+      ...friendsRuntime,
+      NODE_ENV: "production",
+      APP_ENV: "prod",
+      PUBLIC_WEB_ORIGIN: "https://gobadminton.ru",
+      PUBLIC_API_ORIGIN: "https://gobadminton.ru",
+    });
+    expect(env.FRIENDS_INTERNAL_ENABLED).toBe(true);
+    expect(env.APP_ENV).toBe("prod");
+    expect(env.PUBLIC_WEB_ORIGIN).toBe("https://gobadminton.ru");
+    expect(env.PUBLIC_API_ORIGIN).toBe("https://gobadminton.ru");
+    expect(env.SOCIAL_DIRECTORY_ENABLED).toBe(true);
+  });
+
+  it.each([
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://dev.gobadminton.ru", PUBLIC_API_ORIGIN: "https://dev.gobadminton.ru" },
+    { APP_ENV: "mvp", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru" },
+    { APP_ENV: "stage", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://dev.gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "http://gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://www.gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://api.gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru/", PUBLIC_API_ORIGIN: "https://gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://user:pass@gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "http://127.0.0.1:3000" },
+    { APP_ENV: "prod", NODE_ENV: "test", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru", SOCIAL_DIRECTORY_ENABLED: "0" },
+    { APP_ENV: "prod", NODE_ENV: "production", PUBLIC_WEB_ORIGIN: "https://gobadminton.ru", PUBLIC_API_ORIGIN: "https://gobadminton.ru", FRIENDS_SEND_LIMIT: "101" },
+  ])("rejects incorrect Friends production origin/environment variant: %j", (extra) => {
+    expect(() => loadEnv({ ...friendsRuntime, ...extra })).toThrow(/FRIENDS_INTERNAL_ENABLED|Friends production runtime/);
+  });
 });
