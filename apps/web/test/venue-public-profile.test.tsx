@@ -94,7 +94,7 @@ describe("existing V1a public venue projection", () => {
     const invalid = [
       undefined, null, { coverage: "all", items: profile.gallery.items },
       { coverage: "ordered", items: [] },
-      ...["https://external.example/photo.png", "javascript:x", `/v1/media/venue-covers/${"b".repeat(64)}.png`].map(url => ({ coverage: "ordered", items: [{ url, credit }] })),
+      ...["https://external.example/photo.png", "javascript:x"].map(url => ({ coverage: "ordered", items: [{ url, credit }] })),
       ...["logo", "illustration", "unknown"].map(kind => ({ coverage: "ordered", items: [{ url: coverUrl, credit: { ...credit, kind } }] })),
       ...["javascript:x", "https://user@example.org", "https://example.org:444", "https://example.org/a b", "https://example.org/\n", "https://example.org/%xx", "https://example.org/<bad>"].map(url => ({ coverage: "ordered", items: [{ url: coverUrl, credit: { ...credit, url } }] })),
     ];
@@ -106,5 +106,30 @@ describe("existing V1a public venue projection", () => {
     expect(render({ ...full, profile: undefined })).not.toContain("<img");
     // Ordered gallery photos remain visible even when the legacy single cover slot is empty.
     expect(render({ ...full, cover: { uploadedUrl: null } })).toContain(`src="${coverUrl}"`);
+  });
+
+  it("renders ordered multi-photo gallery with distinct allowlisted local cover URLs", () => {
+    const secondUrl = `/v1/media/venue-covers/${"b".repeat(64)}.png`;
+    const secondCredit = { kind: "photo" as const, text: "Фото: Второй зал", url: "https://example.org/second" };
+    const html = render({
+      ...full,
+      profile: {
+        ...profile,
+        gallery: {
+          coverage: "ordered",
+          items: [
+            { id: "a0000000-0000-4000-8000-000000000001", url: coverUrl, credit },
+            { id: "a0000000-0000-4000-8000-000000000002", url: secondUrl, credit: secondCredit },
+          ],
+        },
+      },
+    });
+    expect(html).toContain(`src="${coverUrl}"`);
+    expect(html).toContain(`src="${secondUrl}"`);
+    expect(html).toContain("Фото: Спортзал");
+    expect(html).toContain("Фото: Второй зал");
+    expect(html).toContain('href="https://example.org/photos"');
+    expect(html).toContain('href="https://example.org/second"');
+    expect(html).not.toContain("PRIVATE_SENTINEL");
   });
 });

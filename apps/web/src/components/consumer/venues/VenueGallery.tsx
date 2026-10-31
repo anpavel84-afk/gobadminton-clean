@@ -36,21 +36,24 @@ function readItems(gallery: Venue["profile"] extends infer P ? P : never, cover?
     }
   }
   // Attributed legacy single cover only — never invent illustration credit for unattributed covers.
+  // Strict ordered validation above is unchanged; this path only preserves honest legacy DISPLAY.
+  // Rejected/unsafe credit URLs stay plain text via VenueCoverCredit (never become links).
   if (items.length === 0) {
     const url = venueCoverUrl(cover?.uploadedUrl);
     const credit = cover?.credit;
     if (url && credit && (credit.kind === "photo" || credit.kind === "logo" || credit.kind === "illustration")) {
       if (credit.kind === "illustration") {
-        if (credit.text === "Иллюстрация" && credit.url == null) {
-          items.push({ id: url, url, credit: { kind: "illustration", text: "Иллюстрация", url: null } });
+        if (typeof credit.text === "string" && credit.text.length > 0 && credit.text.length <= 120 && credit.url == null) {
+          items.push({ id: url, url, credit: { kind: "illustration", text: credit.text, url: null } });
         }
-      } else {
-        const href = httpsCreditUrl(credit.url);
-        if (href && typeof credit.text === "string" && credit.text.length <= 120
-          && ((credit.kind === "photo" && credit.text.startsWith("Фото: "))
-            || (credit.kind === "logo" && credit.text.startsWith("Логотип: ")))) {
-          items.push({ id: url, url, credit: { kind: credit.kind, text: credit.text, url: href } });
-        }
+      } else if (typeof credit.text === "string" && credit.text.length <= 120
+        && ((credit.kind === "photo" && credit.text.startsWith("Фото: "))
+          || (credit.kind === "logo" && credit.text.startsWith("Логотип: ")))) {
+        items.push({
+          id: url,
+          url,
+          credit: { kind: credit.kind, text: credit.text, url: httpsCreditUrl(credit.url) },
+        });
       }
     }
   }

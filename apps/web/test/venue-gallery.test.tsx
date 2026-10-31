@@ -87,6 +87,33 @@ describe("VenueGallery", () => {
     expect(html).toContain('data-cover="uploaded"');
   });
 
+  it("preserves honest legacy cover credit on empty-gallery fallback (plain text when URL unsafe)", () => {
+    const legacyIllustration = ssr(<VenueGallery venue={venue([], url("a"), {
+      uploadedUrl: url("a"),
+      credit: { kind: "illustration", text: "Автор фото", url: null },
+    })} />);
+    expect(legacyIllustration).toContain(url("a"));
+    expect(legacyIllustration).toContain("Автор фото");
+    expect(legacyIllustration).not.toContain("<a ");
+    expect(legacyIllustration).not.toContain("Иллюстрация");
+
+    const unsafePhoto = ssr(<VenueGallery venue={venue([], url("a"), {
+      uploadedUrl: url("a"),
+      credit: { kind: "photo", text: "Фото: Клуб", url: "https:///@evil.example/phish" },
+    })} />);
+    expect(unsafePhoto).toContain(url("a"));
+    expect(unsafePhoto).toContain("Фото: Клуб");
+    expect(unsafePhoto).not.toContain("evil.example");
+    expect(unsafePhoto).not.toContain('href="');
+
+    const hidden = ssr(<VenueGallery venue={venue([], url("a"), {
+      uploadedUrl: url("a"),
+      credit: { kind: "illustration", text: "Автор фото", url: null },
+    })} showCredit={false} />);
+    expect(hidden).toContain(url("a"));
+    expect(hidden).not.toContain("Автор фото");
+  });
+
   it("starts on main image even when main is not position 0", () => {
     const multi = venue([
       { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
