@@ -247,6 +247,126 @@
 .fr4 .invite-dialog-example > button:not(.gb-c23-btn) { width: 100%; padding: 14px 0; border: 0; border-top: 1px solid var(--gb-line); background: transparent; display: flex; justify-content: space-between; text-align: left; }
 .fr4 .invite-dialog-example > button span small { display: block; margin-top: 4px; color: var(--gb-ink-soft); }
 .fr4 .invite-dialog-example > button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* #424 invitation chooser — self-contained; wins over .gb-game-feedback h2/p without .fr3/.fr4. */
+.gb-invitation-chooser {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  min-inline-size: 0;
+}
+.profile-dialog--invitation .gb-invitation-hint,
+.profile-dialog--invitation .gb-invitation-empty,
+.profile-dialog--invitation .gb-invitation-status {
+  margin: 0;
+  color: var(--gb-ink-soft);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+.profile-dialog--invitation .gb-invitation-status { color: var(--gb-ink); font-weight: 600; }
+.gb-invitation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-inline-size: 0;
+}
+.gb-invitation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-inline-size: 0;
+  padding: 16px;
+  border: 1px solid var(--gb-line);
+  border-radius: 18px;
+  background: var(--gb-paper);
+  box-sizing: border-box;
+}
+.gb-invitation-card__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-inline-size: 0;
+}
+.gb-invitation-card__badge {
+  flex: none;
+  width: 48px;
+  padding: 8px 6px;
+  border-radius: 12px;
+  background: var(--gb-white);
+  border: 1px solid var(--gb-line);
+  text-align: center;
+  color: var(--gb-ink);
+}
+.gb-invitation-card__day {
+  display: block;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.gb-invitation-card__month {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: lowercase;
+  color: var(--gb-ink-soft);
+}
+.gb-invitation-card__copy { flex: 1 1 auto; min-inline-size: 0; }
+.profile-dialog--invitation .gb-invitation-card__title {
+  margin: 0;
+  color: var(--gb-ink);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.profile-dialog--invitation .gb-invitation-card__when,
+.profile-dialog--invitation .gb-invitation-card__timezone {
+  margin: 4px 0 0;
+  color: var(--gb-ink-soft);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+.profile-dialog--invitation .gb-invitation-card__timezone { font-size: 14px; line-height: 20px; }
+.gb-invitation-card__cta { width: 100%; min-height: 48px; }
+.profile-dialog--invitation .profile-state {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--gb-line);
+  border-radius: 18px;
+  background: var(--gb-white);
+}
+.profile-dialog--invitation .profile-state h2 {
+  margin: 0;
+  color: var(--gb-ink);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 700;
+}
+.profile-dialog--invitation .profile-state p {
+  margin: 8px 0 0;
+  color: var(--gb-ink-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.profile-dialog--invitation .message-notice {
+  margin: 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--gb-purple-soft);
+  font-size: 13px;
+}
+.profile-dialog--invitation .message-notice p {
+  margin: 0 0 10px;
+  color: var(--gb-ink);
+  line-height: 1.45;
+}
 .fr4 .invitation-states { margin-top: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .fr4 .invitation-card { min-height: 140px; padding: 16px; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-sm); background: var(--gb-white); }
 .fr4 .invitation-card > small,

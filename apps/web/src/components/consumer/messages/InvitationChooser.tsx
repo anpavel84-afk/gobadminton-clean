@@ -15,6 +15,63 @@ import { ProfileDialog, ProfileState } from "../players/ProfileComposition";
 import { MutationNotice } from "./MessageComposition";
 import { useSocialMutation } from "./useSocialMutation";
 
+function inviteWhenLabel(game: ManagedGame): string {
+  return new Date(game.startsAt).toLocaleString("ru-RU", {
+    timeZone: game.timezone,
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function inviteCalendarParts(game: ManagedGame): { day: string; month: string } {
+  const at = new Date(game.startsAt);
+  return {
+    day: at.toLocaleString("ru-RU", { timeZone: game.timezone, day: "numeric" }),
+    month: at.toLocaleString("ru-RU", { timeZone: game.timezone, month: "short" }),
+  };
+}
+
+function InvitationGameCard({
+  game,
+  disabled,
+  ctaText,
+  onInvite,
+}: {
+  game: ManagedGame;
+  disabled: boolean;
+  ctaText: string;
+  onInvite: (game: ManagedGame) => void;
+}) {
+  const when = inviteWhenLabel(game);
+  const badge = inviteCalendarParts(game);
+  return (
+    <li className="gb-invitation-card">
+      <div className="gb-invitation-card__main">
+        <div className="gb-invitation-card__badge" aria-hidden="true">
+          <span className="gb-invitation-card__day">{badge.day}</span>
+          <span className="gb-invitation-card__month">{badge.month}</span>
+        </div>
+        <div className="gb-invitation-card__copy">
+          <h3 className="gb-invitation-card__title">{game.title}</h3>
+          <p className="gb-invitation-card__when">{when}</p>
+          <p className="gb-invitation-card__timezone">Часовой пояс: {game.timezone}</p>
+        </div>
+      </div>
+      <Button
+        block
+        className="gb-invitation-card__cta"
+        disabled={disabled}
+        aria-label={`${ctaText}: ${game.title}, ${when}`}
+        onClick={() => void onInvite(game)}
+      >
+        {ctaText}
+      </Button>
+    </li>
+  );
+}
+
 export function InvitationChooser({ me, playerId, resultRef, preferredGameId, onClose, onCreated }: { me: Me; playerId: string; resultRef?: string; preferredGameId?: string; onClose: () => void; onCreated: (id: string) => void }) {
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
@@ -64,12 +121,59 @@ export function InvitationChooser({ me, playerId, resultRef, preferredGameId, on
     mutation.run(`/v1/games/${encodeURIComponent(game.id)}/invitations`, { inviteePublicPlayerId: playerId, expectedGameVersion: fresh.data.version, ...(resultRef ? { discoveryProof: resultRef } : {}) });
   }
   const offeredGames = preferredGameId ? selected ? [selected] : [] : games;
-  return <ProfileDialog title="Пригласить на игру" onClose={() => { if (!checking && !mutation.busy) onClose(); }}><div className="invite-dialog-example"><small>Пригласить на игру</small><strong>{preferredGameId ? "Пригласить в созданную игру" : "Выберите вашу игру"}</strong><p>Приглашение не резервирует место.</p>
-    {state === "loading" && <ProfileState title="Загружаем игры…" state="loading" />}
-    {state === "error" && <ProfileState title="Не удалось загрузить игры" state="error" retry={() => setReload(n => n + 1)} />}
-    {state === "ready" && !preferredGameId && games.length === 0 && <p>Нет предстоящих игр, открытых для приглашений.</p>}
-    {state === "ready" && preferredGameId && !selected && preferredBlock && <><p role="status">{preferredBlock === "started" ? "Созданная игра уже началась и недоступна для приглашений." : preferredBlock === "deadline" ? "Срок записи на созданную игру уже прошёл — приглашение недоступно." : preferredBlock === "unpublished" ? "Созданная игра больше не опубликована и недоступна для приглашений." : "Созданная игра недоступна для приглашений из‑за некорректных дат."}</p><Button variant="outline" onClick={() => setReload(n => n + 1)}>Обновить игры</Button></>}
-    {state === "ready" && preferredGameId && !selected && !preferredBlock && <><p role="status">Созданная игра пока не найдена в вашем списке. Обновите игры, не создавая новую.</p><Button variant="outline" onClick={() => setReload(n => n + 1)}>Обновить игры</Button></>}
-    {offeredGames.map(g => <button key={g.id} disabled={checking || mutation.busy || mutation.pending} onClick={() => void invite(g)}><span>{g.title}<small>{new Date(g.startsAt).toLocaleString("ru-RU", { timeZone: g.timezone, day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</small></span><b aria-hidden="true">→</b></button>)}
-    {!preferredGameId && <Button variant="outline" href={createGameForInvitePath(playerId)}>+ Создать новую игру</Button>}<MutationNotice mutation={mutation} /></div></ProfileDialog>;
+  const inviteLocked = checking || mutation.busy || mutation.pending;
+  const ctaText = checking ? "Проверяем игру…" : mutation.busy ? "Отправляем…" : "Отправить приглашение";
+  const statusText = checking ? "Проверяем игру…" : mutation.busy ? "Отправляем…" : null;
+  return (
+    <ProfileDialog
+      title="Пригласить на игру"
+      className="profile-dialog--invitation"
+      describedBy="gb-invitation-hint"
+      lockBodyScroll
+      onClose={() => { if (!checking && !mutation.busy) onClose(); }}
+    >
+      <div className="gb-invitation-chooser">
+        <p id="gb-invitation-hint" className="gb-invitation-hint">Приглашение не резервирует место.</p>
+        {statusText && <p className="gb-invitation-status" role="status" aria-live="polite">{statusText}</p>}
+        {state === "loading" && <ProfileState title="Загружаем игры…" state="loading" />}
+        {state === "error" && <ProfileState title="Не удалось загрузить игры" state="error" retry={() => setReload(n => n + 1)} />}
+        {state === "ready" && !preferredGameId && games.length === 0 && <p className="gb-invitation-empty">Нет предстоящих игр, открытых для приглашений.</p>}
+        {state === "ready" && preferredGameId && !selected && preferredBlock && (
+          <>
+            <p className="gb-invitation-empty" role="status">
+              {preferredBlock === "started"
+                ? "Созданная игра уже началась и недоступна для приглашений."
+                : preferredBlock === "deadline"
+                  ? "Срок записи на созданную игру уже прошёл — приглашение недоступно."
+                  : preferredBlock === "unpublished"
+                    ? "Созданная игра больше не опубликована и недоступна для приглашений."
+                    : "Созданная игра недоступна для приглашений из‑за некорректных дат."}
+            </p>
+            <Button variant="outline" onClick={() => setReload(n => n + 1)}>Обновить игры</Button>
+          </>
+        )}
+        {state === "ready" && preferredGameId && !selected && !preferredBlock && (
+          <>
+            <p className="gb-invitation-empty" role="status">Созданная игра пока не найдена в вашем списке. Обновите игры, не создавая новую.</p>
+            <Button variant="outline" onClick={() => setReload(n => n + 1)}>Обновить игры</Button>
+          </>
+        )}
+        {offeredGames.length > 0 && (
+          <ul className="gb-invitation-list">
+            {offeredGames.map(game => (
+              <InvitationGameCard
+                key={game.id}
+                game={game}
+                disabled={inviteLocked}
+                ctaText={ctaText}
+                onInvite={invite}
+              />
+            ))}
+          </ul>
+        )}
+        {!preferredGameId && <Button variant="outline" href={createGameForInvitePath(playerId)}>+ Создать новую игру</Button>}
+        <MutationNotice mutation={mutation} />
+      </div>
+    </ProfileDialog>
+  );
 }

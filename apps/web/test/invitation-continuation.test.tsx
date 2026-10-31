@@ -38,7 +38,8 @@ describe("invite → create game → resume exactly the same player", () => {
   });
   it("preselects created-game flow without looping back to create again", () => {
     const html = renderToStaticMarkup(<InvitationChooser me={me} playerId={peer} preferredGameId="game" onClose={() => {}} onCreated={() => {}} />);
-    expect(html).toContain("Пригласить в созданную игру");
+    expect(html).toContain("Пригласить на игру");
+    expect(html).not.toContain("Пригласить в созданную игру");
     expect(html).not.toContain("+ Создать новую игру");
   });
 });

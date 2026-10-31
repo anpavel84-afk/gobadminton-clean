@@ -186,6 +186,36 @@
 .gb-game-field :is(input,select,textarea) { width: 100%; min-width: 0; min-height: 48px; padding: 12px 14px; border: 1px solid var(--gb-line); border-radius: 12px; background: var(--gb-paper); color: var(--gb-ink); font: inherit; font-weight: 400; }
 .gb-game-field textarea { min-height: 120px; resize: vertical; }
 .gb-game-field small { color: var(--gb-ink-soft); font-weight: 400; line-height: 1.5; }
+/* #424 create date/time — intrinsic sizing; no overflow:hidden clipping; keep native pickers. */
+.gb-game-create .gb-game-fields {
+  min-inline-size: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+.gb-game-create :is(.gb-create-layout, .gb-game-form, .gb-game-form-group, .gb-game-field) {
+  min-inline-size: 0;
+}
+.gb-game-create .gb-game-field > input:is([type="date"], [type="time"]) {
+  display: block;
+  box-sizing: border-box;
+  inline-size: 100%;
+  width: 100%;
+  min-inline-size: 0;
+  min-width: 0;
+  max-inline-size: 100%;
+  max-width: 100%;
+  min-block-size: 48px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.gb-game-create input:is([type="date"], [type="time"])::-webkit-date-and-time-value {
+  min-inline-size: 0;
+  text-align: start;
+}
+.gb-game-create input:is([type="date"], [type="time"])::-webkit-datetime-edit {
+  min-inline-size: 0;
+  padding: 0;
+}
 .gb-game-stepper { display: flex; align-items: center; gap: 8px; }
 .gb-game-stepper button { flex: none; width: 44px; height: 44px; border: 1px solid var(--gb-line); border-radius: 12px; background: var(--gb-paper); font-size: 22px; cursor: pointer; }
 .gb-game-stepper input { text-align: center; }
@@ -248,6 +278,7 @@
  .gb-my-games-recommendations .gb-personal-card__action { padding: 0; }
  .gb-my-games-recommendations .gb-personal-card__action .gb-c23-btn { width: auto; }
  .gb-game-fields { grid-template-columns: 1fr; }
+ .gb-game-create .gb-game-fields { grid-template-columns: minmax(0, 1fr); }
  .gb-game-form-group { position: relative; padding: 30px 16px 20px; }
  /* On mobile only, let the title sit across the upper card border, like a legend. */
  .gb-game-form-group > .gb-game-form-group-title {
