@@ -68,6 +68,8 @@ vi.mock("react", async original => ({ ...await original<typeof React>(),
       hooks.effects.push(() => { hooks.cleanups[i]?.(); hooks.cleanups[i] = effect() || (() => {}); });
     }
   },
+  // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
+  useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) { hooks.cursor++; return getSnapshot(); },
 }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("next/dynamic", () => ({ default: () => function CapturedMap(props: Record<string, unknown>) { return <div data-map="harness" {...props} />; } }));
