@@ -1,16 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
+import { DEV_APP_ORIGIN, MOSCOW_BUNDLE, PROD_APP_ORIGIN } from "../src/lib/radar-map-assets";
 import {
   mapPreloadEligible,
   preloadGamesMapAssets,
   resetMapPreloadStateForTests,
 } from "../src/lib/map-preload";
 
-const DEV_ORIGIN = new URL(MOSCOW_BUNDLE.prefix).origin;
 const STYLE_URL = `${MOSCOW_BUNDLE.prefix}style-dev.json`;
 const eligible = {
   cityId: MOSCOW_BUNDLE.cityId,
-  origin: DEV_ORIGIN,
+  origin: DEV_APP_ORIGIN,
   online: true,
   saveData: false,
   hidden: false,
@@ -21,9 +20,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("admits exact canonical PROD origin for Moscow preload eligibility", () => {
+  expect(mapPreloadEligible({ ...eligible, origin: PROD_APP_ORIGIN })).toBe(true);
+  expect(mapPreloadEligible({ ...eligible, origin: DEV_APP_ORIGIN })).toBe(true);
+});
+
 it.each([
   { label: "unsupported city", env: { ...eligible, cityId: "a0000000-0000-4000-8000-000000000002" } },
   { label: "wrong origin", env: { ...eligible, origin: "https://example.test" } },
+  { label: "mixed lookalike host", env: { ...eligible, origin: "https://www.gobadminton.ru" } },
+  { label: "unknown host", env: { ...eligible, origin: "https://unknown.host" } },
   { label: "saveData", env: { ...eligible, saveData: true } },
   { label: "offline", env: { ...eligible, online: false } },
   { label: "hidden", env: { ...eligible, hidden: true } },

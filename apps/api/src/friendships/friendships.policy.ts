@@ -21,18 +21,23 @@ export function parse<T>(schema: z.ZodType<T>, input: unknown): T {
 export function unavailable(): never {
   throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
 }
-/** Local synthetic admission remains unchanged; public runtime is exact DEV opt-in only. */
+/** Local synthetic admission unchanged; public runtime is exact DEV or canonical PROD opt-in. */
 export function friendsEnabled(env: AppEnv): boolean {
   const local = env.NODE_ENV === "test" && env.APP_ENV === "local";
   const bounded = (value: number | undefined, max: number) =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= max;
+  const limits = bounded(env.FRIENDS_REQUEST_TTL_SECONDS, 30 * 86400)
+    && bounded(env.FRIENDS_RATE_WINDOW_SECONDS, 86400)
+    && bounded(env.FRIENDS_SEND_LIMIT, 100) && bounded(env.FRIENDS_RECEIVE_LIMIT, 100);
   const dev = env.NODE_ENV === "production" && ["mvp", "stage"].includes(env.APP_ENV)
     && env.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
     && env.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru"
-    && bounded(env.FRIENDS_REQUEST_TTL_SECONDS, 30 * 86400)
-    && bounded(env.FRIENDS_RATE_WINDOW_SECONDS, 86400)
-    && bounded(env.FRIENDS_SEND_LIMIT, 100) && bounded(env.FRIENDS_RECEIVE_LIMIT, 100);
-  return env.FRIENDS_INTERNAL_ENABLED && (local || dev)
+    && limits;
+  const prod = env.NODE_ENV === "production" && env.APP_ENV === "prod"
+    && env.PUBLIC_WEB_ORIGIN === "https://gobadminton.ru"
+    && env.PUBLIC_API_ORIGIN === "https://gobadminton.ru"
+    && limits;
+  return env.FRIENDS_INTERNAL_ENABLED && (local || dev || prod)
     && env.SOCIAL_DIRECTORY_ENABLED && Boolean(env.FRIENDS_REQUEST_TTL_SECONDS
       && env.FRIENDS_RATE_WINDOW_SECONDS && env.FRIENDS_SEND_LIMIT && env.FRIENDS_RECEIVE_LIMIT);
 }

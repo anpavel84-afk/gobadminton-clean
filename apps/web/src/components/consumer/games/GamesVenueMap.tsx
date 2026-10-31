@@ -12,7 +12,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { filterVenuesForMapLayer } from "../../../lib/map-layer-filters";
-import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
+import { MOSCOW_BUNDLE, allowedMapResource, isApprovedAppOrigin } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 import { useMapLayerFilters } from "./MapLayerFilters";
 function sessionStorageVenue() {
@@ -98,7 +98,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
     async function start() {
       timeout = setTimeout(() => report({ kind: "timeout" }), 20000);
       try {
-        if (window.location.origin !== new URL(MOSCOW_BUNDLE.prefix).origin) throw new Error("Map origin unsupported");
+        if (!isApprovedAppOrigin(window.location.origin)) throw new Error("Map origin unsupported");
         const response = await fetch(MOSCOW_BUNDLE.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
         if (!response.ok) throw { kind: "style", url: response.url, status: response.status };
         const bytes = await response.arrayBuffer();

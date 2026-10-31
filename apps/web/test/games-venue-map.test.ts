@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { sameVenueCounts, stableVenueCounts, venueSchedules } from "../src/lib/games-venue-map";
 import { discoveryDayBounds } from "../src/lib/discovery-presentation";
+import { DEV_APP_ORIGIN, PROD_APP_ORIGIN, isApprovedAppOrigin } from "../src/lib/radar-map-assets";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
+
+it("GamesVenueMap origin gate permits exact DEV and canonical PROD only", () => {
+  expect(isApprovedAppOrigin(DEV_APP_ORIGIN)).toBe(true);
+  expect(isApprovedAppOrigin(PROD_APP_ORIGIN)).toBe(true);
+  expect(isApprovedAppOrigin("https://www.gobadminton.ru")).toBe(false);
+  expect(isApprovedAppOrigin("https://unknown.host")).toBe(false);
+});
+
 const venues = ["a", "b", "empty"].map(id => ({ id, name: "Одинаковое имя", cityId: "city", address: id, timezone: "Europe/Moscow" })) as VenueSummary[];
 const now = Date.parse("2026-10-15T12:00:00Z");
 const game = (id: string, venue = venues[0], extra: Partial<Game> = {}) => ({ id, venue, startsAt: "2026-10-15T22:30:00Z", applicationDeadlineAt: "2026-10-15T21:30:00Z", status: "published", visibility: "public", availablePlaces: 1, ...extra }) as Game;

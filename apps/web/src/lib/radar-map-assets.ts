@@ -8,16 +8,22 @@ export const MOSCOW_BUNDLE = {
   center: [37.6176, 55.7517] as [number, number],
   bounds: [[36, 54.5], [39.5, 56.5]] as [[number, number], [number, number]],
 };
+export const DEV_APP_ORIGIN = "https://dev.gobadminton.ru";
+export const PROD_APP_ORIGIN = "https://gobadminton.ru";
+/** Exact browser app origin: registered DEV or canonical PROD only. */
+export function isApprovedAppOrigin(origin: string): boolean {
+  return origin === DEV_APP_ORIGIN || origin === PROD_APP_ORIGIN;
+}
 /** Server registration and exact browser origin are both required. */
 export function candidateMapAllowed(snapshot: UnifiedSnapshot, origin: string): boolean {
-  return origin === "https://dev.gobadminton.ru" && snapshot.map.availability === "dev_preview" &&
+  return isApprovedAppOrigin(origin) && snapshot.map.availability === "dev_preview" &&
     snapshot.map.mapId === "moscow" && snapshot.map.version === MOSCOW_BUNDLE.version &&
     ["authenticated_live", "synthetic_demo"].includes(snapshot.exposureMode) && snapshot.cityId === MOSCOW_BUNDLE.cityId;
 }
 /** Public basemap may remain visible while a short-lived signed people query
  * expires. No participant/pin is allowed without that separate live query. */
 export function candidateMapConfigAllowed(config: RadarConfig | null, cityId: string | undefined, origin: string): boolean {
-  if (origin !== "https://dev.gobadminton.ru" || cityId !== MOSCOW_BUNDLE.cityId ||
+  if (!isApprovedAppOrigin(origin) || cityId !== MOSCOW_BUNDLE.cityId ||
       config?.unifiedDirectory.enabled !== true ||
       !["live", "synthetic_demo"].includes(config.exposureMode)) return false;
   const map = config.cities.find(c => c.cityId === cityId)?.map;

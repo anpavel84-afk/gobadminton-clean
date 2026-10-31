@@ -1,4 +1,4 @@
-import { MOSCOW_BUNDLE } from "./radar-map-assets";
+import { MOSCOW_BUNDLE, isApprovedAppOrigin } from "./radar-map-assets";
 
 /** Browser signals that gate the optional Games map warm. */
 export type MapPreloadEnv = {
@@ -9,7 +9,6 @@ export type MapPreloadEnv = {
   hidden?: boolean;
 };
 
-const DEV_ORIGIN = new URL(MOSCOW_BUNDLE.prefix).origin;
 const STYLE_URL = `${MOSCOW_BUNDLE.prefix}style-dev.json`;
 
 type WarmOutcome = "ok" | "fail";
@@ -29,10 +28,10 @@ export function resetMapPreloadStateForTests() {
   styleInflight = null;
 }
 
-/** Moscow + exact DEV origin only; skip saveData, offline, and hidden tabs. */
+/** Moscow + exact DEV or canonical PROD origin; skip saveData, offline, and hidden tabs. */
 export function mapPreloadEligible(env: MapPreloadEnv): boolean {
   return env.cityId === MOSCOW_BUNDLE.cityId
-    && env.origin === DEV_ORIGIN
+    && isApprovedAppOrigin(env.origin)
     && env.online !== false
     && env.saveData !== true
     && env.hidden !== true;

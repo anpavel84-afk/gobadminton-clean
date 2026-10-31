@@ -490,7 +490,7 @@ describe("distance and map authority", () => {
   });
   it("never interprets missing registration as public map approval", () => {
     const preview: UnifiedSnapshot = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: "moscow-20261007-p4-098a869f-v001" } };
-    expect(candidateMapAllowed(preview, "https://gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed(preview, "https://gobadminton.ru")).toBe(true);
     expect(candidateMapAllowed(preview, "http://localhost:3001")).toBe(false);
     expect(candidateMapAllowed(snapshot(), "https://dev.gobadminton.ru")).toBe(false);
     expect(candidateMapAllowed(preview, "https://dev.gobadminton.ru")).toBe(true);
@@ -499,7 +499,7 @@ describe("distance and map authority", () => {
     expect(candidateMapAllowed({ ...preview, map: { ...preview.map, version: "wrong" } } as unknown as UnifiedSnapshot, "https://dev.gobadminton.ru")).toBe(false);
     const config = { exposureMode:"live", unifiedDirectory:{ enabled:true }, cities:[{ cityId:MOSCOW_BUNDLE.cityId,regionId:"moscow",map:{availability:"dev_preview",mapId:"moscow",version:MOSCOW_BUNDLE.version} }] } as RadarConfig;
     expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(true);
-    expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://gobadminton.ru")).toBe(true);
     expect(candidateMapConfigAllowed(config,"another-city","https://dev.gobadminton.ru")).toBe(false);
     expect(candidateMapConfigAllowed({ ...config, cities:[{ ...config.cities[0]!, map:{ availability:"missing" } }] },MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
     expect(candidateMapConfigAllowed(null,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);

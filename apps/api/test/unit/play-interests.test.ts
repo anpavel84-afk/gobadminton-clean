@@ -53,6 +53,22 @@ describe("Play interest policy and HTTP authentication", () => {
       PUBLIC_API_ORIGIN: "https://gobadminton.ru",
     })).toBe(false);
   });
+  it("admits exact canonical PROD independently of Friends flag; rejects mixed/wrong origins", () => {
+    const prod = {
+      ...env(),
+      NODE_ENV: "production" as const,
+      APP_ENV: "prod" as const,
+      PUBLIC_WEB_ORIGIN: "https://gobadminton.ru",
+      PUBLIC_API_ORIGIN: "https://gobadminton.ru",
+      FRIENDS_INTERNAL_ENABLED: false,
+    };
+    expect(playInterestsEnabled(prod)).toBe(true);
+    expect(playInterestsEnabled({ ...prod, SOCIAL_DIRECTORY_ENABLED: false })).toBe(false);
+    expect(playInterestsEnabled({ ...prod, APP_ENV: "mvp" })).toBe(false);
+    expect(playInterestsEnabled({ ...prod, PUBLIC_WEB_ORIGIN: "https://dev.gobadminton.ru" })).toBe(false);
+    expect(playInterestsEnabled({ ...prod, PUBLIC_API_ORIGIN: "https://api.gobadminton.ru" })).toBe(false);
+    expect(playInterestsEnabled({ ...prod, PUBLIC_WEB_ORIGIN: "https://unknown.host" })).toBe(false);
+  });
 
   it("requires exact decimal bigint versions and rejects actor fields", () => {
     expect(parse(withdrawRequest, { expectedVersion: "1" }).expectedVersion).toBe("1");

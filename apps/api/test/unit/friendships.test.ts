@@ -32,6 +32,19 @@ describe("Friends S1 policy and HTTP authentication", () => {
     expect(friendsEnabled({...fixture,NODE_ENV:"production"})).toBe(false);
     expect(friendsEnabled({...fixture,APP_ENV:"stage"})).toBe(false);
   });
+  it("admits exact canonical PROD and rejects wrong APP/mixed origins", () => {
+    const fixture = env({FRIENDS_INTERNAL_ENABLED:"1",FRIENDS_REQUEST_TTL_SECONDS:"90",FRIENDS_RATE_WINDOW_SECONDS:"60",FRIENDS_SEND_LIMIT:"2",FRIENDS_RECEIVE_LIMIT:"3"});
+    const prod = {...fixture,NODE_ENV:"production" as const,APP_ENV:"prod" as const,
+      PUBLIC_WEB_ORIGIN:"https://gobadminton.ru",PUBLIC_API_ORIGIN:"https://gobadminton.ru"};
+    expect(friendsEnabled(prod)).toBe(true);
+    expect(friendsEnabled({...prod,SOCIAL_DIRECTORY_ENABLED:false})).toBe(false);
+    expect(friendsEnabled({...prod,APP_ENV:"mvp"})).toBe(false);
+    expect(friendsEnabled({...prod,PUBLIC_WEB_ORIGIN:"https://dev.gobadminton.ru"})).toBe(false);
+    expect(friendsEnabled({...prod,PUBLIC_API_ORIGIN:"https://dev.gobadminton.ru"})).toBe(false);
+    expect(friendsEnabled({...prod,PUBLIC_WEB_ORIGIN:"https://www.gobadminton.ru"})).toBe(false);
+    expect(friendsEnabled({...prod,PUBLIC_API_ORIGIN:"https://api.gobadminton.ru"})).toBe(false);
+    expect(friendsEnabled({...prod,NODE_ENV:"test"})).toBe(false);
+  });
   it("requires exact decimal bigint versions and rejects actor fields", () => {
     expect(parse(decideRequest,{expectedVersion:row.version}).expectedVersion).toBe(row.version);
     for (const expectedVersion of [1,"0","01","1e3","9223372036854775808","-1"]) {
