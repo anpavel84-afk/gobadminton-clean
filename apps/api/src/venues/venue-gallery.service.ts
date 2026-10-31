@@ -18,6 +18,45 @@ import {
 
 type ScopeRow = { version: number; count: number };
 
+/**
+ * Shared main→cover projection (credit reset trigger repair + live-key GC).
+ * Used by admin gallery mutations and the trusted gallery batch CLI — same semantics.
+ */
+export async function projectVenueMainCover(c: PoolClient, venueId: string): Promise<void> {
+  const main = (await c.query<VenueGalleryItemRow>(
+    `SELECT * FROM venue_gallery_items WHERE venue_id=$1 AND active AND is_main LIMIT 1`,
+    [venueId],
+  )).rows[0];
+  if (!main) {
+    await c.query(
+      `UPDATE venues SET cover_key=NULL, cover_moderation_approval_id=NULL, cover_actor_id=NULL,
+        cover_credit_kind=NULL, cover_credit_text=NULL, cover_credit_url=NULL, updated_at=now()
+       WHERE id=$1`,
+      [venueId],
+    );
+    return;
+  }
+  // Key/approval/uploader first: 0037 clear_stale_venue_cover_credit clears credit when
+  // cover_key changes and credit columns look unchanged. Reapply real main credit in a
+  // second UPDATE in this same transaction (no extra version bump, no external calls).
+  await c.query(
+    `UPDATE venues SET cover_key=$2, cover_moderation_approval_id=$3, cover_actor_id=$4, updated_at=now()
+     WHERE id=$1`,
+    [venueId, main.storage_key, main.moderation_approval_id, main.actor_id],
+  );
+  await c.query(
+    `UPDATE venues SET cover_credit_kind=$2, cover_credit_text=$3, cover_credit_url=$4, updated_at=now()
+     WHERE id=$1`,
+    [venueId, main.credit_kind, main.credit_text, main.credit_url],
+  );
+  await c.query(
+    `DELETE FROM avatar_media_gc WHERE storage_key IN (
+       SELECT storage_key FROM venue_gallery_items WHERE venue_id=$1 AND active
+     )`,
+    [venueId],
+  );
+}
+
 @Injectable()
 export class VenueGalleryService {
   private processing = 0;
@@ -63,38 +102,7 @@ export class VenueGalleryService {
    * previous projected key — clear GC for keys that remain live in the gallery.
    */
   async syncMainCover(c: PoolClient, venueId: string, _actorUserId: string | null): Promise<void> {
-    const main = (await c.query<VenueGalleryItemRow>(
-      `SELECT * FROM venue_gallery_items WHERE venue_id=$1 AND active AND is_main LIMIT 1`,
-      [venueId],
-    )).rows[0];
-    if (!main) {
-      await c.query(
-        `UPDATE venues SET cover_key=NULL, cover_moderation_approval_id=NULL, cover_actor_id=NULL,
-          cover_credit_kind=NULL, cover_credit_text=NULL, cover_credit_url=NULL, updated_at=now()
-         WHERE id=$1`,
-        [venueId],
-      );
-      return;
-    }
-    // Key/approval/uploader first: 0037 clear_stale_venue_cover_credit clears credit when
-    // cover_key changes and credit columns look unchanged. Reapply real main credit in a
-    // second UPDATE in this same transaction (no extra version bump, no external calls).
-    await c.query(
-      `UPDATE venues SET cover_key=$2, cover_moderation_approval_id=$3, cover_actor_id=$4, updated_at=now()
-       WHERE id=$1`,
-      [venueId, main.storage_key, main.moderation_approval_id, main.actor_id],
-    );
-    await c.query(
-      `UPDATE venues SET cover_credit_kind=$2, cover_credit_text=$3, cover_credit_url=$4, updated_at=now()
-       WHERE id=$1`,
-      [venueId, main.credit_kind, main.credit_text, main.credit_url],
-    );
-    await c.query(
-      `DELETE FROM avatar_media_gc WHERE storage_key IN (
-         SELECT storage_key FROM venue_gallery_items WHERE venue_id=$1 AND active
-       )`,
-      [venueId],
-    );
+    await projectVenueMainCover(c, venueId);
   }
 
   private async renumber(c: PoolClient, venueId: string): Promise<VenueGalleryItemRow[]> {
