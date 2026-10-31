@@ -66,7 +66,7 @@ function ssr(node: ReactNode) {
 }
 
 beforeEach(() => { resetHooks(); });
-afterEach(() => { resetHooks(); vi.unstubAllGlobals(); });
+afterEach(() => { resetHooks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("VenueGallery", () => {
   it("hides navigation for a single image and keeps honest fallback when empty", () => {
@@ -193,6 +193,7 @@ describe("VenuePopup + VenueGallery compact composition gestures", () => {
   }
 
   it("keeps horizontal gallery capture; vertical still expands popup; swipe suppresses click", () => {
+    vi.useFakeTimers();
     class FakeImage {
       decoding = "";
       src = "";
@@ -344,9 +345,17 @@ describe("VenuePopup + VenueGallery compact composition gestures", () => {
       pointerId: 2, clientX: 101, clientY: 300, currentTarget: surface, preventDefault: vi.fn(),
     });
     expect(change).toHaveBeenCalledWith(true);
+    // Compact expand schedules settling=true for 220ms; a new gesture before settle is ignored.
+    vi.advanceTimersByTime(220);
+    renderPopup();
+    expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props["data-settling"]).toBe(false);
 
     // Non-gallery compact touch still captures onto preview (regression).
+    // Fresh collapsed instance — independent of the prior expand/settling lifecycle.
     previewCapture.clear();
+    popupSlots.cleanups.forEach(fn => fn?.());
+    popupSlots.slots = [];
+    popupSlots.cleanups = [];
     const copySource = {
       closest(selector: string) {
         if (selector === ".gb-venue-preview-button") return previewButton;

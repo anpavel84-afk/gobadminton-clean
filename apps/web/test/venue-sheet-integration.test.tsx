@@ -86,6 +86,8 @@ const game: Game = {
   levelRule: { scaleId: "test", scaleVersion: 1, allowedLevelIds: ["B"] },
   settlement: { mode: "external", purpose: "no_trainer_fee", priceMinor: null, currency: null, terms: "" }
 };
+/** Selected-day cycles must match fixture game local calendar day (not frozen clock day). */
+const selectedDay = new Intl.DateTimeFormat("en-CA", { timeZone: game.venue.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(game.startsAt));
 const navigation = { assign: vi.fn(), pushState: vi.fn(), replaceState: vi.fn(), setItem: vi.fn(), returnFlag: vi.fn() };
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 const errorCard = vi.fn();
@@ -253,18 +255,18 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   expect(countsSeen.at(-1)).toBe(verified);
   expect(h.buttons).toEqual([button]); expect(document.activeElement).toBe(button);
   expect(h.lngLat).not.toHaveBeenCalled(); expect(h.replace).not.toHaveBeenCalled();
-  cycle("2026-10-20"); await vi.advanceTimersByTimeAsync(0); cycle("2026-10-20");
+  cycle(selectedDay); await vi.advanceTimersByTimeAsync(0); cycle(selectedDay);
   if (resource === "reject") transport.games.mockRejectedValue(new Error("offline"));
   else if (resource === "games") transport.games.mockResolvedValue({ ok: false });
   else transport.venues.mockResolvedValue({ ok: false });
-  sheetClick("Показать игры"); cycle("2026-10-20"); sheetClick("Вечерняя игра"); cycle("2026-10-20");
-  window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(0); cycle("2026-10-20");
+  sheetClick("Показать игры"); cycle(selectedDay); sheetClick("Вечерняя игра"); cycle(selectedDay);
+  window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(0); cycle(selectedDay);
   expect(renderToStaticMarkup(sheetTree)).toContain("Расписание временно недоступно");
   expect(renderToStaticMarkup(sheetTree)).not.toContain("Вечерняя игра");
   expect(renderToStaticMarkup(sheetTree)).not.toContain("Показать игры");
   expect(navigation.assign).not.toHaveBeenCalled(); expect(navigation.pushState).not.toHaveBeenCalled(); expect(navigation.replaceState).not.toHaveBeenCalled();
   expect(navigation.setItem).not.toHaveBeenCalled(); expect(navigation.returnFlag).not.toHaveBeenCalled();
-  expect(hasAlert(cycle("2026-10-20"))).toBe(true);
+  expect(hasAlert(cycle(selectedDay))).toBe(true);
   expect(countsSeen.at(-1)).toBeNull(); expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
   popupState.cleanups.forEach(fn => fn?.()); sheet.cleanups.forEach(fn => fn?.()); h.cleanups.forEach(fn => fn?.());
   child.cleanups.forEach(fn => fn?.()); expect(map.remove).toHaveBeenCalledOnce();
