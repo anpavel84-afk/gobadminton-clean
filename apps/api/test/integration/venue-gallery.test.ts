@@ -246,6 +246,45 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     )).rowCount).toBe(0);
     const publicItems = (await publicVenue(v.id)).json().profile.gallery.items;
     expect(publicItems[0]?.url).toBe((await publicVenue(v.id)).json().cover.uploadedUrl);
+    const stale = await add(v.id, 1);
+    expect(stale.statusCode).toBe(409);
+    const removeTarget = reordered[0]!;
+    const removed = await app.inject({
+      method: "DELETE", url: `/v1/admin/venues/${v.id}/gallery/${removeTarget}`,
+      headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(version) }),
+      payload: { expectedVersion: version },
+    });
+    expect(removed.statusCode, removed.body).toBe(200);
+    const storageKey = (await pool.query<{ storage_key: string }>(
+      "SELECT storage_key FROM venue_gallery_items WHERE id=$1", [removeTarget],
+    )).rows[0]!.storage_key;
+    expect((await pool.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1", [storageKey])).rowCount).toBe(1);
+    const concurrent = await Promise.all([
+      app.inject({
+        method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${reordered[1]}/main`,
+        headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(removed.json().version) }),
+        payload: { expectedVersion: removed.json().version },
+      }),
+      app.inject({
+        method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${reordered[2]}/main`,
+        headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(removed.json().version) }),
+        payload: { expectedVersion: removed.json().version },
+      }),
+    ]);
+    expect(concurrent.map((x) => x.statusCode).sort()).toEqual([200, 409]);
+    const rollback = await readFile(path.resolve(__dirname, "../../migrations/rollback/0045_venue_gallery.sql"), "utf8");
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      await expect(c.query(rollback)).rejects.toThrow();
+      await c.query("ROLLBACK");
+    } finally {
+      try { await c.query("ROLLBACK"); } catch { /* already rolled back */ }
+      c.release();
+    }
+  });
+
+  it("legacy cover replace and cover onto existing non-main gallery preserve CHECK range and skip live GC", async () => {
     // Legacy cover replace (no prior main): insert stays in CHECK range; live refs are not GC'd.
     const legacy = await venue();
     const legacyCover = await app.inject({
@@ -292,42 +331,6 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
       "SELECT 1 FROM avatar_media_gc WHERE storage_key = ANY($1::text[])",
       [afterLegacy.map((row) => row.storage_key)],
     )).rowCount).toBe(0);
-    const stale = await add(v.id, 1);
-    expect(stale.statusCode).toBe(409);
-    const removeTarget = reordered[0]!;
-    const removed = await app.inject({
-      method: "DELETE", url: `/v1/admin/venues/${v.id}/gallery/${removeTarget}`,
-      headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(version) }),
-      payload: { expectedVersion: version },
-    });
-    expect(removed.statusCode, removed.body).toBe(200);
-    const storageKey = (await pool.query<{ storage_key: string }>(
-      "SELECT storage_key FROM venue_gallery_items WHERE id=$1", [removeTarget],
-    )).rows[0]!.storage_key;
-    expect((await pool.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1", [storageKey])).rowCount).toBe(1);
-    const concurrent = await Promise.all([
-      app.inject({
-        method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${reordered[1]}/main`,
-        headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(removed.json().version) }),
-        payload: { expectedVersion: removed.json().version },
-      }),
-      app.inject({
-        method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${reordered[2]}/main`,
-        headers: headers(owner, { "content-type": "application/json", "x-venue-version": String(removed.json().version) }),
-        payload: { expectedVersion: removed.json().version },
-      }),
-    ]);
-    expect(concurrent.map((x) => x.statusCode).sort()).toEqual([200, 409]);
-    const rollback = await readFile(path.resolve(__dirname, "../../migrations/rollback/0045_venue_gallery.sql"), "utf8");
-    const c = await pool.connect();
-    try {
-      await c.query("BEGIN");
-      await expect(c.query(rollback)).rejects.toThrow();
-      await c.query("ROLLBACK");
-    } finally {
-      try { await c.query("ROLLBACK"); } catch { /* already rolled back */ }
-      c.release();
-    }
   });
 
   it("preserves original uploader on projected cover when superadmin setMain; retirement clears public gallery+cover without resurrection", async () => {
