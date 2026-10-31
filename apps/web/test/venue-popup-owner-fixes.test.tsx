@@ -178,7 +178,8 @@ describe("production venue popup presentation with real React", () => {
       invitePlayerId: peerId, me: { id: "viewer", csrfToken: "test" } as PresentationProps["me"],
     })} />);
     expect(published).toContain("Пригласить выбранного игрока");
-    expect(published).toContain("Пригласить в созданную игру");
+    expect(published).toContain("Пригласить на игру");
+    expect(published).not.toContain("Пригласить в созданную игру");
     expect(published).not.toContain("Приглашение отправлено");
     const standalone = ssr(<CreateGamePresentation {...presentation({ step: "published", created: game })} />);
     expect(standalone).not.toContain("Пригласить выбранного игрока");

@@ -287,7 +287,11 @@ describe("InvitationChooser open-for-invite filtering", () => {
       }),
     });
     const tree = renderTree();
-    const button = elements(tree).find(node => node.type === "button" && textOf(node).includes("Будущая") && typeof node.props?.onClick === "function");
+    const button = elements(tree).find(node => {
+      if (node.type !== "button" || typeof node.props?.onClick !== "function") return false;
+      const label = typeof node.props?.["aria-label"] === "string" ? node.props["aria-label"] : "";
+      return textOf(node).includes("Отправить приглашение") || label.includes("Отправить приглашение");
+    });
     expect(button).toBeTruthy();
     await (button!.props!.onClick as () => Promise<void>)();
     await Promise.resolve();

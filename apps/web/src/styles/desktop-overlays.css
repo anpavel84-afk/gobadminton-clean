@@ -246,8 +246,9 @@
     padding: 16px; /* retain inner semantic card padding */
   }
 
-  /* ProfileDialog skin — [open] only; closed native <dialog> stays UA-hidden. */
-  .fr3 .profile-dialog[open] {
+  /* ProfileDialog skin — [open] only; closed native <dialog> stays UA-hidden.
+   * Invitation opt-in (.profile-dialog--invitation) shares shell without .fr3 page wrapper. */
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation)[open] {
     display: flex;
     flex-direction: column;
     width: min(560px, calc(100vw - 48px));
@@ -258,7 +259,7 @@
   }
 
   /* Control row 44 + gap 8 reserved above title (24+44+8 = 76); X at shell 24. */
-  .fr3 .profile-dialog > header {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header {
     position: relative;
     flex: 0 0 auto;
     display: block;
@@ -267,20 +268,21 @@
     border-bottom: 1px solid var(--gb-line, #dfe4dc);
   }
 
-  .fr3 .profile-dialog > header h2 {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header h2 {
     margin: 0;
     font-size: var(--gb-overlay-title-size);
     line-height: var(--gb-overlay-title-line);
     font-weight: 700;
+    color: var(--gb-ink, #13221a);
   }
 
-  .fr3 .profile-dialog > header .gb-close-button {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header .gb-close-button {
     position: absolute;
     top: var(--gb-overlay-shell-pad);
     right: var(--gb-overlay-shell-pad);
   }
 
-  .fr3 .profile-dialog__body {
+  :is(.fr3 .profile-dialog__body, .profile-dialog--invitation .profile-dialog__body) {
     display: block;
     flex: 1 1 auto;
     min-height: 0;

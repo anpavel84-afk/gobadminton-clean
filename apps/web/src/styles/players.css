@@ -293,32 +293,59 @@
 .fr3.friends-page .friends-row > div { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; min-height:48px; padding-top:16px; border-top:1px solid var(--gb-line); }
 .fr3.friends-page .friends-row > div > p { margin:0; font-weight:600; }
 .fr3.friends-page .friends-row .profile-form-actions { margin-top:0; }
-.fr3 .profile-dialog { color:var(--gb-ink); background:var(--gb-white); width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 48px); padding:28px; border:1px solid var(--gb-line); border-radius:28px; overflow:auto; box-shadow:var(--gb-shadow-elevated); }
-.fr3 .profile-dialog::backdrop { background:rgba(19,34,26,.55); }
-.fr3 .profile-dialog > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
-.fr3 .profile-dialog h2 { margin:0; font-size:28px; }
+:is(.fr3 .profile-dialog, .profile-dialog--invitation) { color:var(--gb-ink); background:var(--gb-white); width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 48px); padding:28px; border:1px solid var(--gb-line); border-radius:28px; overflow:auto; box-shadow:var(--gb-shadow-elevated); }
+:is(.fr3 .profile-dialog, .profile-dialog--invitation)::backdrop { background:rgba(19,34,26,.55); }
+:is(.fr3 .profile-dialog, .profile-dialog--invitation) > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+:is(.fr3 .profile-dialog, .profile-dialog--invitation) > header h2 { margin:0; font-size:28px; color:var(--gb-ink); }
 /* Body wrapper is layout-transparent below desktop so former grid/gap/footer/forms stay intact. */
 .fr3 .profile-dialog__body { display:contents; }
+/* Invitation family: always one scroll owner when open; closed native dialog stays UA-hidden. */
+.profile-dialog.profile-dialog--invitation[open] {
+  display:flex; flex-direction:column; padding:0; overflow:hidden; box-sizing:border-box;
+  width:min(560px,calc(100vw - 48px)); max-height:calc(100dvh - 48px); border-radius:28px;
+}
+.profile-dialog.profile-dialog--invitation > header {
+  position:relative; flex:0 0 auto; display:block; margin:0;
+  padding:76px 40px 16px; border-bottom:1px solid var(--gb-line);
+}
+.profile-dialog.profile-dialog--invitation > header h2 {
+  margin:0; font-size:22px; line-height:26px; font-weight:700; color:var(--gb-ink);
+}
+.profile-dialog.profile-dialog--invitation > header .gb-close-button {
+  position:absolute; top:24px; right:24px;
+}
+.profile-dialog.profile-dialog--invitation .profile-dialog__body {
+  display:block; flex:1 1 auto; min-block-size:0; min-height:0; min-inline-size:0;
+  overflow-x:clip; overflow-y:auto; overscroll-behavior:contain;
+  padding:16px 40px; box-sizing:border-box;
+}
+.profile-dialog.profile-dialog--invitation :is(button,a,input,select,textarea):focus-visible {
+  outline:3px solid var(--gb-purple); outline-offset:3px;
+}
+@media (min-width:721px) and (max-width:1023px) {
+  .profile-dialog.profile-dialog--invitation > header { padding:76px 24px 16px; }
+  .profile-dialog.profile-dialog--invitation .profile-dialog__body { padding:16px 24px; }
+}
 /* #365 «Просторный40»: desktop ProfileDialog slots (after base; wins cascade vs consumer import order). */
 @media (min-width:1024px) {
   /* Only [open] — never force closed native <dialog> to display:flex. */
-  .fr3 .profile-dialog[open] {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation)[open] {
     display:flex; flex-direction:column; padding:0; overflow:hidden;
     width:min(560px,calc(100vw - 48px)); max-height:calc(100dvh - 48px); border-radius:28px;
   }
   /* Control row 44 + gap 8 above title (top 76); X absolute 24 / 44×44. */
-  .fr3 .profile-dialog > header {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header {
     position:relative; flex:0 0 auto; display:block; margin:0;
     padding:76px 40px 16px;
     border-bottom:1px solid var(--gb-line);
   }
-  .fr3 .profile-dialog > header h2 {
-    margin:0; font-size:22px; line-height:26px; font-weight:700;
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header h2 {
+    margin:0; font-size:22px; line-height:26px; font-weight:700; color:var(--gb-ink);
   }
-  .fr3 .profile-dialog > header .gb-close-button {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header .gb-close-button {
     position:absolute; top:24px; right:24px;
   }
-  .fr3 .profile-dialog__body {
+  :is(.fr3 .profile-dialog__body, .profile-dialog--invitation .profile-dialog__body) {
     display:block; flex:1 1 auto; min-height:0; overflow-x:clip; overflow-y:auto;
     overscroll-behavior:contain; padding:16px 40px; box-sizing:border-box;
   }
@@ -413,6 +440,23 @@
   .fr3 .account-panel { margin-top:12px; }
   .fr3 .trainer-disclosure__intro { align-items:flex-start; }
   .fr3 .profile-dialog { margin:auto 0 0; width:100%; max-width:none; max-height:calc(100dvh - 24px); border-radius:24px 24px 0 0; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); }
+  .profile-dialog.profile-dialog--invitation[open] {
+    margin:auto 0 0; width:100%; max-width:none;
+    max-height:calc(100dvh - 24px - env(safe-area-inset-top, 0px));
+    border-radius:28px 28px 0 0;
+  }
+  .profile-dialog.profile-dialog--invitation > header {
+    padding:calc(20px + 44px + 8px) 20px 16px;
+  }
+  .profile-dialog.profile-dialog--invitation > header h2 {
+    font-size:26px; line-height:32px;
+  }
+  .profile-dialog.profile-dialog--invitation > header .gb-close-button {
+    top:20px; right:20px;
+  }
+  .profile-dialog.profile-dialog--invitation .profile-dialog__body {
+    padding:16px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  }
   .fr3 .profile-form-actions > .gb-c23-btn { flex:1; }
 }
 @media (prefers-reduced-motion:reduce) { .fr3 *, .fr3 *::before, .fr3 *::after { animation:none !important; transition:none !important; } }
