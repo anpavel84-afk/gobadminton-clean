@@ -276,7 +276,9 @@ run("venue gallery import: disposable PostGIS", () => {
     await seedMainCover(otherVenue, await jpeg("other-b-main"));
     const otherVersion = (await db().query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [otherVenue])).rows[0]!.version;
     const venueSwapBytes = await jpeg("venue-swap");
-    const venueSwap = galleryBatch(otherVenue, [{ bytes: venueSwapBytes, expectedVersion: otherVersion }], input.manifest.batch);
+    const venueSwap = galleryBatch(otherVenue, [{
+      bytes: venueSwapBytes, expectedVersion: otherVersion, name: "Other Hall B", address: "Other Address B",
+    }], input.manifest.batch);
     const venueSwapCalls = fake.calls;
     const venueSwapLines: object[] = [];
     expect(await importVenueGallery(db(), venueSwap, actor, true, { media, moderation }, (l) => venueSwapLines.push(l))).toBe(1);
@@ -365,8 +367,12 @@ run("venue gallery import: disposable PostGIS", () => {
     const holdVersion = (await db().query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [holdVenue])).rows[0]!.version;
     const firstBytes = await jpeg("hold-first");
     const rivalBytes = await jpeg("hold-rival");
-    const first = galleryBatch(holdVenue, [{ bytes: firstBytes, expectedVersion: holdVersion }], "hold-batch");
-    const rival = galleryBatch(holdVenue, [{ bytes: rivalBytes, expectedVersion: holdVersion }], "hold-batch");
+    const first = galleryBatch(holdVenue, [{
+      bytes: firstBytes, expectedVersion: holdVersion, name: "Hold Hall", address: "Hold Address 1",
+    }], "hold-batch");
+    const rival = galleryBatch(holdVenue, [{
+      bytes: rivalBytes, expectedVersion: holdVersion, name: "Hold Hall", address: "Hold Address 1",
+    }], "hold-batch");
     let releaseProvider!: () => void;
     const providerGate = new Promise<void>((resolve) => { releaseProvider = resolve; });
     let resolveEntered!: () => void;
@@ -386,13 +392,35 @@ run("venue gallery import: disposable PostGIS", () => {
     const holdStarted = fake.calls;
     const holdLines: object[] = [];
     const firstRun = importVenueGallery(db(), first, actor, true, { media, moderation: holdingModeration }, () => undefined);
-    await enteredProvider;
-    const rivalCode = await importVenueGallery(db(), rival, actor, true, { media, moderation }, (l) => holdLines.push(l));
-    releaseProvider();
-    const firstCode = await firstRun;
-    expect([firstCode, rivalCode].sort()).toEqual([0, 1]);
-    expect(holdLines).toContainEqual(expect.objectContaining({ action: "HOLD", reason: "OPERATION_IN_PROGRESS" }));
-    expect(fake.calls - holdStarted).toBe(1);
+    try {
+      let entryTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          enteredProvider,
+          firstRun.then((code) => {
+            throw new Error(
+              `firstRun finished before provider entry (code=${code}); identity/fixture mismatch likely — approveImage never reached`,
+            );
+          }),
+          new Promise<never>((_, reject) => {
+            entryTimer = setTimeout(
+              () => reject(new Error("timed out waiting for provider entry (approveImage)")),
+              15_000,
+            );
+          }),
+        ]);
+      } finally {
+        if (entryTimer !== undefined) clearTimeout(entryTimer);
+      }
+      const rivalCode = await importVenueGallery(db(), rival, actor, true, { media, moderation }, (l) => holdLines.push(l));
+      releaseProvider();
+      const firstCode = await firstRun;
+      expect([firstCode, rivalCode].sort()).toEqual([0, 1]);
+      expect(holdLines).toContainEqual(expect.objectContaining({ action: "HOLD", reason: "OPERATION_IN_PROGRESS" }));
+      expect(fake.calls - holdStarted).toBe(1);
+    } finally {
+      releaseProvider();
+    }
   });
 
   it("stops later same-venue items after failure; independent venue continues; max 8", async () => {
