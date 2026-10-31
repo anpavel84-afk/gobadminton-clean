@@ -43,6 +43,9 @@ import {
   PlayerBrowsePlayInterest,
   type BrowsePlayInterestApi,
 } from "./PlayerBrowsePlayInterest";
+import { PlayerBrowseFinderGate, PlayerBrowseOfferStatus } from "./PlayerBrowseOffers";
+import type { FinderEligibility, PlayerBrowseOffersApi } from "./usePlayerBrowseOffers";
+import { AuthEntry } from "./ProfileComposition";
 import {
   browseMediaNeighborhood,
   browsePeerMediaKey,
@@ -71,6 +74,12 @@ type Props = {
   /** Mobile <1024 cards mode: fixed fullscreen shell (portal) covering app chrome. */
   mobileFullscreen?: boolean;
   onCloseFullscreen?: () => void;
+  /** Page-level mobile offers host (fluid send + eligibility). Desktop omits. */
+  mobileOffers?: PlayerBrowseOffersApi | null;
+  /** Readonly page-owned eligibility gate for authenticated desktop cards (no fluid host). */
+  finderEligibility?: FinderEligibility | null;
+  onContinueFinder?: () => void;
+  onRetryFinder?: () => void;
 };
 
 type DragState = {
@@ -130,8 +139,30 @@ export function PlayerBrowseDeck({
   desktop: desktopProp,
   mobileFullscreen = false,
   onCloseFullscreen,
+  mobileOffers = null,
+  finderEligibility = null,
+  onContinueFinder,
+  onRetryFinder,
 }: Props) {
   const desktop = useLocalDesktop(desktopProp);
+  const fluidMobile = Boolean(mobileFullscreen && mobileOffers && !desktop);
+  const offersRef = useRef(mobileOffers);
+  offersRef.current = mobileOffers;
+
+  useEffect(() => {
+    if (!mobileOffers) return;
+    setKnown(prev => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [id, relationship] of mobileOffers.known) {
+        if (next.get(id) !== relationship) {
+          next.set(id, relationship);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [mobileOffers, mobileOffers?.known]);
   const [me, setMe] = useState<Me | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "guest" | "error">("loading");
   const [ownPublicPlayerId, setOwnPublicPlayerId] = useState<string | null>(null);
@@ -192,6 +223,7 @@ export function PlayerBrowseDeck({
   const mediaReadyRef = useRef(false);
   const skipCurrentRef = useRef<(opts?: { alreadyFlying?: boolean; generation?: number; peerId?: string | null }) => void>(() => {});
   const applySkipAdvanceRef = useRef<(peerId: string, generation: number | null) => void>(() => {});
+  const applySendAdvanceRef = useRef<(peerId: string, generation: number | null) => void>(() => {});
   const requestFriendshipRef = useRef<() => void>(() => {});
   const openDetailsRef = useRef<() => void>(() => {});
   const closeDetailsRef = useRef<() => void>(() => {});
@@ -243,9 +275,9 @@ export function PlayerBrowseDeck({
       || (catalogMediaStale && intentIndex === index)
     ),
   );
-  // In-flight POST locks browse navigation; media wait stays cancelable by further navigation.
-  // UNKNOWN latch stays in per-peer pending storage without freezing the deck.
-  const navigationLocked = friendBusy;
+  // Fluid mobile: POST no longer locks browse/skip — only media commit does.
+  // Desktop / legacy: in-flight POST still locks navigation until receipt.
+  const navigationLocked = fluidMobile ? false : friendBusy;
   const mediaReady = Boolean(current && committedMedia && committedMedia.peerId === current.publicPlayerId);
   mediaReadyRef.current = mediaReady;
 
@@ -904,26 +936,61 @@ export function PlayerBrowseDeck({
     if (restored >= 0) moveTo(restored, desktop && restored < index ? "prev" : desktop ? "next" : undefined);
   }, [navigationLocked, tutorialOpen, skipStack, browsePlayers, moveTo, desktop, index]);
 
+  const applySendAdvance = useCallback((peerId: string, generation: number | null) => {
+    if (generation != null && generation !== flyGen.current) return;
+    if (!slideMounted.current) return;
+    if (generation != null && peerId !== currentPeerRef.current) {
+      actionConsumedRef.current = false;
+      return;
+    }
+    awaitingRightRef.current = null;
+    actionConsumedRef.current = false;
+    const skipped = new Set(skipStack);
+    const knownMap = new Map(known);
+    knownMap.set(peerId, "outgoing");
+    const next = nextEligibleBrowseIndex(browsePlayers, index, knownMap, skipped);
+    if (next >= 0) {
+      pendingDirectionRef.current = null;
+      setIntentIndex(next);
+      return;
+    }
+    clearCardMotion(true);
+    setAnnounce(prev => prev || "Подборка закончилась.");
+  }, [skipStack, known, browsePlayers, index, clearCardMotion]);
+
   const requestFriendship = useCallback(() => {
     if (navigationLocked || tutorialOpen || actionConsumedRef.current || flyingRef.current) return;
+    if (fluidMobile) {
+      const gate = offersRef.current?.canSendTo(currentPeerRef.current ?? "");
+      if (gate && !gate.ok) {
+        if (gate.reason) setAnnounce(gate.reason);
+        return;
+      }
+    }
     actionConsumedRef.current = true;
     const started = friendshipApi.current?.request() ?? false;
     if (!started) actionConsumedRef.current = false;
-  }, [navigationLocked, tutorialOpen]);
+  }, [navigationLocked, tutorialOpen, fluidMobile]);
 
-  const onConfirmedRequest = useCallback((receipt: PlayInterestReceipt) => {
-    if (!current) return;
+  const onConfirmedRequest = useCallback((receipt: PlayInterestReceipt, capturedPeerId?: string) => {
+    const peerId = capturedPeerId ?? current?.publicPlayerId;
+    if (!peerId) return;
     // Withdraw succeeds as a mutation but must not toast "sent" or auto-advance.
     if (!isBrowseConfirmedPlayInterestOutcome(receipt.outcome)) return;
-    const peerId = current.publicPlayerId;
     const relationship = receipt.outcome === "mutual" ? "mutual" : "outgoing";
     setKnown(prev => {
       const next = new Map(prev);
       next.set(peerId, relationship);
       return next;
     });
+    offersRef.current?.noteRelationship(peerId, relationship);
     setToast(receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено");
     setAnnounce(receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено");
+    // Fluid mobile: flight + next card already ran at admission; receipt must not advance again.
+    if (fluidMobile) {
+      awaitingRightRef.current = null;
+      return;
+    }
     const skipped = new Set(skipStack);
     const next = nextEligibleBrowseIndex(browsePlayers, index, new Map([
       ...known,
@@ -948,7 +1015,7 @@ export function PlayerBrowseDeck({
         setAnnounce(prev => prev || "Подборка закончилась.");
       }
     };
-    // Successful right flyout only after confirmed receipt (green during drag was intent only).
+    // Desktop / legacy mobile: successful right flyout only after confirmed receipt.
     const fromGesture = awaitingRightRef.current === peerId;
     awaitingRightRef.current = null;
     if (fromGesture && !desktop) {
@@ -964,7 +1031,7 @@ export function PlayerBrowseDeck({
       return;
     }
     finishAdvance(null);
-  }, [current, skipStack, browsePlayers, index, known, desktop, flyOffCard, clearCardMotion]);
+  }, [current, skipStack, browsePlayers, index, known, desktop, flyOffCard, clearCardMotion, fluidMobile]);
   const dismissTutorial = useCallback(() => {
     setTutorialOpen(false);
     const ok = persistTutorialDismissed(typeof sessionStorage !== "undefined" ? sessionStorage : null);
@@ -1130,9 +1197,9 @@ export function PlayerBrowseDeck({
     };
   }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
 
-  // Failed / UNKNOWN right-swipe: restore readable card, no automatic replay.
+  // Legacy (non-fluid) failed / UNKNOWN right-swipe: restore readable card, no automatic replay.
   useEffect(() => {
-    if (desktop || friendBusy || flyingRef.current) return;
+    if (fluidMobile || desktop || friendBusy || flyingRef.current) return;
     const peer = awaitingRightRef.current;
     if (!peer || current?.publicPlayerId !== peer) return;
     // Busy cleared without a confirmed receipt consuming the await → restore.
@@ -1140,7 +1207,7 @@ export function PlayerBrowseDeck({
     actionConsumedRef.current = false;
     springBackCard();
     setAnnounce("Запрос не подтверждён. Карточка восстановлена.");
-  }, [friendBusy, desktop, current?.publicPlayerId, springBackCard]);
+  }, [friendBusy, desktop, current?.publicPlayerId, springBackCard, fluidMobile]);
 
   // Breakpoint → desktop: cancel mobile gesture/flight timers (no mutation).
   useEffect(() => {
@@ -1165,6 +1232,7 @@ export function PlayerBrowseDeck({
   currentPeerRef.current = current?.publicPlayerId ?? null;
   skipCurrentRef.current = skipCurrent;
   applySkipAdvanceRef.current = applySkipAdvance;
+  applySendAdvanceRef.current = applySendAdvance;
   requestFriendshipRef.current = requestFriendship;
   openDetailsRef.current = openDetails;
   closeDetailsRef.current = closeDetails;
@@ -1434,6 +1502,12 @@ export function PlayerBrowseDeck({
           springBackCard();
           return;
         }
+        const sendGate = offersRef.current?.canSendTo(peerAtStart);
+        if (sendGate && !sendGate.ok) {
+          springBackCard();
+          if (sendGate.reason) setAnnounce(sendGate.reason);
+          return;
+        }
         actionConsumedRef.current = true;
         awaitingRightRef.current = peerAtStart;
         const started = api.request();
@@ -1443,7 +1517,19 @@ export function PlayerBrowseDeck({
           springBackCard();
           return;
         }
-        // Hold readable card near release pose until receipt; green was intent only.
+        // Fluid mobile: fly off immediately from release pose; POST settles independently.
+        if (offersRef.current) {
+          applyDragVisual({ ...state, axis: "horizontal" });
+          void flyOffCard(1, { peerId: peerAtStart, velocity, fromX, fromRot }).then(fly => {
+            if (!fly.ok || fly.peerId !== peerAtStart || fly.generation !== flyGen.current) {
+              actionConsumedRef.current = false;
+              return;
+            }
+            applySendAdvanceRef.current(peerAtStart, fly.generation);
+          });
+          return;
+        }
+        // Legacy hold until receipt; green was intent only.
         const holdX = Math.max(-width * 0.25, Math.min(width * 0.25, fromX));
         const card = cardRef.current;
         if (card && Math.abs(fromX) > width * 0.25) {
@@ -1504,7 +1590,9 @@ export function PlayerBrowseDeck({
     window.addEventListener("pointercancel", onCancel);
     window.addEventListener("blur", onBlur);
     return () => {
-      cancelActiveGesture(false);
+      // Real peer/auth/scope/breakpoint teardown: restore a readable pose (do not leave a stuck transform).
+      // Ordinary applySendAdvance identity churn must not reach here — it is ref-bound, not an effect dep.
+      cancelActiveGesture(true);
       surface.removeEventListener("pointerdown", onDown);
       surface.removeEventListener("pointermove", onMove);
       surface.removeEventListener("pointerup", onUp);
@@ -1521,12 +1609,18 @@ export function PlayerBrowseDeck({
   const counter = browsePlayers.length
     ? `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`
     : "00 / 00";
+  // Last-card end on mobile FS: plain copy lives in chrome/counter (no in-flow footer that shrinks the card).
+  const atEndFs = mobileFullscreen && browsePlayers.length > 0 && index >= browsePlayers.length - 1;
+  const atEndFsPlain = atEndFs && !hasMore;
   // Shared mobile fullscreen chrome — used by early catalog states and the ready deck (one X/counter/help).
   const mobileFsChrome = mobileFullscreen ? (
     <header className="pb-fs-chrome">
       <div className="pb-fs-chrome__meta">
         <span className="pb-counter" aria-live="polite">{counter}</span>
         <span className="pb-fs-place">{placeLabel}</span>
+        {atEndFsPlain ? (
+          <span className="pb-fs-end" role="status">Больше игроков в текущей выборке нет.</span>
+        ) : null}
       </div>
       <div className="pb-fs-chrome__tools">
         <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
@@ -1553,6 +1647,42 @@ export function PlayerBrowseDeck({
       {body}
     </div>
   );
+
+  // Authenticated cards eligibility gates (batch states) — mobile fluid host or desktop readonly.
+  // Before ordinary empty/loading copy so already-sent peers never flash while checking.
+  const rawGate = fluidMobile && mobileOffers
+    ? mobileOffers.eligibility
+    : finderEligibility;
+  if (rawGate && rawGate.kind !== "ready") {
+    const gateEligibility = rawGate.kind === "idle"
+      ? { ...rawGate, kind: "checking" as const, message: "Подбираем игроков…" }
+      : rawGate;
+    return wrapCatalogState(
+      <>
+        {fluidMobile && mobileOffers && (
+          <PlayerBrowseOfferStatus
+            status={mobileOffers.status}
+            onCheckStatus={() => mobileOffers.checkStatusReadonly()}
+            unresolved={mobileOffers.unresolved}
+            onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
+            className="pb-offer-status--modal"
+          />
+        )}
+        <PlayerBrowseFinderGate
+          eligibility={gateEligibility}
+          onContinue={fluidMobile && mobileOffers
+            ? () => mobileOffers.continueSearch()
+            : onContinueFinder}
+          onRetry={fluidMobile && mobileOffers
+            ? () => mobileOffers.retryEligibility()
+            : onRetryFinder}
+          guestAction={fluidMobile
+            ? <AuthEntry returnPath="/players?view=cards">Войти</AuthEntry>
+            : undefined}
+        />
+      </>,
+    );
+  }
 
   if (catalogState === "loading" && !players.length) {
     return wrapCatalogState(
@@ -1596,6 +1726,9 @@ export function PlayerBrowseDeck({
   const atEnd = index >= browsePlayers.length - 1;
   const intentAtStart = intentIndex <= 0;
   const intentAtEnd = intentIndex >= browsePlayers.length - 1;
+  const sendBlocked = fluidMobile && current
+    ? mobileOffers?.canSendTo(current.publicPlayerId)
+    : null;
   const friendship = current && mediaReady && (
     <PlayerBrowsePlayInterest
       key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
@@ -1613,9 +1746,11 @@ export function PlayerBrowseDeck({
           next.set(current.publicPlayerId, view.relationship);
           return next;
         });
+        offersRef.current?.noteRelationship(current.publicPlayerId, view.relationship);
       }}
       onConfirmedInterest={onConfirmedRequest}
       onBusyChange={(busy) => {
+        if (fluidMobile) return;
         setFriendBusy(busy);
         // Single-flight covers interest buttons as well as gestures.
         if (busy) actionConsumedRef.current = true;
@@ -1630,7 +1765,7 @@ export function PlayerBrowseDeck({
         friendshipApi.current = {
           busy: base.busy,
           pendingUnknown: base.pendingUnknown,
-          canRequest: base.canRequest,
+          canRequest: base.canRequest && !(sendBlocked && !sendBlocked.ok),
           request: () => {
             if (flyingRef.current) return false;
             if (actionConsumedRef.current && awaitingRightRef.current == null) return false;
@@ -1644,6 +1779,27 @@ export function PlayerBrowseDeck({
       onSkip={skipCurrent}
       onAuthRetry={() => setAuthReload(n => n + 1)}
       chrome={desktop ? "desktop" : "mobile"}
+      externalAdmitSend={fluidMobile && mobileOffers
+        ? (view) => mobileOffers.admitSend({
+          peerId: current.publicPlayerId,
+          peerName: current.displayName,
+          view,
+        })
+        : null}
+      sendBlockedReason={sendBlocked && !sendBlocked.ok ? sendBlocked.reason : ""}
+      onExternalSendAdmitted={fluidMobile
+        ? () => {
+          const peer = current.publicPlayerId;
+          awaitingRightRef.current = peer;
+          void flyOffCard(1, { peerId: peer }).then(fly => {
+            if (!fly.ok || fly.peerId !== peer || fly.generation !== flyGen.current) {
+              actionConsumedRef.current = false;
+              return;
+            }
+            applySendAdvanceRef.current(peer, fly.generation);
+          });
+        }
+        : null}
     />
   );
 
@@ -2001,8 +2157,15 @@ export function PlayerBrowseDeck({
       </div>
     </div>
 
-    {atEnd && (
-      <div className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs" : ""}`} role="status">
+    {/*
+      Mobile FS: plain end → chrome `.pb-fs-end` (counter/live path); hasMore → out-of-flow
+      `.pb-deck-end--fs-more` so the last visible card keeps full stage height. Desktop in-flow footer unchanged.
+    */}
+    {atEnd && !(mobileFullscreen && !hasMore) && (
+      <div
+        className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs pb-deck-end--fs-more" : ""}`}
+        role="status"
+      >
         {hasMore
           ? <Button variant="outline" disabled={moreBusy || navigationLocked} onClick={onLoadMore}>{moreBusy ? "Загрузка…" : "Загрузить ещё"}</Button>
           : <p className="pb-counter">Больше игроков в текущей выборке нет.</p>}
@@ -2011,5 +2174,14 @@ export function PlayerBrowseDeck({
 
     <div id="player-browse-live" className="pb-live" aria-live="polite">{announce}</div>
     {toast && <div className="pb-toast" role="status">{toast}</div>}
+    {fluidMobile && mobileOffers && (
+      <PlayerBrowseOfferStatus
+        status={mobileOffers.status}
+        onCheckStatus={() => mobileOffers.checkStatusReadonly()}
+        unresolved={mobileOffers.unresolved}
+        onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
+        className="pb-offer-status--modal"
+      />
+    )}
   </div>;
 }

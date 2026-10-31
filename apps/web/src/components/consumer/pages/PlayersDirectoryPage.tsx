@@ -2,8 +2,9 @@
 
 import "../../../styles/radar-geographic.css";
 import "../../../styles/player-browse.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
@@ -22,6 +23,8 @@ import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
+import { PlayerBrowseOfferOpHost, PlayerBrowseOfferStatus } from "../players/PlayerBrowseOffers";
+import { usePlayerBrowseOffers } from "../players/usePlayerBrowseOffers";
 import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
 import { GamesViewAction } from "../games/GamesViewAction";
 
@@ -75,8 +78,11 @@ export function PlayersDirectoryPage({
   const cardsHistoryPushed = useRef(false);
   const listScrollY = useRef(0);
   const cardsTrigger = useRef<HTMLElement | null>(null);
+  /** Set true on cards→list close so layout can focus the remounted finder CTA. */
+  const pendingFinderFocus = useRef(false);
   const mobileFsDialogRef = useRef<HTMLDialogElement | null>(null);
   const closingFsRef = useRef(false);
+  const mobileCtaZoneRef = useRef<HTMLDivElement | null>(null);
   const { controller, view } = useRadarSession();
   const { filters, update } = useDirectoryFilters();
   const { name, areaKey, cityId, lookingOnly, trainerOnly } = filters;
@@ -153,19 +159,23 @@ export function PlayersDirectoryPage({
   }, []);
   useEffect(() => { setPortalReady(true); }, []);
   useEffect(() => {
-    const restoreListChrome = () => {
+    const restoreListChromeOnPop = () => {
       const trigger = cardsTrigger.current;
       cardsTrigger.current = null;
       cardsHistoryPushed.current = false;
+      pendingFinderFocus.current = true;
       requestAnimationFrame(() => {
         window.scrollTo(0, listScrollY.current);
-        if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+        if (trigger?.isConnected) {
+          pendingFinderFocus.current = false;
+          trigger.focus({ preventScroll: true });
+        }
       });
     };
     const readView = () => {
       const next = parseBrowseView(window.location.search);
       setBrowseView(prev => {
-        if (prev === "cards" && next === "list") restoreListChrome();
+        if (prev === "cards" && next === "list") restoreListChromeOnPop();
         return next;
       });
       setViewReady(true);
@@ -192,9 +202,14 @@ export function PlayersDirectoryPage({
     const trigger = cardsTrigger.current;
     cardsTrigger.current = null;
     cardsHistoryPushed.current = false;
+    // Focus after list/CTA remount (X / Escape / replaceState close). Do not steal focus from late receipts.
+    pendingFinderFocus.current = true;
     requestAnimationFrame(() => {
       window.scrollTo(0, listScrollY.current);
-      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+      if (trigger?.isConnected) {
+        pendingFinderFocus.current = false;
+        trigger.focus({ preventScroll: true });
+      }
     });
   }
   function closeMobileCards() {
@@ -249,6 +264,72 @@ export function PlayersDirectoryPage({
   const showCards = viewReady && browseView === "cards";
   // Wait for MQ before mobile portal — avoids fullscreen flash when desktop ≥1024 hydrates.
   const mobileCards = showCards && mqReady && !desktop;
+  // After cards→list remount, focus current finder CTA when the captured trigger was detached (X/Escape/Back).
+  useLayoutEffect(() => {
+    if (showCards || !pendingFinderFocus.current) return;
+    pendingFinderFocus.current = false;
+    window.scrollTo(0, listScrollY.current);
+    const cta = mobileCtaZoneRef.current?.querySelector<HTMLElement>(".pb-finder-cta") ?? null;
+    if (cta && typeof cta.focus === "function") {
+      cta.focus({ preventScroll: true });
+    }
+  }, [showCards]);
+  const loadMore = () => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); };
+  // Batch eligibility for authenticated cards on both mobile and desktop; list stays complete.
+  const offers = usePlayerBrowseOffers({
+    finderActive: showCards,
+    ordinaryScope,
+    catalogPlayers: catalog.ordinary,
+    catalogState: state,
+    hasMore: Boolean(availableNextCursor),
+    moreBusy,
+    onLoadMore: loadMore,
+  });
+  const authCardsReady = showCards && offers.authState === "ready";
+  // Guest desktop keeps public preview; loading/error cards avoid flashing already-sent peers.
+  const deckPlayers = authCardsReady
+    ? offers.eligibility.players
+    : showCards && offers.authState !== "guest"
+      ? []
+      : catalog.ordinary;
+  // Readonly eligibility gate for desktop auth cards — do not pass mobile operation host.
+  const desktopFinderEligibility = showCards && desktop && offers.authState !== "guest"
+    ? offers.eligibility
+    : null;
+  // Shared mobile overlay zone (finder + optional Radar map) — GamesViewAction nav measure pattern.
+  useLayoutEffect(() => {
+    if (desktop || showCards) return;
+    const element = mobileCtaZoneRef.current;
+    const nav = element?.closest(".gb-app-shell")?.querySelector(".gb-bottom-nav");
+    if (!element || !nav) return;
+    const viewport = window.visualViewport;
+    const measure = () => {
+      const navDisplayed = window.getComputedStyle(nav).display !== "none";
+      if (!navDisplayed) {
+        element.style.bottom = "";
+        return;
+      }
+      const bottom = Math.min(
+        nav.getBoundingClientRect().top,
+        (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
+      );
+      element.style.bottom = `${Math.max(0, window.innerHeight - bottom)}px`;
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    observer.observe(element);
+    measure();
+    window.addEventListener("resize", measure);
+    viewport?.addEventListener("resize", measure);
+    viewport?.addEventListener("scroll", measure);
+    return () => {
+      observer.disconnect();
+      element.style.bottom = "";
+      window.removeEventListener("resize", measure);
+      viewport?.removeEventListener("resize", measure);
+      viewport?.removeEventListener("scroll", measure);
+    };
+  }, [desktop, showCards, activationId]);
   // Mobile cards: native <dialog>.showModal for focus containment; body scroll lock; desktop resize tears down.
   useEffect(() => {
     if (!mobileCards || !portalReady) return;
@@ -283,7 +364,7 @@ export function PlayersDirectoryPage({
       </div>
     </section>
   );
-  // Floating overlay (GamesViewAction layout) — does not shift toolbar/list/card geometry ON/OFF.
+  // Desktop floating map CTA — unchanged GamesViewAction. Mobile map shares finder overlay zone.
   const playersMapCta = activationId ? (
     <GamesViewAction
       view="list"
@@ -293,6 +374,27 @@ export function PlayersDirectoryPage({
       className="gb-players-map-cta"
       aria-label="Игроки на карте"
     />
+  ) : null;
+  const mobileFinderZone = !desktop && !showCards ? (
+    <div ref={mobileCtaZoneRef} className="pb-mobile-finder-zone" data-radar={activationId ? "on" : "off"}>
+      <Button
+        variant="dark"
+        className="pb-finder-cta"
+        aria-label="Найти напарника"
+        onClick={() => changeBrowseView("cards")}
+      >
+        <span className="pb-finder-cta__label">Найти напарника</span>
+      </Button>
+      {activationId ? (
+        <Link
+          href="/players/radar"
+          className="gb-c23-btn gb-c23-btn--outline pb-finder-map-secondary"
+          aria-label="Игроки на карте"
+        >
+          На карте
+        </Link>
+      ) : null}
+    </div>
   ) : null;
   const catalogFilters = (
     <>
@@ -329,17 +431,21 @@ export function PlayersDirectoryPage({
   );
   const deck = (
     <PlayerBrowseDeck
-      players={catalog.ordinary}
+      players={deckPlayers}
       cities={cities}
       ordinaryScope={ordinaryScope}
-      catalogState={state}
+      catalogState={authCardsReady && offers.eligibility.kind === "checking" ? "loading" : state}
       moreBusy={moreBusy}
       hasMore={Boolean(availableNextCursor)}
-      onLoadMore={() => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); }}
+      onLoadMore={loadMore}
       placeLabel={placeLabel}
       desktop={desktop}
       mobileFullscreen={mobileCards}
       onCloseFullscreen={closeMobileCards}
+      mobileOffers={mobileCards ? offers : null}
+      finderEligibility={desktopFinderEligibility}
+      onContinueFinder={desktopFinderEligibility ? () => offers.continueSearch() : undefined}
+      onRetryFinder={desktopFinderEligibility ? () => offers.retryEligibility() : undefined}
     />
   );
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"} inert={mobileCards ? true : undefined}>
@@ -349,12 +455,19 @@ export function PlayersDirectoryPage({
         {/* Always in DOM; CSS media + data-browse-view keep geometry stable (no JS subtitle flash). */}
         <p className="players-hero__subtitle">Найдите партнёров для хорошей игры.</p>
       </div>
-      <div className="pb-view-switch" role="group" aria-label="Вид каталога">
-        <button type="button" aria-pressed={!showCards} onClick={() => changeBrowseView("list")}>
+      {/* Desktop ≥1024 keeps segmented list/cards. Mobile uses floating «Найти напарника» only. */}
+      <div
+        className="pb-view-switch"
+        role="group"
+        aria-label="Вид каталога"
+        hidden={mqReady && !desktop ? true : undefined}
+        aria-hidden={mqReady && !desktop ? true : undefined}
+      >
+        <button type="button" aria-pressed={!showCards} tabIndex={mqReady && !desktop ? -1 : undefined} onClick={() => changeBrowseView("list")}>
           <span aria-hidden="true">☰</span>
           <span className="pb-view-switch__label">Списком</span>
         </button>
-        <button type="button" aria-pressed={showCards} onClick={() => changeBrowseView("cards")}>
+        <button type="button" aria-pressed={showCards} tabIndex={mqReady && !desktop ? -1 : undefined} onClick={() => changeBrowseView("cards")}>
           <span aria-hidden="true">▣</span>
           <span className="pb-view-switch__label">По одному</span>
         </button>
@@ -366,8 +479,28 @@ export function PlayersDirectoryPage({
         {catalogFilters}
       </>
     )}
-    {/* Overlay CTA: list (mobile+desktop) and desktop cards; never mobile fullscreen gesture surface. */}
-    {(desktop || !showCards) && playersMapCta}
+    {/* Desktop: existing map CTA. Mobile list: shared finder+map zone (never inside fullscreen). */}
+    {desktop && playersMapCta}
+    {mobileFinderZone}
+    {/* Keyed OpHost outside conditional dialog — survives X / next-card / portal teardown. */}
+    {offers.activeOperation && (
+      <PlayerBrowseOfferOpHost
+        key={offers.activeOperation.token}
+        operation={offers.activeOperation}
+        onConfirmed={offers.onOperationConfirmed}
+        onFailed={offers.onOperationFailed}
+        onUnknown={offers.onOperationUnknown}
+      />
+    )}
+    {!mobileCards && (
+      <PlayerBrowseOfferStatus
+        status={offers.status}
+        onCheckStatus={() => offers.checkStatusReadonly()}
+        unresolved={offers.unresolved}
+        onCheckUnresolved={(peerId) => offers.checkStatusReadonly(peerId)}
+        className="pb-offer-status--list"
+      />
+    )}
     {showCards && desktop ? (
       <section className="players-browse-deck" aria-label="Игроки по одному">
         {liveRadar && catalog.radar.length > 0 && (
@@ -383,7 +516,7 @@ export function PlayersDirectoryPage({
       <dialog
         ref={mobileFsDialogRef}
         className="gb-player-browse pb-mobile-fs"
-        aria-label="Игроки по одному"
+        aria-label="Найти напарника"
         data-surface="player-browse-mobile-fs"
         onCancel={(event) => {
           // Escape: same close path as X (replace/back). Nested auth <dialog> is a separate top layer.
@@ -395,7 +528,7 @@ export function PlayersDirectoryPage({
       </dialog>,
       document.body,
     ) : showCards ? null : (
-      <section className="players-list">
+      <section className="players-list pb-list--finder-pad">
         {!desktop && (
           <div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
         )}
