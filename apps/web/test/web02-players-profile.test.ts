@@ -84,8 +84,8 @@ describe("WEB-02 Players / Profile", () => {
     expect(page).toContain("cityId");
     // Wave A requires visible Players enable/recovery controls; the header owns consent.
     const provider = await readSource("../src/components/consumer/radar/RadarSessionProvider.tsx");
-    expect(page).toContain("<RadarSwitchControl />");
-    expect(page).toContain("<RadarStatusControls />");
+    expect(page).toContain('<RadarSwitchControl presentation="directory-desktop" />');
+    expect(page).toContain('<RadarStatusControls presentation="directory-compact" />');
     expect(provider).toContain("export function RadarStatusAffordance(");
     expect(provider).toContain("gb-radar-progress");
     expect(provider).toContain("Управление Radar");
