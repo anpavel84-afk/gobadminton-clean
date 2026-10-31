@@ -48,7 +48,7 @@ export function PlayerCard({ player, city, metadata, onSelect }: { player: Publi
     {(player.bio || player.trainer || player.canRequestContact === true) && <div className="player-card__bio">
       {player.bio && <p>{player.bio}</p>}
       {player.trainer && <em>Тренер</em>}
-      {player.canRequestContact === true && <small>Принимает запросы на общение</small>}
+      {player.canRequestContact === true && <small>Можно написать</small>}
     </div>}
   </>;
   return onSelect ? <button type="button" className="player-card" onClick={onSelect}>{content}</button> : <Link className="player-card" href={`/players/${player.publicPlayerId}`}>{content}</Link>;

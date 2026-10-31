@@ -10,7 +10,7 @@ import { foregroundUpdates, privateActor } from "../../../lib/foreground-updates
 import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ProfileState } from "../players/ProfileComposition";
-import { ConversationHeader, InviteGameButton, MessageBubble, MutationNotice, RequestDecision } from "./MessageComposition";
+import { ConversationHeader, InviteGameButton, MessageBubble, MutationNotice } from "./MessageComposition";
 import { ConversationSafety } from "./ConversationSafety";
 import { InvitationChooser } from "./InvitationChooser";
 import { useSocialMutation } from "./useSocialMutation";
@@ -111,7 +111,7 @@ export function DirectConversation({ id, me, changed, openInvitation, startInvit
   const pendingRequest = state === "ready" && conversation && conversation.requestState !== "accepted";
   const showComposer = canCompose(conversation) && !blocked && state !== "guest" && state !== "unavailable";
   return <section className="conversation-panel" aria-label="Личная переписка">
-    <ConversationHeader playerId={conversation?.peer.publicPlayerId} conversationId={conversation?.id} avatar={conversation?.peer.avatar} name={conversation?.peer.displayName ?? "Переписка"} subtitle={conversation ? requestCopy[conversation.requestState] : "Сообщения"}>{conversation && <InviteGameButton disabled={state !== "ready" || blocked || mutation.busy || mutation.pending} onClick={() => setChooser(true)} />}{conversation && <ConversationSafety overflow playerId={conversation.peer.publicPlayerId} me={me} onBlocked={() => { setBlocked(true); changed(); }} />}</ConversationHeader>
+    <ConversationHeader playerId={conversation?.peer.publicPlayerId} conversationId={conversation?.id} avatar={conversation?.peer.avatar} name={conversation?.peer.displayName ?? "Переписка"} subtitle={conversation ? (conversation.requestState === "pending" ? "Переписка" : requestCopy[conversation.requestState]) : "Сообщения"}>{conversation && <InviteGameButton disabled={state !== "ready" || blocked || mutation.busy || mutation.pending} onClick={() => setChooser(true)} />}{conversation && <ConversationSafety overflow playerId={conversation.peer.publicPlayerId} me={me} onBlocked={() => { setBlocked(true); changed(); }} />}</ConversationHeader>
     <div className="conversation-body" ref={bodyRef} onScroll={() => { const node = bodyRef.current; const bottom = !!node && node.scrollHeight - node.scrollTop - node.clientHeight < 48; nearBottom.current = bottom; setAtBottom(bottom); }}>
       {state === "loading" && <ProfileState title="Загружаем переписку…" state="loading" />}
       {state === "error" && <ProfileState title="Не удалось обновить переписку" state="error" retry={() => setReload(n => n + 1)}>Отправка недоступна до обновления.</ProfileState>}
@@ -121,7 +121,6 @@ export function DirectConversation({ id, me, changed, openInvitation, startInvit
         {cursor && <Button variant="ghost" disabled={olderBusy} onClick={() => void older()}>Ранние сообщения</Button>}{olderError && <p role="alert">Не удалось загрузить ранние сообщения. Попробуйте ещё раз.</p>}
         {pendingRequest ? first ? <div data-incoming-seq={first.authorPublicPlayerId === conversation.peer.publicPlayerId ? first.seq : undefined}>
           <div className="message-date">{new Date(first.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</div>
-          <p className="request-first-label">{first.authorPublicPlayerId === conversation.peer.publicPlayerId ? "Первое сообщение" : "Ваше первое сообщение"}</p>
           <MessageBubble message={first} peerId={conversation.peer.publicPlayerId} />
         </div> : null : messages.map((message, index) => <div key={message.id} data-incoming-seq={message.authorPublicPlayerId === conversation.peer.publicPlayerId ? message.seq : undefined}>{(index === 0 || message.createdAt.slice(0, 10) !== messages[index - 1]?.createdAt.slice(0, 10)) && <div className="message-date">{new Date(message.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</div>}{message.id === firstUnread && <div className="unread-divider"><span>Новые сообщения</span></div>}<MessageBubble message={message} peerId={conversation.peer.publicPlayerId} /></div>)}
         {canCompose(conversation) && !messages.length && <ProfileState title="Начните переписку">Напишите первое сообщение.</ProfileState>}
@@ -129,8 +128,7 @@ export function DirectConversation({ id, me, changed, openInvitation, startInvit
       <MutationNotice mutation={mutation} />
     </div>
     {showComposer ? <form className="composer" onSubmit={e => { e.preventDefault(); if (!disabled && text.trim()) mutation.run(`${conversationPath(id)}/messages`, { kind: "text", text: text.trim(), clientMessageId: crypto.randomUUID() }); }}><input aria-label="Сообщение" placeholder="Сообщение" maxLength={2000} value={text} disabled={disabled} onChange={e => setText(e.target.value)} /><Button type="submit" variant="dark" disabled={disabled || !text.trim()}>Отправить</Button></form>
-      : pendingRequest && conversation ? <footer className="request-footer"><RequestDecision conversation={conversation} disabled={disabled} decide={action => mutation.run(`${conversationPath(id)}/${action}`, { expectedVersion: conversation.version })} /></footer>
-      : <div className="composer-restricted">{restricted ? "Отправка сейчас недоступна." : "Переписка станет доступна после принятия запроса."}</div>}
+      : <div className="composer-restricted">Отправка сейчас недоступна.</div>}
     {chooser && conversation && state === "ready" && !blocked && <InvitationChooser me={me} playerId={conversation.peer.publicPlayerId} onClose={() => setChooser(false)} onCreated={openInvitation} />}
   </section>;
 }

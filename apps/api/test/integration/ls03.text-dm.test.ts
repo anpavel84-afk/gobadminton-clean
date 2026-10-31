@@ -292,17 +292,34 @@ describeIntegration("LS-03 text DM", () => {
     expect((await read(a, "invalid")).statusCode).toBe(400);
     const created = await app.inject({ method: "POST", url: "/v1/conversations/requests", headers: mutationHeaders(a, uniqueSuffix("resolver")), payload: { targetPublicPlayerId: peer.publicPlayerId, text: "Request", clientMessageId: uniqueSuffix("resolver-msg") } });
     expect(created.statusCode).toBe(201);
-    const conv = created.json().conversation as { id: string; version: number };
-    expect((await read()).json()).toEqual({ state: "pending_outgoing", targetPublicPlayerId: peer.publicPlayerId, conversationId: conv.id, version: conv.version });
-    expect((await read(b, self.publicPlayerId)).json().state).toBe("pending_incoming");
-    await pool.query("UPDATE conversations SET request_expires_at = now() - interval '1 second' WHERE id = $1", [conv.id]);
+    const conv = created.json().conversation as { id: string; version: number; requestState: string; requestExpiresAt: string | null };
+    expect(conv.requestState).toBe("accepted");
+    expect(conv.requestExpiresAt).toBeNull();
+    expect((await read()).json()).toEqual({ state: "accepted", targetPublicPlayerId: peer.publicPlayerId, conversationId: conv.id, version: conv.version });
+    expect((await read(b, self.publicPlayerId)).json().state).toBe("accepted");
+    // Legacy pending expiry projection: seed explicit pending fixture (API no longer creates pending).
+    await pool.query(
+      `UPDATE conversations
+       SET request_state = 'pending', request_expires_at = now() - interval '1 second'
+       WHERE id = $1`,
+      [conv.id],
+    );
     expect((await read()).json().state).toBe("terminal");
     expect((await pool.query("SELECT request_state FROM conversations WHERE id = $1", [conv.id])).rows[0].request_state).toBe("pending");
     await pool.query("UPDATE conversations SET request_state = 'accepted', request_expires_at = NULL WHERE id = $1", [conv.id]);
     await pool.query("UPDATE conversation_members SET archived = true WHERE conversation_id = $1 AND user_id = $2", [conv.id, a.userId]);
-    await pool.query("UPDATE player_social_profiles SET contact_policy = 'closed' WHERE user_id = $1", [b.userId]);
     expect((await read()).json()).toEqual({ state: "accepted", targetPublicPlayerId: peer.publicPlayerId, conversationId: conv.id, version: conv.version });
     expect((await pool.query("SELECT archived FROM conversation_members WHERE conversation_id = $1 AND user_id = $2", [conv.id, a.userId])).rows[0].archived).toBe(true);
+    await pool.query("UPDATE player_social_profiles SET contact_policy = 'closed' WHERE user_id = $1", [b.userId]);
+    expect((await read()).json()).toEqual({ state: "unavailable", targetPublicPlayerId: peer.publicPlayerId });
+    const historyWhileClosed = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${conv.id}/messages`,
+      cookies: a.cookies,
+    });
+    expect(historyWhileClosed.statusCode).toBe(200);
+    expect((historyWhileClosed.json() as { items: unknown[] }).items.length).toBeGreaterThan(0);
+    await pool.query("UPDATE player_social_profiles SET contact_policy = 'requests' WHERE user_id = $1", [b.userId]);
     for (const terminal of ["declined", "expired", "closed"]) {
       await pool.query("UPDATE conversations SET request_state = $2 WHERE id = $1", [conv.id, terminal]);
       expect((await read()).json()).toEqual({ state: "terminal", targetPublicPlayerId: peer.publicPlayerId });
@@ -398,7 +415,7 @@ describeIntegration("LS-03 text DM", () => {
     }
   });
 
-  it("request → accept → send/list/read with idempotent first contact and send", async () => {
+  it("immediate accepted first contact → both reply; closed recipient blocks inbound only", async () => {
     const a = await login("vk");
     const b = await login("yandex");
     await ensureOpenProfile(a, "Alpha DM", "a");
@@ -422,15 +439,25 @@ describeIntegration("LS-03 text DM", () => {
       conversation: {
         id: string;
         requestState: string;
+        requestExpiresAt: string | null;
         version: number;
         role: string;
       };
       receipt: { seq: string; outcome: string; messageId: string };
     };
-    expect(created.conversation.requestState).toBe("pending");
+    expect(created.conversation.requestState).toBe("accepted");
+    expect(created.conversation.requestExpiresAt).toBeNull();
     expect(created.conversation.role).toBe("initiator");
     expect(created.receipt.seq).toBe("1");
     expect(created.receipt.outcome).toBe("created");
+    expect(
+      (
+        await pool.query<{ request_state: string; request_expires_at: Date | null }>(
+          `SELECT request_state, request_expires_at FROM conversations WHERE id = $1`,
+          [created.conversation.id],
+        )
+      ).rows[0],
+    ).toMatchObject({ request_state: "accepted", request_expires_at: null });
 
     const createReplay = await app.inject({
       method: "POST",
@@ -444,18 +471,20 @@ describeIntegration("LS-03 text DM", () => {
     const convId = created.conversation.id;
     const version = created.conversation.version;
 
-    const pendingForB = await app.inject({
+    const openForB = await app.inject({
       method: "GET",
       url: `/v1/conversations/${convId}`,
       cookies: b.cookies,
     });
-    expect(pendingForB.statusCode).toBe(200);
-    expect(pendingForB.json()).toMatchObject({
-      requestState: "pending",
+    expect(openForB.statusCode).toBe(200);
+    expect(openForB.json()).toMatchObject({
+      requestState: "accepted",
+      requestExpiresAt: null,
       role: "recipient",
       unreadCount: 1,
     });
 
+    // Legacy accept remains idempotent on already-accepted chats.
     const accept = await app.inject({
       method: "POST",
       url: `/v1/conversations/${convId}/accept`,
@@ -464,13 +493,6 @@ describeIntegration("LS-03 text DM", () => {
     });
     expect(accept.statusCode).toBe(200);
     expect(accept.json()).toMatchObject({ requestState: "accepted" });
-
-    // First-contact preference never closes a previously accepted conversation.
-    const own = await app.inject({method:"GET",url:"/v1/me/social-profile",cookies:b.cookies});
-    const close = await app.inject({method:"PATCH",url:"/v1/me/social-profile",headers:mutationHeaders(b,uniqueSuffix("accepted-close")),payload:{expectedVersion:own.json().version,contactPolicy:"closed"}});
-    expect(close.statusCode).toBe(200);
-    const projection = await app.inject({method:"GET",url:`/v1/players/${peer.publicPlayerId}`,cookies:a.cookies});
-    expect(projection.json().canRequestContact).toBe(false);
 
     const sendKey = `send-${uniqueSuffix("k")}-xxxxxxxx`;
     const sendPayload = {
@@ -546,9 +568,65 @@ describeIntegration("LS-03 text DM", () => {
     });
     expect(list.statusCode).toBe(200);
     expect((list.json() as { items: unknown[] }).items.length).toBe(1);
+
+    // Recipient closed: inbound to them denied; their outbound still allowed; history readable.
+    const own = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: b.cookies });
+    const close = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/social-profile",
+      headers: mutationHeaders(b, uniqueSuffix("accepted-close")),
+      payload: { expectedVersion: own.json().version, contactPolicy: "closed" },
+    });
+    expect(close.statusCode).toBe(200);
+    const projection = await app.inject({
+      method: "GET",
+      url: `/v1/players/${peer.publicPlayerId}`,
+      cookies: a.cookies,
+    });
+    expect(projection.json().canRequestContact).toBe(false);
+    expect(
+      (
+        await pool.query<{ request_state: string; request_expires_at: Date | null }>(
+          `SELECT request_state, request_expires_at FROM conversations WHERE id = $1`,
+          [convId],
+        )
+      ).rows[0],
+    ).toMatchObject({ request_state: "accepted", request_expires_at: null });
+
+    const deniedToClosed = await app.inject({
+      method: "POST",
+      url: `/v1/conversations/${convId}/messages`,
+      headers: mutationHeaders(a, `send-closed-${uniqueSuffix("k")}-xxxxx`),
+      payload: {
+        kind: "text",
+        text: "should not deliver to closed recipient",
+        clientMessageId: `send-closed-${uniqueSuffix("s")}`,
+      },
+    });
+    expect(deniedToClosed.statusCode).toBe(404);
+
+    const outboundFromClosed = await app.inject({
+      method: "POST",
+      url: `/v1/conversations/${convId}/messages`,
+      headers: mutationHeaders(b, `send-out-${uniqueSuffix("k")}-xxxxxx`),
+      payload: {
+        kind: "text",
+        text: "closed sender may still write outbound",
+        clientMessageId: `send-out-${uniqueSuffix("s")}`,
+      },
+    });
+    expect(outboundFromClosed.statusCode).toBe(201);
+
+    const history = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${convId}/messages?limit=10`,
+      cookies: a.cookies,
+    });
+    expect(history.statusCode).toBe(200);
+    expect((history.json() as { items: unknown[] }).items.length).toBe(3);
   });
 
-  it("block closes pending request and blocks send on accepted thread", async () => {
+  it("block closes open request and blocks send on accepted thread", async () => {
     const a = await login("vk");
     const b = await login("yandex");
     const peerA = await ensureOpenProfile(a, "Alpha Block", "ab");
@@ -560,13 +638,26 @@ describeIntegration("LS-03 text DM", () => {
       headers: mutationHeaders(a, `reqb-${uniqueSuffix("k")}-xxxxxxx`),
       payload: {
         targetPublicPlayerId: peerB.publicPlayerId,
-        text: "pending then block",
+        text: "open then block",
         clientMessageId: `cmsg-${uniqueSuffix("m")}`,
       },
     });
     expect(created.statusCode).toBe(201);
     const convId = (created.json() as { conversation: { id: string } }).conversation
       .id;
+    expect(
+      (created.json() as { conversation: { requestState: string } }).conversation
+        .requestState,
+    ).toBe("accepted");
+    // Explicit legacy pending fixture — API create is accepted by default.
+    // First half keeps pending→closed-on-block coverage; do not relax to accepted.
+    await pool.query(
+      `UPDATE conversations
+       SET request_state = 'pending',
+           request_expires_at = now() + interval '1 day'
+       WHERE id = $1`,
+      [convId],
+    );
 
     const block = await app.inject({
       method: "PUT",
@@ -604,8 +695,9 @@ describeIntegration("LS-03 text DM", () => {
     });
     expect(open.statusCode).toBe(201);
     const openBody = open.json() as {
-      conversation: { id: string; version: number };
+      conversation: { id: string; version: number; requestState: string };
     };
+    expect(openBody.conversation.requestState).toBe("accepted");
     const accept = await app.inject({
       method: "POST",
       url: `/v1/conversations/${openBody.conversation.id}/accept`,
@@ -644,7 +736,7 @@ describeIntegration("LS-03 text DM", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("decline is a terminal contact gate; expiry on-read + retention purge job", async () => {
+  it("legacy decline/expiry fixtures remain terminal; retention purge job", async () => {
     const a = await login("vk");
     const b = await login("yandex");
     await ensureOpenProfile(a, "Alpha Decline", "ad");
@@ -664,6 +756,14 @@ describeIntegration("LS-03 text DM", () => {
     const body = created.json() as {
       conversation: { id: string; version: number };
     };
+    // Explicit legacy pending fixture — API create is accepted by default.
+    await pool.query(
+      `UPDATE conversations
+       SET request_state = 'pending',
+           request_expires_at = now() + interval '1 day'
+       WHERE id = $1`,
+      [body.conversation.id],
+    );
     const decline = await app.inject({
       method: "POST",
       url: `/v1/conversations/${body.conversation.id}/decline`,
@@ -693,7 +793,7 @@ describeIntegration("LS-03 text DM", () => {
     await pool.query("DELETE FROM user_blocks");
     await pool.query("DELETE FROM social_pairs");
 
-    const pending = await app.inject({
+    const opened = await app.inject({
       method: "POST",
       url: "/v1/conversations/requests",
       headers: mutationHeaders(a, `reqe-${uniqueSuffix("k")}-xxxxxxx`),
@@ -703,13 +803,14 @@ describeIntegration("LS-03 text DM", () => {
         clientMessageId: `cmsg-${uniqueSuffix("me")}`,
       },
     });
-    expect(pending.statusCode).toBe(201);
-    const pendingBody = pending.json() as {
+    expect(opened.statusCode).toBe(201);
+    const pendingBody = opened.json() as {
       conversation: { id: string; version: number };
     };
     await pool.query(
       `UPDATE conversations
-       SET request_expires_at = now() - interval '1 second'
+       SET request_state = 'pending',
+           request_expires_at = now() - interval '1 second'
        WHERE id = $1`,
       [pendingBody.conversation.id],
     );
@@ -931,5 +1032,298 @@ describeIntegration("LS-03 text DM", () => {
       [convId],
     );
     expect(Number(after.rows[0]?.c ?? 0)).toBe(beforeCount);
+  });
+
+  it("0044 promotion predicate accepts eligible pending and preserves closed/expired", async () => {
+    const a = await login("vk");
+    const b = await login("yandex");
+    await ensureOpenProfile(a, "Mig Actor", "mig-a");
+    const peerB = await ensureOpenProfile(b, "Mig Peer", "mig-b");
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/requests",
+      headers: mutationHeaders(a, `mig-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: {
+        targetPublicPlayerId: peerB.publicPlayerId,
+        text: "migration fixture",
+        clientMessageId: `mig-${uniqueSuffix("m")}`,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const conv = created.json() as { conversation: { id: string; version: number } };
+    const convId = conv.conversation.id;
+    const baseVersion = conv.conversation.version;
+
+    const promoteSql = `
+UPDATE conversations AS c
+SET request_state = 'accepted',
+    request_expires_at = NULL,
+    version = c.version + 1,
+    updated_at = clock_timestamp()
+FROM users AS ui,
+     users AS ur,
+     player_social_profiles AS pi,
+     player_social_profiles AS pr
+WHERE c.id = $1
+  AND c.kind = 'direct'
+  AND c.request_state = 'pending'
+  AND c.initiator_user_id = ui.id
+  AND c.recipient_user_id = ur.id
+  AND pi.user_id = ui.id
+  AND pr.user_id = ur.id
+  AND (c.request_expires_at IS NULL OR c.request_expires_at > clock_timestamp())
+  AND ui.status = 'active'
+  AND ur.status = 'active'
+  AND pr.directory_visible IS TRUE
+  AND pr.social_eligible IS TRUE
+  AND pr.contact_policy = 'requests'
+  AND pi.social_eligible IS TRUE
+  AND NOT EXISTS (
+    SELECT 1 FROM user_blocks ub
+    WHERE (ub.blocker_user_id = c.initiator_user_id AND ub.blocked_user_id = c.recipient_user_id)
+       OR (ub.blocker_user_id = c.recipient_user_id AND ub.blocked_user_id = c.initiator_user_id)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM user_restrictions urx
+    WHERE urx.user_id IN (c.initiator_user_id, c.recipient_user_id)
+      AND urx.capability IN ('account.access', 'profile.public', 'social.directory', 'social.dm_send')
+      AND urx.revoked_at IS NULL
+      AND urx.starts_at <= clock_timestamp()
+      AND urx.expires_at > clock_timestamp()
+  )`;
+
+    const client = await pool.connect();
+    const readConv = async () =>
+      (
+        await client.query<{
+          request_state: string;
+          request_expires_at: Date | null;
+          version: number;
+        }>(
+          `SELECT request_state, request_expires_at, version FROM conversations WHERE id = $1`,
+          [convId],
+        )
+      ).rows[0]!;
+
+    try {
+      await client.query(
+        `UPDATE conversations
+         SET request_state = 'pending',
+             request_expires_at = now() + interval '2 days',
+             version = $2
+         WHERE id = $1`,
+        [convId, baseVersion],
+      );
+      await client.query("BEGIN");
+      try {
+        await client.query(promoteSql, [convId]);
+        const promoted = await readConv();
+        expect(promoted.request_state).toBe("accepted");
+        expect(promoted.request_expires_at).toBeNull();
+        expect(promoted.version).toBe(baseVersion + 1);
+      } finally {
+        await client.query("ROLLBACK");
+      }
+
+      await client.query(
+        `UPDATE conversations
+         SET request_state = 'pending',
+             request_expires_at = now() + interval '2 days',
+             version = $2
+         WHERE id = $1`,
+        [convId, baseVersion],
+      );
+      await client.query(
+        `UPDATE player_social_profiles SET contact_policy = 'closed' WHERE user_id = $1`,
+        [b.userId],
+      );
+      await client.query("BEGIN");
+      try {
+        await client.query(promoteSql, [convId]);
+        const closedPreserved = await readConv();
+        expect(closedPreserved.request_state).toBe("pending");
+        expect(closedPreserved.version).toBe(baseVersion);
+      } finally {
+        await client.query("ROLLBACK");
+      }
+      await client.query(
+        `UPDATE player_social_profiles SET contact_policy = 'requests' WHERE user_id = $1`,
+        [b.userId],
+      );
+
+      await client.query(
+        `UPDATE conversations
+         SET request_state = 'pending',
+             request_expires_at = now() - interval '1 minute',
+             version = $2
+         WHERE id = $1`,
+        [convId, baseVersion],
+      );
+      await client.query("BEGIN");
+      try {
+        await client.query(promoteSql, [convId]);
+        const expiredPreserved = await readConv();
+        expect(expiredPreserved.request_state).toBe("pending");
+        expect(expiredPreserved.version).toBe(baseVersion);
+      } finally {
+        await client.query("ROLLBACK");
+      }
+
+      await client.query(
+        `UPDATE conversations
+         SET request_state = 'declined',
+             request_expires_at = now() + interval '2 days',
+             version = $2
+         WHERE id = $1`,
+        [convId, baseVersion],
+      );
+      await client.query("BEGIN");
+      try {
+        await client.query(promoteSql, [convId]);
+        const declinedPreserved = await readConv();
+        expect(declinedPreserved.request_state).toBe("declined");
+        expect(declinedPreserved.version).toBe(baseVersion);
+      } finally {
+        await client.query("ROLLBACK");
+      }
+    } finally {
+      client.release();
+    }
+  });
+
+  it("DM contact_policy opt-out denies incoming without bumping shared social epoch", async () => {
+    const a = await login("vk");
+    const b = await login("yandex");
+    await ensureOpenProfile(a, "Epoch Actor", "epoch-a");
+    const peerB = await ensureOpenProfile(b, "Epoch Peer", "epoch-b");
+
+    const epochBefore = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    const beforeEpoch = epochBefore.rows[0]!.social_action_epoch;
+
+    const cur = await app.inject({
+      method: "GET",
+      url: "/v1/me/social-profile",
+      cookies: b.cookies,
+    });
+    expect(cur.statusCode).toBe(200);
+    const version = (cur.json() as { version: number }).version;
+    const closed = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/social-profile",
+      headers: mutationHeaders(b, `epoch-dm-${uniqueSuffix("k")}-xxxxx`),
+      payload: { expectedVersion: version, contactPolicy: "closed" },
+    });
+    expect(closed.statusCode).toBe(200);
+    expect((closed.json() as { contactPolicy: string }).contactPolicy).toBe(
+      "closed",
+    );
+
+    const epochAfterDm = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    expect(epochAfterDm.rows[0]!.social_action_epoch).toBe(beforeEpoch);
+
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/requests",
+      headers: mutationHeaders(a, `epoch-deny-${uniqueSuffix("k")}-xxxx`),
+      payload: {
+        targetPublicPlayerId: peerB.publicPlayerId,
+        text: "dm opt-out must deny",
+        clientMessageId: `epoch-${uniqueSuffix("m")}`,
+      },
+    });
+    expect(denied.statusCode).toBe(404);
+
+    const hide = await app.inject({
+      method: "PUT",
+      url: "/v1/me/social-profile/visibility",
+      headers: mutationHeaders(b, `epoch-hide-${uniqueSuffix("k")}-xxxx`),
+      payload: {
+        directoryVisible: false,
+        expectedVersion: (closed.json() as { version: number }).version,
+      },
+    });
+    expect(hide.statusCode).toBe(200);
+    const epochAfterHide = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    expect(Number(epochAfterHide.rows[0]!.social_action_epoch)).toBe(
+      Number(beforeEpoch) + 1,
+    );
+
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET directory_visible = true, contact_policy = 'requests'
+       WHERE user_id = $1`,
+      [b.userId],
+    );
+    const epochMid = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    const midEpoch = epochMid.rows[0]!.social_action_epoch;
+    await optOutSocialEligible(b, "epoch-revoke");
+    const epochAfterRevoke = await pool.query<{ social_action_epoch: string }>(
+      `SELECT social_action_epoch::text AS social_action_epoch
+       FROM player_social_profiles WHERE user_id = $1`,
+      [b.userId],
+    );
+    expect(Number(epochAfterRevoke.rows[0]!.social_action_epoch)).toBe(
+      Number(midEpoch) + 1,
+    );
+  });
+
+  it("new profile upsert defaults contact_policy to requests without overwriting closed", async () => {
+    const a = await login("vk");
+    const fresh = await app.inject({
+      method: "GET",
+      url: "/v1/me/social-profile",
+      cookies: a.cookies,
+    });
+    expect(fresh.statusCode).toBe(200);
+    expect(fresh.json()).toMatchObject({
+      version: 0,
+      contactPolicy: "requests",
+      directoryVisible: false,
+    });
+    const created = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/social-profile",
+      headers: mutationHeaders(a, `def-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: {
+        expectedVersion: 0,
+        displayName: "Default Policy",
+        cityId: MOSCOW_CITY_ID,
+      },
+    });
+    expect([200, 201]).toContain(created.statusCode);
+    expect(created.json()).toMatchObject({ contactPolicy: "requests" });
+    const closed = await app.inject({
+      method: "PATCH",
+      url: "/v1/me/social-profile",
+      headers: mutationHeaders(a, `def-close-${uniqueSuffix("k")}-xxxx`),
+      payload: {
+        expectedVersion: (created.json() as { version: number }).version,
+        contactPolicy: "closed",
+      },
+    });
+    expect(closed.statusCode).toBe(200);
+    expect(closed.json()).toMatchObject({ contactPolicy: "closed" });
+    const dbDefault = await pool.query<{ column_default: string }>(
+      `SELECT column_default FROM information_schema.columns
+       WHERE table_name = 'player_social_profiles' AND column_name = 'contact_policy'`,
+    );
+    expect(dbDefault.rows[0]?.column_default ?? "").toMatch(/requests/);
   });
 });

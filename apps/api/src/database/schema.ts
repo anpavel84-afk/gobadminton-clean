@@ -273,7 +273,7 @@ export const playerSocialProfiles = pgTable("player_social_profiles", {
   levelId: text("level_id"),
   bio: text("bio"),
   directoryVisible: boolean("directory_visible").notNull().default(false),
-  contactPolicy: text("contact_policy").notNull().default("closed"),
+  contactPolicy: text("contact_policy").notNull().default("requests"),
   consentPolicyVersion: text("consent_policy_version"),
   optedInAt: timestamp("opted_in_at", { withTimezone: true }),
   radarConsented: boolean("radar_consented").notNull().default(false),

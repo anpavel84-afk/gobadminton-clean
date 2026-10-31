@@ -130,3 +130,16 @@ Recommendation only; must not be claimed as shipped behaviour and must not fake 
 2. Prefer same city → level compatibility on the pilot scale (exact `(scaleId, scaleVersion, levelId)` until neighbourhood is Owner-approved) → same area → stable name+id tie-break.
 3. Distance only from authorized Radar rows with consent/TTL; never invent coordinates. Do not auto-enable Radar on finder open.
 4. Prefer a future opt-in finder order on `GET /players` over client-wide catalog download. Until then, any local reorder of an already-checked buffer must be labelled honestly (e.g. «Среди загруженных»), not as global city ranking.
+
+## Four social entities · immediate DM policy (#404)
+
+Separate product entities — do not merge UI, mutations, or pending scopes:
+
+| Entity | Surface / API | Not the same as |
+| --- | --- | --- |
+| Friendship | Friends panel / friend-requests | DM, play interest, game invite |
+| Play proposal | Browse «Давай сыграем» / play-interest* | Friendship, concrete invite, chat |
+| Concrete invite | Game invitation into a real game | Unilateral play proposal |
+| Personal chat (DM) | Messages / `conversations/requests` | Friendship or play gates |
+
+**DM policy (supersedes the old first-contact approval gate):** `contactPolicy` `requests`\|`closed` is a **DM-only** opt-in/opt-out. Default virtual profiles allow messaging (`requests`). Eligible first message opens an **accepted** conversation immediately — no «Первый контакт ограничен» / «Запрос на общение» / «Дождитесь принятия» / permanent «Запрос отправлен» for normal DM. Public helper `canRequestContact` means **can message** (wire name kept); card copy «Можно написать». Profile toggle «Разрешать личные сообщения»; off blocks new incoming while history stays. Legacy unconverted `pending` may show a read-only/generic link or restricted footer — never fake accepted/send or revive approve/reject for normal messages. DM opt-out must not cancel friendship/play epochs; directory hide and global social revoke still fence those.

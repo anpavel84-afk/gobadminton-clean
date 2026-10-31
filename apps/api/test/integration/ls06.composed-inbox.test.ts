@@ -692,10 +692,12 @@ describeIntegration("LS-06 Composed Inbox", () => {
     expect(request.statusCode).toBe(201);
     const conversationId = (request.json() as { conversation: { id: string } })
       .conversation.id;
-
+    // Current API accepts first contact immediately; isolate a legacy pending row
+    // before expiry so Inbox can still project pending→effective expired without UPDATEs.
     await pool.query(
       `UPDATE conversations
-       SET request_expires_at = now() - interval '1 minute'
+       SET request_state = 'pending',
+           request_expires_at = now() - interval '1 minute'
        WHERE id = $1`,
       [conversationId],
     );

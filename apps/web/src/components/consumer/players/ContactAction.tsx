@@ -12,10 +12,11 @@ import { AuthEntry, ProfileState } from "./ProfileComposition";
 export function contactAction(contact: ContactState): { label: string; href?: string; note?: string } {
   const peer = encodeURIComponent(contact.targetPublicPlayerId);
   switch (contact.state) {
-    case "none": return contact.canRequestContact === true ? { label: "Написать", href: `/messages?to=${peer}`, note: "До принятия запроса можно отправить одно первое сообщение." } : { label: "Общение сейчас недоступно" };
+    case "none": return contact.canRequestContact === true ? { label: "Написать", href: `/messages?to=${peer}` } : { label: "Общение сейчас недоступно" };
     case "accepted": return { label: "К переписке", href: `/messages?conversation=${encodeURIComponent(contact.conversationId)}` };
-    case "pending_incoming": return { label: "Ответить на запрос", href: `/messages?conversation=${encodeURIComponent(contact.conversationId)}`, note: "Продолжить общение можно после принятия запроса." };
-    case "pending_outgoing": return { label: "Открыть запрос", href: `/messages?conversation=${encodeURIComponent(contact.conversationId)}`, note: "Запрос отправлен. Дождитесь ответа игрока." };
+    case "pending_incoming":
+    case "pending_outgoing":
+      return { label: "Открыть", href: `/messages?conversation=${encodeURIComponent(contact.conversationId)}` };
     default: return { label: "Общение сейчас недоступно" };
   }
 }
@@ -56,7 +57,6 @@ export function ContactAction({ result, auth, peer, canInvite, retryAuth }: { re
   if (result.data.targetPublicPlayerId !== peer) return <span role="status">Общение сейчас недоступно</span>;
   const action = contactAction(result.data);
   return <div className="player-contact-row" data-surface="contact-status-actions">
-    {result.data.state === "pending_outgoing" && <span className="player-contact-row__status" role="status">Запрос отправлен</span>}
     {action.href
       ? <Button variant="dark" href={action.href}><MessageGlyph />{action.label}</Button>
       : <span className="player-contact-row__status" role="status">{action.label}</span>}
@@ -64,8 +64,9 @@ export function ContactAction({ result, auth, peer, canInvite, retryAuth }: { re
   </div>;
 }
 
+/** Compat export: normal DM states carry no first-contact note. */
 export function ContactNote({ result }: { result: ApiResult<ContactState> | null }) {
   if (!result?.ok) return null;
   const note = contactAction(result.data).note;
-  return note ? <div className="first-contact-note"><MessageGlyph /><span><strong>{result.data.state === "none" ? "Первый контакт ограничен" : "Запрос на общение"}</strong><p>{note}</p></span></div> : null;
+  return note ? <div className="first-contact-note"><MessageGlyph /><span><strong>Сообщение</strong><p>{note}</p></span></div> : null;
 }
