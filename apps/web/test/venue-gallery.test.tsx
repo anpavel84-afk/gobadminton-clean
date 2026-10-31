@@ -104,7 +104,7 @@ describe("VenueGallery", () => {
     expect(unsafePhoto).toContain(url("a"));
     expect(unsafePhoto).toContain("Фото: Клуб");
     expect(unsafePhoto).not.toContain("evil.example");
-    expect(unsafePhoto).not.toContain('href="');
+    expect(unsafePhoto).not.toContain("<a ");
 
     const hidden = ssr(<VenueGallery venue={venue([], url("a"), {
       uploadedUrl: url("a"),
