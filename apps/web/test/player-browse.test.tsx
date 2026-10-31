@@ -380,6 +380,34 @@ describe("player browse tutorial marker", () => {
     expect(cssSource).toContain("pb-tutorial-cue--play");
   });
 
+  it("A→B memory is actor-bound same-render and coach focus binds on hit mount", () => {
+    // Guard the live ordering bug: bool memory true for A still visible when B's auto-effect
+    // runs in the same render after identity reset — would consume blankGate and skip B's guide.
+    expect(deckSource).toContain("tutorialCompletedActor");
+    expect(deckSource).toMatch(/tutorialCompletedActor === tutorialActor/);
+    expect(deckSource).toMatch(/setTutorialCompletedActor\(actor\)/);
+    expect(deckSource).not.toContain("setTutorialMemory(true)");
+    expect(deckSource).not.toContain("setTutorialMemory(false)");
+    expect(deckSource).not.toMatch(/const \[tutorialMemory, setTutorialMemory\] = useState\(false\)/);
+    // Identity change re-arms gate without clearing the completed-actor latch.
+    const identityFx = deckSource.indexOf("tutorialActorSeenRef.current !== tutorialActor");
+    expect(identityFx).toBeGreaterThan(-1);
+    const identityBlock = deckSource.slice(identityFx, identityFx + 280);
+    expect(identityBlock).toContain("tutorialBlankGateRef.current = true");
+    expect(identityBlock).not.toContain("setTutorialCompletedActor(null)");
+    // Focus when showHelp mounts the coach button — not a tutorialOpen-only effect that can
+    // rAF before the hit exists (abort→reopen Enter). Stable callback avoids step-2 remount churn.
+    expect(deckSource).toContain("bindTutorialHitRef");
+    expect(deckSource).toMatch(/ref=\{bindTutorialHitRef\}/);
+    expect(deckSource).toMatch(
+      /const bindTutorialHitRef = useCallback\(\(node: HTMLButtonElement \| null\) => \{\s*tutorialRef\.current = node;\s*if \(node\) node\.focus\(\{ preventScroll: true \}\);\s*\}, \[\]\)/,
+    );
+    expect(deckSource).not.toContain("if (tutorialOpen) requestAnimationFrame(() => tutorialRef.current?.focus");
+    // Escape/X still returns focus to the deck; fullscreen close focus unchanged.
+    expect(deckSource).toMatch(/abortTutorial[\s\S]*?deckRef\.current\?\.focus\(\{ preventScroll: true \}/);
+    expect(deckSource).toContain("closeBtnRef.current?.focus({ preventScroll: true })");
+  });
+
   it("ignores withdrawn play-interest receipts in onConfirmed toast/auto-advance", () => {
     expect(deckSource).toMatch(/if \(!isBrowseConfirmedPlayInterestOutcome\(receipt\.outcome\)\) return/);
     expect(deckSource).toMatch(/Withdraw succeeds as a mutation but must not toast "sent" or auto-advance/);

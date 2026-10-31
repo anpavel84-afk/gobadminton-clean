@@ -186,7 +186,8 @@ export function PlayerBrowseDeck({
   const [announce, setAnnounce] = useState("");
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [tutorialStep, setTutorialStep] = useState<PlayerBrowseTutorialStep>(1);
-  const [tutorialMemory, setTutorialMemory] = useState(false);
+  /** Actor who finished step 2 in this session (memory fallback). Never a cross-actor bool. */
+  const [tutorialCompletedActor, setTutorialCompletedActor] = useState<string | null>(null);
   const tutorialActorSeenRef = useRef<string | null>(null);
   const tutorialBlankGateRef = useRef(true);
   const [dragStamp, setDragStamp] = useState<{ opacity: number; skip: boolean; label: string }>({ opacity: 0, skip: false, label: "" });
@@ -527,12 +528,14 @@ export function PlayerBrowseDeck({
 
   const identityReady = authState !== "loading";
   const tutorialActor = tutorialActorKey(me?.id);
+  // Derive memory only for the current actor — same-render A→B must not see A's completion.
+  const tutorialMemory = tutorialCompletedActor === tutorialActor;
 
   useEffect(() => {
-    // Reset in-memory completion + step when the resolved actor changes so prior completion cannot suppress the next actor.
+    // On actor change: re-arm blank gate + close open guide. Do not clear completed-actor latch
+    // (derivation above already excludes the previous actor from memory).
     if (!identityReady) return;
     if (tutorialActorSeenRef.current !== null && tutorialActorSeenRef.current !== tutorialActor) {
-      setTutorialMemory(false);
       setTutorialStep(1);
       setTutorialOpen(false);
       tutorialBlankGateRef.current = true;
@@ -1080,11 +1083,12 @@ export function PlayerBrowseDeck({
 
   /** Step-2 finish only: durable per-actor localStorage (memory fallback if blocked). */
   const finishTutorial = useCallback(() => {
+    const actor = tutorialActorKey(me?.id);
     setTutorialOpen(false);
     setTutorialStep(1);
-    persistTutorialCompleted(browseTutorialLocalStorage(), tutorialActorKey(me?.id));
-    // Always latch memory for this actor so storage failure cannot reopen-loop.
-    setTutorialMemory(true);
+    persistTutorialCompleted(browseTutorialLocalStorage(), actor);
+    // Latch this actor only — other actors must not inherit memory in the same session.
+    setTutorialCompletedActor(actor);
     requestAnimationFrame(() => deckRef.current?.focus({ preventScroll: true }));
   }, [me?.id]);
 
@@ -1096,6 +1100,12 @@ export function PlayerBrowseDeck({
     }
     finishTutorial();
   }, [tutorialStep, finishTutorial]);
+
+  /** Focus coach hit when it mounts (showHelp). Stable — no per-render ref churn stealing focus on step 2. */
+  const bindTutorialHitRef = useCallback((node: HTMLButtonElement | null) => {
+    tutorialRef.current = node;
+    if (node) node.focus({ preventScroll: true });
+  }, []);
 
   const openDetails = useCallback(() => {
     setDetailsPage(0);
@@ -1176,10 +1186,6 @@ export function PlayerBrowseDeck({
       ro?.disconnect();
     };
   }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
-
-  useEffect(() => {
-    if (tutorialOpen) requestAnimationFrame(() => tutorialRef.current?.focus({ preventScroll: true }));
-  }, [tutorialOpen]);
 
   useEffect(() => {
     if (mobileFullscreen) requestAnimationFrame(() => closeBtnRef.current?.focus({ preventScroll: true }));
@@ -2211,7 +2217,7 @@ export function PlayerBrowseDeck({
               ×
             </button>
             <button
-              ref={tutorialRef}
+              ref={bindTutorialHitRef}
               type="button"
               className="pb-tutorial-hit"
               aria-live="polite"
