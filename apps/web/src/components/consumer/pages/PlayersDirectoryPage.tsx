@@ -382,10 +382,10 @@ export function PlayersDirectoryPage({
       <Button
         variant="dark"
         className="pb-finder-cta"
-        aria-label="Найти напарника"
+        aria-label="Свайп"
         onClick={() => changeBrowseView("cards")}
       >
-        <span className="pb-finder-cta__label">Найти напарника</span>
+        <span className="pb-finder-cta__label">Свайп</span>
       </Button>
       {activationId ? (
         <Link
@@ -457,7 +457,7 @@ export function PlayersDirectoryPage({
         {/* Always in DOM; CSS media + data-browse-view keep geometry stable (no JS subtitle flash). */}
         <p className="players-hero__subtitle">Найдите партнёров для хорошей игры.</p>
       </div>
-      {/* Desktop ≥1024 keeps segmented list/cards. Mobile uses floating «Найти напарника» only. */}
+      {/* Desktop ≥1024 keeps segmented list/cards. Mobile uses floating «Свайп» only. */}
       <div
         className="pb-view-switch"
         role="group"
@@ -519,7 +519,7 @@ export function PlayersDirectoryPage({
       <dialog
         ref={mobileFsDialogRef}
         className="gb-player-browse pb-mobile-fs"
-        aria-label="Найти напарника"
+        aria-label="Свайп"
         data-surface="player-browse-mobile-fs"
         onCancel={(event) => {
           // Escape: same close path as X (replace/back). Nested auth <dialog> is a separate top layer.

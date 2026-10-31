@@ -1487,7 +1487,7 @@
 }
 
 /*
- * Shared mobile finder overlay zone: primary «Найти напарника» + optional «На карте».
+ * Shared mobile finder overlay zone: primary «Свайп» + optional «На карте».
  * Reserve max zone height whether Radar is ON or OFF so heading/toolbar do not jump.
  */
 .gb-player-browse .pb-mobile-finder-zone {

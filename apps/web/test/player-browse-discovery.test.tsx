@@ -91,7 +91,7 @@ describe("player browse discovery · batch eligibility helpers", () => {
 
 describe("player browse discovery · fluid send source contracts", () => {
   it("mobile entry uses finder CTA and hides segmented switch from mobile tab order", () => {
-    expect(pageSource).toContain("Найти напарника");
+    expect(pageSource).toContain("Свайп");
     expect(pageSource).toContain("pb-mobile-finder-zone");
     expect(pageSource).toContain("pb-finder-cta");
     expect(pageSource).toMatch(/hidden=\{mqReady && !desktop \? true : undefined\}/);
@@ -233,7 +233,7 @@ describe("player browse discovery · fluid send source contracts", () => {
   });
 
   it("style guide records delivered fluid/eligibility and marks ranking PROPOSED", () => {
-    expect(styleGuide).toContain("Найти напарника");
+    expect(styleGuide).toContain("Свайп");
     expect(styleGuide).toContain("Fluid mobile (delivered)");
     expect(styleGuide).toContain("mobile and desktop");
     expect(styleGuide).toContain("Ordinary list remains complete");
