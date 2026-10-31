@@ -84,8 +84,11 @@ run("venue gallery import: disposable PostGIS", () => {
   });
 
   async function jpeg(seed: string) {
-    const n = seed.charCodeAt(0) % 200;
-    return sharp({ create: { width: 900, height: 600, channels: 3, background: { r: 40 + n, g: 80, b: 120 } } }).jpeg().toBuffer();
+    const digest = createHash("sha256").update(seed).digest();
+    const r = 40 + (digest[0]! % 200);
+    const g = digest[1]!;
+    const b = digest[2]!;
+    return sharp({ create: { width: 900, height: 600, channels: 3, background: { r, g, b } } }).jpeg().toBuffer();
   }
 
   async function seedVenue(name = "Synthetic Hall", address = "Synthetic Address 1") {
