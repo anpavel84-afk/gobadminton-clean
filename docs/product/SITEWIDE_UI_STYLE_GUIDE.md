@@ -71,6 +71,10 @@ Accepted Spacious40 overlay foundations, mobile sheets, gestures, history, and f
 
 Opt-in ProfileDialog family `.profile-dialog--invitation` (no `.fr3`/`.fr4` page wrapper required). One title «Пригласить на игру»; body hint «Приглашение не резервирует место.»; shared `.gb-invitation-card` for preferred and normal chooser with real title/time/timezone and full-width «Отправить приглашение» CTA (same `invite(g)`, no auto-send/confirm step). Desktop ≥1024: shell 560 / inset 40 / X 44@24; mobile ≤720: bottom sheet radius 28 / inset 20 / safe-area; single body scroll. Create form date/time: scoped `minmax(0,1fr)` intrinsic sizing, 16px native inputs, optional WebKit value normalization; keep native pickers/required/readOnly/timezone — no `overflow:hidden` clipping.
 
+## Create game level range (#432)
+
+Owner-directed FormGroup control: two separate native `type=range` sliders (От / До) for inclusive NTRP 1.0–7.0 step 0.5; summary `3,0–3,5`; no manual comma typing. Same presentation in normal / trainer / embedded create forms via `.gb-game-level-range`. Compact 44px rows, lime accent, focus-visible; min cannot exceed max (clamp to other endpoint). Do not reuse social pilot level options or dual-thumb frameworks.
+
 ## Messages composition (#394 desktop repair)
 
 Owner-ordered desktop messenger repair (UAT followup): two-pane host on the existing shell rail (`336px` inbox ≥901, `320px` at 721–900); shared 88px pane-header baseline; single-row native filter select (`all` / `unread` / `attention`) instead of wrapping pills or rubricator headers; pending request as directional first message in the scroll body with compact status/decision footer outside scroll; independent inbox-list and conversation-body scroll. Dialogs keep Spacious40; mobile focused host, Back, RootNav, and keyboard/safe-area behavior stay as today (one nav reserve). No new tokens.

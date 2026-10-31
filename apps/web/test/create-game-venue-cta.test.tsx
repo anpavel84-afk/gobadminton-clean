@@ -31,6 +31,7 @@ vi.mock("react", async importOriginal => ({
 }));
 
 import { CreateGamePage, CreateGamePresentation } from "../src/components/consumer/pages/CreateGamePage";
+import { GameLevelRange } from "../src/components/consumer/games/GameLevelRange";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { venueCreatePath } from "../src/lib/games-venue-map";
 import { AuthEntry } from "../src/components/consumer/players/ProfileComposition";
@@ -120,4 +121,22 @@ it.each(["same", "foreign", "unknown"] as const)("selects only a loaded same-cit
     expect(requests.every(request => request.method === "GET")).toBe(true);
     expect(requests.some(request => /publish|^\/v1\/games/.test(request.url))).toBe(false);
   })();
+});
+it("wires GameLevelRange into create form and payload preview", async () => {
+  pageProps = {};
+  Object.assign(window.location, { search: "" });
+  render();
+  await vi.waitFor(() => {
+    expect(elements(render()).some((node) => node.type === GameLevelRange)).toBe(true);
+  });
+  finishCatalog?.();
+  const level = elements(render()).find((node) => node.type === GameLevelRange);
+  expect(level?.props.value).toBe("3.0, 3.5");
+  (level!.props.onChange as (next: string) => void)("4.0, 4.5, 5.0");
+  hooks.cursor = 0;
+  const page = CreateGamePage(pageProps);
+  expect(page.props.previewPayload?.levelRule.allowedLevelIds).toEqual(["4.0", "4.5", "5.0"]);
+  const tree = CreateGamePresentation(page.props as React.ComponentProps<typeof CreateGamePresentation>);
+  const again = elements(tree).find((node) => node.type === GameLevelRange);
+  expect(again?.props.value).toBe("4.0, 4.5, 5.0");
 });
