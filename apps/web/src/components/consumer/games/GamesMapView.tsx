@@ -155,10 +155,10 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       {<>
         {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
         {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
-          preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+          preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} coverFallback={selectedCover.fallback} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)}
             galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange} />}>
-          <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+          <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} coverFallback={selectedCover.fallback} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
             galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
             onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection} />

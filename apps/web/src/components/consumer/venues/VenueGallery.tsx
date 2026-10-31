@@ -74,6 +74,7 @@ export function VenueGallery({
   className = "",
   size = "sheet",
   coverSlot,
+  coverFallback = false,
   showCredit = true,
   index: controlledIndex,
   onIndexChange,
@@ -83,6 +84,8 @@ export function VenueGallery({
   size?: "sheet" | "compact" | "page";
   /** Reuse SelectedVenueCover morph slot for the current main-matching image. */
   coverSlot?: ReactNode;
+  /** Shared SelectedVenueCover resource already shows the generic after main-loan failure. */
+  coverFallback?: boolean;
   showCredit?: boolean;
   /** Parent-owned index keeps compact↔expanded selection aligned for one venue. */
   index?: number;
@@ -109,7 +112,9 @@ export function VenueGallery({
   const safeIndex = items.length === 0 ? 0 : ((index % items.length) + items.length) % items.length;
   const current = items[safeIndex] ?? null;
   const mainUrl = venueCoverUrl(venue.cover?.uploadedUrl);
+  // Keep the morph main-loan slot after shared-resource fallback (one image); local failed still leaves morph.
   const useMorphSlot = Boolean(coverSlot && current && mainUrl && current.url === mainUrl && failed !== current.url);
+  const mainLoanFallback = Boolean(coverSlot && coverFallback && current && mainUrl && current.url === mainUrl);
 
   useEffect(() => {
     setFailed(null);
@@ -207,7 +212,7 @@ export function VenueGallery({
   if (items.length === 0) {
     // Preserve parent morph/fallback slot when gallery has no items; do not invent credit.
     if (coverSlot) return <>{coverSlot}</>;
-    return <VenueCover cover={venue.cover} name={venue.name} className={className} />;
+    return <VenueCover cover={venue.cover} name={venue.name} className={className} venueId={venue.id} />;
   }
 
   const showControls = items.length > 1 && size !== "compact";
@@ -232,7 +237,18 @@ export function VenueGallery({
       <span id={labelId} className="gb-sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>
         Фото площадки {safeIndex + 1} из {items.length}
       </span>
-      <div className="gb-venue-gallery__frame">
+      <div
+        className="gb-venue-gallery__frame"
+        onErrorCapture={(event) => {
+          // Main loan: capture runs before the shared resource target listener — do not setFailed
+          // (that would drop morph and mount a second fallback img). Let the resource own it.
+          if (useMorphSlot) return;
+          const target = event.target;
+          if (!(target instanceof HTMLImageElement) || !current || failed === current.url) return;
+          // Observe the original current img src only — not a static illustration fallback.
+          if (target.getAttribute("src") === current.url) setFailed(current.url);
+        }}
+      >
         {useMorphSlot ? coverSlot : current && failed !== current.url
           ? <img
               key={current.url}
@@ -242,7 +258,7 @@ export function VenueGallery({
               decoding="async"
               onError={() => setFailed(current.url)}
             />
-          : <VenueCover cover={undefined} name={venue.name} />}
+          : <VenueCover cover={undefined} name={venue.name} venueId={venue.id} />}
       </div>
       {showControls && <>
         <div className="gb-venue-gallery__nav">
@@ -252,7 +268,9 @@ export function VenueGallery({
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>
       </>}
     </div>
-    {showCredit && current ? <div className="gb-venue-gallery__credit"><VenueCoverCredit credit={current.credit} /></div> : null}
+    {showCredit && current ? <div className="gb-venue-gallery__credit"><VenueCoverCredit credit={failed === current.url || mainLoanFallback
+      ? { kind: "illustration", text: "Иллюстрация", url: null }
+      : current.credit} /></div> : null}
   </div>;
 }
 

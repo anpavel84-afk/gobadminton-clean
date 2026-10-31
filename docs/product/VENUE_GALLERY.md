@@ -22,6 +22,13 @@ Ordered venue-owned media (max 8) with truthful credit/source/permission evidenc
 - `description` is optional public text (not `booking_note`); omitted edit preserves; explicit null clears.
 - `VenueGallery` reuses existing 16:9 / max-200 desktop shell, icon arrows, counters, SelectedVenueCover morph slot when the shown item is the main cover URL. Horizontal image swipe is axis-locked so vertical sheet gestures stay intact.
 
+## Presentation fallback (Owner #422 · generic v1)
+
+- When a venue has no usable uploaded cover (missing or failed image), consumer UI shows one of four source-controlled equipment illustrations under `apps/web/public/discovery/venue-illustrations/{racket,hand,shuttles,pair}-v1.webp` (provenance: `docs/product/assets/venue-illustrations-v1.json`).
+- Selection is stable by venue id (deterministic hash shared SSR/client); same venue keeps the same illustration on page, map compact/expanded, desktop, and create-venue picker. Not random, time-based, or list-index based.
+- These are **generated app illustrations**, not uploaded venue photos: they never become gallery records, never count in photo statistics, and never override real photo/logo/illustration credits or main selection. Uploaded covers and gallery items always take precedence.
+- Alt text is `Иллюстрация: бадминтон`; credit/badge say `Иллюстрация` (not a claim of a real court or specific hall). Marker: `data-fallback="illustration"`.
+
 ## Out of scope
 
 - No consumer uploads, new privileges, PROD, mass cleanup migration, or new frameworks/services.

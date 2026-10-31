@@ -34,6 +34,7 @@ import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { VenuePickerDialog } from "../src/components/consumer/games/VenuePickerDialog";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
+import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
 
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("react-dom", async (importOriginal) => {
@@ -75,9 +76,29 @@ describe("VenueGallery", () => {
     expect(one).not.toContain("Предыдущее фото");
     expect(one).not.toContain("Следующее фото");
     expect(one).toContain(url("a"));
-    const empty = ssr(<VenueGallery venue={venue([], null)} />);
-    expect(empty).toContain("/discovery/badminton-courts.jpg");
+    const emptyVenue = venue([], null);
+    const empty = ssr(<VenueGallery venue={emptyVenue} />);
+    expect(empty).toContain(venueIllustrationUrl(emptyVenue.id));
+    expect(empty).toContain('data-fallback="illustration"');
+    expect(empty).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(empty).not.toContain("/discovery/badminton-courts.jpg");
     expect(empty).not.toContain("Предыдущее фото");
+    expect(empty).not.toContain("Фото: Клуб");
+  });
+  it("replaces failed gallery photo with illustration alt/credit, not club photo credit", () => {
+    const item = { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } };
+    const v = venue([item]);
+    // VenueGallery hook order: index(0), notify ref(1), failed(2), drag/suppress refs(3-4).
+    resetHooks();
+    hooks.slots[0] = 0;
+    hooks.slots[2] = url("a");
+    const after = renderToStaticMarkup(<VenueGallery venue={v} />);
+    expect(after).toContain(venueIllustrationUrl(v.id));
+    expect(after).toContain('data-fallback="illustration"');
+    expect(after).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(after).toContain("Иллюстрация");
+    expect(after).not.toContain("Фото: Клуб");
+    expect(after).not.toContain(`src="${url("a")}"`);
   });
 
   it("does not invent illustration credit for an unattributed legacy cover", () => {

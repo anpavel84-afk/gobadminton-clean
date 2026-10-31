@@ -6,8 +6,9 @@ import { VenueCover } from "../venues/VenueCover";
 import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import "../../../styles/venue-popup.css";
 
-export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, galleryIndex, onGalleryIndexChange }: {
+export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, galleryIndex, onGalleryIndexChange }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number; onOpen: () => void; embedded?: boolean; coverSlot?: ReactNode;
+  coverFallback?: boolean;
   galleryIndex?: number;
   onGalleryIndexChange?: (index: number, item: GalleryItem | null) => void;
 }) {
@@ -20,11 +21,12 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
         size="compact"
         showCredit={false}
         coverSlot={coverSlot}
+        coverFallback={coverFallback}
         className="gb-venue-preview-cover"
         index={galleryIndex}
         onIndexChange={onGalleryIndexChange}
       />
-    : <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-preview-cover" />;
+    : <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-preview-cover" venueId={venue.id} />;
   return <div className="gb-venue-preview" role="region" aria-label="Выбранная площадка">
     {!embedded && <button type="button" className="gb-venue-handle" aria-label="Развернуть площадку" onClick={onOpen}><span /></button>}
     <button type="button" className="gb-venue-preview-button" aria-label={`Открыть площадку ${venue.name}`} onClick={onOpen}>

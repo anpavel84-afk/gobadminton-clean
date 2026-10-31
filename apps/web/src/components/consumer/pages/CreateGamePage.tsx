@@ -494,7 +494,7 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
                 aria-expanded={venuePickerOpen}
                 onClick={() => setVenuePickerOpen(true)}
               >
-                {selectedVenue && <VenueCover className="gb-venue-cover--thumb" cover={selectedVenue.cover} name={selectedVenue.name} />}
+                {selectedVenue && <VenueCover className="gb-venue-cover--thumb" cover={selectedVenue.cover} name={selectedVenue.name} venueId={selectedVenue.id} />}
                 <span className="gb-venue-picker-trigger-copy">
                   <span className="gb-venue-picker-trigger-title">{selectedVenue?.name ?? "Выберите площадку"}</span>
                   {selectedVenue && <span className="gb-venue-picker-trigger-address">{selectedVenue.address}</span>}

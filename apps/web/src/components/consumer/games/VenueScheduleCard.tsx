@@ -10,7 +10,7 @@ export function VenueScheduleCard({ venue, games, gamesReady, day, hasUpcoming, 
   venue: VenueSummary; games: Game[]; gamesReady: boolean; day: string; hasUpcoming: boolean; scheduleOnly?: boolean;
 }) {
   return <article className="gb-venue-schedule" aria-label={`Площадка: ${venue.name}`}>
-    {!scheduleOnly && <VenueCover name={venue.name} cover={venue.cover} />}
+    {!scheduleOnly && <VenueCover name={venue.name} cover={venue.cover} venueId={venue.id} />}
     <div className="gb-venue-schedule__body">
       {!scheduleOnly && <header><h2>{venue.name}</h2><p>{venue.address}</p></header>}
       <div className="gb-venue-schedule__actions">

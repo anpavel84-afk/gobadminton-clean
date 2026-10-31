@@ -41,6 +41,8 @@ vi.mock("react", async original => {
         runtime.pending.push(() => { state.cleanups.get(index)?.(); const cleanup = effect(); if (cleanup) state.cleanups.set(index, cleanup); else state.cleanups.delete(index); });
       }
     },
+    // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
+    useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) { instance().cursor++; return getSnapshot(); },
   };
 });
 vi.mock("../src/components/consumer/ConsumerShell", () => ({ ConsumerShell: ({ children }: { children: React.ReactNode }) => children }));

@@ -94,9 +94,10 @@ export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; time
   </button>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, galleryIndex, onGalleryIndexChange }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, galleryIndex, onGalleryIndexChange }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
+  coverFallback?: boolean;
   galleryIndex?: number;
   onGalleryIndexChange?: (index: number, item: GalleryItem | null) => void;
 }) {
@@ -152,6 +153,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       venue={venue}
       className="gb-venue-sheet-cover"
       coverSlot={coverSlot}
+      coverFallback={coverFallback}
       showCredit
       index={galleryIndex}
       onIndexChange={onGalleryIndexChange}

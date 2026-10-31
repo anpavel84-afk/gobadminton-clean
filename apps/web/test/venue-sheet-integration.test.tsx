@@ -27,6 +27,8 @@ vi.mock("react", async original => ({
     const i = h.cursor++; const prev = h.slots[i] as unknown[] | undefined;
     if (!prev || deps.some((v, n) => v !== prev[n])) { h.slots[i] = deps; h.effects.push(() => { h.cleanups[i]?.(); h.cleanups[i] = effect() || (() => {}); }); }
   },
+  // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
+  useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) { h.cursor++; return getSnapshot(); },
 }));
 vi.mock("../src/components/consumer/radar/RadarPage", () => ({ RadarPage: () => null }));
 // This suite verifies map lifetime and venue navigation, not authenticated Game UI.
