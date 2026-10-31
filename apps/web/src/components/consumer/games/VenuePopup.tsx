@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent, typ
 import { DesktopMapInspector, useDesktopMapInspector } from "./DesktopMapInspector";
 
 type Drag = { id: number; x: number; y: number; lastY: number; time: number; velocity: number; origin: boolean; start: number; travel: number; axis: "pending" | "vertical"; target: HTMLButtonElement };
-type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement };
+type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement; galleryOwned?: boolean };
 
 /** Shared expanded-shell keyboard/focus/body-overflow lifecycle for VenueSheet and player detail. */
 export function useVenuePopupModalLifecycle({
@@ -144,8 +144,16 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
     rememberCompactGeometry(travel);
     suppress.current = false;
     const source = event.target as HTMLElement;
+    const gallery = source.closest?.(".gb-venue-gallery") as HTMLElement | null;
     const previewButton = source.closest?.(".gb-venue-preview-button") as HTMLButtonElement | null;
     const captureTarget = previewButton ?? event.currentTarget;
+    // Compact gallery already captures for horizontal swipes. Do not override
+    // onto the preview button; keep a pending vertical takeover instead.
+    if (gallery) {
+      compactDrag.current = { id: event.pointerId, x: event.clientX, y: event.clientY,
+        travel, axis: "pending", target: captureTarget, galleryOwned: true };
+      return;
+    }
     captureTarget.setPointerCapture(event.pointerId);
     compactDrag.current = { id: event.pointerId, x: event.clientX, y: event.clientY,
       travel, axis: "pending", target: captureTarget };
@@ -157,9 +165,18 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
     const dy = event.clientY - current.y;
     if (current.axis === "pending") {
       if (Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
-      if (Math.abs(dx) >= Math.abs(dy)) { compactDrag.current = null; return; }
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        // Horizontal: leave gallery ownership alone; drop popup pending.
+        compactDrag.current = null;
+        return;
+      }
       current.axis = "vertical";
+      current.galleryOwned = false;
       suppress.current = true;
+      // Vertical parent takeover after gallery axis-lock released capture.
+      if (!current.target.hasPointerCapture(current.id)) {
+        try { current.target.setPointerCapture(current.id); } catch { /* already released */ }
+      }
     }
     event.preventDefault();
     setPosition(Math.max(0, Math.min(current.travel, -dy)));
@@ -230,6 +247,9 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
         // Clear only stale suppression at the start of a fresh press so the first
         // expanded Close/Back tap is never swallowed after an iPhone swipe.
         onPointerDownCapture={desktop ? undefined : () => {
+          // Clear a stale gallery-deferred pending left after a horizontal swipe
+          // (gallery owned capture, so popup never saw pointerup).
+          if (!drag.current && compactDrag.current?.galleryOwned) releaseCompact();
           if (!drag.current && !compactDrag.current) suppress.current = false;
         }}
         onPointerDown={desktop || expanded ? undefined : compactPointerDown}

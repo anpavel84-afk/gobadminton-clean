@@ -149,6 +149,8 @@ export function VenueGallery({
     if (items.length < 2 || event.button !== 0) return;
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: "pending" };
     event.currentTarget.setPointerCapture(event.pointerId);
+    // Do not stopPropagation: VenuePopup tracks pending vertical takeover without
+    // stealing capture from this gallery target.
   }
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
     const currentDrag = drag.current;
@@ -158,11 +160,13 @@ export function VenueGallery({
     if (currentDrag.axis === "pending") {
       if (Math.abs(dx) < AXIS_LOCK && Math.abs(dy) < AXIS_LOCK) return;
       if (Math.abs(dy) >= Math.abs(dx)) {
+        // Vertical: release so the enclosing VenuePopup can take over at axis lock.
         drag.current = null;
         try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* already released */ }
         return;
       }
       currentDrag.axis = "x";
+      event.preventDefault();
       event.stopPropagation();
     }
     if (currentDrag.axis === "x") {

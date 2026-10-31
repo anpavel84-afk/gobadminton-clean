@@ -39,6 +39,7 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
  useEffect(()=>()=>preparation.current?.abort(),[]);
  const [receipt,setReceipt]=useState<Receipt|null>(null);
  const [queue,setQueue]=useState<Blob[]>([]);
+ const [replaceId,setReplaceId]=useState<string|null>(null);
  const [evidence,setEvidence]=useState(emptyEvidence);
  const [busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
  const [confirmId,setConfirmId]=useState<string|null>(null);
@@ -68,6 +69,16 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
  }
  async function select(files:FileList|null){
   if(!files||!receipt)return;
+  if(replaceId){
+   const file=files[0];
+   if(!file)return;
+   setBusy(true);setError("");
+   try{
+    const controller=new AbortController();preparation.current=controller;
+    setQueue([await preprocessAvatar(file,controller.signal,{x:.5,y:.5})]);
+   }catch(e){setError(e instanceof Error?e.message:errorMessage(e));}finally{setBusy(false);}
+   return;
+  }
   const remaining=MAX-receipt.items.length-queue.length;
   if(remaining<=0){setError("У площадки уже максимум 8 изображений.");return;}
   setBusy(true);setError("");
@@ -120,6 +131,9 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
    if(operation.method==="POST"&&operation.path.endsWith("/gallery")&&operation.body instanceof Blob){
     setQueue(current=>current.slice(1));
    }
+   if(operation.method==="PUT"&&operation.body instanceof Blob){
+    setQueue([]);setReplaceId(null);
+   }
    await changed();
   }catch(e){
    if(e instanceof AdminError&&e.status<500&&e.status!==408&&e.code!=="ADMIN_UPSTREAM_UNAVAILABLE"&&e.code!=="ADMIN_STEP_UP_REQUIRED")setPending(null);
@@ -129,6 +143,13 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
  async function uploadNext(){
   if(!receipt||!queue[0]||!evidence.permissionBasis.trim()){setError("Укажите основание права на изображение.");return;}
   const blob=queue[0];
+  if(replaceId){
+   await run({
+    method:"PUT",path:`/v1/admin/venues/${id}/gallery/${replaceId}`,body:blob,key:crypto.randomUUID(),version:receipt.version,
+    headers:evidenceHeaders(),
+   });
+   return;
+  }
   const operation:Pending={
    method:"POST",path:`/v1/admin/venues/${id}/gallery`,body:blob,key:crypto.randomUUID(),version:receipt.version,
    headers:evidenceHeaders(),
@@ -162,7 +183,16 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
    body:JSON.stringify({expectedVersion:receipt.version,orderedIds:next}),key:crypto.randomUUID(),version:receipt.version,headers:{},
   });
  }
+ function beginReplace(itemId:string){
+  if(busy||reading||!!pending)return;
+  setReplaceId(itemId);setQueue([]);setConfirmId(null);setError("");setNotice("");
+ }
+ function cancelReplace(){
+  if(busy||!!pending)return;
+  setReplaceId(null);setQueue([]);
+ }
  const remaining=receipt?Math.max(0,MAX-receipt.items.length-queue.length):0;
+ const fileDisabled=busy||reading||!!pending||!receipt||(replaceId?false:remaining<=0);
  return <div className="panel"><h3>Галерея площадки</h3>
  {error&&<div className="notice danger" role="alert">{error}<p>При ошибке проверки изображения прежние файлы сохраняются. Можно повторить попытку.</p><button className="button outline" disabled={busy||reading} onClick={()=>void confirmAccess()}>Подтвердить вход</button></div>}
  {notice&&<p role="status">{notice}</p>}
@@ -177,15 +207,17 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
    <button type="button" className="button outline" disabled={busy||reading||!!pending||item.position===0} onClick={()=>void move(item.id,-1)}>↑</button>
    <button type="button" className="button outline" disabled={busy||reading||!!pending||item.position>=receipt.items.length-1} onClick={()=>void move(item.id,1)}>↓</button>
    <button type="button" className="button outline" disabled={busy||reading||!!pending||item.isMain} onClick={()=>void setMain(item.id)}>Сделать основным</button>
+   <button type="button" className="button outline" disabled={busy||reading||!!pending||(!!replaceId&&replaceId!==item.id)} onClick={()=>beginReplace(item.id)}>{replaceId===item.id?"Замена выбрана":"Заменить"}</button>
    <button type="button" className="button outline" disabled={busy||reading||!!pending} onClick={()=>setConfirmId(item.id)}>Удалить</button>
   </div>
+  {replaceId===item.id&&<div className="notice"><p>Выберите новое изображение. Прежнее останется до успешной проверки и сохранения.</p><button type="button" className="button outline" disabled={busy||!!pending} onClick={cancelReplace}>Отменить замену</button></div>}
   {confirmId===item.id&&<div className="notice"><p>Удалить это изображение площадки?</p><div className="actions"><button className="button" disabled={busy} onClick={()=>void remove(item.id)}>Подтвердить удаление</button><button className="button outline" disabled={busy} onClick={()=>setConfirmId(null)}>Отмена</button></div></div>}
  </li>)}</ol>}
  {receipt&&receipt.items.length===0&&<div className="notice">Нет изображений — используется стандартная обложка.</div>}
- <label className="form-field"><span>Выбрать JPEG, PNG или WebP (до {remaining} из 8)</span>
-  <input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={busy||reading||!!pending||!receipt||remaining<=0}
+ <label className="form-field"><span>{replaceId?"JPEG, PNG или WebP для замены":`Выбрать JPEG, PNG или WebP (до ${remaining} из 8)`}</span>
+  <input type="file" accept="image/jpeg,image/png,image/webp" multiple={!replaceId} disabled={fileDisabled}
    onChange={e=>{const files=e.target.files;e.target.value="";void select(files);}}/></label>
- {preview&&<><img className="venue-cover" src={preview} alt="Предпросмотр нового изображения"/><p>В очереди: {queue.length}. Публикация — после проверки изображения сервером.</p></>}
+ {preview&&<><img className="venue-cover" src={preview} alt={replaceId?"Предпросмотр замены":"Предпросмотр нового изображения"}/><p>{replaceId?"Замена подготовлена. Старое изображение видно до успешного сохранения.":`В очереди: ${queue.length}. Публикация — после проверки изображения сервером.`}</p></>}
  <fieldset className="venue-gallery-evidence" disabled={busy||reading||!!pending||!receipt}>
   <legend>Источник и основание права (без выдуманной лицензии)</legend>
   <label className="form-field"><span>Тип</span><select value={evidence.creditKind} onChange={e=>{
@@ -201,7 +233,7 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
  </fieldset>
  {reading&&<p role="status">Загрузка текущей галереи…</p>}{busy&&<p role="status">Подготовка, подтверждение входа или сохранение…</p>}
  <div className="actions">
-  <button className="button" disabled={busy||reading||!queue[0]||!!pending||!receipt} onClick={()=>void uploadNext()}>Загрузить следующее</button>
+  <button className="button" disabled={busy||reading||!queue[0]||!!pending||!receipt} onClick={()=>void uploadNext()}>{replaceId?"Сохранить замену":"Загрузить следующее"}</button>
   <button className="button outline" disabled={busy||reading||queue.length===0||!!pending} onClick={()=>setQueue([])}>Очистить очередь</button>
  </div>
  {pending&&!busy&&<div className="notice"><p>Ответ не получен. Повторите то же действие для получения результата.</p><button className="button" onClick={()=>void run(pending)}>Повторить то же действие</button></div>}

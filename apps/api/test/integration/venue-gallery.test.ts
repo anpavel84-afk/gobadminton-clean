@@ -333,6 +333,115 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     )).rowCount).toBe(0);
   });
 
+  it("normalizes mixed-uploader gallery on retirement: compact positions, elect main/cover, version bump; earlier retired stay hidden", async () => {
+    const uploaderA = await actor("content_manager");
+    const uploaderB = await actor("content_manager");
+    const created = await app.inject({
+      method: "POST", url: "/v1/admin/venues", headers: headers(uploaderA),
+      payload: { cityId, name: "Synthetic mixed " + randomUUID(), address: "Synthetic address", timezone: "Europe/Moscow", latitude: 55.75, longitude: 37.62, reasonCode: "synthetic_fixture" },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const v = created.json() as { id: string; version: number };
+    const a0 = await add(v.id, 1, uploaderA);
+    expect(a0.statusCode, a0.body).toBe(200);
+    // Insert B at position 1 and second A at position 2 via direct rows so both uploaders own media.
+    const approvalB = (await pool.query<{ id: string }>(
+      "INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id",
+      ["b".repeat(64)],
+    )).rows[0]!.id;
+    const approvalA2 = (await pool.query<{ id: string }>(
+      "INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id",
+      ["c".repeat(64)],
+    )).rows[0]!.id;
+    const keyB = `${"b".repeat(64)}.png`;
+    const keyA2 = `${"c".repeat(64)}.png`;
+    await pool.query(
+      `INSERT INTO venue_gallery_items(
+         venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+         credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
+       ) VALUES
+       ($1,1,false,$2,$3,$4,'illustration','Иллюстрация',NULL,NULL,NULL,'Письменное согласие клуба',NULL),
+       ($1,2,false,$5,$6,$7,'illustration','Иллюстрация',NULL,NULL,NULL,'Письменное согласие клуба',NULL)`,
+      [v.id, keyB, approvalB, uploaderB.userId, keyA2, approvalA2, uploaderA.userId],
+    );
+    await pool.query("UPDATE venues SET version=version+1 WHERE id=$1", [v.id]);
+    const beforeB = (await pool.query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [v.id])).rows[0]!.version;
+    const contactsBefore = (await pool.query<{ public_contacts: unknown }>("SELECT public_contacts FROM venues WHERE id=$1", [v.id])).rows[0]!.public_contacts;
+
+    await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1", [uploaderB.userId]);
+    const afterB = await pool.query<{ position: number; actor_id: string; is_main: boolean; active: boolean; storage_key: string }>(
+      "SELECT position, actor_id, is_main, active, storage_key FROM venue_gallery_items WHERE venue_id=$1 ORDER BY position, active DESC",
+      [v.id],
+    );
+    const activeAfterB = afterB.rows.filter((row) => row.active);
+    expect(activeAfterB).toHaveLength(2);
+    expect(activeAfterB.map((row) => row.position)).toEqual([0, 1]);
+    expect(activeAfterB.every((row) => row.actor_id === uploaderA.userId)).toBe(true);
+    expect(afterB.rows.some((row) => row.storage_key === keyB && row.active === false)).toBe(true);
+    const versionAfterB = (await pool.query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [v.id])).rows[0]!.version;
+    expect(versionAfterB).toBe(beforeB + 1);
+    expect((await pool.query("SELECT public_contacts FROM venues WHERE id=$1", [v.id])).rows[0]?.public_contacts).toEqual(contactsBefore);
+
+    const addAfter = await add(v.id, versionAfterB, uploaderA);
+    expect(addAfter.statusCode, addAfter.body).toBe(200);
+    expect((addAfter.json().items as { position: number }[]).map((x) => x.position).sort()).toEqual([0, 1, 2]);
+
+    // Separate venue: retire main uploader while another active uploader survives → elect main/cover.
+    const mainOwner = await actor("content_manager");
+    const otherOwner = await actor("content_manager");
+    const created2 = await app.inject({
+      method: "POST", url: "/v1/admin/venues", headers: headers(mainOwner),
+      payload: { cityId, name: "Synthetic elect " + randomUUID(), address: "Synthetic address", timezone: "Europe/Moscow", latitude: 55.76, longitude: 37.63, reasonCode: "synthetic_fixture" },
+    });
+    expect(created2.statusCode, created2.body).toBe(201);
+    const v2 = created2.json() as { id: string };
+    const firstMain = await add(v2.id, 1, mainOwner);
+    expect(firstMain.statusCode, firstMain.body).toBe(200);
+    const approvalOther = (await pool.query<{ id: string }>(
+      "INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id",
+      ["d".repeat(64)],
+    )).rows[0]!.id;
+    const keyOther = `${"d".repeat(64)}.png`;
+    await pool.query(
+      `INSERT INTO venue_gallery_items(
+         venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+         credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
+       ) VALUES ($1,1,false,$2,$3,$4,'illustration','Иллюстрация',NULL,NULL,NULL,'Письменное согласие клуба',NULL)`,
+      [v2.id, keyOther, approvalOther, otherOwner.userId],
+    );
+    const beforeMain = (await pool.query<{ version: number; cover_actor_id: string }>(
+      "SELECT version, cover_actor_id FROM venues WHERE id=$1", [v2.id],
+    )).rows[0]!;
+    expect(beforeMain.cover_actor_id).toBe(mainOwner.userId);
+    await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1", [mainOwner.userId]);
+    const afterMain = await pool.query<{ position: number; actor_id: string; is_main: boolean; active: boolean }>(
+      "SELECT position, actor_id, is_main, active FROM venue_gallery_items WHERE venue_id=$1 AND active ORDER BY position",
+      [v2.id],
+    );
+    expect(afterMain.rows).toHaveLength(1);
+    expect(afterMain.rows[0]).toMatchObject({ position: 0, actor_id: otherOwner.userId, is_main: true, active: true });
+    const cover = (await pool.query<{ cover_actor_id: string; cover_key: string; version: number }>(
+      "SELECT cover_actor_id, cover_key, version FROM venues WHERE id=$1", [v2.id],
+    )).rows[0]!;
+    expect(cover.cover_actor_id).toBe(otherOwner.userId);
+    expect(cover.cover_key).toBe(keyOther);
+    expect(cover.version).toBe(beforeMain.version + 1);
+    expect((await publicVenue(v2.id)).json().profile.gallery.items).toHaveLength(1);
+    // Earlier-retired B media stays hidden even after B reactivation.
+    expect((await pool.query(
+      "SELECT 1 FROM venue_gallery_items WHERE venue_id=$1 AND storage_key=$2 AND active",
+      [v.id, keyB],
+    )).rowCount).toBe(0);
+    await pool.query("UPDATE users SET status='active' WHERE id=$1", [uploaderB.userId]);
+    expect((await pool.query(
+      "SELECT 1 FROM venue_gallery_items WHERE venue_id=$1 AND storage_key=$2 AND active",
+      [v.id, keyB],
+    )).rowCount).toBe(0);
+    expect((await publicVenue(v.id)).json().profile.gallery.items.every(
+      (entry: { url: string }) => !entry.url.includes("b".repeat(16)),
+    )).toBe(true);
+  });
+
   it("preserves original uploader on projected cover when superadmin setMain; retirement clears public gallery+cover without resurrection", async () => {
     const uploader = await actor("content_manager");
     const created = await app.inject({

@@ -99,3 +99,69 @@ it("definite version conflict clears pending without blind retry", async () => {
   assert.equal(h.commits(), 0);
   assert.equal(h.state.receipt.version, 7);
 });
+
+it("PUT gallery item replacement keeps identical idempotency/version transport on uncertain replay", async () => {
+  assert.ok(component.includes('method:"PUT"'));
+  assert.ok(component.includes("/gallery/${replaceId}"));
+  assert.ok(component.includes("setReplaceId"));
+  const blob = new Blob([new Uint8Array([9, 9, 9])], { type: "image/png" });
+  const operation = {
+    method: "PUT" as const,
+    path: "/v1/admin/venues/x/gallery/a0000000-0000-4000-8000-000000000099",
+    body: blob,
+    key: "22222222-2222-4222-8222-222222222222",
+    version: 7,
+    headers: { "X-Gallery-Permission-Basis": encodeURIComponent("basis") },
+  };
+  const requests: { method: string; headers: Record<string, string> }[] = [];
+  const receipts = new Map<string, unknown>();
+  let commits = 0;
+  const fetch = async (_url: string, request: { method: string; body: Blob | string; headers: Record<string, string> }) => {
+    requests.push({ method: request.method, headers: request.headers });
+    const key = request.headers["Idempotency-Key"];
+    assert.ok(key);
+    if (!receipts.has(key)) {
+      assert.equal(request.method, "PUT");
+      assert.equal(Number(request.headers["X-Venue-Version"]), 7);
+      commits++;
+      receipts.set(key, { version: 8, items: [{ id: "a0000000-0000-4000-8000-000000000099" }] });
+      throw new TypeError("lost after replace commit");
+    }
+    return new Response(JSON.stringify(receipts.get(key)), { status: 200 });
+  };
+  let pending: typeof operation | null = operation;
+  let receipt = { version: 7 };
+  async function run(op: typeof operation) {
+    const current = pending ?? op;
+    pending = current;
+    try {
+      const response = await fetch(current.path, {
+        method: current.method, body: current.body,
+        headers: {
+          "Content-Type": current.body.type,
+          "X-CSRF-Token": "csrf",
+          "Idempotency-Key": current.key,
+          "X-Venue-Version": String(current.version),
+          ...current.headers,
+        },
+      });
+      if (!response.ok) throw new Error("failed");
+      receipt = await response.json() as { version: number };
+      pending = null;
+    } catch (e) {
+      if (e instanceof Error && !(e instanceof TypeError)) pending = null;
+      throw e;
+    }
+  }
+  await assert.rejects(() => run(operation));
+  assert.ok(pending);
+  assert.equal(receipt.version, 7);
+  await run(pending!);
+  assert.equal(commits, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0]!.method, "PUT");
+  assert.equal(requests[1]!.headers["Idempotency-Key"], operation.key);
+  assert.equal(requests[1]!.headers["X-Venue-Version"], "7");
+  assert.equal(receipt.version, 8);
+  assert.equal(pending, null);
+});

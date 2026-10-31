@@ -6,6 +6,21 @@
 .gb-venue-picker-option > .gb-venue-gallery-wrap {
   width: 64px; height: 64px; justify-self: center;
 }
+/* VenuePage .gb-venue-media inherits fixed 300/196 + overflow:hidden from games.css.
+   Scoped override: let image+credit flow; keep reasonable image heights (not game hero). */
+.gb-venue-media:has(> .gb-venue-gallery-wrap) {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+.gb-venue-media > .gb-venue-gallery-wrap > .gb-venue-gallery {
+  max-height: 300px;
+}
+@media (max-width: 600px) {
+  .gb-venue-media > .gb-venue-gallery-wrap > .gb-venue-gallery {
+    max-height: 196px;
+  }
+}
 .gb-venue-gallery {
   position: relative;
   display: block;
@@ -24,6 +39,8 @@
   width: 64px;
   height: 64px;
   border-radius: var(--gb-radius-sm);
+  /* Match compact preview surface: horizontal image gesture must not pan the map. */
+  touch-action: none;
 }
 .gb-venue-gallery__frame {
   display: block;

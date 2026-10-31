@@ -72,15 +72,84 @@ CREATE TRIGGER venue_gallery_cleanup
   FOR EACH ROW EXECUTE FUNCTION queue_venue_gallery_cleanup();
 
 -- Account retirement cannot leave gallery media that reappears on reactivation.
+-- Mixed-uploader galleries: deactivate retired rows, compact survivors 0..N-1,
+-- keep/elect eligible main, sync legacy cover to original uploader, bump version
+-- for every affected venue (including non-main retirement). Uses catalog advisory
+-- + venue/gallery row locks; does not touch public_contacts.
 CREATE OR REPLACE FUNCTION retire_inactive_venue_cover() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  vid uuid;
+  survivor_ids uuid[];
+  survivor_keys text[];
+  i int;
+  main_id uuid;
+  main_key text;
+  main_approval uuid;
+  main_actor uuid;
+  main_kind text;
+  main_text text;
+  main_url text;
 BEGIN
   IF NEW.status <> 'active' AND NEW.status IS DISTINCT FROM OLD.status THEN
-    UPDATE venues SET cover_key = NULL, cover_moderation_approval_id = NULL, cover_actor_id = NULL,
-      cover_credit_kind = NULL, cover_credit_text = NULL, cover_credit_url = NULL,
-      version = version + 1, updated_at = now()
-      WHERE cover_actor_id = NEW.id AND cover_key IS NOT NULL;
+    PERFORM pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'));
     UPDATE venue_gallery_items SET active = false, is_main = false, updated_at = now()
       WHERE actor_id = NEW.id AND active;
+    FOR vid IN
+      SELECT id FROM (
+        SELECT DISTINCT venue_id AS id FROM venue_gallery_items WHERE actor_id = NEW.id
+        UNION
+        SELECT id FROM venues WHERE cover_actor_id = NEW.id AND cover_key IS NOT NULL
+      ) affected
+      ORDER BY id
+    LOOP
+      PERFORM 1 FROM venues WHERE id = vid FOR UPDATE;
+      PERFORM 1 FROM venue_gallery_items WHERE venue_id = vid AND active ORDER BY position FOR UPDATE;
+      SELECT COALESCE(array_agg(id ORDER BY position), ARRAY[]::uuid[]),
+             COALESCE(array_agg(storage_key ORDER BY position), ARRAY[]::text[])
+        INTO survivor_ids, survivor_keys
+        FROM venue_gallery_items WHERE venue_id = vid AND active;
+      IF coalesce(array_length(survivor_ids, 1), 0) > 0 THEN
+        UPDATE venue_gallery_items SET active = false, updated_at = now()
+          WHERE venue_id = vid AND id = ANY(survivor_ids);
+        FOR i IN 1 .. array_length(survivor_ids, 1) LOOP
+          UPDATE venue_gallery_items
+            SET position = (i - 1), active = true, updated_at = now()
+            WHERE id = survivor_ids[i];
+        END LOOP;
+        DELETE FROM avatar_media_gc WHERE storage_key = ANY(survivor_keys);
+        SELECT id INTO main_id FROM venue_gallery_items
+          WHERE venue_id = vid AND active AND is_main LIMIT 1;
+        IF main_id IS NULL THEN
+          SELECT id INTO main_id FROM venue_gallery_items
+            WHERE venue_id = vid AND active ORDER BY position ASC LIMIT 1;
+          IF main_id IS NOT NULL THEN
+            UPDATE venue_gallery_items SET is_main = true, updated_at = now() WHERE id = main_id;
+          END IF;
+        END IF;
+        SELECT storage_key, moderation_approval_id, actor_id, credit_kind, credit_text, credit_url
+          INTO main_key, main_approval, main_actor, main_kind, main_text, main_url
+          FROM venue_gallery_items WHERE id = main_id;
+        UPDATE venues SET
+          cover_key = main_key,
+          cover_moderation_approval_id = main_approval,
+          cover_actor_id = main_actor,
+          cover_credit_kind = main_kind,
+          cover_credit_text = main_text,
+          cover_credit_url = main_url,
+          version = version + 1,
+          updated_at = now()
+          WHERE id = vid;
+        DELETE FROM avatar_media_gc WHERE storage_key IN (
+          SELECT storage_key FROM venue_gallery_items WHERE venue_id = vid AND active
+        );
+      ELSE
+        UPDATE venues SET
+          cover_key = NULL, cover_moderation_approval_id = NULL, cover_actor_id = NULL,
+          cover_credit_kind = NULL, cover_credit_text = NULL, cover_credit_url = NULL,
+          version = version + 1, updated_at = now()
+          WHERE id = vid;
+      END IF;
+    END LOOP;
   END IF;
   RETURN NULL;
 END;
