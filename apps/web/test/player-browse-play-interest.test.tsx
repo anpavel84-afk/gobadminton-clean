@@ -131,8 +131,9 @@ describe("player browse play-interest intent and capabilities", () => {
   });
 
   it("tutorial and status copy say Давай сыграем / mutual-only match, never auto-friend", () => {
-    expect(deckSource).toContain("Давай сыграем — предложение сыграть");
+    expect(deckSource).toContain("Свайп вправо — давай сыграем");
     expect(deckSource).toContain("Совпадение только когда оба хотите сыграть");
+    expect(deckSource).not.toContain("Добавить в друзья");
     expect(playInterestStatus.outgoing).toBe("Предложение отправлено");
     expect(playInterestStatus.mutual).toBe("Вы оба хотите сыграть");
     expect(playInterestSource).toContain("Отменить предложение");

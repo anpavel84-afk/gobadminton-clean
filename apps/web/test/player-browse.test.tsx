@@ -44,12 +44,16 @@ import {
   PLAYER_BROWSE_PROJECT_MS,
   PLAYER_BROWSE_SLIDE_MS,
   PLAYER_BROWSE_TUTORIAL_KEY,
+  PLAYER_BROWSE_TUTORIAL_V3_PREFIX,
+  playerBrowseTutorialStorageKey,
   popSkip,
   prefersBrowseReducedMotion,
+  persistTutorialCompleted,
   pushSkip,
   readBrowseHistoryState,
-  readTutorialDismissed,
+  readTutorialCompleted,
   reconstructBrowseBio,
+  tutorialActorKey,
   relationshipBlocksNewRequest,
   releaseCommitted,
   sampleBrowseVelocity,
@@ -323,13 +327,29 @@ describe("player browse swipe boundaries", () => {
 });
 
 describe("player browse tutorial marker", () => {
-  it("reads versioned boolean only and falls back to memory", () => {
+  it("reads per-actor localStorage completion and falls back to memory; legacy v2 key alone is not enough", () => {
+    expect(PLAYER_BROWSE_TUTORIAL_KEY).toBe("gb-player-gallery-tutorial-v2");
+    expect(PLAYER_BROWSE_TUTORIAL_V3_PREFIX).toBe("gb-player-gallery-tutorial-v3");
+    expect(tutorialActorKey("user-a")).toBe("user-a");
+    expect(tutorialActorKey("")).toBe("guest");
+    expect(tutorialActorKey(null)).toBe("guest");
+    expect(playerBrowseTutorialStorageKey("user-a")).toBe("gb-player-gallery-tutorial-v3:user-a");
+    expect(playerBrowseTutorialStorageKey("guest")).toBe("gb-player-gallery-tutorial-v3:guest");
+    const store = new Map<string, string>();
     const storage = {
-      getItem: (key: string) => (key === PLAYER_BROWSE_TUTORIAL_KEY ? "1" : null),
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
     };
-    expect(readTutorialDismissed(storage, false)).toBe(true);
-    expect(readTutorialDismissed({ getItem: () => null }, true)).toBe(true);
-    expect(readTutorialDismissed({ getItem: () => { throw new Error("denied"); } }, false)).toBe(false);
+    expect(readTutorialCompleted(storage, "user-a", false)).toBe(false);
+    expect(readTutorialCompleted({ getItem: () => null }, "user-a", true)).toBe(true);
+    expect(readTutorialCompleted({ getItem: () => { throw new Error("denied"); } }, "user-a", false)).toBe(false);
+    // Legacy global session v2 marker must not suppress another actor.
+    store.set(PLAYER_BROWSE_TUTORIAL_KEY, "1");
+    expect(readTutorialCompleted(storage, "user-a", false)).toBe(false);
+    expect(persistTutorialCompleted(storage, "user-a")).toBe(true);
+    expect(readTutorialCompleted(storage, "user-a", false)).toBe(true);
+    expect(readTutorialCompleted(storage, "user-b", false)).toBe(false);
+    expect(readTutorialCompleted(storage, "guest", false)).toBe(false);
   });
 
   it("keeps inert on card surface only so the tutorial stays interactive", () => {
@@ -341,10 +361,59 @@ describe("player browse tutorial marker", () => {
     expect(deckOpen).toBeGreaterThan(-1);
     expect(surfaceInert).toBeGreaterThan(deckOpen);
     expect(tutorial).toBeGreaterThan(surfaceInert);
-    // Tutorial must not sit inside the inert surface block that closes before the shade.
+    // Tutorial must not sit inside the inert surface block that closes before the coachmark.
     const surfaceCloseBeforeTutorial = deckSource.slice(surfaceInert, tutorial);
     expect(surfaceCloseBeforeTutorial).toContain("</div>}");
     expect(surfaceCloseBeforeTutorial).toMatch(/pb-controls|pb-profile-bottom|pb-friend-slot/);
+    expect(deckSource).toContain("Свайп влево — пропустить");
+    expect(deckSource).toContain("Коснитесь, чтобы продолжить");
+    expect(deckSource).toContain("Свайп вправо — давай сыграем");
+    expect(deckSource).toContain("advanceTutorial");
+    expect(deckSource).toContain("finishTutorial");
+    expect(deckSource).toContain("abortTutorial");
+    expect(deckSource).toContain("browseTutorialLocalStorage");
+    expect(deckSource).toContain("identityReady");
+    // QA-01: open/render/finish only on ready auth or confirmed guest — not loading/error.
+    expect(deckSource).toMatch(/const identityReady = authState === "ready" \|\| authState === "guest"/);
+    expect(deckSource).toMatch(/showHelp = !desktop && identityReady && tutorialOpen/);
+    expect(deckSource).toMatch(/disabled=\{!identityReady\} onClick=\{openTutorial\}/g);
+    expect(deckSource).toMatch(/const openTutorial = useCallback\(\(\) => \{[\s\S]*?if \(!identityReady\) return;/);
+    expect(deckSource).toMatch(/if \(!identityReady \|\| \(authState === "ready" && !me\?\.id\)\)/);
+    expect(deckSource).toMatch(/tutorialActorSeenRef\.current !== null && tutorialActorSeenRef\.current !== actor/);
+    expect(deckSource).not.toContain("Свайп вверх");
+    expect(deckSource).not.toContain("pb-tutorial-shade");
+    expect(cssSource).not.toContain("backdrop-filter: blur");
+    expect(cssSource).toContain("pb-tutorial-cue--skip");
+    expect(cssSource).toContain("pb-tutorial-cue--play");
+  });
+
+  it("A→B memory is actor-bound same-render and coach focus binds on hit mount", () => {
+    // Guard the live ordering bug: bool memory true for A still visible when B's auto-effect
+    // runs in the same render after identity reset — would consume blankGate and skip B's guide.
+    expect(deckSource).toContain("tutorialCompletedActor");
+    expect(deckSource).toMatch(/tutorialCompletedActor === tutorialActor/);
+    expect(deckSource).toMatch(/setTutorialCompletedActor\(actor\)/);
+    expect(deckSource).not.toContain("setTutorialMemory(true)");
+    expect(deckSource).not.toContain("setTutorialMemory(false)");
+    expect(deckSource).not.toMatch(/const \[tutorialMemory, setTutorialMemory\] = useState\(false\)/);
+    // Unresolved identity retires teaching without updating actor-seen; resolved actor change re-arms.
+    expect(deckSource).toMatch(/if \(!identityReady\) \{\s*setTutorialOpen\(false\);\s*setTutorialStep\(1\);\s*return;/);
+    const identityFx = deckSource.indexOf("tutorialActorSeenRef.current !== tutorialActor");
+    expect(identityFx).toBeGreaterThan(-1);
+    const identityBlock = deckSource.slice(identityFx, identityFx + 280);
+    expect(identityBlock).toContain("tutorialBlankGateRef.current = true");
+    expect(identityBlock).not.toContain("setTutorialCompletedActor(null)");
+    // Focus when showHelp mounts the coach button — not a tutorialOpen-only effect that can
+    // rAF before the hit exists (abort→reopen Enter). Stable callback avoids step-2 remount churn.
+    expect(deckSource).toContain("bindTutorialHitRef");
+    expect(deckSource).toMatch(/ref=\{bindTutorialHitRef\}/);
+    expect(deckSource).toMatch(
+      /const bindTutorialHitRef = useCallback\(\(node: HTMLButtonElement \| null\) => \{\s*tutorialRef\.current = node;\s*if \(node\) node\.focus\(\{ preventScroll: true \}\);\s*\}, \[\]\)/,
+    );
+    expect(deckSource).not.toContain("if (tutorialOpen) requestAnimationFrame(() => tutorialRef.current?.focus");
+    // Escape/X still returns focus to the deck; fullscreen close focus unchanged.
+    expect(deckSource).toMatch(/abortTutorial[\s\S]*?deckRef\.current\?\.focus\(\{ preventScroll: true \}/);
+    expect(deckSource).toContain("closeBtnRef.current?.focus({ preventScroll: true })");
   });
 
   it("ignores withdrawn play-interest receipts in onConfirmed toast/auto-advance", () => {
