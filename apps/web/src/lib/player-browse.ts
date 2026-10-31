@@ -9,8 +9,13 @@ export const PLAYER_BROWSE_DESKTOP_MQ = "(min-width: 1024px)";
 /** Visible horizontal player change on desktop; reduced-motion uses 0. */
 export const PLAYER_BROWSE_SLIDE_MS = 240;
 
+/** Legacy sessionStorage global marker (v2). Kept for history; not sufficient for per-user guide. Do not wipe. */
 export const PLAYER_BROWSE_TUTORIAL_KEY = "gb-player-gallery-tutorial-v2";
+/** Per-actor localStorage completion prefix (v3). Value `"1"` only after real finish. */
+export const PLAYER_BROWSE_TUTORIAL_V3_PREFIX = "gb-player-gallery-tutorial-v3";
 export const PLAYER_BROWSE_HISTORY_KEY = "gbPlayerBrowse";
+
+export type PlayerBrowseTutorialStep = 1 | 2;
 
 export function browseSlideDurationMs(reducedMotion: boolean): number {
   return reducedMotion ? 0 : PLAYER_BROWSE_SLIDE_MS;
@@ -46,18 +51,46 @@ export function writeBrowseViewSearch(search: string, view: PlayerBrowseView): s
   return value ? `?${value}` : "";
 }
 
-export function readTutorialDismissed(storage: Pick<Storage, "getItem"> | null | undefined, memory: boolean): boolean {
+/** Authenticated actors key by `me.id`; guests share a separate bucket. Never a cross-user global suppress. */
+export function tutorialActorKey(meId: string | null | undefined): string {
+  const id = typeof meId === "string" ? meId.trim() : "";
+  return id || "guest";
+}
+
+export function playerBrowseTutorialStorageKey(actorKey: string): string {
+  return `${PLAYER_BROWSE_TUTORIAL_V3_PREFIX}:${actorKey}`;
+}
+
+/** Prefer localStorage for durable same-browser completion; null when blocked/unavailable. */
+export function browseTutorialLocalStorage(): Pick<Storage, "getItem" | "setItem"> | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+export function readTutorialCompleted(
+  storage: Pick<Storage, "getItem"> | null | undefined,
+  actorKey: string,
+  memory: boolean,
+): boolean {
   if (memory) return true;
   try {
-    return storage?.getItem(PLAYER_BROWSE_TUTORIAL_KEY) === "1";
+    return storage?.getItem(playerBrowseTutorialStorageKey(actorKey)) === "1";
   } catch {
     return memory;
   }
 }
 
-export function persistTutorialDismissed(storage: Pick<Storage, "setItem"> | null | undefined): boolean {
+/** Persist only after the learner finishes step 2 — not on first open or X abort. */
+export function persistTutorialCompleted(
+  storage: Pick<Storage, "setItem"> | null | undefined,
+  actorKey: string,
+): boolean {
   try {
-    storage?.setItem(PLAYER_BROWSE_TUTORIAL_KEY, "1");
+    storage?.setItem(playerBrowseTutorialStorageKey(actorKey), "1");
     return true;
   } catch {
     return false;

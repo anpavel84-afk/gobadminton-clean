@@ -729,112 +729,111 @@
   line-height: 1.7;
 }
 
-.gb-player-browse .pb-tutorial-shade {
+/* In-context two-step coachmark over the visible card — no blur / white modal / giant blocks. */
+.gb-player-browse .pb-tutorial {
   position: absolute;
   inset: 0;
   z-index: 5;
-  border-radius: var(--pb-radius);
-  background: #0b1b135c;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 32px 16px;
-  backdrop-filter: blur(3px);
-}
-
-.gb-player-browse .pb-tutorial {
-  position: relative;
-  width: 460px;
-  max-width: 100%;
-  border: 1px solid #e2e7dc;
-  border-radius: 24px;
-  padding: 28px;
-  background: var(--pb-white);
-  color: var(--pb-ink);
-  box-shadow: 0 18px 64px #07180e40;
-}
-
-.gb-player-browse .pb-tutorial:focus {
-  outline: none;
-}
-
-.gb-player-browse .pb-tutorial:focus-visible {
-  outline: 3px solid var(--pb-purple);
-  outline-offset: 4px;
-}
-
-.gb-player-browse .pb-tutorial__eyebrow {
-  margin-bottom: 14px;
-  font-size: 12px;
-  color: var(--pb-muted);
-}
-
-.gb-player-browse .pb-tutorial h2 {
-  margin: 0 0 18px;
-  padding-right: 24px;
-  font-size: 25px;
-  line-height: 1.2;
+  border-radius: inherit;
+  pointer-events: auto;
+  background: transparent;
+  /* Keep cover geometry readable; no backdrop-filter. */
 }
 
 .gb-player-browse .pb-tutorial-close {
   position: absolute;
-  right: 12px;
-  top: 12px;
+  right: max(8px, env(safe-area-inset-right, 0px));
+  top: max(8px, env(safe-area-inset-top, 0px));
+  z-index: 2;
   width: 44px;
   height: 44px;
   display: grid;
   place-items: center;
   border: 0;
   border-radius: 50%;
-  background: transparent;
-  color: var(--pb-ink);
-  cursor: pointer;
-}
-
-.gb-player-browse .pb-gesture-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.gb-player-browse .pb-gesture-choice {
-  border: 1px solid var(--pb-line);
-  border-radius: 16px;
-  padding: 14px;
-  background: var(--pb-paper);
-}
-
-.gb-player-browse .pb-gesture-choice strong {
-  display: block;
-  margin: 8px 0 4px;
-  font-size: 13px;
-}
-
-.gb-player-browse .pb-gesture-choice span {
-  display: block;
-  font-size: 12px;
-  color: var(--pb-muted);
-  line-height: 1.5;
-}
-
-.gb-player-browse .pb-tutorial-note {
-  margin: 0 0 18px;
-  font-size: 12px;
-  color: var(--pb-muted);
-  line-height: 1.6;
-}
-
-.gb-player-browse .pb-tutorial-dismiss {
-  min-height: 44px;
-  width: 100%;
-  border: 0;
-  border-radius: 14px;
-  background: var(--pb-ink);
+  background: #13221a33;
   color: var(--pb-white);
-  font: inherit;
-  font-weight: 600;
   cursor: pointer;
+}
+
+.gb-player-browse .pb-tutorial-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.gb-player-browse .pb-tutorial-hit:focus {
+  outline: none;
+}
+
+.gb-player-browse .pb-tutorial-hit:focus-visible {
+  outline: 3px solid var(--pb-purple);
+  outline-offset: -4px;
+}
+
+.gb-player-browse .pb-tutorial-cue {
+  position: absolute;
+  top: 42%;
+  max-width: min(220px, 58vw);
+  padding: 10px 12px;
+  border-radius: 14px;
+  color: var(--pb-white);
+  pointer-events: none;
+  box-shadow: 0 8px 28px #07180e33;
+}
+
+.gb-player-browse .pb-tutorial-cue--skip {
+  left: max(12px, env(safe-area-inset-left, 0px));
+  background: #c44a3ecc;
+}
+
+.gb-player-browse .pb-tutorial-cue--play {
+  right: max(12px, env(safe-area-inset-right, 0px));
+  left: auto;
+  background: #2f8f4ecc;
+}
+
+.gb-player-browse .pb-tutorial-cue__arrow {
+  display: block;
+  font-size: 22px;
+  line-height: 1;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.gb-player-browse .pb-tutorial-cue__title {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.gb-player-browse .pb-tutorial-cue__hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: .92;
+}
+
+@media (max-width: 390px) {
+  .gb-player-browse .pb-tutorial-cue {
+    top: 38%;
+    max-width: min(200px, 62vw);
+    padding: 8px 10px;
+  }
+  .gb-player-browse .pb-tutorial-cue__title { font-size: 13px; }
+  .gb-player-browse .pb-tutorial-cue__hint { font-size: 11px; }
 }
 
 .gb-player-browse .pb-live {
@@ -939,13 +938,13 @@
   .gb-player-browse .pb-main-actions { grid-template-columns: 1fr 1.65fr; gap: 8px; }
   .gb-player-browse .pb-main-actions .btn,
   .gb-player-browse .pb-main-actions button { min-height: 50px; font-size: 12px; }
-  .gb-player-browse .pb-gesture-pair { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .gb-player-browse .pb-card,
   .gb-player-browse .pb-chevron,
-  .gb-player-browse .pb-slide-frame {
+  .gb-player-browse .pb-slide-frame,
+  .gb-player-browse .pb-tutorial-cue {
     transition: none !important;
     animation: none !important;
   }

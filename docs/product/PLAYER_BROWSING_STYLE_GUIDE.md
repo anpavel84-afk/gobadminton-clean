@@ -46,11 +46,11 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 
 ## Onboarding (mobile)
 
-- First open: short overlay on the card (gestures). Dismiss via «Понятно» / X / Escape. No auto-timer.
-- Per-version boolean `gb-player-gallery-tutorial-v2=1` in `sessionStorage` (memory fallback). Discreet «?» reopens. No persistent instruction banner.
-- Tutorial: right = want-to-play; match only when mutual. No old auto-friend labels.
-- Background card inert while tutorial; focus return; controls ≥44px; honor reduced motion / safe area.
-- Desktop does not show this swipe tutorial.
+- First open (after resolved identity): lightweight **in-context** two-tap coachmark over the visible player card — card/cover/geometry stay readable and same size. **No** blurred backdrop, white modal, huge paragraph blocks, or third «swipe up» step.
+- Step 1 (left / red cue): «Свайп влево — пропустить» + «Коснитесь, чтобы продолжить». Tap → step 2. Step 2 (right / green cue): «Свайп вправо — давай сыграем» + concise mutual-only note; next tap finishes. Coachmark consumes pointer/click without send/skip/scroll; underlying actions inert until finish or abort.
+- Abort via coachmark X / Escape leaves unfinished (no durable mark); reopening may restart. Fullscreen finder X stays available. Discreet «?» explicitly replays from step 1. No automatic repeat after real finish across reopen/reload/new session in the **same** browser.
+- Durable completion: `localStorage` key `gb-player-gallery-tutorial-v3:${me.id}` (guests: `…:guest`), written only on step-2 finish. In-memory fallback if storage blocked. Wait for resolved auth before auto-open/mark; reset memory/step on account change. Legacy `sessionStorage` `gb-player-gallery-tutorial-v2` is **not** sufficient and must not be wiped. No backend prefs / cross-device guarantee.
+- Focusable hit target with step `aria-label` + polite live; keyboard activation; reduced motion; safe area; fits 375×667 / 390. Desktop does not show this swipe tutorial.
 
 ## Play interest (browse deck)
 
@@ -102,7 +102,7 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 - Bio chunks must fit the available about-page height at 375×667 and 390×844 (including font zoom): **no** full-text cutoff, **no** ordinary nested scroll, **no** `-webkit-line-clamp` clipping of lossless bio. Recompute on viewport/text-size changes. Do not invent a generic pagination framework.
 - Minimal persistent **Пропустить** / **Давай сыграем** buttons remain accessible alternatives (stable footer + one status line; no nested scroll; fixed outer card size). Whole card height stays fixed; X/actions always available at 390×844 and 375×667 without horizontal overflow.
 - Last card left must settle to a visible honest end / «Загрузить ещё» terminal, not leave only a flown-off card forever. On mobile FS the last **visible** card keeps full stage height (idle geometry): plain end uses chrome counter / out-of-flow `.pb-fs-end` (no in-flow footer); `hasMore` uses out-of-flow `.pb-deck-end--fs-more`. Desktop `.pb-deck-end` stays in-flow.
-- One-time gesture hint (`gb-player-gallery-tutorial-v2`); help reopens. Existing real metadata only; games copy stays honest unavailable.
+- One-time in-context two-tap guide (`gb-player-gallery-tutorial-v3:${actor}`); help `?` replays from step 1. Legacy v2 session marker retained, not authoritative. Existing real metadata only; games copy stays honest unavailable.
 
 ### Gestures · OUR tuning (`player-browse.ts`)
 - Register only after the pending card is **media-ready**. Single active pointer; stable **pointer capture**; handlers use refs so the controller is not recreated mid-drag. Second contact cancels **before** primary/interactive exclusions (document capture while drag active, including outside the gesture surface); never adopts the secondary pointer; close/help still receive the event; cancel / late primary release → zero POST/skip.

@@ -21,19 +21,22 @@ import {
   normalizeBrowseBio,
   ordinaryBrowsePlayers,
   parseBrowseCssTransformPose,
-  persistTutorialDismissed,
+  browseTutorialLocalStorage,
+  persistTutorialCompleted,
   PLAYER_BROWSE_DESKTOP_MQ,
   PLAYER_BROWSE_MAX_ROTATION_DEG,
   PLAYER_BROWSE_RETURN_MS,
   PLAYER_BROWSE_VELOCITY_WINDOW_MS,
   sampleBrowseVelocity,
   type PlayerBrowseGestureAxis,
+  type PlayerBrowseTutorialStep,
   type PlayerBrowseVelocitySample,
   popSkip,
   prefersBrowseReducedMotion,
   pushSkip,
   readBrowseHistoryState,
-  readTutorialDismissed,
+  readTutorialCompleted,
+  tutorialActorKey,
   type PlayerBrowseSlideDirection,
   withBrowseHistoryState,
 } from "../../../lib/player-browse";
@@ -182,7 +185,10 @@ export function PlayerBrowseDeck({
   const [toast, setToast] = useState("");
   const [announce, setAnnounce] = useState("");
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState<PlayerBrowseTutorialStep>(1);
   const [tutorialMemory, setTutorialMemory] = useState(false);
+  const tutorialActorSeenRef = useRef<string | null>(null);
+  const tutorialBlankGateRef = useRef(true);
   const [dragStamp, setDragStamp] = useState<{ opacity: number; skip: boolean; label: string }>({ opacity: 0, skip: false, label: "" });
   const [slideDir, setSlideDir] = useState<PlayerBrowseSlideDirection | null>(null);
   const [mediaUnavailable, setMediaUnavailable] = useState(false);
@@ -194,7 +200,7 @@ export function PlayerBrowseDeck({
   const detailsBodyRef = useRef<HTMLDivElement>(null);
   const detailsBioRef = useRef<HTMLParagraphElement>(null);
   const mobileDetailsBodyRef = useRef<HTMLDivElement>(null);
-  const tutorialRef = useRef<HTMLElement>(null);
+  const tutorialRef = useRef<HTMLButtonElement>(null);
   const friendshipApi = useRef<BrowsePlayInterestApi | null>(null);
   const drag = useRef<DragState | null>(null);
   const dragRaf = useRef(0);
@@ -519,19 +525,47 @@ export function PlayerBrowseDeck({
     }
   }, [current?.publicPlayerId, clearTransitionTimer]);
 
+  const identityReady = authState !== "loading";
+  const tutorialActor = tutorialActorKey(me?.id);
+
   useEffect(() => {
-    // Desktop: no swipe tutorial. Mobile keeps existing onboarding.
+    // Reset in-memory completion + step when the resolved actor changes so prior completion cannot suppress the next actor.
+    if (!identityReady) return;
+    if (tutorialActorSeenRef.current !== null && tutorialActorSeenRef.current !== tutorialActor) {
+      setTutorialMemory(false);
+      setTutorialStep(1);
+      setTutorialOpen(false);
+      tutorialBlankGateRef.current = true;
+    }
+    tutorialActorSeenRef.current = tutorialActor;
+  }, [identityReady, tutorialActor]);
+
+  useEffect(() => {
+    // Desktop: no swipe tutorial. Mobile first-use coachmarks wait for resolved identity.
     if (desktop) {
       setTutorialOpen(false);
       return;
     }
-    const dismissed = readTutorialDismissed(
-      typeof sessionStorage !== "undefined" ? sessionStorage : null,
+    if (!identityReady) return;
+    const blank = catalogState === "loading" || catalogState === "empty" || catalogState === "error" || catalogState === "unavailable" || !browsePlayers.length;
+    if (blank) {
+      tutorialBlankGateRef.current = true;
+      return;
+    }
+    const completed = readTutorialCompleted(
+      browseTutorialLocalStorage(),
+      tutorialActor,
       tutorialMemory,
     );
-    const blank = catalogState === "loading" || catalogState === "empty" || catalogState === "error" || catalogState === "unavailable" || !browsePlayers.length;
-    if (!dismissed && !blank) setTutorialOpen(true);
-  }, [catalogState, browsePlayers.length, tutorialMemory, desktop]);
+    // Auto-open only on blank→ready (or after actor reset), never re-loop after X abort in the same open.
+    if (!completed && tutorialBlankGateRef.current) {
+      tutorialBlankGateRef.current = false;
+      setTutorialStep(1);
+      setTutorialOpen(true);
+    } else {
+      tutorialBlankGateRef.current = false;
+    }
+  }, [catalogState, browsePlayers.length, tutorialMemory, desktop, identityReady, tutorialActor]);
 
   const onRateLimited = useCallback((until: number | null, _retryAfterSeconds: number | null) => {
     setRateBlockedUntil(until);
@@ -1032,13 +1066,36 @@ export function PlayerBrowseDeck({
     }
     finishAdvance(null);
   }, [current, skipStack, browsePlayers, index, known, desktop, flyOffCard, clearCardMotion, fluidMobile]);
-  const dismissTutorial = useCallback(() => {
+  const openTutorial = useCallback(() => {
+    setTutorialStep(1);
+    setTutorialOpen(true);
+  }, []);
+
+  /** X / Escape: leave unfinished — no persistent completion. Reopening may restart. */
+  const abortTutorial = useCallback(() => {
     setTutorialOpen(false);
-    const ok = persistTutorialDismissed(typeof sessionStorage !== "undefined" ? sessionStorage : null);
-    if (!ok) setTutorialMemory(true);
-    else setTutorialMemory(true);
+    setTutorialStep(1);
     requestAnimationFrame(() => deckRef.current?.focus({ preventScroll: true }));
   }, []);
+
+  /** Step-2 finish only: durable per-actor localStorage (memory fallback if blocked). */
+  const finishTutorial = useCallback(() => {
+    setTutorialOpen(false);
+    setTutorialStep(1);
+    persistTutorialCompleted(browseTutorialLocalStorage(), tutorialActorKey(me?.id));
+    // Always latch memory for this actor so storage failure cannot reopen-loop.
+    setTutorialMemory(true);
+    requestAnimationFrame(() => deckRef.current?.focus({ preventScroll: true }));
+  }, [me?.id]);
+
+  const advanceTutorial = useCallback(() => {
+    if (tutorialStep === 1) {
+      setTutorialStep(2);
+      setAnnounce("Свайп вправо — давай сыграем. Совпадение только когда оба хотите сыграть.");
+      return;
+    }
+    finishTutorial();
+  }, [tutorialStep, finishTutorial]);
 
   const openDetails = useCallback(() => {
     setDetailsPage(0);
@@ -1245,7 +1302,7 @@ export function PlayerBrowseDeck({
       }
       if (event.key === "Escape" && tutorialOpen) {
         event.preventDefault();
-        dismissTutorial();
+        abortTutorial();
         return;
       }
       if (event.key === "Escape" && detailsOpen) {
@@ -1265,7 +1322,7 @@ export function PlayerBrowseDeck({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tutorialOpen, dismissTutorial, moveTo, intentIndex, detailsOpen, closeDetails, mobileFullscreen]);
+  }, [tutorialOpen, abortTutorial, moveTo, intentIndex, detailsOpen, closeDetails, mobileFullscreen]);
 
   function applyDragVisual(state: DragState) {
     const card = cardRef.current;
@@ -1623,7 +1680,7 @@ export function PlayerBrowseDeck({
         ) : null}
       </div>
       <div className="pb-fs-chrome__tools">
-        <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
+        <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={openTutorial}>?</button>
         <button
           ref={closeBtnRef}
           type="button"
@@ -1827,7 +1884,7 @@ export function PlayerBrowseDeck({
         <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
         <div className="pb-deck-context__tools">
           <span className="pb-counter" aria-live="polite">{counter}</span>
-          <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
+          <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={openTutorial}>?</button>
         </div>
       </div>
     ) : null}
@@ -2139,19 +2196,47 @@ export function PlayerBrowseDeck({
         </div>}
 
         {showHelp && (
-          <div className="pb-tutorial-shade">
-            <section ref={tutorialRef} className="pb-tutorial" role="dialog" aria-modal="false" aria-labelledby="pb-tutorial-title" tabIndex={-1}>
-              <button type="button" className="pb-tutorial-close" aria-label="Закрыть подсказку" onClick={dismissTutorial}>×</button>
-              <div className="pb-tutorial__eyebrow">Знакомьтесь в своём темпе</div>
-              <h2 id="pb-tutorial-title">Одна карточка. Два жеста.</h2>
-              <div className="pb-gesture-pair">
-                <div className="pb-gesture-choice"><strong>Свайп влево</strong><span>Пропустить. Без уведомления игроку.</span></div>
-                <div className="pb-gesture-choice"><strong>Свайп вправо</strong><span>Давай сыграем — предложение сыграть, не дружба.</span></div>
-                <div className="pb-gesture-choice"><strong>Свайп вверх</strong><span>Открыть сведения. Вниз — к обложке.</span></div>
-              </div>
-              <p className="pb-tutorial-note">Кнопки «Пропустить» и «Давай сыграем» дублируют жесты. Совпадение только когда оба хотите сыграть; дружба не создаётся.</p>
-              <button type="button" className="pb-tutorial-dismiss" onClick={dismissTutorial}>Понятно</button>
-            </section>
+          <div
+            className="pb-tutorial"
+            data-tutorial-step={tutorialStep}
+            onPointerDown={(event) => { event.stopPropagation(); }}
+            onClick={(event) => { event.stopPropagation(); }}
+          >
+            <button
+              type="button"
+              className="pb-tutorial-close"
+              aria-label="Закрыть подсказку"
+              onClick={abortTutorial}
+            >
+              ×
+            </button>
+            <button
+              ref={tutorialRef}
+              type="button"
+              className="pb-tutorial-hit"
+              aria-live="polite"
+              aria-label={
+                tutorialStep === 1
+                  ? "Шаг 1 из 2. Свайп влево — пропустить. Коснитесь, чтобы продолжить"
+                  : "Шаг 2 из 2. Свайп вправо — давай сыграем. Совпадение только когда оба хотите сыграть. Коснитесь, чтобы закончить"
+              }
+              onClick={advanceTutorial}
+            >
+              <span
+                className={`pb-tutorial-cue${tutorialStep === 1 ? " pb-tutorial-cue--skip" : " pb-tutorial-cue--play"}`}
+                aria-hidden="true"
+              >
+                <span className="pb-tutorial-cue__arrow">{tutorialStep === 1 ? "←" : "→"}</span>
+                <span className="pb-tutorial-cue__title">
+                  {tutorialStep === 1 ? "Свайп влево — пропустить" : "Свайп вправо — давай сыграем"}
+                </span>
+                {tutorialStep === 1 ? (
+                  <span className="pb-tutorial-cue__hint">Коснитесь, чтобы продолжить</span>
+                ) : (
+                  <span className="pb-tutorial-cue__hint">Совпадение только когда оба хотите сыграть</span>
+                )}
+              </span>
+            </button>
           </div>
         )}
       </div>

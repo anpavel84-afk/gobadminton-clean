@@ -44,12 +44,16 @@ import {
   PLAYER_BROWSE_PROJECT_MS,
   PLAYER_BROWSE_SLIDE_MS,
   PLAYER_BROWSE_TUTORIAL_KEY,
+  PLAYER_BROWSE_TUTORIAL_V3_PREFIX,
+  playerBrowseTutorialStorageKey,
   popSkip,
   prefersBrowseReducedMotion,
+  persistTutorialCompleted,
   pushSkip,
   readBrowseHistoryState,
-  readTutorialDismissed,
+  readTutorialCompleted,
   reconstructBrowseBio,
+  tutorialActorKey,
   relationshipBlocksNewRequest,
   releaseCommitted,
   sampleBrowseVelocity,
@@ -323,13 +327,29 @@ describe("player browse swipe boundaries", () => {
 });
 
 describe("player browse tutorial marker", () => {
-  it("reads versioned boolean only and falls back to memory", () => {
+  it("reads per-actor localStorage completion and falls back to memory; legacy v2 key alone is not enough", () => {
+    expect(PLAYER_BROWSE_TUTORIAL_KEY).toBe("gb-player-gallery-tutorial-v2");
+    expect(PLAYER_BROWSE_TUTORIAL_V3_PREFIX).toBe("gb-player-gallery-tutorial-v3");
+    expect(tutorialActorKey("user-a")).toBe("user-a");
+    expect(tutorialActorKey("")).toBe("guest");
+    expect(tutorialActorKey(null)).toBe("guest");
+    expect(playerBrowseTutorialStorageKey("user-a")).toBe("gb-player-gallery-tutorial-v3:user-a");
+    expect(playerBrowseTutorialStorageKey("guest")).toBe("gb-player-gallery-tutorial-v3:guest");
+    const store = new Map<string, string>();
     const storage = {
-      getItem: (key: string) => (key === PLAYER_BROWSE_TUTORIAL_KEY ? "1" : null),
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
     };
-    expect(readTutorialDismissed(storage, false)).toBe(true);
-    expect(readTutorialDismissed({ getItem: () => null }, true)).toBe(true);
-    expect(readTutorialDismissed({ getItem: () => { throw new Error("denied"); } }, false)).toBe(false);
+    expect(readTutorialCompleted(storage, "user-a", false)).toBe(false);
+    expect(readTutorialCompleted({ getItem: () => null }, "user-a", true)).toBe(true);
+    expect(readTutorialCompleted({ getItem: () => { throw new Error("denied"); } }, "user-a", false)).toBe(false);
+    // Legacy global session v2 marker must not suppress another actor.
+    store.set(PLAYER_BROWSE_TUTORIAL_KEY, "1");
+    expect(readTutorialCompleted(storage, "user-a", false)).toBe(false);
+    expect(persistTutorialCompleted(storage, "user-a")).toBe(true);
+    expect(readTutorialCompleted(storage, "user-a", false)).toBe(true);
+    expect(readTutorialCompleted(storage, "user-b", false)).toBe(false);
+    expect(readTutorialCompleted(storage, "guest", false)).toBe(false);
   });
 
   it("keeps inert on card surface only so the tutorial stays interactive", () => {
@@ -341,10 +361,23 @@ describe("player browse tutorial marker", () => {
     expect(deckOpen).toBeGreaterThan(-1);
     expect(surfaceInert).toBeGreaterThan(deckOpen);
     expect(tutorial).toBeGreaterThan(surfaceInert);
-    // Tutorial must not sit inside the inert surface block that closes before the shade.
+    // Tutorial must not sit inside the inert surface block that closes before the coachmark.
     const surfaceCloseBeforeTutorial = deckSource.slice(surfaceInert, tutorial);
     expect(surfaceCloseBeforeTutorial).toContain("</div>}");
     expect(surfaceCloseBeforeTutorial).toMatch(/pb-controls|pb-profile-bottom|pb-friend-slot/);
+    expect(deckSource).toContain("Свайп влево — пропустить");
+    expect(deckSource).toContain("Коснитесь, чтобы продолжить");
+    expect(deckSource).toContain("Свайп вправо — давай сыграем");
+    expect(deckSource).toContain("advanceTutorial");
+    expect(deckSource).toContain("finishTutorial");
+    expect(deckSource).toContain("abortTutorial");
+    expect(deckSource).toContain("browseTutorialLocalStorage");
+    expect(deckSource).toContain("identityReady");
+    expect(deckSource).not.toContain("Свайп вверх");
+    expect(deckSource).not.toContain("pb-tutorial-shade");
+    expect(cssSource).not.toContain("backdrop-filter: blur");
+    expect(cssSource).toContain("pb-tutorial-cue--skip");
+    expect(cssSource).toContain("pb-tutorial-cue--play");
   });
 
   it("ignores withdrawn play-interest receipts in onConfirmed toast/auto-advance", () => {
