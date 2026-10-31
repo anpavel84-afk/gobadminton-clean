@@ -40,6 +40,15 @@ describe("venue public profile form against the existing edit contract", () => {
     expect(validateVenueProfile({ ...draft, parking: "unknown", profileChanged: true }).patch.profile).toEqual({ courtCount: 0, amenities: { parking: null, showers: true }, description: null });
   });
 
+  it("preserves existing description when an unrelated profile value is edited", () => {
+    const draft = initializeVenueProfile({
+      profile: { courtCount: 2, amenities: { parking: true, showers: false }, description: "Зал у метро" },
+    });
+    expect(validateVenueProfile({ ...draft, courtCount: "4", profileChanged: true }).patch.profile).toEqual({
+      courtCount: 4, amenities: { parking: true, showers: false }, description: "Зал у метро",
+    });
+  });
+
   for (const value of ["0", "1", "2147483647", " 12 "]) {
     it("accepts integer count " + value, () => {
       const result = validateVenueProfile({ ...initializeVenueProfile({}), profileChanged: true, courtCount: value, parking: "no" });

@@ -1,7 +1,7 @@
 import { VenueCoverService } from "../venues/venue-cover.service";
 import { VenueGalleryService } from "../venues/venue-gallery.service";
 import { AdminService } from "./admin.service";
-import { Body, Controller, Delete, Put, Get, Header, Headers, Param, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Put, Get, Header, Headers, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { z } from "zod";
 import { AdminVenuesService } from "../venues/admin-venues.service";
@@ -42,7 +42,7 @@ export class AdminVenuesController {
     this.admin.enabled();
     return this.gallery.get(r, parse(uuid, id));
   }
-  @Post(":id/gallery") @Header("Cache-Control","no-store")
+  @Post(":id/gallery") @HttpCode(200) @Header("Cache-Control","no-store")
   addGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined) {
     this.admin.enabled();
     const version=parse(venueVersion,r.headers["x-venue-version"]);
@@ -62,13 +62,13 @@ export class AdminVenuesController {
     const input=parse(galleryItemCommandSchema,b);
     return this.gallery.remove(r,k,parse(uuid,id),parse(uuid,itemId),input.expectedVersion);
   }
-  @Post(":id/gallery/reorder") @Header("Cache-Control","no-store")
+  @Post(":id/gallery/reorder") @HttpCode(200) @Header("Cache-Control","no-store")
   reorderGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
     this.admin.enabled();
     const input=parse(galleryReorderSchema,b);
     return this.gallery.reorder(r,k,parse(uuid,id),input.expectedVersion,input.orderedIds);
   }
-  @Post(":id/gallery/:itemId/main") @Header("Cache-Control","no-store")
+  @Post(":id/gallery/:itemId/main") @HttpCode(200) @Header("Cache-Control","no-store")
   setMainGallery(@Req() r:FastifyRequest,@Param("id") id:string,@Param("itemId") itemId:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
     this.admin.enabled();
     const input=parse(galleryItemCommandSchema,b);

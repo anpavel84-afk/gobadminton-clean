@@ -113,7 +113,6 @@ export function VenueGallery({
     commitIndex(next);
     setFailed(null);
     // Reset only when the selected venue identity changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional venue-id boundary
   }, [venue.id]);
 
   useEffect(() => {

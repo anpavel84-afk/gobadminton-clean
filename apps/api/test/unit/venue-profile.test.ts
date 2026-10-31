@@ -42,6 +42,7 @@ const base = {
   normalized_name: "зал", normalized_address: "адрес", data_status: "verified", provenance: "admin_created",
   public_contacts: contacts as unknown, contact_phone: "private", contact_website: "https://private.invalid", booking_note: "private",
   court_count: 0 as number | null, amenity_parking: false as boolean | null, amenity_showers: null as boolean | null,
+  public_description: null as string | null,
   public_profile_updated_at: date, cover_url: coverUrl, cover_credit_kind: "photo", cover_credit_text: "Фото: Клуб", cover_credit_url: "https://example.com/",
   cover_key: "private-storage", cover_actor_id: "private-actor", cover_moderation_approval_id: "private-approval",
 };

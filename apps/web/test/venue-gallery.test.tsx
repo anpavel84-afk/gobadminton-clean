@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type * as ReactDom from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Venue, VenueProfile } from "../src/lib/consumer-types";
@@ -8,7 +9,7 @@ import { VenuePickerDialog } from "../src/components/consumer/games/VenuePickerD
 
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("react-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-dom")>();
+  const actual = await importOriginal<typeof ReactDom>();
   return { ...actual, createPortal: (node: ReactNode) => node };
 });
 
@@ -103,35 +104,45 @@ describe("VenueGallery", () => {
   });
 
   it("uses VenueGallery inside create-game venue picker options without nested nav buttons", () => {
-    const pickerVenue = {
-      id: "1",
-      cityId: "a0000000-0000-4000-8000-000000000001",
-      name: "Альфа",
-      address: "Москва",
-      timezone: "Europe/Moscow",
-      cover: { uploadedUrl: url("a"), credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
-      profile: {
-        courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
-        gallery: {
-          coverage: "ordered" as const,
-          items: [
-            { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Один", url: "https://club.example/1" } },
-            { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo" as const, text: "Фото: Два", url: "https://club.example/2" } },
-          ],
+    vi.stubGlobal("document", {
+      body: { style: { overflow: "auto" } },
+      activeElement: null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    });
+    try {
+      const pickerVenue = {
+        id: "1",
+        cityId: "a0000000-0000-4000-8000-000000000001",
+        name: "Альфа",
+        address: "Москва",
+        timezone: "Europe/Moscow",
+        cover: { uploadedUrl: url("a"), credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+        profile: {
+          courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+          gallery: {
+            coverage: "ordered" as const,
+            items: [
+              { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Один", url: "https://club.example/1" } },
+              { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo" as const, text: "Фото: Два", url: "https://club.example/2" } },
+            ],
+          },
         },
-      },
-    };
-    const html = renderToStaticMarkup(<VenuePickerDialog
-      venues={[pickerVenue]}
-      selectedId=""
-      status="ready"
-      onSelect={() => {}}
-      onClose={() => {}}
-      onRetry={() => {}}
-    />);
-    expect(html).toContain("gb-venue-gallery");
-    expect(html).toContain('data-size="compact"');
-    expect(html).not.toContain("Предыдущее фото");
-    expect(html).toContain("Альфа");
+      };
+      const html = renderToStaticMarkup(<VenuePickerDialog
+        venues={[pickerVenue]}
+        selectedId=""
+        status="ready"
+        onSelect={() => {}}
+        onClose={() => {}}
+        onRetry={() => {}}
+      />);
+      expect(html).toContain("gb-venue-gallery");
+      expect(html).toContain('data-size="compact"');
+      expect(html).not.toContain("Предыдущее фото");
+      expect(html).toContain("Альфа");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

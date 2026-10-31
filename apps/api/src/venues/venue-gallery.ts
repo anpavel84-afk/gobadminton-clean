@@ -158,7 +158,7 @@ export function mapPublicGalleryItem(row: VenueGalleryItemRow & { public_url: st
  */
 export function decodeGalleryHeaderValue(raw: string): string {
   if (!raw) return raw;
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(raw)) {
+  if (!controlFree(raw)) {
     throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata header contains control characters");
   }
   if (/[^\x20-\x7e]/.test(raw)) {
@@ -166,7 +166,7 @@ export function decodeGalleryHeaderValue(raw: string): string {
   }
   try {
     const decoded = decodeURIComponent(raw);
-    if (/[\u0000-\u001f\u007f-\u009f]/.test(decoded)) {
+    if (!controlFree(decoded)) {
       throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata header contains control characters");
     }
     return decoded;

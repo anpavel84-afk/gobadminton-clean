@@ -227,6 +227,7 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     expect(reorder.statusCode, reorder.body).toBe(200);
     version = reorder.json().version;
     expect(reorder.json().items.map((x: { id: string }) => x.id)).toEqual(reordered);
+    expect(reorder.json().items.every((x: { position: number }) => x.position >= 0 && x.position < 8)).toBe(true);
     const mainId = reordered[3]!;
     const setMain = await app.inject({
       method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${mainId}/main`,
@@ -236,8 +237,61 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     expect(setMain.statusCode, setMain.body).toBe(200);
     version = setMain.json().version;
     expect(setMain.json().items.find((x: { id: string }) => x.id === mainId)?.isMain).toBe(true);
+    expect(setMain.json().items.every((x: { position: number }) => x.position >= 0 && x.position < 8)).toBe(true);
+    const liveKeys = (await pool.query<{ storage_key: string }>(
+      "SELECT storage_key FROM venue_gallery_items WHERE venue_id=$1 AND active", [v.id],
+    )).rows.map((row) => row.storage_key);
+    expect((await pool.query(
+      "SELECT 1 FROM avatar_media_gc WHERE storage_key = ANY($1::text[])", [liveKeys],
+    )).rowCount).toBe(0);
     const publicItems = (await publicVenue(v.id)).json().profile.gallery.items;
     expect(publicItems[0]?.url).toBe((await publicVenue(v.id)).json().cover.uploadedUrl);
+    // Legacy cover replace (no prior main): insert stays in CHECK range; live refs are not GC'd.
+    const legacy = await venue();
+    const legacyCover = await app.inject({
+      method: "PUT", url: `/v1/admin/venues/${legacy.id}/cover`,
+      headers: headers(owner, { "content-type": "image/png", "x-venue-version": "1" }),
+      payload: png,
+    });
+    expect(legacyCover.statusCode, legacyCover.body).toBe(200);
+    const legacyRows = (await pool.query<{ position: number; storage_key: string; is_main: boolean; active: boolean }>(
+      "SELECT position, storage_key, is_main, active FROM venue_gallery_items WHERE venue_id=$1", [legacy.id],
+    )).rows;
+    expect(legacyRows).toHaveLength(1);
+    expect(legacyRows[0]).toMatchObject({ position: 0, is_main: true, active: true });
+    expect((await pool.query(
+      "SELECT 1 FROM avatar_media_gc WHERE storage_key=$1", [legacyRows[0]!.storage_key],
+    )).rowCount).toBe(0);
+    // Cover replace onto venue that already has non-main gallery rows (insert-then-reorder path).
+    const seeded = await venue();
+    const first = await add(seeded.id, 1, owner);
+    expect(first.statusCode, first.body).toBe(200);
+    await pool.query(
+      "UPDATE venue_gallery_items SET is_main=false WHERE venue_id=$1 AND active", [seeded.id],
+    );
+    const second = await add(seeded.id, first.json().version, owner);
+    expect(second.statusCode, second.body).toBe(200);
+    await pool.query(
+      "UPDATE venue_gallery_items SET is_main=false WHERE venue_id=$1 AND active", [seeded.id],
+    );
+    const coverOntoExisting = await app.inject({
+      method: "PUT", url: `/v1/admin/venues/${seeded.id}/cover`,
+      headers: headers(owner, { "content-type": "image/png", "x-venue-version": String(second.json().version) }),
+      payload: await sharp({ create: { width: 900, height: 600, channels: 3, background: "#003399" } }).png().toBuffer(),
+    });
+    expect(coverOntoExisting.statusCode, coverOntoExisting.body).toBe(200);
+    const afterLegacy = (await pool.query<{ position: number; storage_key: string; is_main: boolean; active: boolean }>(
+      "SELECT position, storage_key, is_main, active FROM venue_gallery_items WHERE venue_id=$1 AND active ORDER BY position",
+      [seeded.id],
+    )).rows;
+    expect(afterLegacy.length).toBeGreaterThanOrEqual(2);
+    expect(afterLegacy.every((row) => row.position >= 0 && row.position < 8)).toBe(true);
+    expect(afterLegacy.filter((row) => row.is_main)).toHaveLength(1);
+    expect(afterLegacy[0]!.is_main).toBe(true);
+    expect((await pool.query(
+      "SELECT 1 FROM avatar_media_gc WHERE storage_key = ANY($1::text[])",
+      [afterLegacy.map((row) => row.storage_key)],
+    )).rowCount).toBe(0);
     const stale = await add(v.id, 1);
     expect(stale.statusCode).toBe(409);
     const removeTarget = reordered[0]!;

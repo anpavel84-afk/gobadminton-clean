@@ -159,7 +159,7 @@ describe("existing venue EDIT UI and transport", () => {
     const body = JSON.parse(request.body as string);
     expect(body).toEqual({ action: "edit", expectedVersion: 7, reasonCode: "catalog_correction", fields: {
       cityId: venue().cityId, name: "Зал А", address: "Проверенный адрес", timezone: "Europe/Moscow", latitude: 55.75, longitude: 37.62, identityDiscriminator: "",
-      publicContacts: { ...venue().publicContacts, website: "https://new.example/" }, profile: { courtCount: 12, amenities: { parking: false, showers: null } },
+      publicContacts: { ...venue().publicContacts, website: "https://new.example/" }, profile: { courtCount: 12, amenities: { parking: false, showers: null }, description: null },
     } });
     await h.click("Редактировать данные");
     expect(h.control("Количество кортов").props.value).toBe("12");
@@ -171,10 +171,10 @@ describe("existing venue EDIT UI and transport", () => {
     h.change("Название", "Зал А обновлён"); await h.click("Подтвердить сохранение");
     const body = JSON.parse(h.posts()[0]![1].body as string);
     expect(body.fields).not.toHaveProperty("publicContacts"); expect(body.fields).not.toHaveProperty("profile");
-    await h.click("Редактировать данные"); await h.click("Очистить публичные контакты"); await h.click("Очистить сведения о кортах и удобствах");
+    await h.click("Редактировать данные"); await h.click("Очистить публичные контакты"); await h.click("Очистить сведения о кортах, удобствах и описании");
     await h.click("Отмена"); expect(h.posts()).toHaveLength(1);
     await h.click("Редактировать данные"); expect(h.control("Количество кортов").props.value).toBe("0");
-    await h.click("Очистить публичные контакты"); await h.click("Очистить сведения о кортах и удобствах"); await h.click("Подтвердить сохранение");
+    await h.click("Очистить публичные контакты"); await h.click("Очистить сведения о кортах, удобствах и описании"); await h.click("Подтвердить сохранение");
     expect(JSON.parse(h.posts()[1]![1].body as string).fields).toMatchObject({ publicContacts: null, profile: null });
   });
 
@@ -240,7 +240,7 @@ describe("existing venue EDIT UI and transport", () => {
     expect(h.control("Телефон (виден всем)").props.value).toBe(""); expect(h.control("Парковка").props.value).toBe("unknown");
     h.change("Количество кортов", "0"); h.change("Парковка", "no"); await h.click("Подтвердить сохранение");
     expect(h.posts()[0]![0].endsWith(`/venues/${b}/commands`)).toBe(true);
-    expect(JSON.parse(h.posts()[0]![1].body as string).fields).toMatchObject({ profile: { courtCount: 0, amenities: { parking: false, showers: null } } });
+    expect(JSON.parse(h.posts()[0]![1].body as string).fields).toMatchObject({ profile: { courtCount: 0, amenities: { parking: false, showers: null }, description: null } });
     expect(JSON.parse(h.posts()[0]![1].body as string).fields).not.toHaveProperty("publicContacts");
   });
 

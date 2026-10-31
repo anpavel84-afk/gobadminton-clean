@@ -81,13 +81,39 @@ export class VenueGalleryService {
 
   private async renumber(c: PoolClient, venueId: string): Promise<VenueGalleryItemRow[]> {
     const items = await this.listItems(c, venueId);
-    for (let i = 0; i < items.length; i++) {
-      if (items[i]!.position !== i) {
-        await c.query("UPDATE venue_gallery_items SET position=$2, updated_at=now() WHERE id=$1", [items[i]!.id, i]);
-        items[i]!.position = i;
-      }
+    await this.applyOrderedPositions(c, venueId, items.map((item) => item.id));
+    return this.listItems(c, venueId);
+  }
+
+  /**
+   * Reassign active positions to 0..n-1 without violating CHECK (position < 8)
+   * or unique (venue_id, position) WHERE active. Temporary deactivation frees the
+   * partial unique index; undo GC enqueue so still-live storage keys are not collected.
+   */
+  private async applyOrderedPositions(c: PoolClient, venueId: string, orderedIds: string[]): Promise<void> {
+    if (orderedIds.length === 0) return;
+    if (orderedIds.length > VENUE_GALLERY_MAX) {
+      throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
     }
-    return items;
+    const keys = (await c.query<{ storage_key: string }>(
+      `SELECT storage_key FROM venue_gallery_items
+       WHERE venue_id=$1 AND id = ANY($2::uuid[])`,
+      [venueId, orderedIds],
+    )).rows.map((row) => row.storage_key);
+    await c.query(
+      `UPDATE venue_gallery_items SET active=false, updated_at=now()
+       WHERE venue_id=$1 AND id = ANY($2::uuid[]) AND active`,
+      [venueId, orderedIds],
+    );
+    for (let i = 0; i < orderedIds.length; i++) {
+      await c.query(
+        `UPDATE venue_gallery_items SET position=$2, active=true, updated_at=now() WHERE id=$1`,
+        [orderedIds[i], i],
+      );
+    }
+    if (keys.length > 0) {
+      await c.query("DELETE FROM avatar_media_gc WHERE storage_key = ANY($1::text[])", [keys]);
+    }
   }
 
   async get(request: FastifyRequest, id: string): Promise<VenueGalleryReceipt> {
@@ -319,19 +345,7 @@ export class VenueGalleryService {
           || orderedIds.some((itemId) => !items.some((item) => item.id === itemId))) {
           throw conflict("VENUE_GALLERY_ORDER_CONFLICT", "Состав галереи изменился. Обновите данные.");
         }
-        // Two-phase positions avoid unique collisions under the active partial index.
-        for (let i = 0; i < orderedIds.length; i++) {
-          await c.query(
-            `UPDATE venue_gallery_items SET position=$2, updated_at=now() WHERE id=$1`,
-            [orderedIds[i], i + VENUE_GALLERY_MAX],
-          );
-        }
-        for (let i = 0; i < orderedIds.length; i++) {
-          await c.query(
-            `UPDATE venue_gallery_items SET position=$2, updated_at=now() WHERE id=$1`,
-            [orderedIds[i], i],
-          );
-        }
+        await this.applyOrderedPositions(c, id, orderedIds);
         await this.syncMainCover(c, id, null);
         const updated = (await c.query<{ version: number }>(
           `UPDATE venues SET version=version+1, updated_at=now() WHERE id=$1 RETURNING version`,
@@ -396,14 +410,7 @@ export class VenueGalleryService {
         // Keep main as position 0 for stable public/main projection.
         const items = await this.listItems(c, id);
         const ordered = [existing.id, ...items.filter((item) => item.id !== existing.id).map((item) => item.id)];
-        for (let i = 0; i < ordered.length; i++) {
-          await c.query(`UPDATE venue_gallery_items SET position=$2, updated_at=now() WHERE id=$1`,
-            [ordered[i], i + VENUE_GALLERY_MAX]);
-        }
-        for (let i = 0; i < ordered.length; i++) {
-          await c.query(`UPDATE venue_gallery_items SET position=$2, updated_at=now() WHERE id=$1`,
-            [ordered[i], i]);
-        }
+        await this.applyOrderedPositions(c, id, ordered);
         await this.syncMainCover(c, id, authority.userId);
         const updated = (await c.query<{ version: number }>(
           `UPDATE venues SET version=version+1, updated_at=now() WHERE id=$1 RETURNING version`,
@@ -455,20 +462,18 @@ export class VenueGalleryService {
         `UPDATE venue_gallery_items SET is_main=false, updated_at=now() WHERE venue_id=$1 AND active AND is_main`,
         [venueId],
       );
+      // Insert into a free in-range slot (0..7); then promote to position 0 via applyOrderedPositions.
       const inserted = (await c.query<{ id: string }>(
         `INSERT INTO venue_gallery_items(
            venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
            credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
          ) VALUES ($1,$2,true,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-        [venueId, existing.length + VENUE_GALLERY_MAX, storageKey, approvalId, actorId, creditKind, creditText, creditUrl,
+        [venueId, existing.length, storageKey, approvalId, actorId, creditKind, creditText, creditUrl,
           evidence?.sourceUrl ?? null, evidence?.sourceAuthor ?? null, permissionBasis,
           evidence?.sourceFingerprint ?? null],
       )).rows[0]!;
       const ordered = [inserted.id, ...existing.map((item) => item.id)];
-      for (let i = 0; i < ordered.length; i++) {
-        await c.query(`UPDATE venue_gallery_items SET position=$2, updated_at=now() WHERE id=$1`,
-          [ordered[i], i]);
-      }
+      await this.applyOrderedPositions(c, venueId, ordered);
     }
   }
 
