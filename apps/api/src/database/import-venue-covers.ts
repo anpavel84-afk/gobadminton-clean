@@ -36,6 +36,7 @@ import {
   galleryAdmissionKeyHash,
   galleryItemFingerprint,
   galleryManifestDigest,
+  planGalleryAttemptReplay,
   planGalleryManifestBind,
   planGalleryReplay,
   planGalleryRow,
@@ -43,6 +44,7 @@ import {
   validateImage as validateGalleryImage,
   type AcceptedGalleryReceipt,
   type GalleryActiveRow,
+  type GalleryAttemptRecord,
   type GalleryImportItem,
   type GalleryImportPlan,
   type GalleryImportReport,
@@ -228,20 +230,96 @@ async function loadAcceptedGalleryReceipt(
   };
 }
 
-/** Retained full-manifest digests for a batch (existing after_diff.digest). */
-async function loadAcceptedGalleryBatchDigests(
+async function loadGalleryAttempt(
+  c: Pick<PoolClient, "query">,
+  keyHash: string,
+): Promise<GalleryAttemptRecord | undefined> {
+  const row = (await c.query<{ after_diff: Record<string, unknown> }>(
+    `SELECT after_diff FROM privileged_audit_events
+     WHERE idempotency_hash=$1 AND action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_attempt'
+     ORDER BY created_at DESC LIMIT 1`,
+    [keyHash],
+  )).rows[0];
+  const after = row?.after_diff;
+  if (!after || typeof after.fingerprint !== "string" || typeof after.digest !== "string"
+    || typeof after.batch !== "string" || typeof after.file !== "string"
+    || typeof after.sha256 !== "string" || typeof after.itemIndex !== "number") {
+    return undefined;
+  }
+  return {
+    fingerprint: after.fingerprint,
+    digest: after.digest,
+    batch: after.batch,
+    file: after.file,
+    sha256: after.sha256,
+    itemIndex: after.itemIndex,
+  };
+}
+
+/** Retained full-manifest digests: accepted publications and pre-provider attempts. */
+async function loadGalleryBatchDigests(
   c: Pick<PoolClient, "query">,
   batch: string,
 ): Promise<string[]> {
   const rows = (await c.query<{ digest: string | null }>(
     `SELECT after_diff->>'digest' AS digest FROM privileged_audit_events
-     WHERE action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_import'
+     WHERE action_key='venue.gallery_add'
+       AND reason_code IN ('venue_gallery_batch_import', 'venue_gallery_batch_attempt')
        AND after_diff->>'batch'=$1`,
     [batch],
   )).rows;
   return rows
     .map((row) => row.digest)
     .filter((digest): digest is string => typeof digest === "string" && digest.length > 0);
+}
+
+/**
+ * Short committed txn under claim: bind full manifest + item identity before provider I/O.
+ * Retained attempt without accepted receipt → HOLD; this call's fresh append proceeds.
+ */
+async function commitGalleryAttemptOrReplay(
+  pool: Pool,
+  principalId: string,
+  userId: string,
+  manifest: GalleryManifest,
+  item: GalleryImportItem,
+  itemIndex: number,
+  fingerprint: string,
+  keyHash: string,
+  currentDigest: string,
+): Promise<GalleryImportPlan> {
+  return adminTransaction(pool, async (c) => {
+    if (await requireImportActor(c, principalId) !== userId) {
+      throw new Error("IMPORT_ACTOR_REFUSED");
+    }
+    const liveDigests = await loadGalleryBatchDigests(c, manifest.batch);
+    const liveBind = planGalleryManifestBind(currentDigest, liveDigests);
+    if (liveBind) return liveBind;
+    const terminal = await loadAcceptedGalleryReceipt(c, keyHash);
+    if (terminal) return planGalleryReplay(fingerprint, terminal);
+    const prior = await loadGalleryAttempt(c, keyHash);
+    if (prior) return planGalleryAttemptReplay(fingerprint, currentDigest, prior);
+    await appendAudit(c, {
+      actor: { principalId, roles: ["superadmin"] },
+      action: "venue.gallery_add",
+      targetType: "venue",
+      targetId: item.venueId,
+      permission: "venue.manage",
+      reason: "venue_gallery_batch_attempt",
+      keyHash,
+      after: {
+        batch: manifest.batch,
+        file: item.file,
+        fingerprint,
+        itemIndex,
+        sha256: item.sha256.toLowerCase(),
+        digest: currentDigest,
+        expectedVersion: item.expectedVersion,
+        source: item.evidence.sourceUrl ?? null,
+      },
+    });
+    return { action: "READY", reason: "ATTEMPT_RECORDED" };
+  });
 }
 
 async function loadGalleryActive(
@@ -317,6 +395,7 @@ async function planGalleryItemState(
   manifest: GalleryManifest,
   item: GalleryImportItem,
   itemIndex: number,
+  currentDigest: string,
   simulated: Map<string, { appends: number; versionBump: number }>,
 ): Promise<{ name: string; result: GalleryImportPlan; fingerprint: string; keyHash: string }> {
   const fingerprint = galleryItemFingerprint(item);
@@ -327,6 +406,15 @@ async function planGalleryItemState(
   const receipt = await loadAcceptedGalleryReceipt(c, keyHash);
   if (receipt) {
     return { name, result: planGalleryReplay(fingerprint, receipt), fingerprint, keyHash };
+  }
+  const attempt = await loadGalleryAttempt(c, keyHash);
+  if (attempt) {
+    return {
+      name,
+      result: planGalleryAttemptReplay(fingerprint, currentDigest, attempt),
+      fingerprint,
+      keyHash,
+    };
   }
   const active = await loadGalleryActive(c, item.venueId);
   // Dry-run: prior READY rows for this venue simulate version bumps and capacity use.
@@ -357,7 +445,7 @@ export async function importVenueGallery(
     try {
       await client.query("BEGIN READ ONLY");
       await requireImportActor(client, principalId, false);
-      const retained = await loadAcceptedGalleryBatchDigests(client, batch.manifest.batch);
+      const retained = await loadGalleryBatchDigests(client, batch.manifest.batch);
       const manifestBind = planGalleryManifestBind(currentDigest, retained);
       if (manifestBind) batchBlocked = true;
       for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
@@ -370,7 +458,9 @@ export async function importVenueGallery(
           } else if (blockedVenues.has(item.venueId)) {
             result = { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
           } else {
-            const planned = await planGalleryItemState(client, batch.manifest, item, itemIndex, simulated);
+            const planned = await planGalleryItemState(
+              client, batch.manifest, item, itemIndex, currentDigest, simulated,
+            );
             name = planned.name;
             result = planned.result;
             if (result.action === "READY") {
@@ -418,7 +508,7 @@ export async function importVenueGallery(
     }
 
     // Digest gate while batch claim held — before any paid provider call.
-    const retained = await loadAcceptedGalleryBatchDigests(pool, batch.manifest.batch);
+    const retained = await loadGalleryBatchDigests(pool, batch.manifest.batch);
     const manifestBind = planGalleryManifestBind(currentDigest, retained);
     if (manifestBind) batchBlocked = true;
 
@@ -444,105 +534,119 @@ export async function importVenueGallery(
           if (receipt) {
             result = planGalleryReplay(fingerprint, receipt);
           } else {
-            const preview = (await pool.query<GalleryVenueRow>(galleryVenueSelect, [item.venueId])).rows[0];
-            name = preview?.name ?? "";
-            const active = await loadGalleryActive(pool, item.venueId);
-            result = planGalleryRow(preview, item, active);
-            if (result.action === "READY") {
-              const bytes = batch.images.get(item.file);
-              if (!bytes) throw new Error("INVALID_IMAGE");
-              validateGalleryImage(bytes, item.sha256);
-              const sanitized = await sanitizeAvatar(bytes, "image/jpeg", "cover");
-              key = `${randomBytes(32).toString("hex")}.png`;
-              const staged = await services.media.stage(key, sanitized);
-              const approval = await services.moderation.approveImage(userId, sanitized, "cover");
-              const storageKey = key;
-              const applied = await adminTransaction(pool, async (c) => {
-                if (await requireImportActor(c, principalId) !== userId) {
-                  throw new Error("IMPORT_ACTOR_REFUSED");
-                }
-                await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
-                const liveDigests = await loadAcceptedGalleryBatchDigests(c, batch.manifest.batch);
-                const liveBind = planGalleryManifestBind(currentDigest, liveDigests);
-                if (liveBind) return liveBind;
-                const terminal = await loadAcceptedGalleryReceipt(c, keyHash);
-                if (terminal) return { ...planGalleryReplay(fingerprint, terminal) };
-
-                const current = (await c.query<GalleryVenueRow>(
-                  `${galleryVenueSelect} FOR UPDATE`,
-                  [item.venueId],
-                )).rows[0];
-                name = current?.name ?? name;
-                const lockedActive = await loadGalleryActive(c, item.venueId, true);
-                const gate = planGalleryRow(current, item, lockedActive);
-                if (gate.action !== "READY" || !current) return gate;
-
-                // Row lock held: version is stable; CAS still required so a mismatch rolls back.
-                if (current.version !== item.expectedVersion) {
-                  return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
-                }
-                const verified = await services.media.verifyStage(c, storageKey, staged);
-                const approvalId = await services.moderation.bindImage(c, approval, verified, "cover");
-                const position = lockedActive.length;
-                if (position >= VENUE_GALLERY_MAX) {
-                  return { action: "FAILED" as const, reason: "VENUE_GALLERY_FULL" };
-                }
-                const isMain = lockedActive.length === 0;
-                const inserted = (await c.query<{ id: string }>(
-                  `INSERT INTO venue_gallery_items(
-                     venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
-                     credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
-                   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-                  [
-                    item.venueId, position, isMain, storageKey, approvalId, userId,
-                    item.evidence.creditKind, item.evidence.creditText, item.evidence.creditUrl,
-                    item.evidence.sourceUrl ?? null, item.evidence.sourceAuthor ?? null,
-                    item.evidence.permissionBasis, item.sha256.toLowerCase(),
-                  ],
-                )).rows[0];
-                if (!inserted) throw new Error("GALLERY_INSERT_FAILED");
-                await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1", [storageKey]);
-                await projectVenueMainCover(c, item.venueId);
-                const updated = (await c.query<{ version: number }>(
-                  `UPDATE venues SET version=version+1, updated_at=now()
-                   WHERE id=$1 AND version=$2 RETURNING version`,
-                  [item.venueId, item.expectedVersion],
-                )).rows[0];
-                if (!updated) throw new Error("VENUE_VERSION_CONFLICT");
-
-                const receiptBody = buildAcceptedGalleryReceipt(batch.manifest, item, itemIndex);
-                const audit = await appendAudit(c, {
-                  actor: { principalId, roles: ["superadmin"] },
-                  action: "venue.gallery_add",
-                  targetType: "venue",
-                  targetId: item.venueId,
-                  permission: "venue.manage",
-                  reason: "venue_gallery_batch_import",
-                  keyHash,
-                  before: { version: current.version },
-                  after: {
-                    version: updated.version,
-                    batch: receiptBody.batch,
-                    file: receiptBody.file,
-                    fingerprint: receiptBody.fingerprint,
-                    itemIndex: receiptBody.itemIndex,
-                    itemId: inserted.id,
-                    sha256: receiptBody.sha256,
-                    evidence: receiptBody.evidence,
-                    position,
-                    isMain,
-                    digest: currentDigest,
-                  },
-                });
-                await c.query(
-                  "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'gallery',$3,$4)",
-                  [item.venueId, updated.version, principalId, audit],
+            const priorAttempt = await loadGalleryAttempt(pool, keyHash);
+            if (priorAttempt) {
+              result = planGalleryAttemptReplay(fingerprint, currentDigest, priorAttempt);
+            } else {
+              const preview = (await pool.query<GalleryVenueRow>(galleryVenueSelect, [item.venueId])).rows[0];
+              name = preview?.name ?? "";
+              const active = await loadGalleryActive(pool, item.venueId);
+              result = planGalleryRow(preview, item, active);
+              if (result.action === "READY") {
+                const bytes = batch.images.get(item.file);
+                if (!bytes) throw new Error("INVALID_IMAGE");
+                validateGalleryImage(bytes, item.sha256);
+                // Durable attempt before stage/provider; retained across publication rollback.
+                const attemptGate = await commitGalleryAttemptOrReplay(
+                  pool, principalId, userId, batch.manifest, item, itemIndex,
+                  fingerprint, keyHash, currentDigest,
                 );
-                return { action: "APPLIED" as const, reason: "IMPORTED", itemId: inserted.id };
-              });
-              result = { action: applied.action, reason: applied.reason };
-              if (applied.action === "APPLIED" && "itemId" in applied && typeof applied.itemId === "string") {
-                itemId = applied.itemId;
+                if (attemptGate.action !== "READY") {
+                  result = attemptGate;
+                } else {
+                  const sanitized = await sanitizeAvatar(bytes, "image/jpeg", "cover");
+                  key = `${randomBytes(32).toString("hex")}.png`;
+                  const staged = await services.media.stage(key, sanitized);
+                  const approval = await services.moderation.approveImage(userId, sanitized, "cover");
+                  const storageKey = key;
+                  const applied = await adminTransaction(pool, async (c) => {
+                    if (await requireImportActor(c, principalId) !== userId) {
+                      throw new Error("IMPORT_ACTOR_REFUSED");
+                    }
+                    await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
+                    const liveDigests = await loadGalleryBatchDigests(c, batch.manifest.batch);
+                    const liveBind = planGalleryManifestBind(currentDigest, liveDigests);
+                    if (liveBind) return liveBind;
+                    const terminal = await loadAcceptedGalleryReceipt(c, keyHash);
+                    if (terminal) return { ...planGalleryReplay(fingerprint, terminal) };
+
+                    const current = (await c.query<GalleryVenueRow>(
+                      `${galleryVenueSelect} FOR UPDATE`,
+                      [item.venueId],
+                    )).rows[0];
+                    name = current?.name ?? name;
+                    const lockedActive = await loadGalleryActive(c, item.venueId, true);
+                    const gate = planGalleryRow(current, item, lockedActive);
+                    if (gate.action !== "READY" || !current) return gate;
+
+                    // Row lock held: version is stable; CAS still required so a mismatch rolls back.
+                    if (current.version !== item.expectedVersion) {
+                      return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
+                    }
+                    const verified = await services.media.verifyStage(c, storageKey, staged);
+                    const approvalId = await services.moderation.bindImage(c, approval, verified, "cover");
+                    const position = lockedActive.length;
+                    if (position >= VENUE_GALLERY_MAX) {
+                      return { action: "FAILED" as const, reason: "VENUE_GALLERY_FULL" };
+                    }
+                    const isMain = lockedActive.length === 0;
+                    const inserted = (await c.query<{ id: string }>(
+                      `INSERT INTO venue_gallery_items(
+                         venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+                         credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
+                       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                      [
+                        item.venueId, position, isMain, storageKey, approvalId, userId,
+                        item.evidence.creditKind, item.evidence.creditText, item.evidence.creditUrl,
+                        item.evidence.sourceUrl ?? null, item.evidence.sourceAuthor ?? null,
+                        item.evidence.permissionBasis, item.sha256.toLowerCase(),
+                      ],
+                    )).rows[0];
+                    if (!inserted) throw new Error("GALLERY_INSERT_FAILED");
+                    await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1", [storageKey]);
+                    await projectVenueMainCover(c, item.venueId);
+                    const updated = (await c.query<{ version: number }>(
+                      `UPDATE venues SET version=version+1, updated_at=now()
+                       WHERE id=$1 AND version=$2 RETURNING version`,
+                      [item.venueId, item.expectedVersion],
+                    )).rows[0];
+                    if (!updated) throw new Error("VENUE_VERSION_CONFLICT");
+
+                    const receiptBody = buildAcceptedGalleryReceipt(batch.manifest, item, itemIndex);
+                    const audit = await appendAudit(c, {
+                      actor: { principalId, roles: ["superadmin"] },
+                      action: "venue.gallery_add",
+                      targetType: "venue",
+                      targetId: item.venueId,
+                      permission: "venue.manage",
+                      reason: "venue_gallery_batch_import",
+                      keyHash,
+                      before: { version: current.version },
+                      after: {
+                        version: updated.version,
+                        batch: receiptBody.batch,
+                        file: receiptBody.file,
+                        fingerprint: receiptBody.fingerprint,
+                        itemIndex: receiptBody.itemIndex,
+                        itemId: inserted.id,
+                        sha256: receiptBody.sha256,
+                        evidence: receiptBody.evidence,
+                        position,
+                        isMain,
+                        digest: currentDigest,
+                      },
+                    });
+                    await c.query(
+                      "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'gallery',$3,$4)",
+                      [item.venueId, updated.version, principalId, audit],
+                    );
+                    return { action: "APPLIED" as const, reason: "IMPORTED", itemId: inserted.id };
+                  });
+                  result = { action: applied.action, reason: applied.reason };
+                  if (applied.action === "APPLIED" && "itemId" in applied && typeof applied.itemId === "string") {
+                    itemId = applied.itemId;
+                  }
+                }
               }
             }
           }

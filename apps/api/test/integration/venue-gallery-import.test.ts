@@ -15,6 +15,7 @@ import { FakeModerationProvider } from "../../src/moderation/fake-provider";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { MutationRunner } from "../../src/common/mutation-runner.service";
 import { ActorFenceService } from "../../src/common/actor-fence.service";
+import { problem } from "../../src/auth/problem";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -190,6 +191,18 @@ run("venue gallery import: disposable PostGIS", () => {
     expect(lines).toContainEqual(expect.objectContaining({ action: "READY", usage: "UNKNOWN" }));
 
     expect(await importVenueGallery(db(), input, actor, true, { media, moderation }, (l) => lines.push(l))).toBe(0);
+    expect((await db().query(
+      `SELECT count(*)::int AS n FROM privileged_audit_events
+       WHERE action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_attempt'
+         AND after_diff->>'batch'=$1`,
+      [input.manifest.batch],
+    )).rows[0]!.n).toBe(1);
+    expect((await db().query(
+      `SELECT count(*)::int AS n FROM privileged_audit_events
+       WHERE action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_import'
+         AND after_diff->>'batch'=$1`,
+      [input.manifest.batch],
+    )).rows[0]!.n).toBe(1);
     const after = (await db().query<{
       version: number; cover_key: string; position: number; is_main: boolean; source_fingerprint: string; storage_key: string;
     }>(
@@ -349,9 +362,111 @@ run("venue gallery import: disposable PostGIS", () => {
     };
     const lines: object[] = [];
     const beforeGallery = (await db().query(`SELECT count(*)::int AS n FROM venue_gallery_items WHERE venue_id=$1 AND active`, [venueId])).rows[0]!.n;
+    const bindFailCalls = fake.calls;
     expect(await importVenueGallery(db(), input, actor, true, { media, moderation: brokenModeration }, (l) => lines.push(l))).toBe(1);
     expect((await db().query(`SELECT count(*)::int AS n FROM venue_gallery_items WHERE venue_id=$1 AND active`, [venueId])).rows[0]!.n).toBe(beforeGallery);
     expect((await db().query(`SELECT version FROM venues WHERE id=$1`, [venueId])).rows[0]!.version).toBe(version);
+    expect(fake.calls).toBeGreaterThan(bindFailCalls);
+    // Attempt survives publication rollback; exact retry HOLD with no second paid call.
+    const bindRetryLines: object[] = [];
+    const bindRetryCalls = fake.calls;
+    expect(await importVenueGallery(db(), input, actor, true, { media, moderation }, (l) => bindRetryLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(bindRetryCalls);
+    expect(bindRetryLines).toContainEqual(expect.objectContaining({
+      action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN",
+    }));
+    expect((await db().query(
+      `SELECT count(*)::int AS n FROM privileged_audit_events
+       WHERE action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_attempt'
+         AND after_diff->>'batch'=$1`,
+      [input.manifest.batch],
+    )).rows[0]!.n).toBeGreaterThanOrEqual(1);
+
+    // Injected approveImage UNKNOWN → attempt retained; exact HOLD; changed payload/tail conflict; no provider.
+    const unkVenue = await seedVenue("Unk Hall", "Unk Address 1");
+    await seedMainCover(unkVenue, await jpeg("unk-main"));
+    const unkVersion = (await db().query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [unkVenue])).rows[0]!.version;
+    const unkBytes = await jpeg("unk-append");
+    const unkInput = galleryBatch(unkVenue, [{
+      bytes: unkBytes, expectedVersion: unkVersion, name: "Unk Hall", address: "Unk Address 1",
+    }], "unknown-batch");
+    const unknownModeration: Pick<ContentModerationService, "approveImage" | "bindImage"> = {
+      approveImage: async () => {
+        throw problem(503, "MODERATION_TEMPORARILY_UNAVAILABLE", "Проверка фото временно недоступна");
+      },
+      bindImage: (...args) => moderation.bindImage(...args),
+    };
+    const unkLines: object[] = [];
+    const unkStarted = fake.calls;
+    expect(await importVenueGallery(db(), unkInput, actor, true, { media, moderation: unknownModeration }, (l) => unkLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(unkStarted);
+    expect(unkLines).toContainEqual(expect.objectContaining({
+      action: "HOLD", reason: "MODERATION_TEMPORARILY_UNAVAILABLE",
+    }));
+    const unkExactLines: object[] = [];
+    const unkExactCalls = fake.calls;
+    expect(await importVenueGallery(db(), unkInput, actor, true, { media, moderation }, (l) => unkExactLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(unkExactCalls);
+    expect(unkExactLines).toContainEqual(expect.objectContaining({
+      action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN",
+    }));
+    const dryHold: object[] = [];
+    expect(await importVenueGallery(db(), unkInput, actor, false, { media, moderation }, (l) => dryHold.push(l))).toBe(1);
+    expect(dryHold).toContainEqual(expect.objectContaining({
+      action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN",
+    }));
+    const mutatedUnk = await jpeg("unk-mutated");
+    const mutatedSha = createHash("sha256").update(mutatedUnk).digest("hex");
+    const mutatedFile = `${unkVenue}-${mutatedSha.slice(0, 16)}.jpg`;
+    const changedPayload = {
+      manifest: validateGalleryManifest({
+        schema: "VENUE_GALLERY_BATCH_V1",
+        batch: unkInput.manifest.batch,
+        count: 1,
+        items: [{
+          ...unkInput.manifest.items[0]!,
+          file: mutatedFile,
+          sha256: mutatedSha,
+          evidence: { ...unkInput.manifest.items[0]!.evidence, sourceFingerprint: mutatedSha },
+        }],
+      }),
+      images: new Map([[mutatedFile, mutatedUnk]]),
+    };
+    const changedLines: object[] = [];
+    const changedCalls = fake.calls;
+    expect(await importVenueGallery(db(), changedPayload, actor, true, { media, moderation }, (l) => changedLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(changedCalls);
+    expect(changedLines).toContainEqual(expect.objectContaining({
+      action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT",
+    }));
+    const tailBytes = await jpeg("unk-tail");
+    const tailSha = createHash("sha256").update(tailBytes).digest("hex");
+    const tailFile = `${unkVenue}-${tailSha.slice(0, 16)}.jpg`;
+    const withTail = {
+      manifest: validateGalleryManifest({
+        schema: "VENUE_GALLERY_BATCH_V1",
+        batch: unkInput.manifest.batch,
+        count: 2,
+        items: [
+          unkInput.manifest.items[0]!,
+          {
+            ...unkInput.manifest.items[0]!,
+            expectedVersion: unkVersion + 1,
+            file: tailFile,
+            sha256: tailSha,
+            evidence: { ...unkInput.manifest.items[0]!.evidence, sourceFingerprint: tailSha },
+          },
+        ],
+      }),
+      images: new Map([...unkInput.images, [tailFile, tailBytes]]),
+    };
+    const tailLines: object[] = [];
+    const tailCalls = fake.calls;
+    expect(await importVenueGallery(db(), withTail, actor, true, { media, moderation }, (l) => tailLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(tailCalls);
+    expect(tailLines).toContainEqual(expect.objectContaining({
+      action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT",
+    }));
 
     const healthy = galleryBatch(venueId, [{ bytes: await jpeg("conc"), expectedVersion: version }], "concurrency-batch");
     const started = fake.calls;

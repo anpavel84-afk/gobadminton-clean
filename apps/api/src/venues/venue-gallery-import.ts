@@ -101,6 +101,16 @@ export type AcceptedGalleryReceipt = {
   evidence: GalleryEvidence;
 };
 
+/** Pre-provider attempt bound in privileged_audit_events (reason venue_gallery_batch_attempt). */
+export type GalleryAttemptRecord = {
+  fingerprint: string;
+  digest: string;
+  batch: string;
+  file: string;
+  sha256: string;
+  itemIndex: number;
+};
+
 function stableStringify(value: unknown): string {
   return JSON.stringify(sortValue(value));
 }
@@ -167,6 +177,18 @@ export function planGalleryReplay(
     return { action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" };
   }
   return { action: "SKIPPED", reason: "GALLERY_IMPORT_REPLAY" };
+}
+
+/** Exact attempt without accepted receipt → HOLD; any payload/digest drift → conflict. */
+export function planGalleryAttemptReplay(
+  fingerprint: string,
+  currentDigest: string,
+  attempt: GalleryAttemptRecord,
+): GalleryImportPlan {
+  if (attempt.fingerprint !== fingerprint || attempt.digest !== currentDigest) {
+    return { action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" };
+  }
+  return { action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN" };
 }
 
 /** Identity / lifecycle / gallery shape / capacity / active-fingerprint gate. */

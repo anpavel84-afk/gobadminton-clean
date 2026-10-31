@@ -8,6 +8,7 @@ import {
   galleryAdmissionKeyHash,
   galleryItemFingerprint,
   galleryManifestDigest,
+  planGalleryAttemptReplay,
   planGalleryManifestBind,
   planGalleryReplay,
   planGalleryRow,
@@ -179,6 +180,16 @@ describe("venue gallery batch validation", () => {
     }).reason).toBe("GALLERY_IMPORT_REPLAY");
     expect(planGalleryReplay("0".repeat(64), {
       fingerprint: fp, batch: "reviewed-gallery-1", file: rowItem.file, sha256: sha, itemIndex: 0, evidence: evidence(sha),
+    }).reason).toBe("GALLERY_IMPORT_CONFLICT");
+    const digest = galleryManifestDigest(validateGalleryManifest(fixture([rowItem])));
+    expect(planGalleryAttemptReplay(fp, digest, {
+      fingerprint: fp, digest, batch: "reviewed-gallery-1", file: rowItem.file, sha256: sha, itemIndex: 0,
+    })).toEqual({ action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN" });
+    expect(planGalleryAttemptReplay(fp, digest, {
+      fingerprint: "0".repeat(64), digest, batch: "reviewed-gallery-1", file: rowItem.file, sha256: sha, itemIndex: 0,
+    }).reason).toBe("GALLERY_IMPORT_CONFLICT");
+    expect(planGalleryAttemptReplay(fp, "0".repeat(64), {
+      fingerprint: fp, digest, batch: "reviewed-gallery-1", file: rowItem.file, sha256: sha, itemIndex: 0,
     }).reason).toBe("GALLERY_IMPORT_CONFLICT");
   });
 
