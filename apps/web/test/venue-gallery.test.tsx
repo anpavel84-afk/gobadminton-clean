@@ -192,6 +192,30 @@ describe("VenuePopup + VenueGallery compact composition gestures", () => {
     return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(elements)];
   }
 
+  it("preserves controlled index on same-venue remount and resets uncontrolled on new venue", () => {
+    class FakeImage { decoding = ""; src = ""; }
+    vi.stubGlobal("Image", FakeImage);
+    const multi = venue([
+      { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+      { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } },
+    ]);
+    const onIndexChange = vi.fn();
+    // Controlled remount (compact→expanded): do not push main-index back to the parent.
+    ssr(<VenueGallery venue={multi} size="compact" index={1} onIndexChange={onIndexChange} />);
+    hooks.effects.splice(0).forEach(fn => fn());
+    expect(onIndexChange).not.toHaveBeenCalled();
+    const controlled = ssr(<VenueGallery venue={multi} index={1} onIndexChange={onIndexChange} />);
+    hooks.effects.splice(0).forEach(fn => fn());
+    expect(onIndexChange).not.toHaveBeenCalled();
+    expect(controlled).toContain("2/2");
+    expect(controlled).toContain(url("b"));
+    // Uncontrolled still starts on main and resets when venue id changes.
+    const first = ssr(<VenueGallery venue={multi} />);
+    expect(first).toContain("1/2");
+    const next = ssr(<VenueGallery venue={{ ...multi, id: "a0000000-0000-4000-8000-000000000099" }} />);
+    expect(next).toContain("1/2");
+  });
+
   it("keeps horizontal gallery capture; vertical still expands popup; swipe suppresses click", () => {
     vi.useFakeTimers();
     class FakeImage {
@@ -371,5 +395,221 @@ describe("VenuePopup + VenueGallery compact composition gestures", () => {
       currentTarget: surface, target: copySource, preventDefault: vi.fn(),
     });
     expect(previewCapture.has(3)).toBe(true);
+  });
+
+  it("event-order: gallery lostcapture after parent takeover does not cancel vertical; horizontal then vertical; genuine target loss resets; fresh pointerdown clears suppressClick", () => {
+    vi.useFakeTimers();
+    class FakeImage { decoding = ""; src = ""; }
+    vi.stubGlobal("Image", FakeImage);
+    if (typeof window === "undefined") vi.stubGlobal("window", new EventTarget());
+    const galleryCapture = new Set<number>();
+    const previewCapture = new Set<number>();
+    const galleryTarget = {
+      className: "gb-venue-gallery",
+      setPointerCapture: (id: number) => galleryCapture.add(id),
+      hasPointerCapture: (id: number) => galleryCapture.has(id),
+      releasePointerCapture: (id: number) => galleryCapture.delete(id),
+    };
+    const previewButton = {
+      className: "gb-venue-preview-button",
+      setPointerCapture: (id: number) => previewCapture.add(id),
+      hasPointerCapture: (id: number) => previewCapture.has(id),
+      releasePointerCapture: (id: number) => previewCapture.delete(id),
+      closest(selector: string) {
+        if (selector === ".gb-venue-preview-button") return this;
+        if (selector === ".gb-venue-gallery") return null;
+        if (selector === ".gb-venue-handle") return null;
+        return null;
+      },
+    };
+    const gallerySource = {
+      closest(selector: string) {
+        if (selector === ".gb-venue-gallery") return galleryTarget;
+        if (selector === ".gb-venue-preview-button") return previewButton;
+        if (selector === ".gb-venue-handle") return null;
+        return null;
+      },
+    };
+    const change = vi.fn();
+    const deselect = vi.fn();
+    const indexChange = vi.fn();
+    const multi = venue([
+      { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+      { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } },
+    ]);
+    const popupSlots = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
+    const gallerySlots = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
+    let popupTree: ReactNode = null;
+    let galleryNode: ReactElement<Record<string, unknown>> | null = null;
+    const surface = {
+      setPointerCapture: previewButton.setPointerCapture,
+      hasPointerCapture: previewButton.hasPointerCapture,
+      releasePointerCapture: previewButton.releasePointerCapture,
+    };
+    const renderPopup = () => {
+      hooks.slots = popupSlots.slots; hooks.cleanups = popupSlots.cleanups; hooks.cursor = 0; hooks.effects = [];
+      popupTree = VenuePopup({
+        expanded: false, onExpandedChange: change, onDeselect: deselect,
+        preview: <VenuePreviewCard venue={multi as never} games={[]} gamesReady now={0} onOpen={() => change(true)}
+          galleryIndex={0} onGalleryIndexChange={indexChange} />,
+        children: <div>full</div>,
+      });
+      for (const item of elements(popupTree)) {
+        const ref = item.props.ref as { current: unknown } | undefined;
+        if (ref) {
+          ref.current = {
+            getBoundingClientRect: () => ({
+              height: item.props.className === "gb-venue-popup-full-measure" ? 772 : 172,
+              width: 366,
+            }),
+          };
+        }
+      }
+      hooks.effects.splice(0).forEach(fn => fn());
+      popupSlots.slots = hooks.slots; popupSlots.cleanups = hooks.cleanups;
+    };
+    const renderGallery = () => {
+      hooks.slots = gallerySlots.slots; hooks.cleanups = gallerySlots.cleanups; hooks.cursor = 0; hooks.effects = [];
+      const tree = VenueGallery({
+        venue: multi, size: "compact", showCredit: false, index: 0, onIndexChange: indexChange,
+      });
+      galleryNode = elements(tree).find(node => node.props.className === "gb-venue-gallery") ?? null;
+      hooks.effects.splice(0).forEach(fn => fn());
+      gallerySlots.slots = hooks.slots; gallerySlots.cleanups = hooks.cleanups;
+    };
+
+    // 1) Parent vertical takeover then bubbled gallery lostcapture must keep moving.
+    renderPopup();
+    renderGallery();
+    const shell = elements(popupTree).find(node => node.props.className === "gb-venue-popup")!;
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 10, button: 0, clientX: 60, clientY: 736, currentTarget: galleryTarget, target: gallerySource,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (shell.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 10, button: 0, isPrimary: true, clientX: 60, clientY: 736,
+      currentTarget: surface, target: gallerySource, preventDefault: vi.fn(),
+    });
+    // Popup axis-locks at 8px before gallery's 10px release — matches browser trace.
+    (shell.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 10, clientX: 60, clientY: 722, currentTarget: surface, preventDefault: vi.fn(),
+    });
+    expect(previewCapture.has(10)).toBe(true);
+    renderPopup();
+    expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props["data-moving"]).toBe(true);
+    (shell.props.onLostPointerCapture as (e: unknown) => void)({
+      pointerId: 10, target: galleryTarget, currentTarget: surface,
+    });
+    renderPopup();
+    expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props["data-moving"]).toBe(true);
+    expect(previewCapture.has(10)).toBe(true);
+    (shell.props.onPointerUp as (e: unknown) => void)({
+      pointerId: 10, clientX: 60, clientY: 640, currentTarget: surface, preventDefault: vi.fn(),
+    });
+    expect(change).toHaveBeenCalledWith(true);
+    vi.advanceTimersByTime(220);
+
+    // 2) Horizontal complete clears pending via capture-phase up; next vertical still works.
+    change.mockClear(); galleryCapture.clear(); previewCapture.clear();
+    popupSlots.cleanups.forEach(fn => fn?.());
+    popupSlots.slots = []; popupSlots.cleanups = [];
+    gallerySlots.cleanups.forEach(fn => fn?.());
+    gallerySlots.slots = []; gallerySlots.cleanups = [];
+    renderPopup();
+    renderGallery();
+    const shellH = elements(popupTree).find(node => node.props.className === "gb-venue-popup")!;
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 11, button: 0, clientX: 100, clientY: 100, currentTarget: galleryTarget, target: gallerySource,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (shellH.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 11, button: 0, isPrimary: true, clientX: 100, clientY: 100,
+      currentTarget: surface, target: gallerySource, preventDefault: vi.fn(),
+    });
+    (galleryNode!.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 11, clientX: 40, clientY: 102, currentTarget: galleryTarget,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (galleryNode!.props.onPointerUp as (e: unknown) => void)({
+      pointerId: 11, clientX: 40, clientY: 102, currentTarget: galleryTarget, stopPropagation: vi.fn(),
+    });
+    // Gallery swallowed bubble up; capture-phase up still clears gallery-owned pending.
+    (shellH.props.onPointerUpCapture as (e: unknown) => void)({ pointerId: 11 });
+    (shellH.props.onPointerDownCapture as () => void)();
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 12, button: 0, clientX: 100, clientY: 400, currentTarget: galleryTarget, target: gallerySource,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (shellH.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 12, button: 0, isPrimary: true, clientX: 100, clientY: 400,
+      currentTarget: surface, target: gallerySource, preventDefault: vi.fn(),
+    });
+    (galleryNode!.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 12, clientX: 101, clientY: 360, currentTarget: galleryTarget,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (shellH.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 12, clientX: 101, clientY: 360, currentTarget: surface, preventDefault: vi.fn(),
+    });
+    expect(previewCapture.has(12)).toBe(true);
+    (shellH.props.onPointerUp as (e: unknown) => void)({
+      pointerId: 12, clientX: 101, clientY: 300, currentTarget: surface, preventDefault: vi.fn(),
+    });
+    expect(change).toHaveBeenCalledWith(true);
+    vi.advanceTimersByTime(220);
+
+    // 3) Genuine capture loss on the active parent target still resets.
+    change.mockClear(); galleryCapture.clear(); previewCapture.clear();
+    popupSlots.cleanups.forEach(fn => fn?.());
+    popupSlots.slots = []; popupSlots.cleanups = [];
+    renderPopup();
+    renderGallery();
+    const shellLoss = elements(popupTree).find(node => node.props.className === "gb-venue-popup")!;
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 13, button: 0, clientX: 60, clientY: 736, currentTarget: galleryTarget, target: gallerySource,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (shellLoss.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 13, button: 0, isPrimary: true, clientX: 60, clientY: 736,
+      currentTarget: surface, target: gallerySource, preventDefault: vi.fn(),
+    });
+    (shellLoss.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 13, clientX: 60, clientY: 722, currentTarget: surface, preventDefault: vi.fn(),
+    });
+    renderPopup();
+    expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props["data-moving"]).toBe(true);
+    previewCapture.delete(13);
+    (shellLoss.props.onLostPointerCapture as (e: unknown) => void)({
+      pointerId: 13, target: previewButton, currentTarget: surface,
+    });
+    renderPopup();
+    expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props["data-moving"]).toBe(false);
+    expect(change).not.toHaveBeenCalled();
+
+    // 4) Swipe sets suppressClick; fresh pointerdown clears it so the first tap is not swallowed.
+    gallerySlots.cleanups.forEach(fn => fn?.());
+    gallerySlots.slots = []; gallerySlots.cleanups = [];
+    renderGallery();
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 14, button: 0, clientX: 100, clientY: 100, currentTarget: galleryTarget, target: gallerySource,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (galleryNode!.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 14, clientX: 40, clientY: 102, currentTarget: galleryTarget,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (galleryNode!.props.onPointerUp as (e: unknown) => void)({
+      pointerId: 14, clientX: 40, clientY: 102, currentTarget: galleryTarget, stopPropagation: vi.fn(),
+    });
+    const swallowed = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    (galleryNode!.props.onClickCapture as (e: unknown) => void)(swallowed);
+    expect(swallowed.preventDefault).toHaveBeenCalled();
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 15, button: 0, clientX: 100, clientY: 100, currentTarget: galleryTarget, target: gallerySource,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    const tap = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    (galleryNode!.props.onClickCapture as (e: unknown) => void)(tap);
+    expect(tap.preventDefault).not.toHaveBeenCalled();
   });
 });

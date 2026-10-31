@@ -35,6 +35,12 @@ vi.mock("../src/components/consumer/radar/RadarPage", () => ({ RadarPage: () => 
 vi.mock("../src/components/consumer/games/VenueGameActions", () => ({
   VenueGameActions: ({ gameId }: { gameId: string }) => <section data-game-actions-for={gameId} />,
 }));
+// Same map-lifetime isolation: real VenueGallery hooks would run against the parent
+// hook-array during renderToStaticMarkup(sheetTree) and clear selection. Dedicated
+// gallery composition + browser touch cover the real Gallery/Popup contract.
+vi.mock("../src/components/consumer/venues/VenueGallery", () => ({
+  VenueGallery: ({ coverSlot }: { coverSlot?: React.ReactNode }) => coverSlot ?? null,
+}));
 vi.mock("../src/components/consumer/NavIcon", () => ({ shuttlecockElement: () => ({ setAttribute() {} }) }));
 vi.mock("pmtiles", () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock("maplibre-gl", () => ({

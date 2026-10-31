@@ -109,9 +109,12 @@ export function VenueGallery({
   const useMorphSlot = Boolean(coverSlot && current && mainUrl && current.url === mainUrl && failed !== current.url);
 
   useEffect(() => {
+    setFailed(null);
+    // Parent-owned controlled index survives compact→expanded remount on the same venue.
+    // Uncontrolled (and new-venue parent resets) still start on the main image.
+    if (controlledIndex !== undefined) return;
     const next = mainIndex(readItems(venue.profile ?? null, venue.cover), venue.cover);
     commitIndex(next);
-    setFailed(null);
     // Reset only when the selected venue identity changes.
   }, [venue.id]);
 
@@ -147,6 +150,8 @@ export function VenueGallery({
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (items.length < 2 || event.button !== 0) return;
+    // A fresh real press clears stale swipe click-suppression so the first tap is not swallowed.
+    suppressClick.current = false;
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: "pending" };
     event.currentTarget.setPointerCapture(event.pointerId);
     // Do not stopPropagation: VenuePopup tracks pending vertical takeover without

@@ -215,6 +215,21 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
     suppress.current = false;
     setMoving(false); setSettling(false); setCompactMorph(false); setPosition(null);
   };
+  // Gallery releasePointerCapture / parent setPointerCapture fires a bubbled
+  // lostpointercapture from the old child. That must not cancel an active
+  // vertical takeover that already holds capture on the preview/surface.
+  const compactLostPointerCapture = (event: PointerEvent<HTMLDivElement>) => {
+    const current = compactDrag.current;
+    if (!current || current.id !== event.pointerId) return;
+    if (
+      current.axis === "vertical"
+      && event.target !== current.target
+      && current.target.hasPointerCapture(current.id)
+    ) {
+      return;
+    }
+    compactPointerCancel(event);
+  };
   const progress = compactMorph && position !== null
     ? Math.max(0, Math.min(1, position / compactMorphGeometry.current.travel)) : 0;
   const mediaWidth = Math.max(64, compactMorphGeometry.current.width - 32);
@@ -255,8 +270,15 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
         onPointerDown={desktop || expanded ? undefined : compactPointerDown}
         onPointerMove={desktop || expanded ? undefined : compactPointerMove}
         onPointerUp={desktop || expanded ? undefined : compactPointerUp}
+        // Capture-phase up clears gallery-owned pending after a horizontal swipe
+        // (gallery stopPropagation otherwise leaves stale pending that blocks the next gesture).
+        onPointerUpCapture={desktop || expanded ? undefined : (event) => {
+          const current = compactDrag.current;
+          if (!current || current.id !== event.pointerId || current.axis === "vertical") return;
+          if (current.galleryOwned) releaseCompact();
+        }}
         onPointerCancel={desktop || expanded ? undefined : compactPointerCancel}
-        onLostPointerCapture={desktop || expanded ? undefined : compactPointerCancel}
+        onLostPointerCapture={desktop || expanded ? undefined : compactLostPointerCapture}
         onClickCapture={desktop ? undefined : event => {
           if (event.detail === 0) return;
           if (suppress.current) { suppress.current = false; event.preventDefault(); event.stopPropagation(); }
