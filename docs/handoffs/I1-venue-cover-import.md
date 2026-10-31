@@ -167,3 +167,47 @@ Rollback of this revision: discard only this revision's two-file diff through th
 authorized delivery process. No commit/push/publication or Git metadata mutation
 was performed. Next recipient: independent QA via authorized external delivery;
 re-run C6 with provisioned offline tooling and disposable PostGIS before acceptance.
+
+## Metadata mode (Issue #422 Phase A — public contacts/facts)
+
+Same CLI entry `import-venue-covers`, explicit `--public-data`. Default cover mode
+unchanged (no flag ⇒ images + moderation path). Metadata mode reads one bounded
+regular JSON manifest via the existing `readBatchFile` adapter; no image/provider
+calls. Schema `VENUE_PUBLIC_DATA_BATCH_V1`: batch slug, count ≤50, unique venue
+UUIDs; each item requires `expectedVersion` / `expectedName` / `expectedAddress`,
+at least one of `publicContacts` / `profile` (existing schemas; explicit `null`
+clears), and ≥1 public HTTP(S) `sources[]` evidence. Unknown private/lifecycle/
+identity/cover fields are rejected. Pure module:
+`apps/api/src/venues/venue-public-data-import.ts`. Writer:
+`importVenuePublicData` in the existing entry.
+
+Dry-run (default): `BEGIN READ ONLY`, non-locking actor predicate, inspect only;
+stdout `{venueId,name,action,reason}` plus totals/digest. No audit/outbox/version
+writes. Apply: per-row `adminTransaction`, authority recheck, catalog advisory
+lock, row `FOR UPDATE`, identity exact match, idempotent replay by
+`sha256(venue_public_data_v1\\nbatch\\nvenueId)` before CAS; first-time CAS on
+`expectedVersion`; updates only `public_contacts` and/or profile fact columns +
+`version`; audit `venue.edit` / `venue.manage` / `venue_public_data_batch_import`
+with complete-item fingerprint and validated `sources[]` (url/checkedAt/note) in
+the same transactional `after_diff`; `venue_admin_actions` action `edit` +
+outbox like Admin edit. Fingerprint covers venueId, expectedVersion, expectedName,
+expectedAddress, publicContacts/profile and sources. Same key + identical accepted
+item (original expectedVersion) + matching applied fields ⇒ SKIPPED before version
+gate; same key + any changed accepted field (including source-only or version-only)
+⇒ FAILED `PUBLIC_DATA_CONFLICT`; accepted key + external drift ⇒ FAILED
+`PUBLIC_DATA_DRIFT`. Identity gate may still fail `VENUE_IDENTITY_MISMATCH` first
+but must not silently replay a changed request. Row failure rolls back that venue
+and continues; exit 1 if any FAILED.
+
+Operator (DEV container; PMA supplies reviewed JSON outside Git; confirm current
+versions before apply):
+
+```sh
+node dist/database/import-venue-covers.js --public-data --dir /reviewed-public-data --manifest batch.json --actor-principal-id <active-superadmin-principal-uuid>
+node dist/database/import-venue-covers.js --public-data --dir /reviewed-public-data --manifest batch.json --actor-principal-id <active-superadmin-principal-uuid> --apply
+```
+
+Separate: source-proof dataset (reviewer evidence) ≠ installation of this CLI ≠
+rows actually APPLIED. No gallery/UI/Admin/migration in this pass. Author checks
+NOT_TESTED here (no local node_modules/pnpm install in this sandbox); PMA runs
+types/unit/disposable DB + independent Medium QA + mandatory CI + DEV.
