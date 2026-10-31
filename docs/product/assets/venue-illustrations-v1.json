@@ -1,0 +1,54 @@
+{
+  "issue": 422,
+  "owner_request": "Generate varied non-location-specific badminton illustrations for venues without a photograph",
+  "assets": [
+    {
+      "file": "apps/web/public/discovery/venue-illustrations/racket-v1.webp",
+      "kind": "illustration",
+      "depicts_specific_venue": false,
+      "generated_by": "built-in image_gen",
+      "model": "UNKNOWN_NOT_EXPOSED_BY_TOOL",
+      "prompt": "Use case: stylized-concept. Asset: finished wide 3:2 editorial illustration for GoBadminton venue-cover fallback, also safely crop to a central wide 3:1 strip. Premium tactile 3D illustration, elegant sports still life: one unbranded badminton racket and one white feather shuttlecock, dynamic diagonal balanced arrangement, detailed fine strings and crisp feathers. Deep forest green studio backdrop with a restrained lime green light accent, warm clean illumination and soft sculptural shadows. Subjects occupy central safe area; clean composition, visually legible at small thumbnail size. NOT a picture of a venue: absolutely no room, court, hall, buildings, net, landscape, signage, identifiable location or people. No words, letters, numbers, logos, watermarks or borders. Beautiful polished coherent app asset, no UI mockup. Opaque background.",
+      "delivery_bytes": 105104,
+      "delivery_sha256": "fa6573736c163e59542c7af37b53270079d1d3cd10ffc00863ff8fba43d0a670",
+      "credit": "Иллюстрация",
+      "use": "presentation fallback only, never counted as an authentic venue photo"
+    },
+    {
+      "file": "apps/web/public/discovery/venue-illustrations/hand-v1.webp",
+      "kind": "illustration",
+      "depicts_specific_venue": false,
+      "generated_by": "built-in image_gen",
+      "model": "UNKNOWN_NOT_EXPOSED_BY_TOOL",
+      "prompt": "Use case: stylized-concept. Finished wide 3:2 premium editorial sports illustration for a GoBadminton generic venue cover, central crop-safe composition for a wide 3:1 strip. Close-up of one anonymous adult hand naturally gripping a slender unbranded badminton racket handle, racket head sweeping diagonally toward upper center and one white feather shuttlecock suspended nearby. Tactile polished 3D editorial still-life feel, no face or body, anatomically correct single hand, refined lighting, warm off-white studio backdrop with subtle lavender and forest-green accents. Clear spacious composition, high detail but legible as thumbnail. No identifiable location: no gym, court, architecture, net, scenery. No text, branding, logos, watermark or border. Opaque backdrop. This is thematic illustration, never an image of an actual club.",
+      "delivery_bytes": 63378,
+      "delivery_sha256": "cf4ac4c5183d8c2c188555564f5a53f391015f7d656645ffdba75bcc14c4b260",
+      "credit": "Иллюстрация",
+      "use": "presentation fallback only, never counted as an authentic venue photo"
+    },
+    {
+      "file": "apps/web/public/discovery/venue-illustrations/shuttles-v1.webp",
+      "kind": "illustration",
+      "depicts_specific_venue": false,
+      "generated_by": "built-in image_gen",
+      "model": "UNKNOWN_NOT_EXPOSED_BY_TOOL",
+      "prompt": "Use case: stylized-concept. Finished wide 3:2 premium editorial 3D still-life illustration for a GoBadminton generic venue-cover fallback, central subjects safely crop into wide 3:1. Three beautiful white feather badminton shuttlecocks in a graceful staggered airborne arrangement, delicate feathers, rounded cork tips, elegant natural object proportions. Restrained lilac-purple studio backdrop, warm soft illumination, subtle deep-green and pale-lime accents, sculptural shadows, premium editorial sports campaign aesthetic. Spacious balanced composition, no people, racket optional not needed. No hall, court, architecture, net or recognizable place. No text, numbers, branding, logos, watermark or border. Opaque background. Clearly thematic equipment imagery rather than a venue photograph.",
+      "delivery_bytes": 66438,
+      "delivery_sha256": "8d0882fd5f645e9122b48d8f3b9bb8a1a78372ce7febf25f6cec5a3987647da1",
+      "credit": "Иллюстрация",
+      "use": "presentation fallback only, never counted as an authentic venue photo"
+    },
+    {
+      "file": "apps/web/public/discovery/venue-illustrations/pair-v1.webp",
+      "kind": "illustration",
+      "depicts_specific_venue": false,
+      "generated_by": "built-in image_gen",
+      "model": "UNKNOWN_NOT_EXPOSED_BY_TOOL",
+      "prompt": "Use case: stylized-concept. Finished wide 3:2 premium tactile 3D editorial still-life for GoBadminton generic venue cover. Two elegant unbranded badminton rackets, one dark forest-green and one subtle lavender, overlap in a dynamic diagonal balanced arrangement with one white feather shuttlecock between them. Central framing crop-safe for a wide 3:1 cover as well as square thumbnails. Warm off-white/cream studio backdrop with a restrained lime-green accent, soft sculptural shadows, polished refined materials, fine racket strings, visually clean and confident premium sports composition. No people, no hall, court, architecture, net, location clues, text, letters, logos, branding, watermarks or borders. Opaque background. Do not depict a specific sporting facility.",
+      "delivery_bytes": 89916,
+      "delivery_sha256": "fc170857650259b212bc37144ac2c5a90a68069613d17fad94d0fb5956341d7a",
+      "credit": "Иллюстрация",
+      "use": "presentation fallback only, never counted as an authentic venue photo"
+    }
+  ]
+}
