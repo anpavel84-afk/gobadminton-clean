@@ -60,6 +60,7 @@ export type PublicDataVenueRow = {
   court_count: number | null;
   amenity_parking: boolean | null;
   amenity_showers: boolean | null;
+  public_description: string | null;
 };
 
 export type PublicDataPlan = { action: "READY" | "SKIPPED" | "FAILED"; reason: string };
@@ -113,15 +114,20 @@ export function contactsEqual(left: PublicVenueContacts | null, right: PublicVen
 }
 
 export function profileFactsEqual(
-  row: Pick<PublicDataVenueRow, "court_count" | "amenity_parking" | "amenity_showers">,
+  row: Pick<PublicDataVenueRow, "court_count" | "amenity_parking" | "amenity_showers" | "public_description">,
   profile: z.infer<typeof venueProfileEditSchema>,
 ): boolean {
   if (profile === null) {
-    return row.court_count === null && row.amenity_parking === null && row.amenity_showers === null;
+    return row.court_count === null && row.amenity_parking === null && row.amenity_showers === null
+      && row.public_description === null;
   }
+  const descriptionMatches = !Object.prototype.hasOwnProperty.call(profile, "description")
+    ? true
+    : row.public_description === (profile.description ?? null);
   return row.court_count === profile.courtCount
     && row.amenity_parking === profile.amenities.parking
-    && row.amenity_showers === profile.amenities.showers;
+    && row.amenity_showers === profile.amenities.showers
+    && descriptionMatches;
 }
 
 export function appliedPublicFieldsMatch(

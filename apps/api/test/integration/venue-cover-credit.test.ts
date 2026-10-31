@@ -36,13 +36,13 @@ run("0037 venue cover credit: disposable PostGIS and public API", () => {
     url.pathname = "/" + databaseName;
     pool = new Pool({ connectionString: url.href });
     await pool.query("CREATE TABLE schema_migrations(id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
-    const files = (await readdir(dir)).filter(file => file.endsWith(".sql") && file <= "0036_venue_contacts.sql").sort();
+    // Through 0045: current VenuesService reads venue_gallery_items. 0037 credit CHECKs and
+    // empty-schema 0037 rollback remain valid on this additive stack (credits cleared first).
+    const files = (await readdir(dir)).filter(file => file.endsWith(".sql") && file < "0046").sort();
     for (const file of files) {
       await pool.query(await readFile(path.join(dir, file), "utf8"));
       await pool.query("INSERT INTO schema_migrations(id) VALUES($1)", [file.replace(/\.sql$/, "")]);
     }
-    await pool.query(await readFile(path.join(dir, "0037_venue_cover_credit.sql"), "utf8"));
-    await pool.query("INSERT INTO schema_migrations(id) VALUES('0037_venue_cover_credit')");
     const user = (await pool.query<{ id: string }>("INSERT INTO users(display_name) VALUES('Synthetic attribution') RETURNING id")).rows[0];
     if (user === undefined) throw new Error("Missing fixture user");
     actorId = user.id;

@@ -137,6 +137,7 @@ describe("venue public data batch validation", () => {
       court_count: null,
       amenity_parking: null,
       amenity_showers: null,
+      public_description: null,
     };
     expect(planPublicDataRow(undefined, item).action).toBe("FAILED");
     expect(planPublicDataRow({ ...row, lifecycle_state: "retired" }, item).action).toBe("SKIPPED");
@@ -187,6 +188,7 @@ describe("venue public data batch validation", () => {
       court_count: null,
       amenity_parking: null,
       amenity_showers: null,
+      public_description: null,
     };
     const receipt = {
       fingerprint: baseFp,

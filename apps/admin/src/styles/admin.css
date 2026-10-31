@@ -15,3 +15,7 @@
 .venue-field-error{color:var(--ink);font-size:14px;font-weight:400!important;border-left:3px solid var(--danger);padding-left:12px;overflow-wrap:anywhere}
 .venue-messenger{min-width:0;border-top:1px solid var(--line);margin-top:24px;padding-top:8px}
 .venue-photo-lock{min-width:0;margin:0;padding:0;border:0}
+.venue-gallery-admin{list-style:none;padding:0;margin:0;display:grid;gap:24px}
+.venue-gallery-admin li{min-width:0;padding-bottom:16px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.venue-gallery-evidence{min-width:0;margin:24px 0;padding:16px;border:1px solid var(--line);border-radius:var(--radius-sm)}
+.venue-profile-fields textarea{width:100%;min-height:96px;padding:12px 16px;border:1px solid var(--line-dark);border-radius:var(--radius-sm);background:var(--white);font:inherit;color:inherit;resize:vertical}

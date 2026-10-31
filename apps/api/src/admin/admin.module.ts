@@ -1,6 +1,7 @@
 import { ProfilesModule } from "../profiles/profiles.module";
 import { ModerationModule } from "../moderation/moderation.module";
 import { VenueCoverService } from "../venues/venue-cover.service";
+import { VenueGalleryService } from "../venues/venue-gallery.service";
 import { AdminVenuesService } from "../venues/admin-venues.service";
 import { AdminVenuesController } from "./venues.controller";
 import { AdminCasesController } from "./cases.controller";
@@ -23,6 +24,7 @@ import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
     { provide: CASE_EVIDENCE_POLICY, useClass: SyntheticCaseEvidencePolicy },
     AdminService,
     AdminVenuesService,
+    VenueGalleryService,
     VenueCoverService,
     AdminUserRestrictionsService,
     AdminGameModerationService,

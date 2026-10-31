@@ -77,7 +77,7 @@ export async function requireImportActor(
   return row.user_id;
 }
 
-const publicDataSelect = `SELECT name,address,lifecycle_state,version,canonical_venue_id,public_contacts,court_count,amenity_parking,amenity_showers
+const publicDataSelect = `SELECT name,address,lifecycle_state,version,canonical_venue_id,public_contacts,court_count,amenity_parking,amenity_showers,public_description
   FROM venues WHERE id=$1`;
 
 async function loadAcceptedPublicDataReceipt(
@@ -138,6 +138,29 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
             [item.venueId,storageKey,approvalId,userId,item.kind,item.credit_text,item.source_page_url])).rows[0];
           if (!updated) throw new Error("VENUE_NOT_FOUND");
           await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1",[storageKey]);
+          // Keep gallery main atomic with legacy cover columns after batch import.
+          const main = (await c.query<{id:string}>(
+            `SELECT id FROM venue_gallery_items WHERE venue_id=$1 AND active AND is_main FOR UPDATE`,
+            [item.venueId],
+          )).rows[0];
+          if (main) {
+            await c.query(
+              `UPDATE venue_gallery_items SET storage_key=$2, moderation_approval_id=$3, actor_id=$4,
+                 credit_kind=$5, credit_text=$6, credit_url=$7, source_url=$8, permission_basis=$9,
+                 source_fingerprint=$10, updated_at=now() WHERE id=$1`,
+              [main.id, storageKey, approvalId, userId, item.kind, item.credit_text, item.source_page_url,
+                item.kind === "photo" ? item.source_page_url : null, item.basis_note, item.sha256.toLowerCase()],
+            );
+          } else {
+            await c.query(
+              `INSERT INTO venue_gallery_items(
+                 venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+                 credit_kind, credit_text, credit_url, source_url, permission_basis, source_fingerprint
+               ) VALUES ($1,0,true,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+              [item.venueId, storageKey, approvalId, userId, item.kind, item.credit_text, item.source_page_url,
+                item.kind === "photo" ? item.source_page_url : null, item.basis_note, item.sha256.toLowerCase()],
+            );
+          }
           const audit = await appendAudit(c,{actor:{principalId,roles:["superadmin"]},action:"venue.cover_changed",targetType:"venue",targetId:item.venueId,
             permission:"venue.manage",reason:"venue_cover_batch_import",after:{batch:batch.manifest.batch,kind:item.kind,sha256:item.sha256.toLowerCase(),basis_note:item.basis_note}});
           await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'cover',$3,$4)",[item.venueId,updated.version,principalId,audit]);
@@ -236,20 +259,25 @@ export async function importVenuePublicData(
         const contactsJson = touchContacts
           ? (item.publicContacts === null ? null : JSON.stringify(item.publicContacts))
           : null;
+        const touchDescription = touchProfile && item.profile !== null
+          && Object.prototype.hasOwnProperty.call(item.profile, "description");
+        const clearProfile = touchProfile && item.profile === null;
         const updated = (await c.query<{
           version: number;
           public_contacts: unknown;
           court_count: number | null;
           amenity_parking: boolean | null;
           amenity_showers: boolean | null;
+          public_description: string | null;
         }>(`UPDATE venues SET
             public_contacts=CASE WHEN $2::boolean THEN $3::jsonb ELSE public_contacts END,
             court_count=CASE WHEN $4::boolean THEN $5::integer ELSE court_count END,
             amenity_parking=CASE WHEN $4::boolean THEN $6::boolean ELSE amenity_parking END,
             amenity_showers=CASE WHEN $4::boolean THEN $7::boolean ELSE amenity_showers END,
+            public_description=CASE WHEN $8::boolean THEN $9::text WHEN $10::boolean THEN NULL ELSE public_description END,
             version=version+1, updated_at=now()
-          WHERE id=$1 AND version=$8
-          RETURNING version, public_contacts, court_count, amenity_parking, amenity_showers`,
+          WHERE id=$1 AND version=$11
+          RETURNING version, public_contacts, court_count, amenity_parking, amenity_showers, public_description`,
         [
           item.venueId,
           touchContacts,
@@ -258,6 +286,9 @@ export async function importVenuePublicData(
           item.profile?.courtCount ?? null,
           item.profile?.amenities.parking ?? null,
           item.profile?.amenities.showers ?? null,
+          touchDescription,
+          touchDescription ? (item.profile?.description ?? null) : null,
+          clearProfile,
           item.expectedVersion,
         ])).rows[0];
         if (!updated) return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
@@ -270,6 +301,7 @@ export async function importVenuePublicData(
           court_count: updated.court_count,
           amenity_parking: updated.amenity_parking,
           amenity_showers: updated.amenity_showers,
+          public_description: updated.public_description,
         };
         if (!appliedPublicFieldsMatch(afterRow, applied)) {
           throw new Error("PUBLIC_DATA_READBACK_MISMATCH");
@@ -292,6 +324,7 @@ export async function importVenuePublicData(
           before.profile = {
             courtCount: current.court_count,
             amenities: { parking: current.amenity_parking, showers: current.amenity_showers },
+            description: current.public_description,
           };
           after.profile = applied.profile ?? null;
         }

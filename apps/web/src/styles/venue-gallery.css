@@ -1,0 +1,192 @@
+/* Reuses existing cover shell, icon buttons, 16:9 ratio; no new design system. */
+.gb-venue-gallery-wrap { display: block; min-width: 0; }
+.gb-venue-gallery-wrap.gb-venue-cover--thumb,
+.gb-venue-gallery-wrap.gb-venue-preview-cover { width: 100%; height: 100%; }
+/* Expanded map sheet: outer wrap must not clip credit below the image frame.
+   Beat legacy .gb-consumer/.gb-desktop-map-inspector .gb-venue-sheet-cover clip rules. */
+.gb-venue-gallery-wrap.gb-venue-sheet-cover {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  aspect-ratio: auto;
+  overflow: visible;
+}
+.gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-gallery-wrap.gb-venue-sheet-cover {
+  height: auto;
+  max-height: none;
+  aspect-ratio: auto;
+  overflow: visible;
+}
+.gb-venue-picker-option > .gb-venue-gallery-wrap {
+  width: 64px; height: 64px; justify-self: center;
+}
+/* Create-game picker only: option + optional inline photo expander (not page/map/popup). */
+.gb-venue-picker-option-block {
+  border-bottom: 1px solid var(--gb-line, #d7ddd8);
+}
+.gb-venue-picker-option-block > .gb-venue-picker-option {
+  border-bottom: 0;
+}
+.gb-venue-picker-photos {
+  margin: 0;
+  padding: 0 22px 12px;
+  background: var(--gb-white, #fff);
+}
+.gb-venue-picker-photos__summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--gb-ink-soft, #5c6560);
+  user-select: none;
+}
+.gb-venue-picker-photos__summary::-webkit-details-marker { display: none; }
+.gb-venue-picker-photos__summary::marker { content: ""; }
+.gb-venue-picker-photos__summary:focus-visible {
+  outline: 2px solid var(--gb-ink, #111);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.gb-venue-picker-photos__body {
+  padding: 4px 0 2px;
+  min-width: 0;
+}
+.gb-venue-picker-photos__body > .gb-venue-gallery-wrap {
+  width: 100%;
+}
+.gb-venue-picker-photos__body .gb-venue-gallery {
+  max-height: 200px;
+}
+@media (max-width: 720px) {
+  .gb-venue-picker-photos { padding-left: 16px; padding-right: 16px; }
+}
+@media (min-width: 1024px) {
+  .gb-venue-picker-photos { padding-left: 40px; padding-right: 40px; }
+}
+/* VenuePage .gb-venue-media inherits fixed 300/196 + overflow:hidden from games.css.
+   Scoped override: let image+credit flow; keep reasonable image heights (not game hero). */
+.gb-venue-media:has(> .gb-venue-gallery-wrap) {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+.gb-venue-media > .gb-venue-gallery-wrap > .gb-venue-gallery {
+  max-height: 300px;
+}
+@media (max-width: 600px) {
+  .gb-venue-media > .gb-venue-gallery-wrap > .gb-venue-gallery {
+    max-height: 196px;
+  }
+}
+.gb-venue-gallery {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  max-height: 200px;
+  border-radius: var(--gb-radius-md);
+  overflow: hidden;
+  background: var(--gb-paper, #f3f4f1);
+  touch-action: pan-y;
+}
+.gb-venue-gallery[data-size="compact"] {
+  max-height: none;
+  aspect-ratio: 1 / 1;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--gb-radius-sm);
+  /* Match compact preview surface: horizontal image gesture must not pan the map. */
+  touch-action: none;
+}
+.gb-venue-gallery__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+.gb-venue-gallery__frame > img,
+.gb-venue-gallery__frame > .gb-venue-cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.gb-venue-gallery__frame > .gb-venue-cover { position: absolute; inset: 0; }
+.gb-venue-gallery__nav {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+  padding: 0 8px;
+}
+.gb-venue-gallery__nav > button {
+  pointer-events: auto;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gb-white, #fff) 88%, transparent);
+  color: var(--gb-ink, #111);
+  font: inherit;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.gb-venue-gallery__count {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  min-width: 44px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gb-ink, #111) 62%, transparent);
+  color: var(--gb-white, #fff);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  pointer-events: none;
+}
+.gb-venue-gallery__credit {
+  display: block;
+  margin-top: 8px;
+}
+.gb-desktop-map-inspector .gb-venue-gallery,
+.gb-venue-sheet[data-desktop="true"] .gb-venue-gallery {
+  max-height: 200px;
+}
+@media (max-width: 1023px) {
+  .gb-venue-gallery:not([data-size="compact"]) { max-height: none; }
+}
+/* Compact morph (#422): outer .gb-venue-preview-cover wrap already animates via
+   venue-popup --gb-venue-cover-*; keep the physical SelectedVenueCover image in-place
+   and let the compact gallery frame grow with that wrap (not stay locked at 64).
+   Fallback/no-gallery slot morph is unchanged — these selectors require the wrap+gallery. */
+.gb-venue-popup[data-compact-morph="true"] .gb-venue-gallery-wrap.gb-venue-preview-cover > .gb-venue-gallery[data-size="compact"] {
+  width: 100%;
+  height: 100%;
+}
+/* Nested MAIN slot must fill the gallery frame; do not re-apply outer morph left/top. */
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-gallery__frame > .gb-venue-preview-cover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] .gb-venue-gallery__frame > .gb-venue-preview-cover {
+  transition: none;
+}

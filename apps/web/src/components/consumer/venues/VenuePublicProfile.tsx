@@ -22,21 +22,41 @@ function contentDate(value: unknown): string | null {
   return Number.isFinite(date.getTime()) && date.toISOString() === value ? value : null;
 }
 
-function galleryPhoto(value: unknown, cover: Venue["cover"]): VenueProfile["gallery"]["items"][number] | null {
+function readDescription(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (text.length < 1 || text.length > 500) return null;
+  if (Array.from(text).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  })) return null;
+  return text;
+}
+
+function galleryPhotos(value: unknown): VenueProfile["gallery"]["items"] {
   const gallery = record(value);
-  if (gallery.coverage !== "cover_only" || !Array.isArray(gallery.items) || gallery.items.length !== 1) return null;
-  const item = record(gallery.items[0]), credit = record(item.credit);
-  const url = venueCoverUrl(item.url);
-  const attribution = httpsCreditUrl(credit.url);
-  if (!url || url !== venueCoverUrl(cover?.uploadedUrl) || credit.kind !== "photo"
-    || typeof credit.text !== "string" || !credit.text.startsWith("Фото: ")
-    || credit.text.trim().length <= 6 || credit.text.length > 120
-    || Array.from(credit.text).some(character => {
-      const code = character.charCodeAt(0);
-      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-    })
-    || !attribution) return null;
-  return { url, credit: { kind: "photo", text: credit.text, url: attribution } };
+  if (gallery.coverage !== "ordered" && gallery.coverage !== "cover_only") return [];
+  if (!Array.isArray(gallery.items)) return [];
+  const photos: VenueProfile["gallery"]["items"] = [];
+  for (const raw of gallery.items) {
+    const item = record(raw), credit = record(item.credit);
+    const url = venueCoverUrl(item.url);
+    const attribution = httpsCreditUrl(credit.url);
+    if (!url || credit.kind !== "photo"
+      || typeof credit.text !== "string" || !credit.text.startsWith("Фото: ")
+      || credit.text.trim().length <= 6 || credit.text.length > 120
+      || Array.from(credit.text).some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+      })
+      || !attribution) continue;
+    photos.push({
+      id: typeof item.id === "string" ? item.id : url,
+      url,
+      credit: { kind: "photo", text: credit.text, url: attribution },
+    });
+  }
+  return photos;
 }
 
 function ProfilePhoto({ photo }: { photo: VenueProfile["gallery"]["items"][number] }) {
@@ -63,10 +83,12 @@ export function VenuePublicProfile({
   const count = profile.courtCount;
   const courtCount = typeof count === "number" && Number.isInteger(count) && count >= 0 && count <= 2147483647 ? count : null;
   const updatedAt = contentDate(profile.updatedAt);
-  const photo = galleryPhoto(profile.gallery, venue.cover);
+  const description = readDescription(profile.description);
+  const photos = galleryPhotos(profile.gallery);
   return <div className="gb-venue-public-profile">
     <section className="gb-venue-profile-section" aria-label="О площадке">
       <h2>О площадке</h2>
+      {description && <p className="gb-venue-profile-description">{description}</p>}
       <dl className="gb-venue-profile-facts">
         <div><dt>Количество кортов</dt><dd>{courtCount ?? "Нет данных"}</dd></div>
         <div><dt>Парковка</dt><dd>{amenity(amenities.parking)}</dd></div>
@@ -75,6 +97,6 @@ export function VenuePublicProfile({
       {updatedAt && <p className="gb-venue-profile-updated">Содержимое обновлено: <time dateTime={updatedAt}>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(updatedAt))}</time></p>}
     </section>
     {!omitContacts && <VenuePublicContacts value={venue.publicContacts} />}
-    {photo && <ProfilePhoto key={photo.url} photo={photo} />}
+    {photos.map((photo) => <ProfilePhoto key={photo.id} photo={photo} />)}
   </div>;
 }

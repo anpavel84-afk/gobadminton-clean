@@ -170,10 +170,17 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
       throw error;
     }
   }
-  /** Venue derivatives are public only while the current owning row and approval allow them. */
+  /** Venue derivatives are public only while an approved active main or gallery child allows them. */
   async readVenueCover(key: string): Promise<Buffer> {
     const file = this.filename(key);
-    const current = await this.pool.query("SELECT 1 FROM venues WHERE cover_key=$1 AND venue_cover_url(id) IS NOT NULL", [key]);
+    const current = await this.pool.query(
+      `SELECT 1 FROM venues WHERE cover_key=$1 AND venue_cover_url(id) IS NOT NULL
+       UNION ALL
+       SELECT 1 FROM venue_gallery_items g
+       WHERE g.storage_key=$1 AND g.active AND venue_gallery_item_url(g.id) IS NOT NULL
+       LIMIT 1`,
+      [key],
+    );
     if (!current.rowCount) throw notFound("COVER_UNAVAILABLE", "Обложка недоступна");
     try { return await readFile(file); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notFound("COVER_UNAVAILABLE", "Обложка недоступна");
@@ -217,7 +224,13 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
           // Serialize collectors and publication/staging on the journal only.
           const journal = await client.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1 AND not_before<=now() FOR UPDATE SKIP LOCKED", [row.storage_key]);
           if (journal.rowCount) {
-            const ref = await client.query("SELECT 1 FROM player_social_profiles WHERE avatar_key = $1 OR cover_key = $1 UNION ALL SELECT 1 FROM venues WHERE cover_key=$1 UNION ALL SELECT 1 FROM games WHERE cover_key=$1", [row.storage_key]);
+            const ref = await client.query(
+              `SELECT 1 FROM player_social_profiles WHERE avatar_key = $1 OR cover_key = $1
+               UNION ALL SELECT 1 FROM venues WHERE cover_key=$1
+               UNION ALL SELECT 1 FROM games WHERE cover_key=$1
+               UNION ALL SELECT 1 FROM venue_gallery_items WHERE storage_key=$1 AND active`,
+              [row.storage_key],
+            );
             if (!ref.rowCount) {
               try { await unlink(this.filename(row.storage_key)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
               await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [row.storage_key]);

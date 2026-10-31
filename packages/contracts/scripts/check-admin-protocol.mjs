@@ -26,7 +26,7 @@ for(const [path,item] of Object.entries(api.paths)) {
   }
  }
 }
-// Venue covers add scoped cover/access reads and replace/remove mutations.
-assert.equal(operations,32,"Update this inventory deliberately when adding an Admin operation");
+// Venue covers + ordered gallery add/replace/delete/reorder/set-main and gallery read.
+assert.equal(operations,38,"Update this inventory deliberately when adding an Admin operation");
 for(const path of proofs) assert(api.paths[path]?.post, `Missing proof ceremony ${path}`);
 console.log(`ADMIN PROTOCOL CHECK: PASS (${operations} operations; three bound single-use proof ceremonies)`);

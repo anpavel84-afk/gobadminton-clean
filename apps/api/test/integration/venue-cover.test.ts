@@ -131,11 +131,13 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     const starts=new Date(Date.now()+2*86400000),ends=new Date(+starts+3600000);
     const game=await service.createDraft(owner.userId,session.session.id,randomUUID(),{hostDisplayName:"Synthetic host",hostPublicContact:"Synthetic contact",venueId:v.id,startsAt:starts.toISOString(),endsAt:ends.toISOString(),timezone:"Europe/Moscow",applicationDeadlineAt:starts.toISOString(),capacity:4,externalReservedCount:0,visibility:"public",formatKey:"doubles",activityKind:"regular",levelRule:{scaleId:"test",scaleVersion:1,allowedLevelIds:["test"]},settlement:{mode:"external",purpose:"no_trainer_fee",priceMinor:null,currency:null,terms:"Synthetic"}});
     await service.publish(owner.userId,session.session.id,game.body.id,randomUUID(),game.body.version);
+    // Legacy cover upload without gallery evidence defaults to illustration credit (0045 sync).
+    const coverCredit=(url:string|null)=>url?{uploadedUrl:url,credit:{kind:"illustration",text:"Иллюстрация",url:null}}:{uploadedUrl:null,credit:null};
     async function projections(expected:string|null){
       const detail=await read(`/v1/games/${game.body.id}`);expect(detail.statusCode,detail.body).toBe(200);expect(detail.json().venue).toMatchObject({id:v.id,cover:{uploadedUrl:expected}});
       const list=await read(`/v1/games?venueId=${v.id}`);expect(list.statusCode,list.body).toBe(200);expect(list.json().items.find((g:{id:string})=>g.id===game.body.id)?.venue).toMatchObject({id:v.id,cover:{uploadedUrl:expected}});
-      expect((await read(`/v1/venues/${v.id}`)).json().cover).toEqual({uploadedUrl:expected,credit:null});
-      const catalog=await read(`/v1/venues?cityId=${cityId}`);expect(catalog.json().items.find((r:{id:string})=>r.id===v.id)?.cover).toEqual({uploadedUrl:expected,credit:null});
+      expect((await read(`/v1/venues/${v.id}`)).json().cover).toEqual(coverCredit(expected));
+      const catalog=await read(`/v1/venues?cityId=${cityId}`);expect(catalog.json().items.find((r:{id:string})=>r.id===v.id)?.cover).toEqual(coverCredit(expected));
     }
     await projections(null);
     const key=randomUUID(),saved=await upload(v.id,1,owner,key);expect(saved.statusCode,saved.body).toBe(200);const url=saved.json().cover.uploadedUrl;
@@ -189,7 +191,7 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     expect(url).toEqual(expect.any(String));
     const before=(await pool.query("SELECT version,cover_key,cover_moderation_approval_id,cover_actor_id FROM venues WHERE id=$1",[v.id])).rows[0];
     const publicBefore=(await read(`/v1/venues/${v.id}`)).json();
-    expect(publicBefore.cover).toEqual({uploadedUrl:url,credit:null});
+    expect(publicBefore.cover).toEqual({uploadedUrl:url,credit:{kind:"illustration",text:"Иллюстрация",url:null}});
     const bytesBefore=await read(url);expect(bytesBefore.statusCode).toBe(200);
     // Distinct sanitized bytes must reach moderation rather than reuse an approval.
     const replacement=await sharp({create:{width:900,height:600,channels:3,background:"red"}}).png().toBuffer();

@@ -9,6 +9,7 @@ export type PublicContacts = {
 export type EditableProfile = {
   courtCount: number | null;
   amenities: { parking: boolean | null; showers: boolean | null };
+  description?: string | null;
 };
 export type VenueProfileSource = {
   publicContacts?: PublicContacts | null;
@@ -22,10 +23,11 @@ export type VenueProfileDraft = {
   courtCount: string;
   parking: NullableChoice;
   showers: NullableChoice;
+  description: string;
   contactsChanged: boolean;
   profileChanged: boolean;
 };
-export type VenueProfileErrors = Partial<Record<"phone" | "website" | "courtCount" | `messenger-${number}`, string>>;
+export type VenueProfileErrors = Partial<Record<"phone" | "website" | "courtCount" | "description" | `messenger-${number}`, string>>;
 export type VenueProfilePatch = { publicContacts?: PublicContacts | null; profile?: EditableProfile | null };
 
 const choice = (value: boolean | null | undefined): NullableChoice => value == null ? "unknown" : value ? "yes" : "no";
@@ -37,6 +39,7 @@ export function initializeVenueProfile(source: VenueProfileSource): VenueProfile
     courtCount: source.profile?.courtCount == null ? "" : String(source.profile.courtCount),
     parking: choice(source.profile?.amenities?.parking),
     showers: choice(source.profile?.amenities?.showers),
+    description: source.profile?.description ?? "",
     contactsChanged: false,
     profileChanged: false,
   };
@@ -129,9 +132,19 @@ export function validateVenueProfile(draft: VenueProfileDraft): { patch: VenuePr
     if (raw !== "" && (!/^\d+$/.test(raw) || !Number.isInteger(courtCount) || courtCount! > 2147483647)) {
       errors.courtCount = "Укажите целое число от 0 до 2147483647 или оставьте поле пустым, если неизвестно.";
     }
+    const descriptionRaw = draft.description.trim();
+    if (descriptionRaw.length > 500 || Array.from(draft.description).some(character => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    })) {
+      errors.description = "Краткое описание до 500 символов без управляющих символов, или пустое поле.";
+    }
     const flag = (value: NullableChoice): boolean | null => value === "unknown" ? null : value === "yes";
     const parking = flag(draft.parking), showers = flag(draft.showers);
-    patch.profile = courtCount === null && parking === null && showers === null ? null : { courtCount, amenities: { parking, showers } };
+    const description = descriptionRaw === "" ? null : descriptionRaw;
+    patch.profile = courtCount === null && parking === null && showers === null && description === null
+      ? null
+      : { courtCount, amenities: { parking, showers }, description };
   }
   return { patch, errors };
 }

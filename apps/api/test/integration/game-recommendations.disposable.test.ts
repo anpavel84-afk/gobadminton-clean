@@ -61,6 +61,8 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     const existing=await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'spatial_ref_sys'");
     if(existing.rows.length)throw new Error("Requires EMPTY disposable application schema");
     await pool.query("CREATE TABLE schema_migrations(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())");
+    // N-1 recommendations schema: migrations before 0041 only. Venue gallery 0045 is independent
+    // additive (current venues API); applied after 0041 rollback proof so N-1 stays free of 0041.
     for(const file of (await readdir(migrations)).filter(f=>f.endsWith(".sql")&&f<"0041").sort()) await migrate(file);
     env=loadEnv({NODE_ENV:"test",APP_ENV:"local",DATABASE_URL:databaseUrl,PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",
       PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",AUTH_PEPPER:"fr3a-synthetic-fixture-pepper-only",
@@ -86,6 +88,10 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
       expect((await client.query("SELECT to_regclass('game_recommendations') AS name")).rows[0].name).toBeNull();
       expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(40);
     }finally{await client.query("ROLLBACK");client.release();}
+    // Independent additive venue gallery for current venues API (does not enable 0042).
+    await migrate("0045_venue_gallery.sql");
+    expect((await pool.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(42);
+    expect((await pool.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
     // After 0041 + Friends admission, FR-3B capability follows friends eligibility.
     expect((await get(old,"/v1/me/social-capabilities")).json()).toEqual({
       friends:true,gameRecommendations:true,gameAttention:false,socialPush:false});

@@ -56,9 +56,12 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     const existing = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'spatial_ref_sys'");
     if (existing.rows.length) throw new Error("Requires EMPTY disposable application schema");
     await pool.query("CREATE TABLE schema_migrations(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())");
+    // N-1 outcomes schema: migrations before 0042 only. Venue gallery 0045 is an independent
+    // additive dependency of current VenuesService (venue_gallery_items); apply it without 0042.
     for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql") && f < "0042").sort()) {
       await migrate(file);
     }
+    await migrate("0045_venue_gallery.sql");
     env = loadEnv({
       NODE_ENV: "test",
       APP_ENV: "local",
@@ -98,7 +101,10 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       await client.query("BEGIN");
       await client.query(await readFile(path.join(migrations, "rollback/0042_game_outcomes.sql"), "utf8"));
       expect((await client.query("SELECT to_regclass('game_outcomes') AS name")).rows[0].name).toBeNull();
-      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(41);
+      // Explicit ledger after independent 0045 + rolled-back 0042: 0001–0041 and 0045 (not blanket len).
+      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(42);
+      expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
+      expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0042_game_outcomes'")).rowCount).toBe(0);
     } finally {
       await client.query("ROLLBACK");
       client.release();

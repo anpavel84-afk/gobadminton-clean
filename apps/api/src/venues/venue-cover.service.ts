@@ -8,13 +8,18 @@ import { conflict, notFound, serviceUnavailable } from "../auth/problem";
 import { AvatarService } from "../profiles/avatar.service";
 import { sanitizeAvatar } from "../profiles/avatar-image";
 import { ContentModerationService } from "../moderation/moderation.service";
+import { VenueGalleryService } from "./venue-gallery.service";
 
 /** No consumer role or supplied UI flag can grant venue.manage. Only superadmin may manage eligible catalog venues without creator ownership. */
 @Injectable()
 export class VenueCoverService {
   private processing = 0;
-  constructor(private readonly admin: AdminService, private readonly media: AvatarService,
-    private readonly moderation: ContentModerationService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly media: AvatarService,
+    private readonly moderation: ContentModerationService,
+    private readonly gallery: VenueGalleryService,
+  ) {}
   private async scope(c: PoolClient, actor: AdminActor, id: string) {
     const user = await c.query("SELECT id FROM users WHERE id=$1 AND status='active' FOR UPDATE",[actor.principal.user_id]);
     if (!user.rowCount) throw notFound("VENUE_NOT_FOUND", "Площадка недоступна для редактирования");
@@ -22,6 +27,7 @@ export class VenueCoverService {
       WHERE id=$1 AND (created_by_user_id=$2 OR $3::boolean) AND lifecycle_state IN ('unverified','verified') FOR UPDATE`,
       [id, actor.principal.user_id, actor.roles.includes("superadmin")])).rows[0];
     if (!row) throw notFound("VENUE_NOT_FOUND", "Площадка недоступна для редактирования");
+    await c.query("SELECT id FROM venue_gallery_items WHERE venue_id=$1 AND active ORDER BY position FOR UPDATE", [id]);
     return row;
   }
   async get(request: FastifyRequest, id: string) {
@@ -55,19 +61,26 @@ export class VenueCoverService {
       return await this.admin.privilegedCommand(request,replayKey,"venue.manage",true,"venue.cover",input,async(c,a,keyHash) => {
         if (a.principal.version !== authority.version || a.sessionId !== authority.sessionId || a.principal.user_id !== authority.userId)
           throw conflict("VENUE_AUTHORITY_CHANGED", "Права изменились. Обновите данные.");
+        await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
         const row = await this.scope(c,a,id);
         if (row.version !== expectedVersion) throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
         const bytes = key && staged ? await this.media.verifyStage(c,key,staged) : undefined;
         const approvalId = approval && bytes ? await this.moderation.bindImage(c,approval,bytes,"cover") : null;
-        const updated = (await c.query<{version:number}>(`UPDATE venues SET cover_key=$2,cover_moderation_approval_id=$3,
-          cover_actor_id=$4,version=version+1,updated_at=now() WHERE id=$1 RETURNING version`,
-          [id,key??null,approvalId,key?authority.userId:null])).rows[0]!;
+        if (key && approvalId) {
+          await this.gallery.syncLegacyCoverReplace(c, id, key, approvalId, authority.userId);
+        } else {
+          await this.gallery.syncLegacyCoverRemove(c, id);
+        }
+        await this.gallery.syncMainCover(c, id, key ? authority.userId : null);
+        const updated = (await c.query<{version:number}>(
+          `UPDATE venues SET version=version+1,updated_at=now() WHERE id=$1 RETURNING version`, [id],
+        )).rows[0]!;
         if (key) await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1",[key]);
         const auditId = await appendAudit(c,{actor:a,action:"venue.cover_changed",targetType:"venue",targetId:id,
           permission:"venue.manage",reason:"venue_cover",keyHash,before:{version:row.version},after:{version:updated.version}});
         await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'cover',$3,$4)",[id,updated.version,a.principalId,auditId]);
         const cover = (await c.query<{url:string|null}>("SELECT venue_cover_url($1) AS url",[id])).rows[0]!;
-        return {version:updated.version,hasCover:key !== undefined,cover:{uploadedUrl:cover.url}};
+        return {version:updated.version,hasCover:cover.url !== null,cover:{uploadedUrl:cover.url}};
       },async(c,a) => { await this.scope(c,a,id); });
     } finally {
       if (key) await this.media.releaseStage(key);

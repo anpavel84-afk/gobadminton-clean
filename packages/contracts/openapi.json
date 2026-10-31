@@ -16414,6 +16414,889 @@
           }
         }
       }
+    },
+    "/admin/venues/{id}/gallery": {
+      "get": {
+        "operationId": "getManagedVenueGallery",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "getManagedVenueGallery",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited gallery receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueGalleryReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Existing venue.manage + creator/superadmin scope. Ordered active gallery including source/permission evidence. Public media still requires approval + lifecycle."
+      },
+      "post": {
+        "operationId": "addManagedVenueGalleryItem",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "addManagedVenueGalleryItem",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Venue-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Gallery-Credit-Kind",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "photo",
+                "logo",
+                "illustration"
+              ]
+            },
+            "description": "ASCII enum: photo | logo | illustration. Not percent-encoded."
+          },
+          {
+            "name": "X-Gallery-Credit-Text",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Credit-Url",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Url",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Author",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Permission-Basis",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Fingerprint",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional lowercase sha256 hex, or literal token `null`. ASCII only; not percent-encoded."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gallery receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueGalleryReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/gallery/reorder": {
+      "post": {
+        "operationId": "reorderManagedVenueGallery",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "reorderManagedVenueGallery",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VenueGalleryReorderCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gallery receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueGalleryReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/gallery/{itemId}": {
+      "put": {
+        "operationId": "replaceManagedVenueGalleryItem",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "replaceManagedVenueGalleryItem",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Venue-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Gallery-Credit-Kind",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "photo",
+                "logo",
+                "illustration"
+              ]
+            },
+            "description": "ASCII enum: photo | logo | illustration. Not percent-encoded."
+          },
+          {
+            "name": "X-Gallery-Credit-Text",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Credit-Url",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Url",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Author",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Permission-Basis",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Fingerprint",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional lowercase sha256 hex, or literal token `null`. ASCII only; not percent-encoded."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gallery receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueGalleryReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeManagedVenueGalleryItem",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "removeManagedVenueGalleryItem",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VenueGalleryItemCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gallery receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueGalleryReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/gallery/{itemId}/main": {
+      "post": {
+        "operationId": "setManagedVenueGalleryMain",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "setManagedVenueGalleryMain",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VenueGalleryItemCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Gallery receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueGalleryReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -26618,9 +27501,18 @@
                 ]
               }
             }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Optional. Omitted preserves; null clears; short public description only (never booking_note)."
           }
         },
-        "description": "Admin edit only. Omission preserves all facts; null clears all three; complete strict object replaces facts. Unknown/private/read-only keys rejected. No media URL writes."
+        "description": "Admin edit only. Omission preserves all facts; null clears court/amenities/description; complete strict object replaces court/amenities; description key optional inside object. Unknown/private/read-only keys rejected. No media URL writes."
       },
       "VenueProfile": {
         "type": "object",
@@ -26628,6 +27520,7 @@
         "required": [
           "courtCount",
           "amenities",
+          "description",
           "updatedAt",
           "gallery"
         ],
@@ -26682,15 +27575,16 @@
             "properties": {
               "coverage": {
                 "type": "string",
-                "const": "cover_only"
+                "const": "ordered"
               },
               "items": {
                 "type": "array",
-                "maxItems": 1,
+                "maxItems": 8,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
                   "required": [
+                    "id",
                     "url",
                     "credit"
                   ],
@@ -26710,30 +27604,48 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "const": "photo"
+                          "enum": [
+                            "photo",
+                            "logo",
+                            "illustration"
+                          ]
                         },
                         "text": {
                           "type": "string",
-                          "maxLength": 120,
-                          "pattern": "^Фото: .+"
+                          "maxLength": 120
                         },
                         "url": {
-                          "type": "string",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
                           "format": "uri",
-                          "description": "Original HTTPS credit string. format uri is not the authority check. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                          "description": "Original HTTPS credit string when kind is photo/logo; null for illustration. format uri is not the authority check; httpsCreditUrl remains the strict check.",
                           "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                           "maxLength": 300
                         }
                       }
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
                     }
                   }
                 }
               }
             },
             "readOnly": true
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500,
+            "description": "Short informative public description; null unknown. Never private booking_note."
           }
         },
-        "description": "Complete server projection. Unknown facts remain null, false/0 survive. Optional on Venue/AdminVenue during rollout/old receipts; current server emits all keys. Gallery has at most one current eligible moderated photo with safe HTTPS attribution; empty never asserts full gallery inspection/completion. No rating or review/count source."
+        "description": "Complete server projection. Unknown facts remain null, false/0 survive. Optional on Venue/AdminVenue during rollout/old receipts; current server emits all keys. Gallery is the ordered approved public set (max 8) with truthful kind/credit; empty never invents photos. No rating or review/count source."
       },
       "UnifiedUpcomingGame": {
         "type": "object",
@@ -27272,6 +28184,165 @@
           }
         },
         "description": "PG-1a slice: outcome + actions only. No roster, attendance, private host contact, or reviews."
+      },
+      "VenueGalleryCredit": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "text",
+          "url"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photo",
+              "logo",
+              "illustration"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 300
+          }
+        }
+      },
+      "VenueGalleryAdminItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "position",
+          "isMain",
+          "kind",
+          "uploadedUrl",
+          "credit",
+          "sourceUrl",
+          "sourceAuthor",
+          "permissionBasis",
+          "sourceFingerprint"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 7
+          },
+          "isMain": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photo",
+              "logo",
+              "illustration"
+            ]
+          },
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credit": {
+            "$ref": "#/components/schemas/VenueGalleryCredit"
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceAuthor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permissionBasis": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "sourceFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "VenueGalleryReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "items"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/VenueGalleryAdminItem"
+            }
+          }
+        }
+      },
+      "VenueGalleryReorderCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "orderedIds"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "orderedIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "VenueGalleryItemCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        }
       }
     }
   }

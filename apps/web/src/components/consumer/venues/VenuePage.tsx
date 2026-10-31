@@ -3,8 +3,7 @@ import { useEffect, useState } from "react";
 import type { ActivityKind, Venue } from "../../../lib/consumer-types";
 import { ConsumerShell } from "../ConsumerShell";
 import { Button } from "../Button";
-import { VenueCoverCredit } from "./VenueCoverCredit";
-import { VenueCover } from "./VenueCover";
+import { VenueGallery } from "./VenueGallery";
 import { VenuePublicProfile } from "./VenuePublicProfile";
 import { VenuePublicContacts } from "../games/VenueSheet";
 import { GamesMapView } from "../games/GamesMapView";
@@ -36,7 +35,7 @@ export function VenuePage({venueId}:{venueId:string}) {
       {venue ? <h1>{venue.name}</h1> : null}
       {venue ? <p className="gb-venue-page__address">{venue.address}</p> : null}
     </header>
-    {venue?<><div className="gb-venue-layout"><div className="gb-venue-layout__main"><div className="gb-venue-media"><VenueCover name={venue.name} cover={venue.cover}/></div><VenueCoverCredit credit={venue.cover?.credit}/><VenuePublicProfile venue={venue} omitContacts /><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/></div><aside className="gb-venue-layout__rail" aria-label="Контекст площадки"><VenuePublicContacts value={venue.publicContacts} /><div className="gb-venue-rail-note"><strong>На карте</strong><p>Вернитесь к карте, чтобы увидеть площадку среди публичных игр города.</p><Button variant="outline" href={context.returnTo}>К карте</Button></div></aside></div>
+    {venue?<><div className="gb-venue-layout"><div className="gb-venue-layout__main"><div className="gb-venue-media"><VenueGallery venue={venue} size="page" /></div><VenuePublicProfile venue={venue} omitContacts /><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/></div><aside className="gb-venue-layout__rail" aria-label="Контекст площадки"><VenuePublicContacts value={venue.publicContacts} /><div className="gb-venue-rail-note"><strong>На карте</strong><p>Вернитесь к карте, чтобы увидеть площадку среди публичных игр города.</p><Button variant="outline" href={context.returnTo}>К карте</Button></div></aside></div>
     </>:error?<div role="alert"><p>Площадка недоступна.</p><Button onClick={()=>setReload(v=>v+1)}>Повторить</Button></div>:<p role="status">Загружаем площадку…</p>}
   </div></ConsumerShell>;
 }

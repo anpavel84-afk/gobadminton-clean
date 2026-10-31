@@ -9,7 +9,7 @@ import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
 import { CreateGamePage } from "../pages/CreateGamePage";
 import { GameCover } from "./GameCover";
-import { VenueCover } from "../venues/VenueCover";
+import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import { DesktopInspectorGame } from "./DesktopInspectorGame";
@@ -94,9 +94,11 @@ export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; time
   </button>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, galleryIndex, onGalleryIndexChange }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
+  galleryIndex?: number;
+  onGalleryIndexChange?: (index: number, item: GalleryItem | null) => void;
 }) {
   const desktop = useDesktopMapInspector();
   const [view, setView] = useState<"info" | "schedule" | "game" | "create">("info");
@@ -146,7 +148,15 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       ? <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>
       : null;
   const infoBody = <div className="gb-venue-sheet-info">
-    {coverSlot ?? <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />}
+    <VenueGallery
+      venue={venue}
+      className="gb-venue-sheet-cover"
+      coverSlot={coverSlot}
+      showCredit
+      index={galleryIndex}
+      onIndexChange={onGalleryIndexChange}
+    />
+    {venue.profile?.description ? <p className="gb-venue-sheet-description">{venue.profile.description}</p> : null}
     <h3>{venue.name}</h3><p>{venue.address}</p>
     <VenuePublicContacts value={venue.publicContacts} />
     {!gamesReady && <p role="status">Расписание временно недоступно</p>}

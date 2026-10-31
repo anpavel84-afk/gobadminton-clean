@@ -3,6 +3,36 @@ import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, adminReque
 export const dynamic = "force-dynamic";
 const allowedGet = new Set(["auth/me", "audit/security", "games", "reports", "cases"]);
 const allowedPost = new Set(["auth/vk/start", "auth/yandex/start", "auth/webauthn/options", "auth/webauthn/verify", "auth/logout", "cases"]);
+const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const galleryMeta = [
+  "x-gallery-credit-kind",
+  "x-gallery-credit-text",
+  "x-gallery-credit-url",
+  "x-gallery-source-url",
+  "x-gallery-source-author",
+  "x-gallery-permission-basis",
+  "x-gallery-source-fingerprint",
+] as const;
+
+function galleryRoute(method: string, path: string): { kind: "get" | "upload" | "replace" | "json"; binary: boolean } | null {
+  if (new RegExp("^venues/" + uuid + "/gallery$").test(path)) {
+    if (method === "GET") return { kind: "get", binary: false };
+    if (method === "POST") return { kind: "upload", binary: true };
+    return null;
+  }
+  if (new RegExp("^venues/" + uuid + "/gallery/reorder$").test(path)) {
+    return method === "POST" ? { kind: "json", binary: false } : null;
+  }
+  if (new RegExp("^venues/" + uuid + "/gallery/" + uuid + "$").test(path)) {
+    if (method === "PUT") return { kind: "replace", binary: true };
+    if (method === "DELETE") return { kind: "json", binary: false };
+    return null;
+  }
+  if (new RegExp("^venues/" + uuid + "/gallery/" + uuid + "/main$").test(path)) {
+    return method === "POST" ? { kind: "json", binary: false } : null;
+  }
+  return null;
+}
 
 async function proxy(request: Request, context: { params: Promise<{ path: string[] }> }) {
   const config = internalConfig();
@@ -10,13 +40,13 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const path = (await context.params).path.join("/");
   if (!adminRequestPath(request, config, "/v1/admin/" + path))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
-  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
   const cover = new RegExp("^venues/" + uuid + "/cover$").test(path);
   const coverAccess = new RegExp("^venues/" + uuid + "/cover/access$").test(path);
   const coverRoute = (request.method === "GET" && (cover || coverAccess)) || (cover && ["PUT", "DELETE"].includes(request.method));
-  if (!["GET", "POST"].includes(request.method) && !coverRoute)
+  const gallery = galleryRoute(request.method, path);
+  if (!["GET", "POST"].includes(request.method) && !coverRoute && !gallery)
     return new Response(null, {status:404});
-  if (coverRoute && new URL(request.url).search) return new Response(null,{status:400});
+  if ((coverRoute || gallery) && new URL(request.url).search) return new Response(null,{status:400});
   const callback = request.method === "GET" && /^auth\/(vk|yandex)\/callback$/.test(path);
   const caseDetail = /^cases\/[0-9a-f-]{36}$/.test(path);
   const caseEvidence = /^cases\/[0-9a-f-]{36}\/evidence(?:\/[0-9a-f-]{36})?$/.test(path);
@@ -26,18 +56,24 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const gameDetail = /^games\/[0-9a-f-]{36}$/.test(path);
   const gameCommand = /^games\/[0-9a-f-]{36}\/moderation\/commands$/.test(path);
   const venueRoute = request.method === "GET" ? /^venues(?:\/(?:duplicates|[0-9a-f-]{36}(?:\/games)?))?$/.test(path) : /^venues(?:\/(?:[0-9a-f-]{36}\/commands|duplicates\/[0-9a-f-]{36}\/dismiss))?$/.test(path);
-  if (!(coverRoute || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
+  if (!(coverRoute || gallery || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   if (!adminRequestOrigin(request, config, callback))
     return Response.json({ code: "ADMIN_ORIGIN_REJECTED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   const headers = new Headers({ Origin: config.origin, Cookie: adminCookies(request.headers.get("cookie") ?? "") });
-  for (const name of ["content-type", "x-csrf-token", "idempotency-key", ...(coverRoute ? ["x-venue-version"] : [])])
+  const forward = [
+    "content-type", "x-csrf-token", "idempotency-key",
+    ...((coverRoute || gallery) ? ["x-venue-version"] : []),
+    ...(gallery && (gallery.kind === "upload" || gallery.kind === "replace") ? galleryMeta : []),
+  ];
+  for (const name of forward)
     if (request.headers.has(name)) headers.set(name, request.headers.get(name)!);
   let body: ArrayBuffer | undefined;
   if (["POST", "PUT", "DELETE"].includes(request.method)) {
-    const limit = cover && request.method === "PUT" ? 5 * 1024 * 1024 : 65536;
-    if (cover && request.method === "PUT" && !["image/jpeg", "image/png", "image/webp"].includes(headers.get("content-type") ?? ""))
-      return new Response(null, {status:415});
+    const binaryUpload = (cover && request.method === "PUT") || Boolean(gallery?.binary);
+    const limit = binaryUpload ? 5 * 1024 * 1024 : 65536;
+    if (binaryUpload && !["image/jpeg", "image/png", "image/webp"].includes(headers.get("content-type") ?? ""))
+      return new Response(null,{status:415});
     const reader = request.body?.getReader();
     const chunks: Uint8Array[] = []; let size = 0;
     if (reader) {
