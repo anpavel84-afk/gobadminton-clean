@@ -56,7 +56,13 @@ export class VenueGalleryService {
     return { version, items: items.map(mapAdminGalleryItem) };
   }
 
-  async syncMainCover(c: PoolClient, venueId: string, actorUserId: string | null): Promise<void> {
+  /**
+   * Project active main onto venues.cover_*. cover_actor_id is always the media
+   * uploader (main.actor_id); callers may still pass an editor id for compatibility
+   * but it must not rewrite the stored uploader. Cover-key triggers may enqueue the
+   * previous projected key — clear GC for keys that remain live in the gallery.
+   */
+  async syncMainCover(c: PoolClient, venueId: string, _actorUserId: string | null): Promise<void> {
     const main = (await c.query<VenueGalleryItemRow>(
       `SELECT * FROM venue_gallery_items WHERE venue_id=$1 AND active AND is_main LIMIT 1`,
       [venueId],
@@ -74,8 +80,14 @@ export class VenueGalleryService {
       `UPDATE venues SET cover_key=$2, cover_moderation_approval_id=$3, cover_actor_id=$4,
         cover_credit_kind=$5, cover_credit_text=$6, cover_credit_url=$7, updated_at=now()
        WHERE id=$1`,
-      [venueId, main.storage_key, main.moderation_approval_id, actorUserId ?? main.actor_id,
+      [venueId, main.storage_key, main.moderation_approval_id, main.actor_id,
         main.credit_kind, main.credit_text, main.credit_url],
+    );
+    await c.query(
+      `DELETE FROM avatar_media_gc WHERE storage_key IN (
+         SELECT storage_key FROM venue_gallery_items WHERE venue_id=$1 AND active
+       )`,
+      [venueId],
     );
   }
 

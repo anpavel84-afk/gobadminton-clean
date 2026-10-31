@@ -330,6 +330,57 @@ run("venue gallery: isolated disposable PostGIS / actual API behavior", () => {
     }
   });
 
+  it("preserves original uploader on projected cover when superadmin setMain; retirement clears public gallery+cover without resurrection", async () => {
+    const uploader = await actor("content_manager");
+    const created = await app.inject({
+      method: "POST", url: "/v1/admin/venues", headers: headers(uploader),
+      payload: { cityId, name: "Synthetic " + randomUUID(), address: "Synthetic address", timezone: "Europe/Moscow", latitude: 55.75, longitude: 37.62, reasonCode: "synthetic_fixture" },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const v = created.json() as { id: string; version: number };
+    const first = await add(v.id, 1, uploader);
+    expect(first.statusCode, first.body).toBe(200);
+    const second = await add(v.id, first.json().version, uploader);
+    expect(second.statusCode, second.body).toBe(200);
+    const itemId = (second.json().items as { id: string; isMain: boolean }[]).find((x) => !x.isMain)!.id;
+    const admin = await actor("superadmin");
+    const setMain = await app.inject({
+      method: "POST", url: `/v1/admin/venues/${v.id}/gallery/${itemId}/main`,
+      headers: headers(admin, { "content-type": "application/json", "x-venue-version": String(second.json().version) }),
+      payload: { expectedVersion: second.json().version },
+    });
+    expect(setMain.statusCode, setMain.body).toBe(200);
+    const projected = (await pool.query<{ cover_actor_id: string; cover_key: string }>(
+      "SELECT cover_actor_id, cover_key FROM venues WHERE id=$1", [v.id],
+    )).rows[0]!;
+    expect(projected.cover_actor_id).toBe(uploader.userId);
+    expect(projected.cover_actor_id).not.toBe(admin.userId);
+    const galleryActor = (await pool.query<{ actor_id: string }>(
+      "SELECT actor_id FROM venue_gallery_items WHERE id=$1", [itemId],
+    )).rows[0]!.actor_id;
+    expect(galleryActor).toBe(uploader.userId);
+    const liveKeys = (await pool.query<{ storage_key: string }>(
+      "SELECT storage_key FROM venue_gallery_items WHERE venue_id=$1 AND active", [v.id],
+    )).rows.map((row) => row.storage_key);
+    expect(liveKeys).toContain(projected.cover_key);
+    expect((await pool.query(
+      "SELECT 1 FROM avatar_media_gc WHERE storage_key = ANY($1::text[])", [liveKeys],
+    )).rowCount).toBe(0);
+    expect((await publicVenue(v.id)).json().profile.gallery.items).toHaveLength(2);
+    expect((await publicVenue(v.id)).json().cover.uploadedUrl).toBeTruthy();
+    await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1", [uploader.userId]);
+    expect((await publicVenue(v.id)).json().profile.gallery.items).toEqual([]);
+    expect((await publicVenue(v.id)).json().cover.uploadedUrl).toBeNull();
+    expect((await pool.query("SELECT cover_key FROM venues WHERE id=$1", [v.id])).rows[0]?.cover_key).toBeNull();
+    expect((await pool.query(
+      "SELECT 1 FROM venue_gallery_items WHERE venue_id=$1 AND active", [v.id],
+    )).rowCount).toBe(0);
+    await pool.query("UPDATE users SET status='active' WHERE id=$1", [uploader.userId]);
+    expect((await publicVenue(v.id)).json().profile.gallery.items).toEqual([]);
+    expect((await publicVenue(v.id)).json().cover.uploadedUrl).toBeNull();
+    expect((await pool.query("SELECT cover_key FROM venues WHERE id=$1", [v.id])).rows[0]?.cover_key).toBeNull();
+  });
+
   it("description omission preserves and explicit null clears; auth/replay failures follow cover patterns", async () => {
     const v = await venue();
     const fields = {
