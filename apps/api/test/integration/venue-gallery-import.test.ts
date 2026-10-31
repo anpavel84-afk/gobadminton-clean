@@ -12,7 +12,6 @@ import { validateGalleryManifest, type GalleryManifest } from "../../src/venues/
 import { AvatarService } from "../../src/profiles/avatar.service";
 import { ContentModerationService } from "../../src/moderation/moderation.service";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
-import { safeImageDecision } from "../../src/moderation/provider";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { MutationRunner } from "../../src/common/mutation-runner.service";
 import { ActorFenceService } from "../../src/common/actor-fence.service";
@@ -226,7 +225,7 @@ run("venue gallery import: disposable PostGIS", () => {
     expect(lines).toContainEqual(expect.objectContaining({ action: "SKIPPED", reason: "GALLERY_IMPORT_REPLAY" }));
     expect((await db().query(`SELECT 1 FROM venue_gallery_items WHERE id=$1 AND active`, [item.id])).rowCount).toBe(0);
 
-    // Same admission key (batch+venue+file/index) with altered identity/version → conflict, no moderation.
+    // Same batch+index with altered identity/version → conflict, no moderation.
     const conflictLines: object[] = [];
     const calls2 = fake.calls;
     const crafted = {
@@ -243,6 +242,71 @@ run("venue gallery import: disposable PostGIS", () => {
     expect(await importVenueGallery(db(), crafted, actor, true, { media, moderation }, (l) => conflictLines.push(l))).toBe(1);
     expect(fake.calls).toBe(calls2);
     expect(conflictLines).toContainEqual(expect.objectContaining({ action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" }));
+
+    // Changed file+sha+fresh version at same batch index — no moderation.
+    const mutatedBytes = await jpeg("mutated-file");
+    const mutatedSha = createHash("sha256").update(mutatedBytes).digest("hex");
+    const mutatedFile = `${venueId}-${mutatedSha.slice(0, 16)}.jpg`;
+    const fileSwap = {
+      manifest: validateGalleryManifest({
+        schema: "VENUE_GALLERY_BATCH_V1",
+        batch: input.manifest.batch,
+        count: 1,
+        items: [{
+          ...input.manifest.items[0]!,
+          expectedVersion: version + 1,
+          file: mutatedFile,
+          sha256: mutatedSha,
+          evidence: { ...input.manifest.items[0]!.evidence, sourceFingerprint: mutatedSha },
+        }],
+      }),
+      images: new Map([[mutatedFile, mutatedBytes]]),
+    };
+    const fileSwapCalls = fake.calls;
+    const fileSwapLines: object[] = [];
+    expect(await importVenueGallery(db(), fileSwap, actor, true, { media, moderation }, (l) => fileSwapLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(fileSwapCalls);
+    expect(fileSwapLines).toContainEqual(expect.objectContaining({ action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" }));
+
+    // Changed venue at same batch index — no moderation.
+    const otherVenue = await seedVenue("Other Hall B", "Other Address B");
+    await seedMainCover(otherVenue, await jpeg("other-b-main"));
+    const otherVersion = (await db().query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [otherVenue])).rows[0]!.version;
+    const venueSwapBytes = await jpeg("venue-swap");
+    const venueSwap = galleryBatch(otherVenue, [{ bytes: venueSwapBytes, expectedVersion: otherVersion }], input.manifest.batch);
+    const venueSwapCalls = fake.calls;
+    const venueSwapLines: object[] = [];
+    expect(await importVenueGallery(db(), venueSwap, actor, true, { media, moderation }, (l) => venueSwapLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(venueSwapCalls);
+    expect(venueSwapLines).toContainEqual(expect.objectContaining({ action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" }));
+
+    // Appended tail changes full manifest digest — refuse before any new paid call.
+    const tailBytes = await jpeg("tail-append");
+    const tailSha = createHash("sha256").update(tailBytes).digest("hex");
+    const tailFile = `${venueId}-${tailSha.slice(0, 16)}.jpg`;
+    const withTail = {
+      manifest: validateGalleryManifest({
+        schema: "VENUE_GALLERY_BATCH_V1",
+        batch: input.manifest.batch,
+        count: 2,
+        items: [
+          input.manifest.items[0]!,
+          {
+            ...input.manifest.items[0]!,
+            expectedVersion: version + 1,
+            file: tailFile,
+            sha256: tailSha,
+            evidence: { ...input.manifest.items[0]!.evidence, sourceFingerprint: tailSha },
+          },
+        ],
+      }),
+      images: new Map([...input.images, [tailFile, tailBytes]]),
+    };
+    const tailCalls = fake.calls;
+    const tailLines: object[] = [];
+    expect(await importVenueGallery(db(), withTail, actor, true, { media, moderation }, (l) => tailLines.push(l))).toBe(1);
+    expect(fake.calls).toBe(tailCalls);
+    expect(tailLines).toContainEqual(expect.objectContaining({ action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" }));
 
     const driftVenue = await seedVenue("Hall A", "Addr A");
     await seedMainCover(driftVenue, await jpeg("drift-main"));
@@ -291,6 +355,41 @@ run("venue gallery import: disposable PostGIS", () => {
     expect(active).toBe(2);
     // One winner paid; loser HOLD or replay — at most one additional provider call beyond cache misses.
     expect(fake.calls - started).toBeLessThanOrEqual(1);
+
+    // Competing changed manifest while first provider holds batch claim → HOLD + one provider call.
+    const holdVenue = await seedVenue("Hold Hall", "Hold Address 1");
+    await seedMainCover(holdVenue, await jpeg("hold-main"));
+    const holdVersion = (await db().query<{ version: number }>("SELECT version FROM venues WHERE id=$1", [holdVenue])).rows[0]!.version;
+    const firstBytes = await jpeg("hold-first");
+    const rivalBytes = await jpeg("hold-rival");
+    const first = galleryBatch(holdVenue, [{ bytes: firstBytes, expectedVersion: holdVersion }], "hold-batch");
+    const rival = galleryBatch(holdVenue, [{ bytes: rivalBytes, expectedVersion: holdVersion }], "hold-batch");
+    let releaseProvider!: () => void;
+    const providerGate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    let resolveEntered!: () => void;
+    const enteredProvider = new Promise<void>((resolve) => { resolveEntered = resolve; });
+    let entered = false;
+    const holdingModeration: Pick<ContentModerationService, "approveImage" | "bindImage"> = {
+      approveImage: async (...args) => {
+        if (!entered) {
+          entered = true;
+          resolveEntered();
+          await providerGate;
+        }
+        return moderation.approveImage(...args);
+      },
+      bindImage: (...args) => moderation.bindImage(...args),
+    };
+    const holdStarted = fake.calls;
+    const holdLines: object[] = [];
+    const firstRun = importVenueGallery(db(), first, actor, true, { media, moderation: holdingModeration }, () => undefined);
+    await enteredProvider;
+    const rivalCode = await importVenueGallery(db(), rival, actor, true, { media, moderation }, (l) => holdLines.push(l));
+    releaseProvider();
+    const firstCode = await firstRun;
+    expect([firstCode, rivalCode].sort()).toEqual([0, 1]);
+    expect(holdLines).toContainEqual(expect.objectContaining({ action: "HOLD", reason: "OPERATION_IN_PROGRESS" }));
+    expect(fake.calls - holdStarted).toBe(1);
   });
 
   it("stops later same-venue items after failure; independent venue continues; max 8", async () => {

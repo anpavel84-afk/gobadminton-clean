@@ -8,6 +8,7 @@ import {
   galleryAdmissionKeyHash,
   galleryItemFingerprint,
   galleryManifestDigest,
+  planGalleryManifestBind,
   planGalleryReplay,
   planGalleryRow,
   planGalleryStructure,
@@ -61,9 +62,18 @@ describe("venue gallery batch validation", () => {
     const raw = fixture();
     const parsed = validateGalleryManifest(raw);
     expect(parsed.count).toBe(1);
-    expect(galleryAdmissionKeyHash(parsed.batch, parsed.items[0]!.venueId, parsed.items[0]!.file, 0)).toMatch(/^[a-f0-9]{64}$/);
+    const admission = galleryAdmissionKeyHash(parsed.batch, 0);
+    expect(admission).toMatch(/^[a-f0-9]{64}$/);
+    // Stable identity is batch+index — payload/venue/file mutation must not mint a new key.
+    expect(galleryAdmissionKeyHash(parsed.batch, 0)).toBe(admission);
+    expect(galleryAdmissionKeyHash(parsed.batch, 1)).not.toBe(admission);
     expect(galleryItemFingerprint(parsed.items[0]!)).toMatch(/^[a-f0-9]{64}$/);
-    expect(galleryManifestDigest(parsed)).toMatch(/^[a-f0-9]{64}$/);
+    const digest = galleryManifestDigest(parsed);
+    expect(digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(planGalleryManifestBind(digest, [])).toBeUndefined();
+    expect(planGalleryManifestBind(digest, [digest])).toBeUndefined();
+    expect(planGalleryManifestBind(digest, ["0".repeat(64)])?.reason).toBe("GALLERY_IMPORT_CONFLICT");
+    expect(planGalleryManifestBind(digest, [digest, "0".repeat(64)])?.reason).toBe("GALLERY_IMPORT_CONFLICT");
   });
 
   it.each([
@@ -91,7 +101,7 @@ describe("venue gallery batch validation", () => {
         creditUrl: null,
         permissionBasis: "note",
         sourceFingerprint: sha,
-      } as ReturnType<typeof evidence>,
+      } as unknown as ReturnType<typeof evidence>,
     })]))).toThrow();
     expect(() => validateGalleryManifest(fixture([item({
       venueId, sha256: sha,

@@ -75,6 +75,8 @@ const manifestSchema = z.object({
 export type GalleryManifest = z.infer<typeof manifestSchema>;
 export type GalleryImportItem = GalleryManifest["items"][number];
 export type GalleryImportPlan = { action: "READY" | "SKIPPED" | "FAILED" | "HOLD"; reason: string };
+/** Apply/report outcome; includes APPLIED after a successful commit. */
+export type GalleryImportReport = { action: GalleryImportPlan["action"] | "APPLIED"; reason: string };
 
 export type GalleryVenueRow = {
   name: string;
@@ -120,9 +122,9 @@ export function validateGalleryManifest(raw: unknown): GalleryManifest {
 
 export { validateImage };
 
-/** Stable per-item admission key: batch + venue + file/index. */
-export function galleryAdmissionKeyHash(batch: string, venueId: string, file: string, itemIndex: number): string {
-  return createHash("sha256").update(`${NAMESPACE}\n${batch}\n${venueId}\n${itemIndex}\n${file}`).digest("hex");
+/** Stable per-item admission identity: batch + itemIndex only (payload bound in fingerprint). */
+export function galleryAdmissionKeyHash(batch: string, itemIndex: number): string {
+  return createHash("sha256").update(`${NAMESPACE}\n${batch}\n${itemIndex}`).digest("hex");
 }
 
 /** Full canonical item fingerprint (identity, version, file, raw sha, evidence). */
@@ -145,6 +147,16 @@ export function galleryManifestDigest(manifest: GalleryManifest): string {
   return createHash("sha256").update(
     manifest.items.map((item, index) => `${index}:${galleryItemFingerprint(item)}`).join("\n"),
   ).digest("hex");
+}
+
+/** Bind batch to retained audit digests; any mismatch blocks before paid work. */
+export function planGalleryManifestBind(
+  currentDigest: string,
+  retainedDigests: readonly string[],
+): GalleryImportPlan | undefined {
+  if (retainedDigests.length === 0) return undefined;
+  if (retainedDigests.every((digest) => digest === currentDigest)) return undefined;
+  return { action: "FAILED", reason: "GALLERY_IMPORT_CONFLICT" };
 }
 
 export function planGalleryReplay(

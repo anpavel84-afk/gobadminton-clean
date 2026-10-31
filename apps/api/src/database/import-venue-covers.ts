@@ -36,6 +36,7 @@ import {
   galleryAdmissionKeyHash,
   galleryItemFingerprint,
   galleryManifestDigest,
+  planGalleryManifestBind,
   planGalleryReplay,
   planGalleryRow,
   validateGalleryManifest,
@@ -44,6 +45,7 @@ import {
   type GalleryActiveRow,
   type GalleryImportItem,
   type GalleryImportPlan,
+  type GalleryImportReport,
   type GalleryManifest,
   type GalleryVenueRow,
 } from "../venues/venue-gallery-import";
@@ -226,6 +228,22 @@ async function loadAcceptedGalleryReceipt(
   };
 }
 
+/** Retained full-manifest digests for a batch (existing after_diff.digest). */
+async function loadAcceptedGalleryBatchDigests(
+  c: Pick<PoolClient, "query">,
+  batch: string,
+): Promise<string[]> {
+  const rows = (await c.query<{ digest: string | null }>(
+    `SELECT after_diff->>'digest' AS digest FROM privileged_audit_events
+     WHERE action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_import'
+       AND after_diff->>'batch'=$1`,
+    [batch],
+  )).rows;
+  return rows
+    .map((row) => row.digest)
+    .filter((digest): digest is string => typeof digest === "string" && digest.length > 0);
+}
+
 async function loadGalleryActive(
   c: Pick<PoolClient, "query">,
   venueId: string,
@@ -277,7 +295,7 @@ function emitGalleryLine(
   item: GalleryImportItem,
   itemIndex: number,
   name: string,
-  result: GalleryImportPlan,
+  result: GalleryImportReport,
   extra: Record<string, unknown> = {},
 ) {
   emit({
@@ -302,7 +320,7 @@ async function planGalleryItemState(
   simulated: Map<string, { appends: number; versionBump: number }>,
 ): Promise<{ name: string; result: GalleryImportPlan; fingerprint: string; keyHash: string }> {
   const fingerprint = galleryItemFingerprint(item);
-  const keyHash = galleryAdmissionKeyHash(manifest.batch, item.venueId, item.file, itemIndex);
+  const keyHash = galleryAdmissionKeyHash(manifest.batch, itemIndex);
   const sim = simulated.get(item.venueId) ?? { appends: 0, versionBump: 0 };
   const row = (await c.query<GalleryVenueRow>(galleryVenueSelect, [item.venueId])).rows[0];
   const name = row?.name ?? "";
@@ -330,18 +348,26 @@ export async function importVenueGallery(
   const totals: GalleryTotals = { APPLIED: 0, SKIPPED: 0, FAILED: 0, READY: 0, HOLD: 0 };
   const blockedVenues = new Set<string>();
   const simulated = new Map<string, { appends: number; versionBump: number }>();
+  const currentDigest = galleryManifestDigest(batch.manifest);
+  const batchLease = `venue_gallery_batch_v1:${batch.manifest.batch}`;
+  let batchBlocked = false;
 
   if (!apply) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN READ ONLY");
       await requireImportActor(client, principalId, false);
+      const retained = await loadAcceptedGalleryBatchDigests(client, batch.manifest.batch);
+      const manifestBind = planGalleryManifestBind(currentDigest, retained);
+      if (manifestBind) batchBlocked = true;
       for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
         const item = batch.manifest.items[itemIndex]!;
         let name = "";
-        let result: GalleryImportPlan;
+        let result: GalleryImportReport;
         try {
-          if (blockedVenues.has(item.venueId)) {
+          if (batchBlocked && manifestBind) {
+            result = itemIndex === 0 ? manifestBind : { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
+          } else if (blockedVenues.has(item.venueId)) {
             result = { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
           } else {
             const planned = await planGalleryItemState(client, batch.manifest, item, itemIndex, simulated);
@@ -368,33 +394,47 @@ export async function importVenueGallery(
     } finally {
       client.release();
     }
-    emit({ totals, digest: galleryManifestDigest(batch.manifest) });
+    emit({ totals, digest: currentDigest });
     return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
   }
 
   const userId = await requireImportActor(pool, principalId, true);
-  for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
-    const item = batch.manifest.items[itemIndex]!;
-    let key: string | undefined;
-    let name = "";
-    let result: GalleryImportPlan;
-    let itemId: string | undefined;
-    let lockClient: PoolClient | undefined;
-    const fingerprint = galleryItemFingerprint(item);
-    const keyHash = galleryAdmissionKeyHash(batch.manifest.batch, item.venueId, item.file, itemIndex);
-    const lease = `venue_gallery_import:${keyHash}`;
-    try {
-      if (blockedVenues.has(item.venueId)) {
-        result = { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
-      } else {
-        lockClient = await pool.connect();
-        const claimed = (await lockClient.query<{ ok: boolean }>(
-          "SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok",
-          [lease],
-        )).rows[0];
-        if (!claimed?.ok) {
-          result = { action: "HOLD", reason: "OPERATION_IN_PROGRESS" };
-          blockedVenues.add(item.venueId);
+  let lockClient: PoolClient | undefined;
+  try {
+    lockClient = await pool.connect();
+    const claimed = (await lockClient.query<{ ok: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok",
+      [batchLease],
+    )).rows[0];
+    if (!claimed?.ok) {
+      for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
+        const item = batch.manifest.items[itemIndex]!;
+        const result: GalleryImportReport = { action: "HOLD", reason: "OPERATION_IN_PROGRESS" };
+        totals.HOLD++;
+        emitGalleryLine(emit, item, itemIndex, "", result);
+      }
+      emit({ totals, digest: currentDigest });
+      return 1;
+    }
+
+    // Digest gate while batch claim held — before any paid provider call.
+    const retained = await loadAcceptedGalleryBatchDigests(pool, batch.manifest.batch);
+    const manifestBind = planGalleryManifestBind(currentDigest, retained);
+    if (manifestBind) batchBlocked = true;
+
+    for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
+      const item = batch.manifest.items[itemIndex]!;
+      let key: string | undefined;
+      let name = "";
+      let result: GalleryImportReport;
+      let itemId: string | undefined;
+      const fingerprint = galleryItemFingerprint(item);
+      const keyHash = galleryAdmissionKeyHash(batch.manifest.batch, itemIndex);
+      try {
+        if (batchBlocked && manifestBind) {
+          result = itemIndex === 0 ? manifestBind : { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
+        } else if (blockedVenues.has(item.venueId)) {
+          result = { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
         } else {
           // Pre-paid gates on unlocked snapshot queries (no catalog/user row locks across provider I/O).
           if (await requireImportActor(pool, principalId, false) !== userId) {
@@ -422,6 +462,9 @@ export async function importVenueGallery(
                   throw new Error("IMPORT_ACTOR_REFUSED");
                 }
                 await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
+                const liveDigests = await loadAcceptedGalleryBatchDigests(c, batch.manifest.batch);
+                const liveBind = planGalleryManifestBind(currentDigest, liveDigests);
+                if (liveBind) return liveBind;
                 const terminal = await loadAcceptedGalleryReceipt(c, keyHash);
                 if (terminal) return { ...planGalleryReplay(fingerprint, terminal) };
 
@@ -488,7 +531,7 @@ export async function importVenueGallery(
                     evidence: receiptBody.evidence,
                     position,
                     isMain,
-                    digest: galleryManifestDigest(batch.manifest),
+                    digest: currentDigest,
                   },
                 });
                 await c.query(
@@ -504,25 +547,26 @@ export async function importVenueGallery(
             }
           }
         }
+      } catch (error: unknown) {
+        result = galleryFail(error);
+        itemId = undefined;
+        blockedVenues.add(item.venueId);
+      } finally {
+        if (key) await services.media.releaseStage(key);
       }
-    } catch (error: unknown) {
-      result = galleryFail(error);
-      itemId = undefined;
-      blockedVenues.add(item.venueId);
-    } finally {
-      if (key) await services.media.releaseStage(key);
-      if (lockClient) {
-        try {
-          await lockClient.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [lease]);
-        } catch { /* unlock best-effort */ }
-        lockClient.release();
-      }
+      if (result.action === "FAILED" || result.action === "HOLD") blockedVenues.add(item.venueId);
+      totals[result.action]++;
+      emitGalleryLine(emit, item, itemIndex, name, result, itemId ? { id: itemId } : {});
     }
-    if (result.action === "FAILED" || result.action === "HOLD") blockedVenues.add(item.venueId);
-    totals[result.action]++;
-    emitGalleryLine(emit, item, itemIndex, name, result, itemId ? { id: itemId } : {});
+  } finally {
+    if (lockClient) {
+      try {
+        await lockClient.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [batchLease]);
+      } catch { /* unlock best-effort */ }
+      lockClient.release();
+    }
   }
-  emit({ totals, digest: galleryManifestDigest(batch.manifest) });
+  emit({ totals, digest: currentDigest });
   return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
 }
 
