@@ -15,15 +15,27 @@ vi.mock("../src/components/consumer/radar/RadarSessionProvider", () => ({
 import { PlayersDirectoryPage } from "../src/components/consumer/pages/PlayersDirectoryPage";
 it("Players keeps fixed controls, map CTA when active, and hides private rows after error", () => {
   mock.view = { phase: "off", confirmedOn: false, now: 0 } as RadarView;
-  expect(renderToStaticMarkup(<PlayersDirectoryPage />)).toContain("Включить Radar");
+  const off = renderToStaticMarkup(<PlayersDirectoryPage />);
+  // Mobile compact directory-desktop switch (no giant «Игроки рядом» card / in-band status paragraphs).
+  expect(off).toContain("Включить Radar");
+  expect(off).toContain('role="switch"');
+  expect(off).toContain('aria-label="Radar"');
+  expect(off).not.toContain("Игроки рядом с вами");
+  expect(off).not.toContain("Временный поиск по приблизительной близости");
   mock.view = { ...mock.view, phase: "disabled" };
-  expect(renderToStaticMarkup(<PlayersDirectoryPage />)).toContain("Radar сейчас недоступен");
+  const disabled = renderToStaticMarkup(<PlayersDirectoryPage />);
+  // Disabled: switch stays readable but disabled; header owns unavailable copy (directory-compact).
+  expect(disabled).toContain('role="switch"');
+  expect(disabled).toContain("disabled");
+  expect(disabled).toContain("Включить Radar");
   mock.view = { ...mock.view, phase: "active", confirmedOn: true, status: { state: "active", contractVersion: "players-unified-radar-v1", activationId: "a", expiresAt: "2099-01-01", hardExpiresAt: "2099-01-01", foregroundUntil: "2099-01-01", locationValidUntil: "2099-01-01" } } as RadarView;
   mock.rows = [{ publicPlayerId: "private", projection: "radar_public", player: { publicPlayerId: "private", displayName: "Private", cityId: "moscow", areaKey: null, level: null, trainer: false, lookingForGame: null, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false }, radar: { resultId: "result", resultRef: "proof", consentPolicyVersion: "radar-geographic-sharing-v2", validUntil: "2099-01-01", distance: null, geo: { latitude: 55.75, longitude: 37.61, crs: "EPSG:4326", model: "regional_grid_1000m_v1", gridSizeMeters: 1000, uncertaintyMeters: 1000, quality: "approximate", sourceTimestampBucket: "2026-10-15T00:00:00Z", sourceAgeSeconds: 0 } } }];
   const active = renderToStaticMarkup(<PlayersDirectoryPage />);
   expect(active).toContain("PRIVATE RADAR ROW");
   expect(active).toContain("Игроки на карте");
   expect(active).toContain('href="/players/radar"');
+  expect(active).toContain("Radar включён");
+  expect(active).toContain('aria-checked="true"');
   // In-flow approximate-distance / session rows and Extend removed — header owns them.
   expect(active).not.toContain("Подтверждённый срок Radar");
   expect(active).not.toContain("Расстояние приблизительное, по опубликованным геопозициям");
@@ -31,7 +43,8 @@ it("Players keeps fixed controls, map CTA when active, and hides private rows af
   mock.view = { ...mock.view, phase: "error" };
   mock.rows = mock.rows.map(row => ({ ...row, publicPlayerId: "refreshed-private", player: { ...row.player, publicPlayerId: "refreshed-private" } })); // A directory refresh arrives with retained active status.
   const html = renderToStaticMarkup(<PlayersDirectoryPage />);
-  expect(html).toContain("Проверить статус");
+  // Error: private rows + map CTA gated; recovery actions stay in header (directory-compact), switch keeps phase label.
+  expect(html).toContain("Проверьте статус Radar");
   expect(html).not.toContain("PRIVATE RADAR ROW");
   expect(html).not.toContain("Игроки на карте");
 });

@@ -21,7 +21,7 @@ import type { UnifiedFilters } from "@gobadminton/contracts";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type ScopedCatalogCursor } from "../../../lib/unified-directory";
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
-import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
+import { PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
 import { PlayerBrowseOfferOpHost, PlayerBrowseOfferStatus } from "../players/PlayerBrowseOffers";
 import { usePlayerBrowseOffers } from "../players/usePlayerBrowseOffers";
@@ -354,14 +354,14 @@ export function PlayersDirectoryPage({
     };
   }, [mobileCards, portalReady]);
   const inFlowNotice = directoryInFlowNotice(directory.view.notice);
+  // Mobile list: compact directory-desktop switch only — no giant «Игроки рядом» card / status paragraphs.
+  // Header owns Radar notices; directory-compact status stays empty so filters do not shift on/off.
   const radarBand = (
-    <section className="players-radar-band" aria-label="Игроки рядом">
-      <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
-      <div className="players-radar-band__controls">
-        <RadarSwitchControl />
-        <RadarStatusControls />
-        {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}
+    <section className="players-radar-band players-radar-band--compact" aria-label="Radar">
+      <div className="players-radar-band__switch">
+        <RadarSwitchControl presentation="directory-desktop" />
       </div>
+      <RadarStatusControls presentation="directory-compact" />
     </section>
   );
   // Desktop floating map CTA — unchanged GamesViewAction. Mobile map shares finder overlay zone.

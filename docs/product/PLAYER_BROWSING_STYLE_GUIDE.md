@@ -26,6 +26,8 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 
 **Delivered (#404 fluid finder slice):** list mode has no segmented «Списком / По одному» control — CSS `@media (max-width: 1023px)` hides `.pb-view-switch` unconditionally (independent of JS `mqReady` / `hidden` / `aria-hidden`; those attrs still keep mobile tab order). Entry is the floating CTA **«Найти напарника»** (full label, dark pill) sharing one overlay zone with optional compact **«На карте»** when Radar is active. Desktop ≥1024 segmented switch and layout stay unchanged.
 
+**Delivered (#404 compact mobile Radar):** mobile list replaces the giant «Игроки рядом с вами» band (heading, subtitle, redundant status helper) with one ~180–220px control reusing `RadarSwitchControl` `presentation="directory-desktop"` and `RadarStatusControls` `presentation="directory-compact"` (header owns notices). No outer card, no on/off paragraph banners that shift filters. Desktop toolbar / global header Radar unchanged.
+
 ## Catalog & Radar boundary
 
 - Deck reads the **ordinary public catalog** (`listPlayers`) only. No private Radar rows / `resultRef` in the deck.

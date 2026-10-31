@@ -233,6 +233,8 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(styleGuide).toContain("mobile and desktop");
     expect(styleGuide).toContain("Ordinary list remains complete");
     expect(styleGuide).toContain("Desktop guest public preview");
+    expect(styleGuide).toContain("compact mobile Radar");
+    expect(styleGuide).toContain("directory-desktop");
     expect(styleGuide).toContain("PROPOSED · smart ranking");
     expect(styleGuide).toContain("NOT implemented");
     expect(styleGuide).not.toMatch(/smart ranking[\s\S]{0,80}delivered/i);
@@ -273,6 +275,12 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(offersUiSource).toMatch(/status\.phase === "sending" \|\| status\.phase === "outgoing" \|\| status\.phase === "mutual"/);
     expect(offersUiSource).toContain("!quietRoutine");
     expect(deckSource).toContain('presentation="quietRoutine"');
+    // Mobile list/finder offer status uses quietRoutine; compact Radar reuses directory-desktop switch.
+    expect(pageSource).toContain('presentation={desktop ? "default" : "quietRoutine"}');
+    expect(pageSource).toContain('presentation="directory-desktop"');
+    expect(pageSource).toContain('presentation="directory-compact"');
+    expect(pageSource).toContain("players-radar-band--compact");
+    expect(pageSource).not.toContain("Игроки рядом с вами");
   });
 });
 

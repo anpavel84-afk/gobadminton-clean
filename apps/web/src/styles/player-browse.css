@@ -1046,6 +1046,151 @@
   font-size: 12px;
 }
 
+/*
+ * Mobile list compact Radar (#404): override giant .fr3 .players-radar-band card.
+ * Reuse directory-desktop switch presentation; ~180–220px; no heading/subtitle/status paragraphs.
+ * Desktop toolbar Radar stays under .pb-dir-toolbar__radar — do not change.
+ */
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact {
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  display: block;
+  width: min(200px, 100%);
+  max-width: 220px;
+  min-width: 180px;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .players-radar-band__switch {
+  width: 100%;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-entry {
+  height: auto;
+  min-height: 48px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #dce8ca;
+  border-radius: 12px;
+  background: #eff6e5;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-entry--directory-desktop {
+  padding: 0;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-entry > a {
+  flex: 1;
+  min-width: 0;
+  margin: 6px 10px;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 7px 12px 7px 10px;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--pb-ink);
+  font: inherit;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__glyph {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: #5f8f1f;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__copy strong {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__copy small {
+  display: block;
+  font-size: 10px;
+  color: #6f7d6a;
+  line-height: 1.25;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: #c5d0bc;
+  flex: none;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__track b {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .18s cubic-bezier(.2, .8, .2, 1);
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch.is-on .radar-dir-switch__track {
+  background: var(--pb-lime-deep, #8de126);
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch.is-on .radar-dir-switch__track b {
+  transform: translateX(16px);
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-status-controls {
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+}
+
+.gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-status-controls:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gb-player-browse:not([data-directory-desktop="true"]) .players-radar-band--compact .radar-dir-switch__track b {
+    transition: none;
+  }
+}
+
 .gb-player-browse .pb-dir-toolbar__radar {
   width: 246px;
   flex: none;
