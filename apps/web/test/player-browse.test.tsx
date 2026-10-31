@@ -263,7 +263,8 @@ describe("player browse swipe boundaries", () => {
     expect(deckSource.match(/className="pb-fs-close"/g)?.length).toBe(1);
     // Eligibility gate + loading/unavailable/error/empty — five early fullscreen wraps.
     expect(deckSource.match(/return wrapCatalogState\(/g)?.length).toBe(5);
-    expect(deckSource).toContain("mobileOffers.eligibility.kind !== \"ready\"");
+    expect(deckSource).toContain("rawGate.kind !== \"ready\"");
+    expect(deckSource).toContain("finderEligibility");
   });
 
   it("QA-02: second contact cancels active gesture before primary/interactive exclusions", () => {

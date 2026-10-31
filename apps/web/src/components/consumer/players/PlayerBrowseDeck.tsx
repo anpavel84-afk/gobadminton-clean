@@ -44,7 +44,7 @@ import {
   type BrowsePlayInterestApi,
 } from "./PlayerBrowsePlayInterest";
 import { PlayerBrowseFinderGate, PlayerBrowseOfferStatus } from "./PlayerBrowseOffers";
-import type { PlayerBrowseOffersApi } from "./usePlayerBrowseOffers";
+import type { FinderEligibility, PlayerBrowseOffersApi } from "./usePlayerBrowseOffers";
 import { AuthEntry } from "./ProfileComposition";
 import {
   browseMediaNeighborhood,
@@ -76,6 +76,10 @@ type Props = {
   onCloseFullscreen?: () => void;
   /** Page-level mobile offers host (fluid send + eligibility). Desktop omits. */
   mobileOffers?: PlayerBrowseOffersApi | null;
+  /** Readonly page-owned eligibility gate for authenticated desktop cards (no fluid host). */
+  finderEligibility?: FinderEligibility | null;
+  onContinueFinder?: () => void;
+  onRetryFinder?: () => void;
 };
 
 type DragState = {
@@ -136,6 +140,9 @@ export function PlayerBrowseDeck({
   mobileFullscreen = false,
   onCloseFullscreen,
   mobileOffers = null,
+  finderEligibility = null,
+  onContinueFinder,
+  onRetryFinder,
 }: Props) {
   const desktop = useLocalDesktop(desktopProp);
   const fluidMobile = Boolean(mobileFullscreen && mobileOffers && !desktop);
@@ -1631,25 +1638,37 @@ export function PlayerBrowseDeck({
     </div>
   );
 
-  // Mobile finder eligibility gates (batch states) — before ordinary empty/loading copy.
-  if (fluidMobile && mobileOffers && mobileOffers.eligibility.kind !== "ready") {
-    const gateEligibility = mobileOffers.eligibility.kind === "idle"
-      ? { ...mobileOffers.eligibility, kind: "checking" as const, message: "Подбираем игроков…" }
-      : mobileOffers.eligibility;
+  // Authenticated cards eligibility gates (batch states) — mobile fluid host or desktop readonly.
+  // Before ordinary empty/loading copy so already-sent peers never flash while checking.
+  const rawGate = fluidMobile && mobileOffers
+    ? mobileOffers.eligibility
+    : finderEligibility;
+  if (rawGate && rawGate.kind !== "ready") {
+    const gateEligibility = rawGate.kind === "idle"
+      ? { ...rawGate, kind: "checking" as const, message: "Подбираем игроков…" }
+      : rawGate;
     return wrapCatalogState(
       <>
-        <PlayerBrowseOfferStatus
-          status={mobileOffers.status}
-          onCheckStatus={() => mobileOffers.checkStatusReadonly()}
-          unresolved={mobileOffers.unresolved}
-          onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
-          className="pb-offer-status--modal"
-        />
+        {fluidMobile && mobileOffers && (
+          <PlayerBrowseOfferStatus
+            status={mobileOffers.status}
+            onCheckStatus={() => mobileOffers.checkStatusReadonly()}
+            unresolved={mobileOffers.unresolved}
+            onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
+            className="pb-offer-status--modal"
+          />
+        )}
         <PlayerBrowseFinderGate
           eligibility={gateEligibility}
-          onContinue={() => mobileOffers.continueSearch()}
-          onRetry={() => mobileOffers.retryEligibility()}
-          guestAction={<AuthEntry returnPath="/players?view=cards">Войти</AuthEntry>}
+          onContinue={fluidMobile && mobileOffers
+            ? () => mobileOffers.continueSearch()
+            : onContinueFinder}
+          onRetry={fluidMobile && mobileOffers
+            ? () => mobileOffers.retryEligibility()
+            : onRetryFinder}
+          guestAction={fluidMobile
+            ? <AuthEntry returnPath="/players?view=cards">Войти</AuthEntry>
+            : undefined}
         />
       </>,
     );

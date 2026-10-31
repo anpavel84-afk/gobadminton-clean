@@ -142,7 +142,8 @@ type Props = {
 };
 
 /**
- * Page-level mobile play-interest operation + finder eligibility.
+ * Page-level play-interest operation host (mobile fluid) + shared finder eligibility.
+ * Eligibility gates authenticated cards on mobile and desktop; ordinary list stays complete.
  * Survives card changes and fullscreen close; one active POST via keyed OpHost.
  * Mutation instances stay peer-immutable inside PlayerBrowseOfferOpHost — not here.
  */
@@ -183,9 +184,11 @@ export function usePlayerBrowseOffers({
   const scopeRef = useRef(ordinaryScope);
   const continueArmedRef = useRef(false);
   const peerNamesRef = useRef<Map<string, string>>(new Map());
+  const unresolvedRef = useRef(unresolved);
   continueArmedRef.current = continueArmed;
   opPhaseRef.current = opPhase;
   activeTokenRef.current = activeOperation?.token ?? null;
+  unresolvedRef.current = unresolved;
 
   useEffect(() => {
     const names = peerNamesRef.current;
@@ -315,7 +318,13 @@ export function usePlayerBrowseOffers({
       for (const id of frozen) next.add(id);
       return next;
     });
-    const nextEligible = frozen.filter(id => isFinderSendEligible(bound.get(id)));
+    const nextEligible = frozen.filter(id => {
+      if (!isFinderSendEligible(bound.get(id))) return false;
+      // Own unresolved/pending markers are not new-session recommendations.
+      if (unresolvedRef.current.some(entry => entry.peerId === id)) return false;
+      if (readValidatedPending(actor, id)) return false;
+      return true;
+    });
     setEligibleIds(prev => {
       const merged = mode === "append"
         ? [...prev, ...nextEligible.filter(id => !prev.includes(id))]
@@ -428,9 +437,6 @@ export function usePlayerBrowseOffers({
     }
     prevFinder.current = finderActive;
   }, [finderActive, authState]);
-
-  const unresolvedRef = useRef(unresolved);
-  unresolvedRef.current = unresolved;
 
   const opMatchesCurrentActor = useCallback((op: BrowseOfferOperation): boolean => {
     return op.actorId === actorIdRef.current

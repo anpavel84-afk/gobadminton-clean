@@ -103,6 +103,23 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(pageSource).toContain("По одному");
   });
 
+  it("authenticated cards eligibility covers desktop without mobile operation host", () => {
+    // Same page-owned batch gate for both views; list stays unfiltered.
+    expect(pageSource).toMatch(/finderActive:\s*showCards/);
+    expect(pageSource).toContain("authCardsReady");
+    expect(pageSource).toContain("desktopFinderEligibility");
+    expect(pageSource).toContain("finderEligibility={desktopFinderEligibility}");
+    expect(pageSource).toMatch(/mobileOffers=\{mobileCards \? offers : null\}/);
+    // Desktop guest keeps ordinary catalog; auth loading/error avoid flashing sent peers.
+    expect(pageSource).toContain("offers.authState !== \"guest\"");
+    expect(pageSource).toContain("catalog.ordinary");
+    expect(deckSource).toContain("finderEligibility");
+    expect(deckSource).toContain("onContinueFinder");
+    expect(deckSource).toContain("onRetryFinder");
+    expect(offersHookSource).toContain("readValidatedPending");
+    expect(offersHookSource).toContain("unresolvedRef.current.some");
+  });
+
   it("deck admits then flies right without waiting for receipt on mobile offers path", () => {
     expect(deckSource).toContain("fluidMobile");
     expect(deckSource).toContain("applySendAdvance");
@@ -167,6 +184,9 @@ describe("player browse discovery · fluid send source contracts", () => {
   it("style guide records delivered fluid/eligibility and marks ranking PROPOSED", () => {
     expect(styleGuide).toContain("Найти напарника");
     expect(styleGuide).toContain("Fluid mobile (delivered)");
+    expect(styleGuide).toContain("mobile and desktop");
+    expect(styleGuide).toContain("Ordinary list remains complete");
+    expect(styleGuide).toContain("Desktop guest public preview");
     expect(styleGuide).toContain("PROPOSED · smart ranking");
     expect(styleGuide).toContain("NOT implemented");
     expect(styleGuide).not.toMatch(/smart ranking[\s\S]{0,80}delivered/i);
@@ -193,7 +213,7 @@ vi.mock("react", () => ({
   },
 }));
 vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn() }));
-import { apiFetch } from "../src/lib/api-client";
+import { apiFetch, type ApiResult } from "../src/lib/api-client";
 import { useSocialMutation } from "../src/components/consumer/messages/useSocialMutation";
 
 describe("player browse discovery · deferred mutation admission", () => {
@@ -225,8 +245,10 @@ describe("player browse discovery · deferred mutation admission", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("admits exactly one POST while a deferred promise is pending", async () => {
-    let resolveFetch: (value: unknown) => void = () => {};
-    vi.mocked(apiFetch).mockImplementation(() => new Promise(resolve => { resolveFetch = resolve; }));
+    let resolveFetch: (value: ApiResult<unknown>) => void = () => {};
+    vi.mocked(apiFetch).mockImplementation(
+      () => new Promise<ApiResult<unknown>>(resolve => { resolveFetch = resolve; }),
+    );
     const mutation = render();
     expect(mutation.run("/v1/play-interests", { targetPublicPlayerId: "peer-a" })).toBe(true);
     expect(mutation.run("/v1/play-interests", { targetPublicPlayerId: "peer-a" })).toBe(false);

@@ -253,8 +253,9 @@ export function PlayersDirectoryPage({
   // Wait for MQ before mobile portal — avoids fullscreen flash when desktop ≥1024 hydrates.
   const mobileCards = showCards && mqReady && !desktop;
   const loadMore = () => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); };
+  // Batch eligibility for authenticated cards on both mobile and desktop; list stays complete.
   const offers = usePlayerBrowseOffers({
-    finderActive: mobileCards,
+    finderActive: showCards,
     ordinaryScope,
     catalogPlayers: catalog.ordinary,
     catalogState: state,
@@ -262,6 +263,17 @@ export function PlayersDirectoryPage({
     moreBusy,
     onLoadMore: loadMore,
   });
+  const authCardsReady = showCards && offers.authState === "ready";
+  // Guest desktop keeps public preview; loading/error cards avoid flashing already-sent peers.
+  const deckPlayers = authCardsReady
+    ? offers.eligibility.players
+    : showCards && offers.authState !== "guest"
+      ? []
+      : catalog.ordinary;
+  // Readonly eligibility gate for desktop auth cards — do not pass mobile operation host.
+  const desktopFinderEligibility = showCards && desktop && offers.authState !== "guest"
+    ? offers.eligibility
+    : null;
   // Shared mobile overlay zone (finder + optional Radar map) — GamesViewAction nav measure pattern.
   useLayoutEffect(() => {
     if (desktop || showCards) return;
@@ -396,13 +408,12 @@ export function PlayersDirectoryPage({
       notice={inFlowNotice}
     />
   );
-  const deckPlayers = mobileCards ? offers.eligibility.players : catalog.ordinary;
   const deck = (
     <PlayerBrowseDeck
       players={deckPlayers}
       cities={cities}
       ordinaryScope={ordinaryScope}
-      catalogState={mobileCards && offers.eligibility.kind === "checking" ? "loading" : state}
+      catalogState={authCardsReady && offers.eligibility.kind === "checking" ? "loading" : state}
       moreBusy={moreBusy}
       hasMore={Boolean(availableNextCursor)}
       onLoadMore={loadMore}
@@ -411,6 +422,9 @@ export function PlayersDirectoryPage({
       mobileFullscreen={mobileCards}
       onCloseFullscreen={closeMobileCards}
       mobileOffers={mobileCards ? offers : null}
+      finderEligibility={desktopFinderEligibility}
+      onContinueFinder={desktopFinderEligibility ? () => offers.continueSearch() : undefined}
+      onRetryFinder={desktopFinderEligibility ? () => offers.retryEligibility() : undefined}
     />
   );
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"} inert={mobileCards ? true : undefined}>
