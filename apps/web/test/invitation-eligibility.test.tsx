@@ -287,13 +287,21 @@ describe("InvitationChooser open-for-invite filtering", () => {
       }),
     });
     const tree = renderTree();
-    const button = elements(tree).find(node => {
-      if (node.type !== "button" || typeof node.props?.onClick !== "function") return false;
-      const label = typeof node.props?.["aria-label"] === "string" ? node.props["aria-label"] : "";
-      return textOf(node).includes("Отправить приглашение") || label.includes("Отправить приглашение");
+    // InvitationGameCard is a presentational child: resolve its subtree to reach the CTA
+    // that closes over the same invite handler (do not invent a disconnected onClick).
+    const card = elements(tree).find(node => {
+      if (typeof node.type !== "function" || typeof node.props?.onInvite !== "function") return false;
+      const game = node.props.game as ManagedGame | undefined;
+      return Boolean(game && game.id === "nov01");
     });
-    expect(button).toBeTruthy();
-    await (button!.props!.onClick as () => Promise<void>)();
+    expect(card).toBeTruthy();
+    const cardTree = (card!.type as (props: Record<string, unknown>) => unknown)(card!.props!);
+    const cta = elements(cardTree).find(node => typeof node.props?.onClick === "function" && (
+      textOf(node).includes("Отправить приглашение")
+      || (typeof node.props?.["aria-label"] === "string" && (node.props["aria-label"] as string).includes("Отправить приглашение"))
+    ));
+    expect(cta).toBeTruthy();
+    await (cta!.props!.onClick as () => void)();
     await Promise.resolve();
     await Promise.resolve();
     expect(mutation.run).not.toHaveBeenCalled();

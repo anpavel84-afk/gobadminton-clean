@@ -66,7 +66,7 @@ export function Toggle({ label, helper, on, disabled, onClick, describedBy, id }
   return <button type="button" id={id} className={`toggle-row ${on ? "is-on" : ""}`} aria-label={label} aria-describedby={describedBy} role="switch" aria-checked={on} disabled={disabled} onClick={onClick}><span><strong>{label}</strong>{helper && <small>{helper}</small>}</span><i aria-hidden="true"><b /></i></button>;
 }
 /** Native modal provides focus containment, Escape and focus restoration. */
-export function ProfileDialog({ title, onClose, children, size = "normal", className, describedBy }: {
+export function ProfileDialog({ title, onClose, children, size = "normal", className, describedBy, lockBodyScroll = false }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
@@ -76,20 +76,22 @@ export function ProfileDialog({ title, onClose, children, size = "normal", class
   className?: string;
   /** Optional aria-describedby for the dialog hint. */
   describedBy?: string;
+  /** Opt-in body scroll lock (invitation family only); default leaves overflow untouched. */
+  lockBodyScroll?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
     const trigger = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const overflow = lockBodyScroll ? document.body.style.overflow : null;
+    if (lockBodyScroll) document.body.style.overflow = "hidden";
     dialog?.showModal();
     return () => {
       dialog?.close();
-      document.body.style.overflow = overflow;
+      if (lockBodyScroll && overflow !== null) document.body.style.overflow = overflow;
       if (trigger?.isConnected) trigger.focus();
     };
-  }, []);
+  }, [lockBodyScroll]);
   const classes = ["profile-dialog", size === "small" ? "profile-dialog--small" : "", className].filter(Boolean).join(" ");
   return <dialog ref={ref} className={classes} aria-label={title} aria-describedby={describedBy} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header><div className="profile-dialog__body">{children}</div></dialog>;
 }

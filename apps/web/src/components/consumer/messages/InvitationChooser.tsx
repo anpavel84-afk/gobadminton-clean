@@ -129,6 +129,7 @@ export function InvitationChooser({ me, playerId, resultRef, preferredGameId, on
       title="Пригласить на игру"
       className="profile-dialog--invitation"
       describedBy="gb-invitation-hint"
+      lockBodyScroll
       onClose={() => { if (!checking && !mutation.busy) onClose(); }}
     >
       <div className="gb-invitation-chooser">
