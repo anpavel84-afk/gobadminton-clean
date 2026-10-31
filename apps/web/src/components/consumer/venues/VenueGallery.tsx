@@ -240,6 +240,9 @@ export function VenueGallery({
       <div
         className="gb-venue-gallery__frame"
         onErrorCapture={(event) => {
+          // Main loan: capture runs before the shared resource target listener — do not setFailed
+          // (that would drop morph and mount a second fallback img). Let the resource own it.
+          if (useMorphSlot) return;
           const target = event.target;
           if (!(target instanceof HTMLImageElement) || !current || failed === current.url) return;
           // Observe the original current img src only — not a static illustration fallback.

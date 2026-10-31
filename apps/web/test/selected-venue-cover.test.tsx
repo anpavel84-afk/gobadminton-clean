@@ -53,7 +53,7 @@ vi.mock("react", async original => {
     useContext(context: { _currentValue: unknown }) { return context._currentValue; },
     useSyncExternalStore(subscribe: (onStoreChange: () => void) => () => void, getSnapshot: () => unknown) {
       const store = active(); const index = store.cursor++;
-      let slot = store.slots[index] as { value: unknown; unsub?: () => void } | undefined;
+      const slot = store.slots[index] as { value: unknown; unsub?: () => void } | undefined;
       if (!slot) {
         const owned: { value: unknown; unsub?: () => void } = { value: getSnapshot() };
         owned.unsub = subscribe(() => {
@@ -211,6 +211,9 @@ function mount(root: () => ReactNode) { const renderer = new Renderer(root); ren
 beforeEach(() => {
   runtime.current = null; runtime.dirty = false; runtime.queue = []; created.length = 0; body.rendered = []; body.style = {}; dom.activeElement = null;
   vi.stubGlobal("document", dom); vi.stubGlobal("HTMLElement", Node);
+  // VenueGallery adjacent prefetch uses global Image (not DOM img — avoids eager assert / created counter).
+  class PrefetchImage { src = ""; decoding = ""; }
+  vi.stubGlobal("Image", PrefetchImage);
 });
 afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount()); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -390,6 +393,12 @@ it("F1: compact main error then expanded remount keeps morph illustration credit
   const image = imageAt();
   expect(image.srcWrites).toEqual([uploaded]);
   expect(resource.fallback).toBe(false);
+  // Capture-before-target: React frame capture fires before the shared resource error listener.
+  const frame = renderer.nodes().find(node => node.className === "gb-venue-gallery__frame");
+  if (!frame) throw new Error("Missing gallery frame");
+  const onErrorCapture = frame.props.onErrorCapture as ((event: { target: Node }) => void) | undefined;
+  if (!onErrorCapture) throw new Error("Missing onErrorCapture");
+  onErrorCapture({ target: image });
   image.dispatchEvent(new Event("error"));
   renderer.render();
   expect(resource.fallback).toBe(true);
