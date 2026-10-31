@@ -164,7 +164,10 @@ describe("production venue popup presentation with real React", () => {
     const embedded = ssr(<CreateGamePresentation {...props} embedded onClose={noop} />);
     const full = ssr(<CreateGamePresentation {...props} />);
     for (const html of [embedded, full]) {
-      for (const field of ["title", "venueMode", "venueId", "startDate", "startTime", "capacity", "format", "levels", "visibility", "contact", "venueTerms"]) expect(html).toContain(`id="${field}"`);
+      for (const field of ["title", "venueMode", "venueId", "startDate", "startTime", "capacity", "format", "visibility", "contact", "venueTerms"]) expect(html).toContain(`id="${field}"`);
+      expect(html).not.toContain('id="levels"');
+      expect(html).toMatch(/<input\b[^>]*\btype="range"[^>]*\bmin="1"[^>]*\bmax="3\.5"[^>]*\bstep="0\.5"[^>]*\bvalue="3"[^>]*\baria-label="Нижний уровень"/);
+      expect(html).toMatch(/<input\b[^>]*\btype="range"[^>]*\bmin="3"[^>]*\bmax="7"[^>]*\bstep="0\.5"[^>]*\bvalue="3\.5"[^>]*\baria-label="Верхний уровень"/);
       expect(html).toContain('type="file"'); expect(html).toContain("Далее — к созданию"); expect(html).toContain("Отмена");
       if (step === "preview") { expect(html).toContain("Создать игру"); expect(html).toContain("Назад к редактированию"); expect(html).toMatch(/<form[^>]*hidden=""/); }
     }
