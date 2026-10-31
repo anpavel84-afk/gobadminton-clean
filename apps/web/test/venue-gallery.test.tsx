@@ -145,7 +145,7 @@ describe("VenueGallery", () => {
       querySelector: () => null,
       querySelectorAll: () => [],
     });
-    const pickerVenue = {
+    const multiVenue = {
       id: "1",
       cityId: "a0000000-0000-4000-8000-000000000001",
       name: "Альфа",
@@ -163,18 +163,112 @@ describe("VenueGallery", () => {
         },
       },
     };
+    const singleVenue = {
+      ...multiVenue,
+      id: "2",
+      name: "Бета",
+      profile: {
+        ...multiVenue.profile,
+        gallery: {
+          coverage: "ordered" as const,
+          items: [
+            { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Один", url: "https://club.example/1" } },
+          ],
+        },
+      },
+    };
+    const onSelect = vi.fn();
     const html = ssr(<VenuePickerDialog
-      venues={[pickerVenue]}
+      venues={[multiVenue]}
+      selectedId=""
+      status="ready"
+      onSelect={onSelect}
+      onClose={() => {}}
+      onRetry={() => {}}
+    />);
+    expect(html).toContain("gb-venue-gallery");
+    expect(html).toContain('data-size="compact"');
+    expect(html).toContain('data-size="sheet"');
+    expect(html).toContain("gb-venue-picker-photos");
+    expect(html).toContain("Фото · 2");
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain("Предыдущее фото");
+    expect(html).toContain("Следующее фото");
+    expect(html).toContain("1/2");
+    expect(html).toContain("Фото: Один");
+    expect(html).toContain("Альфа");
+    // Compact thumb stays inside the select button; sheet nav/credits stay outside (no nested buttons).
+    const optionInner = html.match(/class="gb-venue-picker-option"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? "";
+    expect(optionInner).toContain('data-size="compact"');
+    expect(optionInner).not.toContain("<button");
+    expect(optionInner).not.toContain("Предыдущее фото");
+    expect(optionInner).not.toContain("gb-venue-gallery__credit");
+    expect(html.indexOf("gb-venue-picker-option")).toBeLessThan(html.indexOf("gb-venue-picker-photos"));
+    expect(html.indexOf("gb-venue-picker-photos")).toBeLessThan(html.indexOf("Предыдущее фото"));
+
+    const one = ssr(<VenuePickerDialog
+      venues={[singleVenue]}
       selectedId=""
       status="ready"
       onSelect={() => {}}
       onClose={() => {}}
       onRetry={() => {}}
     />);
-    expect(html).toContain("gb-venue-gallery");
-    expect(html).toContain('data-size="compact"');
-    expect(html).not.toContain("Предыдущее фото");
-    expect(html).toContain("Альфа");
+    expect(one).toContain("Бета");
+    expect(one).toContain('data-size="compact"');
+    expect(one).not.toContain("gb-venue-picker-photos");
+    expect(one).not.toContain("Предыдущее фото");
+    expect(one).not.toContain("Следующее фото");
+    expect(one).not.toContain('data-size="sheet"');
+
+    // Selecting the row calls onSelect; browsing sheet photos does not.
+    function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+      if (!isValidElement<Record<string, unknown>>(node)) return [];
+      return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(elements)];
+    }
+    resetHooks();
+    onSelect.mockClear();
+    const tree = VenuePickerDialog({
+      venues: [multiVenue],
+      selectedId: "",
+      status: "ready",
+      onSelect,
+      onClose: () => {},
+      onRetry: () => {},
+    });
+    hooks.effects.splice(0).forEach(fn => fn());
+    const nodes = elements(tree);
+    const option = nodes.find(node => node.props.className === "gb-venue-picker-option");
+    expect(option).toBeTruthy();
+    (option!.props.onClick as () => void)();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(multiVenue);
+    onSelect.mockClear();
+    const summary = nodes.find(node => node.type === "summary");
+    expect(summary?.props.tabIndex).toBe(0);
+    expect(summary?.props.className).toBe("gb-venue-picker-photos__summary");
+    const sheetEl = nodes.find(node => node.type === VenueGallery && node.props.size === "sheet" && node.props.showCredit === true);
+    expect(sheetEl).toBeTruthy();
+    expect(sheetEl!.props.venue).toBe(multiVenue);
+    // Expand sheet gallery tree (outside the select button) and click nav — must not select.
+    const gallerySlots = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
+    hooks.slots = gallerySlots.slots;
+    hooks.cleanups = gallerySlots.cleanups;
+    hooks.cursor = 0;
+    hooks.effects = [];
+    const galleryTree = VenueGallery({
+      venue: sheetEl!.props.venue as typeof multiVenue,
+      size: "sheet",
+      showCredit: true,
+    });
+    const galleryNodes = elements(galleryTree);
+    const next = galleryNodes.find(node => node.props["aria-label"] === "Следующее фото");
+    const prev = galleryNodes.find(node => node.props["aria-label"] === "Предыдущее фото");
+    expect(next).toBeTruthy();
+    expect(prev).toBeTruthy();
+    (next!.props.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: vi.fn() });
+    (prev!.props.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: vi.fn() });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("scopes VenuePage media CSS so image+credit flow without clipping credit", () => {
@@ -183,6 +277,10 @@ describe("VenueGallery", () => {
     expect(css).toContain("overflow: visible");
     expect(css).toContain("max-height: 300px");
     expect(css).toContain("max-height: 196px");
+    // Picker inline expander stays picker-scoped; must not redefine page/map/popup gallery chrome.
+    expect(css).toContain(".gb-venue-picker-photos");
+    expect(css).toContain(".gb-venue-picker-option-block");
+    expect(css).toContain(".gb-venue-picker-photos__summary");
   });
 });
 

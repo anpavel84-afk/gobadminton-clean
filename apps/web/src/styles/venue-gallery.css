@@ -6,6 +6,54 @@
 .gb-venue-picker-option > .gb-venue-gallery-wrap {
   width: 64px; height: 64px; justify-self: center;
 }
+/* Create-game picker only: option + optional inline photo expander (not page/map/popup). */
+.gb-venue-picker-option-block {
+  border-bottom: 1px solid var(--gb-line, #d7ddd8);
+}
+.gb-venue-picker-option-block > .gb-venue-picker-option {
+  border-bottom: 0;
+}
+.gb-venue-picker-photos {
+  margin: 0;
+  padding: 0 22px 12px;
+  background: var(--gb-white, #fff);
+}
+.gb-venue-picker-photos__summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--gb-ink-soft, #5c6560);
+  user-select: none;
+}
+.gb-venue-picker-photos__summary::-webkit-details-marker { display: none; }
+.gb-venue-picker-photos__summary::marker { content: ""; }
+.gb-venue-picker-photos__summary:focus-visible {
+  outline: 2px solid var(--gb-ink, #111);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.gb-venue-picker-photos__body {
+  padding: 4px 0 2px;
+  min-width: 0;
+}
+.gb-venue-picker-photos__body > .gb-venue-gallery-wrap {
+  width: 100%;
+}
+.gb-venue-picker-photos__body .gb-venue-gallery {
+  max-height: 200px;
+}
+@media (max-width: 720px) {
+  .gb-venue-picker-photos { padding-left: 16px; padding-right: 16px; }
+}
+@media (min-width: 1024px) {
+  .gb-venue-picker-photos { padding-left: 40px; padding-right: 40px; }
+}
 /* VenuePage .gb-venue-media inherits fixed 300/196 + overflow:hidden from games.css.
    Scoped override: let image+credit flow; keep reasonable image heights (not game hero). */
 .gb-venue-media:has(> .gb-venue-gallery-wrap) {

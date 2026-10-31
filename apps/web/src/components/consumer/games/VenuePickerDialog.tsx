@@ -17,6 +17,13 @@ type Props = {
   onRetry: () => void;
 };
 
+/** Trusted API projection length, capped at Gallery's existing 8-item bound. */
+function galleryItemCount(venue: VenueSummary): number {
+  const items = venue.profile?.gallery?.items;
+  if (!Array.isArray(items)) return 0;
+  return Math.min(items.length, 8);
+}
+
 /** Compact, keyboard-accessible search sheet; fullscreen on a phone. */
 export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClose, onRetry }: Props) {
   const [query, setQuery] = useState("");
@@ -39,10 +46,18 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
       return;
     }
     if (event.key !== "Tab") return;
-    const controls = dialogRef.current?.querySelectorAll<HTMLElement>(
+    const root = dialogRef.current;
+    if (!root) return;
+    const controls = [...root.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    );
-    if (!controls?.length) return;
+    )].filter(el => {
+      const sealed = el.closest("details:not([open])");
+      if (!sealed) return true;
+      // Collapsed expander: only its summary stays in the tab cycle (nav lives inside).
+      const summary = sealed.querySelector(":scope > summary");
+      return Boolean(summary && (el === summary || summary.contains(el)));
+    });
+    if (!controls.length) return;
     const first = controls[0], last = controls[controls.length - 1];
     if (!first || !last) return;
     if (event.shiftKey && document.activeElement === first) {
@@ -98,23 +113,38 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
             </div>
           ) : status === "loading" ? (
             <p className="gb-venue-picker-empty" role="status">Подождите, загружаем площадки…</p>
-          ) : visible.length ? visible.map(venue => (
-            <button
-              type="button"
-              key={venue.id}
-              className="gb-venue-picker-option"
-              aria-pressed={selectedId === venue.id}
-              onClick={() => onSelect(venue)}
-            >
-              {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select. */}
-              <VenueGallery venue={venue} size="compact" showCredit={false} className="gb-venue-cover--thumb" />
-              <span className="gb-venue-picker-option-copy">
-                <span className="gb-venue-picker-option-name">{venue.name}</span>
-                <span className="gb-venue-picker-option-address">{venue.address}</span>
-              </span>
-              {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
-            </button>
-          )) : (
+          ) : visible.length ? visible.map(venue => {
+            const photos = galleryItemCount(venue);
+            return (
+              <div key={venue.id} className="gb-venue-picker-option-block">
+                <button
+                  type="button"
+                  className="gb-venue-picker-option"
+                  aria-pressed={selectedId === venue.id}
+                  onClick={() => onSelect(venue)}
+                >
+                  {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select. */}
+                  <VenueGallery venue={venue} size="compact" showCredit={false} className="gb-venue-cover--thumb" />
+                  <span className="gb-venue-picker-option-copy">
+                    <span className="gb-venue-picker-option-name">{venue.name}</span>
+                    <span className="gb-venue-picker-option-address">{venue.address}</span>
+                  </span>
+                  {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
+                </button>
+                {photos >= 2 ? (
+                  <details className="gb-venue-picker-photos">
+                    <summary tabIndex={0} className="gb-venue-picker-photos__summary">
+                      Фото · {photos}
+                    </summary>
+                    <div className="gb-venue-picker-photos__body">
+                      {/* Sibling sheet gallery: arrows, counter, focused arrow keys — outside the select button. */}
+                      <VenueGallery venue={venue} size="sheet" showCredit />
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            );
+          }) : (
             <div className="gb-venue-picker-empty" role="status">
               {query ? "По вашему запросу ничего не найдено." : "Площадок пока нет."}
             </div>
