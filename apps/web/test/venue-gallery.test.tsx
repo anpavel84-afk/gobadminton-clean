@@ -19,6 +19,7 @@ vi.mock("react", async importOriginal => ({
     }];
   },
   useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+  useMemo<T>(factory: () => T, _deps?: unknown[]) { return factory(); },
   useEffect(effect: () => void | (() => void), deps: unknown[]) {
     const index = hooks.cursor++;
     const previous = hooks.slots[index] as unknown[] | undefined;

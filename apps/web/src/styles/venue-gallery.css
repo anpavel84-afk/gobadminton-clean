@@ -1,8 +1,22 @@
 /* Reuses existing cover shell, icon buttons, 16:9 ratio; no new design system. */
 .gb-venue-gallery-wrap { display: block; min-width: 0; }
 .gb-venue-gallery-wrap.gb-venue-cover--thumb,
-.gb-venue-gallery-wrap.gb-venue-preview-cover,
-.gb-venue-gallery-wrap.gb-venue-sheet-cover { width: 100%; height: 100%; }
+.gb-venue-gallery-wrap.gb-venue-preview-cover { width: 100%; height: 100%; }
+/* Expanded map sheet: outer wrap must not clip credit below the image frame.
+   Beat legacy .gb-consumer/.gb-desktop-map-inspector .gb-venue-sheet-cover clip rules. */
+.gb-venue-gallery-wrap.gb-venue-sheet-cover {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  aspect-ratio: auto;
+  overflow: visible;
+}
+.gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-gallery-wrap.gb-venue-sheet-cover {
+  height: auto;
+  max-height: none;
+  aspect-ratio: auto;
+  overflow: visible;
+}
 .gb-venue-picker-option > .gb-venue-gallery-wrap {
   width: 64px; height: 64px; justify-self: center;
 }
