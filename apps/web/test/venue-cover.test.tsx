@@ -42,7 +42,6 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     const idA="00000037-1111-4111-8111-111111111111";
     const idB="00000037-1111-4111-8111-111111111112";
     const a=renderToStaticMarkup(<VenueCover venueId={idA}/>);
-    const b=renderToStaticMarkup(<VenueCover venueId={idB}/>);
     const again=renderToStaticMarkup(<VenueCover venueId={idA}/>);
     expect(a).toContain(`src="${venueIllustrationUrl(idA)}"`);
     expect(a).toContain('data-fallback="illustration"');
