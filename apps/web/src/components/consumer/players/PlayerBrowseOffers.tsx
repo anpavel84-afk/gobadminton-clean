@@ -134,8 +134,20 @@ export function PlayerBrowseOfferStatus({
   const tone = status.phase === "outgoing" || status.phase === "mutual"
     ? "is-success"
     : status.phase === "sending"
-      ? ""
+      ? "is-pending"
       : "is-warning";
+  const renderUnresolved = (entry: { peerId: string; peerName: string }) => (
+    <div key={entry.peerId} className="pb-offer-status__unresolved">
+      <p className="pb-offer-status__text is-warning">
+        {`${entry.peerName.trim() || "игроку"}: результат отправки не подтверждён`}
+      </p>
+      {onCheckUnresolved && (
+        <Button variant="outline" onClick={() => onCheckUnresolved(entry.peerId)}>
+          Проверить статус
+        </Button>
+      )}
+    </div>
+  );
   return (
     <div className={`pb-offer-status ${className ?? ""}`.trim()} role="status" aria-live="polite">
       {showPrimary ? (
@@ -144,18 +156,20 @@ export function PlayerBrowseOfferStatus({
       {status.canCheckStatus && onCheckStatus && (
         <Button variant="outline" onClick={onCheckStatus}>Проверить статус</Button>
       )}
-      {extraUnknown.map((entry) => (
-        <div key={entry.peerId} className="pb-offer-status__unresolved">
-          <p className="pb-offer-status__text is-warning">
-            {`${entry.peerName.trim() || "игроку"}: результат отправки не подтверждён`}
-          </p>
-          {onCheckUnresolved && (
-            <Button variant="outline" onClick={() => onCheckUnresolved(entry.peerId)}>
-              Проверить статус
-            </Button>
-          )}
-        </div>
-      ))}
+      {extraUnknown.length === 1
+        ? renderUnresolved(extraUnknown[0])
+        : extraUnknown.length > 1
+          ? (
+            <details className="pb-offer-status__more">
+              <summary className="pb-offer-status__more-summary">
+                Ещё неподтверждённых: {extraUnknown.length}
+              </summary>
+              <div className="pb-offer-status__more-body">
+                {extraUnknown.map(renderUnresolved)}
+              </div>
+            </details>
+          )
+          : null}
     </div>
   );
 }

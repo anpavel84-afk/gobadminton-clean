@@ -1397,7 +1397,8 @@
   margin: 8px 16px;
   padding: 10px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.96);
+  background: #f3f6f1;
+  color: var(--pb-ink, #13221a);
   border: 1px solid var(--pb-line, #d7ddd6);
 }
 .gb-player-browse .pb-offer-status__text {
@@ -1405,16 +1406,74 @@
   flex: 1 1 160px;
   font-size: 14px;
   font-weight: 600;
+  /* Explicit ink — parent fullscreen shell is white text; never inherit onto light panel. */
+  color: var(--pb-ink, #13221a);
 }
+.gb-player-browse .pb-offer-status__text.is-pending { color: #1a3d28; }
 .gb-player-browse .pb-offer-status__text.is-success { color: var(--gb-lime-ink, #1f5b2c); }
 .gb-player-browse .pb-offer-status__text.is-warning { color: var(--gb-warn, #8a5a00); }
+.gb-player-browse .pb-offer-status .btn,
+.pb-mobile-fs .pb-offer-status .btn {
+  min-height: 44px;
+  min-width: 44px;
+  color: var(--pb-ink, #13221a);
+  background: #fff;
+  border-color: #9aab9e;
+}
+.gb-player-browse .pb-offer-status__unresolved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  flex: 1 1 100%;
+}
+.gb-player-browse .pb-offer-status__more {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.gb-player-browse .pb-offer-status__more-summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--gb-warn, #8a5a00);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.gb-player-browse .pb-offer-status__more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  max-height: 7.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .gb-player-browse .pb-offer-status--list {
   position: relative;
   z-index: 5;
 }
-.pb-mobile-fs .pb-offer-status--modal {
-  position: relative;
-  z-index: 6;
+/*
+ * Mobile fullscreen modal status: out-of-flow overlay (toast/popup pattern).
+ * Must not change .pb-surface / .pb-cover / action baseline when pending/confirmed/UNKNOWN appear.
+ */
+.pb-mobile-fs .pb-offer-status--modal,
+.gb-player-browse.pb-browse--fs .pb-offer-status--modal {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  /* Clears undo + ≥44px main actions; stays below chrome/X. */
+  bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+  z-index: 18;
+  margin: 0;
+  max-height: min(28vh, 168px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  box-shadow: 0 10px 28px rgba(8, 18, 12, 0.42);
+  background: #f3f6f1;
+  color: var(--pb-ink, #13221a);
 }
 
 .gb-player-browse .pb-finder-gate,
@@ -2052,6 +2111,7 @@ dialog.pb-mobile-fs::backdrop {
 .pb-mobile-fs .gb-player-browse,
 .pb-mobile-fs.gb-player-browse,
 .gb-player-browse.pb-browse--fs {
+  position: relative; /* contain .pb-offer-status--modal overlay */
   flex: 1;
   min-height: 0;
   display: flex;
