@@ -275,11 +275,13 @@ export function PlayersDirectoryPage({
     }
   }, [showCards]);
   const loadMore = () => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); };
-  // Batch eligibility for authenticated cards on both mobile and desktop; list stays complete.
+  // Finder eligibility reads the full public ordinary page — never mergeRadarCatalog.ordinary,
+  // which presentation-dedupes peers already shown as Radar rows (would drop them while Radar ON).
+  // List display below still uses catalog.radar + catalog.ordinary (deduped full set).
   const offers = usePlayerBrowseOffers({
     finderActive: showCards,
     ordinaryScope,
-    catalogPlayers: catalog.ordinary,
+    catalogPlayers: players,
     catalogState: state,
     hasMore: Boolean(availableNextCursor),
     moreBusy,
@@ -291,7 +293,7 @@ export function PlayersDirectoryPage({
     ? offers.eligibility.players
     : showCards && offers.authState !== "guest"
       ? []
-      : catalog.ordinary;
+      : players;
   // Readonly eligibility gate for desktop auth cards — do not pass mobile operation host.
   const desktopFinderEligibility = showCards && desktop && offers.authState !== "guest"
     ? offers.eligibility
