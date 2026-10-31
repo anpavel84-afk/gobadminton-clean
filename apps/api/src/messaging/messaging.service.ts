@@ -120,6 +120,8 @@ export class MessagingService {
     private readonly jobs: JobEnqueueService,
   ) {
     void this.pool;
+    // New chats are accepted immediately; legacy pending expiry jobs remain for pre-0044 rows.
+    void this.jobs;
   }
 
   /** A snapshot lookup only: never creates a pair, accepts, expires or unarchives. */
@@ -152,8 +154,17 @@ export class MessagingService {
         if (!row.member) return unavailable;
         const state = effectiveRequestState(row, new Date());
         if (state !== "accepted" && state !== "pending") return { state: "terminal", targetPublicPlayerId: target };
+        if (state === "accepted") {
+          // No new wire field: unavailable hides write-capable contact-state when peer closed.
+          // Accepted history remains readable via conversation message APIs (no directory_visibility).
+          if (!(await this.receiverAllowsIncoming(client, peerId))) return unavailable;
+          return {
+            state: "accepted",
+            targetPublicPlayerId: target, conversationId: row.id, version: row.version,
+          };
+        }
         return {
-          state: state === "accepted" ? "accepted" : row.initiator_user_id === actorId ? "pending_outgoing" : "pending_incoming",
+          state: row.initiator_user_id === actorId ? "pending_outgoing" : "pending_incoming",
           targetPublicPlayerId: target, conversationId: row.id, version: row.version,
         };
       }
@@ -258,21 +269,20 @@ export class MessagingService {
           targetUserId,
           discoveryProof: normalized.discoveryProof,
         });
-        const expiresAt = this.feature.requestExpiresAt(now);
+        // Immediate DM: first message opens accepted direct chat; no pending gate/expiry job.
         const inserted = await client.query<ConversationRow>(
           `INSERT INTO conversations (
              pair_id, kind, request_state, initiator_user_id, recipient_user_id,
              request_expires_at, next_message_seq, last_message_at, last_message_seq,
              version, created_at, updated_at, context_game_id
            ) VALUES (
-             $1, 'direct', 'pending', $2, $3, $4, 2, $5, 1, 1, $5, $5, $6
+             $1, 'direct', 'accepted', $2, $3, NULL, 2, $4, 1, 1, $4, $4, $5
            )
            RETURNING *`,
           [
             pair.id,
             actorId,
             targetUserId,
-            expiresAt,
             now,
             normalized.gameContextId,
           ],
@@ -307,11 +317,6 @@ export class MessagingService {
           ],
         );
         const msg = message.rows[0]!;
-        await this.jobs.enqueueDmRequestExpiry(client, {
-          conversationId: conversation.id,
-          version: conversation.version,
-          expiresAt,
-        });
 
         const dto = await this.toConversationDto(client, actorId, conversation);
         await this.proofHook.assertFinalProof(client,{actorId,sessionId,targetUserId,discoveryProof:normalized.discoveryProof});
@@ -818,6 +823,13 @@ export class MessagingService {
           conv.initiator_user_id,
           conv.recipient_user_id,
         );
+        // Peer closed blocks delivery; sender contact_policy opt-out does not forbid outbound.
+        // Accepted history stays readable without requiring directory visibility.
+        const receiverUserId =
+          actorId === conv.initiator_user_id
+            ? conv.recipient_user_id
+            : conv.initiator_user_id;
+        await this.assertReceiverAllowsIncoming(client, receiverUserId);
 
         const seq = Number(conv.next_message_seq);
         const purgeAt = this.feature.purgeEligibleAt(now);
@@ -1122,6 +1134,32 @@ export class MessagingService {
       !row.directory_visible ||
       row.contact_policy !== "requests"
     ) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+  }
+
+  /** Incoming delivery to an accepted chat: contact_policy requests; no directory_visibility required. */
+  private async receiverAllowsIncoming(
+    client: PoolClient,
+    receiverUserId: string,
+  ): Promise<boolean> {
+    const target = await client.query<{
+      contact_policy: "requests" | "closed";
+      social_eligible: boolean;
+    }>(
+      `SELECT contact_policy, social_eligible
+       FROM player_social_profiles WHERE user_id = $1 FOR SHARE`,
+      [receiverUserId],
+    );
+    const row = target.rows[0];
+    return Boolean(row?.social_eligible && row.contact_policy === "requests");
+  }
+
+  private async assertReceiverAllowsIncoming(
+    client: PoolClient,
+    receiverUserId: string,
+  ): Promise<void> {
+    if (!(await this.receiverAllowsIncoming(client, receiverUserId))) {
       throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     }
   }

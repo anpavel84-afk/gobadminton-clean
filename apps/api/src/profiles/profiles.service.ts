@@ -235,7 +235,7 @@ export class ProfilesService {
               level?.scaleVersion ?? null,
               level?.levelId ?? null,
               normalized.bio ?? null,
-              normalized.contactPolicy ?? "closed",
+              normalized.contactPolicy ?? "requests",
               normalized.radarConsented ?? false,
               normalized.radarConsented
                 ? (normalized.radarConsentPolicyVersion ??
@@ -928,7 +928,7 @@ function emptyOwnProfile(trainer: boolean): OwnSocialProfileDto {
     level: null,
     bio: null,
     directoryVisible: false,
-    contactPolicy: "closed",
+    contactPolicy: "requests",
     consentPolicyVersion: null,
     optedInAt: null,
     radarConsented: false,
