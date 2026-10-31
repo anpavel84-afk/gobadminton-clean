@@ -454,17 +454,18 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     expect((await post(a,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId},requestKey)).statusCode).toBe(404);
     const fresh=await request();expect(fresh.requestId).not.toBe(r.requestId);expect(await ledgerCount(fresh)).toBe(2);
   });
-  it("direct-message opt-out does not block a new friend request, but old epoch stays invalid",async()=>{
+  it("direct-message opt-out closes contact_policy without bumping shared epoch; same pending request stays acceptable",async()=>{
     const old=await request();
+    const oldEpoch=(await pool.query("SELECT social_action_epoch FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].social_action_epoch;
     await pool.query("UPDATE player_social_profiles SET contact_policy='closed' WHERE user_id=$1",[b.userId]);
-    expect((await decide(b,old,"accept")).statusCode).toBe(404);
-    const fresh=await request();
-    expect(fresh.requestId).not.toBe(old.requestId);
-    expect((await decide(b,fresh,"accept")).statusCode).toBe(200);
+    const epoch=(await pool.query("SELECT social_action_epoch FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].social_action_epoch;
+    expect(epoch).toBe(oldEpoch);
+    expect((await decide(b,old,"accept")).statusCode).toBe(200);
     const searched=(await get(a,"/v1/me/friendships?view=accepted&q=Synthetic%20B")).json();
-    expect(searched.items.map((item:FriendshipView)=>item.friendshipId)).toContain(fresh.friendshipId);
+    expect(searched.items.map((item:FriendshipView)=>item.friendshipId)).toContain(old.friendshipId);
     const policy=(await pool.query("SELECT contact_policy FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].contact_policy;
     expect(policy).toBe("closed");
+    expect(await ledgerCount(old)).toBe(1);
   });
   it("TTL expiration is authoritative with no worker, old replay and decisions cannot revive it",async()=>{
     env.FRIENDS_REQUEST_TTL_SECONDS=1;

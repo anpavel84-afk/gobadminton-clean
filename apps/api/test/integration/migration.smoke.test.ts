@@ -181,6 +181,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0041_game_recommendations",
         "0042_game_outcomes",
         "0043_play_interests",
+        "0044_direct_messages_immediate",
       ]);
       const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at') ORDER BY column_name");
       expect(profileColumns.rows).toEqual([
