@@ -80,7 +80,8 @@ describe("venue public data batch validation", () => {
         items: [{ ...base.items[0]!, ...patch }],
       })).toThrow();
     }
-    const { publicContacts: _drop, ...withoutPatch } = base.items[0]!;
+    const withoutPatch = { ...base.items[0]! };
+    delete withoutPatch.publicContacts;
     expect(() => validatePublicDataManifest({
       ...base,
       items: [withoutPatch],
