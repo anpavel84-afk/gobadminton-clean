@@ -85,3 +85,47 @@ export function isBrowseConfirmedPlayInterestOutcome(
 ): boolean {
   return outcome === "outgoing" || outcome === "mutual";
 }
+
+/** UUID shape for PlayInterestReceipt.interestId (OpenAPI format: uuid). */
+const PLAY_INTEREST_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Decimal version string — OpenAPI `^[1-9][0-9]{0,18}$`. */
+const PLAY_INTEREST_DECIMAL_VERSION = /^[1-9][0-9]{0,18}$/;
+
+/**
+ * Strict runtime receipt for confirmed browse send (outgoing/mutual).
+ * Missing/malformed interestId, version, or outcome → false (caller treats as UNKNOWN).
+ * Never throws on null/non-object input.
+ */
+export function isValidConfirmedPlayInterestReceipt(
+  data: unknown,
+): data is PlayInterestReceipt {
+  if (!data || typeof data !== "object") return false;
+  const receipt = data as Record<string, unknown>;
+  if (typeof receipt.interestId !== "string" || !PLAY_INTEREST_UUID.test(receipt.interestId)) {
+    return false;
+  }
+  if (typeof receipt.version !== "string" || !PLAY_INTEREST_DECIMAL_VERSION.test(receipt.version)) {
+    return false;
+  }
+  return receipt.outcome === "outgoing" || receipt.outcome === "mutual";
+}
+
+/** SessionStorage pending marker must match path/body/key/method/peer — never self-declare safe. */
+export function isValidPlayInterestSendPendingMarker(
+  value: unknown,
+  peerId: string,
+): value is { path: string; body: { targetPublicPlayerId: string }; key: string; method: string } {
+  if (!value || typeof value !== "object" || !peerId) return false;
+  const marker = value as Record<string, unknown>;
+  if (marker.method !== "POST" || marker.path !== "/v1/play-interests") return false;
+  if (typeof marker.key !== "string" || !marker.key.trim()) return false;
+  if (!marker.body || typeof marker.body !== "object") return false;
+  const body = marker.body as Record<string, unknown>;
+  return body.targetPublicPlayerId === peerId;
+}
+
+export function playInterestPendingStorageKey(actorId: string, peerId: string): string {
+  return `gb-fr04-pending:${actorId}:play-interest:${peerId}`;
+}

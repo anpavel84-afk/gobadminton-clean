@@ -110,7 +110,8 @@ describe("player browse play-interest intent and capabilities", () => {
       /result\.status === 401 \? "guest" : \[403, 404\]\.includes\(result\.status\) \? "unavailable" : "error"/,
     );
     expect(playInterestSource).not.toMatch(/\[403,\s*404,\s*503\]/);
-    const pendingIdx = playInterestSource.indexOf("if (mutation.pending)");
+    // Fluid mobile: local pending UI only when page host does not own send UNKNOWN.
+    const pendingIdx = playInterestSource.indexOf("if (mutation.pending && !useExternalSend)");
     const errorIdx = playInterestSource.indexOf('authState === "error" || loadState === "error"');
     const unavailableIdx = playInterestSource.indexOf(
       'loadState === "unavailable" || view?.relationship === "unavailable"',
@@ -126,6 +127,7 @@ describe("player browse play-interest intent and capabilities", () => {
     expect(playInterestSource).toContain("Проверить статус");
     expect(playInterestSource).toContain("Не повторяйте отправку");
     expect(playInterestSource).toContain("Не удалось проверить. Повторите.");
+    expect(playInterestSource).toContain("externalAdmitSend");
   });
 
   it("tutorial and status copy say Давай сыграем / mutual-only match, never auto-friend", () => {

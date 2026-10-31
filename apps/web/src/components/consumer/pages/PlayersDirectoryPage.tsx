@@ -22,7 +22,7 @@ import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
-import { PlayerBrowseOfferStatus } from "../players/PlayerBrowseOffers";
+import { PlayerBrowseOfferOpHost, PlayerBrowseOfferStatus } from "../players/PlayerBrowseOffers";
 import { usePlayerBrowseOffers } from "../players/usePlayerBrowseOffers";
 import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
 import { GamesViewAction } from "../games/GamesViewAction";
@@ -447,10 +447,22 @@ export function PlayersDirectoryPage({
     {/* Desktop: existing map CTA. Mobile list: shared finder+map zone (never inside fullscreen). */}
     {desktop && playersMapCta}
     {mobileFinderZone}
+    {/* Keyed OpHost outside conditional dialog — survives X / next-card / portal teardown. */}
+    {offers.activeOperation && (
+      <PlayerBrowseOfferOpHost
+        key={offers.activeOperation.token}
+        operation={offers.activeOperation}
+        onConfirmed={offers.onOperationConfirmed}
+        onFailed={offers.onOperationFailed}
+        onUnknown={offers.onOperationUnknown}
+      />
+    )}
     {!mobileCards && (
       <PlayerBrowseOfferStatus
         status={offers.status}
         onCheckStatus={() => offers.checkStatusReadonly()}
+        unresolved={offers.unresolved}
+        onCheckUnresolved={(peerId) => offers.checkStatusReadonly(peerId)}
         className="pb-offer-status--list"
       />
     )}

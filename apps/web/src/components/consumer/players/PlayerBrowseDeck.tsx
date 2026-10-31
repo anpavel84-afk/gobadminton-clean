@@ -1641,6 +1641,8 @@ export function PlayerBrowseDeck({
         <PlayerBrowseOfferStatus
           status={mobileOffers.status}
           onCheckStatus={() => mobileOffers.checkStatusReadonly()}
+          unresolved={mobileOffers.unresolved}
+          onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
           className="pb-offer-status--modal"
         />
         <PlayerBrowseFinderGate
@@ -2140,6 +2142,8 @@ export function PlayerBrowseDeck({
       <PlayerBrowseOfferStatus
         status={mobileOffers.status}
         onCheckStatus={() => mobileOffers.checkStatusReadonly()}
+        unresolved={mobileOffers.unresolved}
+        onCheckUnresolved={(peerId) => mobileOffers.checkStatusReadonly(peerId)}
         className="pb-offer-status--modal"
       />
     )}

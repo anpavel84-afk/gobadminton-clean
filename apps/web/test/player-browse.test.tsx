@@ -261,7 +261,9 @@ describe("player browse swipe boundaries", () => {
     expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"status\">\n        <h2>Никого не нашли");
     expect(deckSource).toContain('className="pb-fs-close"');
     expect(deckSource.match(/className="pb-fs-close"/g)?.length).toBe(1);
-    expect(deckSource.match(/return wrapCatalogState\(/g)?.length).toBe(4);
+    // Eligibility gate + loading/unavailable/error/empty — five early fullscreen wraps.
+    expect(deckSource.match(/return wrapCatalogState\(/g)?.length).toBe(5);
+    expect(deckSource).toContain("mobileOffers.eligibility.kind !== \"ready\"");
   });
 
   it("QA-02: second contact cancels active gesture before primary/interactive exclusions", () => {
@@ -569,7 +571,9 @@ describe("player browse desktop v5 contracts", () => {
     expect(settleBody).toContain("replaceCommittedMedia(null)");
     expect(settleBody).toContain("setMediaUnavailable(true)");
     expect(settleBody).toMatch(/committed\.mediaKey !== browsePeerMediaKey\(failedPeer\)/);
-    expect(deckSource).toMatch(/const navigationLocked = friendBusy/);
+    // Fluid mobile intentionally unlocks card motion during page-level POST; desktop keeps friendBusy.
+    expect(deckSource).toMatch(/const navigationLocked = fluidMobile \? false : friendBusy/);
+    expect(deckSource).toContain("navigationLocked={commitPending}");
   });
 
   it("F5: current uses catalogPeer when mediaKey matches; old peer only while replacement pending", () => {

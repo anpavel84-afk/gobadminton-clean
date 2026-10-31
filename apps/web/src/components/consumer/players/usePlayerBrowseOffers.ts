@@ -8,13 +8,14 @@ import {
   bindPlayInterestStates,
   getPlayInterestState,
   getPlayInterestStates,
-  isBrowseConfirmedPlayInterestOutcome,
   isFinderSendEligible,
+  isValidPlayInterestSendPendingMarker,
   playInterestCommand,
+  playInterestPendingStorageKey,
 } from "../../../lib/play-interests";
 import { canOfferPlayInterest } from "../../../lib/player-browse";
 import { privateViews } from "../../../lib/private-view";
-import { useSocialMutation } from "../messages/useSocialMutation";
+import type { BrowseOfferOperation } from "./PlayerBrowseOffers";
 
 export type BrowseOfferPhase = "idle" | "sending" | "outgoing" | "mutual" | "failed" | "unknown";
 
@@ -48,16 +49,27 @@ export type AdmitSendInput = {
   view: PlayInterestView;
 };
 
+export type UnresolvedOffer = {
+  peerId: string;
+  peerName: string;
+};
+
 export type PlayerBrowseOffersApi = {
   status: BrowseOfferStatus;
   eligibility: FinderEligibility;
   known: ReadonlyMap<string, PlayInterestView["relationship"]>;
   sendInFlight: boolean;
   unknownPeerId: string | null;
+  unresolved: readonly UnresolvedOffer[];
+  /** Immutable in-flight POST host descriptor; page renders keyed OpHost outside dialog. */
+  activeOperation: BrowseOfferOperation | null;
   canSendTo(peerId: string): { ok: boolean; reason: string };
   admitSend(input: AdmitSendInput): boolean;
   noteRelationship(peerId: string, relationship: PlayInterestView["relationship"]): void;
-  checkStatusReadonly(): void;
+  checkStatusReadonly(peerId?: string): void;
+  onOperationConfirmed(op: BrowseOfferOperation, receipt: PlayInterestReceipt): void;
+  onOperationFailed(op: BrowseOfferOperation, notice: string): void;
+  onOperationUnknown(op: BrowseOfferOperation, notice: string): void;
   continueSearch(): void;
   retryEligibility(): void;
   me: Me | null;
@@ -82,6 +94,43 @@ function statusMessage(phase: BrowseOfferPhase, peerName: string, notice: string
   }
 }
 
+function readValidatedPending(actorId: string, peerId: string): boolean {
+  try {
+    const raw = sessionStorage.getItem(playInterestPendingStorageKey(actorId, peerId));
+    if (!raw) return false;
+    return isValidPlayInterestSendPendingMarker(JSON.parse(raw) as unknown, peerId);
+  } catch {
+    return false;
+  }
+}
+
+function restoreUnresolvedPeers(
+  actorId: string,
+  names: Map<string, string>,
+): UnresolvedOffer[] {
+  const prefix = `gb-fr04-pending:${actorId}:play-interest:`;
+  const found: UnresolvedOffer[] = [];
+  try {
+    for (let i = 0; i < sessionStorage.length; i += 1) {
+      const key = sessionStorage.key(i);
+      if (!key || !key.startsWith(prefix)) continue;
+      const peerId = key.slice(prefix.length);
+      if (!peerId) continue;
+      const raw = sessionStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        if (!isValidPlayInterestSendPendingMarker(JSON.parse(raw) as unknown, peerId)) continue;
+      } catch {
+        continue;
+      }
+      found.push({ peerId, peerName: names.get(peerId) ?? "" });
+    }
+  } catch {
+    /* Storage may be disabled — in-memory unresolved still applies after live UNKNOWN. */
+  }
+  return found;
+}
+
 type Props = {
   finderActive: boolean;
   ordinaryScope: string;
@@ -94,7 +143,8 @@ type Props = {
 
 /**
  * Page-level mobile play-interest operation + finder eligibility.
- * Survives card changes and fullscreen close; one active POST; existing mutation/sessionStorage.
+ * Survives card changes and fullscreen close; one active POST via keyed OpHost.
+ * Mutation instances stay peer-immutable inside PlayerBrowseOfferOpHost — not here.
  */
 export function usePlayerBrowseOffers({
   finderActive,
@@ -120,105 +170,29 @@ export function usePlayerBrowseOffers({
   const [opNotice, setOpNotice] = useState("");
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [continueArmed, setContinueArmed] = useState(false);
-  const [unresolvedPeers, setUnresolvedPeers] = useState<Set<string>>(() => new Set());
+  const [unresolved, setUnresolved] = useState<UnresolvedOffer[]>([]);
+  const [activeOperation, setActiveOperation] = useState<BrowseOfferOperation | null>(null);
 
   const actorIdRef = useRef<string | null>(null);
   const privateGenRef = useRef(0);
-  const opPeerIdRef = useRef<string | null>(null);
   const opPhaseRef = useRef<BrowseOfferPhase>("idle");
+  const activeTokenRef = useRef<string | null>(null);
   const admitLockRef = useRef(false);
-  const pendingAdmitRef = useRef<AdmitSendInput | null>(null);
   const batchGen = useRef(0);
   const batchInFlight = useRef(false);
   const scopeRef = useRef(ordinaryScope);
   const continueArmedRef = useRef(false);
+  const peerNamesRef = useRef<Map<string, string>>(new Map());
   continueArmedRef.current = continueArmed;
-  opPeerIdRef.current = opPeerId;
   opPhaseRef.current = opPhase;
-
-  const mutationScope = me && opPeerId
-    ? `${me.id}:play-interest:${opPeerId}`
-    : `guest:play-interest:__idle__`;
-
-  const mutation = useSocialMutation<PlayInterestReceipt>(
-    mutationScope,
-    me?.csrfToken ?? "",
-    (receipt) => {
-      const peer = opPeerIdRef.current;
-      const actor = actorIdRef.current;
-      if (!peer || !actor || me?.id !== actor) return;
-      if (!isBrowseConfirmedPlayInterestOutcome(receipt.outcome)) {
-        admitLockRef.current = false;
-        setOpPhase("failed");
-        setOpNotice("Не удалось отправить");
-        return;
-      }
-      const relationship = receipt.outcome === "mutual" ? "mutual" : "outgoing";
-      setKnown(prev => {
-        const next = new Map(prev);
-        next.set(peer, relationship);
-        return next;
-      });
-      // Keep peer in the finder buffer so index/media neighborhood stay stable; deck skips via known.
-      setUnresolvedPeers(prev => {
-        if (!prev.has(peer)) return prev;
-        const next = new Set(prev);
-        next.delete(peer);
-        return next;
-      });
-      admitLockRef.current = false;
-      setOpPhase(relationship);
-      setOpNotice("");
-    },
-    () => {
-      admitLockRef.current = false;
-      setOpPhase("failed");
-      setOpNotice("Не удалось отправить");
-    },
-    Boolean(me && opPeerId),
-    { validateSuccess: (data) => isBrowseConfirmedPlayInterestOutcome(data.outcome) },
-  );
-
-  // After peer scope commits, start the single admitted POST (existing mutation + idempotency key).
-  useEffect(() => {
-    const input = pendingAdmitRef.current;
-    if (!input || !me || opPeerId !== input.peerId) return;
-    if (mutationScope !== `${me.id}:play-interest:${input.peerId}`) return;
-    pendingAdmitRef.current = null;
-    const command = playInterestCommand(input.view, input.peerId, "send");
-    if (!command) {
-      admitLockRef.current = false;
-      setOpPhase("idle");
-      setOpPeerId(null);
-      opPeerIdRef.current = null;
-      opPhaseRef.current = "idle";
-      return;
-    }
-    const started = mutation.run(command.path, command.body);
-    if (!started) {
-      admitLockRef.current = false;
-      setOpPhase("idle");
-      setOpPeerId(null);
-      opPeerIdRef.current = null;
-      opPhaseRef.current = "idle";
-    }
-  }, [opPeerId, mutationScope, me, mutation]);
+  activeTokenRef.current = activeOperation?.token ?? null;
 
   useEffect(() => {
-    if (mutation.busy) return;
-    if (mutation.pending && opPeerIdRef.current) {
-      const peer = opPeerIdRef.current;
-      admitLockRef.current = false;
-      setOpPhase("unknown");
-      setUnresolvedPeers(prev => {
-        if (prev.has(peer)) return prev;
-        const next = new Set(prev);
-        next.add(peer);
-        return next;
-      });
-      if (mutation.notice) setOpNotice(mutation.notice);
+    const names = peerNamesRef.current;
+    for (const player of catalogPlayers) {
+      if (player.publicPlayerId) names.set(player.publicPlayerId, player.displayName ?? "");
     }
-  }, [mutation.busy, mutation.pending, mutation.notice]);
+  }, [catalogPlayers]);
 
   useEffect(() => {
     let live = true;
@@ -236,6 +210,17 @@ export function usePlayerBrowseOffers({
       actorIdRef.current = result.data.id;
       privateGenRef.current = privateViews.currentGeneration;
       setAuthState("ready");
+      const restored = restoreUnresolvedPeers(result.data.id, peerNamesRef.current);
+      if (restored.length) {
+        setUnresolved(restored);
+        const first = restored[0];
+        if (first) {
+          setOpPeerId(first.peerId);
+          setOpPeerName(first.peerName);
+          setOpPhase("unknown");
+          setOpNotice("Предыдущая отправка не подтверждена. Проверьте её результат.");
+        }
+      }
       const social = await getMySocialProfile();
       if (!live) return;
       if (social.ok && social.data.publicPlayerId) setOwnPublicPlayerId(social.data.publicPlayerId);
@@ -245,16 +230,16 @@ export function usePlayerBrowseOffers({
       actorIdRef.current = null;
       privateGenRef.current = privateViews.currentGeneration;
       admitLockRef.current = false;
-      pendingAdmitRef.current = null;
+      activeTokenRef.current = null;
+      setActiveOperation(null);
       setMe(null);
       setOwnPublicPlayerId(null);
       setAuthState("guest");
       setOpPhase("idle");
       setOpPeerId(null);
-      opPeerIdRef.current = null;
       opPhaseRef.current = "idle";
       setKnown(new Map());
-      setUnresolvedPeers(new Set());
+      setUnresolved([]);
       setEligibleIds([]);
       setEligibilityKind("guest");
     };
@@ -444,32 +429,109 @@ export function usePlayerBrowseOffers({
     prevFinder.current = finderActive;
   }, [finderActive, authState]);
 
-  const unresolvedRef = useRef(unresolvedPeers);
-  unresolvedRef.current = unresolvedPeers;
+  const unresolvedRef = useRef(unresolved);
+  unresolvedRef.current = unresolved;
+
+  const opMatchesCurrentActor = useCallback((op: BrowseOfferOperation): boolean => {
+    return op.actorId === actorIdRef.current
+      && op.privateGeneration === privateGenRef.current;
+  }, []);
+
+  const onOperationConfirmed = useCallback((op: BrowseOfferOperation, receipt: PlayInterestReceipt) => {
+    if (activeTokenRef.current !== op.token) return;
+    admitLockRef.current = false;
+    setActiveOperation(null);
+    activeTokenRef.current = null;
+    if (!opMatchesCurrentActor(op)) return;
+    const peer = op.peerId;
+    const relationship = receipt.outcome === "mutual" ? "mutual" : "outgoing";
+    setKnown(prev => {
+      const next = new Map(prev);
+      next.set(peer, relationship);
+      return next;
+    });
+    setUnresolved(prev => prev.filter(entry => entry.peerId !== peer));
+    setOpPeerId(peer);
+    setOpPeerName(op.peerName);
+    setOpPhase(relationship);
+    setOpNotice("");
+    opPhaseRef.current = relationship;
+  }, [opMatchesCurrentActor]);
+
+  const onOperationFailed = useCallback((op: BrowseOfferOperation, notice: string) => {
+    if (activeTokenRef.current !== op.token) return;
+    admitLockRef.current = false;
+    setActiveOperation(null);
+    activeTokenRef.current = null;
+    if (!opMatchesCurrentActor(op)) return;
+    setOpPeerId(op.peerId);
+    setOpPeerName(op.peerName);
+    setOpPhase("failed");
+    setOpNotice(notice);
+    opPhaseRef.current = "failed";
+  }, [opMatchesCurrentActor]);
+
+  const onOperationUnknown = useCallback((op: BrowseOfferOperation, notice: string) => {
+    if (activeTokenRef.current !== op.token) return;
+    admitLockRef.current = false;
+    setActiveOperation(null);
+    activeTokenRef.current = null;
+    if (!opMatchesCurrentActor(op)) return;
+    const peer = op.peerId;
+    setUnresolved(prev => {
+      if (prev.some(entry => entry.peerId === peer)) return prev;
+      return [...prev, { peerId: peer, peerName: op.peerName }];
+    });
+    setOpPeerId(peer);
+    setOpPeerName(op.peerName);
+    setOpPhase("unknown");
+    setOpNotice(notice);
+    opPhaseRef.current = "unknown";
+  }, [opMatchesCurrentActor]);
 
   const admitSend = useCallback((input: AdmitSendInput): boolean => {
     if (!me || authState !== "ready") return false;
     if (actorIdRef.current !== me.id) return false;
-    if (admitLockRef.current || opPhaseRef.current === "sending") return false;
-    if (unresolvedRef.current.has(input.peerId)) return false;
+    if (admitLockRef.current || opPhaseRef.current === "sending" || activeTokenRef.current) return false;
+    if (unresolvedRef.current.some(entry => entry.peerId === input.peerId)) return false;
+    if (readValidatedPending(me.id, input.peerId)) return false;
     if (!canOfferPlayInterest(input.view) || !input.view.capabilities.canSend) return false;
-    if (!playInterestCommand(input.view, input.peerId, "send")) return false;
+    const command = playInterestCommand(input.view, input.peerId, "send");
+    if (!command) return false;
+    const token = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `op-${Date.now()}-${input.peerId}`;
+    const operation: BrowseOfferOperation = {
+      token,
+      actorId: me.id,
+      privateGeneration: privateViews.currentGeneration,
+      peerId: input.peerId,
+      peerName: input.peerName,
+      csrf: me.csrfToken,
+      path: command.path,
+      body: command.body,
+      method: "POST",
+    };
     admitLockRef.current = true;
-    pendingAdmitRef.current = input;
+    activeTokenRef.current = token;
+    peerNamesRef.current.set(input.peerId, input.peerName);
+    setActiveOperation(operation);
     setOpPeerId(input.peerId);
     setOpPeerName(input.peerName);
     setOpPhase("sending");
     setOpNotice("");
-    opPeerIdRef.current = input.peerId;
     opPhaseRef.current = "sending";
     return true;
   }, [me, authState]);
 
   const canSendTo = useCallback((peerId: string): { ok: boolean; reason: string } => {
-    if (opPhase === "sending") {
+    if (opPhase === "sending" || activeOperation) {
       return { ok: false, reason: "Завершаем предыдущее предложение" };
     }
-    if (unresolvedPeers.has(peerId)) {
+    if (unresolved.some(entry => entry.peerId === peerId)) {
+      return { ok: false, reason: "Результат не подтверждён. Не повторяйте отправку." };
+    }
+    if (me && readValidatedPending(me.id, peerId)) {
       return { ok: false, reason: "Результат не подтверждён. Не повторяйте отправку." };
     }
     const rel = known.get(peerId);
@@ -477,7 +539,7 @@ export function usePlayerBrowseOffers({
       return { ok: false, reason: "" };
     }
     return { ok: true, reason: "" };
-  }, [opPhase, unresolvedPeers, known]);
+  }, [opPhase, activeOperation, unresolved, known, me]);
 
   const noteRelationship = useCallback((peerId: string, relationship: PlayInterestView["relationship"]) => {
     setKnown(prev => {
@@ -488,17 +550,24 @@ export function usePlayerBrowseOffers({
     });
   }, []);
 
-  const checkStatusReadonly = useCallback(() => {
-    if (!me || !opPeerId || checkingStatus) return;
-    const peer = opPeerId;
+  const checkStatusReadonly = useCallback((peerId?: string) => {
+    if (!me || checkingStatus) return;
+    const peer = peerId || opPeerId;
+    if (!peer) return;
     const actor = me.id;
     const gen = privateViews.currentGeneration;
+    const name = peerNamesRef.current.get(peer)
+      || unresolvedRef.current.find(entry => entry.peerId === peer)?.peerName
+      || opPeerName;
     setCheckingStatus(true);
     void getPlayInterestState(peer).then(result => {
       setCheckingStatus(false);
-      if (actorIdRef.current !== actor || opPeerIdRef.current !== peer) return;
+      if (actorIdRef.current !== actor) return;
       if (gen !== privateViews.currentGeneration) return;
       if (!result.ok) {
+        setOpPeerId(peer);
+        setOpPeerName(name);
+        setOpPhase("unknown");
         setOpNotice("Не удалось проверить статус. Предыдущая отправка могла быть получена — не повторяйте.");
         return;
       }
@@ -509,19 +578,24 @@ export function usePlayerBrowseOffers({
           next.set(peer, view.relationship);
           return next;
         });
-        setUnresolvedPeers(prev => {
-          if (!prev.has(peer)) return prev;
-          const next = new Set(prev);
-          next.delete(peer);
-          return next;
-        });
+        setUnresolved(prev => prev.filter(entry => entry.peerId !== peer));
+        setOpPeerId(peer);
+        setOpPeerName(name);
         setOpPhase(view.relationship);
         setOpNotice("");
         return;
       }
+      // none/unavailable/error does not prove prior POST was rejected — keep UNKNOWN.
+      setOpPeerId(peer);
+      setOpPeerName(name);
+      setOpPhase("unknown");
       setOpNotice("Статус не подтверждает результат предыдущей отправки. Не повторяйте отправку.");
+      setUnresolved(prev => {
+        if (prev.some(entry => entry.peerId === peer)) return prev;
+        return [...prev, { peerId: peer, peerName: name }];
+      });
     });
-  }, [me, opPeerId, checkingStatus]);
+  }, [me, opPeerId, opPeerName, checkingStatus]);
 
   const continueSearch = useCallback(() => {
     if (!hasMore || moreBusy || batchInFlight.current || continueArmedRef.current) return;
@@ -565,12 +639,17 @@ export function usePlayerBrowseOffers({
     status,
     eligibility,
     known,
-    sendInFlight: opPhase === "sending",
-    unknownPeerId: opPeerId && unresolvedPeers.has(opPeerId) ? opPeerId : null,
+    sendInFlight: opPhase === "sending" || Boolean(activeOperation),
+    unknownPeerId: opPeerId && unresolved.some(entry => entry.peerId === opPeerId) ? opPeerId : null,
+    unresolved,
+    activeOperation,
     canSendTo,
     admitSend,
     noteRelationship,
     checkStatusReadonly,
+    onOperationConfirmed,
+    onOperationFailed,
+    onOperationUnknown,
     continueSearch,
     retryEligibility,
     me,

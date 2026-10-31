@@ -52,10 +52,19 @@ export function useSocialMutation<T>(
       setLastStatus(result.status);
       setRetryAfterSeconds(null);
       const validate = validateRef.current;
-      if (validate && !validate(result.data)) {
-        setNotice("Результат не подтверждён. Не повторяйте отправку.");
-        setCode("unconfirmed");
-        return;
+      if (validate) {
+        let accepted = false;
+        try {
+          accepted = Boolean(validate(result.data));
+        } catch {
+          // Validator throw ≡ UNKNOWN: keep pending, no onSuccess, no unhandled JS error.
+          accepted = false;
+        }
+        if (!accepted) {
+          setNotice("Результат не подтверждён. Не повторяйте отправку.");
+          setCode("unconfirmed");
+          return;
+        }
       }
       save(null);
       onSuccess(result.data);

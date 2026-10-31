@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,8 @@ import {
   getPlayInterestStates,
   isBrowseConfirmedPlayInterestOutcome,
   isFinderSendEligible,
+  isValidConfirmedPlayInterestReceipt,
+  isValidPlayInterestSendPendingMarker,
   PLAY_INTEREST_STATES_BATCH_MAX,
 } from "../src/lib/play-interests";
 
@@ -18,7 +20,11 @@ const offersHookSource = readFileSync(join(root, "src/components/consumer/player
 const offersUiSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseOffers.tsx"), "utf8");
 const playInterestLib = readFileSync(join(root, "src/lib/play-interests.ts"), "utf8");
 const mutationSource = readFileSync(join(root, "src/components/consumer/messages/useSocialMutation.ts"), "utf8");
-const styleGuide = readFileSync(join(root, "../docs/product/PLAYER_BROWSING_STYLE_GUIDE.md"), "utf8");
+// Repo docs/ — not apps/docs. realpath keeps the contract stable across worktree layouts.
+const styleGuide = readFileSync(
+  realpathSync(join(root, "../../docs/product/PLAYER_BROWSING_STYLE_GUIDE.md")),
+  "utf8",
+);
 
 const caps = { canSend: false, canWithdraw: false };
 const none: PlayInterestView = {
@@ -107,15 +113,55 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(offersHookSource).toContain("Завершаем предыдущее предложение");
     expect(offersHookSource).toContain("getPlayInterestStates");
     expect(offersHookSource).toContain("continueSearch");
+    expect(offersHookSource).toContain("activeOperation");
+    expect(offersHookSource).not.toContain("useSocialMutation");
     expect(offersUiSource).toContain("Продолжить поиск");
+    expect(offersUiSource).toContain("PlayerBrowseOfferOpHost");
+    expect(pageSource).toContain("PlayerBrowseOfferOpHost");
+    expect(pageSource).toMatch(/key=\{offers\.activeOperation\.token\}/);
   });
 
   it("useSocialMutation exposes sync run admission and opt-in receipt validation", () => {
     expect(mutationSource).toContain("validateSuccess");
     expect(mutationSource).toContain("Synchronous admission");
     expect(mutationSource).toMatch(/run\(path: string, body: object, method = "POST"\): boolean/);
+    expect(mutationSource).toContain("Validator throw");
     expect(isBrowseConfirmedPlayInterestOutcome("outgoing")).toBe(true);
     expect(isBrowseConfirmedPlayInterestOutcome("withdrawn")).toBe(false);
+  });
+
+  it("strict confirmed receipt rejects null/malformed and accepts full outgoing/mutual", () => {
+    expect(isValidConfirmedPlayInterestReceipt(null)).toBe(false);
+    expect(isValidConfirmedPlayInterestReceipt({ outcome: "outgoing" })).toBe(false);
+    expect(isValidConfirmedPlayInterestReceipt({
+      interestId: "not-a-uuid", version: "1", outcome: "outgoing",
+    })).toBe(false);
+    expect(isValidConfirmedPlayInterestReceipt({
+      interestId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", version: "01", outcome: "outgoing",
+    })).toBe(false);
+    expect(isValidConfirmedPlayInterestReceipt({
+      interestId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", version: "1", outcome: "withdrawn",
+    })).toBe(false);
+    expect(isValidConfirmedPlayInterestReceipt({
+      interestId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", version: "1", outcome: "outgoing",
+    })).toBe(true);
+    expect(isValidConfirmedPlayInterestReceipt({
+      interestId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", version: "2", outcome: "mutual",
+    })).toBe(true);
+    expect(isValidPlayInterestSendPendingMarker({
+      path: "/v1/play-interests",
+      method: "POST",
+      key: "k1",
+      body: { targetPublicPlayerId: "peer-a" },
+    }, "peer-a")).toBe(true);
+    expect(isValidPlayInterestSendPendingMarker({
+      path: "/v1/play-interests",
+      method: "POST",
+      key: "k1",
+      body: { targetPublicPlayerId: "peer-b" },
+    }, "peer-a")).toBe(false);
+    expect(offersUiSource).toContain("isValidConfirmedPlayInterestReceipt");
+    expect(playInterestLib).toContain("isValidConfirmedPlayInterestReceipt");
   });
 
   it("style guide records delivered fluid/eligibility and marks ranking PROPOSED", () => {
@@ -204,6 +250,24 @@ describe("player browse discovery · deferred mutation admission", () => {
     expect(mutation.run("/v1/play-interests", { targetPublicPlayerId: "peer-a" })).toBe(true);
     await settle();
     const again = render((data) => isBrowseConfirmedPlayInterestOutcome(data.outcome));
+    expect(again.pending).toBe(true);
+    expect(success).not.toHaveBeenCalled();
+    expect(storage.get("gb-fr04-pending:actor:play-interest:peer-a")).toContain("discovery-key-1");
+  });
+
+  it("keeps UNKNOWN when validateSuccess throws or receives null body", async () => {
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: null as unknown as PlayInterestReceipt,
+    });
+    const mutation = render((data) => {
+      if (!isValidConfirmedPlayInterestReceipt(data)) throw new Error("malformed");
+      return true;
+    });
+    expect(mutation.run("/v1/play-interests", { targetPublicPlayerId: "peer-a" })).toBe(true);
+    await settle();
+    const again = render();
     expect(again.pending).toBe(true);
     expect(success).not.toHaveBeenCalled();
     expect(storage.get("gb-fr04-pending:actor:play-interest:peer-a")).toContain("discovery-key-1");
