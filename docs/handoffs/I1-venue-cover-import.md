@@ -188,11 +188,16 @@ lock, row `FOR UPDATE`, identity exact match, idempotent replay by
 `sha256(venue_public_data_v1\\nbatch\\nvenueId)` before CAS; first-time CAS on
 `expectedVersion`; updates only `public_contacts` and/or profile fact columns +
 `version`; audit `venue.edit` / `venue.manage` / `venue_public_data_batch_import`
-with patch fingerprint in `after_diff`; `venue_admin_actions` action `edit` +
-outbox like Admin edit. Same key + same fingerprint + matching fields ⇒ SKIPPED;
-same key + different fingerprint ⇒ FAILED `PUBLIC_DATA_CONFLICT`; accepted key +
-external drift ⇒ FAILED `PUBLIC_DATA_DRIFT`. Row failure rolls back that venue and
-continues; exit 1 if any FAILED.
+with complete-item fingerprint and validated `sources[]` (url/checkedAt/note) in
+the same transactional `after_diff`; `venue_admin_actions` action `edit` +
+outbox like Admin edit. Fingerprint covers venueId, expectedVersion, expectedName,
+expectedAddress, publicContacts/profile and sources. Same key + identical accepted
+item (original expectedVersion) + matching applied fields ⇒ SKIPPED before version
+gate; same key + any changed accepted field (including source-only or version-only)
+⇒ FAILED `PUBLIC_DATA_CONFLICT`; accepted key + external drift ⇒ FAILED
+`PUBLIC_DATA_DRIFT`. Identity gate may still fail `VENUE_IDENTITY_MISMATCH` first
+but must not silently replay a changed request. Row failure rolls back that venue
+and continues; exit 1 if any FAILED.
 
 Operator (DEV container; PMA supplies reviewed JSON outside Git; confirm current
 versions before apply):

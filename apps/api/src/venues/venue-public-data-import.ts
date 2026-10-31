@@ -89,10 +89,16 @@ export function publicDataKeyHash(batch: string, venueId: string): string {
   return createHash("sha256").update(`${NAMESPACE}\n${batch}\n${venueId}`).digest("hex");
 }
 
+/** Fingerprint of the COMPLETE normalized accepted item (identity, version, patch, sources). */
 export function publicDataPatchFingerprint(item: PublicDataItem): string {
   return createHash("sha256").update(stableStringify({
+    venueId: item.venueId,
+    expectedVersion: item.expectedVersion,
+    expectedName: item.expectedName,
+    expectedAddress: item.expectedAddress,
     publicContacts: item.publicContacts,
     profile: item.profile,
+    sources: item.sources,
   })).digest("hex");
 }
 
@@ -150,6 +156,7 @@ export type AcceptedPublicDataReceipt = {
   fingerprint: string;
   publicContacts?: PublicVenueContacts | null;
   profile?: z.infer<typeof venueProfileEditSchema>;
+  sources: PublicDataItem["sources"];
 };
 
 export function planPublicDataReplay(
@@ -163,7 +170,10 @@ export function planPublicDataReplay(
 }
 
 export function buildAppliedPatch(item: PublicDataItem): AcceptedPublicDataReceipt {
-  const applied: AcceptedPublicDataReceipt = { fingerprint: publicDataPatchFingerprint(item) };
+  const applied: AcceptedPublicDataReceipt = {
+    fingerprint: publicDataPatchFingerprint(item),
+    sources: item.sources,
+  };
   if (item.publicContacts !== undefined) applied.publicContacts = item.publicContacts;
   if (item.profile !== undefined) applied.profile = item.profile;
   return applied;

@@ -145,15 +145,58 @@ describe("venue public data batch validation", () => {
     expect(planPublicDataReplay(row, fingerprint, {
       fingerprint,
       publicContacts: item.publicContacts ?? null,
+      sources: item.sources,
     }).action).toBe("SKIPPED");
     expect(planPublicDataReplay(row, fingerprint, {
       fingerprint: "0".repeat(64),
       publicContacts: item.publicContacts ?? null,
+      sources: item.sources,
     }).reason).toBe("PUBLIC_DATA_CONFLICT");
     expect(planPublicDataReplay({ ...row, public_contacts: null }, fingerprint, {
       fingerprint,
       publicContacts: item.publicContacts ?? null,
+      sources: item.sources,
     }).reason).toBe("PUBLIC_DATA_DRIFT");
+  });
+
+  it("fingerprints complete item; source-only and version-only changes conflict", () => {
+    const item = validatePublicDataManifest(fixture()).items[0]!;
+    const baseFp = publicDataPatchFingerprint(item);
+    const sourceOnly = validatePublicDataManifest(fixture({
+      venueId: item.venueId,
+      sources: [{
+        url: "https://example.com/other-source",
+        checkedAt: "2026-10-27T12:00:00.000Z",
+        note: "alternate public page",
+      }],
+    })).items[0]!;
+    const versionOnly = validatePublicDataManifest(fixture({
+      venueId: item.venueId,
+      expectedVersion: 2,
+    })).items[0]!;
+    expect(publicDataPatchFingerprint(sourceOnly)).not.toBe(baseFp);
+    expect(publicDataPatchFingerprint(versionOnly)).not.toBe(baseFp);
+    const row = {
+      name: item.expectedName,
+      address: item.expectedAddress,
+      lifecycle_state: "verified",
+      version: 2,
+      canonical_venue_id: null as string | null,
+      public_contacts: item.publicContacts,
+      court_count: null,
+      amenity_parking: null,
+      amenity_showers: null,
+    };
+    const receipt = {
+      fingerprint: baseFp,
+      publicContacts: item.publicContacts ?? null,
+      sources: item.sources,
+    };
+    expect(planPublicDataReplay(row, publicDataPatchFingerprint(sourceOnly), receipt).reason)
+      .toBe("PUBLIC_DATA_CONFLICT");
+    expect(planPublicDataReplay(row, publicDataPatchFingerprint(versionOnly), receipt).reason)
+      .toBe("PUBLIC_DATA_CONFLICT");
+    expect(planPublicDataReplay(row, baseFp, receipt).action).toBe("SKIPPED");
   });
 
   it("CLI refuses unsafe environment before loading files or connecting", async () => {

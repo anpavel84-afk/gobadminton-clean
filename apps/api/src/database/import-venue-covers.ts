@@ -91,8 +91,11 @@ async function loadAcceptedPublicDataReceipt(
     [keyHash],
   )).rows[0];
   const after = row?.after_diff;
-  if (!after || typeof after.fingerprint !== "string") return undefined;
-  const receipt: AcceptedPublicDataReceipt = { fingerprint: after.fingerprint };
+  if (!after || typeof after.fingerprint !== "string" || !Array.isArray(after.sources)) return undefined;
+  const receipt: AcceptedPublicDataReceipt = {
+    fingerprint: after.fingerprint,
+    sources: after.sources as AcceptedPublicDataReceipt["sources"],
+  };
   if ("publicContacts" in after) {
     receipt.publicContacts = after.publicContacts as AcceptedPublicDataReceipt["publicContacts"];
   }
@@ -278,6 +281,8 @@ export async function importVenuePublicData(
           fingerprint: applied.fingerprint,
           batch: manifest.batch,
           provenance: "venue_public_data_batch_import",
+          // Same transactional after_diff: validated sources for operator provenance.
+          sources: applied.sources,
         };
         if (touchContacts) {
           before.publicContacts = current.public_contacts ?? null;

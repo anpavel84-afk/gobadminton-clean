@@ -150,14 +150,17 @@ run("venue public data import: disposable PostGIS", () => {
       "SELECT 1 FROM venue_admin_actions WHERE venue_id=$1 AND action='edit'",
       [id],
     )).rowCount).toBe(1);
-    expect((await db().query(
-      "SELECT 1 FROM privileged_audit_events WHERE target_id=$1 AND reason_code='venue_public_data_batch_import'",
+    const audit = (await db().query<{ after_diff: Record<string, unknown> }>(
+      "SELECT after_diff FROM privileged_audit_events WHERE target_id=$1 AND reason_code='venue_public_data_batch_import'",
       [id],
-    )).rowCount).toBe(1);
+    )).rows[0];
+    expect(audit?.after_diff.sources).toEqual(input.items[0]!.sources);
+    expect(audit?.after_diff.fingerprint).toEqual(expect.any(String));
 
     const mid = await counts();
     const midRow = await snapshot(id);
     const replayLines: object[] = [];
+    // Identical replay keeps ORIGINAL expectedVersion and is SKIPPED before version gate.
     expect(await importVenuePublicData(db(), input, actor, true, (l) => replayLines.push(l))).toBe(0);
     expect(await counts()).toEqual(mid);
     expect(await snapshot(id)).toEqual(midRow);
@@ -167,13 +170,15 @@ run("venue public data import: disposable PostGIS", () => {
   });
 
   it("refuses conflicting fingerprint and external drift; rolls back failed rows and continues", async () => {
-    const ok = await venue();
+    const versionOnly = await venue();
+    const sourceOnly = await venue();
     const drift = await venue();
     const conflict = await venue();
     const missing = randomUUID();
     const retired = await venue({ lifecycle: "retired" });
 
-    expect(await importVenuePublicData(db(), manifestFor(ok), actor, true, () => undefined)).toBe(0);
+    expect(await importVenuePublicData(db(), manifestFor(versionOnly), actor, true, () => undefined)).toBe(0);
+    expect(await importVenuePublicData(db(), manifestFor(sourceOnly), actor, true, () => undefined)).toBe(0);
     expect(await importVenuePublicData(db(), manifestFor(drift), actor, true, () => undefined)).toBe(0);
     expect(await importVenuePublicData(db(), manifestFor(conflict), actor, true, () => undefined)).toBe(0);
     await db().query(
@@ -184,14 +189,25 @@ run("venue public data import: disposable PostGIS", () => {
     const mixed = validatePublicDataManifest({
       schema: "VENUE_PUBLIC_DATA_BATCH_V1",
       batch: "synthetic-public",
-      count: 5,
+      count: 6,
       items: [
-        { ...manifestFor(ok).items[0]!, expectedVersion: 2 },
-        { ...manifestFor(drift).items[0]!, venueId: drift, expectedVersion: 2 },
+        // Version-only change under same key ⇒ CONFLICT (not silent SKIPPED).
+        { ...manifestFor(versionOnly).items[0]!, expectedVersion: 2 },
+        // Source-only change under same key ⇒ CONFLICT.
+        {
+          ...manifestFor(sourceOnly).items[0]!,
+          venueId: sourceOnly,
+          sources: [{
+            url: "https://example.com/other-page",
+            checkedAt: "2026-10-28T08:00:00.000Z",
+            note: "alternate reviewed page",
+          }],
+        },
+        // Same accepted item fingerprint; external field change ⇒ DRIFT (not version-only rewrite).
+        { ...manifestFor(drift).items[0]!, venueId: drift },
         {
           ...manifestFor(conflict).items[0]!,
           venueId: conflict,
-          expectedVersion: 2,
           publicContacts: {
             phone: "+7 222 333-44-55",
             website: "https://example.com/other",
@@ -210,13 +226,16 @@ run("venue public data import: disposable PostGIS", () => {
 
     const lines: object[] = [];
     expect(await importVenuePublicData(db(), mixed, actor, true, (l) => lines.push(l))).toBe(1);
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: ok, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: versionOnly, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: sourceOnly, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
     expect(lines).toContainEqual(expect.objectContaining({ venueId: drift, action: "FAILED", reason: "PUBLIC_DATA_DRIFT" }));
     expect(lines).toContainEqual(expect.objectContaining({ venueId: conflict, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
     expect(lines).toContainEqual(expect.objectContaining({ venueId: missing, action: "FAILED", reason: "VENUE_NOT_FOUND" }));
     expect(lines).toContainEqual(expect.objectContaining({ venueId: retired, action: "SKIPPED", reason: "VENUE_INELIGIBLE" }));
     expect((await snapshot(conflict)).public_contacts).toEqual(manifestFor(conflict).items[0]!.publicContacts);
-    expect((await snapshot(ok)).version).toBe(2);
+    expect((await snapshot(versionOnly)).version).toBe(2);
+    expect((await snapshot(sourceOnly)).version).toBe(2);
+    expect((await snapshot(sourceOnly)).public_contacts).toEqual(manifestFor(sourceOnly).items[0]!.publicContacts);
   });
 
   it("CAS mismatch fails without writes; identity mismatch fails; actor guards refuse before writes", async () => {
