@@ -58,7 +58,8 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     adminPool = new Pool({ connectionString: url.href });
     await adminPool.query(`CREATE DATABASE "${name}"`); url.pathname = "/" + name;
     pool = new Pool({ connectionString: url.href, max: 10 });
-    await apply(pool, "0040");
+    // Exclusive lexical until 0046 → migrate current API DB through 0045_venue_gallery.
+    await apply(pool, "0046");
     const env = loadEnv({ ...process.env, DATABASE_URL: url.href, PUBLIC_API_ORIGIN: "http://127.0.0.1:19441",
       PUBLIC_WEB_ORIGIN: "http://127.0.0.1:19442", ALLOWED_WEB_ORIGINS: "http://127.0.0.1:19442",
       ADMIN_INTERNAL_ENABLED: "1", ADMIN_ORIGIN: origin, ADMIN_AUTH_PEPPER: pepper });
@@ -115,7 +116,7 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     expect(inserted.rows[0]?.public_profile_updated_at.getUTCFullYear()).not.toBe(1900);
     expect(row).toMatchObject({ court_count: null, amenity_parking: null, amenity_showers: null });
     expect(row.public_profile_updated_at).toBeInstanceOf(Date);
-    expect(x.v.profile).toMatchObject({ courtCount: null, amenities: { parking: null, showers: null }, gallery: { coverage: "cover_only", items: [] } });
+    expect(x.v.profile).toMatchObject({ courtCount: null, amenities: { parking: null, showers: null }, gallery: { coverage: "ordered", items: [] }, description: null });
     const columns = await pool.query("SELECT column_default,is_nullable FROM information_schema.columns WHERE table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at')");
     expect(columns.rows).toHaveLength(4); for (const col of columns.rows) expect(col).toEqual({ column_default: null, is_nullable: "YES" });
     await expect(pool.query("UPDATE venues SET court_count=-1 WHERE id=$1", [x.v.id])).rejects.toMatchObject({ code: "23514" });
@@ -129,12 +130,12 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     await adminPool.query(`CREATE DATABASE "${upgradeName}"`); url.pathname = "/" + upgradeName;
     const db = new Pool({ connectionString: url.href });
     try {
+      // Historical schemas stay SQL-only: current VenuesService always queries venue_gallery_items (0045).
       await apply(db, "0038");
+      expect((await db.query("SELECT column_name FROM information_schema.columns WHERE table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at','public_description')")).rows).toEqual([]);
+      expect((await db.query("SELECT to_regclass('public.venue_gallery_items') AS name")).rows[0]?.name).toBeNull();
       const uid = (await db.query<{ id: string }>("INSERT INTO users(display_name) VALUES('Synthetic legacy') RETURNING id")).rows[0]!.id;
       const id = (await db.query<{ id: string }>("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,contact_phone,contact_website,booking_note) VALUES($1,'Synthetic legacy','Synthetic address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37,55),4326)::geography,$2,'verified','synthetic legacy','synthetic address','private','https://private.invalid','private note') RETURNING id", [cityId, uid])).rows[0]!.id;
-      const service = new VenuesService(db, {} as IdempotencyService, {} as MutationRunner);
-      expect((await service.getById(id)).profile).toMatchObject({ courtCount: null, amenities: { parking: null, showers: null }, updatedAt: null });
-      expect((await service.searchCatalog({ cityId })).items[0]?.profile?.updatedAt).toBeNull();
       await apply(db, "0039"); await db.query("UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1", [id, JSON.stringify(contacts)]);
       const before = (await db.query("SELECT * FROM venues WHERE id=$1", [id])).rows[0];
       await apply(db, "0040");
@@ -147,13 +148,17 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
       expect((await db.query("SELECT id,name,address,timezone FROM venues WHERE id=$1", [id])).rows[0]?.id).toBe(id);
       expect((await db.query("SELECT public_profile_updated_at FROM venues WHERE id=$1", [id])).rows[0]?.public_profile_updated_at).toBeNull();
       await db.query("UPDATE venues SET name='Synthetic legacy edited' WHERE id=$1", [id]);
-      expect((await service.getById(id)).profile?.updatedAt).not.toBeNull();
+      expect((await db.query("SELECT public_profile_updated_at FROM venues WHERE id=$1", [id])).rows[0]?.public_profile_updated_at).toBeInstanceOf(Date);
       await db.query("UPDATE venues SET court_count=0,amenity_parking=false,amenity_showers=true WHERE id=$1", [id]);
       const populated = (await db.query("SELECT * FROM venues WHERE id=$1", [id])).rows[0];
       // Exercise the real ledger runner, not raw ALTER twice; isolated database only.
       execFileSync("pnpm", ["exec", "tsx", "src/database/migrate.ts"], { cwd: apiRoot, env: { ...process.env, DATABASE_URL: url.href, PUBLIC_API_ORIGIN: "http://127.0.0.1:19441" }, stdio: "pipe" });
-      expect((await db.query("SELECT * FROM venues WHERE id=$1", [id])).rows[0]).toEqual(populated);
+      // 0045 adds nullable public_description; prior venue facts/private contacts must hold.
+      expect((await db.query("SELECT * FROM venues WHERE id=$1", [id])).rows[0]).toEqual({ ...populated, public_description: null });
       expect((await db.query("SELECT public_contacts,contact_phone FROM venues WHERE id=$1", [id])).rows[0]).toEqual({ public_contacts: contacts, contact_phone: "private" });
+      expect((await db.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
+      const service = new VenuesService(db, {} as IdempotencyService, {} as MutationRunner);
+      expect((await service.getById(id)).profile).toMatchObject({ courtCount: 0, amenities: { parking: false, showers: true }, updatedAt: expect.any(String), gallery: { coverage: "ordered", items: [] } });
       expect(JSON.stringify(await service.getById(id))).not.toContain("private");
     } finally { try { await db.end(); } finally { await adminPool.query(`DROP DATABASE IF EXISTS "${upgradeName}"`); } }
   });
@@ -222,42 +227,77 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     const x = await fixture(), uid = await user();
     const approval = (await pool.query<{ id: string }>("INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id", [randomUUID().replaceAll("-", "").repeat(2)])).rows[0]!.id;
     const key = randomUUID().replaceAll("-", "").repeat(2) + ".png", oldDate = stamp(await stored(x.v.id));
+    // Multi-gallery contract (0045): public gallery.items come from venue_gallery_items, not legacy cover_* alone.
     await pool.query("UPDATE venues SET cover_key=$2,cover_actor_id=$3,cover_moderation_approval_id=$4,cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id, key, uid, approval]);
+    const galleryId = (await pool.query<{ id: string }>(
+      `INSERT INTO venue_gallery_items (
+         venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+         credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
+       ) VALUES ($1,0,true,$2,$3,$4,'photo','Фото: Synthetic','https://example.invalid/','https://example.invalid/',NULL,'legacy_preserved_unknown',NULL)
+       RETURNING id`,
+      [x.v.id, key, approval, uid],
+    )).rows[0]!.id;
     const profile = (await detail(x.v.id)).profile!;
-    expect(profile.gallery).toEqual({ coverage: "cover_only", items: [{ url: `/v1/media/venue-covers/${key}`, credit: { kind: "photo", text: "Фото: Synthetic", url: "https://example.invalid/" } }] });
+    expect(profile.gallery).toEqual({
+      coverage: "ordered",
+      items: [{ id: galleryId, url: `/v1/media/venue-covers/${key}`, credit: { kind: "photo", text: "Фото: Synthetic", url: "https://example.invalid/" } }],
+    });
     expect(stamp(await stored(x.v.id))).toBeGreaterThan(oldDate);
     const contentDate = stamp(await stored(x.v.id));
     // Existing moderation decisions are allow/reject/review (migration0020).
     // Changing eligibility alone leaves stored venue content and its date intact.
     await pool.query("UPDATE content_moderation_approvals SET decision='reject',checked_at=now() WHERE id=$1", [approval]);
     const rejected = await detail(x.v.id);
-    expect(rejected.profile?.gallery).toEqual({ coverage: "cover_only", items: [] });
+    expect(rejected.profile?.gallery).toEqual({ coverage: "ordered", items: [] });
     expect(rejected.profile?.updatedAt).toBe(profile.updatedAt);
     expect(rejected.cover?.uploadedUrl).toBeNull();
     expect(stamp(await stored(x.v.id))).toBe(contentDate);
     await pool.query("UPDATE content_moderation_approvals SET decision='allow',checked_at=now() WHERE id=$1", [approval]);
     expect((await detail(x.v.id)).profile?.gallery).toEqual(profile.gallery);
     expect(stamp(await stored(x.v.id))).toBe(contentDate);
-    for (const [kind, text, url] of [["logo", "Логотип: Synthetic", "https://example.invalid/"], ["illustration", "Иллюстрация", null], [null, null, null]]) {
+    // Ordered gallery accepts logo/illustration (obsolete cover_only photo-gate); cover_* credit still bumps date.
+    for (const [kind, text, url] of [["logo", "Логотип: Synthetic", "https://example.invalid/"], ["illustration", "Иллюстрация", null]] as const) {
       const beforeCredit = stamp(await stored(x.v.id));
       await pool.query("UPDATE venues SET cover_credit_kind=$2,cover_credit_text=$3,cover_credit_url=$4 WHERE id=$1", [x.v.id, kind, text, url]);
-      expect((await detail(x.v.id)).profile?.gallery).toEqual({ coverage: "cover_only", items: [] });
+      await pool.query(
+        "UPDATE venue_gallery_items SET credit_kind=$2,credit_text=$3,credit_url=$4,source_url=$5,updated_at=now() WHERE id=$1",
+        [galleryId, kind, text, url, kind === "logo" ? url : null],
+      );
+      expect((await detail(x.v.id)).profile?.gallery.items).toEqual([
+        { id: galleryId, url: `/v1/media/venue-covers/${key}`, credit: { kind, text, url } },
+      ]);
       expect(stamp(await stored(x.v.id))).toBeGreaterThan(beforeCredit);
     }
     await pool.query("UPDATE venues SET cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id]);
+    await pool.query(
+      "UPDATE venue_gallery_items SET credit_kind='photo',credit_text='Фото: Synthetic',credit_url='https://example.invalid/',source_url='https://example.invalid/',updated_at=now() WHERE id=$1",
+      [galleryId],
+    );
     const beforeReplacement = stamp(await stored(x.v.id));
-    await pool.query("UPDATE venues SET cover_key=$2 WHERE id=$1", [x.v.id, randomUUID().replaceAll("-", "").repeat(2) + ".png"]);
-    expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);
+    const nextKey = randomUUID().replaceAll("-", "").repeat(2) + ".png";
+    await pool.query("UPDATE venues SET cover_key=$2 WHERE id=$1", [x.v.id, nextKey]);
+    await pool.query("UPDATE venue_gallery_items SET storage_key=$2,updated_at=now() WHERE id=$1", [galleryId, nextKey]);
+    expect((await detail(x.v.id)).profile?.gallery.items).toEqual([
+      { id: galleryId, url: `/v1/media/venue-covers/${nextKey}`, credit: { kind: "photo", text: "Фото: Synthetic", url: "https://example.invalid/" } },
+    ]);
     expect(stamp(await stored(x.v.id))).toBeGreaterThan(beforeReplacement);
-    await pool.query("UPDATE venues SET cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id]);
     await pool.query("UPDATE venues SET lifecycle_state='retired' WHERE id=$1", [x.v.id]);
     expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);
     await pool.query("UPDATE venues SET lifecycle_state='unverified' WHERE id=$1", [x.v.id]);
+    expect((await detail(x.v.id)).profile?.gallery.items).toHaveLength(1);
     const beforeRemoval = stamp(await stored(x.v.id));
+    await pool.query("UPDATE venue_gallery_items SET active=false,is_main=false,updated_at=now() WHERE id=$1", [galleryId]);
     await pool.query("UPDATE venues SET cover_key=NULL,cover_actor_id=NULL,cover_moderation_approval_id=NULL WHERE id=$1", [x.v.id]);
     expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);
     expect(stamp(await stored(x.v.id))).toBeGreaterThan(beforeRemoval);
     await pool.query("UPDATE venues SET cover_key=$2,cover_actor_id=$3,cover_moderation_approval_id=$4,cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id, key, uid, approval]);
+    await pool.query(
+      `INSERT INTO venue_gallery_items (
+         venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+         credit_kind, credit_text, credit_url, source_url, permission_basis
+       ) VALUES ($1,0,true,$2,$3,$4,'photo','Фото: Synthetic','https://example.invalid/','https://example.invalid/','legacy_preserved_unknown')`,
+      [x.v.id, key, approval, uid],
+    );
     expect((await detail(x.v.id)).profile?.gallery.items).toHaveLength(1);
     await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1", [uid]);
     expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);

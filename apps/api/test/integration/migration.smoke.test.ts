@@ -182,16 +182,31 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0042_game_outcomes",
         "0043_play_interests",
         "0044_direct_messages_immediate",
+        "0045_venue_gallery",
       ]);
-      const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at') ORDER BY column_name");
+      const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_description','public_profile_updated_at') ORDER BY column_name");
       expect(profileColumns.rows).toEqual([
         {column_name:"amenity_parking",data_type:"boolean",is_nullable:"YES",column_default:null},
         {column_name:"amenity_showers",data_type:"boolean",is_nullable:"YES",column_default:null},
         {column_name:"court_count",data_type:"integer",is_nullable:"YES",column_default:null},
+        {column_name:"public_description",data_type:"text",is_nullable:"YES",column_default:null},
         {column_name:"public_profile_updated_at",data_type:"timestamp with time zone",is_nullable:"YES",column_default:null},
       ]);
       expect((await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='venues'::regclass AND conname='venues_court_count_check'")).rows).toHaveLength(1);
       expect((await pool.query("SELECT tgname FROM pg_trigger WHERE tgrelid='venues'::regclass AND tgname='venue_public_profile_change' AND NOT tgisinternal AND tgenabled='O'")).rows).toHaveLength(1);
+      // 0045 additive gallery: physical table + URL helper, beyond ledger filename alone.
+      expect((await pool.query("SELECT to_regclass('public.venue_gallery_items')::text AS name")).rows[0]?.name).toBe("venue_gallery_items");
+      expect((await pool.query("SELECT to_regprocedure('public.venue_gallery_item_url(uuid)') IS NOT NULL AS ok")).rows[0]?.ok).toBe(true);
+      const galleryIndexes = await pool.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes WHERE tablename='venue_gallery_items'
+           AND indexname IN ('venue_gallery_active_position','venue_gallery_one_main','venue_gallery_venue_active')
+         ORDER BY indexname`,
+      );
+      expect(galleryIndexes.rows.map((r) => r.indexname)).toEqual([
+        "venue_gallery_active_position",
+        "venue_gallery_one_main",
+        "venue_gallery_venue_active",
+      ]);
       const publicContactsColumn = await pool.query<{data_type:string;is_nullable:string;column_default:string|null}>(
         "SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_name='venues' AND column_name='public_contacts'",
       );
