@@ -4,8 +4,22 @@ import { apiFetch } from "../../../lib/api-client";
 import { socialError } from "../../../lib/messaging-presentation";
 
 type Pending = { path: string; body: object; key: string; method: string };
+export type SocialMutationOptions<T> = {
+  /**
+   * Opt-in: when set, a 2xx body must pass before pending clears / onSuccess runs.
+   * Failed validation keeps unresolved identity (UNKNOWN) — default callers omit this.
+   */
+  validateSuccess?: (data: T) => boolean;
+};
 /** Persist unresolved identity across reload; explicit replay uses identical body/key. */
-export function useSocialMutation<T>(scope: string, csrf: string, onSuccess: (data: T) => void, onRefresh: () => void, persist = true) {
+export function useSocialMutation<T>(
+  scope: string,
+  csrf: string,
+  onSuccess: (data: T) => void,
+  onRefresh: () => void,
+  persist = true,
+  options?: SocialMutationOptions<T>,
+) {
   const storageKey = `gb-fr04-pending:${scope}`;
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
@@ -16,6 +30,8 @@ export function useSocialMutation<T>(scope: string, csrf: string, onSuccess: (da
   const [lastStatus, setLastStatus] = useState<number | null>(null);
   const lock = useRef(false);
   const live = useRef(true);
+  const validateRef = useRef(options?.validateSuccess);
+  validateRef.current = options?.validateSuccess;
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   useEffect(() => {
     if (!persist) return;
@@ -32,7 +48,18 @@ export function useSocialMutation<T>(scope: string, csrf: string, onSuccess: (da
     const result = await apiFetch<T>(value.path, { method: value.method, body: JSON.stringify(value.body), csrfToken: csrf, headers: { "Idempotency-Key": value.key } });
     if (!live.current) return;
     lock.current = false; setBusy(false);
-    if (result.ok) { setLastStatus(result.status); setRetryAfterSeconds(null); save(null); onSuccess(result.data); }
+    if (result.ok) {
+      setLastStatus(result.status);
+      setRetryAfterSeconds(null);
+      const validate = validateRef.current;
+      if (validate && !validate(result.data)) {
+        setNotice("Результат не подтверждён. Не повторяйте отправку.");
+        setCode("unconfirmed");
+        return;
+      }
+      save(null);
+      onSuccess(result.data);
+    }
     else {
       setLastStatus(result.status);
       setRetryAfterSeconds(result.retryAfterSeconds ?? null);
@@ -41,7 +68,12 @@ export function useSocialMutation<T>(scope: string, csrf: string, onSuccess: (da
     }
   }
   return { busy, pending: !!pending, pendingPath: pending?.path, notice, code, setNotice, retryAfterSeconds, lastStatus,
-    run(path: string, body: object, method = "POST") { if (!pending && !lock.current) void perform({ path, body, method, key: crypto.randomUUID() }); },
+    /** Synchronous admission: true only when this call starts the write (lock+pending latched before await). */
+    run(path: string, body: object, method = "POST"): boolean {
+      if (pending || lock.current) return false;
+      void perform({ path, body, method, key: crypto.randomUUID() });
+      return lock.current;
+    },
     retry() { if (pending) void perform(pending); },
   };
 }

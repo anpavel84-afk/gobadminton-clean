@@ -40,6 +40,15 @@ type Props = {
   onAuthRetry: () => void;
   /** desktop: primary want-to-play only (Next lives in the deck). mobile: Skip + send. */
   chrome?: "mobile" | "desktop";
+  /**
+   * Mobile page-level host: admit + POST outside this card.
+   * When set, local mutation is not used for send (withdraw/GET unchanged).
+   */
+  externalAdmitSend?: ((view: PlayInterestView) => boolean) | null;
+  /** Soft-disable send while previous page-level op settles / UNKNOWN for this peer. */
+  sendBlockedReason?: string;
+  /** After external admit from the footer button (not gesture — gesture flies itself). */
+  onExternalSendAdmitted?: (() => void) | null;
 };
 
 /** Stable footer: one reserved status line + same action baseline (no panel that pushes controls). */
@@ -97,8 +106,12 @@ export function PlayerBrowsePlayInterest({
   onSkip,
   onAuthRetry,
   chrome = "mobile",
+  externalAdmitSend = null,
+  sendBlockedReason = "",
+  onExternalSendAdmitted = null,
 }: Props) {
   const desktopChrome = chrome === "desktop";
+  const useExternalSend = Boolean(externalAdmitSend);
   const [view, setView] = useState<PlayInterestView | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "guest" | "unavailable" | "error">("loading");
   const [reload, setReload] = useState(0);
@@ -110,8 +123,11 @@ export function PlayerBrowsePlayInterest({
   meIdRef.current = me?.id;
   const viewRef = useRef<PlayInterestView | null>(null);
   viewRef.current = view;
+  const externalAdmitRef = useRef(externalAdmitSend);
+  externalAdmitRef.current = externalAdmitSend;
 
   // Distinct pending scope — never reuses friendship `${me}:friends:${peer}` storage.
+  // When externalAdmitSend is set, send POST lives on the page host; local mutation remains for withdraw.
   const mutation = useSocialMutation<PlayInterestReceipt>(
     me ? `${me.id}:play-interest:${peerId}` : `guest:play-interest:${peerId}`,
     me?.csrfToken ?? "",
@@ -188,18 +204,26 @@ export function PlayerBrowsePlayInterest({
     }
   }, [mutation.lastStatus, mutation.retryAfterSeconds, onRateLimited]);
 
-  const locked = mutation.busy || mutation.pending || navigationLocked;
+  const locked = mutation.busy || mutation.pending || navigationLocked || Boolean(sendBlockedReason);
   const rateBlocked = rateBlockedUntil != null && Date.now() < rateBlockedUntil;
-  const canRequest = Boolean(me && loadState === "ready" && canOfferPlayInterest(view) && !rateBlocked && !mutation.pending);
+  const canRequest = Boolean(
+    me
+    && loadState === "ready"
+    && canOfferPlayInterest(view)
+    && !rateBlocked
+    && !mutation.pending
+    && !sendBlockedReason,
+  );
 
   function runSend(): boolean {
-    if (!me || locked || rateBlocked) return false;
+    if (!me || locked || rateBlocked || sendBlockedReason) return false;
     const current = viewRef.current;
     if (!current || !canOfferPlayInterest(current)) return false;
+    const admit = externalAdmitRef.current;
+    if (admit) return admit(current);
     const command = playInterestCommand(current, peerId, "send");
     if (!command || !current.capabilities.canSend) return false;
-    mutation.run(command.path, command.body);
-    return true;
+    return mutation.run(command.path, command.body);
   }
 
   function runWithdraw() {
@@ -244,7 +268,10 @@ export function PlayerBrowsePlayInterest({
     return () => onApi(null);
   }, [locked, mutation.pending, canRequest, me, peerId, rateBlocked]);
 
-  const skipDisabled = locked || navigationLocked;
+  // Fluid mobile: sendBlocked / host busy must not freeze local skip.
+  const skipDisabled = useExternalSend
+    ? navigationLocked
+    : (locked || navigationLocked);
 
   if (authState === "loading" || loadState === "loading") {
     return (
@@ -276,9 +303,10 @@ export function PlayerBrowsePlayInterest({
     );
   }
 
+  // External host owns send UNKNOWN for this peer — do not dual-render local pending UI for send.
   // Still-authenticated pending UNKNOWN: keep receipt / check-status / no-repeat before
   // temporary error or unavailable blanking. No new POST; checkStatusReadonly only.
-  if (mutation.pending) {
+  if (mutation.pending && !useExternalSend) {
     const knownLine = (view?.relationship === "outgoing" || view?.relationship === "mutual")
       ? playInterestStatus[view.relationship]
       : "";
@@ -369,23 +397,27 @@ export function PlayerBrowsePlayInterest({
     );
   }
 
-  const notice = mutation.notice && !mutation.pending ? mutation.notice : "";
+  const notice = sendBlockedReason
+    || (mutation.notice && !mutation.pending && !useExternalSend ? mutation.notice : "");
   return (
     <StableActionFooter
       desktop={desktopChrome}
       status={notice}
       statusTone={notice ? "warning" : ""}
       showSkip={!desktopChrome}
-      skipDisabled={locked}
+      skipDisabled={skipDisabled}
       onSkip={onSkip}
       primary={
         <button
           type="button"
           className="pb-btn-request"
           disabled={!canRequest || locked}
-          onClick={() => { void runSend(); }}
+          onClick={() => {
+            const started = runSend();
+            if (started && useExternalSend) onExternalSendAdmitted?.();
+          }}
         >
-          {mutation.busy ? "Отправляем…" : "Давай сыграем"}
+          {!useExternalSend && mutation.busy ? "Отправляем…" : "Давай сыграем"}
         </button>
       }
     />

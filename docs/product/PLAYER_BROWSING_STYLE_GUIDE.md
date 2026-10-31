@@ -24,6 +24,8 @@ This document records product contracts for the integrated consumer surface. Do 
 
 Superseded by the **Mobile fullscreen contract** appendix below for cards mode. Do not apply desktop v5 composition globally.
 
+**Delivered (#404 fluid finder slice):** list mode has no segmented «Списком / По одному» control (hidden from layout and tab order). Entry is the floating CTA **«Найти напарника»** (full label, dark pill) sharing one overlay zone with optional compact **«На карте»** when Radar is active. Desktop ≥1024 segmented switch and layout stay unchanged.
+
 ## Catalog & Radar boundary
 
 - Deck reads the **ordinary public catalog** (`listPlayers`) only. No private Radar rows / `resultRef` in the deck.
@@ -36,9 +38,9 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 ## Interaction (shared)
 
 - Side arrows and Left/Right on a deliberately focused deck: **browse only** (never play-interest mutation). Desktop ≥1024: buttons only (no pointer swipe).
-- Mobile only: Left swipe / «Пропустить»: local skip (no block/withdraw). Right swipe or green «Давай сыграем»: play-interest send — see mobile appendix for 1:1 drag, fly-off, and confirmed-only right advance.
+- Mobile only: Left swipe / «Пропустить»: local skip (no block/withdraw). Right swipe or green «Давай сыграем»: play-interest send — see mobile appendix for 1:1 drag, immediate right fly-off after admission, and peer-bound settlement independent of motion.
 - Axis lock / distance-or-flick release / cancel / vertical details; interactive targets exclude drag. No send on partial drag, cancel, navigation, load, or pagination.
-- After **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the desktop browse slide). Busy / UNKNOWN must not fake success. Unilateral outcome copy is «Предложение отправлено» — never «match»/friends. Mutual only after server confirms both current intents: «Вы оба хотите сыграть». Withdraw control: «Отменить предложение».
+- **Desktop:** after **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the browse slide). **Mobile fluid:** admission starts POST + right fly-off immediately; next prepared peer appears after flight; receipt updates peer-bound status only (no second advance). Busy / UNKNOWN must not fake success. Unilateral outcome copy is «Предложение отправлено» — never «match»/friends. Mutual only after server confirms both current intents: «Вы оба хотите сыграть». Withdraw control: «Отменить предложение».
 - Previous restores preserved interest state; no repeated send. Position within the loaded public scope uses browser history state (no new storage engine). Filter change resets selection/skip.
 - No mutations on mouseenter or keyboard browse navigation.
 
@@ -109,7 +111,18 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 - Recent velocity: last **80ms** window including the release sample; **0** after ~100ms pause; capped ±2.5 px/ms (`sampleBrowseVelocity`).
 - Release (`releaseCommitted`): **reverse veto first** (≈10px reverse travel + opposite velocity ≥0.2 px/ms) even past distance — then **slow-distance** `D=clamp(72,.24W,112)` **or** short-fast projected flick `F=clamp(18,.06W,28)`, `|vx|≥0.65`, `p=travel+|vx|·180ms ≥ D`. Gesture duration is not a cutoff. Residual axis ratio ≥1.2 on release.
 - Left commit: fly off from **rendered release pose** with geometry-safe offscreen target (rotated AABB + 24px margin — width+48 alone can leave corners visible); duration `clamp(140, L/max(|v|,1.6), 300)` ms; carry velocity direction; **no recenter before exit**. Then advance to next ready peer. Generation/peer fence ignores obsolete completions.
-- Right commit: explicit play-interest `send` only (unilateral is never Match; mutual only after server receipt). Bind to the peer at gesture start; cancel if peer changes; single-flight consumed ref covers gesture **and** buttons. **Only confirmed receipt** may auto-advance and play the successful right fly-out; failed / UNKNOWN restores the readable card with honest status and **no automatic replay**. Do not POST `/friend-requests` from browse.
+- Right commit: explicit play-interest `send` only (unilateral is never Match; mutual only after server receipt). Bind to the peer at gesture start; cancel if peer changes; single-flight consumed ref covers gesture **and** buttons. **Fluid mobile (delivered):** synchronous page-level admission (captured actor/peer/operation) starts POST and right fly-off from release pose immediately; next eligible peer after flight completion; receipt must not advance again or move a newer card. One active POST; browsing/left skip/X allowed while unsettled; next right may show «Завершаем предыдущее предложение». UNKNOWN blocks only the original peer (no automatic POST/retry). Status lives in a stable modal slot and remains on the list after X. Do not POST `/friend-requests` from browse.
 - Cancel / spring-return is interruptible (pin computed transform, then cancel transition) for re-grab without jump when practical.
 - **Spring re-grab**: on pointerdown during return, parse the pinned computed matrix (`parseBrowseCssTransformPose`) into drag `originX/originY`; subsequent moves apply **fresh dx/dy relative to that base** (visual = origin + delta). Classifier axis / intent / reversal / velocity stay on the fresh grab samples — do not replace the first move with absolute finger delta alone (that jumps opposite the finger).
 - No extra motion/gesture dependencies or generic recognizer packages.
+
+### Mobile entry + eligibility (delivered · #404 first fluid slice)
+- Floating **«Найти напарника»** opens existing fullscreen cards; CTA stays outside the dialog. Radar **«На карте»** shares the same overlay zone; list reserves safe-area/nav padding for the max zone height so heading/toolbar do not jump when Radar toggles.
+- On finder entry/reopen/new session: batch `GET /v1/me/play-interest-states` for the current catalog page (1..50 UUID query params; ordered IDs ↔ positional response; actor/generation/filter bound) before showing candidates. Show only `none && canSend`; exclude outgoing/mutual/unavailable and own unresolved markers. Transient read failure → explicit retry, never empty-or-allowed fallback. Empty filtered page with cursor → «Продолжить поиск» (one page + one batch). True end only when cursor exhausted. Left skip is local; no automatic cycle at end. Desktop and ordinary list unchanged. No whole-catalog download.
+
+### PROPOSED · smart ranking (next bounded slice — NOT implemented)
+Recommendation only; must not be claimed as shipped behaviour and must not fake a globally ranked partial page:
+1. Hard filters stay absolute (city/area/name/looking/trainer).
+2. Prefer same city → level compatibility on the pilot scale (exact `(scaleId, scaleVersion, levelId)` until neighbourhood is Owner-approved) → same area → stable name+id tie-break.
+3. Distance only from authorized Radar rows with consent/TTL; never invent coordinates. Do not auto-enable Radar on finder open.
+4. Prefer a future opt-in finder order on `GET /players` over client-wide catalog download. Until then, any local reorder of an already-checked buffer must be labelled honestly (e.g. «Среди загруженных»), not as global city ranking.

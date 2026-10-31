@@ -1323,6 +1323,123 @@
   display: none;
 }
 
+/* Mobile <1024: hide segmented list/cards (desktop ≥1024 keeps it). */
+@media (max-width: 1023px) {
+  .gb-player-browse .pb-view-switch[hidden],
+  .gb-player-browse .pb-view-switch[aria-hidden="true"] {
+    display: none !important;
+  }
+}
+
+/*
+ * Shared mobile finder overlay zone: primary «Найти напарника» + optional «На карте».
+ * Reserve max zone height whether Radar is ON or OFF so heading/toolbar do not jump.
+ */
+.gb-player-browse .pb-mobile-finder-zone {
+  display: flex;
+  position: fixed;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  pointer-events: none;
+  margin: 0;
+  padding: 8px 16px;
+  min-height: 112px;
+  box-sizing: border-box;
+  background: transparent;
+}
+.gb-player-browse .pb-mobile-finder-zone > * {
+  pointer-events: auto;
+}
+.gb-player-browse .pb-finder-cta {
+  min-height: 48px;
+  min-width: min(280px, calc(100vw - 32px));
+  padding: 10px 22px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.gb-player-browse .pb-finder-cta__label {
+  white-space: nowrap;
+}
+.gb-player-browse .pb-finder-map-secondary {
+  min-height: 44px;
+  min-width: 120px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+@media (min-width: 721px) and (max-width: 1023px) {
+  .gb-player-browse .pb-mobile-finder-zone {
+    bottom: 24px;
+  }
+}
+/* Stable list bottom reserve for max finder zone (Radar ON/OFF same). */
+.gb-player-browse .players-list.pb-list--finder-pad {
+  padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+}
+@media (max-width: 720px) {
+  .gb-player-browse .players-list.pb-list--finder-pad {
+    padding-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+.gb-player-browse .pb-offer-status,
+.pb-mobile-fs .pb-offer-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--pb-line, #d7ddd6);
+}
+.gb-player-browse .pb-offer-status__text {
+  margin: 0;
+  flex: 1 1 160px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.gb-player-browse .pb-offer-status__text.is-success { color: var(--gb-lime-ink, #1f5b2c); }
+.gb-player-browse .pb-offer-status__text.is-warning { color: var(--gb-warn, #8a5a00); }
+.gb-player-browse .pb-offer-status--list {
+  position: relative;
+  z-index: 5;
+}
+.pb-mobile-fs .pb-offer-status--modal {
+  position: relative;
+  z-index: 6;
+}
+
+.gb-player-browse .pb-finder-gate,
+.pb-mobile-fs .pb-finder-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 24px 20px;
+  padding: 20px;
+  max-width: 420px;
+}
+.gb-player-browse .pb-finder-gate h2,
+.pb-mobile-fs .pb-finder-gate h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+.gb-player-browse .pb-finder-gate p,
+.pb-mobile-fs .pb-finder-gate p {
+  margin: 0;
+  color: var(--pb-muted, #5c6b60);
+  font-size: 14px;
+}
+
 .gb-player-browse .pb-slide-frame {
   height: 100%;
   min-height: inherit;
