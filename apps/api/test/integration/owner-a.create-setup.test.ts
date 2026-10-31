@@ -251,7 +251,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const saved = await patchProfile(session, valid, saveKey);
     expect(saved.statusCode).toBe(201);
     expect(saved.json()).toMatchObject({ version: 1, cityId: MOSCOW_CITY_ID, directoryVisible: false,
-      contactPolicy: "closed", radarConsented: false, consentPolicyVersion: null, optedInAt: null,
+      contactPolicy: "requests", radarConsented: false, consentPolicyVersion: null, optedInAt: null,
       radarConsentPolicyVersion: null, radarConsentedAt: null, level: null, bio: null });
     expect(saved.json().displayName).toBe("OA2 Fictional Player");
     const replay = await patchProfile(session, valid, saveKey);
@@ -279,7 +279,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const updated = await patchProfile(session, { expectedVersion: 1, cityId: MOSCOW_CITY_ID, bio: "Changed" });
     expect(updated.statusCode).toBe(200);
     expect(updated.json()).toMatchObject({ version: 2, bio: "Changed", radarConsented: true,
-      radarConsentedAt: created.json().radarConsentedAt, directoryVisible: false, contactPolicy: "closed" });
+      radarConsentedAt: created.json().radarConsentedAt, directoryVisible: false, contactPolicy: "requests" });
   });
 
   it.each([undefined, null])("optional city %s remains compatible at bootstrap and update", async cityId => {
@@ -287,7 +287,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const created = await patchProfile(session, { expectedVersion: 0, ...(cityId === undefined ? {} : { cityId }) });
     expect(created.statusCode).toBe(201); expect(created.json().cityId).toBeNull();
     const updated = await patchProfile(session, { expectedVersion: 1, ...(cityId === undefined ? {} : { cityId }), bio: "Optional city" });
-    expect(updated.statusCode).toBe(200); expect(updated.json()).toMatchObject({ cityId: null, version: 2, directoryVisible: false, radarConsented: false, contactPolicy: "closed" });
+    expect(updated.statusCode).toBe(200); expect(updated.json()).toMatchObject({ cityId: null, version: 2, directoryVisible: false, radarConsented: false, contactPolicy: "requests" });
   });
 
   it("version conflicts precede catalog lookup and roll back reservations", async () => {
@@ -334,7 +334,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     expect(await profileState(session)).toEqual(before);
   });
 
-  it("stub OAuth preserves encoded create return; missing profile bootstraps city with closed/private defaults", async () => {
+  it("stub OAuth preserves encoded create return; missing profile bootstraps city with DM-allowed/private-directory defaults", async () => {
     owner = await login("vk"); other = await login("yandex");
     const destination = new URL(owner.callbackLocation!);
     expect(destination.pathname).toBe("/profile/setup");
@@ -344,7 +344,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const saveKey = key();
     const saved = await app.inject({ method: "PATCH", url: "/v1/me/social-profile", headers: mutationHeaders(owner, saveKey), payload: { expectedVersion: 0, cityId: MOSCOW_CITY_ID } });
     expect(saved.statusCode).toBe(201);
-    expect(saved.json()).toMatchObject({ cityId: MOSCOW_CITY_ID, directoryVisible: false, contactPolicy: "closed", radarConsented: false, level: null, bio: null, version: 1 });
+    expect(saved.json()).toMatchObject({ cityId: MOSCOW_CITY_ID, directoryVisible: false, contactPolicy: "requests", radarConsented: false, level: null, bio: null, version: 1 });
     expect(saved.json().displayName).toBeTruthy();
     const reread = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: owner.cookies });
     expect(reread.json().cityId).toBe(MOSCOW_CITY_ID);
@@ -402,7 +402,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     expect(inactiveTrainer.statusCode).toBe(409); expect(inactiveTrainer.json().code).toBe("TRAINER_PROFILE_INACTIVE");
     expect((await create(payload(30))).statusCode).toBe(201);
     const own = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: owner.cookies });
-    expect(own.json()).toMatchObject({ directoryVisible: false, contactPolicy: "closed", radarConsented: false });
+    expect(own.json()).toMatchObject({ directoryVisible: false, contactPolicy: "requests", radarConsented: false });
   });
 
   it("future bound and cursor advance exclude started games while managed history remains readable", async () => {
