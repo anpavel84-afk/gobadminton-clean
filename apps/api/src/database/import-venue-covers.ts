@@ -31,6 +31,24 @@ import {
   type PublicDataManifest,
   type PublicDataVenueRow,
 } from "../venues/venue-public-data-import";
+import {
+  buildAcceptedGalleryReceipt,
+  galleryAdmissionKeyHash,
+  galleryItemFingerprint,
+  galleryManifestDigest,
+  planGalleryReplay,
+  planGalleryRow,
+  validateGalleryManifest,
+  validateImage as validateGalleryImage,
+  type AcceptedGalleryReceipt,
+  type GalleryActiveRow,
+  type GalleryImportItem,
+  type GalleryImportPlan,
+  type GalleryManifest,
+  type GalleryVenueRow,
+} from "../venues/venue-gallery-import";
+import { projectVenueMainCover } from "../venues/venue-gallery.service";
+import { VENUE_GALLERY_MAX } from "../venues/venue-gallery";
 
 export function guardImportEnv(env: NodeJS.ProcessEnv): void {
   if (!["mvp","stage"].includes(env.APP_ENV ?? "") || env.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" ||
@@ -178,6 +196,334 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
   }
   emit({totals,digest:manifestDigest(batch.manifest)});
   return totals.FAILED === 0 ? 0 : 1;
+}
+
+const galleryVenueSelect = `SELECT name,address,lifecycle_state,version,canonical_venue_id FROM venues WHERE id=$1`;
+
+async function loadAcceptedGalleryReceipt(
+  c: Pick<PoolClient, "query">,
+  keyHash: string,
+): Promise<AcceptedGalleryReceipt | undefined> {
+  const row = (await c.query<{ after_diff: Record<string, unknown> }>(
+    `SELECT after_diff FROM privileged_audit_events
+     WHERE idempotency_hash=$1 AND action_key='venue.gallery_add' AND reason_code='venue_gallery_batch_import'
+     ORDER BY created_at DESC LIMIT 1`,
+    [keyHash],
+  )).rows[0];
+  const after = row?.after_diff;
+  if (!after || typeof after.fingerprint !== "string" || typeof after.batch !== "string"
+    || typeof after.file !== "string" || typeof after.sha256 !== "string"
+    || typeof after.itemIndex !== "number" || typeof after.evidence !== "object" || after.evidence === null) {
+    return undefined;
+  }
+  return {
+    fingerprint: after.fingerprint,
+    batch: after.batch,
+    file: after.file,
+    sha256: after.sha256,
+    itemIndex: after.itemIndex,
+    evidence: after.evidence as AcceptedGalleryReceipt["evidence"],
+  };
+}
+
+async function loadGalleryActive(
+  c: Pick<PoolClient, "query">,
+  venueId: string,
+  forUpdate = false,
+): Promise<GalleryActiveRow[]> {
+  const locking = forUpdate ? " FOR UPDATE" : "";
+  return (await c.query<GalleryActiveRow>(
+    `SELECT position, is_main, source_fingerprint FROM venue_gallery_items
+     WHERE venue_id=$1 AND active ORDER BY position${locking}`,
+    [venueId],
+  )).rows;
+}
+
+export async function loadGalleryBatch(dir: string, file: string) {
+  const manifest = validateGalleryManifest(JSON.parse((await readBatchFile(dir, file, 256 * 1024)).toString("utf8")));
+  const images = new Map<string, Buffer>();
+  for (const item of manifest.items) {
+    const bytes = await readBatchFile(dir, item.file, 2 * 1024 * 1024);
+    validateGalleryImage(bytes, item.sha256);
+    images.set(item.file, bytes);
+  }
+  return { manifest, images };
+}
+
+function problemCode(error: unknown): string | undefined {
+  const body = error instanceof ProblemHttpException ? error.getResponse() : undefined;
+  const code = typeof body === "object" && body !== null && "code" in body ? body.code : undefined;
+  return typeof code === "string" && /^[A-Z_]{1,80}$/.test(code) ? code : undefined;
+}
+
+function galleryFail(error: unknown): GalleryImportPlan {
+  const code = problemCode(error);
+  if (code === "MODERATION_TEMPORARILY_UNAVAILABLE" || code === "MODERATION_POLICY_MISMATCH"
+    || code === "MODERATION_RATE_LIMITED" || code === "AVATAR_BUSY") {
+    return { action: "HOLD", reason: code };
+  }
+  return { action: "FAILED", reason: code ?? "IMPORT_ROW_FAILED" };
+}
+
+type GalleryServices = {
+  media: Pick<AvatarService, "stage" | "verifyStage" | "releaseStage">;
+  moderation: Pick<ContentModerationService, "approveImage" | "bindImage">;
+};
+
+type GalleryTotals = { APPLIED: number; SKIPPED: number; FAILED: number; READY: number; HOLD: number };
+
+function emitGalleryLine(
+  emit: (line: object) => void,
+  item: GalleryImportItem,
+  itemIndex: number,
+  name: string,
+  result: GalleryImportPlan,
+  extra: Record<string, unknown> = {},
+) {
+  emit({
+    venueId: item.venueId,
+    name,
+    file: item.file,
+    itemIndex,
+    sha256: item.sha256.toLowerCase(),
+    source: item.evidence.sourceUrl ?? null,
+    usage: "UNKNOWN",
+    action: result.action,
+    reason: result.reason,
+    ...extra,
+  });
+}
+
+async function planGalleryItemState(
+  c: Pick<PoolClient, "query">,
+  manifest: GalleryManifest,
+  item: GalleryImportItem,
+  itemIndex: number,
+  simulated: Map<string, { appends: number; versionBump: number }>,
+): Promise<{ name: string; result: GalleryImportPlan; fingerprint: string; keyHash: string }> {
+  const fingerprint = galleryItemFingerprint(item);
+  const keyHash = galleryAdmissionKeyHash(manifest.batch, item.venueId, item.file, itemIndex);
+  const sim = simulated.get(item.venueId) ?? { appends: 0, versionBump: 0 };
+  const row = (await c.query<GalleryVenueRow>(galleryVenueSelect, [item.venueId])).rows[0];
+  const name = row?.name ?? "";
+  const receipt = await loadAcceptedGalleryReceipt(c, keyHash);
+  if (receipt) {
+    return { name, result: planGalleryReplay(fingerprint, receipt), fingerprint, keyHash };
+  }
+  const active = await loadGalleryActive(c, item.venueId);
+  // Dry-run: prior READY rows for this venue simulate version bumps and capacity use.
+  const adjustedRow = row
+    ? { ...row, version: row.version + sim.versionBump }
+    : row;
+  const result = planGalleryRow(adjustedRow, item, active, { simulatedAppends: sim.appends });
+  return { name, result, fingerprint, keyHash };
+}
+
+export async function importVenueGallery(
+  pool: Pool,
+  batch: { manifest: GalleryManifest; images: Map<string, Buffer> },
+  principalId: string,
+  apply: boolean,
+  services: GalleryServices,
+  emit: (line: object) => void,
+): Promise<number> {
+  const totals: GalleryTotals = { APPLIED: 0, SKIPPED: 0, FAILED: 0, READY: 0, HOLD: 0 };
+  const blockedVenues = new Set<string>();
+  const simulated = new Map<string, { appends: number; versionBump: number }>();
+
+  if (!apply) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN READ ONLY");
+      await requireImportActor(client, principalId, false);
+      for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
+        const item = batch.manifest.items[itemIndex]!;
+        let name = "";
+        let result: GalleryImportPlan;
+        try {
+          if (blockedVenues.has(item.venueId)) {
+            result = { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
+          } else {
+            const planned = await planGalleryItemState(client, batch.manifest, item, itemIndex, simulated);
+            name = planned.name;
+            result = planned.result;
+            if (result.action === "READY") {
+              const sim = simulated.get(item.venueId) ?? { appends: 0, versionBump: 0 };
+              simulated.set(item.venueId, { appends: sim.appends + 1, versionBump: sim.versionBump + 1 });
+            } else if (result.action === "FAILED" || result.action === "HOLD") {
+              blockedVenues.add(item.venueId);
+            }
+          }
+        } catch (error: unknown) {
+          result = galleryFail(error);
+          blockedVenues.add(item.venueId);
+        }
+        totals[result.action]++;
+        emitGalleryLine(emit, item, itemIndex, name, result);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    emit({ totals, digest: galleryManifestDigest(batch.manifest) });
+    return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
+  }
+
+  const userId = await requireImportActor(pool, principalId, true);
+  for (let itemIndex = 0; itemIndex < batch.manifest.items.length; itemIndex++) {
+    const item = batch.manifest.items[itemIndex]!;
+    let key: string | undefined;
+    let name = "";
+    let result: GalleryImportPlan;
+    let itemId: string | undefined;
+    let lockClient: PoolClient | undefined;
+    const fingerprint = galleryItemFingerprint(item);
+    const keyHash = galleryAdmissionKeyHash(batch.manifest.batch, item.venueId, item.file, itemIndex);
+    const lease = `venue_gallery_import:${keyHash}`;
+    try {
+      if (blockedVenues.has(item.venueId)) {
+        result = { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
+      } else {
+        lockClient = await pool.connect();
+        const claimed = (await lockClient.query<{ ok: boolean }>(
+          "SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok",
+          [lease],
+        )).rows[0];
+        if (!claimed?.ok) {
+          result = { action: "HOLD", reason: "OPERATION_IN_PROGRESS" };
+          blockedVenues.add(item.venueId);
+        } else {
+          // Pre-paid gates on unlocked snapshot queries (no catalog/user row locks across provider I/O).
+          if (await requireImportActor(pool, principalId, false) !== userId) {
+            throw new Error("IMPORT_ACTOR_REFUSED");
+          }
+          const receipt = await loadAcceptedGalleryReceipt(pool, keyHash);
+          if (receipt) {
+            result = planGalleryReplay(fingerprint, receipt);
+          } else {
+            const preview = (await pool.query<GalleryVenueRow>(galleryVenueSelect, [item.venueId])).rows[0];
+            name = preview?.name ?? "";
+            const active = await loadGalleryActive(pool, item.venueId);
+            result = planGalleryRow(preview, item, active);
+            if (result.action === "READY") {
+              const bytes = batch.images.get(item.file);
+              if (!bytes) throw new Error("INVALID_IMAGE");
+              validateGalleryImage(bytes, item.sha256);
+              const sanitized = await sanitizeAvatar(bytes, "image/jpeg", "cover");
+              key = `${randomBytes(32).toString("hex")}.png`;
+              const staged = await services.media.stage(key, sanitized);
+              const approval = await services.moderation.approveImage(userId, sanitized, "cover");
+              const storageKey = key;
+              const applied = await adminTransaction(pool, async (c) => {
+                if (await requireImportActor(c, principalId) !== userId) {
+                  throw new Error("IMPORT_ACTOR_REFUSED");
+                }
+                await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
+                const terminal = await loadAcceptedGalleryReceipt(c, keyHash);
+                if (terminal) return { ...planGalleryReplay(fingerprint, terminal) };
+
+                const current = (await c.query<GalleryVenueRow>(
+                  `${galleryVenueSelect} FOR UPDATE`,
+                  [item.venueId],
+                )).rows[0];
+                name = current?.name ?? name;
+                const lockedActive = await loadGalleryActive(c, item.venueId, true);
+                const gate = planGalleryRow(current, item, lockedActive);
+                if (gate.action !== "READY" || !current) return gate;
+
+                // Row lock held: version is stable; CAS still required so a mismatch rolls back.
+                if (current.version !== item.expectedVersion) {
+                  return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
+                }
+                const verified = await services.media.verifyStage(c, storageKey, staged);
+                const approvalId = await services.moderation.bindImage(c, approval, verified, "cover");
+                const position = lockedActive.length;
+                if (position >= VENUE_GALLERY_MAX) {
+                  return { action: "FAILED" as const, reason: "VENUE_GALLERY_FULL" };
+                }
+                const isMain = lockedActive.length === 0;
+                const inserted = (await c.query<{ id: string }>(
+                  `INSERT INTO venue_gallery_items(
+                     venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+                     credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
+                   ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                  [
+                    item.venueId, position, isMain, storageKey, approvalId, userId,
+                    item.evidence.creditKind, item.evidence.creditText, item.evidence.creditUrl,
+                    item.evidence.sourceUrl ?? null, item.evidence.sourceAuthor ?? null,
+                    item.evidence.permissionBasis, item.sha256.toLowerCase(),
+                  ],
+                )).rows[0];
+                if (!inserted) throw new Error("GALLERY_INSERT_FAILED");
+                await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1", [storageKey]);
+                await projectVenueMainCover(c, item.venueId);
+                const updated = (await c.query<{ version: number }>(
+                  `UPDATE venues SET version=version+1, updated_at=now()
+                   WHERE id=$1 AND version=$2 RETURNING version`,
+                  [item.venueId, item.expectedVersion],
+                )).rows[0];
+                if (!updated) throw new Error("VENUE_VERSION_CONFLICT");
+
+                const receiptBody = buildAcceptedGalleryReceipt(batch.manifest, item, itemIndex);
+                const audit = await appendAudit(c, {
+                  actor: { principalId, roles: ["superadmin"] },
+                  action: "venue.gallery_add",
+                  targetType: "venue",
+                  targetId: item.venueId,
+                  permission: "venue.manage",
+                  reason: "venue_gallery_batch_import",
+                  keyHash,
+                  before: { version: current.version },
+                  after: {
+                    version: updated.version,
+                    batch: receiptBody.batch,
+                    file: receiptBody.file,
+                    fingerprint: receiptBody.fingerprint,
+                    itemIndex: receiptBody.itemIndex,
+                    itemId: inserted.id,
+                    sha256: receiptBody.sha256,
+                    evidence: receiptBody.evidence,
+                    position,
+                    isMain,
+                    digest: galleryManifestDigest(batch.manifest),
+                  },
+                });
+                await c.query(
+                  "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'gallery',$3,$4)",
+                  [item.venueId, updated.version, principalId, audit],
+                );
+                return { action: "APPLIED" as const, reason: "IMPORTED", itemId: inserted.id };
+              });
+              result = { action: applied.action, reason: applied.reason };
+              if (applied.action === "APPLIED" && "itemId" in applied && typeof applied.itemId === "string") {
+                itemId = applied.itemId;
+              }
+            }
+          }
+        }
+      }
+    } catch (error: unknown) {
+      result = galleryFail(error);
+      itemId = undefined;
+      blockedVenues.add(item.venueId);
+    } finally {
+      if (key) await services.media.releaseStage(key);
+      if (lockClient) {
+        try {
+          await lockClient.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [lease]);
+        } catch { /* unlock best-effort */ }
+        lockClient.release();
+      }
+    }
+    if (result.action === "FAILED" || result.action === "HOLD") blockedVenues.add(item.venueId);
+    totals[result.action]++;
+    emitGalleryLine(emit, item, itemIndex, name, result, itemId ? { id: itemId } : {});
+  }
+  emit({ totals, digest: galleryManifestDigest(batch.manifest) });
+  return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
 }
 
 export async function importVenuePublicData(
@@ -364,14 +710,16 @@ export async function importVenuePublicData(
 
 export async function main(argv:string[], raw:NodeJS.ProcessEnv = process.env):Promise<number> {
   guardImportEnv(raw);
-  const options = new Map<string,string>(); let apply=false; let publicData=false;
+  const options = new Map<string,string>(); let apply=false; let publicData=false; let gallery=false;
   for (let i=0;i<argv.length;i++) {
     const arg=argv[i];
     if (arg === "--apply" && !apply) {apply=true;continue;}
     if (arg === "--public-data" && !publicData) {publicData=true;continue;}
+    if (arg === "--gallery" && !gallery) {gallery=true;continue;}
     if (!arg || !["--dir","--manifest","--actor-principal-id"].includes(arg) || options.has(arg)) throw new Error("INVALID_ARGUMENTS");
     const value=argv[++i]; if (!value || value.startsWith("--")) throw new Error("INVALID_ARGUMENTS"); options.set(arg,value);
   }
+  if (publicData && gallery) throw new Error("INVALID_ARGUMENTS");
   const dir=options.get("--dir"), file=options.get("--manifest"), actor=options.get("--actor-principal-id");
   if (!dir || !file || !actor || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actor)) throw new Error("INVALID_ARGUMENTS");
   if (publicData) {
@@ -379,6 +727,17 @@ export async function main(argv:string[], raw:NodeJS.ProcessEnv = process.env):P
     const env = loadEnv(raw), { pool } = createDatabase(env.DATABASE_URL);
     try {
       return await importVenuePublicData(pool, manifest, actor, apply, (line) => console.log(JSON.stringify(line)));
+    } finally { await pool.end(); }
+  }
+  if (gallery) {
+    const batch = await loadGalleryBatch(dir, file);
+    const env = loadEnv(raw), { pool } = createDatabase(env.DATABASE_URL);
+    try {
+      const moderation = new ContentModerationService(pool, env, new OpenAIModerationProvider(env));
+      const idempotency = new IdempotencyService(pool, env);
+      const media = new AvatarService(pool, env, new MutationRunner(pool, idempotency, new ActorFenceService(env), env), moderation, idempotency);
+      // No lifecycle hooks: dry-run must not start the collector or write storage.
+      return await importVenueGallery(pool, batch, actor, apply, { media, moderation }, (line) => console.log(JSON.stringify(line)));
     } finally { await pool.end(); }
   }
   const batch=await loadBatch(dir,file);
