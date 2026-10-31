@@ -499,6 +499,7 @@ export function PlayersDirectoryPage({
         unresolved={offers.unresolved}
         onCheckUnresolved={(peerId) => offers.checkStatusReadonly(peerId)}
         className="pb-offer-status--list"
+        presentation={desktop ? "default" : "quietRoutine"}
       />
     )}
     {showCards && desktop ? (

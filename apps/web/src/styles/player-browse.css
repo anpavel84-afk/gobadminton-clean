@@ -1457,16 +1457,17 @@
 }
 /*
  * Mobile fullscreen modal status: out-of-flow overlay in the photo/safe band
- * below chrome/X and above Undo/primary actions. Must not change .pb-surface /
+ * below CloseButton/X and above Undo/primary actions. Must not change .pb-surface /
  * .pb-cover / action baseline when pending/confirmed/UNKNOWN appear.
  * Do not use bottom:~112 — that overlaps controls after an end strip.
+ * quietRoutine hides sending/outgoing/mutual visuals — failed/unknown still show here.
  */
 .pb-mobile-fs .pb-offer-status--modal,
 .gb-player-browse.pb-browse--fs .pb-offer-status--modal {
   position: absolute;
   left: 12px;
   right: 12px;
-  top: calc(56px + env(safe-area-inset-top, 0px));
+  top: calc(52px + env(safe-area-inset-top, 0px));
   bottom: auto;
   z-index: 18;
   margin: 0;
@@ -2089,11 +2090,8 @@ dialog.pb-mobile-fs,
   height: 100dvh;
   max-height: 100dvh;
   margin: 0;
-  padding:
-    env(safe-area-inset-top, 0px)
-    env(safe-area-inset-right, 0px)
-    env(safe-area-inset-bottom, 0px)
-    env(safe-area-inset-left, 0px);
+  /* Fullbleed stage — CloseButton owns safe-area; no in-flow header strip. */
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: var(--pb-ink, #13221a);
@@ -2125,52 +2123,22 @@ dialog.pb-mobile-fs::backdrop {
   overflow: hidden;
 }
 
-.gb-player-browse .pb-fs-chrome {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 52px;
-  padding: 6px 12px 6px 16px;
+/* Mobile FS close: canonical CloseButton overlaid top-right with safe-area. */
+.gb-player-browse.pb-browse--fs .pb-fs-close,
+.pb-mobile-fs .pb-fs-close {
+  position: absolute;
+  z-index: 30;
+  top: max(8px, env(safe-area-inset-top, 0px));
+  right: max(8px, env(safe-area-inset-right, 0px));
+  /* Dark-stage contrast over fullbleed cover; keep 44px glyph contract from CloseButton. */
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--pb-ink, #13221a);
+  box-shadow: 0 4px 16px rgba(8, 18, 12, 0.28);
 }
 
-.gb-player-browse .pb-fs-chrome__meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.gb-player-browse .pb-fs-place {
-  font-size: 11px;
-  color: #b8c8bc;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 55vw;
-}
-
-.gb-player-browse .pb-fs-chrome__tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.gb-player-browse .pb-fs-close {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  border: 0;
-  border-radius: 50%;
-  background: #ffffff14;
-  color: var(--pb-white, #fff);
-  font: 400 28px/1 inherit;
-  cursor: pointer;
-}
-
-.gb-player-browse .pb-fs-close:focus-visible,
+.gb-player-browse.pb-browse--fs .pb-fs-close:focus-visible,
+.pb-mobile-fs .pb-fs-close:focus-visible,
 .gb-player-browse .pb-help:focus-visible {
   outline: 3px solid var(--pb-lime, #a7f447);
   outline-offset: 2px;
@@ -2262,15 +2230,16 @@ dialog.pb-mobile-fs::backdrop {
 }
 
 /*
- * Mobile FS hasMore end: out of normal flex flow so the last visible card keeps
- * full stage height (~611 @ 375×667). Plain end uses .pb-fs-end in chrome.
- * Desktop .pb-deck-end stays in-flow.
+ * Mobile FS end/continue: out of normal flex flow so the last visible card keeps
+ * full stage height (~611 @ 375×667). Plain end uses .pb-fs-end (same overlay band).
+ * Desktop .pb-deck-end stays in-flow. No in-flow header strip.
  */
-.gb-player-browse .pb-deck-end--fs {
+.gb-player-browse .pb-deck-end--fs,
+.gb-player-browse .pb-deck-end.pb-fs-end {
   position: absolute;
   left: 12px;
   right: 12px;
-  top: calc(56px + env(safe-area-inset-top, 0px));
+  top: calc(52px + env(safe-area-inset-top, 0px));
   bottom: auto;
   z-index: 16;
   flex: none;
@@ -2287,7 +2256,7 @@ dialog.pb-mobile-fs::backdrop {
 }
 /* Offer modal owns the top photo band; keep «Загрузить ещё» just under it. */
 .gb-player-browse.pb-browse--fs:has(.pb-offer-status--modal) .pb-deck-end--fs-more {
-  top: calc(56px + min(22vh, 140px) + 10px + env(safe-area-inset-top, 0px));
+  top: calc(52px + min(22vh, 140px) + 10px + env(safe-area-inset-top, 0px));
 }
 
 .gb-player-browse .pb-mobile-stage {
