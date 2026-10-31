@@ -14,6 +14,7 @@ Ordered venue-owned media (max 8) with truthful credit/source/permission evidenc
 - Same gates as cover: `venue.manage`, creator/superadmin, CSRF/Origin/session/fresh step-up, CAS version, idempotent replay reauthorization.
 - Uploads reuse sanitize → stage → verify → ContentModerationService approval/binding and media GC.
 - Admin UI (`VenuePhoto`) supports multi-file queue bounded by `8 − current`, sequential versioned commands, ordered preview, main/reorder/delete, and exact pending replay.
+- **Metadata wire encoding:** `X-Gallery-Credit-Text`, `X-Gallery-Credit-Url`, `X-Gallery-Source-Url`, `X-Gallery-Source-Author`, and `X-Gallery-Permission-Basis` are sent as `encodeURIComponent` ASCII ByteStrings (Fetch `Headers` rejects raw Cyrillic). `parseGalleryEvidenceHeaders` decodes exactly once before semantic validation; malformed encoding, control characters, and multi-value header arrays are rejected. Kind/fingerprint stay plain ASCII; optional empties use the literal token `null`. Decoded Russian text and source URLs are what evidence/fingerprint validation and storage see.
 
 ## Public
 

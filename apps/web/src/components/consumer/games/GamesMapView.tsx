@@ -99,16 +99,19 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const desktop = useDesktopMapInspector();
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const clearVenueSelection = () => { setSelectedVenueId(null); setExpanded(false); };
+  const [galleryIndex, setGalleryIndex] = useState(0);
+  const clearVenueSelection = () => { setSelectedVenueId(null); setExpanded(false); setGalleryIndex(0); };
   // Sync handoff via same-turn CustomEvent: player sheet closes before venue state commits.
   // Desktop opens the right inspector immediately; mobile keeps the compact preview first.
   const selectVenue = (venue: VenueSummary) => {
     window.dispatchEvent(new Event("gb-map-select-venue"));
     setExpanded(desktop);
+    setGalleryIndex(0);
     setSelectedVenueId(venue.id);
   };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
   const selectedCover = useSelectedVenueCover(cityId, selectedVenue);
+  const onGalleryIndexChange = (index: number) => setGalleryIndex(index);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
   useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
   useEffect(() => { setSelectedVenueId(null); setExpanded(false); }, [cityId]);
@@ -153,9 +156,11 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
         {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
         {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
           preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-            gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
+            gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)}
+            galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange} />}>
           <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
+            galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
             onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection} />
         </VenuePopup>}
         {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}

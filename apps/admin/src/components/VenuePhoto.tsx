@@ -80,17 +80,21 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
    setQueue(current=>[...current,...next].slice(0,remaining+queue.length));
   }catch(e){setError(e instanceof Error?e.message:errorMessage(e));}finally{setBusy(false);}
  }
+ function wireMeta(value:string):string{
+  // Fetch Headers require ByteString; encode UTF-8 (incl. Cyrillic) once for the wire.
+  return encodeURIComponent(value);
+ }
  function evidenceHeaders():Record<string,string>{
   const headers:Record<string,string>={
    "X-Gallery-Credit-Kind":evidence.creditKind,
-   "X-Gallery-Credit-Text":evidence.creditText,
-   "X-Gallery-Permission-Basis":evidence.permissionBasis.trim(),
+   "X-Gallery-Credit-Text":wireMeta(evidence.creditText),
+   "X-Gallery-Permission-Basis":wireMeta(evidence.permissionBasis.trim()),
   };
-  if(evidence.creditUrl.trim())headers["X-Gallery-Credit-Url"]=evidence.creditUrl.trim();
+  if(evidence.creditUrl.trim())headers["X-Gallery-Credit-Url"]=wireMeta(evidence.creditUrl.trim());
   else headers["X-Gallery-Credit-Url"]="null";
-  if(evidence.sourceUrl.trim())headers["X-Gallery-Source-Url"]=evidence.sourceUrl.trim();
+  if(evidence.sourceUrl.trim())headers["X-Gallery-Source-Url"]=wireMeta(evidence.sourceUrl.trim());
   else headers["X-Gallery-Source-Url"]="null";
-  if(evidence.sourceAuthor.trim())headers["X-Gallery-Source-Author"]=evidence.sourceAuthor.trim();
+  if(evidence.sourceAuthor.trim())headers["X-Gallery-Source-Author"]=wireMeta(evidence.sourceAuthor.trim());
   else headers["X-Gallery-Source-Author"]="null";
   if(evidence.sourceFingerprint.trim())headers["X-Gallery-Source-Fingerprint"]=evidence.sourceFingerprint.trim().toLowerCase();
   else headers["X-Gallery-Source-Fingerprint"]="null";

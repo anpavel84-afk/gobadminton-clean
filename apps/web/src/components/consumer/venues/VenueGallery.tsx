@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefCallback } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefCallback, type MouseEvent as ReactMouseEvent } from "react";
 import type { Venue, VenueProfile } from "../../../lib/consumer-types";
 import { httpsCreditUrl } from "../../../lib/original-http-authority";
 import { VenueCover, venueCoverUrl } from "./VenueCover";
@@ -35,20 +35,33 @@ function readItems(gallery: Venue["profile"] extends infer P ? P : never, cover?
       if (items.length >= 8) break;
     }
   }
+  // Attributed legacy single cover only — never invent illustration credit for unattributed covers.
   if (items.length === 0) {
     const url = venueCoverUrl(cover?.uploadedUrl);
-    if (url) {
-      const credit = cover?.credit;
-      items.push({
-        id: url,
-        url,
-        credit: credit && (credit.kind === "photo" || credit.kind === "logo" || credit.kind === "illustration")
-          ? credit
-          : { kind: "illustration", text: "Иллюстрация", url: null },
-      });
+    const credit = cover?.credit;
+    if (url && credit && (credit.kind === "photo" || credit.kind === "logo" || credit.kind === "illustration")) {
+      if (credit.kind === "illustration") {
+        if (credit.text === "Иллюстрация" && credit.url == null) {
+          items.push({ id: url, url, credit: { kind: "illustration", text: "Иллюстрация", url: null } });
+        }
+      } else {
+        const href = httpsCreditUrl(credit.url);
+        if (href && typeof credit.text === "string" && credit.text.length <= 120
+          && ((credit.kind === "photo" && credit.text.startsWith("Фото: "))
+            || (credit.kind === "logo" && credit.text.startsWith("Логотип: ")))) {
+          items.push({ id: url, url, credit: { kind: credit.kind, text: credit.text, url: href } });
+        }
+      }
     }
   }
   return items;
+}
+
+function mainIndex(items: GalleryItem[], cover?: Venue["cover"]): number {
+  const mainUrl = venueCoverUrl(cover?.uploadedUrl);
+  if (!mainUrl || items.length === 0) return 0;
+  const index = items.findIndex((item) => item.url === mainUrl);
+  return index >= 0 ? index : 0;
 }
 
 type Drag = { id: number; x: number; y: number; axis: "pending" | "x" | "y" };
@@ -59,6 +72,7 @@ export function VenueGallery({
   size = "sheet",
   coverSlot,
   showCredit = true,
+  index: controlledIndex,
   onIndexChange,
 }: {
   venue: Pick<Venue, "id" | "name" | "cover" | "profile"> | (Pick<Venue, "id" | "name" | "cover"> & { profile?: Venue["profile"] });
@@ -67,25 +81,49 @@ export function VenueGallery({
   /** Reuse SelectedVenueCover morph slot for the current main-matching image. */
   coverSlot?: ReactNode;
   showCredit?: boolean;
+  /** Parent-owned index keeps compact↔expanded selection aligned for one venue. */
+  index?: number;
   onIndexChange?: (index: number, item: GalleryItem | null) => void;
 }) {
   const items = readItems(venue.profile ?? null, venue.cover);
-  const [index, setIndex] = useState(0);
+  const [uncontrolledIndex, setUncontrolledIndex] = useState(() => mainIndex(items, venue.cover));
+  const index = controlledIndex ?? uncontrolledIndex;
+  const notify = useRef(onIndexChange);
+  notify.current = onIndexChange;
+  const commitIndex = (next: number) => {
+    if (controlledIndex !== undefined) {
+      if (controlledIndex === next) return;
+      notify.current?.(next, items[next] ?? null);
+      return;
+    }
+    setUncontrolledIndex(next);
+    notify.current?.(next, items[next] ?? null);
+  };
   const [failed, setFailed] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
+  const suppressClick = useRef(false);
   const labelId = useId();
   const safeIndex = items.length === 0 ? 0 : ((index % items.length) + items.length) % items.length;
   const current = items[safeIndex] ?? null;
   const mainUrl = venueCoverUrl(venue.cover?.uploadedUrl);
   const useMorphSlot = Boolean(coverSlot && current && mainUrl && current.url === mainUrl && failed !== current.url);
 
-  useEffect(() => { setIndex(0); setFailed(null); }, [venue.id]);
   useEffect(() => {
-    if (items.length === 0) { onIndexChange?.(0, null); return; }
+    const next = mainIndex(readItems(venue.profile ?? null, venue.cover), venue.cover);
+    commitIndex(next);
+    setFailed(null);
+    // Reset only when the selected venue identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional venue-id boundary
+  }, [venue.id]);
+
+  useEffect(() => {
+    if (items.length === 0) {
+      if (index !== 0) commitIndex(0);
+      return;
+    }
     const next = Math.min(safeIndex, items.length - 1);
-    if (next !== index) setIndex(next);
-    onIndexChange?.(next, items[next] ?? null);
-  }, [items, safeIndex, index, onIndexChange]);
+    if (next !== index) commitIndex(next);
+  }, [items.length, safeIndex, index]);
 
   useEffect(() => {
     if (items.length < 2) return;
@@ -95,17 +133,17 @@ export function VenueGallery({
       image.decoding = "async";
       image.src = item.url;
     }
-  }, [items, safeIndex]);
+  }, [safeIndex, items.length, current?.id]);
 
   function go(delta: number) {
     if (items.length < 2) return;
-    setIndex((value) => (value + delta + items.length) % items.length);
+    commitIndex((safeIndex + delta + items.length) % items.length);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (items.length < 2) return;
-    if (event.key === "ArrowLeft") { event.preventDefault(); go(-1); }
-    if (event.key === "ArrowRight") { event.preventDefault(); go(1); }
+    if (event.key === "ArrowLeft") { event.preventDefault(); event.stopPropagation(); go(-1); }
+    if (event.key === "ArrowRight") { event.preventDefault(); event.stopPropagation(); go(1); }
   }
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -126,23 +164,39 @@ export function VenueGallery({
         return;
       }
       currentDrag.axis = "x";
+      event.stopPropagation();
     }
-    if (currentDrag.axis === "x") event.preventDefault();
+    if (currentDrag.axis === "x") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }
   function onPointerUp(event: PointerEvent<HTMLDivElement>) {
     const currentDrag = drag.current;
     if (!currentDrag || currentDrag.id !== event.pointerId) return;
     drag.current = null;
     if (currentDrag.axis !== "x") return;
+    event.stopPropagation();
     const dx = event.clientX - currentDrag.x;
-    if (Math.abs(dx) >= SWIPE_THRESHOLD) go(dx < 0 ? 1 : -1);
+    if (Math.abs(dx) >= SWIPE_THRESHOLD) {
+      go(dx < 0 ? 1 : -1);
+      suppressClick.current = true;
+    }
   }
   function onPointerCancel(event: PointerEvent<HTMLDivElement>) {
     if (drag.current?.id === event.pointerId) drag.current = null;
   }
+  function onClickCapture(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!suppressClick.current) return;
+    suppressClick.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }
 
   if (items.length === 0) {
-    return <VenueCover cover={undefined} name={venue.name} className={className} />;
+    // Unattributed legacy cover: keep VenueCover (no invented illustration credit).
+    if (coverSlot && venueCoverUrl(venue.cover?.uploadedUrl)) return <>{coverSlot}</>;
+    return <VenueCover cover={venue.cover} name={venue.name} className={className} />;
   }
 
   const showControls = items.length > 1 && size !== "compact";
@@ -162,6 +216,7 @@ export function VenueGallery({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
       onLostPointerCapture={onPointerCancel}
+      onClickCapture={onClickCapture}
     >
       <span id={labelId} className="gb-sr-only" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>
         Фото площадки {safeIndex + 1} из {items.length}
@@ -180,8 +235,8 @@ export function VenueGallery({
       </div>
       {showControls && <>
         <div className="gb-venue-gallery__nav">
-          <button type="button" aria-label="Предыдущее фото" onClick={() => go(-1)}>←</button>
-          <button type="button" aria-label="Следующее фото" onClick={() => go(1)}>→</button>
+          <button type="button" aria-label="Предыдущее фото" onClick={(event) => { event.stopPropagation(); go(-1); }}>←</button>
+          <button type="button" aria-label="Следующее фото" onClick={(event) => { event.stopPropagation(); go(1); }}>→</button>
         </div>
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>
       </>}

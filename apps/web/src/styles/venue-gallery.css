@@ -1,4 +1,11 @@
 /* Reuses existing cover shell, icon buttons, 16:9 ratio; no new design system. */
+.gb-venue-gallery-wrap { display: block; min-width: 0; }
+.gb-venue-gallery-wrap.gb-venue-cover--thumb,
+.gb-venue-gallery-wrap.gb-venue-preview-cover,
+.gb-venue-gallery-wrap.gb-venue-sheet-cover { width: 100%; height: 100%; }
+.gb-venue-picker-option > .gb-venue-gallery-wrap {
+  width: 64px; height: 64px; justify-self: center;
+}
 .gb-venue-gallery {
   position: relative;
   display: block;

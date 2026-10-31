@@ -16548,7 +16548,8 @@
                 "logo",
                 "illustration"
               ]
-            }
+            },
+            "description": "ASCII enum: photo | logo | illustration. Not percent-encoded."
           },
           {
             "name": "X-Gallery-Credit-Text",
@@ -16556,7 +16557,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Credit-Url",
@@ -16564,7 +16566,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Source-Url",
@@ -16572,7 +16575,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Source-Author",
@@ -16580,7 +16584,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Permission-Basis",
@@ -16588,7 +16593,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Source-Fingerprint",
@@ -16596,7 +16602,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Optional lowercase sha256 hex, or literal token `null`. ASCII only; not percent-encoded."
           },
           {
             "name": "id",
@@ -16876,7 +16883,8 @@
                 "logo",
                 "illustration"
               ]
-            }
+            },
+            "description": "ASCII enum: photo | logo | illustration. Not percent-encoded."
           },
           {
             "name": "X-Gallery-Credit-Text",
@@ -16884,7 +16892,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Credit-Url",
@@ -16892,7 +16901,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Source-Url",
@@ -16900,7 +16910,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Source-Author",
@@ -16908,7 +16919,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Permission-Basis",
@@ -16916,7 +16928,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
           },
           {
             "name": "X-Gallery-Source-Fingerprint",
@@ -16924,7 +16937,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Optional lowercase sha256 hex, or literal token `null`. ASCII only; not percent-encoded."
           },
           {
             "name": "id",

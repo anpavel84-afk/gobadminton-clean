@@ -1,7 +1,7 @@
 "use client";
 import { CloseButton } from "../CloseButton";
 
-import { VenueCover } from "../venues/VenueCover";
+import { VenueGallery } from "../venues/VenueGallery";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent } from "react";
@@ -106,7 +106,8 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
               aria-pressed={selectedId === venue.id}
               onClick={() => onSelect(venue)}
             >
-              <VenueCover className="gb-venue-cover--thumb" cover={venue.cover} name={venue.name} />
+              {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select. */}
+              <VenueGallery venue={venue} size="compact" showCredit={false} className="gb-venue-cover--thumb" />
               <span className="gb-venue-picker-option-copy">
                 <span className="gb-venue-picker-option-name">{venue.name}</span>
                 <span className="gb-venue-picker-option-address">{venue.address}</span>

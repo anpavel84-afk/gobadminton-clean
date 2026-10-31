@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { badRequest } from "../auth/problem";
 import { httpsCreditUrl } from "../lib/original-http-authority";
 
 export const VENUE_GALLERY_MAX = 8;
@@ -150,24 +151,57 @@ export function mapPublicGalleryItem(row: VenueGalleryItemRow & { public_url: st
   };
 }
 
+/**
+ * Admin upload wire: UTF-8 metadata travels as encodeURIComponent ASCII ByteStrings
+ * on X-Gallery-* headers; decode exactly once here before semantic validation.
+ * Literal token "null" remains the explicit empty optional; raw Cyrillic is rejected.
+ */
+export function decodeGalleryHeaderValue(raw: string): string {
+  if (!raw) return raw;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(raw)) {
+    throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata header contains control characters");
+  }
+  if (/[^\x20-\x7e]/.test(raw)) {
+    throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata headers must be ASCII-encoded (encodeURIComponent)");
+  }
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (/[\u0000-\u001f\u007f-\u009f]/.test(decoded)) {
+      throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata header contains control characters");
+    }
+    return decoded;
+  } catch (error) {
+    if (error && typeof error === "object" && "getStatus" in error) throw error;
+    throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata header encoding is malformed");
+  }
+}
+
 export function parseGalleryEvidenceHeaders(headers: Record<string, unknown>): GalleryEvidence {
-  const single = (key: string): string | undefined => {
+  const single = (key: string, decode: boolean): string | undefined => {
     const value = headers[key];
-    return typeof value === "string" ? value : Array.isArray(value) && typeof value[0] === "string" ? value[0] : undefined;
+    if (Array.isArray(value)) {
+      throw badRequest("GALLERY_HEADER_INVALID", "Gallery metadata header must be a single value");
+    }
+    if (typeof value !== "string") return undefined;
+    return decode ? decodeGalleryHeaderValue(value) : value;
   };
-  const optionalNull = (key: string): string | null | undefined => {
-    const value = single(key);
+  const optionalNull = (key: string, decode: boolean): string | null | undefined => {
+    const value = single(key, decode);
     if (value === undefined) return undefined;
     if (value === "" || value === "null") return null;
     return value;
   };
-  return galleryEvidenceSchema.parse({
-    creditKind: single("x-gallery-credit-kind"),
-    creditText: single("x-gallery-credit-text"),
-    creditUrl: optionalNull("x-gallery-credit-url") ?? null,
-    sourceUrl: optionalNull("x-gallery-source-url") ?? null,
-    sourceAuthor: optionalNull("x-gallery-source-author") ?? null,
-    permissionBasis: single("x-gallery-permission-basis"),
-    sourceFingerprint: optionalNull("x-gallery-source-fingerprint") ?? null,
+  const parsed = galleryEvidenceSchema.safeParse({
+    creditKind: single("x-gallery-credit-kind", false),
+    creditText: single("x-gallery-credit-text", true),
+    creditUrl: optionalNull("x-gallery-credit-url", true) ?? null,
+    sourceUrl: optionalNull("x-gallery-source-url", true) ?? null,
+    sourceAuthor: optionalNull("x-gallery-source-author", true) ?? null,
+    permissionBasis: single("x-gallery-permission-basis", true),
+    sourceFingerprint: optionalNull("x-gallery-source-fingerprint", false) ?? null,
   });
+  if (!parsed.success) {
+    throw badRequest("GALLERY_EVIDENCE_INVALID", "Gallery evidence headers failed validation");
+  }
+  return parsed.data;
 }
