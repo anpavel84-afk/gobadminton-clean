@@ -283,7 +283,19 @@ export function validateGameResultsSuccess(
       (record.value === "present" || record.value === "absent");
     if (!baseOk) return false;
     if (body.resolvingDisputeId != null) {
-      return record.dispute == null || record.dispute.status !== "open";
+      const expectedDisputeVersion = asPositiveInt(body.expectedDisputeVersion);
+      if (typeof body.resolvingDisputeId !== "string" || !body.resolvingDisputeId) return false;
+      if (expectedDisputeVersion == null) return false;
+      const receipt = record.resolvedDispute;
+      // Open-dispute summary absence / unrelated withdrawn is NOT proof of exact closure.
+      if (!receipt || typeof receipt !== "object") return false;
+      return (
+        receipt.id === body.resolvingDisputeId &&
+        receipt.status === "resolved" &&
+        receipt.resultingVersion === expectedDisputeVersion + 1 &&
+        receipt.contextId === action.contextId &&
+        receipt.attendanceVersion === attendanceVersion
+      );
     }
     return true;
   }

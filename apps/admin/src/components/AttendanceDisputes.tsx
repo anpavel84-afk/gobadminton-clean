@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { AdminError, adminRequest, type Session } from "../lib/admin-client";
+import { AdminError, adminRequest, isDefiniteAdminFailure, type Session } from "../lib/admin-client";
 
 type DisputeMaterial = {
   caseId: string;
@@ -24,6 +24,57 @@ type DisputeMaterial = {
   allowedActions: { canResolve: boolean };
 };
 
+type ResolveBody = {
+  expectedCaseVersion: number;
+  expectedDisputeVersion: number;
+  expectedAttendanceVersion: number;
+  resolution: keyof typeof resolutions;
+  reason: string;
+  reasonCode: string;
+};
+
+type IntakeBody = {
+  disputeId: string;
+  expectedDisputeVersion: number;
+  reasonCode: string;
+  assignToSelf: true;
+};
+
+type IntakeReceipt = {
+  caseId: string;
+  disputeId: string;
+  disputeVersion: number;
+  caseVersion: number;
+  assignedTo: string;
+};
+
+type ResolveReceipt = {
+  caseId: string;
+  disputeId: string;
+  disputeVersion: number;
+  caseVersion: number;
+  attendanceVersion: number;
+  resolution: keyof typeof resolutions;
+  leavesOpen: boolean;
+  independentlyVerified: boolean;
+};
+
+/** Narrow frozen pending — not a generic state engine. */
+type PendingOp = {
+  kind: "intake" | "resolve";
+  path: string;
+  key: string;
+  body: IntakeBody | ResolveBody;
+  actorPrincipalId: string;
+  target?: { caseId: string; disputeId: string };
+  expectedVersions?: {
+    caseVersion: number;
+    disputeVersion: number;
+    attendanceVersion: number;
+  };
+  resolution?: keyof typeof resolutions;
+};
+
 const resolutions = {
   uphold_current: "Утвердить текущую известную отметку",
   correct_present: "Исправить на «Пришёл»",
@@ -34,6 +85,105 @@ const resolutions = {
 
 const valueLabel = (value: string) =>
   value === "present" ? "Пришёл" : value === "absent" ? "Не пришёл" : "Неизвестно";
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function asNonNegInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function validateIntakeReceipt(
+  raw: unknown,
+  body: IntakeBody,
+  actorPrincipalId: string,
+): IntakeReceipt | null {
+  if (!isObject(raw)) return null;
+  if (typeof raw.caseId !== "string" || !raw.caseId) return null;
+  if (typeof raw.disputeId !== "string" || raw.disputeId !== body.disputeId) return null;
+  if (typeof raw.assignedTo !== "string" || raw.assignedTo !== actorPrincipalId) return null;
+  const disputeVersion = asNonNegInt(raw.disputeVersion);
+  const caseVersion = asNonNegInt(raw.caseVersion);
+  if (disputeVersion !== body.expectedDisputeVersion + 1) return null;
+  if (caseVersion !== 1) return null;
+  return {
+    caseId: raw.caseId,
+    disputeId: raw.disputeId,
+    disputeVersion,
+    caseVersion,
+    assignedTo: raw.assignedTo,
+  };
+}
+
+function expectedAttendanceAfter(resolution: keyof typeof resolutions, expected: number): number {
+  if (resolution === "insufficient_evidence" || resolution === "uphold_current") return expected;
+  return expected + 1;
+}
+
+function validateResolveReceipt(raw: unknown, pending: PendingOp): ResolveReceipt | null {
+  if (pending.kind !== "resolve" || !pending.target || !pending.expectedVersions || !pending.resolution) {
+    return null;
+  }
+  if (!isObject(raw)) return null;
+  const body = pending.body as ResolveBody;
+  if (typeof raw.caseId !== "string" || raw.caseId !== pending.target.caseId) return null;
+  if (typeof raw.disputeId !== "string" || raw.disputeId !== pending.target.disputeId) return null;
+  if (raw.resolution !== pending.resolution || raw.resolution !== body.resolution) return null;
+  const leavesOpen = raw.leavesOpen === true;
+  if (leavesOpen !== (pending.resolution === "insufficient_evidence")) return null;
+  const disputeVersion = asNonNegInt(raw.disputeVersion);
+  const caseVersion = asNonNegInt(raw.caseVersion);
+  const attendanceVersion = asNonNegInt(raw.attendanceVersion);
+  if (disputeVersion !== pending.expectedVersions.disputeVersion + 1) return null;
+  if (caseVersion !== pending.expectedVersions.caseVersion + 1) return null;
+  if (
+    attendanceVersion !==
+    expectedAttendanceAfter(pending.resolution, pending.expectedVersions.attendanceVersion)
+  ) {
+    return null;
+  }
+  if (typeof raw.independentlyVerified !== "boolean") return null;
+  if (leavesOpen && raw.independentlyVerified !== false) return null;
+  return {
+    caseId: raw.caseId,
+    disputeId: raw.disputeId,
+    disputeVersion,
+    caseVersion,
+    attendanceVersion,
+    resolution: pending.resolution,
+    leavesOpen,
+    independentlyVerified: raw.independentlyVerified,
+  };
+}
+
+function rereadMatchesIntake(detail: DisputeMaterial, receipt: IntakeReceipt, actorPrincipalId: string): boolean {
+  return (
+    detail.caseId === receipt.caseId &&
+    detail.dispute.id === receipt.disputeId &&
+    detail.dispute.version === receipt.disputeVersion &&
+    detail.caseVersion === receipt.caseVersion &&
+    detail.assignedTo === actorPrincipalId
+  );
+}
+
+function rereadMatchesResolve(detail: DisputeMaterial, receipt: ResolveReceipt): boolean {
+  if (detail.caseId !== receipt.caseId || detail.dispute.id !== receipt.disputeId) return false;
+  if (detail.dispute.version < receipt.disputeVersion) return false;
+  if (detail.caseVersion < receipt.caseVersion) return false;
+  if (receipt.leavesOpen) {
+    return detail.dispute.status === "open";
+  }
+  // Exact closure at receipt version, or later valid higher versions of the same identities.
+  if (detail.dispute.version === receipt.disputeVersion) {
+    return detail.dispute.status === "resolved";
+  }
+  return detail.dispute.status === "resolved" || detail.dispute.status === "open";
+}
+
+function markUnknown(cause: unknown): boolean {
+  return !isDefiniteAdminFailure(cause);
+}
 
 export function AttendanceDisputes({
   session,
@@ -60,45 +210,79 @@ export function AttendanceDisputes({
   const [confirmed, setConfirmed] = useState(false);
   const [notice, setNotice] = useState("");
   const [uncertain, setUncertain] = useState(false);
-  const [pendingRef, setPendingRef] = useState<{ path: string; key: string; body: object } | null>(null);
+  const [pendingRef, setPendingRef] = useState<PendingOp | null>(null);
 
+  async function readMaterial(nextCaseId: string, nextDisputeId: string): Promise<DisputeMaterial> {
+    return adminRequest<DisputeMaterial>(`cases/${nextCaseId}/attendance-disputes/${nextDisputeId}`);
+  }
+
+  /** Ordinary refresh must not clear a preserved UNKNOWN / frozen pending. */
   async function open(nextCaseId: string, nextDisputeId: string) {
-    setDetail(null);
     setConfirmed(false);
-    setUncertain(false);
-    setNotice("");
-    const next = await adminRequest<DisputeMaterial>(
-      `cases/${nextCaseId}/attendance-disputes/${nextDisputeId}`,
-    );
+    if (!uncertain) setNotice("");
+    const next = await readMaterial(nextCaseId, nextDisputeId);
     setDetail(next);
     setCaseId(next.caseId);
     setDisputeId(next.dispute.id);
   }
 
-  async function intake() {
+  async function intake(retry = false) {
     await run(async () => {
-      const key = crypto.randomUUID();
-      const body = {
-        disputeId: intakeDisputeId.trim(),
-        expectedDisputeVersion: Number(intakeVersion),
-        reasonCode,
-        assignToSelf: true as const,
-      };
-      setPendingRef({ path: "cases/attendance-dispute-intake", key, body });
+      if (!retry && (uncertain || pendingRef)) return;
+      let request: PendingOp | null = null;
+      if (retry) {
+        if (!pendingRef || pendingRef.kind !== "intake") return;
+        if (pendingRef.actorPrincipalId !== session.principalId) {
+          setNotice("Сессия изменилась. Исходное действие не привязываем к другому сотруднику.");
+          return;
+        }
+        request = pendingRef;
+      } else {
+        const body: IntakeBody = {
+          disputeId: intakeDisputeId.trim(),
+          expectedDisputeVersion: Number(intakeVersion),
+          reasonCode,
+          assignToSelf: true,
+        };
+        request = {
+          kind: "intake",
+          path: "cases/attendance-dispute-intake",
+          key: crypto.randomUUID(),
+          body,
+          actorPrincipalId: session.principalId,
+        };
+        setPendingRef(request);
+      }
       try {
         if (!fresh) {
           await stepup();
         }
-        const result = await adminRequest<{ caseId: string; disputeId: string }>(
-          "cases/attendance-dispute-intake",
-          body,
-          session.csrfToken,
-          key,
-        );
-        await open(result.caseId, result.disputeId);
+        const raw = await adminRequest<unknown>(request.path, request.body, session.csrfToken, request.key);
+        const receipt = validateIntakeReceipt(raw, request.body as IntakeBody, session.principalId);
+        if (!receipt) {
+          setUncertain(true);
+          setNotice("Ответ не разобран. Проверим результат того же действия.");
+          return;
+        }
+        const next = await readMaterial(receipt.caseId, receipt.disputeId);
+        if (!rereadMatchesIntake(next, receipt, session.principalId)) {
+          setUncertain(true);
+          setDetail(next);
+          setNotice("Повторное чтение не подтвердило приём. Проверим то же действие.");
+          return;
+        }
+        setDetail(next);
+        setCaseId(next.caseId);
+        setDisputeId(next.dispute.id);
+        setPendingRef(null);
+        setUncertain(false);
         setNotice("Обращение по возражению создано и назначено вам.");
       } catch (cause) {
-        if (cause instanceof AdminError && cause.status >= 500) setUncertain(true);
+        if (markUnknown(cause)) setUncertain(true);
+        else {
+          setPendingRef(null);
+          setUncertain(false);
+        }
         throw cause;
       }
     });
@@ -106,39 +290,78 @@ export function AttendanceDisputes({
 
   async function resolve(retry = false) {
     await run(async () => {
-      if (!detail) return;
-      const request = retry
-        ? pendingRef
-        : {
-            path: `cases/${detail.caseId}/attendance-disputes/${detail.dispute.id}`,
-            key: crypto.randomUUID(),
-            body: {
-              expectedCaseVersion: detail.caseVersion,
-              expectedDisputeVersion: detail.dispute.version,
-              expectedAttendanceVersion: detail.dispute.currentAssertion.version,
-              resolution,
-              reason: reason.trim(),
-              reasonCode,
-            },
-          };
-      if (!request) return;
-      setPendingRef(request);
+      if (!retry && (uncertain || pendingRef)) return;
+      let request: PendingOp | null = null;
+      if (retry) {
+        if (!pendingRef || pendingRef.kind !== "resolve") return;
+        if (pendingRef.actorPrincipalId !== session.principalId) {
+          setNotice("Сессия изменилась. Исходное действие не привязываем к другому сотруднику.");
+          return;
+        }
+        request = pendingRef;
+      } else {
+        if (!detail) return;
+        const body: ResolveBody = {
+          expectedCaseVersion: detail.caseVersion,
+          expectedDisputeVersion: detail.dispute.version,
+          expectedAttendanceVersion: detail.dispute.currentAssertion.version,
+          resolution,
+          reason: reason.trim(),
+          reasonCode,
+        };
+        request = {
+          kind: "resolve",
+          path: `cases/${detail.caseId}/attendance-disputes/${detail.dispute.id}`,
+          key: crypto.randomUUID(),
+          body,
+          actorPrincipalId: session.principalId,
+          target: { caseId: detail.caseId, disputeId: detail.dispute.id },
+          expectedVersions: {
+            caseVersion: detail.caseVersion,
+            disputeVersion: detail.dispute.version,
+            attendanceVersion: detail.dispute.currentAssertion.version,
+          },
+          resolution,
+        };
+        setPendingRef(request);
+      }
+      const frozenResolution = request.resolution ?? (request.body as ResolveBody).resolution;
       try {
         if (!fresh) await stepup();
-        await adminRequest(request.path, request.body, session.csrfToken, request.key);
-        await open(detail.caseId, detail.dispute.id);
+        const raw = await adminRequest<unknown>(request.path, request.body, session.csrfToken, request.key);
+        const receipt = validateResolveReceipt(raw, request);
+        if (!receipt) {
+          setUncertain(true);
+          setNotice("Ответ не подтвердил решение. Проверим результат того же действия.");
+          return;
+        }
+        const next = await readMaterial(receipt.caseId, receipt.disputeId);
+        if (!rereadMatchesResolve(next, receipt)) {
+          setUncertain(true);
+          setDetail(next);
+          setNotice("Повторное чтение не подтвердило решение. Проверим то же действие.");
+          return;
+        }
+        setDetail(next);
+        setCaseId(next.caseId);
+        setDisputeId(next.dispute.id);
         setReason("");
         setConfirmed(false);
+        setPendingRef(null);
+        setUncertain(false);
         setNotice(
-          resolution === "insufficient_evidence"
+          frozenResolution === "insufficient_evidence"
             ? "Спор оставлен открытым: недостаточно данных. independently_verified не выставлялся."
             : "Решение зафиксировано.",
         );
       } catch (cause) {
-        if (cause instanceof AdminError && cause.status < 500) {
+        if (cause instanceof AdminError && isDefiniteAdminFailure(cause)) {
           setConfirmed(false);
+          setPendingRef(null);
+          setUncertain(false);
           if (cause.code === "CASE_VERSION_CONFLICT" || cause.code === "VERSION_CONFLICT") {
-            await open(detail.caseId, detail.dispute.id);
+            const target = request.target;
+            if (target) await open(target.caseId, target.disputeId);
           }
           if ([401, 403, 404].includes(cause.status)) setDetail(null);
         } else setUncertain(true);
@@ -147,9 +370,22 @@ export function AttendanceDisputes({
     });
   }
 
+  async function recover() {
+    if (!pendingRef) return;
+    if (pendingRef.kind === "intake") {
+      await intake(true);
+      return;
+    }
+    await resolve(true);
+  }
+
   const locked = busy || uncertain;
   const validReason = reason.trim().length >= 1 && reason.trim().length <= 500;
   const validCode = /^[a-z][a-z0-9_]{2,63}$/.test(reasonCode);
+  const retryResolution =
+    pendingRef?.kind === "resolve"
+      ? pendingRef.resolution ?? (pendingRef.body as ResolveBody).resolution
+      : null;
 
   return (
     <section className="attendance-disputes">
@@ -224,8 +460,12 @@ export function AttendanceDisputes({
       ) : null}
       {uncertain ? (
         <div className="notice danger">
-          <p>Ответ не получен. Проверим результат того же действия.</p>
-          <button className="button outline" disabled={busy} onClick={() => void resolve(true)}>
+          <p>
+            Ответ не получен. Проверим результат того же действия
+            {retryResolution ? ` («${resolutions[retryResolution]}»)` : pendingRef?.kind === "intake" ? " (приём возражения)" : ""}
+            .
+          </p>
+          <button className="button outline" disabled={busy} onClick={() => void recover()}>
             Повторить проверку действия
           </button>
         </div>

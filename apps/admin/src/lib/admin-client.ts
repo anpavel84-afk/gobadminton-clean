@@ -4,6 +4,17 @@ export type Session = { principalId: string; userId: string; status: string; ver
 export class AdminError extends Error {
   constructor(public readonly code: string, public readonly status: number) { super(code); }
 }
+/** Authorized 4xx that settle the attempt — distinct from transport/timeout/5xx/malformed UNKNOWN. */
+export function isDefiniteAdminFailure(error: unknown): boolean {
+  return (
+    error instanceof AdminError &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429 &&
+    error.code !== "ADMIN_UPSTREAM_UNAVAILABLE" &&
+    error.code !== "ADMIN_STEP_UP_REQUIRED"
+  );
+}
 export async function adminRequest<T>(path: string, body?: unknown, csrf?: string, key?: string): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";

@@ -9,7 +9,7 @@ Owner visuals approved 2026-11-01; product model OWNER_CONFIRMED. Freeze matches
 |---|---|---|
 | `POST /attendance-disputes/{id}/responses` | current manager | Explanation; optional correction present/absent/unknown. **Never closes** open dispute. |
 | `POST /attendance-disputes/{id}/help` | subject participant | Escalation **progress** only — not abuse_report, not staff assignment. |
-| `POST .../acknowledgements` | subject | Optional `resolvingDisputeId` + `expectedDisputeVersion` closes own open objection after accepting **current known** assertion. Unknown cannot ACK. |
+| `POST .../acknowledgements` | subject | Optional `resolvingDisputeId` + `expectedDisputeVersion` closes own open objection after accepting **current known** assertion. Response includes optional ACK-only `resolvedDispute` receipt (`id`, `resultingVersion=expected+1`, `status=resolved`, `contextId`, `attendanceVersion`) when that exact dispute closed in-transaction. Absence of open-dispute summary is **not** closure proof. Unknown cannot ACK. |
 | `PUT .../attendance/{contextId}` | manager | Additive `unknown` value only as correction (version ≥ 1) with reason. |
 
 ## Admin (existing audience / step-up / assignment)

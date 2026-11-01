@@ -17619,7 +17619,7 @@
           "Games"
         ],
         "summary": "Acknowledge own attendance notice for exact version",
-        "description": "PG-1b/PG-2. Self only. Explicit accept of current known assertion. Optional resolvingDisputeId+expectedDisputeVersion closes own open objection. Unknown cannot be acknowledged. Silence never writes.",
+        "description": "PG-1b/PG-2. Self only. Explicit accept of current known assertion. Optional resolvingDisputeId+expectedDisputeVersion closes own open objection and returns resolvedDispute receipt bound to that id/version/context/attendance. Open-dispute summary alone is not closure proof. Unknown cannot be acknowledged. Silence never writes.",
         "security": [
           {
             "cookieSession": []
@@ -18479,7 +18479,24 @@
         "description": "PG-2. Existing admin audience, step-up, case.manage. Links game source_kind + unique dispute→case mapping. Assigns to current actor.",
         "security": [
           {
-            "adminCookieSession": []
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "description": "Bound to Admin ticket or session; consumer CSRF rejected."
           }
         ],
         "requestBody": {
@@ -18530,9 +18547,10 @@
         "description": "PG-2. case.manage or case.assigned.manage with assignment. Safe projection — no raw staff evidence/principal IDs beyond assignment, no private contacts.",
         "security": [
           {
-            "adminCookieSession": []
+            "AdminSessionCookie": []
           }
         ],
+        "x-client-surface": "admin-only",
         "parameters": [
           {
             "name": "caseId",
@@ -18589,9 +18607,10 @@
         "description": "PG-2. Fresh step-up + assignment + exact versions. Server derives reviewer provenance. insufficient_evidence leaves dispute OPEN. Consumer cannot call.",
         "security": [
           {
-            "adminCookieSession": []
+            "AdminSessionCookie": []
           }
         ],
+        "x-client-surface": "admin-only",
         "parameters": [
           {
             "name": "caseId",
@@ -18610,6 +18629,20 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "description": "Bound to Admin ticket or session; consumer CSRF rejected."
           }
         ],
         "requestBody": {
@@ -29777,6 +29810,42 @@
           }
         }
       },
+      "AttendanceResolvedDisputeReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "resultingVersion",
+          "status",
+          "contextId",
+          "attendanceVersion"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resultingVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved"
+            ]
+          },
+          "contextId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attendanceVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "ACK-only authoritative receipt when resolvingDisputeId+expectedDisputeVersion closed that dispute in the same transaction. Not part of ordinary reads; absence of open-dispute summary is not proof of closure."
+      },
       "AttendanceRecordAllowedActions": {
         "type": "object",
         "additionalProperties": false,
@@ -29869,6 +29938,9 @@
           },
           "allowedActions": {
             "$ref": "#/components/schemas/AttendanceRecordAllowedActions"
+          },
+          "resolvedDispute": {
+            "$ref": "#/components/schemas/AttendanceResolvedDisputeReceipt"
           }
         }
       },

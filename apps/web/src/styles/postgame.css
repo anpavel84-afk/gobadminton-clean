@@ -133,6 +133,23 @@
   justify-content: space-between;
 }
 
+.gb-postgame__dispute-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gb-postgame__dispute-picks > button {
+  border: 1px solid var(--gb-line);
+  background: var(--gb-white);
+  cursor: pointer;
+  font: inherit;
+}
+
+.gb-postgame__dispute-picks > button[aria-pressed="true"] {
+  border-color: var(--gb-ink);
+}
+
 .gb-postgame__side-by-side {
   display: grid;
   gap: 10px;

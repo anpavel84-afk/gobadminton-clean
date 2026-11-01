@@ -324,6 +324,13 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
     expect(ack.statusCode).toBe(200);
     expect(ack.json().dispute).toBeNull();
     expect(ack.json().acknowledgedVersion).toBe(4);
+    expect(ack.json().resolvedDispute).toEqual({
+      id: disputeId,
+      resultingVersion: 6,
+      status: "resolved",
+      contextId,
+      attendanceVersion: 4,
+    });
 
     const replay = await post(
       participant,
@@ -333,6 +340,13 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
     );
     expect(replay.statusCode).toBe(200);
     expect(replay.json().acknowledgedVersion).toBe(4);
+    expect(replay.json().resolvedDispute).toEqual({
+      id: disputeId,
+      resultingVersion: 6,
+      status: "resolved",
+      contextId,
+      attendanceVersion: 4,
+    });
 
     const notices = await pool.query(
       `SELECT count(*)::int AS n FROM game_attendance_notices WHERE participation_id=$1`,

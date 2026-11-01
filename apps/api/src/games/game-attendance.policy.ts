@@ -172,6 +172,15 @@ export type AttendanceDisputeSummary = {
   version: number;
 };
 
+/** ACK-only authoritative receipt when resolvingDisputeId was requested and resolved in-transaction. */
+export type AttendanceResolvedDisputeReceipt = {
+  id: string;
+  resultingVersion: number;
+  status: "resolved";
+  contextId: string;
+  attendanceVersion: number;
+};
+
 export type AttendanceAllowedActions = {
   canSetAttendance: boolean;
   canAcknowledge: boolean;
@@ -191,6 +200,8 @@ export type AttendanceRecordView = {
   dispute: AttendanceDisputeSummary | null;
   displayName: string;
   allowedActions: AttendanceAllowedActions;
+  /** Present only on ACK responses that closed the exact requested dispute. */
+  resolvedDispute?: AttendanceResolvedDisputeReceipt;
 };
 
 export type AttendanceSummary = {

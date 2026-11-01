@@ -19,7 +19,9 @@ import {
   attendanceLabel,
   attendanceSourceLabel,
   canOfferAttendanceWrites,
+  defaultOpenDisputeId,
   formatGameDateBadge,
+  listOpenAttendanceDisputes,
 } from "../../../lib/game-results";
 import type { AttendanceDispute } from "../../../lib/consumer-types";
 import { Button } from "../Button";
@@ -100,6 +102,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeText, setDisputeText] = useState("");
   const [disputeDetail, setDisputeDetail] = useState<AttendanceDispute | null>(null);
+  const [selectedDisputeId, setSelectedDisputeId] = useState<string | null>(null);
   const [responseText, setResponseText] = useState("");
   const [responseValue, setResponseValue] = useState<AttendanceValue>("present");
   const [responseLate, setResponseLate] = useState(false);
@@ -112,8 +115,20 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [outcomeValue, setOutcomeValue] = useState<"held" | "not_held">("held");
   const [outcomeReason, setOutcomeReason] = useState("");
   const epoch = useRef(0);
+  const disputeFetchGen = useRef(0);
+  const selectedDisputeRef = useRef<string | null>(null);
   const actorRef = useRef<string | null>(null);
   actorRef.current = me?.id ?? null;
+  selectedDisputeRef.current = selectedDisputeId;
+
+  function resetResponseDraft() {
+    setResponseText("");
+    setResponseValue("present");
+    setResponseLate(false);
+    setResponseReason("");
+    setResponseCorrect(false);
+    setHelpText("");
+  }
 
   function clearSensitiveUi() {
     setResults(null);
@@ -124,15 +139,26 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setDisputeOpen(false);
     setDisputeText("");
     setDisputeDetail(null);
-    setResponseText("");
-    setResponseReason("");
-    setResponseCorrect(false);
-    setHelpText("");
+    setSelectedDisputeId(null);
+    selectedDisputeRef.current = null;
+    resetResponseDraft();
     setHistoryOpen(false);
     setHistoryLines([]);
     setOutcomeOpen(false);
     setNotice(null);
     setError(null);
+  }
+
+  async function loadDisputeDetail(disputeId: string, opts?: { resetDraft?: boolean }) {
+    const gen = ++disputeFetchGen.current;
+    selectedDisputeRef.current = disputeId;
+    setSelectedDisputeId(disputeId);
+    if (opts?.resetDraft) resetResponseDraft();
+    const detail = await getAttendanceDispute(disputeId);
+    // Fence late fetch A after selecting B — do not adopt stale detail or clear UNKNOWN of A.
+    if (gen !== disputeFetchGen.current || selectedDisputeRef.current !== disputeId) return;
+    if (actorRef.current == null) return;
+    setDisputeDetail(detail.ok ? detail.data : null);
   }
 
   async function reload() {
@@ -175,17 +201,23 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setResults(resultsRes.data);
     // Public getGame may 404 while authorized own results remain usable.
     setGame(gameRes.ok ? gameRes.data : null);
-    const openDisputeId =
-      resultsRes.data.attendance?.myAttendance?.dispute?.status === "open"
-        ? resultsRes.data.attendance.myAttendance.dispute.id
-        : resultsRes.data.attendance?.roster?.find((row) => row.dispute?.status === "open")?.dispute
-            ?.id;
-    if (openDisputeId) {
-      const detail = await getAttendanceDispute(openDisputeId);
+    const openList = listOpenAttendanceDisputes(resultsRes.data);
+    const preferred =
+      selectedDisputeRef.current && openList.some((item) => item.disputeId === selectedDisputeRef.current)
+        ? selectedDisputeRef.current
+        : defaultOpenDisputeId(resultsRes.data);
+    if (preferred) {
+      const gen = ++disputeFetchGen.current;
+      selectedDisputeRef.current = preferred;
+      setSelectedDisputeId(preferred);
+      const detail = await getAttendanceDispute(preferred);
       if (request !== epoch.current) return;
       if (actorRef.current && actorRef.current !== account.data.id) return;
+      if (gen !== disputeFetchGen.current || selectedDisputeRef.current !== preferred) return;
       setDisputeDetail(detail.ok ? detail.data : null);
     } else {
+      setSelectedDisputeId(null);
+      selectedDisputeRef.current = null;
       setDisputeDetail(null);
     }
     setState("ready");
@@ -226,9 +258,16 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     const writes = canOfferAttendanceWrites(results);
     const isManager = Boolean(results?.attendance?.roster);
     const my = results?.attendance?.myAttendance ?? null;
+    const openDisputes = listOpenAttendanceDisputes(results);
+    const selectedOpen = openDisputes.find((item) => item.disputeId === selectedDisputeId) ?? null;
     const busy = mutation.busy;
     const unknownOp = mutation.pending;
     const displayNotice = notice ?? (mutation.notice || null);
+
+    function selectOpenDispute(disputeId: string) {
+      setTab("clarification");
+      void loadDisputeDetail(disputeId, { resetDraft: true });
+    }
 
     function runWrite(path: string, body: object, method: string): boolean {
       if (!me || unknownOp || busy) return false;
@@ -436,7 +475,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
               aria-selected={tab === "clarification"}
               onClick={() => setTab("clarification")}
             >
-              Уточнение{my?.dispute?.status === "open" ? " · 1" : ""}
+              Уточнение{openDisputes.length > 0 ? ` · ${openDisputes.length}` : ""}
             </button>
             <button type="button" role="tab" aria-selected={tab === "feedback"} onClick={() => setTab("feedback")}>
               Обратная связь
@@ -521,26 +560,39 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                             {attendanceLabel(row.value)}
                             {row.late ? " · опоздание" : ""}
                           </span>
-                          {writes && row.allowedActions.canSetAttendance ? (
-                            <Button
-                              variant="outline"
-                              disabled={busy || unknownOp}
-                              onClick={() => {
-                                setMarkTarget({ record: row, mode: "single" });
-                                setMarkValue(
-                                  row.value === "absent"
-                                    ? "absent"
-                                    : row.value === "unknown"
-                                      ? "present"
-                                      : "present",
-                                );
-                                setMarkLate(row.late);
-                                setMarkReason("");
-                              }}
-                            >
-                              Изменить
-                            </Button>
-                          ) : null}
+                          <div className="gb-postgame__actions">
+                            {row.dispute?.status === "open" &&
+                            (row.allowedActions.canRespondDispute || writes) ? (
+                              <Button
+                                variant="outline"
+                                disabled={busy}
+                                aria-pressed={selectedDisputeId === row.dispute.id}
+                                onClick={() => selectOpenDispute(row.dispute!.id)}
+                              >
+                                {selectedDisputeId === row.dispute.id ? "Выбрано уточнение" : "Открыть уточнение"}
+                              </Button>
+                            ) : null}
+                            {writes && row.allowedActions.canSetAttendance ? (
+                              <Button
+                                variant="outline"
+                                disabled={busy || unknownOp}
+                                onClick={() => {
+                                  setMarkTarget({ record: row, mode: "single" });
+                                  setMarkValue(
+                                    row.value === "absent"
+                                      ? "absent"
+                                      : row.value === "unknown"
+                                        ? "present"
+                                        : "present",
+                                  );
+                                  setMarkLate(row.late);
+                                  setMarkReason("");
+                                }}
+                              >
+                                Изменить
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -619,16 +671,50 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
               <div className="gb-postgame__main">
                 <SurfacePanel tone="bordered" className="gb-postgame__panel">
                   <div className="gb-postgame__clarify-head">
-                    <SectionHeader title="Давайте уточним" eyebrow="Посещение · ваша отметка" />
+                    <SectionHeader
+                      title="Давайте уточним"
+                      eyebrow={
+                        isManager && selectedOpen
+                          ? `Посещение · ${selectedOpen.displayName}`
+                          : "Посещение · ваша отметка"
+                      }
+                    />
                     {(my?.dispute?.status === "open" || disputeDetail?.status === "open") && (
                       <p className="gb-postgame__pill" data-tone="wait">На уточнении</p>
                     )}
                   </div>
-                  {disputeDetail && (my?.dispute || isManager) ? (
+                  {isManager && openDisputes.length > 1 ? (
+                    <div className="gb-postgame__dispute-picks" role="group" aria-label="Открытые уточнения">
+                      {openDisputes.map((item) => (
+                        <button
+                          key={item.disputeId}
+                          type="button"
+                          className="gb-postgame__pill"
+                          data-tone={selectedDisputeId === item.disputeId ? "wait" : undefined}
+                          data-value={item.value}
+                          aria-pressed={selectedDisputeId === item.disputeId}
+                          disabled={busy}
+                          onClick={() => selectOpenDispute(item.disputeId)}
+                        >
+                          {item.displayName}
+                          {selectedDisputeId === item.disputeId ? " · выбрано" : ""}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {disputeDetail &&
+                  selectedDisputeId === disputeDetail.id &&
+                  (my?.dispute?.id === disputeDetail.id || isManager) ? (
                     <>
+                      {selectedOpen ? (
+                        <p>
+                          Участник: <strong>{selectedOpen.displayName}</strong>. Оспаривается v
+                          {selectedOpen.challengedVersion}; сейчас «{attendanceLabel(selectedOpen.value)}».
+                        </p>
+                      ) : null}
                       <p>
                         Вопрос к прежней отметке. Сейчас: «
-                        {attendanceLabel(disputeDetail.currentAssertion?.value ?? my?.value ?? "unknown")}», версия{" "}
+                        {attendanceLabel(disputeDetail.currentAssertion?.value ?? selectedOpen?.value ?? my?.value ?? "unknown")}», версия{" "}
                         {disputeDetail.currentAssertion?.version ?? my?.version ?? "—"}.
                       </p>
                       <div className="gb-postgame__side-by-side">
@@ -652,7 +738,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                         </div>
                       </div>
                       <div className="gb-postgame__quote" data-tone="party">
-                        <strong>{my?.displayName ?? "Участник"}</strong>
+                        <strong>{selectedOpen?.displayName ?? my?.displayName ?? "Участник"}</strong>
                         <p>{disputeDetail.explanation}</p>
                       </div>
                       {disputeDetail.latestManagerResponse ? (

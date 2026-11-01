@@ -851,6 +851,15 @@ export class GameAttendanceService {
             [notice.id],
           );
         }
+        let resolvedDispute:
+          | {
+              id: string;
+              resultingVersion: number;
+              status: "resolved";
+              contextId: string;
+              attendanceVersion: number;
+            }
+          | undefined;
         if (body.resolvingDisputeId && body.expectedDisputeVersion !== undefined) {
           const dispute = (
             await client.query<{
@@ -872,14 +881,24 @@ export class GameAttendanceService {
           ) {
             unavailable();
           }
+          const resultingVersion = body.expectedDisputeVersion + 1;
           if (dispute.status === "resolved") {
-            // Idempotent same-key path may replay; already resolved is fine when versions match.
+            // Same-key replay / already closed at the exact requested transition.
+            if (dispute.version !== resultingVersion) {
+              throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
+            }
+            resolvedDispute = {
+              id: dispute.id,
+              resultingVersion,
+              status: "resolved",
+              contextId: participation.id,
+              attendanceVersion: body.attendanceVersion,
+            };
           } else if (dispute.status !== "open") {
             throw conflict("DISPUTE_NOT_OPEN", "Возражение уже закрыто");
           } else if (dispute.version !== body.expectedDisputeVersion) {
             throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
           } else {
-            const nextVersion = dispute.version + 1;
             await client.query(
               `UPDATE game_attendance_disputes
                SET status = 'resolved',
@@ -892,14 +911,21 @@ export class GameAttendanceService {
                    END,
                    updated_at = clock_timestamp()
                WHERE id = $1`,
-              [dispute.id, nextVersion],
+              [dispute.id, resultingVersion],
             );
             await client.query(
               `INSERT INTO game_attendance_dispute_revisions
                  (dispute_id, resource_version, actor_user_id, action, explanation)
                VALUES ($1, $2, $3, 'party_acknowledged', $4)`,
-              [dispute.id, nextVersion, userId, "Участник подтвердил текущую отметку"],
+              [dispute.id, resultingVersion, userId, "Участник подтвердил текущую отметку"],
             );
+            resolvedDispute = {
+              id: dispute.id,
+              resultingVersion,
+              status: "resolved",
+              contextId: participation.id,
+              attendanceVersion: body.attendanceVersion,
+            };
           }
         }
         const displayName = await this.displayName(client, participation.user_id);
@@ -916,7 +942,10 @@ export class GameAttendanceService {
           true,
           false,
         );
-        return { statusCode: 200, body: view };
+        return {
+          statusCode: 200,
+          body: resolvedDispute ? { ...view, resolvedDispute } : view,
+        };
       },
     });
   }

@@ -409,6 +409,15 @@ export type AttendanceDisputeHelpProgress =
   | "resolved"
   | "left_open_insufficient_evidence";
 
+/** ACK-only receipt when the exact resolving dispute closed in the same transaction. */
+export type AttendanceResolvedDisputeReceipt = {
+  id: string;
+  resultingVersion: number;
+  status: "resolved";
+  contextId: string;
+  attendanceVersion: number;
+};
+
 export type AttendanceRecord = {
   contextId: string;
   value: AttendanceProjectionValue;
@@ -435,6 +444,8 @@ export type AttendanceRecord = {
     canRespondDispute?: boolean;
     canRequestHelp?: boolean;
   };
+  /** Optional; only on ACK responses that resolved the requested dispute. */
+  resolvedDispute?: AttendanceResolvedDisputeReceipt;
 };
 
 export type GameAttendanceSlice = {
