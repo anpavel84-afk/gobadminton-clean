@@ -9,8 +9,9 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AuthModule } from "../../src/auth/auth.module";
-import { EMAIL_BINDING_COOKIE, SESSION_COOKIE } from "../../src/auth/constants";
+import { SESSION_COOKIE } from "../../src/auth/constants";
 import { deliverEmail } from "../../src/auth/email-delivery";
+import { EMAIL_BINDING_COOKIE } from "../../src/auth/email-security";
 import { FakeMailTransport } from "../../src/auth/mail-transport";
 import { AUTH_PROVIDER_OVERRIDES } from "../../src/auth/providers/registry";
 import type {
@@ -21,6 +22,7 @@ import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { createDatabase } from "../../src/database/client";
+import { DEMO_ISSUER_NAMESPACE } from "../../src/database/demo-ids";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
 import { SafetyModule } from "../../src/safety/safety.module";
 import {
@@ -425,5 +427,182 @@ run("Owner #448 social profile defaults", () => {
       cookies: { [SESSION_COOKIE]: issued.sessionToken },
     });
     expect(restricted.statusCode).toBe(404);
+  });
+
+  it("ensure normalizes email-shaped automatic name; never fabricates consent", async () => {
+    const userId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO users(display_name,locale) VALUES($1,'ru') RETURNING id",
+        ["mailbox.user@example.test"],
+      )
+    ).rows[0]!.id;
+    await ensureDefaultSocialProfile(pool, {
+      userId,
+      displayName: "mailbox.user@example.test",
+    });
+    const row = await pool.query<{
+      display_name: string;
+      city_id: string | null;
+      consent_policy_version: string | null;
+      opted_in_at: Date | null;
+      directory_visibility_provenance: string;
+    }>(
+      `SELECT display_name, city_id, consent_policy_version, opted_in_at,
+              directory_visibility_provenance
+       FROM player_social_profiles WHERE user_id=$1`,
+      [userId],
+    );
+    expect(row.rows[0]).toMatchObject({
+      display_name: SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+      city_id: null,
+      consent_policy_version: null,
+      opted_in_at: null,
+      directory_visibility_provenance: DIRECTORY_VISIBILITY_PROVENANCE.OWNER_DEFAULT,
+    });
+  });
+
+  it("scoped demo/pristine enable is CAS-once; modified and explicit OFF stay off", async () => {
+    // Demo-shaped private closed fixture (operator cohort identity guards).
+    const demoUserId = "d0f00001-0000-4000-8000-00000000a448";
+    await pool.query("DELETE FROM player_social_profiles WHERE user_id=$1", [
+      demoUserId,
+    ]);
+    await pool.query("DELETE FROM external_identities WHERE user_id=$1", [
+      demoUserId,
+    ]);
+    await pool.query("DELETE FROM users WHERE id=$1", [demoUserId]);
+    await pool.query(
+      `INSERT INTO users(id, display_name, locale, status)
+       VALUES($1,'Demo Private 448','ru','active')`,
+      [demoUserId],
+    );
+    await pool.query(
+      `INSERT INTO external_identities
+         (id, user_id, provider_key, issuer_namespace, subject, email, display_name)
+       VALUES($1,$2,'vk',$3,'s448-demo-private',NULL,'Demo Private 448')`,
+      [
+        "d0f00002-0000-4000-8000-00000000a448",
+        demoUserId,
+        DEMO_ISSUER_NAMESPACE,
+      ],
+    );
+    await pool.query(
+      `INSERT INTO player_social_profiles (
+         user_id, display_name, directory_visible, contact_policy,
+         directory_visibility_provenance, social_eligible, version, social_action_epoch
+       ) VALUES ($1,'Demo Private 448', false, 'closed', $2, false, 1, 1)`,
+      [demoUserId, DIRECTORY_VISIBILITY_PROVENANCE.LEGACY],
+    );
+
+    const enableDemoSql = `
+      UPDATE player_social_profiles AS p
+      SET directory_visible = true,
+          contact_policy = 'requests',
+          directory_visibility_provenance = CASE
+            WHEN p.directory_visible = true
+              AND p.consent_policy_version IS NOT NULL
+              AND p.opted_in_at IS NOT NULL
+              THEN 'user_consent'
+            ELSE 'owner_default'
+          END,
+          version = p.version + 1,
+          updated_at = now()
+      WHERE p.user_id::text ~* '^d0f00001-0000-4000-8000-[0-9a-f]{12}$'
+        AND p.version = 1
+        AND p.social_action_epoch = 1
+        AND (p.directory_visible = false OR p.contact_policy = 'closed')
+        AND EXISTS (
+          SELECT 1 FROM external_identities ei
+          WHERE ei.user_id = p.user_id
+            AND ei.issuer_namespace = '${DEMO_ISSUER_NAMESPACE}'
+        )
+        AND p.user_id = $1`;
+    const first = await pool.query(enableDemoSql, [demoUserId]);
+    expect(first.rowCount).toBe(1);
+    const afterDemo = await pool.query<{
+      directory_visible: boolean;
+      contact_policy: string;
+      social_eligible: boolean;
+      version: number;
+      social_action_epoch: string;
+      directory_visibility_provenance: string;
+    }>(
+      `SELECT directory_visible, contact_policy, social_eligible, version,
+              social_action_epoch::text, directory_visibility_provenance
+       FROM player_social_profiles WHERE user_id=$1`,
+      [demoUserId],
+    );
+    expect(afterDemo.rows[0]).toMatchObject({
+      directory_visible: true,
+      contact_policy: "requests",
+      social_eligible: false,
+      version: 2,
+      social_action_epoch: "1",
+      directory_visibility_provenance: DIRECTORY_VISIBILITY_PROVENANCE.OWNER_DEFAULT,
+    });
+    const repeat = await pool.query(enableDemoSql, [demoUserId]);
+    expect(repeat.rowCount).toBe(0);
+
+    // Pristine non-demo hidden (contact stays requests; directory enables once).
+    const pristineId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO users(display_name,locale) VALUES('Pristine Hidden','ru') RETURNING id",
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO player_social_profiles (
+         user_id, display_name, directory_visible, contact_policy,
+         directory_visibility_provenance, version, social_action_epoch
+       ) VALUES ($1,'Pristine Hidden', false, 'requests', $2, 1, 1)`,
+      [pristineId, DIRECTORY_VISIBILITY_PROVENANCE.LEGACY],
+    );
+    const enablePristineSql = `
+      UPDATE player_social_profiles AS p
+      SET directory_visible = true,
+          directory_visibility_provenance = 'owner_default',
+          version = p.version + 1,
+          updated_at = now()
+      WHERE p.user_id = $1
+        AND p.directory_visible = false
+        AND p.directory_visibility_provenance = 'legacy'
+        AND p.version = 1
+        AND p.social_action_epoch = 1
+        AND p.consent_policy_version IS NULL
+        AND p.opted_in_at IS NULL
+        AND p.user_id::text !~* '^d0f00001-0000-4000-8000-[0-9a-f]{12}$'`;
+    expect((await pool.query(enablePristineSql, [pristineId])).rowCount).toBe(1);
+    expect((await pool.query(enablePristineSql, [pristineId])).rowCount).toBe(0);
+
+    // Modified / explicit OFF must not be re-enabled by ensure or version=1 CAS.
+    const modifiedId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO users(display_name,locale) VALUES('Modified Off','ru') RETURNING id",
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO player_social_profiles (
+         user_id, display_name, directory_visible, contact_policy,
+         directory_visibility_provenance, version, social_action_epoch
+       ) VALUES ($1,'Modified Off', false, 'closed', $2, 26, 1)`,
+      [modifiedId, DIRECTORY_VISIBILITY_PROVENANCE.USER_OPT_OUT],
+    );
+    await ensureDefaultSocialProfile(pool, {
+      userId: modifiedId,
+      displayName: "Should Not Win",
+    });
+    expect((await pool.query(enablePristineSql, [modifiedId])).rowCount).toBe(0);
+    expect((await pool.query(enableDemoSql, [modifiedId])).rowCount).toBe(0);
+    const retained = await pool.query(
+      `SELECT directory_visible, contact_policy, directory_visibility_provenance, version, display_name
+       FROM player_social_profiles WHERE user_id=$1`,
+      [modifiedId],
+    );
+    expect(retained.rows[0]).toMatchObject({
+      directory_visible: false,
+      contact_policy: "closed",
+      directory_visibility_provenance: DIRECTORY_VISIBILITY_PROVENANCE.USER_OPT_OUT,
+      version: 26,
+      display_name: "Modified Off",
+    });
   });
 });
