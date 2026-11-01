@@ -29,16 +29,19 @@ DEV install of the same application version used worker-fix source `84ced…`
   (accepted `2026-11-01T15:08:02Z`).
 - Owner UAT: NOT_TESTED; PROD unchanged.
 
-## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 candidate)
+## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 DEV ACCEPTED)
 
-Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. Runtime writes remain default OFF. **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 final DEV record retained below.
+Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. DEV accepted source `7a36b8d94a5df412426155e5852fddd9da7b0045`, PR `#441`, Product CI `41310154224` 7/7, release `r41310911419-a1`, accepted `2026-11-01T13:34:38Z`. Postgame/cases subsequently activated DEV only. PG-3/PG-4 not delivered. PROD unchanged. Owner UAT NOT_TESTED. Alpha.3 final DEV record retained below.
 
-- Application version (candidate): `0.1.0-alpha.4`
-- API contract (candidate): `0.22.0`
-- Refs: #372 / PG-2
-- Independent QA / Product CI / DEV install: pending trusted process
+- Application version: `0.1.0-alpha.4`
+- API contract: `0.22.0`
+- Refs: #372 / PG-2 / PR #441
+- Accepted source: `7a36b8d94a5df412426155e5852fddd9da7b0045`
+- Product CI: run `41310154224`, 7/7 PASS
+- DEV release: `r41310911419-a1` (accepted `2026-11-01T13:34:38Z`)
+- Postgame/cases: activated DEV only after acceptance
 - Owner UAT: NOT_TESTED
-- Known limits: no PG-3/PG-4, PROD unchanged alpha.2
+- Known limits: no PG-3/PG-4, PROD unchanged
 
 ## #372 — PG-1b attendance + results (0.1.0-alpha.3 DEV ACCEPTED)
 
