@@ -22,7 +22,7 @@ class WorkerImageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'RUNTIME', Path(tmp)), \
                 patch.object(worker.os, 'geteuid', return_value=0), \
                 patch.object(Path, 'read_text', return_value=json.dumps(accepted)), \
-                patch.object(worker.subprocess, 'check_output', return_value=json.dumps([api]).encode()), \
+                patch.object(worker.subprocess, 'check_output', side_effect=lambda *_: json.dumps([api]).encode()), \
                 patch.object(worker.os, 'execv') as execute:
             worker.main()
             args = execute.call_args.args[1]
