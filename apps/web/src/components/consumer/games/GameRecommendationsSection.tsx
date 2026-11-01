@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { SocialCapabilities } from "@gobadminton/contracts/friendship-types";
-import type { Me } from "../../../lib/consumer-types";
+import { getMySocialProfile } from "../../../lib/api-client";
+import type { Me, OwnSocialProfile } from "../../../lib/consumer-types";
 import { getSocialCapabilities } from "../../../lib/friendships";
 import {
   formatRecommendationWhen,
@@ -21,7 +23,12 @@ import { Button } from "../Button";
 import { ProfileState } from "../players/ProfileComposition";
 import { MutationNotice } from "../messages/MessageComposition";
 
-type LoadState = "loading" | "ready" | "unavailable" | "error" | "guest";
+type LoadState = "loading" | "ready" | "unavailable" | "error" | "guest" | "prerequisite";
+
+/** Own profile must be saved and publicly eligible before recommendation lists are admitted. */
+function ownRecommendationsPrerequisite(profile: OwnSocialProfile): boolean {
+  return profile.version < 1 || !profile.directoryVisible || !profile.socialEligible;
+}
 
 /**
  * «Мои игры» inbox for received/sent recommendations.
@@ -103,8 +110,15 @@ export function GameRecommendationsSection({
       }
       setCapabilities(caps.data);
       if (!recommendationsUiEnabled(caps.data)) {
+        // Do not fetch private recommendation lists while capability is denied.
         setItems([]);
-        setState("unavailable");
+        const social = await getMySocialProfile();
+        if (!live) return;
+        if (!social.ok) {
+          setState(social.status === 401 ? "guest" : "error");
+          return;
+        }
+        setState(ownRecommendationsPrerequisite(social.data) ? "prerequisite" : "unavailable");
         return;
       }
       const page = await listGameRecommendations(view, cursor);
@@ -178,6 +192,11 @@ export function GameRecommendationsSection({
       ) : null}
       {state === "loading" && <ProfileState title="Загружаем рекомендации…" state="loading" />}
       {state === "guest" && <ProfileState title="Войдите снова">Личные рекомендации скрыты после выхода или истечения сессии.</ProfileState>}
+      {state === "prerequisite" && (
+        <ProfileState title="Сначала настройте свой профиль">
+          Сохраните игровой профиль и включите видимость в каталоге. <Link href="/profile">Открыть профиль</Link>
+        </ProfileState>
+      )}
       {state === "unavailable" && (
         <ProfileState title="Рекомендации сейчас недоступны">Попробуйте позже.</ProfileState>
       )}
