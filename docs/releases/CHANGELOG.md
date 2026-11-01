@@ -1,22 +1,47 @@
 # GoBadminton release notes
 
-## #445 followup points 2/3/5/6 — map aliases, finder, friends guidance (0.1.0-alpha.7 candidate)
+## #448 — social directory/contact defaults ON, preserve explicit OFF (0.1.0-alpha.8 candidate)
+
+Owner-approved source policy for new email/OAuth and missing ACTIVE social profiles:
+`directoryVisible` and DM contact requests default ON with field provenance
+`owner_default` distinct from real consent / legacy / opt-out. Safe automatic public
+name avoids email-shaped strings, fake city, and fabricated consent. Explicit user OFF
+is preserved on login/reread; migration `0049` only touches pristine/verified synthetic
+defaults and missing ACTIVE users — unknown modified legacy OFF stays untouched.
+API wire remains `0.22.0`. Policy approved for both environments in source; actual
+DEV then PROD installs are separate future receipts (deployment NOT DONE). Future user
+OFF is not re-enabled; Radar/blocks/moderation unchanged; private email is not made
+public; no geography/skill fabrication. Partial privacy backfill is truthful: verified
+initial synthetic/pristine → ON; existing explicit/ambiguous old OFF preserved — no
+guarantee that all already-OFF rows are reset. #445 remains OPEN/retest pending.
+Source core base `f9ae4bbd3eb1af80d6445c57cbcd413921cde6e6` (product logic already
+written; this pass is release metadata only).
+
+- Application version (candidate): `0.1.0-alpha.8`; API contract unchanged `0.22.0`.
+- Candidate source SHA / DEV/PROD receipts: unbound until trusted ACCEPTED.
+- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Owner / Go Bad UAT: NOT_TESTED.
+- PG-3/PG-4 still not installed; PROD remains alpha.2.
+
+## #445 followup points 2/3/5/6 — map aliases, finder, friends guidance (0.1.0-alpha.7 DEV ACCEPTED)
 
 Bounded visual-qa followup for #445 points 2, 3, 5 and 6 only (point 1 already DEV
 ACCEPTED as alpha.6). Legacy `/games/map` and `/venues` enter the existing canonical
 map; invalid non-game UUID terminates before API; neutral finder prerequisite fits
 desktop and mobile; Friends/recommendations show own-profile save/visibility guidance
 with `/profile` link instead of a false outage when own profile is unsaved/hidden.
-No auto opt-in and no backend permission changes. Source UI already written in prior
-commits; this descriptor is release metadata only. Point 4 needs reporter game URL/role;
+No auto opt-in and no backend permission changes. Point 4 needs reporter game URL/role;
 postgame fixture waits reporter ID. Do not claim all fresh users eligible, private
-profiles enabled, or all of #445 done.
+profiles enabled, or all of #445 done — Issue #445 stays OPEN / retest pending.
 
-- Application version (candidate): `0.1.0-alpha.7`; API contract unchanged `0.22.0`.
-- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
-- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Application version: `0.1.0-alpha.7`; API contract unchanged `0.22.0`.
+- Accepted source: `dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc` (PR #447).
+- Product CI: run `41330759194`, 7/7 PASS.
+- DEV release: `r41331655353-a1` (accepted `2026-11-01T17:33:52Z`).
+- Digests: api `sha256:c11807e1d7d9661f284a64236288c98f8afc1a53d1029c59ec51c9121b9f3705`,
+  web `sha256:25a6f51d6d5b5a5218a9b8e2ae84fdf3561dde274e1ff6705bb07501f1e9fba1`.
 - Owner / Go Bad UAT: NOT_TESTED.
-- PG-3/PG-4 still not installed; PROD unchanged.
+- PG-3/PG-4 still not installed; PROD unchanged (remains alpha.2).
 
 ## #445 point 1 — create-game level range common track (0.1.0-alpha.6 DEV ACCEPTED)
 

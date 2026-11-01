@@ -1,62 +1,98 @@
-# Owner #448 — social directory/contact defaults ON (preserve explicit OFF)
+# Owner #448 — release metadata alpha.8 (social defaults ON / preserve OFF)
 
-From: Cursor Auto (`OWNER_SOCIAL_DEFAULTS_ON_PRESERVE_EXPLICIT_OPTOUT`, attempt 2 / exact pass1 candidate repair, base `464b3b1f3dc06683f430cb0fa613d4592cd62a3a`).
-To: independent Codex Sol Medium QA → mandatory Product CI → trusted DEV → Owner UAT.
-Status: SOURCE CANDIDATE only. **UAT = NOT_TESTED**. Refs #448. #445 stays open. No release metadata bump. No runtime/PROD deploy by author. Pass1 typecheck FAIL preserved in evidence (`EMAIL_BINDING_COOKIE` import); this candidate fixes that import only.
+From: Cursor Auto (`OWNER_SOCIAL448_RELEASE_METADATA`, attempt 1, base `f9ae4bbd3eb1af80d6445c57cbcd413921cde6e6`).
+To: independent Codex Sol Medium QA → mandatory Product CI → trusted DEV → Owner UAT → separate PROD receipt.
+Status: SOURCE CANDIDATE for `0.1.0-alpha.8` release descriptor only. **UAT = NOT_TESTED**.
+Refs #448. Product source already on core `f9ae…` — this pass is **release metadata only**.
+No production-logic edits. No Git/runtime/root/PROD deploy by author. Deployment NOT DONE.
 
-## Summary
+## Scope this writer
 
-Product defaults for new/missing normal-user social profiles: `directoryVisible=true`, `contactPolicy=requests`. Provenance column `directory_visibility_provenance` distinguishes:
+Final application/release metadata for Owner #448 social directory/contact defaults.
+Sets `CURRENT_APPLICATION_VERSION = 0.1.0-alpha.8` (API contract remains `0.22.0`), records
+confirmed alpha.7 historical seed from delivered DEV receipt, and marks alpha.7 changelog
+as factual DEV ACCEPTED (not a pending candidate). First named alpha.1 baseline kept literal.
+PROD remains old alpha.2; #445 stays OPEN/retest pending; PG-3/PG-4 still not installed.
 
-| Value | Meaning |
+## Product policy (source approved both environments; install separate)
+
+| Topic | Fact |
 | --- | --- |
-| `owner_default` | Owner #448 product default ON (future inserts / migration enables) — not individual consent |
-| `user_consent` | Visible row with real directory consent stamps |
-| `user_opt_out` | Explicit directory hide via visibility API |
-| `legacy` | Pre-#448 existing row without Owner-default label and without proven opt-out |
+| New email/OAuth + missing ACTIVE | `directoryVisible=true`, `contactPolicy=requests` (catalog + DM) |
+| Provenance | `owner_default` vs real consent / legacy / `user_opt_out` |
+| Safe automatic name | no email-shaped public name; no fake city; no fabricated consent |
+| Explicit OFF | preserved on login/reread; unknown modified legacy OFF untouched |
+| Migration 0049 | pristine / verified synthetic defaults + missing ACTIVE only |
+| Future OFF | not re-enabled |
+| Unchanged | Radar / blocks / moderation; private email not auto-public; no geo/skill fabrication |
+| Backfill honesty | verified initial synthetic/pristine → ON; explicit/ambiguous old OFF preserved; no guarantee all already-OFF reset |
+| API wire | unchanged `0.22.0` |
+| Deploy | Owner policy approved in source for DEV+PROD; actual installs need separate receipts |
 
-Automatic account-fallback public names use a small pure normalizer: email-shaped → «Игрок». Intentionally provided public `displayName` on patch is preserved. `ensureDefaultSocialProfile` never UPDATEs existing rows.
+## Alpha.7 already delivered (historical seed — do not claim pending)
 
-## Changed paths (allowed attempt-2 scope)
+| Fact | Value |
+| --- | --- |
+| Application version | `0.1.0-alpha.7` |
+| Accepted source | `dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc` |
+| PR | #447 |
+| Product CI | `41330759194` 7/7 PASS |
+| DEV receipt | `r41331655353-a1` accepted `2026-11-01T17:33:52Z` |
+| Digests | api `sha256:c11807e1d7d9661f284a64236288c98f8afc1a53d1029c59ec51c9121b9f3705`, web `sha256:25a6f51d6d5b5a5218a9b8e2ae84fdf3561dde274e1ff6705bb07501f1e9fba1` |
+| Owner UAT | NOT_TESTED |
 
-- `apps/api/migrations/0049_social_profile_defaults.sql`
-- `apps/api/migrations/rollback/0049_social_profile_defaults.sql`
-- `apps/api/src/profiles/social-profile-defaults.ts`
-- `apps/api/src/profiles/profiles.service.ts`
-- `apps/api/test/unit/social-profile-defaults.test.ts`
-- `apps/api/test/integration/social448.defaults.test.ts`
+## Author operator checks already recorded (product source; not this metadata pass)
+
+- social448.defaults disposable integration: 6 PASS
+- ls01 profiles security: 11 PASS
+- auth identity: 4 PASS
+- helper unit: 6 PASS
+- API/web typecheck PASS; Foundation PASS
+- Earlier typecheck wrong `EMAIL_BINDING` import + PMA unsafe email fallback / legacy provenance findings repaired; history preserved
+
+This metadata pass does **not** re-run product logic tests. No independent QA / CI / runtime yet — not Source PASS as install.
+
+### Author checks this pass
+
+- Deterministic source/changelog/seed sanity against delivered alpha.7 JSON + receipt:
+  alpha.8 current unbound SHA, alpha.7 historical ACCEPTED facts, first-alpha baseline literal.
+- Trusted operator should run:
+  `pnpm --filter @gobadminton/web exec vitest run test/releases.test.tsx test/releases-server.test.ts`
+
+## CURRENT_NAMED_RELEASE delta (alpha.8 candidate)
+
+- New/missing profiles: catalog + DM defaults ON with `owner_default` provenance.
+- Safe automatic name without email / fake city / fake consent.
+- Explicit OFF preserved; migration 0049 scoped; legacy modified OFF untouched.
+- `source_sha`: **null** until trusted ACCEPTED (unbound).
+- DEV then PROD = separate future receipts; do not claim installed.
+
+## Required next gates (handoff)
+
+1. Independent Codex Sol Medium QA (release metadata + retained product facts).
+2. Mandatory Product CI.
+3. Trusted DEV install + backup/readback for migration 0049 (operator, not author).
+4. Owner UAT (explicitly NOT_TESTED until then).
+5. Separate Owner decision + receipt for PROD (currently alpha.2).
+
+## Input materials read (this pass)
+
+| Material | Delivered path | SHA256 | Read |
+| --- | --- | --- | --- |
+| alpha7 history seed | `…/design-inputs/alpha7-history-seed-for-alpha8.json` | `a6583e9463fc7ad546c615a7faccb34f1b81907c8df756a81987ae2c386b3132` | Yes — exact alpha.7 HistoricalReleaseSeed |
+| accepted deploy receipt | `…/design-inputs/accepted.json` | `62ebd0fdf7fb484d9f1418b8e222902a078b8dde17dc528d57216cd6999b9945` | Yes — `r41331655353-a1` / SHA `dd383981…` / digests |
+
+## Changed paths (exact allowed only)
+
+- `apps/web/src/lib/releases.ts`
+- `apps/web/test/releases.test.tsx`
+- `apps/web/test/releases-server.test.ts`
+- `docs/releases/CHANGELOG.md`
 - `docs/handoffs/social448-defaults.md`
 
-0048 remains RESERVED (unmerged PG3 candidate) — not stolen.
+## Non-goals
 
-## Migration behaviour (0049)
-
-1. Column defaults: `directory_visible=true`, `contact_policy=requests`.
-2. Add provenance nullable → label all existing `legacy` → visible+stamps → `user_consent` → remaining visible → `owner_default`; then `DEFAULT owner_default` + NOT NULL.
-3. Demo cohort (operator-verified): reserved `d0f00001-*` + `demo:synthetic:foundation-v001` + `version=1` + `epoch=1` → enable directory+contact flags only; preserve city/name/consent/Radar/`social_eligible` (ineligible stays false); `version+1` once; CAS blocks reapply.
-4. Pristine non-demo hidden: `legacy` + v1 + epoch1 + no stamps + not email-shaped + no retained completed `social_profile.visibility` receipt with `directoryVisible=false` → directory ON only (never flip non-demo contact closed). PROD v26 / epoch>1 / opt-out / modified version preserved by CAS.
-5. Missing ACTIVE unrestricted users: INSERT safe name («Игрок» / non-email) + null city + ON/requests/`owner_default` / `ON CONFLICT DO NOTHING`.
-
-Root operator captures DB backup + before/after/readback separately. No whole-DB restore by author.
-
-## Rollback
-
-Prefer **app-only** rollback retaining additive schema/data. Optional DB rollback **HOLD/refuses** if any visible row cannot meet the pre-#448 city+consent contract — never silently hide rows, forge consent, or delete profiles to force PASS.
-
-## Author checks (operator runs; model env may lack deps)
-
-```bash
-pnpm --filter @gobadminton/api exec vitest run test/unit/social-profile-defaults.test.ts
-# typecheck: social448 import must resolve EMAIL_BINDING_COOKIE from auth/email-security
-pnpm --filter @gobadminton/api typecheck
-RUN_DB_INTEGRATION=1 pnpm --filter @gobadminton/api exec vitest run \
-  test/integration/social448.defaults.test.ts
-```
-
-Expect: typecheck clean for this import; email-shaped automatic name → Игрок; normal name kept; missing profile initializes once; explicit OFF retained; demo/pristine CAS-once enable; modified/opt-out untouched; no consent fabrication.
-
-## Non-goals / unchanged
-
-- No PROD/runtime/live DB/auth deploy, release bump, Git publish, C5, new framework/audit engine.
-- Blocks, restrictions, Radar consent, and user privacy OFF remain authoritative.
-- #445 remains open.
+- No production-logic / SMTP / unrelated feature enablement; no Git/runtime/root/PROD/C5/secrets.
+- No new framework, scheduler, or full test matrix.
+- No rewrite of older historical seeds beyond factual alpha.7 ACCEPTED status already delivered.
+- No reset of old UNKNOWN/attempts; #445 stays open until Go Bad full PASS.
