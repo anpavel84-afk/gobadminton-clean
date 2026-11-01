@@ -92,7 +92,7 @@ describe("PG-1b game results mutation host", () => {
 
   function render(scopeActor = actor, scopeGame = gameId, csrf = "csrf") {
     hooks.cursor = 0;
-    const mutation = useGameResultsMutation(scopeActor, scopeGame, csrf, success, refresh);
+    useGameResultsMutation(scopeActor, scopeGame, csrf, success, refresh);
     flushEffects();
     hooks.cursor = 0;
     return useGameResultsMutation(scopeActor, scopeGame, csrf, success, refresh);
@@ -101,7 +101,7 @@ describe("PG-1b game results mutation host", () => {
   /** Same hook slots / instance: scope change must re-run storage effect (A→B). */
   function renderSameInstance(scopeActor: string, scopeGame = gameId, csrf = "csrf") {
     hooks.cursor = 0;
-    const mutation = useGameResultsMutation(scopeActor, scopeGame, csrf, success, refresh);
+    useGameResultsMutation(scopeActor, scopeGame, csrf, success, refresh);
     flushEffects();
     hooks.cursor = 0;
     return useGameResultsMutation(scopeActor, scopeGame, csrf, success, refresh);
