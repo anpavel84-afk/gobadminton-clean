@@ -55,6 +55,7 @@ let fail: boolean;
 let failResource: "games" | "venues" | "reject" | undefined;
 let ignoreAbort: boolean;
 let responseGame: Game;
+let responseVenues: VenueSummary[] | null;
 function render(cityId = "city", day = "", venueId?: string, withReturn = false) {
   hooks.cursor = 0;
   const tree = GamesMapView({ cityId, day, venueId, onReturnToList: withReturn ? () => {} : undefined });
@@ -69,6 +70,7 @@ beforeEach(() => {
   failResource = undefined;
   requests = []; inFlight = 0; maxInFlight = 0; fail = false; ignoreAbort = false;
   responseGame = game;
+  responseVenues = null;
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => {
@@ -82,9 +84,10 @@ beforeEach(() => {
       const isVenue = parsed.pathname === "/v1/venues";
       if (failResource === "reject") { reject(new Error("offline")); return; }
       const resourceFailed = fail || (isVenue ? failResource === "venues" : failResource === "games");
+      const venueItems = responseVenues ?? [{ ...venue, cityId: parsed.searchParams.get("cityId") }];
       resolve(new Response(JSON.stringify(resourceFailed ? { title: "Offline" } : {
-        items: [isVenue ? { ...venue, cityId: parsed.searchParams.get("cityId") } : responseGame],
-        nextCursor: parsed.searchParams.has("cursor") ? null : "page-2",
+        items: isVenue ? venueItems : [responseGame],
+        nextCursor: (isVenue ? venueItems : [responseGame]).length === 0 || parsed.searchParams.has("cursor") ? null : "page-2",
       }), { status: resourceFailed ? 503 : 200 }));
     }, 20000);
     signal.addEventListener("abort", abort, { once: true });
@@ -97,12 +100,14 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   window.dispatchEvent(new Event("focus")); window.dispatchEvent(new Event("online"));
   expect(requests).toHaveLength(4); // two resources, each on its second sequential page
   expect(html()).toContain("Загружаем");
+  expect(html()).not.toContain("В каталоге города пока нет площадок");
   expect(html()).not.toContain("Создать игру на этой площадке");
   await vi.advanceTimersByTimeAsync(9000);
   const completed = html();
   expect(completed).toContain("Venue · 1");
   expect(completed).not.toContain("Delayed game"); // schedules are hidden until a venue is selected
   expect(completed).not.toContain("Загружаем");
+  expect(completed).not.toContain("В каталоге города пока нет площадок");
   await vi.advanceTimersByTimeAsync(29999);
   expect(requests).toHaveLength(4);
   await vi.advanceTimersByTimeAsync(1);
@@ -112,6 +117,38 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   await vi.advanceTimersByTimeAsync(40000);
   expect(html()).toContain("Venue · 1");
   expect(maxInFlight).toBe(2); // at most one request per resource, never two snapshots
+});
+
+it("announces empty city catalogue only after a fulfilled venues response, never while loading or failed", async () => {
+  responseVenues = [];
+  render();
+  expect(html()).toContain("Загружаем");
+  expect(html()).not.toContain("В каталоге города пока нет площадок");
+  // Empty venues settle on page 1; games still use two sequential pages (40s).
+  await vi.advanceTimersByTimeAsync(40000);
+  const empty = html();
+  expect(empty).not.toContain("Загружаем");
+  expect(empty).toContain("В каталоге города пока нет площадок");
+  expect(empty).toContain("gb-map-sr-only");
+  failResource = "venues";
+  window.dispatchEvent(new Event("focus"));
+  // Same-city refresh keeps prior snapshot until settle; loading suppresses empty claim.
+  expect(html()).toContain("Загружаем");
+  expect(html()).not.toContain("В каталоге города пока нет площадок");
+  await vi.advanceTimersByTimeAsync(40000);
+  const failed = html();
+  expect(failed).toContain('role="alert"');
+  expect(failed).not.toContain("В каталоге города пока нет площадок");
+  // Cold first load that fails venues before any fulfilled snapshot: no empty claim.
+  unmount();
+  hooks.slots = []; hooks.cleanups = []; hooks.effects = [];
+  responseVenues = [];
+  failResource = "venues";
+  render("fresh-city");
+  expect(html("fresh-city")).not.toContain("В каталоге города пока нет площадок");
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(html("fresh-city")).toContain('role="alert"');
+  expect(html("fresh-city")).not.toContain("В каталоге города пока нет площадок");
 });
 it("retains public venues with unknown counts and truthful failure state", async () => {
   render(); await vi.advanceTimersByTimeAsync(40000);

@@ -163,15 +163,24 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
       if (!profile.ok) { setStep(profile.status === 401 ? "auth" : "load-error"); return; }
       if (!profile.data.cityId) { setStep("setup"); return; }
       setDraft(d => ({ ...d, startDate: d.startDate || cityDate(new Date(), location.timezone) }));
-      const [tp, pref] = await Promise.all([getTrainerProfile(), getGamePreferences()]);
+      // OwnSocialProfile.trainer is authoritative hasActiveTrainer; ordinary non-trainers
+      // must not auto-GET /v1/me/trainer-profile (legitimate absence is 404).
+      const pref = await getGamePreferences();
       if (cancelled || epoch !== sessionEpoch.current) return;
-      if (!tp.ok && tp.status !== 404) { setStep(tp.status === 401 ? "auth" : "load-error"); return; }
       if (!pref.ok && pref.status === 401) { setStep("auth"); return; }
       setPreferences(pref.ok ? pref.data : null);
       setSaveContact(pref.ok && pref.data.defaultPublicGameContact === null);
       if (pref.ok) setDraft(d => ({ ...d, hostPublicContact: contactEdited.current ? d.hostPublicContact : pref.data.defaultPublicGameContact || "" }));
-      setTrainer(tp.ok && tp.data.status === "active" ? tp.data : null);
-      if (!tp.ok || tp.data.status !== "active") setActivityKind("regular");
+      if (profile.data.trainer) {
+        const tp = await getTrainerProfile();
+        if (cancelled || epoch !== sessionEpoch.current) return;
+        if (!tp.ok && tp.status !== 404) { setStep(tp.status === 401 ? "auth" : "load-error"); return; }
+        setTrainer(tp.ok && tp.data.status === "active" ? tp.data : null);
+        if (!tp.ok || tp.data.status !== "active") setActivityKind("regular");
+      } else {
+        setTrainer(null);
+        setActivityKind("regular");
+      }
       clearAuthIntent();
       setStep("form");
 

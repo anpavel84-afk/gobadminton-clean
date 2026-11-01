@@ -59,12 +59,20 @@ export function ProfilePage() {
       const m = await getMe(); if (!live) return;
       if (!m.ok) { setState(m.status === 401 ? "auth" : "error"); return; }
       setMe(m.data);
-      const [s, t, c] = await Promise.all([getMySocialProfile(), getTrainerProfile(), listCities()]); if (!live) return;
+      // OwnSocialProfile.trainer is authoritative hasActiveTrainer; skip automatic
+      // trainer-profile GET for ordinary non-trainers (legitimate 404 is not an error).
+      const [s, c] = await Promise.all([getMySocialProfile(), listCities()]); if (!live) return;
       if (s.ok) { hydrate(s.data); window.dispatchEvent(new Event("gb-profile-changed")); }
       else if (isSocialDirectoryDisabled(s)) setSocialUnavailable(true);
       else { setState(s.status === 401 ? "auth" : "error"); return; }
-      if (t.ok) setTrainer(t.data); else if (t.status !== 404) setTrainerError(true);
       if (c.ok) setCities(c.data.items);
+      if (s.ok && s.data.trainer) {
+        const t = await getTrainerProfile(); if (!live) return;
+        if (t.ok) setTrainer(t.data);
+        else if (t.status === 401) { setState("auth"); return; }
+        else if (t.status !== 404) setTrainerError(true);
+        // 404 race with social.trainer=true: keep trainer null, no fake success.
+      }
       setNeedsRefresh(false); setState("ready");
     })();
     return () => { live = false; };
