@@ -467,7 +467,7 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     // Pending-only manager participation is not eligible peer authorship.
     await pool.query(
       `INSERT INTO participations (game_id, user_id, status)
-       VALUES ($1, $2, 'pending')`,
+       VALUES ($1, $2, 'pending') ON CONFLICT (game_id, user_id) DO UPDATE SET status = 'pending', confirmed_at = NULL`,
       [gameId, manager.userId],
     );
     const pendingCaps = await get(manager, `/v1/games/${gameId}/results`);
