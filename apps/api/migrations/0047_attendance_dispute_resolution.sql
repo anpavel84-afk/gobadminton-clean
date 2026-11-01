@@ -1,6 +1,8 @@
 -- PG-2 / #372. Additive dispute response, help escalation, case mapping, reviewer resolution.
 -- Extends 0046 present/absent rows with versioned unknown + case_reviewer provenance.
 -- Does not edit 0042/0046 SQL. Open dispute retained across manager corrections.
+-- Catalog lookups bind to the search_path-resolved table OID so public/side dual apply
+-- cannot drop or skip the wrong schema's constraints/triggers by relname/conname alone.
 
 -- Allow versioned unknown as a known-history row (not DELETE / reset to version 0).
 ALTER TABLE game_attendance DROP CONSTRAINT IF EXISTS game_attendance_value_check;
@@ -41,17 +43,17 @@ ALTER TABLE game_attendance_revisions DROP CONSTRAINT IF EXISTS game_attendance_
 ALTER TABLE game_attendance_revisions DROP CONSTRAINT IF EXISTS game_attendance_revisions_check2;
 DO $$
 DECLARE
+  rel regclass := 'game_attendance_revisions'::regclass;
   cname text;
 BEGIN
   FOR cname IN
     SELECT con.conname
     FROM pg_constraint con
-    JOIN pg_class rel ON rel.oid = con.conrelid
-    WHERE rel.relname = 'game_attendance_revisions'
+    WHERE con.conrelid = rel
       AND con.contype = 'c'
       AND pg_get_constraintdef(con.oid) ILIKE '%after_late%'
   LOOP
-    EXECUTE format('ALTER TABLE game_attendance_revisions DROP CONSTRAINT %I', cname);
+    EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', rel, cname);
   END LOOP;
 END $$;
 ALTER TABLE game_attendance_revisions
@@ -74,18 +76,18 @@ ALTER TABLE game_attendance_notices
 ALTER TABLE game_attendance_notices DROP CONSTRAINT IF EXISTS game_attendance_notices_check;
 DO $$
 DECLARE
+  rel regclass := 'game_attendance_notices'::regclass;
   cname text;
 BEGIN
   FOR cname IN
     SELECT con.conname
     FROM pg_constraint con
-    JOIN pg_class rel ON rel.oid = con.conrelid
-    WHERE rel.relname = 'game_attendance_notices'
+    WHERE con.conrelid = rel
       AND con.contype = 'c'
       AND pg_get_constraintdef(con.oid) ILIKE '%late%'
       AND pg_get_constraintdef(con.oid) ILIKE '%present%'
   LOOP
-    EXECUTE format('ALTER TABLE game_attendance_notices DROP CONSTRAINT %I', cname);
+    EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', rel, cname);
   END LOOP;
 END $$;
 ALTER TABLE game_attendance_notices
@@ -109,49 +111,60 @@ ALTER TABLE game_attendance_disputes
   ADD COLUMN IF NOT EXISTS help_progress text NULL;
 
 DO $$
+DECLARE
+  disputes regclass := 'game_attendance_disputes'::regclass;
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'game_attendance_disputes_resolution_kind_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = disputes
+      AND conname = 'game_attendance_disputes_resolution_kind_check'
   ) THEN
-    ALTER TABLE game_attendance_disputes
-      ADD CONSTRAINT game_attendance_disputes_resolution_kind_check
-      CHECK (
+    EXECUTE format(
+      'ALTER TABLE %s ADD CONSTRAINT game_attendance_disputes_resolution_kind_check CHECK (
         resolution_kind IS NULL
         OR resolution_kind IN (
-          'party_acknowledged',
-          'reviewer_uphold_current',
-          'reviewer_correct_present',
-          'reviewer_correct_absent',
-          'reviewer_clear_unknown'
+          ''party_acknowledged'',
+          ''reviewer_uphold_current'',
+          ''reviewer_correct_present'',
+          ''reviewer_correct_absent'',
+          ''reviewer_clear_unknown''
         )
-      );
+      )',
+      disputes
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'game_attendance_disputes_response_bounds_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = disputes
+      AND conname = 'game_attendance_disputes_response_bounds_check'
   ) THEN
-    ALTER TABLE game_attendance_disputes
-      ADD CONSTRAINT game_attendance_disputes_response_bounds_check
-      CHECK (
+    EXECUTE format(
+      'ALTER TABLE %s ADD CONSTRAINT game_attendance_disputes_response_bounds_check CHECK (
         latest_manager_response IS NULL
         OR char_length(latest_manager_response) BETWEEN 1 AND 500
-      );
+      )',
+      disputes
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'game_attendance_disputes_help_progress_check'
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = disputes
+      AND conname = 'game_attendance_disputes_help_progress_check'
   ) THEN
-    ALTER TABLE game_attendance_disputes
-      ADD CONSTRAINT game_attendance_disputes_help_progress_check
-      CHECK (
+    EXECUTE format(
+      'ALTER TABLE %s ADD CONSTRAINT game_attendance_disputes_help_progress_check CHECK (
         help_progress IS NULL
         OR help_progress IN (
-          'requested',
-          'case_opened',
-          'in_review',
-          'awaiting_information',
-          'resolved',
-          'left_open_insufficient_evidence'
+          ''requested'',
+          ''case_opened'',
+          ''in_review'',
+          ''awaiting_information'',
+          ''resolved'',
+          ''left_open_insufficient_evidence''
         )
-      );
+      )',
+      disputes
+    );
   END IF;
 END $$;
 
@@ -255,47 +268,81 @@ CREATE UNIQUE INDEX IF NOT EXISTS game_attendance_dispute_resolutions_one_closin
   WHERE leaves_open = false;
 
 DO $$
+DECLARE
+  responses regclass := 'game_attendance_dispute_responses'::regclass;
+  case_links regclass := 'game_attendance_dispute_case_links'::regclass;
+  resolutions regclass := 'game_attendance_dispute_resolutions'::regclass;
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'game_attendance_dispute_responses_immutable'
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = responses
+      AND tgname = 'game_attendance_dispute_responses_immutable'
   ) THEN
-    CREATE TRIGGER game_attendance_dispute_responses_immutable
-      BEFORE UPDATE OR DELETE ON game_attendance_dispute_responses
-      FOR EACH ROW EXECUTE FUNCTION deny_game_attendance_history_rewrite();
+    EXECUTE format(
+      'CREATE TRIGGER game_attendance_dispute_responses_immutable
+        BEFORE UPDATE OR DELETE ON %s
+        FOR EACH ROW EXECUTE FUNCTION deny_game_attendance_history_rewrite()',
+      responses
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'game_attendance_dispute_responses_deny_truncate'
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = responses
+      AND tgname = 'game_attendance_dispute_responses_deny_truncate'
   ) THEN
-    CREATE TRIGGER game_attendance_dispute_responses_deny_truncate
-      BEFORE TRUNCATE ON game_attendance_dispute_responses
-      FOR EACH STATEMENT EXECUTE FUNCTION deny_game_attendance_history_rewrite();
+    EXECUTE format(
+      'CREATE TRIGGER game_attendance_dispute_responses_deny_truncate
+        BEFORE TRUNCATE ON %s
+        FOR EACH STATEMENT EXECUTE FUNCTION deny_game_attendance_history_rewrite()',
+      responses
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'game_attendance_dispute_case_links_immutable'
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = case_links
+      AND tgname = 'game_attendance_dispute_case_links_immutable'
   ) THEN
-    CREATE TRIGGER game_attendance_dispute_case_links_immutable
-      BEFORE UPDATE OR DELETE ON game_attendance_dispute_case_links
-      FOR EACH ROW EXECUTE FUNCTION deny_game_attendance_history_rewrite();
+    EXECUTE format(
+      'CREATE TRIGGER game_attendance_dispute_case_links_immutable
+        BEFORE UPDATE OR DELETE ON %s
+        FOR EACH ROW EXECUTE FUNCTION deny_game_attendance_history_rewrite()',
+      case_links
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'game_attendance_dispute_case_links_deny_truncate'
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = case_links
+      AND tgname = 'game_attendance_dispute_case_links_deny_truncate'
   ) THEN
-    CREATE TRIGGER game_attendance_dispute_case_links_deny_truncate
-      BEFORE TRUNCATE ON game_attendance_dispute_case_links
-      FOR EACH STATEMENT EXECUTE FUNCTION deny_game_attendance_history_rewrite();
+    EXECUTE format(
+      'CREATE TRIGGER game_attendance_dispute_case_links_deny_truncate
+        BEFORE TRUNCATE ON %s
+        FOR EACH STATEMENT EXECUTE FUNCTION deny_game_attendance_history_rewrite()',
+      case_links
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'game_attendance_dispute_resolutions_immutable'
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = resolutions
+      AND tgname = 'game_attendance_dispute_resolutions_immutable'
   ) THEN
-    CREATE TRIGGER game_attendance_dispute_resolutions_immutable
-      BEFORE UPDATE OR DELETE ON game_attendance_dispute_resolutions
-      FOR EACH ROW EXECUTE FUNCTION deny_game_attendance_history_rewrite();
+    EXECUTE format(
+      'CREATE TRIGGER game_attendance_dispute_resolutions_immutable
+        BEFORE UPDATE OR DELETE ON %s
+        FOR EACH ROW EXECUTE FUNCTION deny_game_attendance_history_rewrite()',
+      resolutions
+    );
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_trigger WHERE tgname = 'game_attendance_dispute_resolutions_deny_truncate'
+    SELECT 1 FROM pg_trigger
+    WHERE tgrelid = resolutions
+      AND tgname = 'game_attendance_dispute_resolutions_deny_truncate'
   ) THEN
-    CREATE TRIGGER game_attendance_dispute_resolutions_deny_truncate
-      BEFORE TRUNCATE ON game_attendance_dispute_resolutions
-      FOR EACH STATEMENT EXECUTE FUNCTION deny_game_attendance_history_rewrite();
+    EXECUTE format(
+      'CREATE TRIGGER game_attendance_dispute_resolutions_deny_truncate
+        BEFORE TRUNCATE ON %s
+        FOR EACH STATEMENT EXECUTE FUNCTION deny_game_attendance_history_rewrite()',
+      resolutions
+    );
   END IF;
 END $$;

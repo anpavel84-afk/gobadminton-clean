@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { checkDatabase, createDatabase } from "../../src/database/client";
@@ -184,7 +185,117 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0044_direct_messages_immediate",
         "0045_venue_gallery",
         "0046_game_attendance",
+        "0047_attendance_dispute_resolution",
       ]);
+      // 0047 PG-2 dispute resolution: physical tables beyond ledger filename alone.
+      expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_responses')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_responses");
+      expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_case_links')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_case_links");
+      expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_resolutions')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_resolutions");
+      // Second-schema apply (same fixture pattern as url-storage dual search_path): 0047
+      // local constraints + 6 history immutability triggers must exist on side OIDs so
+      // public catalog rows cannot mask a missing side protection.
+      const migrationsDir = path.resolve(apiRoot, "migrations");
+      const migrationFiles = readdirSync(migrationsDir)
+        .filter((name) => name.endsWith(".sql"))
+        .sort();
+      const sideClient = await pool.connect();
+      try {
+        await sideClient.query("DROP SCHEMA IF EXISTS side CASCADE");
+        await sideClient.query("CREATE SCHEMA side");
+        await sideClient.query("SET search_path TO side, public");
+        for (const file of migrationFiles) {
+          await sideClient.query(readFileSync(path.join(migrationsDir, file), "utf8"));
+        }
+        const sideConstraints = await sideClient.query<{ conname: string }>(
+          `SELECT conname
+           FROM pg_constraint
+           WHERE (conrelid = 'side.game_attendance'::regclass
+                  AND conname IN (
+                    'game_attendance_value_check',
+                    'game_attendance_source_check',
+                    'game_attendance_late_value_check'
+                  ))
+              OR (conrelid = 'side.game_attendance_revisions'::regclass
+                  AND conname IN (
+                    'game_attendance_revisions_before_value_check',
+                    'game_attendance_revisions_after_value_check',
+                    'game_attendance_revisions_source_check',
+                    'game_attendance_revisions_late_value_check'
+                  ))
+              OR (conrelid = 'side.game_attendance_notices'::regclass
+                  AND conname IN (
+                    'game_attendance_notices_value_check',
+                    'game_attendance_notices_source_check',
+                    'game_attendance_notices_late_value_check',
+                    'game_attendance_notices_unknown_no_ack_check'
+                  ))
+              OR (conrelid = 'side.game_attendance_disputes'::regclass
+                  AND conname IN (
+                    'game_attendance_disputes_resolution_kind_check',
+                    'game_attendance_disputes_response_bounds_check',
+                    'game_attendance_disputes_help_progress_check',
+                    'game_attendance_disputes_status_check',
+                    'game_attendance_disputes_lifecycle_check'
+                  ))
+              OR (conrelid = 'side.game_attendance_dispute_revisions'::regclass
+                  AND conname = 'game_attendance_dispute_revisions_action_check')
+           ORDER BY conname`,
+        );
+        expect(sideConstraints.rows.map((row) => row.conname)).toEqual([
+          "game_attendance_dispute_revisions_action_check",
+          "game_attendance_disputes_help_progress_check",
+          "game_attendance_disputes_lifecycle_check",
+          "game_attendance_disputes_resolution_kind_check",
+          "game_attendance_disputes_response_bounds_check",
+          "game_attendance_disputes_status_check",
+          "game_attendance_late_value_check",
+          "game_attendance_notices_late_value_check",
+          "game_attendance_notices_source_check",
+          "game_attendance_notices_unknown_no_ack_check",
+          "game_attendance_notices_value_check",
+          "game_attendance_revisions_after_value_check",
+          "game_attendance_revisions_before_value_check",
+          "game_attendance_revisions_late_value_check",
+          "game_attendance_revisions_source_check",
+          "game_attendance_source_check",
+          "game_attendance_value_check",
+        ]);
+        const sideTriggers = await sideClient.query<{ tgname: string }>(
+          `SELECT tgname
+           FROM pg_trigger
+           WHERE NOT tgisinternal
+             AND (
+               (tgrelid = 'side.game_attendance_dispute_responses'::regclass
+                AND tgname IN (
+                  'game_attendance_dispute_responses_immutable',
+                  'game_attendance_dispute_responses_deny_truncate'
+                ))
+               OR (tgrelid = 'side.game_attendance_dispute_case_links'::regclass
+                   AND tgname IN (
+                     'game_attendance_dispute_case_links_immutable',
+                     'game_attendance_dispute_case_links_deny_truncate'
+                   ))
+               OR (tgrelid = 'side.game_attendance_dispute_resolutions'::regclass
+                   AND tgname IN (
+                     'game_attendance_dispute_resolutions_immutable',
+                     'game_attendance_dispute_resolutions_deny_truncate'
+                   ))
+             )
+           ORDER BY tgname`,
+        );
+        expect(sideTriggers.rows.map((row) => row.tgname)).toEqual([
+          "game_attendance_dispute_case_links_deny_truncate",
+          "game_attendance_dispute_case_links_immutable",
+          "game_attendance_dispute_resolutions_deny_truncate",
+          "game_attendance_dispute_resolutions_immutable",
+          "game_attendance_dispute_responses_deny_truncate",
+          "game_attendance_dispute_responses_immutable",
+        ]);
+      } finally {
+        await sideClient.query("RESET search_path");
+        await sideClient.query("DROP SCHEMA IF EXISTS side CASCADE");
+        sideClient.release();
+      }
       const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_description','public_profile_updated_at') ORDER BY column_name");
       expect(profileColumns.rows).toEqual([
         {column_name:"amenity_parking",data_type:"boolean",is_nullable:"YES",column_default:null},
@@ -408,5 +519,5 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
     } finally {
       await pool.end();
     }
-  });
+  }, 180_000);
 });
