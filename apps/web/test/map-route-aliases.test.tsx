@@ -1,38 +1,39 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((url: string) => { throw new Error(`redirect:${url}`); }),
+  notFound: vi.fn(() => { throw new Error("not-found"); }),
+}));
+vi.mock("../src/components/consumer/pages/GameDetailPage", () => ({
+  GameDetailPage: () => null,
+}));
+import { redirect, notFound } from "next/navigation";
+import MapAlias from "../src/app/games/map/page";
+import VenuesAlias from "../src/app/venues/page";
+import GamePage from "../src/app/games/[gameId]/page";
+import { gamesMapReturnPath } from "../src/lib/games-venue-map";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const mapAlias = readFileSync(join(root, "src/app/games/map/page.tsx"), "utf8");
-const venuesAlias = readFileSync(join(root, "src/app/venues/page.tsx"), "utf8");
-const gameRoute = readFileSync(join(root, "src/app/games/[gameId]/page.tsx"), "utf8");
-const venueMapLib = readFileSync(join(root, "src/lib/games-venue-map.ts"), "utf8");
-
-describe("map / venues compatibility aliases (#445 C)", () => {
-  it("static /games/map and /venues redirect only to canonical map view", () => {
-    expect(mapAlias).toContain('redirect("/games?view=map")');
-    expect(venuesAlias).toContain('redirect("/games?view=map")');
-    expect(mapAlias).not.toMatch(/GameDetailPage|getGame|\/v1\/games/);
-    expect(venuesAlias).not.toMatch(/GameDetailPage|getGame|\/v1\/games/);
-    // No open redirect / query forwarding into arbitrary destinations.
-    expect(mapAlias).not.toMatch(/searchParams|returnTo|redirect\([^"]/);
-    expect(venuesAlias).not.toMatch(/searchParams|returnTo|redirect\([^"]/);
+beforeEach(() => vi.clearAllMocks());
+describe("map entrances and invalid game routes (#445)", () => {
+  it("redirects both compatibility entrances to the existing map", () => {
+    for (const route of [MapAlias, VenuesAlias]) {
+      expect(() => route()).toThrow("redirect:/games?view=map");
+    }
+    expect(redirect).toHaveBeenCalledTimes(2);
   });
-
-  it("venue back helper still falls back to /games?view=map with privacy guards", () => {
-    expect(venueMapLib).toContain('return "/games?view=map"');
-    expect(venueMapLib).toMatch(/gamesMapReturnPath/);
-    expect(venueMapLib).toMatch(/\^\\\/\(\?:games\|players\\\/radar\)\(\?:\\\?\|\$\)/);
+  it("terminates invalid game routes before rendering game detail", async () => {
+    for (const gameId of ["map", "not-a-game", "https://evil.example"]) {
+      await expect(GamePage({ params: Promise.resolve({ gameId }) })).rejects.toThrow("not-found");
+    }
+    expect(notFound).toHaveBeenCalledTimes(3);
+    for (const gameId of ["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"]) {
+      const page = await GamePage({ params: Promise.resolve({ gameId }) });
+      expect(page.props.gameId).toBe(gameId);
+    }
+    expect(notFound).toHaveBeenCalledTimes(3);
   });
-
-  it("game route rejects non-UUID ids before detail mount; accepts UUID shape case-insensitively", () => {
-    expect(gameRoute).toContain("notFound()");
-    expect(gameRoute).toContain("GAME_ID_UUID");
-    expect(gameRoute).toMatch(/\/\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$/i);
-    expect(gameRoute).toContain("GameDetailPage");
-    // Literal legacy segment "map" is a static sibling route, not a game id fetch.
-    expect(mapAlias).toContain("redirect");
-    expect(gameRoute).not.toMatch(/version.*[1-5]|variant|clock_seq/);
+  it("preserves a safe venue return path and rejects an external destination", () => {
+    expect(gamesMapReturnPath(null)).toBe("/games?view=map");
+    expect(gamesMapReturnPath("/games?view=map&cityId=moscow")).toBe("/games?view=map&cityId=moscow");
+    expect(gamesMapReturnPath("https://evil.example")).toBe("/games?view=map");
   });
 });
