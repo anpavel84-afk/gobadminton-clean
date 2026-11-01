@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.11" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.12" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.23.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,19 +425,20 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Карта: загрузка и пустой каталог; профиль без лишнего запроса тренера",
+  title: "После игры: черновики личных заметок и удаление ждут подтверждения",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [],
+  additions: [
+    "Личные заметки после игры: черновик создания и редактор при удалении очищаются только после подтверждённого успеха своей команды.",
+  ],
   fixes: [
-    "Карта корректно показывает загрузку и отсутствие результатов.",
-    "Для обычного игрока страницы профиля и создания игры не запрашивают отсутствующий тренерский профиль без необходимости.",
+    "Черновик новой заметки и открытый редактор больше не сбрасываются сразу после запуска запроса: неизвестный ответ, конфликт и чужой успех сохраняют текст.",
   ],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
-    "Холодная загрузка модуля карты и сети может занимать несколько секунд; это не выдаётся за готовый экран.",
-    "Замечания #445 по чату для неучастника и отдельные пункты #450 не объявлены закрытыми этим выпуском.",
-    "Основной сайт обновляется отдельно.",
+    "Полное типизированное расширение жалоб Safety (PG-4) этим выпуском не объявлено готовым.",
+    "Публичные комментарии после игры и массовая активация PG-3 на PROD не входят в этот кандидат.",
+    "Основной сайт обновляется отдельно; PROD остаётся на принятой alpha.8.",
   ],
   feature_catalogue: "delta",
 };
@@ -856,6 +857,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "known_limitations": [
       "Установленный интерфейс проверен на синтетических данных; проверка владельцем после обычного входа не выполнена.",
       "Alpha.10 установлена только на DEV; PROD остался на принятой alpha.8."
+    ]
+  },
+  {
+    "source_sha": "acec520281d07f30d3fa855043be7d613ba56db1",
+    "application_version": "0.1.0-alpha.11",
+    "version_label": "0.1.0-alpha.11",
+    "title": "Загрузка карты и запросы тренерского профиля — P0 #445/#450",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41361963371-a1",
+        "accepted_at": "2026-11-01T23:30:16Z",
+        "api_digest": "sha256:a89e5c9c8018914c6ac6aee2bbb666c6d99a0fd892db5aad0ede730056e9667c",
+        "web_digest": "sha256:efcbef6285944a2ea38f1156c00dd234756cf4834d2d7edb4281d6d115ace534",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Карта не показывает отсутствие площадок до успешной загрузки данных текущего города.",
+      "Обычный игрок без статуса тренера не вызывает автоматический запрос отсутствующего тренерского профиля на своём профиле и создании игры."
+    ],
+    "known_limitations": [
+      "Проверка владельцем после входа не выполнена.",
+      "Остальные замечания #445/#450, чат и второй неидентифицированный404 не объявлены исправленными.",
+      "Этот выпуск принят только на DEV; PROD остался на принятой alpha.8."
     ]
   },
 ] as const;

@@ -58,6 +58,14 @@ type NoteEditFlight = {
   text: string;
 };
 
+type NoteCreateFlight = {
+  path: string;
+  method: string;
+  body: Record<string, unknown>;
+  contextId: string;
+  text: string;
+};
+
 export function GameFeedbackPanel({
   gameId,
   feedback,
@@ -98,6 +106,7 @@ export function GameFeedbackPanel({
   boundGame.current = gameId;
   const reviewFlight = useRef<ReviewFlight | null>(null);
   const noteEditFlight = useRef<NoteEditFlight | null>(null);
+  const noteCreateFlight = useRef<NoteCreateFlight | null>(null);
   const draftSnapshot = useRef({
     peerRating,
     orgScore,
@@ -105,6 +114,8 @@ export function GameFeedbackPanel({
     tags,
     discrepancy,
     subjectId,
+    noteContextId,
+    noteText,
     editingNoteContextId,
     editingNoteText,
   });
@@ -115,6 +126,8 @@ export function GameFeedbackPanel({
     tags,
     discrepancy,
     subjectId,
+    noteContextId,
+    noteText,
     editingNoteContextId,
     editingNoteText,
   };
@@ -178,6 +191,24 @@ export function GameFeedbackPanel({
         setEditingNoteText("");
       }
       noteEditFlight.current = null;
+    }
+
+    const createFlight = noteCreateFlight.current;
+    if (
+      createFlight &&
+      boundGame.current === gameId &&
+      pending.path === createFlight.path &&
+      pending.method === createFlight.method &&
+      sameFrozenBody(pending.body, createFlight.body)
+    ) {
+      const unchanged =
+        draft.noteContextId === createFlight.contextId &&
+        draft.noteText === createFlight.text;
+      if (unchanged) {
+        setNoteContextId("");
+        setNoteText("");
+      }
+      noteCreateFlight.current = null;
     }
 
     onConfirmedOperationSeen?.();
@@ -253,17 +284,6 @@ export function GameFeedbackPanel({
     );
   }
 
-  function resetCreateNoteDraft() {
-    setNoteContextId("");
-    setNoteText("");
-  }
-
-  function resetEditNoteDraft(contextId?: string) {
-    if (contextId && editingNoteContextId && editingNoteContextId !== contextId) return;
-    setEditingNoteContextId("");
-    setEditingNoteText("");
-  }
-
   /** Create requires canCreateNote; edit of an existing own note uses note.canEdit only. */
   function saveNote(existing?: GamePersonalNote) {
     if (!writes || busy || unknownOp) return;
@@ -272,16 +292,21 @@ export function GameFeedbackPanel({
       if (!existing.allowedActions.canEdit) return;
       const text = noteText.trim();
       if (!text) return;
+      const path = `/v1/games/${gameId}/notes/${existing.contextId}`;
+      const body = {
+        expectedVersion: existing.version,
+        text,
+      };
       onLocalNotice(null);
-      mutation.run(
-        `/v1/games/${gameId}/notes/${existing.contextId}`,
-        {
-          expectedVersion: existing.version,
-          text,
-        },
-        "PUT",
-      );
-      resetCreateNoteDraft();
+      // Keep create draft until confirmed success of this exact PUT.
+      noteCreateFlight.current = {
+        path,
+        method: "PUT",
+        body,
+        contextId: existing.contextId,
+        text: noteText,
+      };
+      mutation.run(path, body, "PUT");
       return;
     }
     if (!caps?.canCreateNote) return;
@@ -292,28 +317,36 @@ export function GameFeedbackPanel({
     const preexisting = notes.find((n) => n.contextId === contextId);
     if (preexisting) {
       if (!preexisting.allowedActions.canEdit) return;
+      const path = `/v1/games/${gameId}/notes/${preexisting.contextId}`;
+      const body = {
+        expectedVersion: preexisting.version,
+        text,
+      };
       onLocalNotice(null);
-      mutation.run(
-        `/v1/games/${gameId}/notes/${preexisting.contextId}`,
-        {
-          expectedVersion: preexisting.version,
-          text,
-        },
-        "PUT",
-      );
-      resetCreateNoteDraft();
+      noteCreateFlight.current = {
+        path,
+        method: "PUT",
+        body,
+        contextId: preexisting.contextId,
+        text: noteText,
+      };
+      mutation.run(path, body, "PUT");
       return;
     }
+    const path = `/v1/games/${gameId}/notes/${contextId}`;
+    const body = {
+      expectedVersion: 0,
+      text,
+    };
     onLocalNotice(null);
-    mutation.run(
-      `/v1/games/${gameId}/notes/${contextId}`,
-      {
-        expectedVersion: 0,
-        text,
-      },
-      "PUT",
-    );
-    resetCreateNoteDraft();
+    noteCreateFlight.current = {
+      path,
+      method: "PUT",
+      body,
+      contextId,
+      text: noteText,
+    };
+    mutation.run(path, body, "PUT");
   }
 
   function saveExistingNote(note: GamePersonalNote) {
@@ -341,15 +374,21 @@ export function GameFeedbackPanel({
 
   function deleteNote(note: GamePersonalNote) {
     if (!writes || busy || unknownOp || !note.allowedActions.canDelete) return;
+    if (boundGame.current !== gameId) return;
+    const path = `/v1/games/${gameId}/notes/${note.contextId}`;
+    const body = {
+      expectedVersion: note.version,
+    };
     onLocalNotice(null);
-    mutation.run(
-      `/v1/games/${gameId}/notes/${note.contextId}`,
-      {
-        expectedVersion: note.version,
-      },
-      "DELETE",
-    );
-    resetEditNoteDraft(note.contextId);
+    // Keep edit editor open until confirmed success of this exact DELETE.
+    noteEditFlight.current = {
+      path,
+      method: "DELETE",
+      body,
+      contextId: note.contextId,
+      text: editingNoteContextId === note.contextId ? editingNoteText : "",
+    };
+    mutation.run(path, body, "DELETE");
   }
 
   function toggleTag(tag: PeerReviewTag) {

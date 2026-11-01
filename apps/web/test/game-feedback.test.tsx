@@ -667,4 +667,230 @@ describe("PG-3 feedback client mutation fencing", () => {
     ).toBe(false);
     expect(closed.nodes.some((n) => String(n.props.children) === "Изменить")).toBe(true);
   });
+
+  it("create-note draft stays after run; UNKNOWN keeps input; matching confirm clears; unrelated/changed draft does not", () => {
+    const run = vi.fn(() => true);
+    const start = renderPanel({ canCreateNote: true, run });
+    const notesTab = start.nodes.find(
+      (n) => n.type === "button" && n.props.role === "tab" && String(n.props.children) === "Заметки",
+    );
+    (notesTab!.props.onClick as () => void)();
+
+    const onNotes = renderPanel({ canCreateNote: true, run });
+    const select = onNotes.nodes.find((n) => n.type === "select");
+    expect(select).toBeTruthy();
+    (select!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: contextId },
+    });
+    const withSubject = renderPanel({ canCreateNote: true, run });
+    const area = withSubject.nodes.find(
+      (n) => n.type === "textarea" && n.props.maxLength === 500 && n.props.rows === 3,
+    );
+    (area!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Черновик новой заметки" },
+    });
+    const ready = renderPanel({ canCreateNote: true, run });
+    const save = ready.nodes.find((n) => String(n.props.children) === "Сохранить заметку");
+    expect(save).toBeTruthy();
+    (save!.props.onClick as () => void)();
+    const body = { expectedVersion: 0, text: "Черновик новой заметки" };
+    expect(run).toHaveBeenCalledWith(`/v1/games/${gameId}/notes/${contextId}`, body, "PUT");
+
+    const afterRun = renderPanel({ canCreateNote: true, run });
+    expect(
+      afterRun.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Черновик новой заметки",
+      ),
+    ).toBe(true);
+    expect(afterRun.nodes.some((n) => n.type === "select" && n.props.value === contextId)).toBe(
+      true,
+    );
+
+    const unrelated = renderPanel({
+      canCreateNote: true,
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/reviews`,
+        method: "POST",
+        key: "rev-x",
+        body: {
+          kind: "peer",
+          experienceAssertion: "i_experienced_this_game",
+          subjectContextId: contextId,
+          peerRating: "play_again",
+        },
+      },
+      flushConfirm: true,
+    });
+    expect(
+      unrelated.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Черновик новой заметки",
+      ),
+    ).toBe(true);
+
+    const tweak = renderPanel({ canCreateNote: true, run });
+    const tweakArea = tweak.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Черновик новой заметки",
+    );
+    (tweakArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Уже другой черновик" },
+    });
+    const changed = renderPanel({
+      canCreateNote: true,
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "PUT",
+        key: "note-create-k",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      changed.nodes.some((n) => n.type === "textarea" && n.props.value === "Уже другой черновик"),
+    ).toBe(true);
+
+    const restore = renderPanel({ canCreateNote: true, run });
+    const restoreArea = restore.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Уже другой черновик",
+    );
+    (restoreArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Черновик новой заметки" },
+    });
+    const again = renderPanel({ canCreateNote: true, run });
+    const saveAgain = again.nodes.find((n) => String(n.props.children) === "Сохранить заметку");
+    (saveAgain!.props.onClick as () => void)();
+    const cleared = renderPanel({
+      canCreateNote: true,
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "PUT",
+        key: "note-create-k2",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      cleared.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Черновик новой заметки",
+      ),
+    ).toBe(false);
+    expect(cleared.nodes.some((n) => n.type === "select" && n.props.value === "")).toBe(true);
+  });
+
+  it("delete keeps editor open on admission; closes only on matching confirmed DELETE", () => {
+    const run = vi.fn(() => true);
+    const first = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote({ allowedActions: { canEdit: true, canDelete: true } })],
+      run,
+    });
+    const notesTab = first.nodes.find(
+      (n) => n.type === "button" && n.props.role === "tab" && String(n.props.children) === "Заметки",
+    );
+    (notesTab!.props.onClick as () => void)();
+    const onNotes = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+    });
+    const changeBtn = onNotes.nodes.find((n) => String(n.props.children) === "Изменить");
+    (changeBtn!.props.onClick as () => void)();
+    const editing = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const editArea = editing.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Старая заметка",
+    );
+    (editArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Текст перед удалением" },
+    });
+    const ready = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const del = ready.nodes.find((n) => String(n.props.children) === "Удалить");
+    expect(del).toBeTruthy();
+    (del!.props.onClick as () => void)();
+    const body = { expectedVersion: 2 };
+    expect(run).toHaveBeenCalledWith(`/v1/games/${gameId}/notes/${contextId}`, body, "DELETE");
+
+    const afterRun = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    expect(
+      afterRun.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Текст перед удалением",
+      ),
+    ).toBe(true);
+    expect(afterRun.nodes.some((n) => String(n.props.children) === "Сохранить изменения")).toBe(
+      true,
+    );
+
+    const unrelated = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+      confirmedOperation: {
+        path: `/v1/reviews/${reviewId}/reply`,
+        method: "PUT",
+        key: "reply-del",
+        body: { expectedVersion: 0, text: "ответ" },
+      },
+      flushConfirm: true,
+    });
+    expect(
+      unrelated.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Текст перед удалением",
+      ),
+    ).toBe(true);
+
+    const tweak = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const tweakArea = tweak.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Текст перед удалением",
+    );
+    (tweakArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Уже правлю после delete admission" },
+    });
+    const changed = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "DELETE",
+        key: "del-k",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      changed.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Уже правлю после delete admission",
+      ),
+    ).toBe(true);
+
+    const restore = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const restoreArea = restore.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Уже правлю после delete admission",
+    );
+    (restoreArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Текст перед удалением" },
+    });
+    const again = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const delAgain = again.nodes.find((n) => String(n.props.children) === "Удалить");
+    (delAgain!.props.onClick as () => void)();
+    const closed = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "DELETE",
+        key: "del-k2",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      closed.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Текст перед удалением",
+      ),
+    ).toBe(false);
+    expect(closed.nodes.some((n) => String(n.props.children) === "Изменить")).toBe(true);
+  });
 });
