@@ -557,7 +557,19 @@ export class GameFeedbackService {
         }
 
         const tags = body.kind === "peer" ? (body.tags ?? []) : [];
+        // Game row is locked above: same-game writers serialize. Precheck returns the
+        // stored projection only (does not apply this request's fields). SAVEPOINT keeps
+        // a late UNIQUE 23505 from aborting the outer txn before owned lookup (25P02).
+        const ownedPrior = await this.findOwnedDuplicate(client, gameId, userId, body);
+        if (ownedPrior) {
+          return {
+            statusCode: 200,
+            body: await this.projectReview(client, ownedPrior, userId, true),
+          };
+        }
+
         let inserted: ReviewRow;
+        await client.query("SAVEPOINT game_review_insert");
         try {
           inserted = (
             await client.query<ReviewRow>(
@@ -588,8 +600,10 @@ export class GameFeedbackService {
               ],
             )
           ).rows[0]!;
+          await client.query("RELEASE SAVEPOINT game_review_insert");
         } catch (error) {
           if (isUniqueViolation(error)) {
+            await client.query("ROLLBACK TO SAVEPOINT game_review_insert");
             const existing = await this.findOwnedDuplicate(client, gameId, userId, body);
             if (existing) {
               return {

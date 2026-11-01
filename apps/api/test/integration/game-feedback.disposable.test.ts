@@ -343,8 +343,13 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       experienceAssertion: "i_experienced_this_game",
       discrepancyExplanation: "повтор",
     });
+    // Owned duplicate must not 500 (aborted txn 25P02). 200 = existing receipt only.
     expect([200, 409]).toContain(dup.statusCode);
-    if (dup.statusCode === 200) expect(dup.json().id).toBe(reviewId);
+    if (dup.statusCode === 200) {
+      expect(dup.json().id).toBe(reviewId);
+      expect(dup.json().peerRating).toBe("play_again");
+      expect(dup.json().peerRating).not.toBe("neutral");
+    }
 
     const patched = await patch(anna, `/v1/reviews/${reviewId}`, {
       expectedVersion: created.json().version,
