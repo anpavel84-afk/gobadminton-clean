@@ -157,14 +157,14 @@ function validateResolveReceipt(raw: unknown, pending: PendingOp): ResolveReceip
   };
 }
 
+/** Historical intake proof: exact identities; current versions may be ≥ receipt (not lower). */
 function rereadMatchesIntake(detail: DisputeMaterial, receipt: IntakeReceipt, actorPrincipalId: string): boolean {
-  return (
-    detail.caseId === receipt.caseId &&
-    detail.dispute.id === receipt.disputeId &&
-    detail.dispute.version === receipt.disputeVersion &&
-    detail.caseVersion === receipt.caseVersion &&
-    detail.assignedTo === actorPrincipalId
-  );
+  if (detail.caseId !== receipt.caseId || detail.dispute.id !== receipt.disputeId) return false;
+  if (detail.assignedTo !== receipt.assignedTo || detail.assignedTo !== actorPrincipalId) return false;
+  if (!Number.isInteger(detail.dispute.version) || !Number.isInteger(detail.caseVersion)) return false;
+  if (detail.dispute.version < receipt.disputeVersion) return false;
+  if (detail.caseVersion < receipt.caseVersion) return false;
+  return true;
 }
 
 function rereadMatchesResolve(detail: DisputeMaterial, receipt: ResolveReceipt): boolean {
