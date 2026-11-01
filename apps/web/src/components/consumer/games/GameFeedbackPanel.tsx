@@ -61,7 +61,8 @@ export function GameFeedbackPanel({
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [noteContextId, setNoteContextId] = useState("");
   const [noteText, setNoteText] = useState("");
-  const [noteVersion, setNoteVersion] = useState(0);
+  const [editingNoteContextId, setEditingNoteContextId] = useState("");
+  const [editingNoteText, setEditingNoteText] = useState("");
   const boundGame = useRef(gameId);
   boundGame.current = gameId;
 
@@ -143,20 +144,85 @@ export function GameFeedbackPanel({
     );
   }
 
+  function resetCreateNoteDraft() {
+    setNoteContextId("");
+    setNoteText("");
+  }
+
+  function resetEditNoteDraft(contextId?: string) {
+    if (contextId && editingNoteContextId && editingNoteContextId !== contextId) return;
+    setEditingNoteContextId("");
+    setEditingNoteText("");
+  }
+
+  /** Create requires canCreateNote; edit of an existing own note uses note.canEdit only. */
   function saveNote(existing?: GamePersonalNote) {
     if (!writes || busy || unknownOp) return;
-    const contextId = existing?.contextId || noteContextId;
-    const text = (existing ? noteText : noteText).trim();
+    if (boundGame.current !== gameId) return;
+    if (existing) {
+      if (!existing.allowedActions.canEdit) return;
+      const text = noteText.trim();
+      if (!text) return;
+      onLocalNotice(null);
+      mutation.run(
+        `/v1/games/${gameId}/notes/${existing.contextId}`,
+        {
+          expectedVersion: existing.version,
+          text,
+        },
+        "PUT",
+      );
+      resetCreateNoteDraft();
+      return;
+    }
+    if (!caps?.canCreateNote) return;
+    const contextId = noteContextId;
+    const text = noteText.trim();
     if (!contextId || !text) return;
+    // Never create with a stale draft that actually targets an existing row as version 0.
+    const preexisting = notes.find((n) => n.contextId === contextId);
+    if (preexisting) {
+      if (!preexisting.allowedActions.canEdit) return;
+      onLocalNotice(null);
+      mutation.run(
+        `/v1/games/${gameId}/notes/${preexisting.contextId}`,
+        {
+          expectedVersion: preexisting.version,
+          text,
+        },
+        "PUT",
+      );
+      resetCreateNoteDraft();
+      return;
+    }
     onLocalNotice(null);
     mutation.run(
       `/v1/games/${gameId}/notes/${contextId}`,
       {
-        expectedVersion: existing?.version ?? noteVersion,
+        expectedVersion: 0,
         text,
       },
       "PUT",
     );
+    resetCreateNoteDraft();
+  }
+
+  function saveExistingNote(note: GamePersonalNote) {
+    if (!writes || busy || unknownOp || !note.allowedActions.canEdit) return;
+    if (boundGame.current !== gameId) return;
+    if (editingNoteContextId !== note.contextId) return;
+    const text = editingNoteText.trim();
+    if (!text) return;
+    onLocalNotice(null);
+    mutation.run(
+      `/v1/games/${gameId}/notes/${note.contextId}`,
+      {
+        expectedVersion: note.version,
+        text,
+      },
+      "PUT",
+    );
+    resetEditNoteDraft(note.contextId);
   }
 
   function deleteNote(note: GamePersonalNote) {
@@ -169,6 +235,7 @@ export function GameFeedbackPanel({
       },
       "DELETE",
     );
+    resetEditNoteDraft(note.contextId);
   }
 
   function toggleTag(tag: PeerReviewTag) {
@@ -467,7 +534,6 @@ export function GameFeedbackPanel({
                         setNoteContextId(e.target.value);
                         const existing = notes.find((n) => n.contextId === e.target.value);
                         setNoteText(existing?.text ?? "");
-                        setNoteVersion(existing?.version ?? 0);
                       }}
                       disabled={busy || unknownOp || !writes}
                     >
@@ -497,21 +563,58 @@ export function GameFeedbackPanel({
                   </Button>
                 </>
               ) : null}
-              {notes.map((note) => (
-                <article key={note.contextId} className="gb-postgame__review-card">
-                  <strong>{note.subjectDisplay}</strong>
-                  <p>{note.text}</p>
-                  <div className="gb-postgame__actions">
-                    <Button
-                      variant="outline"
-                      disabled={busy || unknownOp || !writes || !note.allowedActions.canDelete}
-                      onClick={() => deleteNote(note)}
-                    >
-                      Удалить
-                    </Button>
-                  </div>
-                </article>
-              ))}
+              {notes.map((note) => {
+                const editing = editingNoteContextId === note.contextId && note.allowedActions.canEdit;
+                return (
+                  <article key={note.contextId} className="gb-postgame__review-card">
+                    <strong>{note.subjectDisplay}</strong>
+                    {editing ? (
+                      <label className="profile-field">
+                        Текст заметки
+                        <textarea
+                          maxLength={500}
+                          rows={3}
+                          value={editingNoteText}
+                          onChange={(e) => setEditingNoteText(e.target.value)}
+                          disabled={busy || unknownOp || !writes}
+                        />
+                      </label>
+                    ) : (
+                      <p>{note.text}</p>
+                    )}
+                    <div className="gb-postgame__actions">
+                      {note.allowedActions.canEdit ? (
+                        editing ? (
+                          <Button
+                            disabled={busy || unknownOp || !writes || !editingNoteText.trim()}
+                            onClick={() => saveExistingNote(note)}
+                          >
+                            Сохранить изменения
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            disabled={busy || unknownOp || !writes}
+                            onClick={() => {
+                              setEditingNoteContextId(note.contextId);
+                              setEditingNoteText(note.text);
+                            }}
+                          >
+                            Изменить
+                          </Button>
+                        )
+                      ) : null}
+                      <Button
+                        variant="outline"
+                        disabled={busy || unknownOp || !writes || !note.allowedActions.canDelete}
+                        onClick={() => deleteNote(note)}
+                      >
+                        Удалить
+                      </Button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           ) : null}
         </SurfacePanel>

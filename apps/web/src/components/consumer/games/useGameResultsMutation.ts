@@ -53,6 +53,38 @@ function asPositiveInt(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
 }
 
+/**
+ * Normalize optional review text the same way create stores omitted/blank as null.
+ * Returns false when the wire value is an unexpected type (keep UNKNOWN).
+ */
+function normalizeOptionalReviewText(value: unknown): string | null | false {
+  if (value == null) return null;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+const PEER_REVIEW_TAGS = new Set(["communication", "teamwork", "agreements"]);
+
+function normalizeReviewTags(value: unknown): string[] | null {
+  if (value == null) return [];
+  if (!Array.isArray(value)) return null;
+  const tags: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !PEER_REVIEW_TAGS.has(item)) return null;
+    tags.push(item);
+  }
+  return tags;
+}
+
+function sameReviewTags(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
 type BulkRequestItem = { contextId: string; expectedVersion: number };
 
 function parseBulkRequestItems(body: object): BulkRequestItem[] | null {
@@ -429,13 +461,80 @@ export function validateGameResultsSuccess(
 
   if (action.kind === "reviewCreate") {
     const review = data as GameReview;
-    return (
-      typeof review.id === "string" &&
-      review.gameId === action.gameId &&
-      review.direction === "sent" &&
-      typeof review.version === "number" &&
-      review.version >= 1
-    );
+    const body = pending.body as {
+      kind?: unknown;
+      subjectContextId?: unknown;
+      peerRating?: unknown;
+      organizationScore?: unknown;
+      comment?: unknown;
+      tags?: unknown;
+      experienceAssertion?: unknown;
+      discrepancyExplanation?: unknown;
+    };
+    // Explicit duplicate 200 returns the prior owned projection without applying a new body.
+    // Same-body idempotent replay is valid; mismatched requested fields stay UNKNOWN.
+    if (typeof review.id !== "string" || !review.id) return false;
+    if (review.gameId !== action.gameId) return false;
+    if (review.direction !== "sent") return false;
+    if (typeof review.version !== "number" || review.version < 1) return false;
+    if (body.kind !== "peer" && body.kind !== "organization" && body.kind !== "training") {
+      return false;
+    }
+    if (review.kind !== body.kind) return false;
+    if (review.experienceAssertion !== "i_experienced_this_game") return false;
+    if (body.experienceAssertion !== "i_experienced_this_game") return false;
+    if (review.experienceAssertion !== body.experienceAssertion) return false;
+
+    const requestedComment = normalizeOptionalReviewText(body.comment);
+    const requestedDiscrepancy = normalizeOptionalReviewText(body.discrepancyExplanation);
+    if (requestedComment === false || requestedDiscrepancy === false) return false;
+    const responseComment = normalizeOptionalReviewText(review.comment);
+    const responseDiscrepancy = normalizeOptionalReviewText(review.discrepancyExplanation);
+    if (responseComment === false || responseDiscrepancy === false) return false;
+    if (responseComment !== requestedComment) return false;
+    if (responseDiscrepancy !== requestedDiscrepancy) return false;
+
+    if (body.kind === "peer") {
+      if (typeof body.subjectContextId !== "string" || !body.subjectContextId) return false;
+      if (review.subjectContextId !== body.subjectContextId) return false;
+      if (
+        body.peerRating !== "play_again" &&
+        body.peerRating !== "neutral" &&
+        body.peerRating !== "difficulties"
+      ) {
+        return false;
+      }
+      if (review.peerRating !== body.peerRating) return false;
+      if (review.organizationScore != null) return false;
+      const requestedTags = normalizeReviewTags(body.tags);
+      if (requestedTags == null) return false;
+      if (!sameReviewTags(review.tags ?? [], requestedTags)) return false;
+      return true;
+    }
+
+    if (review.subjectContextId != null) return false;
+    if (review.peerRating != null) return false;
+    if ((review.tags ?? []).length > 0) return false;
+    if (body.tags !== undefined) {
+      const requestedTags = normalizeReviewTags(body.tags);
+      if (requestedTags == null || requestedTags.length > 0) return false;
+    }
+
+    if (body.kind === "organization") {
+      const requestedScore =
+        body.organizationScore === undefined ? null : asPositiveInt(body.organizationScore);
+      if (body.organizationScore !== undefined && requestedScore == null) return false;
+      if (requestedScore != null && (requestedScore < 1 || requestedScore > 5)) return false;
+      if (review.organizationScore !== requestedScore) return false;
+      if (requestedScore == null && requestedComment == null) return false;
+      return true;
+    }
+
+    // training
+    if (review.organizationScore != null) return false;
+    if (body.organizationScore !== undefined) return false;
+    if (requestedComment == null) return false;
+    return true;
   }
 
   if (action.kind === "reviewPatch") {
