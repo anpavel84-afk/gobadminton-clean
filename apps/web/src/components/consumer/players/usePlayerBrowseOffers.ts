@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PlayInterestReceipt, PlayInterestView } from "@gobadminton/contracts/friendship-types";
 import { getMe, getMySocialProfile } from "../../../lib/api-client";
-import type { Me, PublicPlayer } from "../../../lib/consumer-types";
+import type { Me, OwnSocialProfile, PublicPlayer } from "../../../lib/consumer-types";
 import {
   bindPlayInterestStates,
   getPlayInterestState,
@@ -34,7 +34,12 @@ export type FinderEligibilityKind =
   | "ready"
   | "empty_page"
   | "exhausted"
+  | "own_prerequisite"
+  | "peers_unavailable"
   | "error";
+
+/** Own social-profile gate for finder — independent of authState timing. */
+export type OwnSocialFinderStatus = "loading" | "ready" | "hidden" | "error";
 
 export type FinderEligibility = {
   kind: FinderEligibilityKind;
@@ -42,6 +47,38 @@ export type FinderEligibility = {
   message: string;
   canContinue: boolean;
 };
+
+/** Classify empty sendable batch without disclosing peer-private reasons. */
+export function classifyFinderBatchEmpty(input: {
+  hasMore: boolean;
+  relationships: ReadonlyArray<PlayInterestView["relationship"] | null | undefined>;
+}): "empty_page" | "exhausted" | "peers_unavailable" {
+  const known = input.relationships.filter(
+    (rel): rel is PlayInterestView["relationship"] => typeof rel === "string",
+  );
+  if (known.length > 0 && known.every((rel) => rel === "unavailable")) {
+    return "peers_unavailable";
+  }
+  return input.hasMore ? "empty_page" : "exhausted";
+}
+
+/** Map loaded OwnSocialProfile into finder gate (no privacy bypass). */
+export function ownSocialFinderStatusFromProfile(
+  profile: OwnSocialProfile | null,
+  fetchOk: boolean,
+): { status: OwnSocialFinderStatus; publicPlayerId: string | null } {
+  if (!fetchOk || !profile) {
+    return { status: "error", publicPlayerId: null };
+  }
+  const publicPlayerId = profile.publicPlayerId?.trim() || null;
+  if (!publicPlayerId) {
+    return { status: "error", publicPlayerId: null };
+  }
+  if (!profile.directoryVisible || !profile.socialEligible) {
+    return { status: "hidden", publicPlayerId };
+  }
+  return { status: "ready", publicPlayerId };
+}
 
 export type AdmitSendInput = {
   peerId: string;
@@ -159,7 +196,9 @@ export function usePlayerBrowseOffers({
   const [me, setMe] = useState<Me | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "guest" | "error">("loading");
   const [authReload, setAuthReload] = useState(0);
+  const [ownProfileReload, setOwnProfileReload] = useState(0);
   const [ownPublicPlayerId, setOwnPublicPlayerId] = useState<string | null>(null);
+  const [ownSocialStatus, setOwnSocialStatus] = useState<OwnSocialFinderStatus>("loading");
   const [known, setKnown] = useState<Map<string, PlayInterestView["relationship"]>>(() => new Map());
   const [eligibleIds, setEligibleIds] = useState<string[]>([]);
   const [eligibilityKind, setEligibilityKind] = useState<FinderEligibilityKind>("idle");
@@ -218,17 +257,24 @@ export function usePlayerBrowseOffers({
     let live = true;
     setAuthState("loading");
     setMe(null);
+    setOwnPublicPlayerId(null);
+    setOwnSocialStatus("loading");
     void (async () => {
       const result = await getMe();
       if (!live) return;
       if (!result.ok) {
         setMe(null);
+        setOwnPublicPlayerId(null);
+        setOwnSocialStatus("loading");
         setAuthState(result.status === 401 ? "guest" : "error");
         return;
       }
       setMe(result.data);
       actorIdRef.current = result.data.id;
       privateGenRef.current = privateViews.currentGeneration;
+      // Auth may be ready before own social profile — finder must wait on ownSocialStatus.
+      setOwnSocialStatus("loading");
+      setOwnPublicPlayerId(null);
       setAuthState("ready");
       const restored = restoreUnresolvedPeers(result.data.id, peerNamesRef.current);
       if (restored.length) {
@@ -241,9 +287,6 @@ export function usePlayerBrowseOffers({
           setOpNotice("Предыдущая отправка не подтверждена. Проверьте её результат.");
         }
       }
-      const social = await getMySocialProfile();
-      if (!live) return;
-      if (social.ok && social.data.publicPlayerId) setOwnPublicPlayerId(social.data.publicPlayerId);
     })();
     const expire = () => {
       live = false;
@@ -254,6 +297,7 @@ export function usePlayerBrowseOffers({
       setActiveOperation(null);
       setMe(null);
       setOwnPublicPlayerId(null);
+      setOwnSocialStatus("loading");
       setAuthState("guest");
       setOpPhase("idle");
       setOpPeerId(null);
@@ -281,6 +325,30 @@ export function usePlayerBrowseOffers({
     };
   }, [authReload]);
 
+  // Own social profile readiness — gate finder before any peer-capability batch.
+  useEffect(() => {
+    if (authState !== "ready" || !me) return;
+    let live = true;
+    setOwnSocialStatus("loading");
+    setOwnPublicPlayerId(null);
+    // Drop premature checked/exhausted bookkeeping from any auth-ready race.
+    retireEligibilityBookkeeping();
+    void (async () => {
+      const social = await getMySocialProfile();
+      if (!live) return;
+      if (actorIdRef.current !== me.id) return;
+      const mapped = ownSocialFinderStatusFromProfile(
+        social.ok ? social.data : null,
+        social.ok,
+      );
+      setOwnPublicPlayerId(mapped.publicPlayerId);
+      setOwnSocialStatus(mapped.status);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [authState, me, ownProfileReload, retireEligibilityBookkeeping]);
+
   useEffect(() => {
     if (scopeRef.current === ordinaryScope) return;
     scopeRef.current = ordinaryScope;
@@ -290,7 +358,7 @@ export function usePlayerBrowseOffers({
   }, [ordinaryScope, finderActive, retireEligibilityBookkeeping]);
 
   const runBatch = useCallback(async (players: PublicPlayer[], mode: "replace" | "append") => {
-    if (!me || authState !== "ready") return;
+    if (!me || authState !== "ready" || ownSocialStatus !== "ready") return;
     const own = ownPublicPlayerId?.trim() || "";
     const ordered = players
       .map(p => p.publicPlayerId)
@@ -302,7 +370,7 @@ export function usePlayerBrowseOffers({
         setEligibilityKind(hasMore ? "empty_page" : "exhausted");
         setEligibilityMessage(hasMore
           ? "В этой части списка новых предложений нет"
-          : "Подборка по этим фильтрам закончилась");
+          : "Новых предложений сейчас нет.");
       }
       return;
     }
@@ -361,6 +429,9 @@ export function usePlayerBrowseOffers({
       if (readValidatedPending(actor, id)) return false;
       return true;
     });
+    const ownedRels = frozen
+      .filter(id => peerStillOwned(id))
+      .map(id => bound.get(id)?.relationship);
     setEligibleIds(prev => {
       // Drop peers that mutated after this batch captured them so stale none cannot re-admit.
       const retained = mode === "append"
@@ -372,16 +443,20 @@ export function usePlayerBrowseOffers({
       if (merged.length > 0) {
         setEligibilityKind("ready");
         setEligibilityMessage("");
-      } else if (hasMore) {
-        setEligibilityKind("empty_page");
-        setEligibilityMessage("В этой части списка новых предложений нет");
       } else {
-        setEligibilityKind("exhausted");
-        setEligibilityMessage("Подборка по этим фильтрам закончилась");
+        const emptyKind = classifyFinderBatchEmpty({ hasMore, relationships: ownedRels });
+        setEligibilityKind(emptyKind);
+        setEligibilityMessage(
+          emptyKind === "peers_unavailable"
+            ? "Подходящие предложения временно недоступны."
+            : emptyKind === "empty_page"
+              ? "В этой части списка новых предложений нет"
+              : "Новых предложений сейчас нет.",
+        );
       }
       return merged;
     });
-  }, [me, authState, ordinaryScope, hasMore, ownPublicPlayerId]);
+  }, [me, authState, ordinaryScope, hasMore, ownPublicPlayerId, ownSocialStatus]);
 
   useEffect(() => {
     if (!finderActive) return;
@@ -395,6 +470,25 @@ export function usePlayerBrowseOffers({
     if (authState !== "ready" || !me) {
       setEligibilityKind("error");
       setEligibilityMessage("Не удалось проверить подборку");
+      return;
+    }
+    if (ownSocialStatus === "loading") {
+      setEligibilityKind("checking");
+      setEligibilityMessage("Подбираем игроков…");
+      return;
+    }
+    if (ownSocialStatus === "error") {
+      setEligibilityKind("error");
+      setEligibilityMessage("Не удалось загрузить профиль");
+      setEligibleIds([]);
+      return;
+    }
+    if (ownSocialStatus === "hidden") {
+      setEligibilityKind("own_prerequisite");
+      setEligibilityMessage(
+        "В режиме «Свайп» предложения доступны, когда ваш профиль виден в каталоге.",
+      );
+      setEligibleIds([]);
       return;
     }
     if (catalogState === "loading" && catalogPlayers.length === 0) {
@@ -416,10 +510,12 @@ export function usePlayerBrowseOffers({
       const fresh = catalogPlayers.filter(p => !checkedIds.has(p.publicPlayerId));
       if (fresh.length === 0) {
         setContinueArmed(false);
+        // Preserve peers_unavailable from prior batch — do not flash false exhausted.
+        if (eligibilityKind === "peers_unavailable") return;
         setEligibilityKind(hasMore ? "empty_page" : "exhausted");
         setEligibilityMessage(hasMore
           ? "В этой части списка новых предложений нет"
-          : "Подборка по этим фильтрам закончилась");
+          : "Новых предложений сейчас нет.");
         return;
       }
       setContinueArmed(false);
@@ -432,10 +528,21 @@ export function usePlayerBrowseOffers({
       return;
     }
     if (unchecked.length === 0 && checkedIds.size > 0) {
+      // Preserve terminal kinds from runBatch (peers_unavailable / exhausted / empty_page).
+      if (
+        eligibilityKind === "peers_unavailable"
+        || eligibilityKind === "exhausted"
+        || eligibilityKind === "empty_page"
+        || eligibilityKind === "own_prerequisite"
+        || eligibilityKind === "error"
+      ) {
+        return;
+      }
+      // Was ready; sendable queue drained without fresh catalog peers.
       setEligibilityKind(hasMore ? "empty_page" : "exhausted");
       setEligibilityMessage(hasMore
         ? "В этой части списка новых предложений нет"
-        : "Подборка по этим фильтрам закончилась");
+        : "Новых предложений сейчас нет.");
       return;
     }
     if (unchecked.length === 0) {
@@ -443,7 +550,7 @@ export function usePlayerBrowseOffers({
       setEligibilityMessage(hasMore
         ? "В этой части списка новых предложений нет"
         : catalogState === "empty"
-          ? "Подборка по этим фильтрам закончилась"
+          ? "Новых предложений сейчас нет."
           : "Подбираем игроков…");
       return;
     }
@@ -453,10 +560,12 @@ export function usePlayerBrowseOffers({
     finderActive,
     authState,
     me,
+    ownSocialStatus,
     catalogState,
     catalogPlayers,
     checkedIds,
     eligibleIds.length,
+    eligibilityKind,
     hasMore,
     moreBusy,
     continueArmed,
@@ -534,7 +643,7 @@ export function usePlayerBrowseOffers({
   }, [opMatchesCurrentActor]);
 
   const admitSend = useCallback((input: AdmitSendInput): boolean => {
-    if (!me || authState !== "ready") return false;
+    if (!me || authState !== "ready" || ownSocialStatus !== "ready") return false;
     if (actorIdRef.current !== me.id) return false;
     if (admitLockRef.current || opPhaseRef.current === "sending" || activeTokenRef.current) return false;
     if (unresolvedRef.current.some(entry => entry.peerId === input.peerId)) return false;
@@ -568,9 +677,14 @@ export function usePlayerBrowseOffers({
     setOpNotice("");
     opPhaseRef.current = "sending";
     return true;
-  }, [me, authState, bumpPeerMutation]);
+  }, [me, authState, ownSocialStatus, bumpPeerMutation]);
 
   const canSendTo = useCallback((peerId: string): { ok: boolean; reason: string } => {
+    if (ownSocialStatus !== "ready") {
+      return { ok: false, reason: ownSocialStatus === "hidden"
+        ? "Сначала сделайте профиль видимым в каталоге"
+        : "Проверяем профиль…" };
+    }
     if (opPhase === "sending" || activeOperation) {
       return { ok: false, reason: "Завершаем предыдущее предложение" };
     }
@@ -585,7 +699,7 @@ export function usePlayerBrowseOffers({
       return { ok: false, reason: "" };
     }
     return { ok: true, reason: "" };
-  }, [opPhase, activeOperation, unresolved, known, me]);
+  }, [ownSocialStatus, opPhase, activeOperation, unresolved, known, me]);
 
   const noteRelationship = useCallback((peerId: string, relationship: PlayInterestView["relationship"]) => {
     bumpPeerMutation(peerId);
@@ -661,7 +775,11 @@ export function usePlayerBrowseOffers({
     retireEligibilityBookkeeping();
     setEligibilityKind("checking");
     setEligibilityMessage("Подбираем игроков…");
-  }, [retireEligibilityBookkeeping]);
+    if (ownSocialStatus === "error" || ownSocialStatus === "hidden") {
+      setOwnSocialStatus("loading");
+      setOwnProfileReload((n) => n + 1);
+    }
+  }, [retireEligibilityBookkeeping, ownSocialStatus]);
 
   const eligiblePlayers = useMemo(() => {
     const byId = new Map(catalogPlayers.map(p => [p.publicPlayerId, p]));

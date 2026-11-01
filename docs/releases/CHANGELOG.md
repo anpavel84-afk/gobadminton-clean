@@ -1,5 +1,15 @@
 # GoBadminton release notes
 
+## #438 — Swipe false exhaustion repair (0.1.0-alpha.2 candidate)
+
+Finder «Свайп» waits for own social-profile readiness before peer-capability filtering. Hidden own profile (`directoryVisible` / `socialEligible`) shows a profile-settings prerequisite with link to `/profile` — no automatic privacy change. Profile load failure is a real retry error; all-peer `unavailable` is generic unavailable/retry, not catalogue exhaustion. Genuine outgoing/mutual skip/exhaustion and UNKNOWN/account-switch protections retained. Application version descriptor `0.1.0-alpha.2` (delta); first named `0.1.0-alpha.1` baseline kept literal; trusted history seed adds the two accepted alpha.1 DEV/PROD receipts. Alpha.2 SHA/date unknown until trusted release.
+
+- Application version (candidate): `0.1.0-alpha.2`
+- Refs: #438
+- Independent QA / Product CI / DEV install: pending
+- Owner UAT: NOT_TESTED
+- Alpha.2 source SHA / acceptance dates: not invented
+
 ## #434 — First named application version 0.1.0-alpha.1 (DEV releases page)
 
 First formal application version number for this code build (not API contract `0.20.0`, not package metadata alone). DEV-only `/releases` product page: what the app does, simple DEV/PROD installation status, readable dates, and known limits in plain Russian. Technical SHA/API/receipts stay under collapsed details. Trusted historical seed (unnumbered 855/115) and live SHA vs `__release-info` comparison retained. Footer version badge + DEV-only «Версии» link. Web `/health` reports `applicationVersion` + `gitSha`. Pass2 repairs: fail-soft out-of-range finished/observed timestamps; full 40-hex SHA required before `accepted_current`.

@@ -185,7 +185,7 @@ export function PlayerBrowseOfferStatus({
   );
 }
 
-/** Finder gate surfaces: checking / empty page / exhausted / error (not a false empty catalog). */
+/** Finder gate: loading / own-prerequisite / peers unavailable / empty page / exhausted / error. */
 export function PlayerBrowseFinderGate({
   eligibility,
   onContinue,
@@ -215,11 +215,40 @@ export function PlayerBrowseFinderGate({
       </div>
     );
   }
+  if (eligibility.kind === "own_prerequisite") {
+    return (
+      <div className="pb-finder-gate" role="status">
+        <h2>Сначала откройте свой профиль</h2>
+        <p>
+          {eligibility.message
+            || "В режиме «Свайп» предложения доступны, когда ваш профиль виден в каталоге."}
+        </p>
+        <Button variant="dark" href="/profile">К настройкам профиля</Button>
+        {onRetry && (
+          <Button variant="outline" onClick={onRetry}>Проверить снова</Button>
+        )}
+      </div>
+    );
+  }
+  if (eligibility.kind === "peers_unavailable") {
+    return (
+      <div className="pb-finder-gate" role="status">
+        <h2>Сейчас нельзя предложить игру</h2>
+        <p>{eligibility.message || "Подходящие предложения временно недоступны."}</p>
+        {onRetry && <Button variant="outline" onClick={onRetry}>Повторить</Button>}
+      </div>
+    );
+  }
   if (eligibility.kind === "error") {
+    const profileError = eligibility.message.includes("профиль");
     return (
       <div className="pb-finder-gate" role="alert">
-        <h2>Не удалось проверить подборку</h2>
-        <p>{eligibility.message}</p>
+        <h2>{profileError ? "Не удалось загрузить профиль" : "Не удалось проверить подборку"}</h2>
+        <p>
+          {profileError
+            ? "Повторите попытку. Без профиля нельзя проверить предложения."
+            : "Проверьте соединение и повторите."}
+        </p>
         {onRetry && <Button variant="outline" onClick={onRetry}>Повторить</Button>}
       </div>
     );
@@ -238,7 +267,7 @@ export function PlayerBrowseFinderGate({
   return (
     <div className="pb-finder-gate" role="status">
       <h2>Подборка по этим фильтрам закончилась</h2>
-      <p>{eligibility.message || "Новых предложений сейчас нет."}</p>
+      <p>Новых предложений сейчас нет.</p>
     </div>
   );
 }

@@ -154,7 +154,7 @@ describe("player browse discovery · fluid send source contracts", () => {
     // Actor/private retirement resets checkedIds / batch gen / continuation — not only known/eligible.
     const expire = offersHookSource.indexOf("const expire = () =>");
     expect(expire).toBeGreaterThan(-1);
-    const expireBody = offersHookSource.slice(expire, expire + 900);
+    const expireBody = offersHookSource.slice(expire, expire + 1400);
     expect(expireBody).toContain("batchGen.current += 1");
     expect(expireBody).toContain("batchInFlight.current = false");
     expect(expireBody).toContain("setCheckedIds(new Set())");
