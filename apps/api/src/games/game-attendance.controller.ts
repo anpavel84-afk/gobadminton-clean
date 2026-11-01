@@ -142,4 +142,42 @@ export class GameAttendanceController {
     reply.status(result.statusCode);
     return result.body;
   }
+
+  @Post("attendance-disputes/:disputeId/responses")
+  @Header("Cache-Control", "no-store")
+  async respond(
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+    @Param("disputeId") disputeId: string,
+  ) {
+    const actor = await this.auth.requireCookieMutation(request);
+    const result = await this.attendance.respondDispute(
+      actor.userId,
+      actor.sessionId,
+      this.idempotency.requireKey(request.headers["idempotency-key"]),
+      disputeId,
+      request.body,
+    );
+    reply.status(result.statusCode);
+    return result.body;
+  }
+
+  @Post("attendance-disputes/:disputeId/help")
+  @Header("Cache-Control", "no-store")
+  async help(
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+    @Param("disputeId") disputeId: string,
+  ) {
+    const actor = await this.auth.requireCookieMutation(request);
+    const result = await this.attendance.requestDisputeHelp(
+      actor.userId,
+      actor.sessionId,
+      this.idempotency.requireKey(request.headers["idempotency-key"]),
+      disputeId,
+      request.body,
+    );
+    reply.status(result.statusCode);
+    return result.body;
+  }
 }

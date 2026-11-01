@@ -14,14 +14,17 @@ import {
   decodeRosterCursor,
   disputeAttendanceRequest,
   eligibleFromTransitions,
+  emptyAttendanceActions,
   emptyAttendanceSlice,
   encodeMeResultsCursor,
   encodeRosterCursor,
+  helpDisputeRequest,
   parse,
   parseContextId,
   parseLimit,
   postGameWritesEnabled,
   putAttendanceRequest,
+  respondDisputeRequest,
   summarizeRoster,
   unavailable,
   unknownAttendanceRecord,
@@ -34,6 +37,9 @@ import {
   ATTENDANCE_ROSTER_DEFAULT_LIMIT,
   ATTENDANCE_ROSTER_MAX_LIMIT,
   type AttendanceAllowedActions,
+  type AttendanceDisputeHelpProgress,
+  type AttendanceDisputeHistoryAction,
+  type AttendanceDisputeStatus,
   type AttendanceDisputeView,
   type AttendanceRecordView,
   type AttendanceRow,
@@ -67,6 +73,12 @@ export class GameAttendanceService {
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
     return Boolean((await client.query("SELECT to_regclass('game_attendance') AS name")).rows[0]?.name);
+  }
+
+  private async pg2Installed(client: PoolClient | Pool): Promise<boolean> {
+    return Boolean(
+      (await client.query("SELECT to_regclass('game_attendance_dispute_responses') AS name")).rows[0]?.name,
+    );
   }
 
   private async lockGame(client: PoolClient, gameId: string): Promise<LockedGameRow> {
@@ -283,9 +295,12 @@ export class GameAttendanceService {
   ): Promise<AttendanceRecordView> {
     const row = await this.readAttendance(client, context.participationId);
     const dispute = await this.readOpenDispute(client, context.participationId);
-    const acknowledgedVersion = row
-      ? await this.readAcknowledgedVersion(client, context.participationId, row.version)
-      : null;
+    const pg2 = await this.pg2Installed(client);
+    const knownFact = !!row && row.value !== "unknown";
+    const acknowledgedVersion =
+      knownFact && row
+        ? await this.readAcknowledgedVersion(client, context.participationId, row.version)
+        : null;
     const isOwn = context.userId === viewerId;
     const actorDisplay = row ? await this.displayName(client, row.actor_user_id) : null;
     const actions: AttendanceAllowedActions = {
@@ -293,13 +308,19 @@ export class GameAttendanceService {
       canAcknowledge:
         writesEnabled &&
         isOwn &&
+        knownFact &&
         !!row &&
         acknowledgedVersion !== row.version,
-      canDispute: writesEnabled && isOwn && !!row && !dispute,
+      canDispute: writesEnabled && isOwn && knownFact && !!row && !dispute,
       canWithdrawDispute: writesEnabled && isOwn && !!dispute,
+      canRespondDispute: writesEnabled && pg2 && role === "manager" && !!dispute,
+      canRequestHelp: writesEnabled && pg2 && isOwn && !!dispute,
     };
     if (!row) {
-      return unknownAttendanceRecord(context.participationId, context.displayName, actions);
+      return unknownAttendanceRecord(context.participationId, context.displayName, {
+        ...emptyAttendanceActions(),
+        canSetAttendance: canManagerWrite,
+      });
     }
     return {
       contextId: context.participationId,
@@ -321,10 +342,7 @@ export class GameAttendanceService {
           }
         : null,
       displayName: context.displayName,
-      allowedActions: {
-        ...actions,
-        canSetAttendance: canManagerWrite,
-      },
+      allowedActions: actions,
     };
   }
 
@@ -444,7 +462,12 @@ export class GameAttendanceService {
     };
   }
 
-  private resolveSource(actorId: string, participantUserId: string): AttendanceSource {
+  private resolveSource(
+    actorId: string,
+    participantUserId: string,
+    forced?: AttendanceSource,
+  ): AttendanceSource {
+    if (forced) return forced;
     return actorId === participantUserId ? "self_attested" : "manager_explicit";
   }
 
@@ -459,6 +482,7 @@ export class GameAttendanceService {
       late: boolean;
       correctionReason: string | null;
       now: Date;
+      source?: AttendanceSource;
     },
   ): Promise<AttendanceRow> {
     const existing = (
@@ -471,10 +495,15 @@ export class GameAttendanceService {
     if (currentVersion !== args.expectedVersion) {
       throw conflict("VERSION_CONFLICT", "Версия посещения устарела");
     }
-    // Open dispute is retained across corrections (PG-2 closes it).
+    if (args.value === "unknown" && currentVersion < 1) {
+      throw conflict("ATTENDANCE_UNKNOWN_INITIAL", "Неизвестное нельзя записать как первую отметку");
+    }
+    // Open dispute is retained across manager corrections (PG-2 closes only via
+    // party acknowledge or scoped reviewer resolution).
     await this.readOpenDispute(client, args.participation.id);
     const nextVersion = currentVersion + 1;
-    const source = this.resolveSource(args.actorId, args.participation.user_id);
+    const late = args.value === "present" ? args.late : false;
+    const source = this.resolveSource(args.actorId, args.participation.user_id, args.source);
     const actorDisplay = await this.displayName(client, args.actorId);
     if (!existing) {
       await client.query(
@@ -487,7 +516,7 @@ export class GameAttendanceService {
           args.gameId,
           args.participation.user_id,
           args.value,
-          args.late,
+          late,
           source,
           args.actorId,
           args.correctionReason,
@@ -509,7 +538,7 @@ export class GameAttendanceService {
           args.participation.id,
           args.value,
           nextVersion,
-          args.late,
+          late,
           source,
           args.actorId,
           args.correctionReason,
@@ -533,7 +562,7 @@ export class GameAttendanceService {
         existing?.value ?? null,
         args.value,
         existing ? existing.late : null,
-        args.late,
+        late,
         existing?.correction_reason ?? null,
         args.correctionReason,
         nextVersion === 1 ? null : args.correctionReason,
@@ -551,7 +580,7 @@ export class GameAttendanceService {
         args.participation.user_id,
         nextVersion,
         args.value,
-        args.late,
+        late,
         source,
         args.actorId,
         actorDisplay,
@@ -772,6 +801,8 @@ export class GameAttendanceService {
       gameId,
       contextId,
       attendanceVersion: body.attendanceVersion,
+      resolvingDisputeId: body.resolvingDisputeId ?? null,
+      expectedDisputeVersion: body.expectedDisputeVersion ?? null,
     });
     return this.mutations.runIdempotent<AttendanceRecordView>({
       actorId: userId,
@@ -797,15 +828,21 @@ export class GameAttendanceService {
         if (!attendance || attendance.version !== body.attendanceVersion) {
           throw conflict("VERSION_CONFLICT", "Версия посещения устарела");
         }
+        if (attendance.value === "unknown") {
+          throw conflict("ATTENDANCE_UNKNOWN_NO_ACK", "Неизвестную отметку нельзя подтвердить");
+        }
         const notice = (
-          await client.query<{ id: string; acknowledged_at: Date | null }>(
-            `SELECT id, acknowledged_at FROM game_attendance_notices
+          await client.query<{ id: string; acknowledged_at: Date | null; value: AttendanceValue }>(
+            `SELECT id, acknowledged_at, value FROM game_attendance_notices
              WHERE participation_id = $1 AND attendance_version = $2
              FOR UPDATE`,
             [participation.id, body.attendanceVersion],
           )
         ).rows[0];
         if (!notice) unavailable();
+        if (notice.value === "unknown") {
+          throw conflict("ATTENDANCE_UNKNOWN_NO_ACK", "Неизвестную отметку нельзя подтвердить");
+        }
         if (!notice.acknowledged_at) {
           await client.query(
             `UPDATE game_attendance_notices
@@ -813,6 +850,57 @@ export class GameAttendanceService {
              WHERE id = $1 AND acknowledged_at IS NULL`,
             [notice.id],
           );
+        }
+        if (body.resolvingDisputeId && body.expectedDisputeVersion !== undefined) {
+          const dispute = (
+            await client.query<{
+              id: string;
+              version: number;
+              status: string;
+              participation_id: string;
+              user_id: string;
+            }>(
+              `SELECT id, version, status, participation_id, user_id
+               FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`,
+              [body.resolvingDisputeId],
+            )
+          ).rows[0];
+          if (
+            !dispute ||
+            dispute.user_id !== userId ||
+            dispute.participation_id !== participation.id
+          ) {
+            unavailable();
+          }
+          if (dispute.status === "resolved") {
+            // Idempotent same-key path may replay; already resolved is fine when versions match.
+          } else if (dispute.status !== "open") {
+            throw conflict("DISPUTE_NOT_OPEN", "Возражение уже закрыто");
+          } else if (dispute.version !== body.expectedDisputeVersion) {
+            throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
+          } else {
+            const nextVersion = dispute.version + 1;
+            await client.query(
+              `UPDATE game_attendance_disputes
+               SET status = 'resolved',
+                   version = $2,
+                   resolved_at = clock_timestamp(),
+                   resolution_kind = 'party_acknowledged',
+                   help_progress = CASE
+                     WHEN help_progress IS NULL THEN NULL
+                     ELSE 'resolved'
+                   END,
+                   updated_at = clock_timestamp()
+               WHERE id = $1`,
+              [dispute.id, nextVersion],
+            );
+            await client.query(
+              `INSERT INTO game_attendance_dispute_revisions
+                 (dispute_id, resource_version, actor_user_id, action, explanation)
+               VALUES ($1, $2, $3, 'party_acknowledged', $4)`,
+              [dispute.id, nextVersion, userId, "Участник подтвердил текущую отметку"],
+            );
+          }
         }
         const displayName = await this.displayName(client, participation.user_id);
         const view = await this.projectRecord(
@@ -959,6 +1047,156 @@ export class GameAttendanceService {
            VALUES ($1, $2, $3, 'withdrawn', $4)`,
           [disputeId, nextVersion, userId, body.reason ?? null],
         );
+        return { statusCode: 200, body: await this.projectDispute(client, disputeId, userId) };
+      },
+    });
+  }
+
+  async respondDispute(
+    userId: string,
+    sessionId: string,
+    key: string,
+    disputeIdRaw: string,
+    input: unknown,
+  ): Promise<{ statusCode: number; body: AttendanceDisputeView }> {
+    if (!postGameWritesEnabled(this.env)) writesUnavailable();
+    const disputeId = parseContextId(disputeIdRaw);
+    const body = parse(respondDisputeRequest, input);
+    const requestHash = this.idempotency.requestHash({
+      disputeId,
+      expectedVersion: body.expectedVersion,
+      explanation: body.explanation,
+      correction: body.correction ?? null,
+    });
+    return this.mutations.runIdempotent<AttendanceDisputeView>({
+      actorId: userId,
+      sessionId,
+      operation: "games.attendance.dispute.respond",
+      key,
+      requestHash,
+      authorizeReplay: async (client) => {
+        if (!postGameWritesEnabled(this.env)) writesUnavailable();
+        if (!(await this.installed(client)) || !(await this.pg2Installed(client))) writesUnavailable();
+        const row = await this.lockManagerDispute(client, disputeId, userId);
+        if (row.status !== "open" && row.status !== "resolved" && row.status !== "withdrawn") {
+          unavailable();
+        }
+      },
+      execute: async (client) => {
+        if (!postGameWritesEnabled(this.env)) writesUnavailable();
+        if (!(await this.installed(client)) || !(await this.pg2Installed(client))) writesUnavailable();
+        const row = await this.lockManagerDispute(client, disputeId, userId);
+        if (row.status !== "open") {
+          throw conflict("DISPUTE_NOT_OPEN", "Возражение уже закрыто");
+        }
+        if (row.version !== body.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
+        }
+        const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+        let correctedAttendanceVersion: number | null = null;
+        let action: AttendanceDisputeHistoryAction = "manager_responded";
+        if (body.correction) {
+          const participation = (
+            await client.query<ParticipationLockRow>(
+              `SELECT id, game_id, user_id, status, confirmed_at
+               FROM participations WHERE id = $1 FOR UPDATE`,
+              [row.participation_id],
+            )
+          ).rows[0];
+          if (!participation) unavailable();
+          const written = await this.writeAssertion(client, {
+            gameId: row.game_id,
+            participation,
+            actorId: userId,
+            expectedVersion: body.correction.expectedAttendanceVersion,
+            value: body.correction.value,
+            late: body.correction.late === true,
+            correctionReason: body.correction.correctionReason,
+            now,
+          });
+          correctedAttendanceVersion = written.version;
+          action = "manager_corrected";
+        }
+        const nextVersion = row.version + 1;
+        await client.query(
+          `UPDATE game_attendance_disputes
+           SET version = $2,
+               latest_manager_response = $3,
+               updated_at = clock_timestamp()
+           WHERE id = $1 AND status = 'open'`,
+          [disputeId, nextVersion, body.explanation],
+        );
+        await client.query(
+          `INSERT INTO game_attendance_dispute_revisions
+             (dispute_id, resource_version, actor_user_id, action, explanation)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [disputeId, nextVersion, userId, action, body.explanation],
+        );
+        await client.query(
+          `INSERT INTO game_attendance_dispute_responses
+             (dispute_id, dispute_version, actor_user_id, explanation, corrected_attendance_version, recorded_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [disputeId, nextVersion, userId, body.explanation, correctedAttendanceVersion, now],
+        );
+        // Response/correction never unilaterally closes the objection.
+        return { statusCode: 200, body: await this.projectDispute(client, disputeId, userId) };
+      },
+    });
+  }
+
+  async requestDisputeHelp(
+    userId: string,
+    sessionId: string,
+    key: string,
+    disputeIdRaw: string,
+    input: unknown,
+  ): Promise<{ statusCode: number; body: AttendanceDisputeView }> {
+    if (!postGameWritesEnabled(this.env)) writesUnavailable();
+    const disputeId = parseContextId(disputeIdRaw);
+    const body = parse(helpDisputeRequest, input);
+    const requestHash = this.idempotency.requestHash({
+      disputeId,
+      expectedVersion: body.expectedVersion,
+      explanation: body.explanation,
+    });
+    return this.mutations.runIdempotent<AttendanceDisputeView>({
+      actorId: userId,
+      sessionId,
+      operation: "games.attendance.dispute.help",
+      key,
+      requestHash,
+      authorizeReplay: async (client) => {
+        if (!postGameWritesEnabled(this.env)) writesUnavailable();
+        if (!(await this.installed(client)) || !(await this.pg2Installed(client))) writesUnavailable();
+        await this.lockOwnDispute(client, disputeId, userId);
+      },
+      execute: async (client) => {
+        if (!postGameWritesEnabled(this.env)) writesUnavailable();
+        if (!(await this.installed(client)) || !(await this.pg2Installed(client))) writesUnavailable();
+        const row = await this.lockOwnDispute(client, disputeId, userId);
+        if (row.status !== "open") {
+          throw conflict("DISPUTE_NOT_OPEN", "Возражение уже закрыто");
+        }
+        if (row.version !== body.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
+        }
+        const nextVersion = row.version + 1;
+        await client.query(
+          `UPDATE game_attendance_disputes
+           SET version = $2,
+               help_requested_at = COALESCE(help_requested_at, clock_timestamp()),
+               help_progress = COALESCE(help_progress, 'requested'),
+               updated_at = clock_timestamp()
+           WHERE id = $1 AND status = 'open'`,
+          [disputeId, nextVersion],
+        );
+        await client.query(
+          `INSERT INTO game_attendance_dispute_revisions
+             (dispute_id, resource_version, actor_user_id, action, explanation)
+           VALUES ($1, $2, $3, 'help_requested', $4)`,
+          [disputeId, nextVersion, userId, body.explanation],
+        );
+        // Escalation is a progress record — not an abuse report and not staff assignment.
         return { statusCode: 200, body: await this.projectDispute(client, disputeId, userId) };
       },
     });
@@ -1180,7 +1418,37 @@ export class GameAttendanceService {
       }>(`SELECT * FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`, [disputeId])
     ).rows[0];
     if (!row || row.user_id !== userId) unavailable();
+    // Lock order: ActorFence → Game → participation → dispute (already locked).
     await this.lockGame(client, row.game_id);
+    await client.query(`SELECT id FROM participations WHERE id = $1 FOR UPDATE`, [row.participation_id]);
+    return row;
+  }
+
+  private async lockManagerDispute(
+    client: PoolClient,
+    disputeId: string,
+    managerUserId: string,
+  ): Promise<{
+    id: string;
+    version: number;
+    status: string;
+    game_id: string;
+    participation_id: string;
+    user_id: string;
+  }> {
+    const row = (
+      await client.query<{
+        id: string;
+        version: number;
+        status: string;
+        game_id: string;
+        participation_id: string;
+        user_id: string;
+      }>(`SELECT * FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`, [disputeId])
+    ).rows[0];
+    if (!row) unavailable();
+    await this.lockGame(client, row.game_id);
+    await this.assertCurrentManager(client, row.game_id, managerUserId);
     await client.query(`SELECT id FROM participations WHERE id = $1 FOR UPDATE`, [row.participation_id]);
     return row;
   }
@@ -1190,6 +1458,7 @@ export class GameAttendanceService {
     disputeId: string,
     viewerId: string,
   ): Promise<AttendanceDisputeView> {
+    const pg2 = await this.pg2Installed(client);
     const row = (
       await client.query<{
         id: string;
@@ -1198,18 +1467,34 @@ export class GameAttendanceService {
         user_id: string;
         challenged_version: number;
         explanation: string;
-        status: "open" | "withdrawn";
+        status: AttendanceDisputeStatus;
         version: number;
         created_at: Date;
         updated_at: Date;
         withdrawn_at: Date | null;
         withdraw_reason: string | null;
-      }>(`SELECT * FROM game_attendance_disputes WHERE id = $1`, [disputeId])
+        resolved_at: Date | null;
+        resolution_kind: string | null;
+        latest_manager_response: string | null;
+        help_progress: AttendanceDisputeHelpProgress | null;
+      }>(
+        pg2
+          ? `SELECT id, game_id, participation_id, user_id, challenged_version, explanation, status,
+                    version, created_at, updated_at, withdrawn_at, withdraw_reason,
+                    resolved_at, resolution_kind, latest_manager_response, help_progress
+             FROM game_attendance_disputes WHERE id = $1`
+          : `SELECT id, game_id, participation_id, user_id, challenged_version, explanation, status,
+                    version, created_at, updated_at, withdrawn_at, withdraw_reason,
+                    NULL::timestamptz AS resolved_at, NULL::text AS resolution_kind,
+                    NULL::text AS latest_manager_response, NULL::text AS help_progress
+             FROM game_attendance_disputes WHERE id = $1`,
+        [disputeId],
+      )
     ).rows[0];
     if (!row) unavailable();
     const history = await client.query<{
       resource_version: number;
-      action: "opened" | "withdrawn";
+      action: AttendanceDisputeHistoryAction;
       explanation: string | null;
       recorded_at: Date;
     }>(
@@ -1219,6 +1504,34 @@ export class GameAttendanceService {
        ORDER BY resource_version ASC`,
       [disputeId],
     );
+    const challenged = (
+      await client.query<{
+        resource_version: number;
+        after_value: AttendanceValue;
+        after_late: boolean;
+        source: AttendanceSource;
+        recorded_at: Date;
+        actor_user_id: string;
+      }>(
+        `SELECT resource_version, after_value, after_late, source, recorded_at, actor_user_id
+         FROM game_attendance_revisions
+         WHERE participation_id = $1 AND resource_version = $2
+         LIMIT 1`,
+        [row.participation_id, row.challenged_version],
+      )
+    ).rows[0];
+    const current = await this.readAttendance(client, row.participation_id);
+    const role = await this.accessRole(client, row.game_id, viewerId);
+    const writes = postGameWritesEnabled(this.env);
+    const isOwn = row.user_id === viewerId;
+    const caseLink = pg2
+      ? (
+          await client.query<{ case_id: string }>(
+            `SELECT case_id FROM game_attendance_dispute_case_links WHERE dispute_id = $1`,
+            [disputeId],
+          )
+        ).rows[0]
+      : undefined;
     return {
       id: row.id,
       gameId: row.game_id,
@@ -1231,6 +1544,34 @@ export class GameAttendanceService {
       updatedAt: row.updated_at.toISOString(),
       withdrawnAt: row.withdrawn_at?.toISOString() ?? null,
       withdrawReason: row.withdraw_reason,
+      resolvedAt: row.resolved_at?.toISOString() ?? null,
+      resolutionKind: row.resolution_kind,
+      latestManagerResponse: row.latest_manager_response,
+      helpProgress: row.help_progress,
+      caseProgress: {
+        linked: Boolean(caseLink),
+        status: row.help_progress,
+      },
+      challengedAssertion: challenged
+        ? {
+            version: challenged.resource_version,
+            value: challenged.after_value,
+            late: challenged.after_late,
+            source: challenged.source,
+            actorDisplay: await this.displayName(client, challenged.actor_user_id),
+            recordedAt: challenged.recorded_at.toISOString(),
+          }
+        : null,
+      currentAssertion: {
+        value: current?.value ?? "unknown",
+        version: current?.version ?? 0,
+        late: current?.late ?? false,
+        assertion: {
+          actorDisplay: current ? await this.displayName(client, current.actor_user_id) : null,
+          source: current?.source ?? null,
+          at: current?.updated_at.toISOString() ?? null,
+        },
+      },
       history: history.rows.map((item) => ({
         version: item.resource_version,
         action: item.action,
@@ -1238,8 +1579,15 @@ export class GameAttendanceService {
         recordedAt: item.recorded_at.toISOString(),
       })),
       allowedActions: {
-        canWithdraw:
-          postGameWritesEnabled(this.env) && row.user_id === viewerId && row.status === "open",
+        canWithdraw: writes && isOwn && row.status === "open",
+        canRespond: writes && pg2 && role === "manager" && row.status === "open",
+        canRequestHelp: writes && pg2 && isOwn && row.status === "open",
+        canAcknowledgeCurrent:
+          writes &&
+          isOwn &&
+          row.status === "open" &&
+          !!current &&
+          current.value !== "unknown",
       },
     };
   }

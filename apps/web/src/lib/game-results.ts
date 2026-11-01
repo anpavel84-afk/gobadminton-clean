@@ -14,7 +14,29 @@ export function attendanceLabel(value: AttendanceValue | "unknown"): string {
 export function attendanceSourceLabel(source: AttendanceRecord["assertion"]["source"]): string {
   if (source === "self_attested") return "Сами отметили";
   if (source === "manager_explicit") return "Отметил организатор";
+  if (source === "case_reviewer") return "Решение по обращению";
   return "Источник неизвестен";
+}
+
+/** Compact day/month badge in game timezone; full date/time stays in context text. */
+export function formatGameDateBadge(iso: string | undefined, timezone?: string): { day: string; month: string } {
+  if (!iso) return { day: "—", month: "" };
+  try {
+    const day = new Intl.DateTimeFormat("ru-RU", {
+      day: "numeric",
+      timeZone: timezone || undefined,
+    }).format(new Date(iso));
+    const month = new Intl.DateTimeFormat("ru-RU", {
+      month: "short",
+      timeZone: timezone || undefined,
+    })
+      .format(new Date(iso))
+      .replace(".", "")
+      .toUpperCase();
+    return { day, month };
+  } catch {
+    return { day: "—", month: "" };
+  }
 }
 
 export function canOfferAttendanceWrites(results: GameResults | null | undefined): boolean {

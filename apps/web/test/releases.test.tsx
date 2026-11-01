@@ -20,8 +20,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.3 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.3");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.4 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.4");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -30,7 +30,7 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
     expect(CURRENT_NAMED_RELEASE.feature_catalogue).toBe("delta");
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/посещаем|результат/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/отметк|возражен|обращен|уточнен/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/OFF|alpha\.2|NOT_TESTED/i);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
@@ -38,7 +38,8 @@ describe("releases catalogue integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) => row.application_version === FIRST_NAMED_APPLICATION_VERSION)).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) => row.application_version === "0.1.0-alpha.2")).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(4);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) => row.application_version === "0.1.0-alpha.3")).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(5);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

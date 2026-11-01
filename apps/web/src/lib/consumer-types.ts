@@ -396,10 +396,18 @@ export const UNAVAILABLE_COPY = {
 /** Additive avatar projection; missing on older API candidates. */
 export type PlayerAvatar = { uploadedUrl: string | null; providerUrl: string | null };
 
-/** PG-1a/PG-1b game results + attendance. */
-export type AttendanceValue = "present" | "absent";
-export type AttendanceProjectionValue = "unknown" | AttendanceValue;
-export type AttendanceSource = "manager_explicit" | "self_attested";
+/** PG-1a/PG-1b/PG-2 game results + attendance. */
+export type AttendanceValue = "present" | "absent" | "unknown";
+export type AttendanceProjectionValue = AttendanceValue;
+export type AttendanceSource = "manager_explicit" | "self_attested" | "case_reviewer";
+export type AttendanceDisputeStatus = "open" | "withdrawn" | "resolved";
+export type AttendanceDisputeHelpProgress =
+  | "requested"
+  | "case_opened"
+  | "in_review"
+  | "awaiting_information"
+  | "resolved"
+  | "left_open_insufficient_evidence";
 
 export type AttendanceRecord = {
   contextId: string;
@@ -414,7 +422,7 @@ export type AttendanceRecord = {
   acknowledgedVersion: number | null;
   dispute: {
     id: string;
-    status: "open" | "withdrawn";
+    status: AttendanceDisputeStatus;
     challengedVersion: number;
     version: number;
   } | null;
@@ -424,6 +432,8 @@ export type AttendanceRecord = {
     canAcknowledge: boolean;
     canDispute: boolean;
     canWithdrawDispute: boolean;
+    canRespondDispute?: boolean;
+    canRequestHelp?: boolean;
   };
 };
 
@@ -479,7 +489,7 @@ export type AttendanceDispute = {
   id: string;
   gameId: string;
   contextId: string;
-  status: "open" | "withdrawn";
+  status: AttendanceDisputeStatus;
   challengedVersion: number;
   explanation: string;
   version: number;
@@ -487,13 +497,41 @@ export type AttendanceDispute = {
   updatedAt: string;
   withdrawnAt: string | null;
   withdrawReason: string | null;
+  resolvedAt?: string | null;
+  resolutionKind?: string | null;
+  latestManagerResponse?: string | null;
+  helpProgress?: AttendanceDisputeHelpProgress | null;
+  caseProgress?: { linked: boolean; status: AttendanceDisputeHelpProgress | null };
+  challengedAssertion?: {
+    version: number;
+    value: AttendanceValue;
+    late: boolean;
+    source: AttendanceSource;
+    actorDisplay: string;
+    recordedAt: string;
+  } | null;
+  currentAssertion?: {
+    value: AttendanceProjectionValue;
+    version: number;
+    late: boolean;
+    assertion: {
+      actorDisplay: string | null;
+      source: AttendanceSource | null;
+      at: string | null;
+    };
+  };
   history: Array<{
     version: number;
-    action: "opened" | "withdrawn";
+    action: string;
     explanation: string | null;
     recordedAt: string;
   }>;
-  allowedActions: { canWithdraw: boolean };
+  allowedActions: {
+    canWithdraw: boolean;
+    canRespond?: boolean;
+    canRequestHelp?: boolean;
+    canAcknowledgeCurrent?: boolean;
+  };
 };
 
 export type AttendanceHistoryPage = {

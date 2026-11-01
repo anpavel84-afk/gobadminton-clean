@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  getAttendanceDispute,
   getAttendanceHistory,
   getGame,
   getGameResults,
@@ -18,7 +19,9 @@ import {
   attendanceLabel,
   attendanceSourceLabel,
   canOfferAttendanceWrites,
+  formatGameDateBadge,
 } from "../../../lib/game-results";
+import type { AttendanceDispute } from "../../../lib/consumer-types";
 import { Button } from "../Button";
 import { ContentContainer, SurfacePanel } from "../Surfaces";
 import { Avatar, ProfileDialog, SectionHeader } from "../players/ProfileComposition";
@@ -96,6 +99,13 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeText, setDisputeText] = useState("");
+  const [disputeDetail, setDisputeDetail] = useState<AttendanceDispute | null>(null);
+  const [responseText, setResponseText] = useState("");
+  const [responseValue, setResponseValue] = useState<AttendanceValue>("present");
+  const [responseLate, setResponseLate] = useState(false);
+  const [responseReason, setResponseReason] = useState("");
+  const [responseCorrect, setResponseCorrect] = useState(false);
+  const [helpText, setHelpText] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLines, setHistoryLines] = useState<string[]>([]);
   const [outcomeOpen, setOutcomeOpen] = useState(false);
@@ -113,6 +123,11 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setBulkConfirmOpen(false);
     setDisputeOpen(false);
     setDisputeText("");
+    setDisputeDetail(null);
+    setResponseText("");
+    setResponseReason("");
+    setResponseCorrect(false);
+    setHelpText("");
     setHistoryOpen(false);
     setHistoryLines([]);
     setOutcomeOpen(false);
@@ -137,6 +152,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     }
     setMe(account.data);
     const [gameRes, resultsRes] = await Promise.all([getGame(gameId), getGameResults(gameId)]);
+    // dispute detail loaded after results when open — see below after results ok
     if (request !== epoch.current) return;
     if (actorRef.current && actorRef.current !== account.data.id) return;
     if (!resultsRes.ok) {
@@ -159,6 +175,19 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setResults(resultsRes.data);
     // Public getGame may 404 while authorized own results remain usable.
     setGame(gameRes.ok ? gameRes.data : null);
+    const openDisputeId =
+      resultsRes.data.attendance?.myAttendance?.dispute?.status === "open"
+        ? resultsRes.data.attendance.myAttendance.dispute.id
+        : resultsRes.data.attendance?.roster?.find((row) => row.dispute?.status === "open")?.dispute
+            ?.id;
+    if (openDisputeId) {
+      const detail = await getAttendanceDispute(openDisputeId);
+      if (request !== epoch.current) return;
+      if (actorRef.current && actorRef.current !== account.data.id) return;
+      setDisputeDetail(detail.ok ? detail.data : null);
+    } else {
+      setDisputeDetail(null);
+    }
     setState("ready");
   }
 
@@ -243,11 +272,71 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       );
     }
 
-    function submitAck() {
+    function submitAck(resolveOpenDispute = false) {
       if (!me || !my) return;
+      if (my.value === "unknown") {
+        setNotice("Неизвестную отметку нельзя подтвердить.");
+        return;
+      }
+      const body: Record<string, unknown> = { attendanceVersion: my.version };
+      if (resolveOpenDispute && my.dispute?.status === "open") {
+        body.resolvingDisputeId = my.dispute.id;
+        body.expectedDisputeVersion = my.dispute.version;
+      }
       runWrite(
         `/v1/games/${gameId}/attendance/${my.contextId}/acknowledgements`,
-        { attendanceVersion: my.version },
+        body,
+        "POST",
+      );
+    }
+
+    function submitRespond() {
+      if (!me || !disputeDetail) return;
+      const explanation = responseText.trim();
+      if (!explanation) {
+        setNotice("Укажите пояснение ответа.");
+        return;
+      }
+      const body: Record<string, unknown> = {
+        expectedVersion: disputeDetail.version,
+        explanation,
+      };
+      if (responseCorrect) {
+        const reason = responseReason.trim();
+        if (!reason) {
+          setNotice("Укажите причину исправления.");
+          return;
+        }
+        body.correction = {
+          expectedAttendanceVersion: disputeDetail.currentAssertion?.version ?? my?.version ?? 0,
+          value: responseValue,
+          late: responseValue === "present" ? responseLate : false,
+          correctionReason: reason,
+        };
+      }
+      runWrite(`/v1/attendance-disputes/${disputeDetail.id}/responses`, body, "POST");
+    }
+
+    function submitHelp(explanationRaw?: string) {
+      if (!me || !disputeDetail) return;
+      const explanation = (explanationRaw ?? helpText).trim();
+      if (!explanation) {
+        setNotice("Укажите, в чём нужна помощь.");
+        return;
+      }
+      setHelpText(explanation);
+      runWrite(
+        `/v1/attendance-disputes/${disputeDetail.id}/help`,
+        { expectedVersion: disputeDetail.version, explanation },
+        "POST",
+      );
+    }
+
+    function submitWithdraw() {
+      if (!me || !disputeDetail) return;
+      runWrite(
+        `/v1/attendance-disputes/${disputeDetail.id}/withdraw`,
+        { expectedVersion: disputeDetail.version },
         "POST",
       );
     }
@@ -316,8 +405,16 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       {state === "ready" && results ? (
         <>
           <SurfacePanel tone="bordered" className="gb-postgame__context">
-            <div className="gb-postgame__date">
-              <strong>{game ? formatWhen(game.startsAt, game.timezone).split(",")[0] : "Игра"}</strong>
+            <div className="gb-postgame__date" aria-hidden={!game}>
+              {(() => {
+                const badge = formatGameDateBadge(game?.startsAt, game?.timezone);
+                return (
+                  <>
+                    <strong>{badge.day}</strong>
+                    <span>{badge.month}</span>
+                  </>
+                );
+              })()}
             </div>
             <div>
               <h2>{game?.title ?? "Контекст игры"}</h2>
@@ -430,7 +527,13 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                               disabled={busy || unknownOp}
                               onClick={() => {
                                 setMarkTarget({ record: row, mode: "single" });
-                                setMarkValue(row.value === "absent" ? "absent" : "present");
+                                setMarkValue(
+                                  row.value === "absent"
+                                    ? "absent"
+                                    : row.value === "unknown"
+                                      ? "present"
+                                      : "present",
+                                );
                                 setMarkLate(row.late);
                                 setMarkReason("");
                               }}
@@ -512,21 +615,174 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
           ) : null}
 
           {tab === "clarification" ? (
-            <SurfacePanel tone="bordered" className="gb-postgame__panel">
-              <SectionHeader title="Уточнение" />
-              {my?.dispute?.status === "open" ? (
-                <>
-                  <p className="gb-postgame__pill" data-tone="wait">На уточнении</p>
-                  <p>
-                    Открытое возражение к версии {my.dispute.challengedVersion}. Новая отметка организатора не закрывает
-                    его молча.
-                  </p>
-                  <p>Полный ответ организатора и независимое разрешение — в следующем срезе (PG-2).</p>
-                </>
-              ) : (
-                <p>Нет открытого уточнения по вашей отметке.</p>
-              )}
-            </SurfacePanel>
+            <div className="gb-postgame__layout">
+              <div className="gb-postgame__main">
+                <SurfacePanel tone="bordered" className="gb-postgame__panel">
+                  <div className="gb-postgame__clarify-head">
+                    <SectionHeader title="Давайте уточним" eyebrow="Посещение · ваша отметка" />
+                    {(my?.dispute?.status === "open" || disputeDetail?.status === "open") && (
+                      <p className="gb-postgame__pill" data-tone="wait">На уточнении</p>
+                    )}
+                  </div>
+                  {disputeDetail && (my?.dispute || isManager) ? (
+                    <>
+                      <p>
+                        Вопрос к прежней отметке. Сейчас: «
+                        {attendanceLabel(disputeDetail.currentAssertion?.value ?? my?.value ?? "unknown")}», версия{" "}
+                        {disputeDetail.currentAssertion?.version ?? my?.version ?? "—"}.
+                      </p>
+                      <div className="gb-postgame__side-by-side">
+                        <div className="gb-postgame__quote">
+                          <strong>Оспариваемая отметка</strong>
+                          <p>
+                            {disputeDetail.challengedAssertion
+                              ? `v${disputeDetail.challengedAssertion.version}: «${attendanceLabel(disputeDetail.challengedAssertion.value)}» · ${disputeDetail.challengedAssertion.actorDisplay}`
+                              : `Версия ${disputeDetail.challengedVersion}`}
+                          </p>
+                        </div>
+                        <div className="gb-postgame__quote">
+                          <strong>Текущая отметка</strong>
+                          <p>
+                            v{disputeDetail.currentAssertion?.version ?? 0}: «
+                            {attendanceLabel(disputeDetail.currentAssertion?.value ?? "unknown")}»
+                            {disputeDetail.currentAssertion?.assertion.actorDisplay
+                              ? ` · ${disputeDetail.currentAssertion.assertion.actorDisplay}`
+                              : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="gb-postgame__quote" data-tone="party">
+                        <strong>{my?.displayName ?? "Участник"}</strong>
+                        <p>{disputeDetail.explanation}</p>
+                      </div>
+                      {disputeDetail.latestManagerResponse ? (
+                        <div className="gb-postgame__quote">
+                          <strong>Ответ организатора</strong>
+                          <p>{disputeDetail.latestManagerResponse}</p>
+                        </div>
+                      ) : null}
+                      {disputeDetail.helpProgress ? (
+                        <p className="gb-postgame__helper">
+                          Помощь:{" "}
+                          {disputeDetail.caseProgress?.linked
+                            ? "обращение принято в работу"
+                            : disputeDetail.helpProgress === "requested"
+                              ? "запрос отправлен, ожидает служебного приёма"
+                              : disputeDetail.helpProgress}
+                          . Это не автоматическая жалоба и не назначение сотрудника.
+                        </p>
+                      ) : null}
+                      <div className="gb-postgame__actions">
+                        {writes && disputeDetail.allowedActions.canAcknowledgeCurrent ? (
+                          <Button disabled={busy || unknownOp} onClick={() => submitAck(true)}>
+                            Проверить текущую отметку
+                          </Button>
+                        ) : null}
+                        {writes && disputeDetail.allowedActions.canRequestHelp ? (
+                          <Button
+                            variant="outline"
+                            disabled={busy || unknownOp}
+                            onClick={() =>
+                              submitHelp(helpText.trim() || "Нужна помощь по уточнению посещения.")
+                            }
+                          >
+                            Помощь по уточнению
+                          </Button>
+                        ) : null}
+                        {writes && disputeDetail.allowedActions.canRespond ? (
+                          <Button disabled={busy || unknownOp} onClick={() => submitRespond()}>
+                            Ответить / исправить
+                          </Button>
+                        ) : null}
+                      </div>
+                      {writes && disputeDetail.allowedActions.canRespond ? (
+                        <div className="gb-postgame__dialog-form">
+                          <label className="profile-field">
+                            Пояснение организатора
+                            <textarea
+                              maxLength={500}
+                              rows={3}
+                              value={responseText}
+                              onChange={(e) => setResponseText(e.target.value)}
+                              disabled={busy || unknownOp}
+                            />
+                          </label>
+                          <label className="profile-field">
+                            <input
+                              type="checkbox"
+                              checked={responseCorrect}
+                              onChange={(e) => setResponseCorrect(e.target.checked)}
+                              disabled={busy || unknownOp}
+                            />{" "}
+                            Также исправить текущую отметку (спор останется открытым)
+                          </label>
+                          {responseCorrect ? (
+                            <>
+                              <label className="profile-field">
+                                Новая отметка
+                                <select
+                                  value={responseValue}
+                                  onChange={(e) => setResponseValue(e.target.value as AttendanceValue)}
+                                  disabled={busy || unknownOp}
+                                >
+                                  <option value="present">Пришёл</option>
+                                  <option value="absent">Не пришёл</option>
+                                  <option value="unknown">Неизвестно</option>
+                                </select>
+                              </label>
+                              {responseValue === "present" ? (
+                                <label className="profile-field">
+                                  <input
+                                    type="checkbox"
+                                    checked={responseLate}
+                                    onChange={(e) => setResponseLate(e.target.checked)}
+                                    disabled={busy || unknownOp}
+                                  />{" "}
+                                  Опоздание
+                                </label>
+                              ) : null}
+                              <label className="profile-field">
+                                Причина исправления
+                                <textarea
+                                  required
+                                  maxLength={500}
+                                  rows={2}
+                                  value={responseReason}
+                                  onChange={(e) => setResponseReason(e.target.value)}
+                                  disabled={busy || unknownOp}
+                                />
+                              </label>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {writes && disputeDetail.allowedActions.canWithdraw ? (
+                        <button
+                          type="button"
+                          className="gb-postgame__text-action"
+                          disabled={busy || unknownOp}
+                          onClick={() => submitWithdraw()}
+                        >
+                          Отозвать возражение
+                          <small>Отзыв не меняет текущую отметку и не создаёт согласие.</small>
+                        </button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p>Нет открытого уточнения по вашей отметке.</p>
+                  )}
+                </SurfacePanel>
+              </div>
+              <aside className="gb-postgame__rail">
+                <SectionHeader title="Только по делу" />
+                <p>
+                  Видны ваша отметка и ход этого уточнения. Участие в запросе и факт посещения — разные вещи.
+                </p>
+                {disputeDetail?.helpProgress === "requested" && !disputeDetail.caseProgress?.linked ? (
+                  <p className="gb-postgame__helper">Ожидается служебный приём обращения — без ложного назначения.</p>
+                ) : null}
+              </aside>
+            </div>
           ) : null}
 
           {tab === "feedback" ? (
@@ -558,6 +814,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
               <select value={markValue} onChange={(e) => setMarkValue(e.target.value as AttendanceValue)} disabled={busy || unknownOp}>
                 <option value="present">Пришёл</option>
                 <option value="absent">Не пришёл</option>
+                {markTarget.record.version > 0 ? <option value="unknown">Неизвестно</option> : null}
               </select>
             </label>
             {markValue === "present" ? (

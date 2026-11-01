@@ -36,7 +36,7 @@ const plainBounded = (max: number) =>
 export const putAttendanceRequest = z
   .object({
     expectedVersion: z.number().int().min(0).max(2147483647),
-    value: z.enum(["present", "absent"]),
+    value: z.enum(["present", "absent", "unknown"]),
     late: z.boolean().optional(),
     correctionReason: plainBounded(ATTENDANCE_REASON_MAX).optional(),
   })
@@ -44,6 +44,9 @@ export const putAttendanceRequest = z
   .superRefine((body, ctx) => {
     if (body.late === true && body.value !== "present") {
       ctx.addIssue({ code: "custom", path: ["late"], message: "late only with present" });
+    }
+    if (body.value === "unknown" && body.expectedVersion < 1) {
+      ctx.addIssue({ code: "custom", path: ["value"], message: "unknown only as correction" });
     }
     const correction = body.expectedVersion > 0;
     if (correction && !body.correctionReason) {
@@ -83,8 +86,21 @@ export const bulkPresentRequest = z
 export const acknowledgeAttendanceRequest = z
   .object({
     attendanceVersion: z.number().int().min(1).max(2147483647),
+    resolvingDisputeId: uuid.optional(),
+    expectedDisputeVersion: z.number().int().min(1).max(2147483647).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, ctx) => {
+    const hasDispute = body.resolvingDisputeId !== undefined;
+    const hasVersion = body.expectedDisputeVersion !== undefined;
+    if (hasDispute !== hasVersion) {
+      ctx.addIssue({
+        code: "custom",
+        path: hasDispute ? ["expectedDisputeVersion"] : ["resolvingDisputeId"],
+        message: "resolvingDisputeId and expectedDisputeVersion required together",
+      });
+    }
+  });
 
 export const disputeAttendanceRequest = z
   .object({
@@ -100,11 +116,48 @@ export const withdrawDisputeRequest = z
   })
   .strict();
 
+export const respondDisputeRequest = z
+  .object({
+    expectedVersion: z.number().int().min(1).max(2147483647),
+    explanation: plainBounded(ATTENDANCE_EXPLANATION_MAX),
+    correction: z
+      .object({
+        expectedAttendanceVersion: z.number().int().min(1).max(2147483647),
+        value: z.enum(["present", "absent", "unknown"]),
+        late: z.boolean().optional(),
+        correctionReason: plainBounded(ATTENDANCE_REASON_MAX),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    if (!body.correction) return;
+    if (body.correction.late === true && body.correction.value !== "present") {
+      ctx.addIssue({ code: "custom", path: ["correction", "late"], message: "late only with present" });
+    }
+  });
+
+export const helpDisputeRequest = z
+  .object({
+    expectedVersion: z.number().int().min(1).max(2147483647),
+    explanation: plainBounded(ATTENDANCE_EXPLANATION_MAX),
+  })
+  .strict();
+
 export type PutAttendanceRequest = z.infer<typeof putAttendanceRequest>;
 export type BulkPresentRequest = z.infer<typeof bulkPresentRequest>;
-export type AttendanceValue = "present" | "absent";
-export type AttendanceProjectionValue = "unknown" | AttendanceValue;
-export type AttendanceSource = "manager_explicit" | "self_attested";
+export type AttendanceValue = "present" | "absent" | "unknown";
+export type AttendanceProjectionValue = AttendanceValue;
+export type AttendanceSource = "manager_explicit" | "self_attested" | "case_reviewer";
+export type AttendanceDisputeStatus = "open" | "withdrawn" | "resolved";
+export type AttendanceDisputeHelpProgress =
+  | "requested"
+  | "case_opened"
+  | "in_review"
+  | "awaiting_information"
+  | "resolved"
+  | "left_open_insufficient_evidence";
 
 export type AttendanceAssertion = {
   actorDisplay: string | null;
@@ -114,7 +167,7 @@ export type AttendanceAssertion = {
 
 export type AttendanceDisputeSummary = {
   id: string;
-  status: "open" | "withdrawn";
+  status: AttendanceDisputeStatus;
   challengedVersion: number;
   version: number;
 };
@@ -124,6 +177,8 @@ export type AttendanceAllowedActions = {
   canAcknowledge: boolean;
   canDispute: boolean;
   canWithdrawDispute: boolean;
+  canRespondDispute: boolean;
+  canRequestHelp: boolean;
 };
 
 export type AttendanceRecordView = {
@@ -154,6 +209,15 @@ export type AttendanceRevisionView = {
   source: AttendanceSource;
   recordedAt: string;
   actorDisplay: string;
+};
+
+export type AttendanceChallengedSnapshot = {
+  version: number;
+  value: AttendanceValue;
+  late: boolean;
+  source: AttendanceSource;
+  actorDisplay: string;
+  recordedAt: string;
 };
 
 export type GameAttendanceSlice = {
@@ -192,11 +256,22 @@ export type MeGameResultsPage = {
   nextCursor: string | null;
 };
 
+export type AttendanceDisputeHistoryAction =
+  | "opened"
+  | "withdrawn"
+  | "manager_responded"
+  | "manager_corrected"
+  | "party_acknowledged"
+  | "help_requested"
+  | "case_linked"
+  | "reviewer_resolved"
+  | "left_open_insufficient_evidence";
+
 export type AttendanceDisputeView = {
   id: string;
   gameId: string;
   contextId: string;
-  status: "open" | "withdrawn";
+  status: AttendanceDisputeStatus;
   challengedVersion: number;
   explanation: string;
   version: number;
@@ -204,13 +279,33 @@ export type AttendanceDisputeView = {
   updatedAt: string;
   withdrawnAt: string | null;
   withdrawReason: string | null;
+  resolvedAt: string | null;
+  resolutionKind: string | null;
+  latestManagerResponse: string | null;
+  helpProgress: AttendanceDisputeHelpProgress | null;
+  caseProgress: {
+    linked: boolean;
+    status: AttendanceDisputeHelpProgress | null;
+  };
+  challengedAssertion: AttendanceChallengedSnapshot | null;
+  currentAssertion: {
+    value: AttendanceProjectionValue;
+    version: number;
+    late: boolean;
+    assertion: AttendanceAssertion;
+  };
   history: Array<{
     version: number;
-    action: "opened" | "withdrawn";
+    action: AttendanceDisputeHistoryAction;
     explanation: string | null;
     recordedAt: string;
   }>;
-  allowedActions: { canWithdraw: boolean };
+  allowedActions: {
+    canWithdraw: boolean;
+    canRespond: boolean;
+    canRequestHelp: boolean;
+    canAcknowledgeCurrent: boolean;
+  };
 };
 
 export type AttendanceRow = {
@@ -311,7 +406,21 @@ export function unknownAttendanceRecord(
     acknowledgedVersion: null,
     dispute: null,
     displayName,
-    allowedActions: actions,
+    allowedActions: {
+      ...actions,
+      canAcknowledge: false,
+    },
+  };
+}
+
+export function emptyAttendanceActions(): AttendanceAllowedActions {
+  return {
+    canSetAttendance: false,
+    canAcknowledge: false,
+    canDispute: false,
+    canWithdrawDispute: false,
+    canRespondDispute: false,
+    canRequestHelp: false,
   };
 }
 

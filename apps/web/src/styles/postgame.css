@@ -30,24 +30,55 @@
 }
 
 .gb-postgame__date {
-  min-width: 72px;
-  min-height: 72px;
+  width: 72px;
+  height: 72px;
+  max-width: 72px;
+  max-height: 72px;
   border: 1px solid var(--gb-line);
   border-radius: 18px;
   display: grid;
-  place-items: center;
+  place-content: center;
+  gap: 2px;
   text-align: center;
   background: var(--gb-white);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.1;
+  overflow: hidden;
+}
+
+.gb-postgame__date strong {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.gb-postgame__date span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--gb-ink-soft);
+}
+
+/* Compact rhythm inside postgame panels/rail only — do not change global typography. */
+.gb-postgame__panel h2,
+.gb-postgame__panel p,
+.gb-postgame__rail h2,
+.gb-postgame__rail p,
+.gb-postgame__context h2,
+.gb-postgame__context p {
+  margin: 0;
+}
+
+.gb-postgame__panel,
+.gb-postgame__rail,
+.gb-postgame__main {
+  gap: 12px;
 }
 
 .gb-postgame__context h2 {
-  margin: 0 0 6px;
   font-size: 1.15rem;
 }
 
 .gb-postgame__context p {
-  margin: 0;
   color: var(--gb-ink-soft);
   font-size: 15px;
 }
@@ -91,7 +122,58 @@
 .gb-postgame__panel {
   padding: 28px 24px;
   display: grid;
-  gap: 14px;
+  gap: 12px;
+}
+
+.gb-postgame__clarify-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.gb-postgame__side-by-side {
+  display: grid;
+  gap: 10px;
+}
+
+@media (min-width: 720px) {
+  .gb-postgame__side-by-side {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.gb-postgame__quote {
+  border-left: 3px solid var(--gb-purple);
+  background: var(--gb-paper);
+  border-radius: 0 12px 12px 0;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.gb-postgame__quote[data-tone="party"] {
+  background: #eee6ff;
+}
+
+.gb-postgame__text-action {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  border: 0;
+  background: transparent;
+  color: var(--gb-ink);
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gb-postgame__text-action small {
+  font-weight: 400;
+  color: var(--gb-ink-soft);
 }
 
 .gb-postgame__notice-card {

@@ -67,13 +67,33 @@ type RecognizedAction =
   | { kind: "mark"; gameId: string; contextId: string }
   | { kind: "ack"; gameId: string; contextId: string }
   | { kind: "dispute"; gameId: string; contextId: string }
-  | { kind: "outcome"; gameId: string };
+  | { kind: "outcome"; gameId: string }
+  | { kind: "disputeRespond"; disputeId: string }
+  | { kind: "disputeHelp"; disputeId: string }
+  | { kind: "disputeWithdraw"; disputeId: string };
+
+function pathDisputeId(path: string): string | null {
+  const match = path.match(/^\/v1\/attendance-disputes\/([^/]+)(?:\/(responses|help|withdraw))?$/);
+  return match?.[1] ?? null;
+}
 
 /** Anchored path+method only — no broad substring fallback. */
 export function recognizeGameResultsAction(
   path: string,
   method: string,
 ): RecognizedAction | null {
+  if (method === "POST") {
+    const disputeId = pathDisputeId(path);
+    if (disputeId && path === `/v1/attendance-disputes/${disputeId}/responses`) {
+      return { kind: "disputeRespond", disputeId };
+    }
+    if (disputeId && path === `/v1/attendance-disputes/${disputeId}/help`) {
+      return { kind: "disputeHelp", disputeId };
+    }
+    if (disputeId && path === `/v1/attendance-disputes/${disputeId}/withdraw`) {
+      return { kind: "disputeWithdraw", disputeId };
+    }
+  }
   const gameId = pathGameId(path);
   if (!gameId) return null;
   if (method === "POST" && path === `/v1/games/${gameId}/attendance/bulk-present`) {
@@ -105,9 +125,12 @@ export function validateGameResultsPending(
   if (typeof pending.path !== "string" || typeof pending.method !== "string") return false;
   if (typeof pending.key !== "string" || !pending.key) return false;
   if (!isObject(pending.body)) return false;
-  if (pathGameId(pending.path) !== gameId) return false;
   const action = recognizeGameResultsAction(pending.path, pending.method);
-  if (!action || action.gameId !== gameId) return false;
+  if (!action) return false;
+  if ("gameId" in action && action.gameId !== gameId) return false;
+  if (!("gameId" in action) && pathGameId(pending.path) != null && pathGameId(pending.path) !== gameId) {
+    return false;
+  }
 
   switch (action.kind) {
     case "bulk": {
@@ -121,7 +144,8 @@ export function validateGameResultsPending(
       const expectedVersion = asNonNegInt(body.expectedVersion);
       const value = body.value;
       if (expectedVersion == null) return false;
-      if (value !== "present" && value !== "absent") return false;
+      if (value !== "present" && value !== "absent" && value !== "unknown") return false;
+      if (value === "unknown" && expectedVersion < 1) return false;
       if (value === "present") {
         if (body.late != null && typeof body.late !== "boolean") return false;
       } else if (body.late === true) {
@@ -130,7 +154,23 @@ export function validateGameResultsPending(
       return true;
     }
     case "ack": {
-      return asPositiveInt((pending.body as { attendanceVersion?: unknown }).attendanceVersion) != null;
+      const body = pending.body as {
+        attendanceVersion?: unknown;
+        resolvingDisputeId?: unknown;
+        expectedDisputeVersion?: unknown;
+      };
+      if (asPositiveInt(body.attendanceVersion) == null) return false;
+      const hasDispute = body.resolvingDisputeId !== undefined;
+      const hasVersion = body.expectedDisputeVersion !== undefined;
+      if (hasDispute !== hasVersion) return false;
+      if (hasDispute) {
+        return (
+          typeof body.resolvingDisputeId === "string" &&
+          body.resolvingDisputeId.length > 0 &&
+          asPositiveInt(body.expectedDisputeVersion) != null
+        );
+      }
+      return true;
     }
     case "dispute": {
       const body = pending.body as { attendanceVersion?: unknown; explanation?: unknown };
@@ -139,6 +179,18 @@ export function validateGameResultsPending(
         typeof body.explanation === "string" &&
         body.explanation.trim().length > 0
       );
+    }
+    case "disputeRespond":
+    case "disputeHelp": {
+      const body = pending.body as { expectedVersion?: unknown; explanation?: unknown };
+      return (
+        asPositiveInt(body.expectedVersion) != null &&
+        typeof body.explanation === "string" &&
+        body.explanation.trim().length > 0
+      );
+    }
+    case "disputeWithdraw": {
+      return asPositiveInt((pending.body as { expectedVersion?: unknown }).expectedVersion) != null;
     }
     case "outcome": {
       const body = pending.body as { expectedVersion?: unknown; outcome?: unknown };
@@ -160,7 +212,12 @@ export function validateGameResultsSuccess(
   if (!pending || data == null || typeof data !== "object") return false;
   const action = recognizeGameResultsAction(pending.path, pending.method);
   if (!action) return false;
-  if (!validateGameResultsPending(pending, action.gameId)) return false;
+  if ("gameId" in action) {
+    if (!validateGameResultsPending(pending, action.gameId)) return false;
+  } else {
+    // Dispute-scoped routes are host-bound by dispute id; shape-check without game path.
+    if (!validateGameResultsPending(pending, "__dispute_scope__")) return false;
+  }
 
   if (action.kind === "bulk") {
     const requested = parseBulkRequestItems(pending.body);
@@ -196,7 +253,7 @@ export function validateGameResultsSuccess(
     const record = data as AttendanceRecord;
     const body = pending.body as {
       expectedVersion: number;
-      value: "present" | "absent";
+      value: "present" | "absent" | "unknown";
       late?: boolean;
     };
     const late = body.value === "present" ? Boolean(body.late) : false;
@@ -210,18 +267,25 @@ export function validateGameResultsSuccess(
 
   if (action.kind === "ack") {
     const record = data as AttendanceRecord;
-    const attendanceVersion = asPositiveInt(
-      (pending.body as { attendanceVersion?: unknown }).attendanceVersion,
-    );
+    const body = pending.body as {
+      attendanceVersion?: unknown;
+      resolvingDisputeId?: unknown;
+      expectedDisputeVersion?: unknown;
+    };
+    const attendanceVersion = asPositiveInt(body.attendanceVersion);
     if (attendanceVersion == null) return false;
-    return (
+    const baseOk =
       record.contextId === action.contextId &&
       record.acknowledgedVersion === attendanceVersion &&
       typeof record.version === "number" &&
       record.version === attendanceVersion &&
       // Only present/absent with exact positive version+ack confirm; unknown/malformed stay UNKNOWN.
-      (record.value === "present" || record.value === "absent")
-    );
+      (record.value === "present" || record.value === "absent");
+    if (!baseOk) return false;
+    if (body.resolvingDisputeId != null) {
+      return record.dispute == null || record.dispute.status !== "open";
+    }
+    return true;
   }
 
   if (action.kind === "dispute") {
@@ -240,6 +304,25 @@ export function validateGameResultsSuccess(
       typeof dispute.version === "number" &&
       dispute.version >= 1
     );
+  }
+
+  if (
+    action.kind === "disputeRespond" ||
+    action.kind === "disputeHelp" ||
+    action.kind === "disputeWithdraw"
+  ) {
+    const dispute = data as AttendanceDispute;
+    const expectedVersion = asPositiveInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    if (expectedVersion == null) return false;
+    if (dispute.id !== action.disputeId) return false;
+    if (typeof dispute.version !== "number" || dispute.version < 1) return false;
+    if (action.kind === "disputeWithdraw") {
+      return dispute.status === "withdrawn" && dispute.version >= expectedVersion;
+    }
+    // Response/help leave dispute open and bump version.
+    return dispute.status === "open" && dispute.version === expectedVersion + 1;
   }
 
   if (action.kind === "outcome") {

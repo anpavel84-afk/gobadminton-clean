@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { AdminError, adminRequest, type Session } from "../lib/admin-client";
+import { AttendanceDisputes } from "./AttendanceDisputes";
 type Case = {id:string;status:keyof typeof statuses;version:number;assignedTo:string|null};
 type Link = {id:string;sourceKind:"report"|"game";sourceId:string};
 type Detail = Case & {links:Link[];history:{id:string;version:number;action:string;noteCode:string|null;createdAt:string}[];nextHistoryBeforeVersion:number|null};
@@ -50,6 +51,7 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
  const validCommand=action==="status"?transitions?.includes(status):action==="note"?true:action==="assign"?(!value.trim()||uuid(value.trim())):action==="capture_evidence"?Boolean(linkId)&&fresh:uuid(value.trim());
  return <>
   <h2>Обращения</h2><p>{manager?"Проверяйте жалобы и ведите обращения.":"Здесь доступны назначенные вам обращения."}</p>
+  <AttendanceDisputes session={session} busy={busy} fresh={fresh} run={run} stepup={stepup} />
   <div className="actions"><button className="button outline" disabled={locked} onClick={()=>void list()}>Обновить обращения</button>{manager&&<button className="button outline" disabled={locked} onClick={()=>void queue()}>Очередь жалоб</button>}</div>
   {cases&&(cases.items.length?<ul className="events">{cases.items.map(item=><li key={item.id}><button className="game-row" disabled={locked} onClick={()=>void run(()=>open(item.id))}><strong>{statuses[item.status]}</strong><small>{item.id}</small></button></li>)}</ul>:<div className="notice">Обращений пока нет.</div>)}
   {cases?.nextBeforeId&&<button className="button outline" disabled={locked} onClick={()=>void list(true)}>Ещё обращения</button>}

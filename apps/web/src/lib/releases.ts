@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.3" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.4" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.21.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,23 +425,24 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Посещаемость и единый экран результатов игры — первый ограниченный этап",
+  title: "Уточнение посещения: ответ, согласие и служебное разрешение спора",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "Фиксация посещаемости с происхождением сведений (provenance).",
-    "Устойчивое личное уведомление о сведениях посещаемости и явное согласие с точной версией отметки.",
-    "Базовое возражение по сведениям посещаемости.",
-    "Единый экран результатов игры в пределах PG-1b.",
+    "Ответ организатора и исправление отметки (включая неизвестно) без одностороннего закрытия возражения.",
+    "Явное согласие участника с текущей известной отметкой и точной версией открытого спора.",
+    "Запрос помощи как прогресс обращения — без автоматической жалобы и без ложного назначения.",
+    "Ограниченное независимое решение в Admin Cases по назначенному обращению со step-up.",
   ],
-  fixes: [],
+  fixes: [
+    "На экране итогов компактный day/month badge в таймзоне игры; сброс лишних вертикальных полей только внутри postgame panel/rail.",
+  ],
   known_limitations: [
-    "Это предложение кандидата, не подтверждение готовой доступной функции на DEV/PROD.",
-    "Полный PG-2: разбор и разрешение споров ещё не входят.",
-    "Оценки, отзывы и комментарии ещё не входят.",
-    "PROD вне этого среза; действующий PROD остаётся alpha.2, пока отдельный выпуск не принят.",
-    "Запись под флагом по умолчанию OFF; доступность DEV заявляется только после безопасной проверенной активации.",
-    "Owner UAT будущего продукта NOT_TESTED; одобрение дизайн-галерей не равно приёмке реализации.",
+    "Это предложение кандидата alpha.4, не READY и не DEV ACCEPTED.",
+    "PG-3 отзывы/заметки и PG-4 полный поток ещё не входят.",
+    "PROD вне этого среза; действующий PROD остаётся alpha.2.",
+    "Запись под флагом по умолчанию OFF до доверенной DEV-активации.",
+    "Owner UAT = NOT_TESTED; одобрение галерей не равно приёмке реализации.",
     "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
   ],
   feature_catalogue: "delta",
@@ -590,6 +591,37 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     ],
     "known_limitations": [
       "Owner UAT после обычного входа не выполнен"
+    ]
+  },
+  {
+    "source_sha": "7b75fbed6b2582c9594ff71566566df625b5672d",
+    "application_version": "0.1.0-alpha.3",
+    "version_label": "0.1.0-alpha.3",
+    "title": "Посещаемость и единый экран результатов игры — PG-1b",
+    "api_contract_version": "0.21.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41298675161-a1",
+        "accepted_at": "2026-11-01T10:54:33Z",
+        "api_digest": "sha256:1429553fe96fa517b6c501a2e8b07eafbede6751957ef205ba61798b96ccca76",
+        "web_digest": "sha256:7e3b5b57fe4de8c40e26c1df0e02730af9aae1ebb709310c61a159d4b21fa3d0",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Фиксация посещаемости с происхождением сведений (provenance).",
+      "Устойчивое личное уведомление и явное согласие с точной версией отметки.",
+      "Базовое возражение / запрос исправления собственной отметки.",
+      "Единый экран «Участники / Итоги» в пределах PG-1b."
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Полный PG-2 разбор/разрешение споров не входили в alpha.3.",
+      "PG-3/PG-4 и отзывы не входили.",
+      "PROD оставался alpha.2; Owner UAT NOT_TESTED."
     ]
   },
 ] as const;
