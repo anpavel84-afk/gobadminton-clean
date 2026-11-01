@@ -20,8 +20,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.5 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.5");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.6 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.6");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -30,8 +30,10 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
     expect(CURRENT_NAMED_RELEASE.feature_catalogue).toBe("delta");
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/одноразового кода входа/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/OFF|alpha\.2|NOT_TESTED/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/общий визуальный трек|От.*До|NTRP/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#445|NOT_TESTED/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/пункты 2/);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/PG-3|friends|#436|DONE/i);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
     expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);
@@ -39,7 +41,19 @@ describe("releases catalogue integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.some((row) => row.application_version === FIRST_NAMED_APPLICATION_VERSION)).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) => row.application_version === "0.1.0-alpha.2")).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) => row.application_version === "0.1.0-alpha.3")).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(5);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.4"
+      && row.source_sha === "7a36b8d94a5df412426155e5852fddd9da7b0045",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.5"
+      && row.source_sha === "06991b099317a702dc102eeef53ee64cfa841f0e",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.5"
+      && row.source_sha === "84cedf79ec6d0582ef1197589acd808f9470f62c",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(8);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

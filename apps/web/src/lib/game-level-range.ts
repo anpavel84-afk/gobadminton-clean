@@ -58,6 +58,24 @@ export function parseNtrpLevelRange(value: string): { lower: number; upper: numb
 
 export type NtrpLevelBound = "lower" | "upper";
 
+/** Stable visual % on the shared global NTRP track (1..7). Independent of the other thumb. */
+export function ntrpLevelVisualPercent(value: number): number {
+  const snapped = snapClampNtrpLevel(value);
+  return ((snapped - NTRP_LEVEL_MIN) / (NTRP_LEVEL_MAX - NTRP_LEVEL_MIN)) * 100;
+}
+
+/** Selected-interval fill on the shared track; left/width in % of global 1..7. */
+export function ntrpLevelSelectedFillStyle(
+  lower: number,
+  upper: number,
+): { left: string; width: string } {
+  const lo = ntrpLevelVisualPercent(lower);
+  const hi = ntrpLevelVisualPercent(upper);
+  const left = Math.min(lo, hi);
+  const width = Math.max(0, Math.abs(hi - lo));
+  return { left: `${left}%`, width: `${width}%` };
+}
+
 /** Apply a native range value to one bound; clamp to the other endpoint; never reverse. */
 export function applyNtrpLevelBoundChange(
   bound: NtrpLevelBound,

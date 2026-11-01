@@ -71,9 +71,9 @@ Accepted Spacious40 overlay foundations, mobile sheets, gestures, history, and f
 
 Opt-in ProfileDialog family `.profile-dialog--invitation` (no `.fr3`/`.fr4` page wrapper required). One title «Пригласить на игру»; body hint «Приглашение не резервирует место.»; shared `.gb-invitation-card` for preferred and normal chooser with real title/time/timezone and full-width «Отправить приглашение» CTA (same `invite(g)`, no auto-send/confirm step). Desktop ≥1024: shell 560 / inset 40 / X 44@24; mobile ≤720: bottom sheet radius 28 / inset 20 / safe-area; single body scroll. Create form date/time: scoped `minmax(0,1fr)` intrinsic sizing, 16px native inputs, optional WebKit value normalization; keep native pickers/required/readOnly/timezone — no `overflow:hidden` clipping.
 
-## Create game level range (#432)
+## Create game level range (#432 / #445 point 1)
 
-Owner-directed FormGroup control: two separate native `type=range` sliders (От / До) for inclusive NTRP 1.0–7.0 step 0.5; summary `3,0–3,5`; no manual comma typing. Same presentation in normal / trainer / embedded create forms via `.gb-game-level-range`. Compact 44px rows, lime accent, focus-visible; min cannot exceed max (clamp to other endpoint). Do not reuse social pilot level options or dual-thumb frameworks.
+Owner-directed FormGroup control: two native `type=range` handles (От / До) on **one shared visual track** with stable global NTRP 1.0–7.0 step 0.5 coordinates; selected interval fill; summary `3,0–3,5`; no manual comma typing. Native `min`/`max` stay 1..7 for both handles (do not remap visual coordinates from the other thumb); crossing clamps via helpers. Same presentation in normal / trainer / embedded create forms via `.gb-game-level-range`. Compact 44px control, lime fill/accent, focus-visible on thumbs; separate keyboard focus/aria. Do not reuse social pilot level options or dual-thumb UI libraries.
 
 ## Messages composition (#394 desktop repair)
 

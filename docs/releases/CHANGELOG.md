@@ -1,15 +1,33 @@
 # GoBadminton release notes
 
-## REG.RU SMTP email-code delivery (0.1.0-alpha.5 candidate)
+## #445 point 1 — create-game level range common track (0.1.0-alpha.6 candidate)
+
+Visual QA repair for Go Bad report point 1 (source PR #433 / canonical #432): «От»/«До»
+native range handles share one visual track with stable global NTRP 1..7 coordinates and
+selected-interval fill. Defaults 3.0..3.5, inclusive `allowedLevelIds`, regular/trainer
+forms preserved. API contract unchanged. Points 2–6 of #445 are out of scope.
+
+- Application version (candidate): `0.1.0-alpha.6`; API contract unchanged `0.22.0`.
+- Base accepted DEV: `84cedf79ec6d0582ef1197589acd808f9470f62c` (alpha.5 worker fix).
+- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+- Independent QA / Product CI / DEV acceptance: pending.
+- Owner / Go Bad visual UAT: NOT_TESTED.
+- PROD unchanged; PG3 parked separately.
+
+## REG.RU SMTP email-code delivery (0.1.0-alpha.5 accepted)
 
 Existing email-code API and pg-boss delivery queue gain verified TLS SMTP delivery
 from info@gobadminton.ru, with protected worker-only password file, bounded retries
-and private error reporting. Fake delivery remains local/test only.
+and private error reporting. Fake delivery remains local/test only. Distinct later
+DEV install of the same application version used worker-fix source `84ced…`
+(`r41319296538-a1`); digests/receipts are not mixed under SMTP source `06991…`.
 
-- Application version (candidate): `0.1.0-alpha.5`; API contract unchanged `0.22.0`.
-- Independent QA / Product CI / DEV acceptance: pending.
-- Real delivery and email-code UAT: pending; registration/recovery NOT_TESTED.
-- PROD unchanged; SMTP ACK-loss/crash duplicate window remains documented.
+- Application version: `0.1.0-alpha.5`; API contract unchanged `0.22.0`.
+- SMTP source: `06991b099317a702dc102eeef53ee64cfa841f0e`, release `r41317332177-a1`
+  (accepted `2026-11-01T14:52:56Z`).
+- Worker-fix source: `84cedf79ec6d0582ef1197589acd808f9470f62c`, release `r41319296538-a1`
+  (accepted `2026-11-01T15:08:02Z`).
+- Owner UAT: NOT_TESTED; PROD unchanged.
 
 ## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 candidate)
 
