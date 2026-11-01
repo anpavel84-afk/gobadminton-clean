@@ -273,6 +273,12 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
 
   it("creates peer review, reply, edit, note delete+replay and guards foreign/self/duplicate", async () => {
     const { gameId, ilyaContext, annaContext } = await createEndedGameWithPlayers();
+    const skillsBefore = (
+      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM trainer_profiles")
+    ).rows[0]!.n;
+    const reportsBefore = (
+      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM abuse_reports")
+    ).rows[0]!.n;
 
     const missingAssertion = await post(anna, `/v1/games/${gameId}/reviews`, {
       kind: "peer",
@@ -431,13 +437,124 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     expect(delReplay.statusCode).toBe(200);
     expect(delReplay.json().deleted).toBe(true);
 
-    // No skill mutation side effect: trainer_profiles unchanged count.
-    const skills = await pool.query("SELECT COUNT(*)::int AS n FROM trainer_profiles");
-    expect(typeof skills.rows[0].n).toBe("number");
+    // No skill mutation / abuse side effect: persisted counts unchanged (empty fixture stays empty).
+    const skillsAfter = (
+      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM trainer_profiles")
+    ).rows[0]!.n;
+    const reportsAfter = (
+      await pool.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM abuse_reports")
+    ).rows[0]!.n;
+    expect(skillsAfter).toBe(skillsBefore);
+    expect(reportsAfter).toBe(reportsBefore);
+  });
 
-    // No automatic abuse report from review.
-    const reports = await pool.query("SELECT COUNT(*)::int AS n FROM abuse_reports").catch(() => ({ rows: [{ n: 0 }] }));
-    expect(reports.rows[0].n).toBe(0);
+  it("playing manager peer create/capabilities; pending/nonplaying manager denied; note after revoke", async () => {
+    const { gameId, ilyaContext, annaContext } = await createEndedGameWithPlayers();
+
+    // Nonplaying manager: access role manager, no eligible own participation → no peer create.
+    const nonplayingCaps = await get(manager, `/v1/games/${gameId}/results`);
+    expect(nonplayingCaps.statusCode).toBe(200);
+    expect(nonplayingCaps.json().feedback.capabilities.canCreatePeer).toBe(false);
+    expect(nonplayingCaps.json().feedback.capabilities.canCreateNote).toBe(true);
+    const nonplayingPeer = await post(manager, `/v1/games/${gameId}/reviews`, {
+      kind: "peer",
+      subjectContextId: ilyaContext,
+      peerRating: "neutral",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect([404, 422]).toContain(nonplayingPeer.statusCode);
+
+    // Pending-only manager participation is not eligible peer authorship.
+    await pool.query(
+      `INSERT INTO participations (game_id, user_id, status)
+       VALUES ($1, $2, 'pending')`,
+      [gameId, manager.userId],
+    );
+    const pendingCaps = await get(manager, `/v1/games/${gameId}/results`);
+    expect(pendingCaps.statusCode).toBe(200);
+    expect(pendingCaps.json().feedback.capabilities.canCreatePeer).toBe(false);
+    const pendingPeer = await post(manager, `/v1/games/${gameId}/reviews`, {
+      kind: "peer",
+      subjectContextId: ilyaContext,
+      peerRating: "neutral",
+      experienceAssertion: "i_experienced_this_game",
+      discrepancyExplanation: "только pending",
+    });
+    expect([404, 422]).toContain(pendingPeer.statusCode);
+
+    // Upgrade to concrete eligible confirmed participation (same proof path as peers).
+    await pool.query(`DELETE FROM participations WHERE game_id = $1 AND user_id = $2`, [
+      gameId,
+      manager.userId,
+    ]);
+    const managerContext = await confirmWithTransition(gameId, manager.userId, -4);
+    const playingCaps = await get(manager, `/v1/games/${gameId}/results`);
+    expect(playingCaps.statusCode).toBe(200);
+    expect(playingCaps.json().feedback.capabilities.canCreatePeer).toBe(true);
+    expect(
+      playingCaps.json().feedback.capabilities.peerSubjects.some(
+        (s: { contextId: string }) => s.contextId === ilyaContext,
+      ),
+    ).toBe(true);
+    expect(
+      playingCaps.json().feedback.capabilities.peerSubjects.some(
+        (s: { contextId: string }) => s.contextId === managerContext,
+      ),
+    ).toBe(false);
+
+    const playingPeer = await post(manager, `/v1/games/${gameId}/reviews`, {
+      kind: "peer",
+      subjectContextId: ilyaContext,
+      peerRating: "play_again",
+      comment: "Играли вместе",
+      experienceAssertion: "i_experienced_this_game",
+      discrepancyExplanation: "организатор тоже играл",
+    });
+    expect([200, 201]).toContain(playingPeer.statusCode);
+    expect(playingPeer.json().direction).toBe("sent");
+    expect(playingPeer.json().kind).toBe("peer");
+
+    // Personal note: create as manager, then revoke — author retains read/edit/delete; foreign forbidden.
+    const note = await put(manager, `/v1/games/${gameId}/notes/${annaContext}`, {
+      expectedVersion: 0,
+      text: "Заметка до revoke",
+    });
+    expect([200, 201]).toContain(note.statusCode);
+    await pool.query(
+      `UPDATE game_managers SET status = 'revoked', revoked_at = clock_timestamp(), updated_at = clock_timestamp()
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameId, manager.userId],
+    );
+
+    const ownRead = await get(manager, `/v1/games/${gameId}/notes/${annaContext}`);
+    expect(ownRead.statusCode).toBe(200);
+    expect(ownRead.json().text).toBe("Заметка до revoke");
+
+    const foreignAfterRevoke = await get(anna, `/v1/games/${gameId}/notes/${annaContext}`);
+    expect(foreignAfterRevoke.statusCode).toBe(404);
+    const outsiderAfterRevoke = await get(outsider, `/v1/games/${gameId}/notes/${annaContext}`);
+    expect(outsiderAfterRevoke.statusCode).toBe(404);
+
+    const edited = await put(manager, `/v1/games/${gameId}/notes/${annaContext}`, {
+      expectedVersion: note.json().version,
+      text: "Заметка после revoke",
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().text).toBe("Заметка после revoke");
+
+    const deleted = await del(manager, `/v1/games/${gameId}/notes/${annaContext}`, {
+      expectedVersion: edited.json().version,
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json().deleted).toBe(true);
+    expect((await get(manager, `/v1/games/${gameId}/notes/${annaContext}`)).statusCode).toBe(404);
+
+    // New note create after revoke remains forbidden (current manager required).
+    const createAfterRevoke = await put(manager, `/v1/games/${gameId}/notes/${ilyaContext}`, {
+      expectedVersion: 0,
+      text: "новая после revoke",
+    });
+    expect([403, 404]).toContain(createAfterRevoke.statusCode);
   });
 
   it("refuses writes when POST_GAME_INTERNAL_ENABLED is off", async () => {

@@ -203,6 +203,34 @@ export class GameFeedbackService {
     ).rows[0] ?? null;
   }
 
+  /**
+   * Concrete own historical eligibility (same proof as loadPeerSubjects / attendance roster).
+   * Access role "manager" does not imply participation; pending/rejected/removed-before-start stay ineligible.
+   */
+  private async ownEligibleParticipation(
+    client: PoolClient | Pool,
+    gameId: string,
+    userId: string,
+    startsAt: Date,
+    endsAt: Date,
+  ): Promise<{ id: string; status: string; confirmed_at: Date | null } | null> {
+    const own = await this.authorParticipation(client, gameId, userId);
+    if (!own) return null;
+    const transitions = await client.query<{ to_status: string; at: Date; id: string }>(
+      `SELECT to_status, at, id FROM participation_transitions
+       WHERE participation_id = $1 ORDER BY at ASC, id ASC`,
+      [own.id],
+    );
+    const verdict = eligibleFromTransitions(
+      transitions.rows,
+      startsAt,
+      own.status,
+      own.confirmed_at,
+      endsAt,
+    );
+    return verdict.eligible ? own : null;
+  }
+
   private async resolveAttendanceContext(
     client: PoolClient,
     gameId: string,
@@ -339,8 +367,15 @@ export class GameFeedbackService {
     const lifecycleOk =
       afterEnd &&
       (game.status === "published" || game.status === "completed" || game.status === "cancelled");
-    const authorPart = await this.authorParticipation(client, gameId, userId);
-    const canAuthorAsParticipant = role === "participant" && !!authorPart;
+    // Peer authoring keys off concrete eligible own participation, not mutually exclusive access role.
+    const ownEligible = await this.ownEligibleParticipation(
+      client,
+      gameId,
+      userId,
+      meta.startsAt,
+      meta.endsAt,
+    );
+    const canAuthorAsParticipant = !!ownEligible;
     const canAuthorAsManager = role === "manager";
     const canCreate = writesEnabled && lifecycleOk && (canAuthorAsParticipant || canAuthorAsManager);
 
@@ -508,14 +543,22 @@ export class GameFeedbackService {
 
         const authorPart = await this.authorParticipation(client, gameId, userId);
         if (role === "participant" && !authorPart) unavailable();
-        // Creator/manager is not automatically a participant for peer feedback.
-        if (body.kind === "peer" && role !== "participant") {
+        const meta = await this.loadGameMeta(client, gameId);
+        // Creator/manager is not automatic participant; peer needs concrete eligible own participation.
+        const ownEligible = await this.ownEligibleParticipation(
+          client,
+          gameId,
+          userId,
+          meta.startsAt,
+          meta.endsAt,
+        );
+        if (body.kind === "peer" && !ownEligible) {
           throw unprocessable("FEEDBACK_PEER_REQUIRES_PARTICIPATION", "Отзыв игроку доступен участнику с контекстом");
         }
 
         let recipientUserId: string;
         let subjectParticipationId: string | null = null;
-        const meta = await this.loadGameMeta(client, gameId);
+        const authorParticipationId = ownEligible?.id ?? authorPart?.id ?? null;
 
         if (body.kind === "peer") {
           const subjectId = body.subjectContextId!;
@@ -585,7 +628,7 @@ export class GameFeedbackService {
                 gameId,
                 body.kind,
                 userId,
-                authorPart?.id ?? null,
+                authorParticipationId,
                 subjectParticipationId,
                 recipientUserId,
                 body.peerRating ?? null,
