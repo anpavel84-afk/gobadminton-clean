@@ -19,11 +19,15 @@ export class GameOutcomesController {
     @Param("gameId") gameId: string,
     @Query("revisionsLimit") revisionsLimit?: string,
     @Query("revisionsCursor") revisionsCursor?: string,
+    @Query("rosterLimit") rosterLimit?: string,
+    @Query("rosterCursor") rosterCursor?: string,
   ) {
     const actor = await this.auth.requireSession(request);
     return this.outcomes.getResults(gameId, actor.userId, {
       revisionsLimit,
       revisionsCursor,
+      rosterLimit,
+      rosterCursor,
     });
   }
 

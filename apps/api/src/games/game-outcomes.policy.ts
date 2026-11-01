@@ -78,6 +78,19 @@ export type RevisionsPage = {
   nextCursor: string | null;
 };
 
+export type GameResultsAttendanceSlice = {
+  installed: boolean;
+  writesEnabled: boolean;
+  myAttendance: unknown | null;
+  roster: unknown[] | null;
+  rosterNextCursor: string | null;
+  summary: unknown | null;
+  allowedActions: {
+    canRecordAttendance: boolean;
+    canBulkPresent: boolean;
+  };
+};
+
 export type GameResultsView = {
   gameId: string;
   outcome: {
@@ -89,7 +102,13 @@ export type GameResultsView = {
   revisions?: OutcomeRevisionView[];
   /** Manager-only; null when the returned window is complete (no older page). */
   revisionsNextCursor?: string | null;
-  allowedActions: { canRecordOutcome: boolean };
+  /** PG-1b additive attendance projection; omitted only when schema not installed. */
+  attendance?: GameResultsAttendanceSlice;
+  allowedActions: {
+    canRecordOutcome: boolean;
+    canRecordAttendance?: boolean;
+    canBulkPresent?: boolean;
+  };
 };
 
 export type OutcomeRow = {

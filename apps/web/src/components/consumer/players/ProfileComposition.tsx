@@ -72,11 +72,11 @@ export function ProfileDialog({ title, onClose, children, size = "normal", class
   children: ReactNode;
   /** Functional width family; callers inherit desktop overlay skin without rewrite. */
   size?: "normal" | "small";
-  /** Opt-in shell family (e.g. invitation) without wrapping the page in .fr3. */
+  /** Opt-in shell family (e.g. invitation, postgame) without wrapping the page in .fr3. */
   className?: string;
   /** Optional aria-describedby for the dialog hint. */
   describedBy?: string;
-  /** Opt-in body scroll lock (invitation family only); default leaves overflow untouched. */
+  /** Opt-in body scroll lock (supported overlay families); default leaves overflow untouched. */
   lockBodyScroll?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);

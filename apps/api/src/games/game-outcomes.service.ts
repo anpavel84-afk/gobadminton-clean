@@ -25,6 +25,7 @@ import {
   type RevisionsPage,
   type RevisionsQuery,
 } from "./game-outcomes.policy";
+import { GameAttendanceService } from "./game-attendance.service";
 
 type AccessRole = "manager" | "participant" | "none";
 
@@ -35,6 +36,7 @@ export class GameOutcomesService {
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
+    private readonly attendance: GameAttendanceService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -84,22 +86,9 @@ export class GameOutcomesService {
   }
 
   private async accessRole(client: PoolClient | Pool, gameId: string, userId: string): Promise<AccessRole> {
-    const manager = await client.query(
-      `SELECT 1
-       FROM game_managers
-       WHERE game_id = $1 AND user_id = $2 AND status = 'active' AND role IN ('owner', 'manager')
-       LIMIT 1`,
-      [gameId, userId],
-    );
-    if (manager.rows[0]) return "manager";
-    const participant = await client.query(
-      `SELECT 1
-       FROM participations
-       WHERE game_id = $1 AND user_id = $2 AND status = 'confirmed'
-       LIMIT 1`,
-      [gameId, userId],
-    );
-    return participant.rows[0] ? "participant" : "none";
+    // Delegate so removed-after-start own marked participants retain results access
+    // via frozen eligibility / durable attendance proof (no foreign roster grant).
+    return this.attendance.resolveAccessRole(client, gameId, userId);
   }
 
   private async readOutcome(client: PoolClient | Pool, gameId: string): Promise<OutcomeRow | null> {
@@ -183,7 +172,12 @@ export class GameOutcomesService {
   async getResults(
     gameIdRaw: string,
     userId: string,
-    revisionsRaw: { revisionsLimit?: string; revisionsCursor?: string } = {},
+    revisionsRaw: {
+      revisionsLimit?: string;
+      revisionsCursor?: string;
+      rosterLimit?: string;
+      rosterCursor?: string;
+    } = {},
   ): Promise<GameResultsView> {
     const gameId = parseGameId(gameIdRaw);
     const revisionsQuery = parseRevisionsQuery(revisionsRaw);
@@ -201,11 +195,39 @@ export class GameOutcomesService {
       const installed = await this.installed(client);
       const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
       const canRecord = canRecordHint(this.env, role, game, now, installed);
-      if (!installed) return unknownOutcome(gameId, false);
+      const attendance = await this.attendance.enrichResults(
+        client,
+        gameId,
+        userId,
+        role,
+        game,
+        now,
+        { rosterLimit: revisionsRaw.rosterLimit, rosterCursor: revisionsRaw.rosterCursor },
+      );
+      if (!installed) {
+        return {
+          ...unknownOutcome(gameId, false),
+          attendance,
+          allowedActions: {
+            canRecordOutcome: false,
+            canRecordAttendance: attendance.allowedActions.canRecordAttendance,
+            canBulkPresent: attendance.allowedActions.canBulkPresent,
+          },
+        };
+      }
       const row = await this.readOutcome(client, gameId);
       const revisionsPage =
         role === "manager" ? await this.readRevisionsPage(client, gameId, revisionsQuery) : undefined;
-      return this.project(gameId, row, role, canRecord, revisionsPage);
+      const base = this.project(gameId, row, role, canRecord, revisionsPage);
+      return {
+        ...base,
+        attendance,
+        allowedActions: {
+          ...base.allowedActions,
+          canRecordAttendance: attendance.allowedActions.canRecordAttendance,
+          canBulkPresent: attendance.allowedActions.canBulkPresent,
+        },
+      };
     } finally {
       client.release();
     }
@@ -319,9 +341,26 @@ export class GameOutcomesService {
           )
         ).rows[0]!;
         const canRecord = canRecordHint(this.env, "manager", refreshed, now, true);
+        const base = this.project(gameId, row, "manager", canRecord, revisionsPage);
+        const attendance = await this.attendance.enrichResults(
+          client,
+          gameId,
+          userId,
+          "manager",
+          refreshed,
+          now,
+        );
         return {
           statusCode: 200,
-          body: this.project(gameId, row, "manager", canRecord, revisionsPage),
+          body: {
+            ...base,
+            attendance,
+            allowedActions: {
+              ...base.allowedActions,
+              canRecordAttendance: attendance.allowedActions.canRecordAttendance,
+              canBulkPresent: attendance.allowedActions.canBulkPresent,
+            },
+          },
         };
       },
     });

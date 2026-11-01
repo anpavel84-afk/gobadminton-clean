@@ -1,14 +1,27 @@
 # GoBadminton release notes
 
-## #438 — Swipe false exhaustion repair (0.1.0-alpha.2 candidate)
+## #372 — PG-1b attendance + results (0.1.0-alpha.3 candidate)
 
-Finder «Свайп» waits for own social-profile readiness before peer-capability filtering. Hidden own profile (`directoryVisible` / `socialEligible`) shows a profile-settings prerequisite with link to `/profile` — no automatic privacy change. Profile load failure is a real retry error; all-peer `unavailable` is generic unavailable/retry, not catalogue exhaustion. Genuine outgoing/mutual skip/exhaustion and UNKNOWN/account-switch protections retained. Application version descriptor `0.1.0-alpha.2` (delta); first named `0.1.0-alpha.1` baseline kept literal; trusted history seed adds the two accepted alpha.1 DEV/PROD receipts. Alpha.2 SHA/date unknown until trusted release.
+Bounded post-game attendance with provenance, durable own notice + explicit mark-version agreement, basic dispute, and unified results screen within PG-1b. Pass-3: durable UNKNOWN mutation host (shared useSocialMutation), auth/game epoch invalidation, own removed-after-start recourse, no invented correction reason, eligibility rejects stale confirmed_at after pre-start withdraw. Runtime write flag remains default OFF; do not claim DEV-ready/exposed until trusted activation. PROD stays on accepted alpha.2. First named alpha.1 baseline unchanged; trusted history seed retains alpha.1 and appends accepted alpha.2 DEV/PROD receipts. Candidate SHA, QA, release ID, and acceptance dates unknown until trusted DEV ACCEPTED.
 
-- Application version (candidate): `0.1.0-alpha.2`
-- Refs: #438
+- Application version (candidate): `0.1.0-alpha.3`
+- Refs: #372 / PG-1b
 - Independent QA / Product CI / DEV install: pending
+- Runtime feature flag: default OFF (not claimed enabled)
 - Owner UAT: NOT_TESTED
-- Alpha.2 source SHA / acceptance dates: not invented
+- Alpha.3 source SHA / acceptance dates: not invented
+- Known limits: no PG-2 adjudication, no ratings/reviews/comments, PROD out of this slice
+
+## #438 — Swipe false exhaustion repair (0.1.0-alpha.2 accepted)
+
+Finder «Свайп» waits for own social-profile readiness before peer-capability filtering. Hidden own profile (`directoryVisible` / `socialEligible`) shows a profile-settings prerequisite with link to `/profile` — no automatic privacy change. Profile load failure is a real retry error; all-peer `unavailable` is generic unavailable/retry, not catalogue exhaustion. Genuine outgoing/mutual skip/exhaustion and UNKNOWN/account-switch protections retained. Application version `0.1.0-alpha.2` (delta); first named `0.1.0-alpha.1` baseline kept literal.
+
+- Application version: `0.1.0-alpha.2`
+- Accepted source: `38a4700c68ed85189007dcab3c859c98eb37bf46`
+- Refs: #438
+- DEV release: `r41287889091-a1` (accepted `2026-11-01T08:17:46Z`)
+- Managed PROD: accepted `2026-11-01T08:19:28.308318Z` (application-only; pipeline release_id absent)
+- Owner UAT: NOT_TESTED
 
 ## #434 — First named application version 0.1.0-alpha.1 (DEV releases page)
 

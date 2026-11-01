@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.20.0",
+    "version": "0.21.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -1689,8 +1689,8 @@
         "tags": [
           "Games"
         ],
-        "summary": "Read game outcome projection for current manager or confirmed participant",
-        "description": "PG-1a. Absent outcome projects unknown/version 0; elapsed endsAt never inserts a row. Current active manager may receive a bounded newest revision window (default 20, max 50) with revisionsNextCursor for older continuation. Confirmed participants see outcome facts for their game without revisions. Guest/outsider/revoked-manager-without-seat are private 404. Reads remain available when POST_GAME_INTERNAL_ENABLED is off. No attendance/roster/private host fields. Cookie session required.",
+        "summary": "Read game outcome + PG-1b attendance projection",
+        "description": "PG-1a/PG-1b. Outcome unknown/version 0 when absent. Attendance installed flag + myAttendance; manager roster/summary only. Reads survive write flag OFF. Guest/outsider private 404. No-store.",
         "security": [
           {
             "cookieSession": []
@@ -1727,6 +1727,28 @@
               "maxLength": 2048
             },
             "description": "Opaque cursor from a prior revisionsNextCursor; continues into older revision history. Malformed → 400 CURSOR_INVALID. Ignored for participants."
+          },
+          {
+            "name": "rosterLimit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": "Manager roster page size. Ignored for participants."
+          },
+          {
+            "name": "rosterCursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Opaque manager roster cursor."
           }
         ],
         "responses": {
@@ -17297,6 +17319,973 @@
           }
         }
       }
+    },
+    "/games/{gameId}/attendance/{contextId}": {
+      "put": {
+        "operationId": "putGameAttendance",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Record or correct attendance for an eligible participation context",
+        "description": "PG-1b. Current manager. expectedVersion CAS + Idempotency-Key + cookie/Origin/CSRF. Atomic notice. Open dispute retained. Writes default OFF.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contextId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Participation context id"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGameAttendanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/attendance/bulk-present": {
+      "post": {
+        "operationId": "bulkPresentGameAttendance",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Atomic exact-selection bulk present",
+        "description": "PG-1b. confirmedExactSelection:true with frozen items+versions. All-or-nothing. No dynamic remaining expansion.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkPresentAttendanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkPresentAttendanceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/attendance/{contextId}/acknowledgements": {
+      "post": {
+        "operationId": "acknowledgeGameAttendance",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Acknowledge own attendance notice for exact version",
+        "description": "PG-1b. Self only. Old acknowledgement does not apply to a newer version.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contextId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcknowledgeAttendanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/attendance/{contextId}/disputes": {
+      "post": {
+        "operationId": "disputeGameAttendance",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Open own attendance dispute for exact version",
+        "description": "PG-1b. Self only. One open dispute. Silence is not agreement. No automatic report.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contextId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisputeAttendanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Authorized projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceDispute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/attendance/{contextId}/history": {
+      "get": {
+        "operationId": "getGameAttendanceHistory",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Bounded immutable attendance revision history",
+        "description": "PG-1b. Own context or current manager. Newest-first window, ascending projection.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "contextId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "History page; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceHistoryPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/attendance-disputes/{disputeId}": {
+      "get": {
+        "operationId": "getAttendanceDispute",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Private attendance dispute projection",
+        "description": "PG-1b. Self or current authorized manager. No foreign roster leak.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "disputeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dispute; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceDispute"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/attendance-disputes/{disputeId}/withdraw": {
+      "post": {
+        "operationId": "withdrawAttendanceDispute",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Withdraw own open attendance dispute",
+        "description": "PG-1b. Self only. Does not rewrite attendance assertion.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "disputeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawAttendanceDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceDispute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/me/game-results": {
+      "get": {
+        "operationId": "listMyGameResults",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Own durable attendance notices / results history",
+        "description": "PG-1b. Self only. Survives chat loss / social opt-out / removed role. Bounded cursor pagination. Reads when writes OFF.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own history; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeGameResultsPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -28144,6 +29133,12 @@
           "canRecordOutcome": {
             "type": "boolean",
             "description": "UI hint only; PUT revalidates current manager, lifecycle, and write admission."
+          },
+          "canRecordAttendance": {
+            "type": "boolean"
+          },
+          "canBulkPresent": {
+            "type": "boolean"
           }
         }
       },
@@ -28181,9 +29176,12 @@
           },
           "allowedActions": {
             "$ref": "#/components/schemas/GameResultsAllowedActions"
+          },
+          "attendance": {
+            "$ref": "#/components/schemas/GameAttendanceSlice"
           }
         },
-        "description": "PG-1a slice: outcome + actions only. No roster, attendance, private host contact, or reviews."
+        "description": "PG-1a outcome + PG-1b attendance slice. Roster/summary manager-only. No reviews."
       },
       "VenueGalleryCredit": {
         "type": "object",
@@ -28341,6 +29339,770 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
+          }
+        }
+      },
+      "AttendanceAssertion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actorDisplay",
+          "source",
+          "at"
+        ],
+        "properties": {
+          "actorDisplay": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "manager_explicit",
+              "self_attested",
+              null
+            ]
+          },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AttendanceDisputeSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "challengedVersion",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "withdrawn"
+            ]
+          },
+          "challengedVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "AttendanceRecordAllowedActions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "canSetAttendance",
+          "canAcknowledge",
+          "canDispute",
+          "canWithdrawDispute"
+        ],
+        "properties": {
+          "canSetAttendance": {
+            "type": "boolean"
+          },
+          "canAcknowledge": {
+            "type": "boolean"
+          },
+          "canDispute": {
+            "type": "boolean"
+          },
+          "canWithdrawDispute": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AttendanceRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contextId",
+          "value",
+          "version",
+          "late",
+          "assertion",
+          "acknowledgedVersion",
+          "dispute",
+          "displayName",
+          "allowedActions"
+        ],
+        "properties": {
+          "contextId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "present",
+              "absent"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "late": {
+            "type": "boolean"
+          },
+          "assertion": {
+            "$ref": "#/components/schemas/AttendanceAssertion"
+          },
+          "acknowledgedVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "dispute": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttendanceDisputeSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "allowedActions": {
+            "$ref": "#/components/schemas/AttendanceRecordAllowedActions"
+          }
+        }
+      },
+      "AttendanceSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rosterCount",
+          "marked",
+          "unknown",
+          "underClarification",
+          "agreed"
+        ],
+        "properties": {
+          "rosterCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "marked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unknown": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "underClarification": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "agreed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "GameAttendanceSlice": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "installed",
+          "writesEnabled",
+          "myAttendance",
+          "roster",
+          "rosterNextCursor",
+          "summary",
+          "allowedActions"
+        ],
+        "properties": {
+          "installed": {
+            "type": "boolean"
+          },
+          "writesEnabled": {
+            "type": "boolean"
+          },
+          "myAttendance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttendanceRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "roster": {
+            "oneOf": [
+              {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/AttendanceRecord"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rosterNextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AttendanceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allowedActions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "canRecordAttendance",
+              "canBulkPresent"
+            ],
+            "properties": {
+              "canRecordAttendance": {
+                "type": "boolean"
+              },
+              "canBulkPresent": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "PutGameAttendanceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "value"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "value": {
+            "type": "string",
+            "enum": [
+              "present",
+              "absent"
+            ]
+          },
+          "late": {
+            "type": "boolean",
+            "description": "Only with present"
+          },
+          "correctionReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "BulkPresentAttendanceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "confirmedExactSelection"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "contextId",
+                "expectedVersion"
+              ],
+              "properties": {
+                "contextId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "expectedVersion": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                }
+              }
+            }
+          },
+          "confirmedExactSelection": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
+      "BulkPresentAttendanceResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/AttendanceRecord"
+            }
+          }
+        }
+      },
+      "AcknowledgeAttendanceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attendanceVersion"
+        ],
+        "properties": {
+          "attendanceVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        }
+      },
+      "DisputeAttendanceRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attendanceVersion",
+          "explanation"
+        ],
+        "properties": {
+          "attendanceVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "WithdrawAttendanceDisputeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "AttendanceDisputeHistoryItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "action",
+          "explanation",
+          "recordedAt"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "opened",
+              "withdrawn"
+            ]
+          },
+          "explanation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AttendanceDispute": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "gameId",
+          "contextId",
+          "status",
+          "challengedVersion",
+          "explanation",
+          "version",
+          "createdAt",
+          "updatedAt",
+          "withdrawnAt",
+          "withdrawReason",
+          "history",
+          "allowedActions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "contextId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "withdrawn"
+            ]
+          },
+          "challengedVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "explanation": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "withdrawnAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "withdrawReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "history": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/AttendanceDisputeHistoryItem"
+            }
+          },
+          "allowedActions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "canWithdraw"
+            ],
+            "properties": {
+              "canWithdraw": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "AttendanceHistoryItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "before",
+          "after",
+          "reason",
+          "source",
+          "recordedAt",
+          "actorDisplay"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "before": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "value",
+                  "late"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "enum": [
+                      "present",
+                      "absent"
+                    ]
+                  },
+                  "late": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "late"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "present",
+                  "absent"
+                ]
+              },
+              "late": {
+                "type": "boolean"
+              }
+            }
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manager_explicit",
+              "self_attested"
+            ]
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorDisplay": {
+            "type": "string",
+            "maxLength": 80
+          }
+        }
+      },
+      "AttendanceHistoryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/AttendanceHistoryItem"
+            }
+          }
+        }
+      },
+      "MeGameResultsNotice": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "attendanceVersion",
+          "value",
+          "late",
+          "source",
+          "actorDisplay",
+          "createdAt",
+          "acknowledgedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attendanceVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "value": {
+            "type": "string",
+            "enum": [
+              "present",
+              "absent"
+            ]
+          },
+          "late": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manager_explicit",
+              "self_attested"
+            ]
+          },
+          "actorDisplay": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "acknowledgedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "MeGameResultsItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "contextId",
+          "gameTitle",
+          "endsAt",
+          "attendance",
+          "notice"
+        ],
+        "properties": {
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "contextId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "gameTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endsAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "attendance": {
+            "$ref": "#/components/schemas/AttendanceRecord"
+          },
+          "notice": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MeGameResultsNotice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "MeGameResultsPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/MeGameResultsItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048
           }
         }
       }

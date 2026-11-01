@@ -348,15 +348,41 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     const idem = key();
     const saved = await put(manager, `/v1/games/${g.id}/outcome`, { expectedVersion: 0, outcome: "held" }, idem);
     expect(saved.statusCode).toBe(200);
+    // PG-1b additive attendance on results; this PG-1a fixture does not apply 0046 → empty slice.
     expect(Object.keys(saved.json()).sort()).toEqual([
       "allowedActions",
+      "attendance",
       "gameId",
       "outcome",
       "revisions",
       "revisionsNextCursor",
     ]);
-    const body = JSON.stringify(saved.json());
-    expect(body).not.toMatch(/PRIVATE TERMS SENTINEL|telegram:@synthetic_private|roster|attendance|absent/);
+    const managerBody = saved.json();
+    expect(JSON.stringify(managerBody)).not.toMatch(/PRIVATE TERMS SENTINEL|telegram:@synthetic_private/);
+    expect(Object.keys(managerBody.attendance).sort()).toEqual([
+      "allowedActions",
+      "installed",
+      "myAttendance",
+      "roster",
+      "rosterNextCursor",
+      "summary",
+      "writesEnabled",
+    ]);
+    // Authorized manager attendance projection for this game only; no private settlement/contact fields.
+    expect(managerBody.attendance).toEqual({
+      installed: false,
+      writesEnabled: false,
+      myAttendance: null,
+      roster: null,
+      rosterNextCursor: null,
+      summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    });
+    expect(managerBody.allowedActions).toMatchObject({
+      canRecordOutcome: expect.any(Boolean),
+      canRecordAttendance: false,
+      canBulkPresent: false,
+    });
 
     const asParticipant = await get(participant, `/v1/games/${g.id}/results`);
     expect(asParticipant.statusCode).toBe(200);
@@ -364,6 +390,17 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     expect(asParticipant.json().revisions).toBeUndefined();
     expect(asParticipant.json().revisionsNextCursor).toBeUndefined();
     expect(asParticipant.headers["cache-control"]).toBe("no-store");
+    // Participant: own attendance only — no roster/summary or other-user data.
+    expect(asParticipant.json().attendance).toEqual({
+      installed: false,
+      writesEnabled: false,
+      myAttendance: null,
+      roster: null,
+      rosterNextCursor: null,
+      summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    });
+    expect(JSON.stringify(asParticipant.json())).not.toMatch(/PRIVATE TERMS SENTINEL|telegram:@synthetic_private/);
 
     for (const who of [outsider]) {
       expect((await get(who, `/v1/games/${g.id}/results`)).statusCode).toBe(404);
@@ -386,6 +423,17 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     expect(asFormerManager.statusCode).toBe(200);
     expect(asFormerManager.json().revisions).toBeUndefined();
     expect(asFormerManager.json().outcome.value).toBe("held");
+    // Revoked manager with seat: own attendance only — no roster/summary.
+    expect(asFormerManager.json().attendance).toEqual({
+      installed: false,
+      writesEnabled: false,
+      myAttendance: null,
+      roster: null,
+      rosterNextCursor: null,
+      summary: null,
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    });
+    expect(JSON.stringify(asFormerManager.json())).not.toMatch(/PRIVATE TERMS SENTINEL|telegram:@synthetic_private/);
     expect((await put(manager, `/v1/games/${g.id}/outcome`, { expectedVersion: 0, outcome: "held" }, idem)).statusCode).toBe(404);
   });
 

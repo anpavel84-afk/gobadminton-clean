@@ -156,10 +156,12 @@ describe("PG-1a outcome policy and transport", () => {
       new IdempotencyService({} as never, env),
       { getResults } as never,
     );
-    await controller.getResults({} as never, past.id, "5", "cursor-token");
+    await controller.getResults({} as never, past.id, "5", "cursor-token", "10", "roster-cursor");
     expect(getResults).toHaveBeenCalledWith(past.id, past.id, {
       revisionsLimit: "5",
       revisionsCursor: "cursor-token",
+      rosterLimit: "10",
+      rosterCursor: "roster-cursor",
     });
   });
 

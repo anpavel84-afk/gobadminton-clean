@@ -1,5 +1,7 @@
 import { GameCoverService } from "./game-cover.service";
 import { GameCoverController } from "./game-cover.controller";
+import { GameAttendanceController } from "./game-attendance.controller";
+import { GameAttendanceService } from "./game-attendance.service";
 import { GameOutcomesController } from "./game-outcomes.controller";
 import { GameOutcomesService } from "./game-outcomes.service";
 import { ModerationModule } from "../moderation/moderation.module";
@@ -26,8 +28,21 @@ import { MeGamesController } from "./me-games.controller";
     forwardRef(() => InvitationsModule),
     GameChatModule,
   ],
-  controllers: [GameCoverController, GameOutcomesController, GamesController, MeGamesController],
-  providers: [GameCoverService, GameOutcomesService, GamesService, GameAuthorityService, OutboxService],
+  controllers: [
+    GameCoverController,
+    GameOutcomesController,
+    GameAttendanceController,
+    GamesController,
+    MeGamesController,
+  ],
+  providers: [
+    GameCoverService,
+    GameAttendanceService,
+    GameOutcomesService,
+    GamesService,
+    GameAuthorityService,
+    OutboxService,
+  ],
   exports: [GamesService, GameAuthorityService],
 })
 export class GamesModule {}
