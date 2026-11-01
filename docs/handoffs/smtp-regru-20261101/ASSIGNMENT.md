@@ -2,10 +2,10 @@
 
 Role: bounded implementer/OPS of the explicit Owner SMTP assignment, not a second
 PMA. Repo anpavel84-afk/gobadminton-clean; base DEV
-7a36b8d94a5df412426155e5852fddd9da7b0045. Accepted rules EOM 1.4 commit
-bc8bad0c38a861f8e72296d0a323e2941b9322e0, SHA256
-017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269;
-common+author capsules and full navigation read. User directly authorizes code,
+7a36b8d94a5df412426155e5852fddd9da7b0045. Current execution rules: DEV AGENTS.md Lean Delivery v2 at the exact base SHA,
+which supersedes historical EOM/SMART_ROUTING execution rules; C5 OFF. Initial
+main navigation referenced historical EOM; this was corrected on DEV read-back.
+User directly authorizes code,
 protected mail runtime and DEV after QA/CI. PROD is forbidden; C5 off.
 
 Scope: apps/api auth SMTP adapter/template, config and existing worker selection;

@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.4" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.5" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,25 +425,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Уточнение посещения: ответ, согласие и служебное разрешение спора",
+  title: "Доставка кода входа через почту GoBadminton",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [
-    "Ответ организатора и исправление отметки (включая неизвестно) без одностороннего закрытия возражения.",
-    "Явное согласие участника с текущей известной отметкой и точной версией открытого спора.",
-    "Запрос помощи как прогресс обращения — без автоматической жалобы и без ложного назначения.",
-    "Ограниченное независимое решение в Admin Cases по назначенному обращению со step-up.",
-  ],
-  fixes: [
-    "На экране итогов компактный day/month badge в таймзоне игры; сброс лишних вертикальных полей только внутри postgame panel/rail.",
-  ],
+  additions: ["Отправка одноразового кода входа с info@gobadminton.ru через существующую очередь доставки."],
+  fixes: ["Временные ошибки почтового сервера обрабатываются ограниченными повторными попытками."],
   known_limitations: [
-    "Это предложение кандидата alpha.4, не READY и не DEV ACCEPTED.",
-    "PG-3 отзывы/заметки и PG-4 полный поток ещё не входят.",
-    "PROD вне этого среза; действующий PROD остаётся alpha.2.",
-    "Запись под флагом по умолчанию OFF до доверенной DEV-активации.",
-    "Owner UAT = NOT_TESTED; одобрение галерей не равно приёмке реализации.",
-    "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
+    "Доступность в текущей установке подтверждается после DEV-приёмки и реальной проверки доставки.",
+    "Регистрация и восстановление доступа ещё не прошли пользовательскую приёмку.",
+    "PROD не изменён; Owner UAT = NOT_TESTED.",
   ],
   feature_catalogue: "delta",
 };

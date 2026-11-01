@@ -19,9 +19,10 @@ def main():
     digest = accepted['api_digest']
     if accepted['status'] != 'ACCEPTED' or not re.fullmatch(r'[a-f0-9]{40}', sha) or not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
         raise ValueError('accepted DEV release required')
+    image_ref = 'ghcr.io/anpavel84-afk/gobadminton-clean-api@' + digest
     api = json.loads(subprocess.check_output(['/usr/bin/docker', 'inspect', API]))[0]
     env = dict(item.split('=', 1) for item in api['Config']['Env'])
-    if env.get('GIT_SHA') != sha or api['Image'] != digest or env.get('APP_ENV') not in ('mvp', 'stage') or env.get('PUBLIC_API_ORIGIN') != 'https://dev.gobadminton.ru' or env.get('PUBLIC_WEB_ORIGIN') != 'https://dev.gobadminton.ru' or env.get('EMAIL_AUTH_TRANSPORT') != 'smtp':
+    if env.get('GIT_SHA') != sha or api['Config']['Image'] != image_ref or env.get('APP_ENV') not in ('mvp', 'stage') or env.get('PUBLIC_API_ORIGIN') != 'https://dev.gobadminton.ru' or env.get('PUBLIC_WEB_ORIGIN') != 'https://dev.gobadminton.ru' or env.get('EMAIL_AUTH_TRANSPORT') != 'smtp':
         raise ValueError('DEV API image/config mismatch')
     networks = list(api['NetworkSettings']['Networks'])
     if len(networks) != 1:
@@ -42,7 +43,7 @@ def main():
             '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=16m', '--network', networks[0],
             '--env-file', str(private_env), '--mount',
             'type=bind,src=/srv/gobadminton/mail-runtime/info-mail.auth,dst=/run/gobadminton-mail/info-mail.auth,readonly',
-            digest, 'node', 'dist/worker-main.js']
+            image_ref, 'node', 'dist/worker-main.js']
     os.execv(args[0], args)
 
 if __name__ == '__main__':

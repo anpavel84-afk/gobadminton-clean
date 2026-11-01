@@ -1,5 +1,16 @@
 # GoBadminton release notes
 
+## REG.RU SMTP email-code delivery (0.1.0-alpha.5 candidate)
+
+Existing email-code API and pg-boss delivery queue gain verified TLS SMTP delivery
+from info@gobadminton.ru, with protected worker-only password file, bounded retries
+and private error reporting. Fake delivery remains local/test only.
+
+- Application version (candidate): `0.1.0-alpha.5`; API contract unchanged `0.22.0`.
+- Independent QA / Product CI / DEV acceptance: pending.
+- Real delivery and email-code UAT: pending; registration/recovery NOT_TESTED.
+- PROD unchanged; SMTP ACK-loss/crash duplicate window remains documented.
+
 ## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 candidate)
 
 Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. Runtime writes remain default OFF. **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 final DEV record retained below.
