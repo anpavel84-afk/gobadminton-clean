@@ -9,6 +9,7 @@ import type {
   PeerReviewTag,
   ReviewKind,
 } from "../../../lib/consumer-types";
+import type { SocialMutationPending } from "../messages/useSocialMutation";
 import { Button } from "../Button";
 import { SectionHeader } from "../players/ProfileComposition";
 import { SurfacePanel } from "../Surfaces";
@@ -32,6 +33,31 @@ function peerLabel(rating: PeerReviewRating | null): string {
   return PEER_OPTIONS.find((o) => o.value === rating)?.title ?? "—";
 }
 
+function sameFrozenBody(left: object, right: object): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+type ReviewFlight = {
+  path: string;
+  method: string;
+  body: Record<string, unknown>;
+  peerRating: PeerReviewRating | null;
+  orgScore: number | "";
+  comment: string;
+  tags: PeerReviewTag[];
+  discrepancy: string;
+  subjectId: string;
+  kind: ReviewKind;
+};
+
+type NoteEditFlight = {
+  path: string;
+  method: string;
+  body: Record<string, unknown>;
+  contextId: string;
+  text: string;
+};
+
 export function GameFeedbackPanel({
   gameId,
   feedback,
@@ -40,6 +66,8 @@ export function GameFeedbackPanel({
   unknownOp,
   onLocalNotice,
   noteSubjects = [],
+  confirmedOperation = null,
+  onConfirmedOperationSeen,
 }: {
   gameId: string;
   feedback: GameFeedbackSlice | null | undefined;
@@ -48,6 +76,9 @@ export function GameFeedbackPanel({
   unknownOp: boolean;
   onLocalNotice: (text: string | null) => void;
   noteSubjects?: Array<{ contextId: string; displayName: string }>;
+  /** Validated-success frozen request from host; ignored when null / unrelated. */
+  confirmedOperation?: SocialMutationPending | null;
+  onConfirmedOperationSeen?: () => void;
 }) {
   const caps = feedback?.capabilities;
   const writes = Boolean(feedback?.installed && feedback.writesEnabled);
@@ -65,6 +96,28 @@ export function GameFeedbackPanel({
   const [editingNoteText, setEditingNoteText] = useState("");
   const boundGame = useRef(gameId);
   boundGame.current = gameId;
+  const reviewFlight = useRef<ReviewFlight | null>(null);
+  const noteEditFlight = useRef<NoteEditFlight | null>(null);
+  const draftSnapshot = useRef({
+    peerRating,
+    orgScore,
+    comment,
+    tags,
+    discrepancy,
+    subjectId,
+    editingNoteContextId,
+    editingNoteText,
+  });
+  draftSnapshot.current = {
+    peerRating,
+    orgScore,
+    comment,
+    tags,
+    discrepancy,
+    subjectId,
+    editingNoteContextId,
+    editingNoteText,
+  };
 
   useEffect(() => {
     const first = caps?.peerSubjects[0]?.contextId ?? "";
@@ -78,6 +131,57 @@ export function GameFeedbackPanel({
       else setMode("received");
     }
   }, [caps, mode]);
+
+  useEffect(() => {
+    if (!confirmedOperation) return;
+    const pending = confirmedOperation;
+    const review = reviewFlight.current;
+    const draft = draftSnapshot.current;
+    if (
+      review &&
+      boundGame.current === gameId &&
+      pending.path === review.path &&
+      pending.method === review.method &&
+      sameFrozenBody(pending.body, review.body)
+    ) {
+      const unchanged =
+        draft.peerRating === review.peerRating &&
+        draft.orgScore === review.orgScore &&
+        draft.comment === review.comment &&
+        draft.tags.length === review.tags.length &&
+        draft.tags.every((tag, i) => tag === review.tags[i]) &&
+        draft.discrepancy === review.discrepancy &&
+        draft.subjectId === review.subjectId;
+      if (unchanged) {
+        setPeerRating(null);
+        setOrgScore("");
+        setComment("");
+        setTags([]);
+        setDiscrepancy("");
+      }
+      reviewFlight.current = null;
+    }
+
+    const noteFlight = noteEditFlight.current;
+    if (
+      noteFlight &&
+      boundGame.current === gameId &&
+      pending.path === noteFlight.path &&
+      pending.method === noteFlight.method &&
+      sameFrozenBody(pending.body, noteFlight.body)
+    ) {
+      const unchanged =
+        draft.editingNoteContextId === noteFlight.contextId &&
+        draft.editingNoteText === noteFlight.text;
+      if (unchanged) {
+        setEditingNoteContextId("");
+        setEditingNoteText("");
+      }
+      noteEditFlight.current = null;
+    }
+
+    onConfirmedOperationSeen?.();
+  }, [confirmedOperation, gameId, onConfirmedOperationSeen]);
 
   if (!feedback?.installed) {
     return (
@@ -93,14 +197,6 @@ export function GameFeedbackPanel({
   const sent = (feedback.gameReviews ?? []).filter((r) => r.direction === "sent");
   const received = (feedback.gameReviews ?? []).filter((r) => r.direction === "received");
   const notes = feedback.myNotes ?? [];
-
-  function resetForm() {
-    setPeerRating(null);
-    setOrgScore("");
-    setComment("");
-    setTags([]);
-    setDiscrepancy("");
-  }
 
   function submitReview(kind: ReviewKind) {
     if (!writes || busy || unknownOp) return;
@@ -124,9 +220,22 @@ export function GameFeedbackPanel({
       if (!comment.trim()) return;
       body.comment = comment.trim();
     }
+    const path = `/v1/games/${gameId}/reviews`;
     onLocalNotice(null);
-    mutation.run(`/v1/games/${gameId}/reviews`, body, "POST");
-    resetForm();
+    // Freeze flight before async transport; do not treat run() admission as success.
+    reviewFlight.current = {
+      path,
+      method: "POST",
+      body,
+      peerRating,
+      orgScore,
+      comment,
+      tags: [...tags],
+      discrepancy,
+      subjectId,
+      kind,
+    };
+    mutation.run(path, body, "POST");
   }
 
   function submitReply(review: GameReview) {
@@ -213,16 +322,21 @@ export function GameFeedbackPanel({
     if (editingNoteContextId !== note.contextId) return;
     const text = editingNoteText.trim();
     if (!text) return;
+    const path = `/v1/games/${gameId}/notes/${note.contextId}`;
+    const body = {
+      expectedVersion: note.version,
+      text,
+    };
     onLocalNotice(null);
-    mutation.run(
-      `/v1/games/${gameId}/notes/${note.contextId}`,
-      {
-        expectedVersion: note.version,
-        text,
-      },
-      "PUT",
-    );
-    resetEditNoteDraft(note.contextId);
+    // Keep editor open until confirmed success of this exact PUT.
+    noteEditFlight.current = {
+      path,
+      method: "PUT",
+      body,
+      contextId: note.contextId,
+      text: editingNoteText,
+    };
+    mutation.run(path, body, "PUT");
   }
 
   function deleteNote(note: GamePersonalNote) {

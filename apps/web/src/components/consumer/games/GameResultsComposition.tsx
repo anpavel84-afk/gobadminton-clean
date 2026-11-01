@@ -27,6 +27,7 @@ import type { AttendanceDispute } from "../../../lib/consumer-types";
 import { Button } from "../Button";
 import { ContentContainer, SurfacePanel } from "../Surfaces";
 import { Avatar, ProfileDialog, SectionHeader } from "../players/ProfileComposition";
+import type { SocialMutationPending } from "../messages/useSocialMutation";
 import {
   type GameResultsMutationApi,
   type GameResultsMutationData,
@@ -54,7 +55,7 @@ function GameResultsMutationHost({
   actorId: string;
   gameId: string;
   csrf: string;
-  onSuccess: (data: GameResultsMutationData) => void;
+  onSuccess: (data: GameResultsMutationData, pending?: SocialMutationPending) => void;
   onRefresh: () => void;
   children: (mutation: GameResultsMutationApi) => ReactNode;
 }) {
@@ -115,6 +116,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [outcomeOpen, setOutcomeOpen] = useState(false);
   const [outcomeValue, setOutcomeValue] = useState<"held" | "not_held">("held");
   const [outcomeReason, setOutcomeReason] = useState("");
+  /** Exact frozen request after validated success — feedback panel clears matching drafts only. */
+  const [confirmedOperation, setConfirmedOperation] = useState<SocialMutationPending | null>(null);
   const epoch = useRef(0);
   const disputeFetchGen = useRef(0);
   const selectedDisputeRef = useRef<string | null>(null);
@@ -880,6 +883,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
               busy={busy}
               unknownOp={unknownOp}
               onLocalNotice={setNotice}
+              confirmedOperation={confirmedOperation}
+              onConfirmedOperationSeen={() => setConfirmedOperation(null)}
               noteSubjects={(results?.attendance?.roster ?? []).map((row) => ({
                 contextId: row.contextId,
                 displayName: row.displayName,
@@ -1079,7 +1084,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
           actorId={me.id}
           gameId={gameId}
           csrf={me.csrfToken}
-          onSuccess={() => {
+          onSuccess={(_data, pending) => {
             // Native callback applies only while this actor still owns the page host.
             if (!actorRef.current || actorRef.current !== me.id) return;
             setMarkTarget(null);
@@ -1089,6 +1094,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             setDisputeText("");
             setOutcomeOpen(false);
             setNotice(null);
+            // Forward exact frozen request; panel matches review/note drafts only.
+            if (pending) setConfirmedOperation(pending);
             void reload();
           }}
           onRefresh={() => {

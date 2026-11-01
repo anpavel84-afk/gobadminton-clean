@@ -102,6 +102,7 @@ function walk(node: ReactNode): ReactElement<Record<string, unknown>>[] {
 
 function feedbackFixture(overrides: {
   canCreateNote?: boolean;
+  canCreatePeer?: boolean;
   notes?: GamePersonalNote[];
 } = {}): GameFeedbackSlice {
   return {
@@ -110,11 +111,13 @@ function feedbackFixture(overrides: {
     capabilities: {
       installed: true,
       writesEnabled: true,
-      canCreatePeer: false,
+      canCreatePeer: overrides.canCreatePeer ?? false,
       canCreateOrganization: false,
       canCreateTraining: false,
       canCreateNote: overrides.canCreateNote ?? false,
-      peerSubjects: [],
+      peerSubjects: overrides.canCreatePeer
+        ? [{ contextId, displayName: "Илья Петров" }]
+        : [],
       organizationRecipientDisplay: null,
       complaintReuse: "existing_player_report",
       remaining: ["typed_review_safety_extension"],
@@ -139,14 +142,24 @@ function ownNote(overrides: Partial<GamePersonalNote> = {}): GamePersonalNote {
 
 function renderPanel(args: {
   canCreateNote?: boolean;
+  canCreatePeer?: boolean;
   notes?: GamePersonalNote[];
   run?: ReturnType<typeof vi.fn>;
+  confirmedOperation?: {
+    path: string;
+    body: object;
+    key: string;
+    method: string;
+  } | null;
+  onConfirmedOperationSeen?: () => void;
+  flushConfirm?: boolean;
 }) {
   const run = args.run ?? vi.fn();
   const props = {
     gameId,
     feedback: feedbackFixture({
       canCreateNote: args.canCreateNote ?? false,
+      canCreatePeer: args.canCreatePeer ?? false,
       notes: args.notes ?? [],
     }),
     mutation: { run, busy: false, pending: false } as never,
@@ -154,6 +167,8 @@ function renderPanel(args: {
     unknownOp: false,
     onLocalNotice: () => {},
     noteSubjects: [{ contextId, displayName: "Кирилл" }],
+    confirmedOperation: args.confirmedOperation ?? null,
+    onConfirmedOperationSeen: args.onConfirmedOperationSeen,
   };
   let tree: ReactNode = null;
   for (let pass = 0; pass < 3; pass += 1) {
@@ -167,7 +182,15 @@ function renderPanel(args: {
   }
   hooks.stateCursor = 0;
   hooks.refCursor = 0;
+  hooks.effects = [];
   tree = GameFeedbackPanel(props);
+  if (args.flushConfirm) {
+    const queued = hooks.effects.splice(0);
+    for (const effect of queued) effect();
+    hooks.stateCursor = 0;
+    hooks.refCursor = 0;
+    tree = GameFeedbackPanel(props);
+  }
   return { tree, run, nodes: walk(tree) };
 }
 
@@ -405,5 +428,243 @@ describe("PG-3 feedback client mutation fencing", () => {
     expect(blocked.nodes.some((n) => String(n.props.children) === "Изменить")).toBe(false);
     expect(blocked.nodes.some((n) => String(n.props.children) === "Сохранить заметку")).toBe(false);
     expect(blockedRun).not.toHaveBeenCalled();
+  });
+
+  it("review draft stays after run; UNKNOWN keeps input; matching confirm clears; unrelated/changed draft does not", () => {
+    const run = vi.fn(() => true);
+    const seen = vi.fn();
+    const start = renderPanel({ canCreatePeer: true, run });
+    const rating = start.nodes.find(
+      (n) => n.type === "input" && n.props.name === "peerRating" && n.props.type === "radio",
+    );
+    expect(rating).toBeTruthy();
+    (rating!.props.onChange as () => void)();
+
+    const withRating = renderPanel({ canCreatePeer: true, run });
+    const commentBox = withRating.nodes.find(
+      (n) => n.type === "textarea" && n.props.maxLength === 500 && n.props.rows === 3,
+    );
+    expect(commentBox).toBeTruthy();
+    (commentBox!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Точный черновик" },
+    });
+
+    const ready = renderPanel({ canCreatePeer: true, run });
+    const submit = ready.nodes.find((n) => String(n.props.children) === "Отправить игроку");
+    expect(submit).toBeTruthy();
+    (submit!.props.onClick as () => void)();
+
+    const body = {
+      kind: "peer",
+      experienceAssertion: "i_experienced_this_game",
+      subjectContextId: contextId,
+      peerRating: "play_again",
+      comment: "Точный черновик",
+    };
+    expect(run).toHaveBeenCalledWith(`/v1/games/${gameId}/reviews`, body, "POST");
+
+    // Premature reset must not happen — draft still present after void/admission run.
+    const afterRun = renderPanel({ canCreatePeer: true, run });
+    expect(
+      afterRun.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Точный черновик",
+      ),
+    ).toBe(true);
+    expect(
+      afterRun.nodes.some(
+        (n) => n.type === "input" && n.props.name === "peerRating" && n.props.checked === true,
+      ),
+    ).toBe(true);
+
+    // Unrelated confirmed command must not clear review draft.
+    const unrelated = renderPanel({
+      canCreatePeer: true,
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "PUT",
+        key: "note-k",
+        body: { expectedVersion: 2, text: "x" },
+      },
+      onConfirmedOperationSeen: seen,
+      flushConfirm: true,
+    });
+    expect(
+      unrelated.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Точный черновик",
+      ),
+    ).toBe(true);
+
+    // Changed draft after submit: matching confirm must preserve current input.
+    const edited = renderPanel({ canCreatePeer: true, run });
+    const editBox = edited.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Точный черновик",
+    );
+    (editBox!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Уже другой текст" },
+    });
+    const changedConfirm = renderPanel({
+      canCreatePeer: true,
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/reviews`,
+        method: "POST",
+        key: "rev-k",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      changedConfirm.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Уже другой текст",
+      ),
+    ).toBe(true);
+
+    // Restore frozen draft and confirm matching success → clear.
+    const restore = renderPanel({ canCreatePeer: true, run });
+    const restoreBox = restore.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Уже другой текст",
+    );
+    (restoreBox!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Точный черновик" },
+    });
+    // Re-submit to latch flight against current draft (prior flight cleared on mismatched confirm).
+    const resubmit = renderPanel({ canCreatePeer: true, run });
+    const submitAgain = resubmit.nodes.find((n) => String(n.props.children) === "Отправить игроку");
+    (submitAgain!.props.onClick as () => void)();
+    const matched = renderPanel({
+      canCreatePeer: true,
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/reviews`,
+        method: "POST",
+        key: "rev-k2",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      matched.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Точный черновик",
+      ),
+    ).toBe(false);
+    expect(
+      matched.nodes.some(
+        (n) => n.type === "input" && n.props.name === "peerRating" && n.props.checked === true,
+      ),
+    ).toBe(false);
+  });
+
+  it("note editor stays open on UNKNOWN admission; closes only on matching confirmed PUT", () => {
+    const run = vi.fn(() => true);
+    const first = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote({ allowedActions: { canEdit: true, canDelete: true } })],
+      run,
+    });
+    const notesTab = first.nodes.find(
+      (n) => n.type === "button" && n.props.role === "tab" && String(n.props.children) === "Заметки",
+    );
+    (notesTab!.props.onClick as () => void)();
+    const onNotes = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+    });
+    const changeBtn = onNotes.nodes.find((n) => String(n.props.children) === "Изменить");
+    (changeBtn!.props.onClick as () => void)();
+    const editing = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const editArea = editing.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Старая заметка",
+    );
+    (editArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Сохранённый черновик" },
+    });
+    const ready = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const save = ready.nodes.find((n) => String(n.props.children) === "Сохранить изменения");
+    (save!.props.onClick as () => void)();
+    const body = { expectedVersion: 2, text: "Сохранённый черновик" };
+    expect(run).toHaveBeenCalledWith(`/v1/games/${gameId}/notes/${contextId}`, body, "PUT");
+
+    const afterRun = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    expect(
+      afterRun.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Сохранённый черновик",
+      ),
+    ).toBe(true);
+    expect(afterRun.nodes.some((n) => String(n.props.children) === "Сохранить изменения")).toBe(true);
+
+    // Unrelated reply success must not close note editor.
+    const unrelated = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+      confirmedOperation: {
+        path: `/v1/reviews/${reviewId}/reply`,
+        method: "PUT",
+        key: "reply-k",
+        body: { expectedVersion: 0, text: "ответ" },
+      },
+      flushConfirm: true,
+    });
+    expect(
+      unrelated.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Сохранённый черновик",
+      ),
+    ).toBe(true);
+
+    // Changed editor text: matching PUT confirm must keep the new text/context.
+    const tweak = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const tweakArea = tweak.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Сохранённый черновик",
+    );
+    (tweakArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Уже правлю дальше" },
+    });
+    const changed = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "PUT",
+        key: "note-k",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      changed.nodes.some((n) => n.type === "textarea" && n.props.value === "Уже правлю дальше"),
+    ).toBe(true);
+
+    // Matching confirm with unchanged draft closes editor.
+    const restore = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const restoreArea = restore.nodes.find(
+      (n) => n.type === "textarea" && n.props.value === "Уже правлю дальше",
+    );
+    (restoreArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Сохранённый черновик" },
+    });
+    const again = renderPanel({ canCreateNote: false, notes: [ownNote()], run });
+    const saveAgain = again.nodes.find((n) => String(n.props.children) === "Сохранить изменения");
+    (saveAgain!.props.onClick as () => void)();
+    const closed = renderPanel({
+      canCreateNote: false,
+      notes: [ownNote()],
+      run,
+      confirmedOperation: {
+        path: `/v1/games/${gameId}/notes/${contextId}`,
+        method: "PUT",
+        key: "note-k2",
+        body,
+      },
+      flushConfirm: true,
+    });
+    expect(
+      closed.nodes.some(
+        (n) => n.type === "textarea" && n.props.value === "Сохранённый черновик",
+      ),
+    ).toBe(false);
+    expect(closed.nodes.some((n) => String(n.props.children) === "Изменить")).toBe(true);
   });
 });

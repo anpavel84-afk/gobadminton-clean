@@ -341,6 +341,30 @@ describe("PG-1b game results mutation host", () => {
     expect(storage.get(`gb-fr04-pending:${actor}:game-results:${gameId}`)).toBeTruthy();
   });
 
+  it("forwards frozen pending on confirmed success; single-arg success callers stay compatible", async () => {
+    const body = { expectedVersion: 0, value: "present" as const, late: false };
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: record({ version: 1, value: "present", late: false }),
+    });
+    const mutation = render();
+    expect(mutation.run(`/v1/games/${gameId}/attendance/${contextId}`, body, "PUT")).toBe(true);
+    await settle();
+    expect(success).toHaveBeenCalledOnce();
+    expect(success).toHaveBeenCalledWith(
+      record({ version: 1, value: "present", late: false }),
+      expect.objectContaining({
+        path: `/v1/games/${gameId}/attendance/${contextId}`,
+        method: "PUT",
+        key: "results-attempt-key",
+        body,
+      }),
+    );
+    // Single-arg callback shape still receives data as first argument.
+    expect(success.mock.calls[0]?.[0]).toEqual(record({ version: 1, value: "present", late: false }));
+  });
+
   it("receipt binding rejects empty bulk and stale unknown outcome; matching responses pass", () => {
     const bulkPending = {
       path: `/v1/games/${gameId}/attendance/bulk-present`,

@@ -601,7 +601,8 @@ export function useGameResultsMutation(
   actorId: string,
   gameId: string,
   csrf: string,
-  onSuccess: (data: GameResultsMutationData) => void,
+  /** Forwards validated success + frozen pending; single-arg callers stay compatible. */
+  onSuccess: (data: GameResultsMutationData, pending?: SocialMutationPending) => void,
   onRefresh: () => void,
 ) {
   const persist = Boolean(actorId) && !actorId.startsWith("anon:");
