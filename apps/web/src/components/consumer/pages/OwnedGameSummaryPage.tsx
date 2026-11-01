@@ -13,6 +13,7 @@ import {
 } from "../../../lib/api-client";
 import type { ManagedGame, Me, Participation } from "../../../lib/consumer-types";
 import { managedGameRelationLabel } from "../../../lib/game-presentation";
+import { resultsPath } from "../../../lib/game-results";
 import {
   GameHero,
   GameTerms,
@@ -249,6 +250,9 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
               <p className="gb-c23-helper">Изменение вместимости и отмена игры пока недоступны.</p>
               <div className="gb-game-form-actions">
                 {game.status === "published" && <Button href={`/games/${game.id}`}>Открыть игру</Button>}
+                {(game.status === "published" || game.status === "completed" || game.status === "cancelled") ? (
+                  <Button variant="outline" href={resultsPath(game.id)}>Участники / Итоги</Button>
+                ) : null}
                 <Button variant="outline" href="/my-games?tab=created">К управляемым играм</Button>
               </div>
             </aside>

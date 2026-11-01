@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps six confirmed seed deployments including accepted alpha.1 and dedupes identical live rows", () => {
+  it("keeps eight confirmed seed deployments including accepted alpha.1/alpha.2 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(6);
+    expect(seedCount).toBe(8);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -275,6 +275,7 @@ describe("history seed integrity", () => {
     expect(rows.every((row) =>
       row.application_version == null
       || row.application_version === FIRST_NAMED_APPLICATION_VERSION
+      || row.application_version === "0.1.0-alpha.2"
       || row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(true);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
@@ -283,6 +284,10 @@ describe("history seed integrity", () => {
       row.application_version === FIRST_NAMED_APPLICATION_VERSION
       && row.source_sha === "8733578a2f8a6cfd860371e8a2c2aa39f1b885bb",
     )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.2"
+      && row.source_sha === "38a4700c68ed85189007dcab3c859c98eb37bf46",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.flatMap((row) => row.deployments).map((d) => d.accepted_at)).toEqual([
       "2026-10-31T20:28:18Z",
       "2026-10-31T23:22:12.477839Z",
@@ -290,6 +295,8 @@ describe("history seed integrity", () => {
       "2026-11-01T00:04:47.811785Z",
       "2026-11-01T00:45:11Z",
       "2026-11-01T00:47:25.574224Z",
+      "2026-11-01T08:17:46Z",
+      "2026-11-01T08:19:28.308318Z",
     ]);
   });
 

@@ -812,9 +812,6 @@
               }
             }
           },
-          "400": {
-            "$ref": "#/components/responses/Problem"
-          },
           "401": {
             "$ref": "#/components/responses/Problem"
           },
@@ -828,6 +825,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "default": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
             "$ref": "#/components/responses/Problem"
           }
         },
@@ -1207,16 +1207,6 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Exact existing venue reused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Venue"
-                }
-              }
-            }
-          },
           "201": {
             "description": "Created unverified venue",
             "content": {
@@ -1253,6 +1243,16 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Exact existing venue reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Venue"
+                }
+              }
+            }
           }
         }
       },
@@ -3208,10 +3208,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3297,10 +3297,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3386,10 +3386,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3475,10 +3475,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3528,10 +3528,10 @@
           "409": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -5284,10 +5284,10 @@
           "422": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "429": {
+          "503": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "503": {
+          "429": {
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
@@ -6426,16 +6426,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6474,6 +6465,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": []
@@ -6510,16 +6510,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6558,6 +6549,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": []
@@ -6590,16 +6590,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6638,6 +6629,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -6708,16 +6708,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6756,6 +6747,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -6815,16 +6815,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6863,6 +6854,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -6954,16 +6954,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7002,6 +6993,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7094,16 +7094,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7142,6 +7133,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7215,16 +7215,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7263,6 +7254,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7317,16 +7317,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7365,6 +7356,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7450,16 +7450,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7498,6 +7489,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7580,16 +7580,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7628,6 +7619,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7701,16 +7701,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7749,6 +7740,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7803,16 +7803,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7851,6 +7842,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7936,16 +7936,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7984,6 +7975,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8066,16 +8066,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8114,6 +8105,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8187,16 +8187,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8235,6 +8226,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8289,16 +8289,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8337,6 +8328,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8422,16 +8422,7 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8470,6 +8461,15 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8534,34 +8534,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailUnlinkResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8597,6 +8570,33 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailUnlinkResult"
                 }
               }
             }
@@ -8653,34 +8653,7 @@
         "description": "Read-only browser status using JSON POST so browser supplies exact Origin. Same purpose/binding/session/freshness fences as GET status. No state change or code in response.",
         "security": [],
         "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8716,6 +8689,33 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -8796,34 +8796,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8859,6 +8832,33 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -8929,34 +8929,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8992,6 +8965,33 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -9062,34 +9062,7 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
           "403": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -9125,6 +9098,33 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -10875,24 +10875,6 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Internal synthetic result",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "const": "no-store"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserRestrictionsDetail"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid bounded request",
             "content": {
@@ -10959,6 +10941,24 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Internal synthetic result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRestrictionsDetail"
                 }
               }
             }
@@ -11032,24 +11032,6 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Internal synthetic result",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "const": "no-store"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserRestrictionCommandResult"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid bounded request",
             "content": {
@@ -11100,16 +11082,6 @@
               }
             }
           },
-          "422": {
-            "description": "Expiry must be future DB time within30 days",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
           "429": {
             "description": "Admin attempt budget exhausted",
             "content": {
@@ -11122,6 +11094,34 @@
           },
           "503": {
             "description": "Admin provider not configured",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Internal synthetic result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRestrictionCommandResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Expiry must be future DB time within30 days",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -13493,26 +13493,6 @@
               }
             }
           },
-          "201": {
-            "description": "Actor-owned result",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FriendshipReceipt"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Safe problem response",
             "content": {
@@ -13573,6 +13553,36 @@
               }
             }
           },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Actor send cap; Retry-After. Recipient cap uses generic resource unavailable.",
             "headers": {
@@ -13583,16 +13593,6 @@
                 }
               }
             },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Safe problem response",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14482,6 +14482,16 @@
               }
             }
           },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Actor send cap; Retry-After.",
             "headers": {
@@ -14492,16 +14502,6 @@
                 }
               }
             },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Safe problem response",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14748,10 +14748,10 @@
           "422": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "429": {
+          "503": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "503": {
+          "429": {
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
@@ -15154,15 +15154,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "415": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "422": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
           "429": {
             "description": "Rate limit",
             "content": {
@@ -15172,6 +15163,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
           },
           "503": {
             "$ref": "#/components/responses/AvatarProblem"
@@ -15306,15 +15306,6 @@
               }
             }
           },
-          "413": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "415": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "422": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
           "429": {
             "description": "Rate limit",
             "content": {
@@ -15324,6 +15315,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
           },
           "503": {
             "$ref": "#/components/responses/AvatarProblem"
@@ -15392,16 +15392,6 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Audited result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VenueCoverAccess"
-                }
-              }
-            }
-          },
           "400": {
             "description": "Invalid request",
             "content": {
@@ -15458,6 +15448,16 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverAccess"
                 }
               }
             }
@@ -15884,36 +15884,6 @@
               }
             }
           },
-          "201": {
-            "description": "Created exactly one recommendation and audit send.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationReceipt"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
           "401": {
             "description": "No active cookie session/account; bearer does not authenticate this surface.",
             "content": {
@@ -15964,6 +15934,29 @@
               }
             }
           },
+          "500": {
+            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
+          },
+          "400": {
+            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Actor game.recommend budget exhausted; Retry-After. Recipient exhaustion returns generic 404.",
             "content": {
@@ -15982,15 +15975,22 @@
               }
             }
           },
-          "500": {
-            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          },
-          "503": {
-            "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
-            "content": {
-              "application/problem+json": {
+          "201": {
+            "description": "Created exactly one recommendation and audit send.",
+            "headers": {
+              "Cache-Control": {
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameRecommendationReceipt"
                 }
               }
             }
@@ -16203,16 +16203,6 @@
               }
             }
           },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
           "401": {
             "description": "No active cookie session/account; bearer does not authenticate this surface.",
             "content": {
@@ -16265,6 +16255,16 @@
           },
           "500": {
             "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
+          },
+          "400": {
+            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "503": {
             "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
@@ -16361,16 +16361,6 @@
               }
             }
           },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
           "401": {
             "description": "No active cookie session/account; bearer does not authenticate this surface.",
             "content": {
@@ -16423,6 +16413,16 @@
           },
           "500": {
             "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
+          },
+          "400": {
+            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "503": {
             "description": "Friends admission OFF or migration0041 absent: writes unavailable.",

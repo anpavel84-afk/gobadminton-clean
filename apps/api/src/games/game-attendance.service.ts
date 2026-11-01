@@ -127,6 +127,7 @@ export class GameAttendanceService {
     client: PoolClient | Pool,
     gameId: string,
     startsAt: Date,
+    endsAt: Date,
   ): Promise<EligibleContext[]> {
     const parts = await client.query<{
       id: string;
@@ -157,6 +158,7 @@ export class GameAttendanceService {
         startsAt,
         part.status,
         part.confirmed_at,
+        endsAt,
       );
       if (!verdict.eligible || !verdict.proof) continue;
       eligible.push({
@@ -290,12 +292,15 @@ export class GameAttendanceService {
     if (!installed) return emptyAttendanceSlice(false, false, false);
     if (role === "none") unavailable();
 
-    const startsAt = (
-      await client.query<{ starts_at: Date }>(`SELECT starts_at FROM games WHERE id = $1`, [gameId])
-    ).rows[0]?.starts_at;
-    if (!startsAt) unavailable();
+    const bounds = (
+      await client.query<{ starts_at: Date; ends_at: Date }>(
+        `SELECT starts_at, ends_at FROM games WHERE id = $1`,
+        [gameId],
+      )
+    ).rows[0];
+    if (!bounds?.starts_at || !bounds.ends_at) unavailable();
 
-    const eligible = await this.loadEligibleContexts(client, gameId, startsAt);
+    const eligible = await this.loadEligibleContexts(client, gameId, bounds.starts_at, bounds.ends_at);
     const own = eligible.find((row) => row.userId === userId) ?? null;
 
     if (role === "participant") {
@@ -477,6 +482,7 @@ export class GameAttendanceService {
     gameId: string,
     contextId: string,
     startsAt: Date,
+    endsAt: Date,
   ): Promise<ParticipationLockRow> {
     const row = (
       await client.query<ParticipationLockRow>(
@@ -493,7 +499,13 @@ export class GameAttendanceService {
        WHERE participation_id = $1 ORDER BY at ASC, id ASC`,
       [row.id],
     );
-    const verdict = eligibleFromTransitions(transitions.rows, startsAt, row.status, row.confirmed_at);
+    const verdict = eligibleFromTransitions(
+      transitions.rows,
+      startsAt,
+      row.status,
+      row.confirmed_at,
+      endsAt,
+    );
     if (!verdict.eligible) {
       throw conflict("ATTENDANCE_CONTEXT_INELIGIBLE", "Контекст не входит в подтверждённый состав на момент игры");
     }
@@ -545,7 +557,13 @@ export class GameAttendanceService {
         const startsAt = (
           await client.query<{ starts_at: Date }>(`SELECT starts_at FROM games WHERE id = $1`, [gameId])
         ).rows[0]!.starts_at;
-        const participation = await this.lockEligibleParticipation(client, gameId, contextId, startsAt);
+        const participation = await this.lockEligibleParticipation(
+          client,
+          gameId,
+          contextId,
+          startsAt,
+          locked.ends_at,
+        );
         await this.writeAssertion(client, {
           gameId,
           participation,
@@ -620,6 +638,7 @@ export class GameAttendanceService {
             gameId,
             item.contextId,
             startsAt,
+            locked.ends_at,
           );
           await this.writeAssertion(client, {
             gameId,

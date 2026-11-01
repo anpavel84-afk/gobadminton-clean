@@ -53,4 +53,15 @@ describe("PG-1b game results helpers", () => {
     expect(composition).toContain("Кнопки отправки сейчас не предлагаются");
     expect(composition).not.toContain("phantom");
   });
+
+  it("OwnedGameSummary exposes contextual Results entry via resultsPath", () => {
+    const summary = readFileSync(
+      path.resolve(__dirname, "../src/components/consumer/pages/OwnedGameSummaryPage.tsx"),
+      "utf8",
+    );
+    expect(summary).toContain("resultsPath");
+    expect(summary).toContain("Участники / Итоги");
+    expect(summary).not.toContain("ManageGamePage");
+    expect(summary).not.toContain("MyGameDetailPage");
+  });
 });

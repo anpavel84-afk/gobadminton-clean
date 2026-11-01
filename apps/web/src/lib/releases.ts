@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.2" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.3" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.20.0" as const;
@@ -425,17 +425,23 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Исправление ложного конца подборки в «Свайп»",
+  title: "Посещаемость и единый экран результатов игры — первый ограниченный этап",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [],
-  fixes: [
-    "Режим «Свайп» дожидается готовности собственного профиля и не показывает ложный конец подборки",
-    "Скрытый собственный профиль объясняется со ссылкой на настройки, без автосмены приватности",
-    "Ошибка или отсутствие профиля и временная недоступность предложений отделены от настоящего конца списка",
+  additions: [
+    "Фиксация посещаемости с происхождением сведений (provenance).",
+    "Устойчивое личное уведомление о сведениях посещаемости и подтверждение ознакомления.",
+    "Базовое возражение по сведениям посещаемости.",
+    "Единый экран результатов игры в пределах PG-1b.",
   ],
+  fixes: [],
   known_limitations: [
-    "Исправление режима «Свайп» ещё не проверялось владельцем после обычного входа",
+    "Это предложение кандидата, не подтверждение готовой доступной функции на DEV/PROD.",
+    "Полный PG-2: разбор и разрешение споров ещё не входят.",
+    "Оценки, отзывы и комментарии ещё не входят.",
+    "PROD вне этого среза; действующий PROD остаётся alpha.2, пока отдельный выпуск не принят.",
+    "Запись под флагом по умолчанию OFF; доступность DEV заявляется только после безопасной проверенной активации.",
+    "Owner UAT будущего продукта NOT_TESTED; одобрение дизайн-галерей не равно приёмке реализации.",
     "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
   ],
   feature_catalogue: "delta",
@@ -547,6 +553,43 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "known_limitations": [
       "Владелец ещё не проверял сервис после обычного входа в браузере",
       "Полный базовый каталог первой alpha сохранён под номером 0.1.0-alpha.1"
+    ]
+  },
+  {
+    "source_sha": "38a4700c68ed85189007dcab3c859c98eb37bf46",
+    "application_version": "0.1.0-alpha.2",
+    "version_label": "0.1.0-alpha.2",
+    "title": "Исправление ложного конца подборки в «Свайп»",
+    "api_contract_version": "0.20.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41287889091-a1",
+        "accepted_at": "2026-11-01T08:17:46Z",
+        "api_digest": "sha256:cbbc5b57d19375751cb001ac5a7ac70cbabcba76e8c2cdc7e28c6c46c9c895a1",
+        "web_digest": "sha256:773dd9985af3c862ffb022c2ca105071b13e83c6a2731cccfbee056d2652b816",
+        "kind": "pipeline"
+      },
+      {
+        "environment": "prod",
+        "status": "ACCEPTED",
+        "release_id": null,
+        "accepted_at": "2026-11-01T08:19:28.308318Z",
+        "api_digest": "sha256:cbbc5b57d19375751cb001ac5a7ac70cbabcba76e8c2cdc7e28c6c46c9c895a1",
+        "web_digest": "sha256:773dd9985af3c862ffb022c2ca105071b13e83c6a2731cccfbee056d2652b816",
+        "kind": "managed_application_only"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Swipe различает загрузку собственного профиля, невыполненное условие готовности, ошибку и недоступных игроков; эти состояния не выдаются за настоящий конец списка.",
+      "После страницы недоступных игроков можно продолжить просмотр следующей страницы.",
+      "Ошибка capability-запроса не запускает автоматический бесконечный повтор; повтор выполняется явно."
+    ],
+    "known_limitations": [
+      "Owner UAT после обычного входа не выполнен"
     ]
   },
 ] as const;

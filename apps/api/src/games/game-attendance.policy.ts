@@ -381,28 +381,27 @@ export function decodeMeResultsCursor(cursor: string | undefined): { createdAt: 
   }
 }
 
+const PRESTART_NON_CONFIRMED = new Set(["withdrawn", "removed", "rejected", "pending"]);
+
 /**
  * Reconstruct confirmed-as-of-start from transition history.
- * Ambiguous / incomplete history → false (do not invent membership).
+ * Latest definite as-of-start transition wins; never resurrect pre-start
+ * withdrawn/removed/rejected/pending via an earlier confirmation.
+ * Current confirmed alone requires a known confirmed_at within the game window
+ * (not after ends). Ambiguous / incomplete history → false (do not invent membership).
  */
 export function eligibleFromTransitions(
   transitions: Array<{ to_status: string; at: Date; id: string }>,
   startsAt: Date,
   currentStatus: string,
   confirmedAt: Date | null,
+  endsAt: Date,
 ): { eligible: boolean; proof: EligibleContext["eligibleProof"] | null } {
-  if (currentStatus === "confirmed") {
-    return { eligible: true, proof: "current_confirmed" };
-  }
   const ordered = [...transitions].sort((a, b) => {
     const delta = a.at.getTime() - b.at.getTime();
     if (delta !== 0) return delta;
     return a.id.localeCompare(b.id);
   });
-  if (ordered.length === 0) {
-    // No durable transition proof for non-current confirmed seats.
-    return { eligible: false, proof: null };
-  }
   let statusAtStart: string | null = null;
   for (const row of ordered) {
     if (row.at.getTime() <= startsAt.getTime()) statusAtStart = row.to_status;
@@ -411,15 +410,25 @@ export function eligibleFromTransitions(
   if (statusAtStart === "confirmed") {
     return { eligible: true, proof: "transition_as_of_start" };
   }
-  // Confirmed after start but still during game window is still a real context when
-  // confirmed_at is known and not after ends — handled by current_confirmed above.
-  // Without as-of-start confirmed proof, do not mark withdrawn/rejected/pending/removed-before-start.
-  if (
-    confirmedAt &&
-    confirmedAt.getTime() <= startsAt.getTime() &&
-    ordered.some((row) => row.to_status === "confirmed" && row.at.getTime() <= startsAt.getTime())
-  ) {
-    return { eligible: true, proof: "transition_as_of_start" };
+  // Definite non-confirmed as-of-start: do not fall back to any earlier confirmation.
+  // Mid-game re-confirm may still qualify via current_confirmed below.
+  if (statusAtStart !== null && PRESTART_NON_CONFIRMED.has(statusAtStart)) {
+    // continue to current_confirmed only
+  } else if (statusAtStart !== null) {
+    // Unrecognized as-of-start status → do not invent eligibility from partial history.
+    return { eligible: false, proof: null };
+  }
+
+  if (currentStatus === "confirmed") {
+    if (
+      confirmedAt &&
+      Number.isFinite(confirmedAt.getTime()) &&
+      confirmedAt.getTime() <= endsAt.getTime()
+    ) {
+      return { eligible: true, proof: "current_confirmed" };
+    }
+    // Missing / future / after-end confirmation timestamp cannot prove membership.
+    return { eligible: false, proof: null };
   }
   return { eligible: false, proof: null };
 }

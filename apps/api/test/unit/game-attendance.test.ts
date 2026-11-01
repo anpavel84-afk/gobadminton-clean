@@ -64,10 +64,11 @@ describe("PG-1b attendance policy", () => {
   });
 
   it("does not infer attendance from time; eligibility uses transitions or current confirmed", () => {
+    const ends = new Date("2026-10-24T17:00:00.000Z");
     expect(
-      eligibleFromTransitions([], starts, "confirmed", new Date("2026-10-20T00:00:00.000Z")),
+      eligibleFromTransitions([], starts, "confirmed", new Date("2026-10-20T00:00:00.000Z"), ends),
     ).toEqual({ eligible: true, proof: "current_confirmed" });
-    expect(eligibleFromTransitions([], starts, "withdrawn", null)).toEqual({
+    expect(eligibleFromTransitions([], starts, "withdrawn", null, ends)).toEqual({
       eligible: false,
       proof: null,
     });
@@ -75,7 +76,7 @@ describe("PG-1b attendance policy", () => {
       { to_status: "confirmed", at: new Date("2026-10-20T00:00:00.000Z"), id: "a" },
       { to_status: "withdrawn", at: new Date("2026-10-25T00:00:00.000Z"), id: "b" },
     ];
-    expect(eligibleFromTransitions(confirmedThenWithdrawnAfter, starts, "withdrawn", null)).toEqual({
+    expect(eligibleFromTransitions(confirmedThenWithdrawnAfter, starts, "withdrawn", null, ends)).toEqual({
       eligible: true,
       proof: "transition_as_of_start",
     });
@@ -83,10 +84,25 @@ describe("PG-1b attendance policy", () => {
       { to_status: "confirmed", at: new Date("2026-10-20T00:00:00.000Z"), id: "a" },
       { to_status: "withdrawn", at: new Date("2026-10-23T00:00:00.000Z"), id: "b" },
     ];
-    expect(eligibleFromTransitions(withdrawnBeforeStart, starts, "withdrawn", null)).toEqual({
+    expect(eligibleFromTransitions(withdrawnBeforeStart, starts, "withdrawn", null, ends)).toEqual({
       eligible: false,
       proof: null,
     });
+    // Negative proof: later withdrawal before start overrides earlier confirmation even when
+    // stale confirmed_at remains on the participation row (disposable FAIL root cause).
+    expect(
+      eligibleFromTransitions(
+        withdrawnBeforeStart,
+        starts,
+        "withdrawn",
+        new Date("2026-10-20T00:00:00.000Z"),
+        ends,
+      ),
+    ).toEqual({ eligible: false, proof: null });
+    // Current confirmed after ends cannot prove membership for this game window.
+    expect(
+      eligibleFromTransitions([], starts, "confirmed", new Date("2026-10-24T18:00:00.000Z"), ends),
+    ).toEqual({ eligible: false, proof: null });
   });
 
   it("unknown projection has null provenance and summary separates clarification", () => {
