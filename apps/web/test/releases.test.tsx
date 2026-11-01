@@ -24,12 +24,15 @@ describe("releases catalogue integrity", () => {
     expect(FIRST_NAMED_RELEASE.source_sha).toBeNull();
     expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
+    expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
     expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);
     expect(TRUSTED_HISTORICAL_SEED.every((row) => row.application_version == null)).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(2);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");
+    expect(FIRST_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/sanitized projection|live SHA|runtime.?допуск|postgame/i);
+    expect(FIRST_NAMED_RELEASE.additions.join(" ")).not.toMatch(/sanitized projection|live SHA/i);
   });
 
   it("does not invent GIT_SHA when unset", () => {

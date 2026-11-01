@@ -121,7 +121,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Организация",
     title: "Диапазон уровней игроков",
     description: "Минимальный и максимальный уровень выбираются двумя ползунками, в том числе в общей форме создания из приглашения.",
-    limitation: "Изменение PR433 вошло в85513; отдельная Owner UAT не подтверждена.",
+    limitation: "Недавнее уточнение ползунков уровней ещё не проверялось владельцем в обычном сценарии.",
     prod: "available",
     dev: "available",
   },
@@ -202,7 +202,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Аккаунт",
     title: "Управление способами входа",
     description: "Просмотр подключённых провайдеров, подключение и отключение способа с сохранением хотя бы одного доступного входа.",
-    limitation: "Наличие провайдера подтверждено public discovery; полный внешний OAuth round trip в этой проверке не выполнялся.",
+    limitation: "Способы входа видны в настройках сервиса; полный вход через внешний сайт в этой проверке не проходился от начала до конца.",
     prod: "available",
     dev: "available",
   },
@@ -310,7 +310,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Radar",
     title: "Временная видимость рядом",
     description: "Включение, продление и выключение Radar, явное согласие, ограниченный срок видимости и управление активным устройством.",
-    limitation: "Для авторизованных пользователей и поддержанного города; не точный публичный GPS. Авторизованный браузерный сценарий после promotion не проверен.",
+    limitation: "Только для вошедших пользователей и поддерживаемого города; это не точная публичная геолокация. Полный сценарий после входа ещё не проверялся владельцем.",
     prod: "available",
     dev: "available",
   },
@@ -319,7 +319,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Radar",
     title: "Поиск игроков поблизости",
     description: "Список/единый каталог подходящих доступных игроков, географический поиск и просмотр профиля результата.",
-    limitation: "Живой Radar ограничен Москвой; приватные результаты зависят от согласия, временных разрешений и настроек видимости. PROD flags включены, авторизованный runtime путь не квалифицирован этой проверкой.",
+    limitation: "Живой поиск рядом пока для Москвы; кто виден — зависит от согласия, срока и настроек приватности. На основном сайте функция включена, полный вход и проверка владельцем ещё не завершены.",
     prod: "available",
     dev: "available",
   },
@@ -337,7 +337,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Карты",
     title: "Карта игр и площадок Москвы",
     description: "Карта с площадками и играми, открытие карточки и доступные действия участия.",
-    limitation: "Canonical PROD origin разрешён новым кодом; публичный неизменяемый московский bundle обслуживается с DEV asset host. CORS GET200/Range206/OPTIONS204 подтверждены без credentials. Интерактивный браузерный UAT NOT_TESTED.",
+    limitation: "Карта доступна на основном сайте; сами файлы карты по-прежнему отдаются с тестового хранилища. Интерактивная проверка владельцем ещё не выполнялась.",
     prod: "available",
     dev: "available",
   },
@@ -346,7 +346,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Карты",
     title: "Карта игроков Москвы",
     description: "Отображение разрешённых результатов Radar на карте с защитой приватных результатов.",
-    limitation: "PROD map зарегистрирована runtime как dev_preview. Частные pins по-прежнему требуют signed Radar query, согласия и действующих прав. Полный авторизованный браузерный UAT NOT_TESTED.",
+    limitation: "На основном сайте карта подключена в режиме предварительного просмотра. Частные отметки показываются только при согласии и действующих правах. Полная проверка после входа ещё не выполнялась.",
     prod: "available",
     dev: "available",
   },
@@ -355,7 +355,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Общение",
     title: "Друзья",
     description: "Запрос дружбы, принять/отклонить/отменить, список друзей и удаление из друзей.",
-    limitation: "PROD friendsEnabled=true проверен загруженным policy-модулем; TTL/rate/eligibility/приватность сохранены. Авторизованный браузерный UAT NOT_TESTED.",
+    limitation: "На основном сайте друзья включены с прежними ограничениями по срокам, частоте и приватности. Полная проверка после входа ещё не выполнялась.",
     prod: "available",
     dev: "available",
   },
@@ -364,7 +364,7 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Общение",
     title: "Советовать игру другу",
     description: "Отправка рекомендации игры принятому другу, входящие рекомендации, скрыть или отозвать совет.",
-    limitation: "PROD service guard теперь разрешён через friendsEnabled=true; рекомендация не резервирует место. Отдельная authenticated рекомендация в этой проверке не отправлялась; UAT NOT_TESTED.",
+    limitation: "На основном сайте совет другу разрешён вместе с друзьями; место в игре этим не бронируется. Отдельная проверка после входа ещё не выполнялась.",
     prod: "available",
     dev: "available",
   },
@@ -373,18 +373,18 @@ export const FIRST_ALPHA_FEATURES: readonly ReleaseFeature[] = [
     group: "Общение",
     title: "Хочу сыграть",
     description: "Отправка/отзыв интереса к совместной игре, взаимный интерес.",
-    limitation: "PROD playMatch=true проверен загруженным policy-модулем; не означает подтверждённого участия в игре. Авторизованный браузерный UAT NOT_TESTED.",
+    limitation: "На основном сайте интерес включён; это ещё не подтверждённое участие в игре. Полная проверка после входа ещё не выполнялась.",
     prod: "available",
     dev: "available",
   },
 ] as const;
 
 export const FIRST_ALPHA_KNOWN_LIMITATIONS: readonly string[] = [
-  "Авторизованный браузерный UAT: NOT_TESTED",
+  "Владелец ещё не проверял сервис после обычного входа в браузере",
   "Бронирование кортов и оплата выполняются вне приложения",
   "Юридические тексты, сведения об операторе и адрес поддержки пока не опубликованы",
   "Удаление аккаунта, изменение вместимости и отмена игры в пользовательском сценарии недоступны",
-  "Email-вход, результаты после игры и социальные push-уведомления выключены"
+  "Вход по электронной почте недоступен; результаты и отзывы после игры не запущены; push-уведомления не активны"
 ] as const;
 
 /** Switched-off / non-public items — not advertised as product features. */
@@ -399,24 +399,24 @@ export const SWITCHED_OFF_INTERNAL: readonly { id: string; title: string; note: 
 
 export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Первый именованный каталог функций",
+  title: "Первый именованный выпуск: что умеет приложение",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-  "Страница истории выпусков /releases (только DEV) с каталогом функций и сверкой live SHA",
-  "Полный базовый каталог доступных пользовательских функций первой именованной alpha",
-  "Ссылка «Версии» в DEV footer; /health отдаёт applicationVersion и gitSha сборки"
-],
+    "Страница «Версии» на тестовом сайте: что умеет эта сборка и какие выпуски уже ставили",
+    "Полный список доступных пользовательских функций первой именованной alpha",
+    "Ссылка «Версии» в подвале тестового сайта; служебная проверка сборки сообщает номер приложения"
+  ],
   fixes: [],
   known_limitations: [
-  "Авторизованный браузерный UAT: NOT_TESTED",
-  "Бронирование кортов и оплата выполняются вне приложения",
-  "Юридические тексты, сведения об операторе и адрес поддержки пока не опубликованы",
-  "Удаление аккаунта, изменение вместимости и отмена игры в пользовательском сценарии недоступны",
-  "Email-вход, результаты после игры и социальные push-уведомления выключены",
-  "Фактическое принятие текущего номера берётся из live projection после выпуска; candidate SHA не подменяет accepted receipt",
-  "Служебные admin и тестовая геопозиция не являются публичными функциями"
-],
+    "Владелец ещё не проверял сервис после обычного входа в браузере",
+    "Бронирование кортов и оплата выполняются вне приложения",
+    "Юридические тексты, сведения об операторе и адрес поддержки пока не опубликованы",
+    "Удаление аккаунта, изменение вместимости и отмена игры в пользовательском сценарии недоступны",
+    "Вход по электронной почте недоступен; результаты и отзывы после игры не запущены; push-уведомления не активны",
+    "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
+    "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
+  ],
   feature_catalogue: "full_baseline",
 };
 
@@ -426,7 +426,7 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "source_sha": "85513c719826a91bebd14a16b807ced8e17133fd",
     "application_version": null,
     "version_label": "Без формального номера",
-    "title": "Полное продвижение принятого DEV в PROD",
+    "title": "Полный перенос принятого тестового выпуска на основной сайт",
     "api_contract_version": "0.20.0",
     "owner_uat": "NOT_TESTED",
     "deployments": [
@@ -451,16 +451,16 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "additions": [],
     "fixes": [],
     "known_limitations": [
-      "Авторизованный браузерный UAT NOT_TESTED",
+      "Владелец ещё не проверял сервис после обычного входа",
       "Номер alpha ещё не присвоен",
-      "Карты, Friends, рекомендации друзьям и play-interest ещё ограничены DEV"
+      "Карты, друзья, советы друзьям и «хочу сыграть» тогда ещё были только на тестовом сайте"
     ]
   },
   {
     "source_sha": "11558239cf284a2f20e3c1c6906ae217c703325f",
     "application_version": null,
     "version_label": "Без формального номера",
-    "title": "Равенство публичных возможностей PROD и DEV (#435)",
+    "title": "Одинаковые публичные возможности на основном и тестовом сайтах",
     "api_contract_version": "0.20.0",
     "owner_uat": "NOT_TESTED",
     "deployments": [
@@ -484,17 +484,32 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     ],
     "additions": [],
     "fixes": [
-      "Разрешены canonical PROD Friends и рекомендации друзьям",
-      "Разрешён canonical PROD play-interest",
-      "Разрешены зарегистрированные карты Москвы и точный static CORS"
+      "На основном сайте включены друзья и советы друзьям",
+      "На основном сайте включён интерес «хочу сыграть»",
+      "На основном сайте доступны карты Москвы"
     ],
     "known_limitations": [
-      "Авторизованный браузерный UAT NOT_TESTED",
+      "Владелец ещё не проверял сервис после обычного входа",
       "Номер alpha ещё не присвоен",
-      "Admin остаётся служебным DEV; email, публичный postgame и социальный push не включены"
+      "Admin остаётся служебным; вход по email, результаты после игры и push не включены"
     ]
   },
 ] as const;
+
+/** Full 40-char repository SHA; comparison uses lowercase. */
+export const REPO_SHA40 = /^[0-9a-fA-F]{40}$/;
+
+export function isRepoSha40(value: unknown): value is string {
+  return typeof value === "string" && REPO_SHA40.test(value.trim());
+}
+
+/** Normalize a repository SHA to lowercase 40-hex, or null if garbage/blank/truncated/unknown. */
+export function normalizeRepoSha40(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!REPO_SHA40.test(trimmed)) return null;
+  return trimmed.toLowerCase();
+}
 
 export function runtimeBuildGitSha(): string {
   const value = process.env.GIT_SHA?.trim();
@@ -517,4 +532,20 @@ export function groupFeatures(features: readonly ReleaseFeature[]): { group: str
 export function shortSha(sha: string | null | undefined): string {
   if (!sha || sha === "unknown") return "неизвестно";
   return sha.length > 12 ? sha.slice(0, 12) : sha;
+}
+
+/** Readable installation/history date for product UI; keeps ISO machine facts elsewhere. */
+export function formatReleaseDateRu(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "—";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  }).format(new Date(ms));
 }

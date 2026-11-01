@@ -2,7 +2,7 @@
 
 ## #434 — First named application version 0.1.0-alpha.1 (DEV releases page)
 
-First formal application version number for this code build (not API contract `0.20.0`, not package metadata alone). DEV-only `/releases` catalogue of baseline user functions, known limitations, trusted historical seed, and live DEV/PROD SHA vs sanitized `__release-info` projections. Footer version badge + DEV-only «Версии» link. Web `/health` reports `applicationVersion` + `gitSha`. Acceptance of this number is bound only after trusted integrator deploy + live projection match — candidate/merge SHA is not invented in source.
+First formal application version number for this code build (not API contract `0.20.0`, not package metadata alone). DEV-only `/releases` product page: what the app does, simple DEV/PROD installation status, readable dates, and known limits in plain Russian. Technical SHA/API/receipts stay under collapsed details. Trusted historical seed (unnumbered 855/115) and live SHA vs `__release-info` comparison retained. Footer version badge + DEV-only «Версии» link. Web `/health` reports `applicationVersion` + `gitSha`. Pass2 repairs: fail-soft out-of-range finished/observed timestamps; full 40-hex SHA required before `accepted_current`.
 
 - Application version: `0.1.0-alpha.1`
 - API contract remains: `0.20.0`

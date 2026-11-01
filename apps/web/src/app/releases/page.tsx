@@ -6,6 +6,7 @@ import { ReleaseLink } from "../../components/consumer/ReleaseLink";
 import {
   FIRST_ALPHA_FEATURES,
   FIRST_ALPHA_KNOWN_LIMITATIONS,
+  formatReleaseDateRu,
   groupFeatures,
   shortSha,
 } from "../../lib/releases";
@@ -14,80 +15,131 @@ import {
   loadReleasesPageModel,
   type EnvironmentLiveStatus,
   type HistoryRow,
-  type LiveEndpointState,
 } from "../../lib/releases-server";
 
 export const dynamic = "force-dynamic";
 
-function liveLabel(state: LiveEndpointState): string {
-  if (state.state === "ok") return shortSha(state.gitSha);
-  if (state.state === "mismatch") return "расхождение";
-  if (state.state === "unavailable") return "недоступно";
-  return "неизвестно";
+function siteTitle(env: EnvironmentLiveStatus["environment"]): string {
+  return env === "dev" ? "Тестовый сайт (DEV)" : "Основной сайт (PROD)";
 }
 
-function acceptanceLabel(env: EnvironmentLiveStatus): string {
+function installationStatus(env: EnvironmentLiveStatus): string {
   switch (env.acceptance.state) {
     case "accepted_current":
-      return "ACCEPTED · совпадает с live SHA";
-    case "projection_only":
-      return "Запись ACCEPTED есть, live SHA не подтверждены";
+      return "Установлена";
     case "mismatch":
-      return "ACCEPTED не совпадает с live";
+      return "Данные расходятся";
     case "pending_or_none":
-      return "Текущий ACCEPTED отсутствует";
+      return "Обновляется";
+    case "projection_only":
+      return "Не удалось проверить";
     default:
-      return "Projection недоступен";
+      return "Не удалось проверить";
   }
 }
 
+function applicationNumber(env: EnvironmentLiveStatus): string {
+  if (env.web.state === "ok" && env.web.applicationVersion) return env.web.applicationVersion;
+  return "пока неизвестен";
+}
+
 function EnvironmentCard({ env }: { env: EnvironmentLiveStatus }) {
-  const title = env.environment === "dev" ? "DEV" : "PROD";
   const accepted =
     env.acceptance.state === "accepted_current"
     || env.acceptance.state === "projection_only"
     || env.acceptance.state === "mismatch"
       ? env.acceptance.accepted
       : null;
+  const installedAt = accepted ? formatReleaseDateRu(accepted.finished_at) : "—";
+  const status = installationStatus(env);
+
   return (
     <article className="gb-releases-env-card" data-environment={env.environment} data-acceptance={env.acceptance.state}>
       <header>
-        <h2>{title}</h2>
-        <p>{acceptanceLabel(env)}</p>
+        <h2>{siteTitle(env.environment)}</h2>
+        <p>{status}</p>
       </header>
       <dl>
         <div>
-          <dt>Web SHA</dt>
-          <dd>{liveLabel(env.web)}{env.web.state === "ok" && env.web.applicationVersion ? ` · ${env.web.applicationVersion}` : ""}</dd>
+          <dt>Номер приложения</dt>
+          <dd>{applicationNumber(env)}</dd>
         </div>
         <div>
-          <dt>API SHA</dt>
-          <dd>{liveLabel(env.api)}{env.api.state === "ok" && env.api.apiVersion ? ` · контракт ${env.api.apiVersion}` : ""}</dd>
-        </div>
-        <div>
-          <dt>Accepted SHA</dt>
-          <dd>{accepted ? shortSha(accepted.source_sha) : "—"}</dd>
-        </div>
-        <div>
-          <dt>Принято</dt>
-          <dd>{accepted ? accepted.finished_at : "—"}</dd>
-        </div>
-        <div>
-          <dt>Release id</dt>
-          <dd>{accepted?.release_id ?? (accepted ? "managed / нет pipeline id" : "—")}</dd>
+          <dt>Дата установки</dt>
+          <dd>{installedAt}</dd>
         </div>
       </dl>
-      {env.acceptance.state === "mismatch" || env.acceptance.state === "projection_only" || env.acceptance.state === "unavailable" ? (
-        <p className="gb-releases-note" role="status">
-          {"reason" in env.acceptance ? env.acceptance.reason : env.projection.state !== "ok" ? env.projection.detail : ""}
-        </p>
-      ) : null}
-      {env.web.state !== "ok" && env.web.state !== "mismatch" ? (
-        <p className="gb-releases-note">{env.web.detail}</p>
-      ) : null}
-      {env.api.state !== "ok" && env.api.state !== "mismatch" ? (
-        <p className="gb-releases-note">{env.api.detail}</p>
-      ) : null}
+      <details className="gb-releases-details">
+        <summary>Технические сведения</summary>
+        <dl>
+          <div>
+            <dt>Web SHA</dt>
+            <dd>
+              {env.web.state === "ok"
+                ? shortSha(env.web.gitSha)
+                : env.web.state === "mismatch"
+                  ? "расхождение"
+                  : env.web.state === "unavailable"
+                    ? "недоступно"
+                    : "неизвестно"}
+              {env.web.state === "ok" && env.web.applicationVersion ? ` · ${env.web.applicationVersion}` : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>API SHA</dt>
+            <dd>
+              {env.api.state === "ok"
+                ? shortSha(env.api.gitSha)
+                : env.api.state === "mismatch"
+                  ? "расхождение"
+                  : env.api.state === "unavailable"
+                    ? "недоступно"
+                    : "неизвестно"}
+              {env.api.state === "ok" && env.api.apiVersion ? ` · контракт ${env.api.apiVersion}` : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>Accepted SHA</dt>
+            <dd>{accepted ? shortSha(accepted.source_sha) : "—"}</dd>
+          </div>
+          <div>
+            <dt>Принято (ISO)</dt>
+            <dd>{accepted ? accepted.finished_at : "—"}</dd>
+          </div>
+          <div>
+            <dt>Release id / receipt</dt>
+            <dd>{accepted?.release_id ?? (accepted ? "managed / нет pipeline id" : "—")}</dd>
+          </div>
+          <div>
+            <dt>Статус проверки владельцем</dt>
+            <dd>NOT_TESTED</dd>
+          </div>
+          {"reason" in env.acceptance ? (
+            <div>
+              <dt>Служебная причина</dt>
+              <dd>{env.acceptance.reason}</dd>
+            </div>
+          ) : null}
+          {env.projection.state !== "ok" ? (
+            <div>
+              <dt>Источник записи</dt>
+              <dd>{env.projection.detail}</dd>
+            </div>
+          ) : null}
+          {env.web.state !== "ok" && env.web.state !== "mismatch" ? (
+            <div>
+              <dt>Web</dt>
+              <dd>{env.web.detail}</dd>
+            </div>
+          ) : null}
+          {env.api.state !== "ok" && env.api.state !== "mismatch" ? (
+            <div>
+              <dt>API</dt>
+              <dd>{env.api.detail}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </details>
     </article>
   );
 }
@@ -101,15 +153,19 @@ function HistoryList({ rows }: { rows: HistoryRow[] }) {
       {rows.map((row) => (
         <li key={`${row.environment}-${row.source_sha}-${row.accepted_at}`}>
           <div className="gb-releases-history-head">
-            <strong>{row.version_label}</strong>
-            <span>{row.environment.toUpperCase()}</span>
+            <strong>{row.version_label === "Без формального номера" ? "Без номера" : row.version_label}</strong>
+            <span>{row.environment === "dev" ? "Тестовый сайт" : "Основной сайт"}</span>
           </div>
           <p>{row.title}</p>
-          <p className="gb-releases-meta">
-            {shortSha(row.source_sha)} · {row.accepted_at}
-            {row.release_id ? ` · ${row.release_id}` : " · managed"}
-            {" · UAT "}{row.owner_uat}
-          </p>
+          <p className="gb-releases-meta">{formatReleaseDateRu(row.accepted_at)}</p>
+          <details className="gb-releases-details">
+            <summary>Технические сведения</summary>
+            <p className="gb-releases-meta">
+              {shortSha(row.source_sha)} · {row.accepted_at}
+              {row.release_id ? ` · ${row.release_id}` : " · managed"}
+              {" · проверка владельцем "}{row.owner_uat}
+            </p>
+          </details>
         </li>
       ))}
     </ol>
@@ -132,21 +188,20 @@ export default async function ReleasesPage() {
         </header>
 
         <section className="gb-releases-hero">
-          <span className="eyebrow">История выпусков · только DEV</span>
+          <span className="eyebrow">История версий · тестовый сайт</span>
           <h1>GoBadminton {model.build.applicationVersion}</h1>
           <p>
-            Каталог доступных функций этой сборки и подтверждённая история принятий.
-            Номер приложения не путать с версией API-контракта.
-            UAT владельца: <strong>NOT_TESTED</strong>.
+            Здесь собрано, что умеет эта сборка, и какие выпуски уже ставили на тестовый и основной сайты.
+            Номер приложения — это версия самого сервиса, не путать с внутренней версией обмена данными.
           </p>
-          <p className="gb-releases-meta">
-            Сборка страницы: {shortSha(model.build.gitSha)} · проверка {model.checkedAt}
+          <p>
+            Проверка владельцем после обычного входа ещё не выполнялась.
           </p>
         </section>
 
         <section className="gb-releases-section" aria-labelledby="releases-live">
-          <h2 id="releases-live">Текущие среды</h2>
-          <p>Сверка live SHA web/API с sanitized projection. Старый projection не выдаётся за новый ACCEPTED.</p>
+          <h2 id="releases-live">Где сейчас стоит выпуск</h2>
+          <p>Краткий статус тестового и основного сайтов. Подробные служебные коды — в технических сведениях.</p>
           <div className="gb-releases-env-grid">
             {model.environments.map((env) => <EnvironmentCard key={env.environment} env={env} />)}
           </div>
@@ -154,28 +209,31 @@ export default async function ReleasesPage() {
 
         <section className="gb-releases-section" aria-labelledby="releases-named">
           <h2 id="releases-named">{model.named.application_version}</h2>
-          <p>{model.named.title}. {model.named.source_sha
-            ? `Принятие текущего номера подтверждено live: ${shortSha(model.named.source_sha)}.`
-            : "Фактическое принятие номера появится после deploy и совпадения live SHA с projection — candidate merge SHA здесь не подставляется."}</p>
+          <p>
+            {model.named.title}.{" "}
+            {model.named.source_sha
+              ? `Установка этого номера подтверждена на сайте.`
+              : "Фактическая установка этого номера появится после выпуска — черновик разработки сюда не подставляется."}
+          </p>
           {model.named.additions.length > 0 ? (
             <div className="gb-releases-list-block">
-              <h3>Добавлено</h3>
+              <h3>Что добавлено</h3>
               <ul>{model.named.additions.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
           ) : null}
           {model.named.fixes.length > 0 ? (
             <div className="gb-releases-list-block">
-              <h3>Исправлено</h3>
+              <h3>Что исправлено</h3>
               <ul>{model.named.fixes.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
           ) : null}
         </section>
 
         <section className="gb-releases-section" aria-labelledby="releases-features">
-          <h2 id="releases-features">Доступные функции</h2>
+          <h2 id="releases-features">Что умеет приложение</h2>
           <p>
-            Базовый каталог первой alpha по коду и runtime-допуску.
-            «Доступно» не означает пройденный авторизованный UAT.
+            Базовый список функций первой alpha по фактическому коду.
+            «Доступно» значит, что функция есть в сборке — это ещё не отдельная проверка владельцем после входа.
           </p>
           <div className="gb-releases-groups">
             {groups.map((group) => (
@@ -204,14 +262,14 @@ export default async function ReleasesPage() {
               .map((item) => <li key={item}>{item}</li>)}
           </ul>
           <p className="gb-releases-note">
-            Служебные admin-сценарии и тестовая геопозиция не публикуются как функции продукта.
-            Email-вход, postgame и push выключены.
+            Раздел Admin служебный. Вход по электронной почте недоступен. Результаты и отзывы после игры не запущены.
+            Push-уведомления не активны. Тестовая геопозиция не для обычных пользователей.
           </p>
         </section>
 
         <section className="gb-releases-section" aria-labelledby="releases-history">
-          <h2 id="releases-history">История принятий</h2>
-          <p>Только подтверждённые receipts и live projection. Исторические выпуски без формального номера alpha сохранены.</p>
+          <h2 id="releases-history">История установок</h2>
+          <p>Подтверждённые установки по дате. Ранние выпуски без формального номера сохранены как есть.</p>
           <HistoryList rows={model.history} />
         </section>
 

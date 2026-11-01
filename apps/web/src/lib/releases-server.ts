@@ -6,6 +6,7 @@ import {
   CURRENT_APPLICATION_VERSION,
   FIRST_NAMED_RELEASE,
   TRUSTED_HISTORICAL_SEED,
+  normalizeRepoSha40,
   runtimeBuildGitSha,
   shortSha,
   type HistoricalReleaseSeed,
@@ -98,18 +99,31 @@ export function isTrustedDevReleasesRuntime(input: {
   return host === DEV_RELEASES_HOST && isTrustedDevApiBase(input.apiBaseUrl ?? process.env.API_BASE_URL);
 }
 
+function isoFromEpochCandidate(ms: number): string | null {
+  if (!Number.isFinite(ms)) return null;
+  const date = new Date(ms);
+  const time = date.getTime();
+  if (!Number.isFinite(time)) return null;
+  try {
+    return date.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/** Fail-soft: finite but out-of-Date-range numbers/strings (e.g. 1e30) return null, never throw. */
 export function normalizeFinishedAt(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     const ms = value > 1e12 ? value : value * 1000;
-    return new Date(ms).toISOString();
+    return isoFromEpochCandidate(ms);
   }
   if (typeof value === "string" && value.trim()) {
     const trimmed = value.trim();
-    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    if (/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
       return normalizeFinishedAt(Number(trimmed));
     }
     const parsed = Date.parse(trimmed);
-    if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+    if (!Number.isNaN(parsed)) return isoFromEpochCandidate(parsed);
   }
   return null;
 }
@@ -143,7 +157,7 @@ export function parseReleaseProjection(raw: unknown, expectedEnv: ReleaseEnviron
       return { ok: false, reason: "malformed", detail: "accepted повреждён" };
     }
     const acc = body.accepted as Record<string, unknown>;
-    const source_sha = asNonEmptyString(acc.source_sha);
+    const source_sha = normalizeRepoSha40(acc.source_sha);
     const status = asNonEmptyString(acc.status);
     const finished_at = normalizeFinishedAt(acc.finished_at);
     if (!source_sha || !status || !finished_at) {
@@ -210,9 +224,13 @@ export function parseWebHealth(raw: unknown): LiveEndpointState {
   if (body.status !== "ok") {
     return { state: "unavailable", detail: `status=${String(body.status)}`, checkedAt };
   }
-  const gitSha = asNonEmptyString(body.gitSha);
-  if (!gitSha) {
+  const rawSha = asNonEmptyString(body.gitSha);
+  if (!rawSha) {
     return { state: "unknown", detail: "в /health нет gitSha (legacy)", checkedAt };
+  }
+  const gitSha = normalizeRepoSha40(rawSha);
+  if (!gitSha) {
+    return { state: "unknown", detail: "в /health неполный или неверный gitSha", checkedAt };
   }
   const applicationVersion = asNonEmptyString(body.applicationVersion) ?? undefined;
   return { state: "ok", gitSha, applicationVersion, checkedAt };
@@ -224,9 +242,13 @@ export function parseApiMeta(raw: unknown): LiveEndpointState {
     return { state: "unknown", detail: "некорректный /v1/meta", checkedAt };
   }
   const body = raw as Record<string, unknown>;
-  const gitSha = asNonEmptyString(body.gitSha);
-  if (!gitSha) {
+  const rawSha = asNonEmptyString(body.gitSha);
+  if (!rawSha) {
     return { state: "unknown", detail: "в /v1/meta нет gitSha", checkedAt };
+  }
+  const gitSha = normalizeRepoSha40(rawSha);
+  if (!gitSha) {
+    return { state: "unknown", detail: "в /v1/meta неполный или неверный gitSha", checkedAt };
   }
   const apiVersion = asNonEmptyString(body.apiVersion) ?? undefined;
   return { state: "ok", gitSha, apiVersion, checkedAt };
@@ -248,28 +270,44 @@ export function evaluateAcceptance(
     };
   }
   const accepted = projection.accepted;
+  const acceptedSha = normalizeRepoSha40(accepted.source_sha);
+  if (!acceptedSha) {
+    return {
+      state: "unavailable",
+      reason: "accepted.source_sha не полный 40-hex — текущий выпуск не подтверждаем",
+    };
+  }
   if (web.state !== "ok" || api.state !== "ok") {
     return {
       state: "projection_only",
-      accepted,
+      accepted: { ...accepted, source_sha: acceptedSha },
       reason: "live SHA недоступны — не подтверждаем текущий ACCEPTED по runtime",
     };
   }
-  if (web.gitSha !== accepted.source_sha || api.gitSha !== accepted.source_sha) {
+  const webSha = normalizeRepoSha40(web.gitSha);
+  const apiSha = normalizeRepoSha40(api.gitSha);
+  if (!webSha || !apiSha) {
     return {
-      state: "mismatch",
-      accepted,
-      reason: `accepted ${shortSha(accepted.source_sha)} ≠ live web ${shortSha(web.gitSha)} / api ${shortSha(api.gitSha)}`,
+      state: "projection_only",
+      accepted: { ...accepted, source_sha: acceptedSha },
+      reason: "live SHA неполный или неверный — не подтверждаем текущий ACCEPTED",
     };
   }
-  if (web.gitSha !== api.gitSha) {
+  if (webSha !== acceptedSha || apiSha !== acceptedSha) {
     return {
       state: "mismatch",
-      accepted,
-      reason: `web ${shortSha(web.gitSha)} ≠ api ${shortSha(api.gitSha)}`,
+      accepted: { ...accepted, source_sha: acceptedSha },
+      reason: `accepted ${shortSha(acceptedSha)} ≠ live web ${shortSha(webSha)} / api ${shortSha(apiSha)}`,
     };
   }
-  return { state: "accepted_current", accepted };
+  if (webSha !== apiSha) {
+    return {
+      state: "mismatch",
+      accepted: { ...accepted, source_sha: acceptedSha },
+      reason: `web ${shortSha(webSha)} ≠ api ${shortSha(apiSha)}`,
+    };
+  }
+  return { state: "accepted_current", accepted: { ...accepted, source_sha: acceptedSha } };
 }
 
 function seedTitleFor(sha: string): Pick<HistoryRow, "title" | "version_label" | "application_version" | "owner_uat"> {
