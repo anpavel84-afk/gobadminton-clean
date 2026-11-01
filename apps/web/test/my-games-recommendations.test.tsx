@@ -506,14 +506,21 @@ describe("FR-3B recommendation UI lifecycle", () => {
     GameRecommendationsSection({ me });
     flushEffects();
     await settle();
+    expect(getSocialCapabilities).toHaveBeenCalled();
+    expect(getMySocialProfile).toHaveBeenCalled();
     hooks.cursor = 0;
     const tree = GameRecommendationsSection({ me });
     flushEffects();
 
-    expect(labelOf(tree)).toContain("Сначала настройте свой профиль");
+    // Titles live on ProfileState props; labelOf only walks children (pass1 FAIL). Link stays a component node until render.
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(true);
     expect(labelOf(tree)).toContain("Открыть профиль");
-    expect(labelOf(tree)).not.toContain("Рекомендации сейчас недоступны");
-    expect(elements(tree).some((el) => el.type === "a" && el.props.href === "/profile")).toBe(true);
+    expect(elements(tree).some((el) => el.props.title === "Рекомендации сейчас недоступны")).toBe(false);
+    expect(
+      elements(tree).some(
+        (el) => el.props.href === "/profile" && labelOf(el.props.children).includes("Открыть профиль"),
+      ),
+    ).toBe(true);
     expect(vi.mocked(apiFetch).mock.calls.some(([path]) => String(path).includes("/v1/me/game-recommendations"))).toBe(false);
   });
 
@@ -533,12 +540,14 @@ describe("FR-3B recommendation UI lifecycle", () => {
     GameRecommendationsSection({ me });
     flushEffects();
     await settle();
+    expect(getSocialCapabilities).toHaveBeenCalled();
+    expect(getMySocialProfile).toHaveBeenCalled();
     hooks.cursor = 0;
     const tree = GameRecommendationsSection({ me });
     flushEffects();
 
-    expect(labelOf(tree)).toContain("Рекомендации сейчас недоступны");
-    expect(labelOf(tree)).not.toContain("Сначала настройте свой профиль");
+    expect(elements(tree).some((el) => el.props.title === "Рекомендации сейчас недоступны")).toBe(true);
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(false);
     expect(vi.mocked(apiFetch).mock.calls.some(([path]) => String(path).includes("/v1/me/game-recommendations"))).toBe(false);
   });
 

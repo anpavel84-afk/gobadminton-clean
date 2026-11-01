@@ -185,12 +185,19 @@ describe("FriendsPage own-profile prerequisite (#445 / #436)", () => {
 
     renderPage();
     await settle();
+    expect(friendships.getSocialCapabilities).toHaveBeenCalled();
+    expect(api.getMySocialProfile).toHaveBeenCalled();
     const tree = renderPage();
 
-    expect(labelOf(tree)).toContain("Сначала настройте свой профиль");
+    // Titles live on ProfileState props; labelOf only walks children (pass1 FAIL).
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(true);
     expect(labelOf(tree)).toContain("Открыть профиль");
-    expect(labelOf(tree)).not.toContain("Друзья сейчас недоступны");
-    expect(elements(tree).some((el) => el.type === "a" && el.props.href === "/profile")).toBe(true);
+    expect(elements(tree).some((el) => el.props.title === "Друзья сейчас недоступны")).toBe(false);
+    expect(
+      elements(tree).some(
+        (el) => el.props.href === "/profile" && labelOf(el.props.children).includes("Открыть профиль"),
+      ),
+    ).toBe(true);
     expect(friendships.listFriends).not.toHaveBeenCalled();
   });
 
@@ -208,10 +215,12 @@ describe("FriendsPage own-profile prerequisite (#445 / #436)", () => {
 
     renderPage();
     await settle();
+    expect(friendships.getSocialCapabilities).toHaveBeenCalled();
+    expect(api.getMySocialProfile).toHaveBeenCalled();
     const tree = renderPage();
 
-    expect(labelOf(tree)).toContain("Друзья сейчас недоступны");
-    expect(labelOf(tree)).not.toContain("Сначала настройте свой профиль");
+    expect(elements(tree).some((el) => el.props.title === "Друзья сейчас недоступны")).toBe(true);
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(false);
     expect(friendships.listFriends).not.toHaveBeenCalled();
   });
 
@@ -225,10 +234,15 @@ describe("FriendsPage own-profile prerequisite (#445 / #436)", () => {
 
     renderPage();
     await settle();
+    expect(friendships.getSocialCapabilities).toHaveBeenCalled();
+    expect(api.getMySocialProfile).toHaveBeenCalled();
     const tree = renderPage();
 
-    expect(elements(tree).some((el) => el.props["data-profile-state"] === "Не удалось загрузить друзей")).toBe(true);
-    expect(labelOf(tree)).not.toContain("Здесь пока никого нет");
+    // Mock ProfileState only stamps data-profile-state after React render; harness sees typed props.
+    const errorState = elements(tree).find((el) => el.props.title === "Не удалось загрузить друзей");
+    expect(errorState).toBeTruthy();
+    expect(typeof errorState!.props.retry).toBe("function");
+    expect(elements(tree).some((el) => el.props.title === "Здесь пока никого нет")).toBe(false);
     expect(friendships.listFriends).not.toHaveBeenCalled();
   });
 
@@ -250,7 +264,7 @@ describe("FriendsPage own-profile prerequisite (#445 / #436)", () => {
 
     expect(friendships.listFriends).toHaveBeenCalledWith("accepted", null);
     expect(api.getMySocialProfile).not.toHaveBeenCalled();
-    expect(labelOf(tree)).toContain("Здесь пока никого нет");
-    expect(labelOf(tree)).not.toContain("Сначала настройте свой профиль");
+    expect(elements(tree).some((el) => el.props.title === "Здесь пока никого нет")).toBe(true);
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(false);
   });
 });
