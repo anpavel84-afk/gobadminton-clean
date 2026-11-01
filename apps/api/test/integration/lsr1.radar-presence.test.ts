@@ -871,17 +871,22 @@ describeIntegration("LS-R1 radar presence/matching", () => {
       cookies: a.cookies,
     });
     expect(before.statusCode).toBe(200);
+    // Owner #448: missing profile is materialized ON (no fake city/consent stamps).
     expect(before.json()).toMatchObject({
-      version: 0,
-      displayName: "",
-      directoryVisible: false,
+      version: 1,
+      displayName: "LSR1 Player A",
+      directoryVisible: true,
+      cityId: null,
+      consentPolicyVersion: null,
+      optedInAt: null,
+      radarConsented: false,
     });
     const seeded = await app.inject({
       method: "PATCH",
       url: "/v1/me/social-profile",
       headers: mutationHeaders(a, `seed-${uniqueSuffix("k")}`),
       payload: {
-        expectedVersion: 0,
+        expectedVersion: (before.json() as { version: number }).version,
         radarConsented: true,
         radarConsentPolicyVersion: "radar-mvp-v1",
       },
@@ -892,17 +897,21 @@ describeIntegration("LS-R1 radar presence/matching", () => {
       directoryVisible: boolean;
       cityId: string | null;
       socialEligible: boolean;
+      consentPolicyVersion: string | null;
+      optedInAt: string | null;
     };
     expect(own.displayName).toBe("LSR1 Player A");
-    expect(own.directoryVisible).toBe(false);
+    expect(own.directoryVisible).toBe(true);
     expect(own.cityId).toBeNull();
     expect(own.socialEligible).toBe(true);
+    expect(own.consentPolicyVersion).toBeNull();
+    expect(own.optedInAt).toBeNull();
     const listed = await pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM player_social_profiles
        WHERE user_id = $1 AND directory_visible = true`,
       [a.userId],
     );
-    expect(listed.rows[0]?.n).toBe(0);
+    expect(listed.rows[0]?.n).toBe(1);
     const started = await startRadar(a);
     expect(started.statusCode).toBe(201);
   });

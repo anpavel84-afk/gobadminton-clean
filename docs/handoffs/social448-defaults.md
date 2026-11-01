@@ -1,57 +1,64 @@
-# Owner #448 — P2 narrow repair: ensureDefaultSocialProfile eligibility guard
+# Owner #448 — CI database repair (migration flush + fixture defaults)
 
-From: Cursor Auto (`OWNER_SOCIAL_DEFAULTS_ON_PRESERVE_EXPLICIT_OPTOUT`, attempt 3, base `c3b9126d0c09ea5369522f19de29c045c44fe52c`).
+From: Cursor Auto (`OWNER_SOCIAL448_CI_DATABASE_REPAIR`, attempt 1, base `3858cc8404e50cac26f27ddf7ef4428c92b49f36`).
 To: independent Codex Sol Medium delta-QA → mandatory Product CI → trusted DEV → Owner UAT.
-Status: SOURCE CANDIDATE (narrow repair). **UAT = NOT_TESTED**. Refs #448.
-Ops P1 (PROD Radar preview env copy) is **out of this writer scope** — trusted PMA separately.
+Status: SOURCE CANDIDATE. **UAT = NOT_TESTED**. Refs #448 / PR449.
 No Git/runtime/root/PROD by author. Deployment NOT DONE.
 
-## QA FAIL preserved (pass 1)
+## CI FAIL preserved (PR449 database)
 
-| Sev | Finding | This pass |
+Product CI database job failed while Source/API/web/admin/contracts/foundation PASS.
+Actual log: `ci-database.log` (SHA256 `ea04b692…`). Synthetic receipt/rollback ERROR lines from passing tests ignored.
+
+| Class | Finding | This pass |
 | --- | --- | --- |
-| P2 | OAuth inactive / restricted `getOwn` could call `ensureDefaultSocialProfile` and materialize a visible profile; migration 0049 filters ACTIVE + unrestricted | **Fixed** in central helper |
-| P1 | PROD Ops fragment copies Radar preview vars from DEV | **Not touched** (allowed_paths exclude Ops; PMA) |
+| A | Populated upgrade (`avatar-moderation-migration`, `friends-s1`) fails in 0049: `cannot ALTER TABLE player_social_profiles because it has pending trigger events` after provenance UPDATEs under native BEGIN/COMMIT | **Fixed** — `SET CONSTRAINTS ALL IMMEDIATE` before later DDL (same pattern as 0040) |
+| B | Fixtures assumed virtual getOwn v0 / directory OFF; Owner #448 materializes physical ON v1 → 404→200, 409 cascades, provenance check violations | **Fixed** in allowed test files only |
 
-## Repair
+## Repair A — migration ordering
 
-`ensureDefaultSocialProfile` now uses atomic `INSERT … SELECT … ON CONFLICT DO NOTHING` matching migration 0049 missing-ACTIVE insert:
+`0049_social_profile_defaults.sql`: after legacy provenance labeling UPDATEs, flush deferred constraint triggers (`players_query_revision_change` DEFERRABLE INITIALLY DEFERRED) via `SET CONSTRAINTS ALL IMMEDIATE` before `ALTER COLUMN … SET DEFAULT/NOT NULL` and constraint DDL. Does **not** disable triggers, replication role, or clear ledger. Data/backfill predicates/OFF/consent/Radar guards unchanged. Old migrations/rollback/RootOps untouched.
 
-- `users.status = 'active'`
-- no effective `account.access` / `profile.public` / `social.directory` restriction
-- clock: `revoked_at IS NULL` + `starts_at <= clock_timestamp()` + `expires_at > clock_timestamp()`
-- existing rows unchanged (preserves OFF); future OFF not re-enabled
-- all callers (OAuth identity, email signup, `getOwn`) share the same helper — no per-branch bypass
+## Repair B — fixtures only (policy/auth/guards unchanged)
 
-Auth status rejection / own-read empty-fallback behavior unchanged; helper does not grant access or fake a guard pass.
+- **cover-upload**: after upload, explicit visibility API hide before owner-only 404; public restore SQL sets `user_consent` provenance + stamps.
+- **ls03**: SQL restore after opt-out sets `owner_default` provenance; getOwn expects v1/ON; closed contact retention intact (no directory/epoch bump from DM close).
+- **lsr1**: materialized Owner ON bootstrap (account displayName, no fake city/consent); radar patch uses actual version.
+- **lsr2**: synthetic peers inserted PRIVATE (`directory_visible=false`, `user_opt_out`, `closed`); target restore SQL sets truthful provenance.
+- **migration.smoke**: registry includes `0049_social_profile_defaults` (no skipped upgrade checks).
+- **owner-a**: OAuth/getOwn uses actual version → city save 200; directory ON expectations; venue bootstrap no longer cascades `VENUE_ID_INVALID`; private preference independence vs game ops retained.
+- **p2**: baseline social rows after OAuth, compare after preference put (not zero-count); other city via UPDATE; consent restore sets provenance.
+- **radar.demo-activation**: fetch own version before consent patch (avoids 409 after materialization).
 
 ## Author checks (this pass)
 
-- Unit `social-profile-defaults.test.ts`: **6/6 PASS** (guarded SELECT SQL + safe name)
-- API `tsc --noEmit`: **PASS** (pinned Node 24.21.0)
-- Integration `social448.defaults.test.ts`: negatives added (inactive + each of three capabilities + existing OFF); retained positives unchanged — **not executed here** (no disposable PostGIS/docker socket in author sandbox)
-- No Ops/metadata/runtime/PROD/Git; no full suite expansion
-
-### Operator-addressed (author cannot claim)
-
-- `RUN_DB_INTEGRATION=1` disposable DB for `social448.defaults.test.ts` (incl. new negative block)
-- Product CI 7/7
-- Independent delta-QA on this repair only
-- Ops P1 PROD fragment (PMA)
+- Model environment: no disposable PostGIS — full suite **not executed** here.
+- Operator: import candidate → targeted disposable runs of the failed files above → independent delta-QA → mandatory Product CI.
+- No product time/venue/auth logic edits; no new test framework/matrix; no Git/liveDB/runtime/PROD/root/credentials.
 
 ## Changed paths (exact allowed only)
 
-- `apps/api/src/profiles/social-profile-defaults.ts`
-- `apps/api/test/unit/social-profile-defaults.test.ts`
-- `apps/api/test/integration/social448.defaults.test.ts`
+- `apps/api/migrations/0049_social_profile_defaults.sql`
 - `docs/handoffs/social448-defaults.md`
+- `apps/api/test/integration/cover-upload.test.ts`
+- `apps/api/test/integration/ls03.text-dm.test.ts`
+- `apps/api/test/integration/lsr1.radar-presence.test.ts`
+- `apps/api/test/integration/lsr2.radar-contact-recovery.test.ts`
+- `apps/api/test/integration/migration.smoke.test.ts`
+- `apps/api/test/integration/owner-a.create-setup.test.ts`
+- `apps/api/test/integration/p2.discovery-preferences.test.ts`
+- `apps/api/test/integration/radar.demo-activation.test.ts`
+
+Unchanged allowed paths (migration flush sufficient): `avatar-moderation-migration.test.ts`, `friends-s1.disposable.test.ts`.
 
 ## Input materials read
 
 | Material | Delivered path | SHA256 | Read |
 | --- | --- | --- | --- |
-| QA pass 1 final | `…/design-inputs/final.txt` | `984dbeaf1db1cfe0a842457e992b09049b0c17afc5f867c84c8f55d602d58686` | Yes — P2 helper guard + P1 Ops out of scope |
+| CI database FAIL log | `…/design-inputs/ci-database.log` | `ea04b692a5537076ca34e82cf58ea4e19d5a62cfadd64ee05b8502bae87f2c72` | Yes — FAIL/testcases only |
 
-## Non-goals
+## Non-goals / unresolved
 
-- No Ops/PROD/Git/runtime/C5/secrets; no new framework; no rewrite of historical admissions; no huge test matrix.
+- No Astra/High; no disable tests/security/gates; no PROD; no old migration/rollback edits.
+- Author did not run disposable DB checks (no deps/socket here) — operator must.
+- Unresolved: none specific beyond operator execution of targeted failed files + CI.

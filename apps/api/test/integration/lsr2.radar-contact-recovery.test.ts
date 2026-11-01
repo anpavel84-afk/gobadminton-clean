@@ -375,12 +375,14 @@ describeIntegration("LS-R2 radar contact/recovery", () => {
        VALUES ($1, $2, 'consumer_browser', $3, $4, now() + interval '1 day')`,
       [sessionId, userId, `hash-${userId}`, `csrf-${userId}`],
     );
+    // Synthetic peers stay private for contactability proof (Owner #448 DEFAULT is ON).
     await pool.query(
       `INSERT INTO player_social_profiles (
          user_id, public_player_id, display_name, city_id,
+         directory_visible, contact_policy, directory_visibility_provenance,
          radar_consented, radar_consent_policy_version, radar_consented_at,
          social_eligible, version
-       ) VALUES ($1,$2,$3,$4,true,'radar-mvp-v1',now(),true,1)`,
+       ) VALUES ($1,$2,$3,$4,false,'closed','user_opt_out',true,'radar-mvp-v1',now(),true,1)`,
       [userId, publicPlayerId, opts.displayName, MOSCOW_CITY_ID],
     );
     const cell = await pool.query<{
@@ -565,7 +567,17 @@ describeIntegration("LS-R2 radar contact/recovery", () => {
     for (const change of ["contact_policy='closed'", "directory_visible=false"]) {
       await pool.query(`UPDATE player_social_profiles SET ${change} WHERE user_id=$1`, [seeded.target.userId]);
       await reset(); response = await preview(); expect(response.statusCode).toBe(200); expect(response.json().player.canRequestContact).toBe(false);
-      await pool.query("UPDATE player_social_profiles SET contact_policy='requests',directory_visible=true WHERE user_id=$1", [seeded.target.userId]);
+      // Restore with provenance consistent with Owner-default / consent stamps already present.
+      await pool.query(
+        `UPDATE player_social_profiles
+         SET contact_policy='requests', directory_visible=true,
+             directory_visibility_provenance = CASE
+               WHEN consent_policy_version IS NOT NULL AND opted_in_at IS NOT NULL THEN 'user_consent'
+               ELSE 'owner_default'
+             END
+         WHERE user_id=$1`,
+        [seeded.target.userId],
+      );
     }
     await resetNearbyBudget(seeded.viewer.userId);
     const nearby = await app.inject({method:"GET",url:"/v1/me/radar/nearby",headers:{cookie:seeded.viewer.cookie,"x-radar-activation-id":seeded.viewerAct.activationId}});

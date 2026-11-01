@@ -49,6 +49,12 @@ SET directory_visibility_provenance = 'owner_default'
 WHERE directory_visible = true
   AND directory_visibility_provenance = 'legacy';
 
+-- players_query_revision_change is DEFERRABLE INITIALLY DEFERRED on player_social_profiles.
+-- Provenance UPDATEs above queue it; later ALTER TABLE is refused while that event is pending
+-- under the migration's native BEGIN/COMMIT (populated upgrade fixtures). Flush validated
+-- deferred constraint triggers before further DDL — do not disable triggers/replication.
+SET CONSTRAINTS ALL IMMEDIATE;
+
 ALTER TABLE player_social_profiles
   ALTER COLUMN directory_visibility_provenance SET DEFAULT 'owner_default';
 
