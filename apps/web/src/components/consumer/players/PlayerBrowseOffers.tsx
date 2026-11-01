@@ -235,6 +235,9 @@ export function PlayerBrowseFinderGate({
       <div className="pb-finder-gate" role="status">
         <h2>Сейчас нельзя предложить игру</h2>
         <p>{eligibility.message || "Подходящие предложения временно недоступны."}</p>
+        {eligibility.canContinue && onContinue && (
+          <Button variant="dark" onClick={onContinue}>Продолжить поиск</Button>
+        )}
         {onRetry && <Button variant="outline" onClick={onRetry}>Повторить</Button>}
       </div>
     );

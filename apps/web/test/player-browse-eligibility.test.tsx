@@ -1,16 +1,110 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import type { OwnSocialProfile } from "../src/lib/consumer-types";
+import type * as React from "react";
+import type { OwnSocialProfile, PublicPlayer } from "../src/lib/consumer-types";
 import type { PlayInterestView } from "@gobadminton/contracts/friendship-types";
+
+const hooks = vi.hoisted(() => ({
+  slots: [] as unknown[],
+  cursor: 0,
+  effects: [] as (() => void)[],
+  cleanups: [] as Array<(() => void) | undefined>,
+}));
+
+const apiMocks = vi.hoisted(() => ({
+  getMe: vi.fn(),
+  getMySocialProfile: vi.fn(),
+}));
+
+const playInterestMocks = vi.hoisted(() => ({
+  getPlayInterestStates: vi.fn(),
+  getPlayInterestState: vi.fn(),
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const ReactActual = await importOriginal<typeof React>();
+  return {
+    ...ReactActual,
+    useState<T>(initial: T | (() => T)) {
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) {
+        hooks.slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      }
+      return [
+        hooks.slots[index] as T,
+        (value: T | ((previous: T) => T)) => {
+          hooks.slots[index] = typeof value === "function"
+            ? (value as (previous: T) => T)(hooks.slots[index] as T)
+            : value;
+        },
+      ];
+    },
+    useRef<T>(initial: T) {
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
+      return hooks.slots[index] as { current: T };
+    },
+    useMemo<T>(fn: () => T, deps: unknown[]) {
+      const index = hooks.cursor++;
+      const prev = hooks.slots[index] as { deps: unknown[]; value: T } | undefined;
+      if (!prev || deps.some((value, i) => !Object.is(value, prev.deps[i]))) {
+        hooks.slots[index] = { deps, value: fn() };
+      }
+      return (hooks.slots[index] as { value: T }).value;
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: unknown[]) {
+      const index = hooks.cursor++;
+      const prev = hooks.slots[index] as { deps: unknown[]; fn: T } | undefined;
+      if (!prev || deps.some((value, i) => !Object.is(value, prev.deps[i]))) {
+        hooks.slots[index] = { deps, fn };
+      }
+      return (hooks.slots[index] as { fn: T }).fn;
+    },
+    useEffect(effect: () => void | (() => void), deps?: unknown[]) {
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      const nextDeps = deps ?? [];
+      if (!previous || nextDeps.some((value, i) => !Object.is(value, previous[i]))) {
+        hooks.slots[index] = nextDeps;
+        hooks.effects.push(() => {
+          hooks.cleanups[index]?.();
+          const cleanup = effect();
+          hooks.cleanups[index] = typeof cleanup === "function" ? cleanup : undefined;
+        });
+      }
+    },
+  };
+});
+
+vi.mock("../src/lib/api-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/api-client")>();
+  return {
+    ...actual,
+    getMe: apiMocks.getMe,
+    getMySocialProfile: apiMocks.getMySocialProfile,
+  };
+});
+
+vi.mock("../src/lib/play-interests", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/play-interests")>();
+  return {
+    ...actual,
+    getPlayInterestStates: playInterestMocks.getPlayInterestStates,
+    getPlayInterestState: playInterestMocks.getPlayInterestState,
+  };
+});
+
 import { PlayerBrowseFinderGate } from "../src/components/consumer/players/PlayerBrowseOffers";
 import {
   classifyFinderBatchEmpty,
   ownSocialFinderStatusFromProfile,
+  usePlayerBrowseOffers,
   type FinderEligibility,
+  type PlayerBrowseOffersApi,
 } from "../src/components/consumer/players/usePlayerBrowseOffers";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,6 +138,60 @@ const baseProfile = (over: Partial<OwnSocialProfile> = {}): OwnSocialProfile => 
   ...over,
 });
 
+const peer = (id: string, name = id): PublicPlayer => ({
+  publicPlayerId: id,
+  displayName: name,
+  cityId: "city",
+  areaKey: null,
+  level: null,
+  bio: null,
+  trainer: false,
+  lookingForGame: false,
+});
+
+const unavailableView: PlayInterestView = {
+  interestId: null,
+  relationship: "unavailable",
+  version: null,
+  capabilities: { canSend: false, canWithdraw: false },
+};
+
+const noneView: PlayInterestView = {
+  interestId: null,
+  relationship: "none",
+  version: null,
+  capabilities: { canSend: true, canWithdraw: false },
+};
+
+type OfferProps = Parameters<typeof usePlayerBrowseOffers>[0];
+
+function resetHookFiber() {
+  hooks.cleanups.forEach((fn) => fn?.());
+  hooks.slots = [];
+  hooks.cursor = 0;
+  hooks.effects = [];
+  hooks.cleanups = [];
+}
+
+function renderOffers(props: OfferProps): PlayerBrowseOffersApi {
+  hooks.cursor = 0;
+  hooks.effects = [];
+  const api = usePlayerBrowseOffers(props);
+  hooks.effects.splice(0).forEach((effect) => effect());
+  return api;
+}
+
+/** Drive auth → own profile → capability batch through the real hooked effects. */
+async function settleOffers(props: OfferProps, rounds = 24): Promise<PlayerBrowseOffersApi> {
+  let api = renderOffers(props);
+  for (let i = 0; i < rounds; i += 1) {
+    await Promise.resolve();
+    await Promise.resolve();
+    api = renderOffers(props);
+  }
+  return api;
+}
+
 describe("player browse eligibility · own profile gate (#438)", () => {
   it("delayed own profile stays loading — not exhausted — until social profile resolves", () => {
     expect(ownSocialFinderStatusFromProfile(null, false).status).toBe("error");
@@ -68,9 +216,9 @@ describe("player browse eligibility · own profile gate (#438)", () => {
       true,
     );
     expect(ineligible.status).toBe("hidden");
-    expect(offersHookSource).toContain('own_prerequisite');
+    expect(offersHookSource).toContain("own_prerequisite");
     expect(offersHookSource).toContain('ownSocialStatus === "hidden"');
-    expect(offersHookSource).toContain('admitSend');
+    expect(offersHookSource).toContain("admitSend");
     expect(offersHookSource).toMatch(/ownSocialStatus !== "ready"\) return false/);
     expect(offersUiSource).toContain("К настройкам профиля");
     expect(offersUiSource).toContain('href="/profile"');
@@ -143,10 +291,34 @@ describe("player browse eligibility · own profile gate (#438)", () => {
     const html = renderToStaticMarkup(createElement(PlayerBrowseFinderGate, {
       eligibility: gate,
       onRetry: () => undefined,
+      onContinue: () => undefined,
     }));
     expect(html).toContain("Сейчас нельзя предложить игру");
+    expect(html).not.toContain("Продолжить поиск");
     expect(html).not.toContain("Подборка по этим фильтрам закончилась");
     expect(html).not.toMatch(/недоступен.*приват|скрыт.*игрок/i);
+  });
+
+  it("unavailable page with hasMore exposes Continue while keeping generic copy", () => {
+    expect(offersHookSource).toMatch(
+      /eligibilityKind === "empty_page" \|\| eligibilityKind === "peers_unavailable"/,
+    );
+    expect(offersUiSource).toContain("Продолжить поиск");
+    const gate: FinderEligibility = {
+      kind: "peers_unavailable",
+      players: [],
+      message: "Подходящие предложения временно недоступны.",
+      canContinue: true,
+    };
+    const html = renderToStaticMarkup(createElement(PlayerBrowseFinderGate, {
+      eligibility: gate,
+      onRetry: () => undefined,
+      onContinue: () => undefined,
+    }));
+    expect(html).toContain("Сейчас нельзя предложить игру");
+    expect(html).toContain("Подходящие предложения временно недоступны.");
+    expect(html).toContain("Продолжить поиск");
+    expect(html).toContain("Повторить");
   });
 
   it("preserves account-switch / UNKNOWN bookkeeping and does not invent privacy bypass", () => {
@@ -164,5 +336,139 @@ describe("player browse eligibility · own profile gate (#438)", () => {
     expect(offersHookSource).not.toContain("directoryVisible: true");
     expect(offersHookSource).not.toContain("putMySocialProfileVisibility");
     expect(offersUiSource).not.toContain("putMySocialProfileVisibility");
+    // Error hold must not depend on eligibilityKind effect dependency (auto-retry loop).
+    expect(offersHookSource).toContain("eligibilityKindRef");
+    expect(offersHookSource).toContain('eligibilityKindRef.current === "error"');
+    const effectDeps = offersHookSource.slice(
+      offersHookSource.indexOf("void runBatch(unchecked,"),
+      offersHookSource.indexOf("void runBatch(unchecked,") + 500,
+    );
+    expect(effectDeps).not.toMatch(/eligibleIds\.length,\s*eligibilityKind,/);
+  });
+});
+
+describe("player browse eligibility · hooked effect flow (#438 repair)", () => {
+  const storage = new Map<string, string>();
+
+  beforeEach(() => {
+    resetHookFiber();
+    storage.clear();
+    vi.resetAllMocks();
+    apiMocks.getMe.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        id: "actor-1",
+        displayName: "Actor",
+        locale: "ru",
+        linkedProviders: [],
+        csrfToken: "csrf",
+      },
+    });
+    apiMocks.getMySocialProfile.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: baseProfile(),
+    });
+    vi.stubGlobal("window", Object.assign(new EventTarget(), {}));
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+      removeItem: (key: string) => { storage.delete(key); },
+      get length() { return storage.size; },
+      key: (index: number) => [...storage.keys()][index] ?? null,
+    });
+  });
+
+  afterEach(() => {
+    resetHookFiber();
+    vi.unstubAllGlobals();
+  });
+
+  it("persistent 503 yields one capability batch with no automatic retry; explicit retry starts one new batch", async () => {
+    playInterestMocks.getPlayInterestStates.mockResolvedValue({
+      ok: false,
+      status: 503,
+      error: "unavailable",
+    });
+    const catalogPlayers = [peer("p1"), peer("p2")];
+    const props: OfferProps = {
+      finderActive: true,
+      ordinaryScope: "scope-a",
+      catalogPlayers,
+      catalogState: "ready",
+      hasMore: true,
+      moreBusy: false,
+      onLoadMore: () => undefined,
+    };
+
+    const afterFail = await settleOffers(props, 20);
+    expect(playInterestMocks.getPlayInterestStates).toHaveBeenCalledTimes(1);
+    expect(afterFail.eligibility.kind).toBe("error");
+    expect(afterFail.eligibility.message).toContain("Не удалось проверить подборку");
+
+    // Parent re-renders (new catalog array identity) must not auto-loop.
+    const churnProps: OfferProps = { ...props, catalogPlayers: [...catalogPlayers] };
+    const afterChurn = await settleOffers(churnProps, 12);
+    expect(playInterestMocks.getPlayInterestStates).toHaveBeenCalledTimes(1);
+    expect(afterChurn.eligibility.kind).toBe("error");
+
+    afterChurn.retryEligibility();
+    const afterRetry = await settleOffers(churnProps, 16);
+    expect(playInterestMocks.getPlayInterestStates).toHaveBeenCalledTimes(2);
+    expect(afterRetry.eligibility.kind).toBe("error");
+  });
+
+  it("unavailable first page with hasMore continues to an eligible next page via existing pagination", async () => {
+    playInterestMocks.getPlayInterestStates.mockImplementation(async (ids: readonly string[]) => ({
+      ok: true as const,
+      status: 200,
+      data: {
+        items: ids.map((id) => (id.startsWith("next-") ? noneView : unavailableView)),
+      },
+    }));
+
+    let catalogPlayers = [peer("page-a"), peer("page-b")];
+    let hasMore = true;
+    let moreBusy = false;
+    const onLoadMore = vi.fn(() => {
+      moreBusy = true;
+    });
+
+    const propsFor = (): OfferProps => ({
+      finderActive: true,
+      ordinaryScope: "scope-a",
+      catalogPlayers,
+      catalogState: moreBusy ? "loading" : "ready",
+      hasMore,
+      moreBusy,
+      onLoadMore,
+    });
+
+    let api = await settleOffers(propsFor(), 20);
+    expect(api.eligibility.kind).toBe("peers_unavailable");
+    expect(api.eligibility.canContinue).toBe(true);
+    expect(playInterestMocks.getPlayInterestStates).toHaveBeenCalledTimes(1);
+
+    const gateHtml = renderToStaticMarkup(createElement(PlayerBrowseFinderGate, {
+      eligibility: api.eligibility,
+      onContinue: () => api.continueSearch(),
+      onRetry: () => api.retryEligibility(),
+    }));
+    expect(gateHtml).toContain("Сейчас нельзя предложить игру");
+    expect(gateHtml).toContain("Продолжить поиск");
+
+    api.continueSearch();
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+    api = await settleOffers(propsFor(), 6);
+    expect(api.eligibility.kind).toBe("checking");
+
+    // Parent delivers next catalogue page (existing pagination callback contract).
+    catalogPlayers = [...catalogPlayers, peer("next-c"), peer("next-d")];
+    moreBusy = false;
+    api = await settleOffers(propsFor(), 16);
+    expect(playInterestMocks.getPlayInterestStates).toHaveBeenCalledTimes(2);
+    expect(api.eligibility.kind).toBe("ready");
+    expect(api.eligibility.players.map((p) => p.publicPlayerId)).toEqual(["next-c", "next-d"]);
   });
 });

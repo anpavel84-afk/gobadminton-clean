@@ -226,10 +226,13 @@ export function usePlayerBrowseOffers({
   const continueArmedRef = useRef(false);
   const peerNamesRef = useRef<Map<string, string>>(new Map());
   const unresolvedRef = useRef(unresolved);
+  /** Ref so terminal kind checks do not put eligibilityKind in effect deps (avoids error→re-fetch loops). */
+  const eligibilityKindRef = useRef(eligibilityKind);
   continueArmedRef.current = continueArmed;
   opPhaseRef.current = opPhase;
   activeTokenRef.current = activeOperation?.token ?? null;
   unresolvedRef.current = unresolved;
+  eligibilityKindRef.current = eligibilityKind;
 
   const bumpPeerMutation = useCallback((peerId: string) => {
     if (!peerId) return;
@@ -501,6 +504,10 @@ export function usePlayerBrowseOffers({
       setEligibilityMessage("Не удалось проверить подборку");
       return;
     }
+    // Capability/catalog errors stay until explicit retry or scope/account invalidation — no auto re-fetch.
+    if (eligibilityKindRef.current === "error") {
+      return;
+    }
     if (continueArmed) {
       if (moreBusy || (catalogState === "loading" && catalogPlayers.every(p => checkedIds.has(p.publicPlayerId)))) {
         setEligibilityKind("checking");
@@ -511,7 +518,7 @@ export function usePlayerBrowseOffers({
       if (fresh.length === 0) {
         setContinueArmed(false);
         // Preserve peers_unavailable from prior batch — do not flash false exhausted.
-        if (eligibilityKind === "peers_unavailable") return;
+        if (eligibilityKindRef.current === "peers_unavailable") return;
         setEligibilityKind(hasMore ? "empty_page" : "exhausted");
         setEligibilityMessage(hasMore
           ? "В этой части списка новых предложений нет"
@@ -529,12 +536,12 @@ export function usePlayerBrowseOffers({
     }
     if (unchecked.length === 0 && checkedIds.size > 0) {
       // Preserve terminal kinds from runBatch (peers_unavailable / exhausted / empty_page).
+      // error already held above until explicit retry.
       if (
-        eligibilityKind === "peers_unavailable"
-        || eligibilityKind === "exhausted"
-        || eligibilityKind === "empty_page"
-        || eligibilityKind === "own_prerequisite"
-        || eligibilityKind === "error"
+        eligibilityKindRef.current === "peers_unavailable"
+        || eligibilityKindRef.current === "exhausted"
+        || eligibilityKindRef.current === "empty_page"
+        || eligibilityKindRef.current === "own_prerequisite"
       ) {
         return;
       }
@@ -565,7 +572,6 @@ export function usePlayerBrowseOffers({
     catalogPlayers,
     checkedIds,
     eligibleIds.length,
-    eligibilityKind,
     hasMore,
     moreBusy,
     continueArmed,
@@ -798,7 +804,10 @@ export function usePlayerBrowseOffers({
     kind: eligibilityKind,
     players: eligiblePlayers,
     message: eligibilityMessage,
-    canContinue: eligibilityKind === "empty_page" && hasMore && !moreBusy,
+    canContinue:
+      (eligibilityKind === "empty_page" || eligibilityKind === "peers_unavailable")
+      && hasMore
+      && !moreBusy,
   };
 
   return {
