@@ -104,10 +104,18 @@ export function PersonalGameCard({
         <div className="gb-game-identity gb-personal-card__organizer"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span><small>Организатор</small><strong>{game.organizer.displayName}</strong></span></div>
         <div className="gb-personal-card__action">
           {owned ? (
-            <Button variant={tone === "draft" ? "dark" : "outline"} href={`/my-games/${game.id}`}>{game.status === "draft" ? "Продолжить" : "Управление"} →</Button>
+            <>
+              <Button variant={tone === "draft" ? "dark" : "outline"} href={`/my-games/${game.id}`}>{game.status === "draft" ? "Продолжить" : "Управление"} →</Button>
+              {game.status === "completed" || game.status === "cancelled" || game.status === "published" ? (
+                <Button variant="outline" href={`/my-games/${game.id}/results`}>Участники / Итоги</Button>
+              ) : null}
+            </>
           ) : (
             <>
               <Button variant="outline" href={`/games/${game.id}`}>Подробнее →</Button>
+              {ownStatus === "confirmed" ? (
+                <Button variant="outline" href={`/my-games/${game.id}/results`}>Участники / Итоги</Button>
+              ) : null}
               <GameShare gameId={game.id} label="Поделиться" />
             </>
           )}

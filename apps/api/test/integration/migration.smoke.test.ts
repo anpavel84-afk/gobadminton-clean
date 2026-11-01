@@ -183,6 +183,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0043_play_interests",
         "0044_direct_messages_immediate",
         "0045_venue_gallery",
+        "0046_game_attendance",
       ]);
       const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_description','public_profile_updated_at') ORDER BY column_name");
       expect(profileColumns.rows).toEqual([
@@ -197,6 +198,10 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       // 0045 additive gallery: physical table + URL helper, beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.venue_gallery_items')::text AS name")).rows[0]?.name).toBe("venue_gallery_items");
       expect((await pool.query("SELECT to_regprocedure('public.venue_gallery_item_url(uuid)') IS NOT NULL AS ok")).rows[0]?.ok).toBe(true);
+      // 0046 attendance: physical tables beyond ledger filename alone.
+      expect((await pool.query("SELECT to_regclass('public.game_attendance')::text AS name")).rows[0]?.name).toBe("game_attendance");
+      expect((await pool.query("SELECT to_regclass('public.game_attendance_notices')::text AS name")).rows[0]?.name).toBe("game_attendance_notices");
+      expect((await pool.query("SELECT to_regclass('public.game_attendance_disputes')::text AS name")).rows[0]?.name).toBe("game_attendance_disputes");
       const galleryIndexes = await pool.query<{ indexname: string }>(
         `SELECT indexname FROM pg_indexes WHERE tablename='venue_gallery_items'
            AND indexname IN ('venue_gallery_active_position','venue_gallery_one_main','venue_gallery_venue_active')

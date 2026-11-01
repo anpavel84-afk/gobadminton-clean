@@ -7,14 +7,16 @@ import {
   getMe,
   listAllMyManagedGames,
   listAllMyParticipations,
+  listMyGameResults,
 } from "../../../lib/api-client";
-import type { Game, ManagedGame, Me, Participation } from "../../../lib/consumer-types";
+import type { Game, ManagedGame, Me, MeGameResultsPage, Participation } from "../../../lib/consumer-types";
 import {
   isActiveCreatedGame,
   isParticipatingHistoryRow,
   managedGameRelationLabel,
   participationLabel,
 } from "../../../lib/game-presentation";
+import { pendingOwnNotice, resultsPath } from "../../../lib/game-results";
 import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
@@ -40,6 +42,7 @@ export function MyGamesPage() {
   const [rows, setRows] = useState<ParticipationRow[]>([]);
   const [created, setCreated] = useState<ManagedGame[]>([]);
   const [me, setMe] = useState<Me | null>(null);
+  const [ownResults, setOwnResults] = useState<MeGameResultsPage | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [state, setState] = useState<"loading" | "ready" | "error" | "auth">(
     "loading",
@@ -53,11 +56,13 @@ export function MyGamesPage() {
     setRows([]);
     setCreated([]);
     setMe(null);
+    setOwnResults(null);
     const clearPrivate = () => {
       cancelled = true;
       setMe(null);
       setRows([]);
       setCreated([]);
+      setOwnResults(null);
       setState("auth");
     };
     const onSession = () => {
@@ -75,6 +80,8 @@ export function MyGamesPage() {
         return;
       }
       setMe(account.data);
+      const notices = await listMyGameResults({ limit: 20 });
+      if (!cancelled && notices.ok) setOwnResults(notices.data);
 
       if (relation === "created") {
         // Include owner + non-creator manager rows from /v1/me/games.
@@ -210,6 +217,27 @@ export function MyGamesPage() {
             История показывает исход заявки или статус управляемой игры. Это не
             подтверждает присутствие на площадке и не означает оплату.
           </p>
+        ) : null}
+        {state === "ready" && ownResults && pendingOwnNotice(ownResults) > 0 ? (
+          <section className="gb-game-feedback" data-surface="postgame-notices" aria-label="Уведомления об итогах">
+            <h2>Есть отметки посещения, которые ждут ответа</h2>
+            <p>
+              Уведомления сохранены здесь, а не только в чате. Отсутствие ответа не
+              означает согласие.
+            </p>
+            <ul>
+              {ownResults.items
+                .filter((item) => item.notice && !item.notice.acknowledgedAt)
+                .slice(0, 5)
+                .map((item) => (
+                  <li key={item.notice!.id}>
+                    <Button variant="outline" href={resultsPath(item.gameId)}>
+                      {item.gameTitle ?? "Игра"} — открыть итоги
+                    </Button>
+                  </li>
+                ))}
+            </ul>
+          </section>
         ) : null}
         {state === "auth" ? (
           <div className="gb-game-feedback" data-state="auth">

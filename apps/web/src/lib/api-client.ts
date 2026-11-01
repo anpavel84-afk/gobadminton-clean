@@ -4,6 +4,10 @@ import { foregroundUpdates } from "./foreground-updates";
 import { privateViews } from "./private-view";
 import type {
   AbuseReportReceipt,
+  AttendanceDispute,
+  AttendanceHistoryPage,
+  AttendanceRecord,
+  AttendanceValue,
   BlockReceipt,
   City,
   CreateAbuseReportInput,
@@ -11,12 +15,14 @@ import type {
   CreateVenueInput,
   Game,
   GamePage,
+  GameResults,
   LookingForGamePutInput,
   LookingIntent,
   LinkedProvidersResponse,
   ManagedGame,
   ManagedGamePage,
   Me,
+  MeGameResultsPage,
   OwnSocialProfile,
   Participation,
   ParticipationPage,
@@ -636,6 +642,131 @@ export function createAbuseReport(
     csrfToken,
     idempotent: true,
   });
+}
+
+export function getGameResults(gameId: string, query: {
+  revisionsLimit?: number;
+  revisionsCursor?: string;
+  rosterLimit?: number;
+  rosterCursor?: string;
+} = {}) {
+  const params = new URLSearchParams();
+  if (query.revisionsLimit) params.set("revisionsLimit", String(query.revisionsLimit));
+  if (query.revisionsCursor) params.set("revisionsCursor", query.revisionsCursor);
+  if (query.rosterLimit) params.set("rosterLimit", String(query.rosterLimit));
+  if (query.rosterCursor) params.set("rosterCursor", query.rosterCursor);
+  const qs = params.toString();
+  return apiFetch<GameResults>(`/v1/games/${gameId}/results${qs ? `?${qs}` : ""}`);
+}
+
+export function putGameOutcome(
+  gameId: string,
+  input: { expectedVersion: number; outcome: "held" | "not_held"; reason?: string },
+  csrfToken: string,
+) {
+  return apiFetch<GameResults>(`/v1/games/${gameId}/outcome`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function putGameAttendance(
+  gameId: string,
+  contextId: string,
+  input: {
+    expectedVersion: number;
+    value: AttendanceValue;
+    late?: boolean;
+    correctionReason?: string;
+  },
+  csrfToken: string,
+) {
+  return apiFetch<AttendanceRecord>(`/v1/games/${gameId}/attendance/${contextId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function bulkPresentAttendance(
+  gameId: string,
+  input: {
+    items: Array<{ contextId: string; expectedVersion: number }>;
+    confirmedExactSelection: true;
+  },
+  csrfToken: string,
+) {
+  return apiFetch<{ items: AttendanceRecord[] }>(`/v1/games/${gameId}/attendance/bulk-present`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function acknowledgeAttendance(
+  gameId: string,
+  contextId: string,
+  attendanceVersion: number,
+  csrfToken: string,
+) {
+  return apiFetch<AttendanceRecord>(
+    `/v1/games/${gameId}/attendance/${contextId}/acknowledgements`,
+    {
+      method: "POST",
+      body: JSON.stringify({ attendanceVersion }),
+      csrfToken,
+      idempotent: true,
+    },
+  );
+}
+
+export function disputeAttendance(
+  gameId: string,
+  contextId: string,
+  input: { attendanceVersion: number; explanation: string },
+  csrfToken: string,
+) {
+  return apiFetch<AttendanceDispute>(`/v1/games/${gameId}/attendance/${contextId}/disputes`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function getAttendanceHistory(gameId: string, contextId: string, limit = 20) {
+  return apiFetch<AttendanceHistoryPage>(
+    `/v1/games/${gameId}/attendance/${contextId}/history?limit=${limit}`,
+  );
+}
+
+export function getAttendanceDispute(disputeId: string) {
+  return apiFetch<AttendanceDispute>(`/v1/attendance-disputes/${disputeId}`);
+}
+
+export function withdrawAttendanceDispute(
+  disputeId: string,
+  input: { expectedVersion: number; reason?: string },
+  csrfToken: string,
+) {
+  return apiFetch<AttendanceDispute>(`/v1/attendance-disputes/${disputeId}/withdraw`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function listMyGameResults(query: { limit?: number; cursor?: string } = {}) {
+  const params = new URLSearchParams();
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.cursor) params.set("cursor", query.cursor);
+  const qs = params.toString();
+  return apiFetch<MeGameResultsPage>(`/v1/me/game-results${qs ? `?${qs}` : ""}`);
 }
 
 /** Both RFC Retry-After forms; never schedule an earlier retry. */

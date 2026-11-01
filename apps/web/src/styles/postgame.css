@@ -1,0 +1,230 @@
+/* PG-1b / #372 — Participants / Results. Uses existing Onest + consumer tokens. */
+.gb-postgame {
+  display: grid;
+  gap: 24px;
+  padding: 24px 20px 40px;
+  color: var(--gb-ink);
+}
+
+.gb-postgame__back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--gb-ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.gb-postgame > h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 2vw + 1rem, 2.5rem);
+  line-height: 1.15;
+}
+
+.gb-postgame__context {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 20px 24px;
+}
+
+.gb-postgame__date {
+  min-width: 72px;
+  min-height: 72px;
+  border: 1px solid var(--gb-line);
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  background: var(--gb-white);
+  font-size: 13px;
+}
+
+.gb-postgame__context h2 {
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+}
+
+.gb-postgame__context p {
+  margin: 0;
+  color: var(--gb-ink-soft);
+  font-size: 15px;
+}
+
+.gb-postgame__tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--gb-line);
+}
+
+.gb-postgame__tabs button {
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--gb-ink-soft);
+  font: inherit;
+  font-weight: 600;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.gb-postgame__tabs button[aria-selected="true"] {
+  color: var(--gb-ink);
+  border-bottom-color: var(--gb-ink);
+}
+
+.gb-postgame__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 290px);
+  gap: 32px;
+  align-items: start;
+}
+
+.gb-postgame__main,
+.gb-postgame__rail {
+  display: grid;
+  gap: 20px;
+}
+
+.gb-postgame__panel {
+  padding: 28px 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.gb-postgame__notice-card {
+  background: var(--gb-purple-soft);
+}
+
+.gb-postgame__stats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  color: var(--gb-ink-soft);
+  font-size: 14px;
+}
+
+.gb-postgame__roster {
+  display: grid;
+  gap: 0;
+}
+
+.gb-postgame__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 0;
+  border-top: 1px solid var(--gb-line);
+}
+
+.gb-postgame__who {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.gb-postgame__who strong,
+.gb-postgame__who small {
+  display: block;
+}
+
+.gb-postgame__who small {
+  color: var(--gb-ink-soft);
+  font-size: 13px;
+}
+
+.gb-postgame__pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--gb-paper);
+  border: 1px solid var(--gb-line);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gb-postgame__pill[data-value="absent"] {
+  background: var(--gb-white);
+}
+
+.gb-postgame__pill[data-value="present"] {
+  background: var(--gb-lime-soft);
+}
+
+.gb-postgame__pill[data-tone="wait"] {
+  background: var(--gb-purple-soft);
+  color: var(--gb-purple);
+  border-color: transparent;
+  width: fit-content;
+}
+
+.gb-postgame__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.gb-postgame__helper,
+.gb-postgame__notice,
+.gb-postgame__unknown {
+  margin: 0;
+  color: var(--gb-ink-soft);
+  font-size: 14px;
+}
+
+.gb-postgame__unknown {
+  color: var(--gb-ink);
+}
+
+.gb-postgame__dialog-form,
+.gb-postgame__bulk-list,
+.gb-postgame__history {
+  display: grid;
+  gap: 12px;
+}
+
+.gb-postgame__bulk-list,
+.gb-postgame__history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(50dvh, 420px);
+  overflow: auto;
+}
+
+.gb-postgame__bulk-list label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-height: 44px;
+}
+
+@media (min-width: 1024px) {
+  .gb-postgame {
+    padding: 28px 40px 48px;
+  }
+
+  .gb-postgame__panel {
+    padding: 40px;
+  }
+}
+
+@media (max-width: 900px) {
+  .gb-postgame__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .gb-postgame__row {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
+}

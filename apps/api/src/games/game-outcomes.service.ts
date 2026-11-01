@@ -25,6 +25,7 @@ import {
   type RevisionsPage,
   type RevisionsQuery,
 } from "./game-outcomes.policy";
+import { GameAttendanceService } from "./game-attendance.service";
 
 type AccessRole = "manager" | "participant" | "none";
 
@@ -35,6 +36,7 @@ export class GameOutcomesService {
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
+    private readonly attendance: GameAttendanceService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -183,7 +185,12 @@ export class GameOutcomesService {
   async getResults(
     gameIdRaw: string,
     userId: string,
-    revisionsRaw: { revisionsLimit?: string; revisionsCursor?: string } = {},
+    revisionsRaw: {
+      revisionsLimit?: string;
+      revisionsCursor?: string;
+      rosterLimit?: string;
+      rosterCursor?: string;
+    } = {},
   ): Promise<GameResultsView> {
     const gameId = parseGameId(gameIdRaw);
     const revisionsQuery = parseRevisionsQuery(revisionsRaw);
@@ -201,11 +208,39 @@ export class GameOutcomesService {
       const installed = await this.installed(client);
       const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
       const canRecord = canRecordHint(this.env, role, game, now, installed);
-      if (!installed) return unknownOutcome(gameId, false);
+      const attendance = await this.attendance.enrichResults(
+        client,
+        gameId,
+        userId,
+        role,
+        game,
+        now,
+        { rosterLimit: revisionsRaw.rosterLimit, rosterCursor: revisionsRaw.rosterCursor },
+      );
+      if (!installed) {
+        return {
+          ...unknownOutcome(gameId, false),
+          attendance,
+          allowedActions: {
+            canRecordOutcome: false,
+            canRecordAttendance: attendance.allowedActions.canRecordAttendance,
+            canBulkPresent: attendance.allowedActions.canBulkPresent,
+          },
+        };
+      }
       const row = await this.readOutcome(client, gameId);
       const revisionsPage =
         role === "manager" ? await this.readRevisionsPage(client, gameId, revisionsQuery) : undefined;
-      return this.project(gameId, row, role, canRecord, revisionsPage);
+      const base = this.project(gameId, row, role, canRecord, revisionsPage);
+      return {
+        ...base,
+        attendance,
+        allowedActions: {
+          ...base.allowedActions,
+          canRecordAttendance: attendance.allowedActions.canRecordAttendance,
+          canBulkPresent: attendance.allowedActions.canBulkPresent,
+        },
+      };
     } finally {
       client.release();
     }
@@ -319,9 +354,26 @@ export class GameOutcomesService {
           )
         ).rows[0]!;
         const canRecord = canRecordHint(this.env, "manager", refreshed, now, true);
+        const base = this.project(gameId, row, "manager", canRecord, revisionsPage);
+        const attendance = await this.attendance.enrichResults(
+          client,
+          gameId,
+          userId,
+          "manager",
+          refreshed,
+          now,
+        );
         return {
           statusCode: 200,
-          body: this.project(gameId, row, "manager", canRecord, revisionsPage),
+          body: {
+            ...base,
+            attendance,
+            allowedActions: {
+              ...base.allowedActions,
+              canRecordAttendance: attendance.allowedActions.canRecordAttendance,
+              canBulkPresent: attendance.allowedActions.canBulkPresent,
+            },
+          },
         };
       },
     });

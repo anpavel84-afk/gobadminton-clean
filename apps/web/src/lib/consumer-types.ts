@@ -395,3 +395,136 @@ export const UNAVAILABLE_COPY = {
 
 /** Additive avatar projection; missing on older API candidates. */
 export type PlayerAvatar = { uploadedUrl: string | null; providerUrl: string | null };
+
+/** PG-1a/PG-1b game results + attendance. */
+export type AttendanceValue = "present" | "absent";
+export type AttendanceProjectionValue = "unknown" | AttendanceValue;
+export type AttendanceSource = "manager_explicit" | "self_attested";
+
+export type AttendanceRecord = {
+  contextId: string;
+  value: AttendanceProjectionValue;
+  version: number;
+  late: boolean;
+  assertion: {
+    actorDisplay: string | null;
+    source: AttendanceSource | null;
+    at: string | null;
+  };
+  acknowledgedVersion: number | null;
+  dispute: {
+    id: string;
+    status: "open" | "withdrawn";
+    challengedVersion: number;
+    version: number;
+  } | null;
+  displayName: string;
+  allowedActions: {
+    canSetAttendance: boolean;
+    canAcknowledge: boolean;
+    canDispute: boolean;
+    canWithdrawDispute: boolean;
+  };
+};
+
+export type GameAttendanceSlice = {
+  installed: boolean;
+  writesEnabled: boolean;
+  myAttendance: AttendanceRecord | null;
+  roster: AttendanceRecord[] | null;
+  rosterNextCursor: string | null;
+  summary: {
+    rosterCount: number;
+    marked: number;
+    unknown: number;
+    underClarification: number;
+    agreed: number;
+  } | null;
+  allowedActions: {
+    canRecordAttendance: boolean;
+    canBulkPresent: boolean;
+  };
+};
+
+export type GameResults = {
+  gameId: string;
+  outcome: {
+    value: "unknown" | "held" | "not_held";
+    version: number;
+    reason: string | null;
+    provenance: {
+      source: "manager_explicit";
+      recordedAt: string;
+      createdAt: string;
+    } | null;
+  };
+  revisions?: Array<{
+    version: number;
+    before: { value: "held" | "not_held"; reason: string | null } | null;
+    after: { value: "held" | "not_held"; reason: string | null };
+    reason: string | null;
+    source: "manager_explicit";
+    recordedAt: string;
+  }>;
+  revisionsNextCursor?: string | null;
+  attendance?: GameAttendanceSlice;
+  allowedActions: {
+    canRecordOutcome: boolean;
+    canRecordAttendance?: boolean;
+    canBulkPresent?: boolean;
+  };
+};
+
+export type AttendanceDispute = {
+  id: string;
+  gameId: string;
+  contextId: string;
+  status: "open" | "withdrawn";
+  challengedVersion: number;
+  explanation: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  withdrawnAt: string | null;
+  withdrawReason: string | null;
+  history: Array<{
+    version: number;
+    action: "opened" | "withdrawn";
+    explanation: string | null;
+    recordedAt: string;
+  }>;
+  allowedActions: { canWithdraw: boolean };
+};
+
+export type AttendanceHistoryPage = {
+  items: Array<{
+    version: number;
+    before: { value: AttendanceValue; late: boolean } | null;
+    after: { value: AttendanceValue; late: boolean };
+    reason: string | null;
+    source: AttendanceSource;
+    recordedAt: string;
+    actorDisplay: string;
+  }>;
+};
+
+export type MeGameResultsPage = {
+  items: Array<{
+    gameId: string;
+    contextId: string;
+    gameTitle: string | null;
+    endsAt: string | null;
+    attendance: AttendanceRecord;
+    notice: {
+      id: string;
+      attendanceVersion: number;
+      value: AttendanceValue;
+      late: boolean;
+      source: AttendanceSource;
+      actorDisplay: string;
+      createdAt: string;
+      acknowledgedAt: string | null;
+    } | null;
+  }>;
+  nextCursor: string | null;
+};
