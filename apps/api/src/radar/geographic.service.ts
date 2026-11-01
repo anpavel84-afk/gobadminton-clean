@@ -15,6 +15,7 @@ import {
 } from "../auth/problem";
 import { ActorFenceService } from "../common/actor-fence.service";
 import { safeProviderAvatar } from "../profiles/avatar-presentation";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { DEMO_SPB_CITY_ID } from "../database/demo-ids";
 import { quantizeFix } from "./coarse-location";
@@ -251,7 +252,7 @@ export class GeographicRadarService {
           ),
           player: {
             publicPlayerId: row.public_player_id,
-            displayName: row.display_name,
+            displayName: safePublicDisplayName(row.display_name),
             trainer: row.trainer,
             avatar: {
               uploadedUrl: row.avatar_key

@@ -15,6 +15,7 @@ import { isDemoUuid } from "../database/demo-ids";
 import { notFound } from "../auth/problem";
 import type { AppEnv } from "../config/env";
 import { APP_ENV } from "../tokens";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import {
   RADAR_POLICY_VERSION,
   isAdmittedRadarRegionId,
@@ -447,7 +448,7 @@ export class RadarProofService {
     return {
       targetUserId: payload.targetUserId,
       publicPlayerId: targetProfile.public_player_id,
-      displayName: targetProfile.display_name,
+      displayName: safePublicDisplayName(targetProfile.display_name),
       levelScaleId: targetProfile.level_scale_id,
       levelScaleVersion: targetProfile.level_scale_version,
       levelId: targetProfile.level_id,

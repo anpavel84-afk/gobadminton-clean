@@ -1,27 +1,32 @@
 # GoBadminton release notes
 
-## #448 — social directory/contact defaults ON, preserve explicit OFF (0.1.0-alpha.8 candidate)
+## #450 — safe public name + Russian release history (0.1.0-alpha.9 candidate)
 
-Owner-approved source policy for new email/OAuth and missing ACTIVE social profiles:
-`directoryVisible` and DM contact requests default ON with field provenance
-`owner_default` distinct from real consent / legacy / opt-out. Safe automatic public
-name avoids email-shaped strings, fake city, and fabricated consent. Explicit user OFF
-is preserved on login/reread; migration `0049` only touches pristine/verified synthetic
-defaults and missing ACTIVE users — unknown modified legacy OFF stays untouched.
-API wire remains `0.22.0`. Policy approved for both environments in source; actual
-DEV then PROD installs are separate future receipts (deployment NOT DONE). Future user
-OFF is not re-enabled; Radar/blocks/moderation unchanged; private email is not made
-public; no geography/skill fabrication. Partial privacy backfill is truthful: verified
-initial synthetic/pristine → ON; existing explicit/ambiguous old OFF preserved — no
-guarantee that all already-OFF rows are reset. #445 remains OPEN/retest pending.
-Source core base `f9ae4bbd3eb1af80d6445c57cbcd413921cde6e6` (product logic already
-written; this pass is release metadata only).
+Visual QA repair on accepted alpha.8 (`26f3ba38…`). Public directory, player
+profile, unified/radar and friendship peer DTOs scrub email-shaped or empty
+display names to «Игрок» at the read boundary without rewriting own-profile or
+login storage; catalogue cursor ordering stays on raw stored names. Alpha.8
+accepted history for both sites is recorded in Russian user-facing prose;
+current descriptor is alpha.9 delta. API wire remains `0.22.0`. No fixture
+visibility rewrite; no chat rights change; trainer-profile HTTP 404 stays
+normal missing-profile (no client console.error). Alpha.9 pending acceptance;
+no automatic PROD activation.
 
-- Application version (candidate): `0.1.0-alpha.8`; API contract unchanged `0.22.0`.
-- Candidate source SHA / DEV/PROD receipts: unbound until trusted ACCEPTED.
+- Application version (candidate): `0.1.0-alpha.9`; API contract unchanged `0.22.0`.
+- Base accepted SHA: `26f3ba38d9c04730674b084c0266afc193662398` (alpha.8 both DEV+PROD).
+- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
 - Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
 - Owner / Go Bad UAT: NOT_TESTED.
-- PG-3/PG-4 still not installed; PROD remains alpha.2.
+- PG-3/PG-4 untouched; C5 untouched.
+
+## #448 — visibility and messages defaults with preserved user choice (0.1.0-alpha.8 ACCEPTED both sites)
+
+For eligible accounts, directory listing and contact requests are on by default;
+an explicit saved user opt-out is preserved. Accepted on DEV `r41339991160-a1`
+(`2026-11-01T19:18:15Z`) and managed PROD (`2026-11-01T19:30:08.857934Z`),
+source `26f3ba38d9c04730674b084c0266afc193662398`. Post-install browser findings
+are tracked in #450 and are not back-dated as fixed in this release record.
+API wire `0.22.0`. Owner UAT: NOT_TESTED.
 
 ## #445 followup points 2/3/5/6 — map aliases, finder, friends guidance (0.1.0-alpha.7 DEV ACCEPTED)
 

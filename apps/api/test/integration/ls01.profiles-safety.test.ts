@@ -835,6 +835,64 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
     ], "detail");
   });
 
+  it("public directory/detail scrub email-shaped stored names without rewriting own storage (#450)", async () => {
+    const a = await login("vk");
+    const profile = await ensureVisibleProfile(a, "Ordinary Public Name", "email-scrub");
+    const emailShaped = "legacy.stored@mail.example";
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [a.userId, emailShaped],
+    );
+
+    const own = await app.inject({
+      method: "GET",
+      url: "/v1/me/social-profile",
+      cookies: a.cookies,
+    });
+    expect(own.statusCode).toBe(200);
+    expect((own.json() as { displayName: string }).displayName).toBe(emailShaped);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/v1/players/${profile.publicPlayerId}`,
+    });
+    expect(detail.statusCode).toBe(200);
+    const detailBody = detail.json() as Record<string, unknown>;
+    expect(detailBody.displayName).toBe("Игрок");
+    expect(JSON.stringify(detailBody)).not.toContain(emailShaped);
+    expect(JSON.stringify(detailBody)).not.toContain("ls01-a@example.com");
+
+    const list = await app.inject({ method: "GET", url: "/v1/players" });
+    expect(list.statusCode).toBe(200);
+    const item = (
+      list.json() as {
+        items: Array<{ publicPlayerId: string; displayName: string }>;
+      }
+    ).items.find((row) => row.publicPlayerId === profile.publicPlayerId);
+    expect(item?.displayName).toBe("Игрок");
+    expect(JSON.stringify(item)).not.toContain(emailShaped);
+
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [a.userId, "Анна Смирнова"],
+    );
+    const ordinary = await app.inject({
+      method: "GET",
+      url: `/v1/players/${profile.publicPlayerId}`,
+    });
+    expect(ordinary.statusCode).toBe(200);
+    expect((ordinary.json() as { displayName: string }).displayName).toBe(
+      "Анна Смирнова",
+    );
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/v1/players/00000000-0000-4000-8000-000000000099",
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
+  });
+
   it("anonymous reads hide hidden, ineligible, disabled, and missing profiles uniformly", async () => {
     const a = await login("vk");
     const hidden = await login("yandex");

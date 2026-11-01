@@ -2,6 +2,7 @@ import { unrestrictedSql } from "../restrictions/policy";
 import type { PoolClient } from "pg";
 import { notFound } from "../auth/problem";
 import { isDemoUuid } from "../database/demo-ids";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import {
   displayLocation,
   GEO_POLICY,
@@ -111,7 +112,7 @@ export async function redeemGeographicProof(
   return {
     targetUserId: payload.targetUserId,
     publicPlayerId: row.public_player_id,
-    displayName: row.display_name,
+    displayName: safePublicDisplayName(row.display_name),
     levelScaleId: row.level_scale_id,
     levelScaleVersion: row.level_scale_version,
     levelId: row.level_id,
