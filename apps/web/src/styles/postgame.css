@@ -197,8 +197,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: min(50dvh, 420px);
-  overflow: auto;
+  /* Dialog body (.profile-dialog__body) is the sole scroll owner — no nested overflow. */
 }
 
 .gb-postgame__bulk-list label {

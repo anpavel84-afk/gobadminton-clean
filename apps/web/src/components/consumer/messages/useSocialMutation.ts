@@ -18,6 +18,12 @@ export type SocialMutationOptions<T> = {
    * Invalid marker stays in storage (HOLD) — no retry, no delete, no new keys.
    */
   validatePending?: (pending: Pending) => boolean;
+  /**
+   * Opt-in (postgame host): unparseable persisted JSON stays in storage, HOLD is set,
+   * and new writes/retries are blocked until the marker can be proven parseable.
+   * Default callers keep silent ignore of corrupt storage.
+   */
+  holdCorruptStorage?: boolean;
 };
 /** Persist unresolved identity across reload; explicit replay uses identical body/key. */
 export function useSocialMutation<T>(
@@ -46,6 +52,8 @@ export function useSocialMutation<T>(
   validateRef.current = options?.validateSuccess;
   const validatePendingRef = useRef(options?.validatePending);
   validatePendingRef.current = options?.validatePending;
+  const holdCorruptRef = useRef(Boolean(options?.holdCorruptStorage));
+  holdCorruptRef.current = Boolean(options?.holdCorruptStorage);
   pendingRef.current = pending;
 
   useEffect(() => {
@@ -96,7 +104,19 @@ export function useSocialMutation<T>(
       );
       if (!valid) setCode("hold");
     } catch {
-      /* Storage may be disabled. */
+      if (!holdCorruptRef.current) {
+        /* Default callers: storage may be disabled or unreadable — leave clear. */
+        return;
+      }
+      if (gen !== generation.current) return;
+      // Opt-in: preserve raw unresolved marker; block writes/retries without parse proof.
+      holdRef.current = true;
+      // In-memory pending only — do not rewrite/delete the raw storage value.
+      const corruptHold: Pending = { path: "", body: {}, key: "", method: "" };
+      pendingRef.current = corruptHold;
+      setPending(corruptHold);
+      setNotice("Сохранённая операция повреждена. Не повторяйте отправку.");
+      setCode("hold");
     }
   }, [storageKey, persist]);
 
@@ -184,7 +204,7 @@ export function useSocialMutation<T>(
     },
     retry() {
       const current = pendingRef.current;
-      if (!current || lock.current) return;
+      if (!current || lock.current || holdRef.current) return;
       const validatePending = validatePendingRef.current;
       if (validatePending && !validatePending(current)) {
         holdRef.current = true;

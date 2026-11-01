@@ -109,7 +109,8 @@ describe("PG-1b attendance policy", () => {
         ends,
       ),
     ).toEqual({ eligible: false, proof: null });
-    // New concrete confirmation after that withdraw, within the game window, is markable.
+    // Later confirmation after pre-start withdraw does not restore markable eligibility
+    // (no late-join expansion; leave unmarkable unknown).
     expect(
       eligibleFromTransitions(
         withdrawnBeforeStart,
@@ -118,7 +119,21 @@ describe("PG-1b attendance policy", () => {
         new Date("2026-10-24T12:00:00.000Z"),
         ends,
       ),
-    ).toEqual({ eligible: true, proof: "current_confirmed" });
+    ).toEqual({ eligible: false, proof: null });
+    // QA probe: confirm → withdraw before start → reconfirm after start stays unmarkable.
+    expect(
+      eligibleFromTransitions(
+        [
+          { to_status: "confirmed", at: new Date("2026-11-01T12:00:00Z"), id: "a" },
+          { to_status: "withdrawn", at: new Date("2026-11-01T14:00:00Z"), id: "b" },
+          { to_status: "confirmed", at: new Date("2026-11-01T16:00:00Z"), id: "c" },
+        ],
+        new Date("2026-11-01T15:00:00Z"),
+        "confirmed",
+        new Date("2026-11-01T16:00:00Z"),
+        new Date("2026-11-01T17:00:00Z"),
+      ),
+    ).toEqual({ eligible: false, proof: null });
     // Current confirmed after ends cannot prove membership for this game window.
     expect(
       eligibleFromTransitions([], starts, "confirmed", new Date("2026-10-24T18:00:00.000Z"), ends),

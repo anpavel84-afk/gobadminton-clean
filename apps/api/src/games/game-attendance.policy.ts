@@ -386,9 +386,11 @@ const PRESTART_NON_CONFIRMED = new Set(["withdrawn", "removed", "rejected", "pen
 /**
  * Reconstruct confirmed-as-of-start from transition history.
  * Latest definite as-of-start transition wins; never resurrect pre-start
- * withdrawn/removed/rejected/pending via an earlier confirmation.
- * Current confirmed alone requires a known confirmed_at within the game window
- * (not after ends). Ambiguous / incomplete history → false (do not invent membership).
+ * withdrawn/removed/rejected/pending via an earlier or later confirmation.
+ * Owner contract: withdrawal-before-start stays unmarkable (no late-join expansion).
+ * Current confirmed alone (no contradictory as-of-start status) requires a known
+ * confirmed_at within the game window (not after ends). Ambiguous / incomplete
+ * history → false (do not invent membership).
  */
 export function eligibleFromTransitions(
   transitions: Array<{ to_status: string; at: Date; id: string }>,
@@ -410,11 +412,12 @@ export function eligibleFromTransitions(
   if (statusAtStart === "confirmed") {
     return { eligible: true, proof: "transition_as_of_start" };
   }
-  // Definite non-confirmed as-of-start: do not fall back to any earlier confirmation.
-  // Mid-game re-confirm may still qualify via current_confirmed below.
+  // Definite non-confirmed as-of-start: do not restore eligibility from current
+  // or post-start confirmation fallback (leave unmarkable unknown, not absent).
   if (statusAtStart !== null && PRESTART_NON_CONFIRMED.has(statusAtStart)) {
-    // continue to current_confirmed only
-  } else if (statusAtStart !== null) {
+    return { eligible: false, proof: null };
+  }
+  if (statusAtStart !== null) {
     // Unrecognized as-of-start status → do not invent eligibility from partial history.
     return { eligible: false, proof: null };
   }
@@ -425,20 +428,6 @@ export function eligibleFromTransitions(
       Number.isFinite(confirmedAt.getTime()) &&
       confirmedAt.getTime() <= endsAt.getTime()
     ) {
-      // After a definite pre-start withdraw/remove/reject/pending, only a *new*
-      // confirmation (confirmed_at strictly after that as-of-start status) can
-      // establish markable context. Stale confirmed_at from before the conflict
-      // must not override contradictory history.
-      if (statusAtStart !== null && PRESTART_NON_CONFIRMED.has(statusAtStart)) {
-        let lastPrestartAt: Date | null = null;
-        for (const row of ordered) {
-          if (row.at.getTime() <= startsAt.getTime()) lastPrestartAt = row.at;
-          else break;
-        }
-        if (!lastPrestartAt || confirmedAt.getTime() <= lastPrestartAt.getTime()) {
-          return { eligible: false, proof: null };
-        }
-      }
       return { eligible: true, proof: "current_confirmed" };
     }
     // Missing / future / after-end confirmation timestamp cannot prove membership.

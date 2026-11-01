@@ -14,41 +14,97 @@ const hooks = vi.hoisted(() => ({
   cursor: 0,
   effects: [] as Array<() => void>,
   cleanups: [] as Array<(() => void) | undefined>,
+  /** When set, useState serves dual-role render fixtures (QA probe) instead of hook slots. */
+  render: null as null | { index: number; manager: boolean },
 }));
 
-vi.mock("react", () => ({
-  useState<T>(initial: T) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) hooks.slots[index] = initial;
-    return [
-      hooks.slots[index],
-      (value: T | ((previous: T) => T)) => {
-        hooks.slots[index] =
-          typeof value === "function" ? (value as (previous: T) => T)(hooks.slots[index] as T) : value;
-      },
-    ];
-  },
-  useRef<T>(initial: T) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
-    return hooks.slots[index];
-  },
-  useEffect(effect: () => void | (() => void), deps?: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    const nextDeps = deps ?? [];
-    if (!previous || nextDeps.some((value, i) => !Object.is(value, previous[i]))) {
-      hooks.slots[index] = nextDeps;
-      hooks.effects.push(() => {
-        hooks.cleanups[index]?.();
-        const cleanup = effect();
-        hooks.cleanups[index] = typeof cleanup === "function" ? cleanup : undefined;
-      });
-    }
-  },
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    useState<T>(initial: T) {
+      if (hooks.render) {
+        const i = hooks.render.index++;
+        const rec = {
+          contextId: "ctx",
+          value: "absent",
+          version: 1,
+          late: false,
+          displayName: "Own manager",
+          assertion: {
+            actorDisplay: "Other manager",
+            source: "manager_explicit",
+            at: "2026-11-01T00:00:00Z",
+          },
+          acknowledgedVersion: null,
+          dispute: null,
+          allowedActions: {
+            canSetAttendance: true,
+            canAcknowledge: true,
+            canDispute: true,
+            canWithdrawDispute: false,
+          },
+        };
+        const results = {
+          gameId: "g",
+          outcome: { value: "unknown", version: 0 },
+          allowedActions: { canRecordOutcome: true },
+          attendance: {
+            installed: true,
+            writesEnabled: true,
+            myAttendance: rec,
+            roster: hooks.render.manager ? [rec] : null,
+            summary: { rosterCount: 1, marked: 1, unknown: 0, underClarification: 0, agreed: 0 },
+            allowedActions: { canRecordAttendance: true, canBulkPresent: true },
+          },
+        };
+        return actual.useState(
+          i === 0 ? ({ id: "actor", csrfToken: "csrf" } as T) : i === 2 ? (results as T) : i === 3 ? ("ready" as T) : initial,
+        );
+      }
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) hooks.slots[index] = initial;
+      return [
+        hooks.slots[index],
+        (value: T | ((previous: T) => T)) => {
+          hooks.slots[index] =
+            typeof value === "function" ? (value as (previous: T) => T)(hooks.slots[index] as T) : value;
+        },
+      ];
+    },
+    useRef<T>(initial: T) {
+      if (hooks.render) return actual.useRef(initial);
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
+      return hooks.slots[index];
+    },
+    useEffect(effect: () => void | (() => void), deps?: unknown[]) {
+      if (hooks.render) return actual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      const nextDeps = deps ?? [];
+      if (!previous || nextDeps.some((value, i) => !Object.is(value, previous[i]))) {
+        hooks.slots[index] = nextDeps;
+        hooks.effects.push(() => {
+          hooks.cleanups[index]?.();
+          const cleanup = effect();
+          hooks.cleanups[index] = typeof cleanup === "function" ? cleanup : undefined;
+        });
+      }
+    },
+  };
+});
+vi.mock("../src/lib/api-client", () => ({
+  apiFetch: vi.fn(),
+  getMe: vi.fn(),
+  getGame: vi.fn(),
+  getGameResults: vi.fn(),
+  getAttendanceHistory: vi.fn(),
 }));
-vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn() }));
 import { apiFetch } from "../src/lib/api-client";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { GameResultsComposition } from "../src/components/consumer/games/GameResultsComposition";
 
 const gameId = "10000000-0000-4000-8000-000000000099";
 const otherGameId = "10000000-0000-4000-8000-000000000088";
@@ -112,6 +168,7 @@ describe("PG-1b game results mutation host", () => {
     hooks.cursor = 0;
     hooks.effects = [];
     hooks.cleanups = [];
+    hooks.render = null;
     storage.clear();
     vi.resetAllMocks();
     vi.stubGlobal("crypto", { randomUUID: () => "results-attempt-key" });
@@ -123,6 +180,7 @@ describe("PG-1b game results mutation host", () => {
   });
   afterEach(() => {
     hooks.cleanups.forEach((fn) => fn?.());
+    hooks.render = null;
     vi.unstubAllGlobals();
   });
 
@@ -354,7 +412,13 @@ describe("PG-1b game results mutation host", () => {
       validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 2, value: "present" }), ackPending),
     ).toBe(true);
     expect(
+      validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 2, value: "absent" }), ackPending),
+    ).toBe(true);
+    expect(
       validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 1, value: "present" }), ackPending),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 2, value: "unknown" }), ackPending),
     ).toBe(false);
 
     const disputePending = {
@@ -403,5 +467,84 @@ describe("PG-1b game results mutation host", () => {
     expect(composition).toContain("actorRef.current = null");
     expect(composition).toContain("gb-session-changed");
     expect(composition).toContain("Проверить ту же отправку");
+    // Dual-role: own section is independent of manager roster branch.
+    expect(composition).toContain("my || !isManager");
+    // Postgame ProfileDialog skin opt-in + body scroll lock on all five forms.
+    expect(composition).toContain('className="profile-dialog--postgame"');
+    expect((composition.match(/profile-dialog--postgame/g) ?? []).length).toBe(5);
+    expect((composition.match(/lockBodyScroll/g) ?? []).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("QA: unknown is never a valid acknowledged fact receipt", () => {
+    expect(
+      validateGameResultsSuccess(record({ value: "unknown", version: 2, acknowledgedVersion: 2 }), {
+        path: `/v1/games/${gameId}/attendance/${contextId}/acknowledgements`,
+        method: "POST",
+        body: { attendanceVersion: 2 },
+        key: "qa-ack",
+      }),
+    ).toBe(false);
+  });
+
+  it("QA: unparseable persisted operation stays HOLD and blocks new intent", () => {
+    storage.set(`gb-fr04-pending:${actor}:game-results:${gameId}`, "{broken-json");
+    vi.mocked(apiFetch).mockResolvedValue({ ok: false, status: 0, error: "unknown" });
+    const mutation = render();
+    expect(mutation.code).toBe("hold");
+    expect(mutation.pending).toBe(true);
+    expect(
+      mutation.run(`/v1/games/${gameId}/attendance/${contextId}`, { expectedVersion: 0, value: "present" }, "PUT"),
+    ).toBe(false);
+    mutation.retry();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(storage.get(`gb-fr04-pending:${actor}:game-results:${gameId}`)).toBe("{broken-json");
+  });
+
+  it("QA: corrupt HOLD on scope A does not block independent scope B", () => {
+    storage.set(`gb-fr04-pending:${actor}:game-results:${gameId}`, "{broken-json");
+    vi.mocked(apiFetch).mockResolvedValue({ ok: false, status: 0, error: "unknown" });
+    const held = render(actor, gameId);
+    expect(held.code).toBe("hold");
+    expect(held.run(`/v1/games/${gameId}/attendance/${contextId}`, { expectedVersion: 0, value: "present" }, "PUT")).toBe(
+      false,
+    );
+    const other = render(actorB, gameId);
+    expect(other.code).not.toBe("hold");
+    expect(other.pending).toBe(false);
+    expect(
+      other.run(`/v1/games/${gameId}/attendance/${contextId}`, { expectedVersion: 0, value: "present" }, "PUT"),
+    ).toBe(true);
+  });
+
+  it("postgame dialog family uses sole body scroll; lists drop nested overflow", () => {
+    const postgameCss = readFileSync(path.resolve(__dirname, "../src/styles/postgame.css"), "utf8");
+    const playersCss = readFileSync(path.resolve(__dirname, "../src/styles/players.css"), "utf8");
+    const overlaysCss = readFileSync(path.resolve(__dirname, "../src/styles/desktop-overlays.css"), "utf8");
+    expect(postgameCss).toContain("gb-postgame__bulk-list");
+    expect(postgameCss).toContain("sole scroll owner");
+    expect(postgameCss).not.toMatch(/\.gb-postgame__bulk-list[^{]*\{[^}]*overflow:\s*auto/);
+    expect(postgameCss).not.toMatch(/\.gb-postgame__history[^{]*\{[^}]*max-height:/);
+    expect(playersCss).toContain(".profile-dialog--postgame");
+    expect(overlaysCss).toContain(".profile-dialog--postgame");
+  });
+
+  it("QA rendered own recourse: ordinary participant sees acknowledgement and objection", () => {
+    hooks.render = { index: 0, manager: false };
+    const html = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
+    expect(html).toContain("Согласен с этой отметкой");
+    expect(html).toContain("Запросить исправление");
+    expect(html).toContain("Other manager");
+    expect(html).not.toContain('aria-label="Состав"');
+  });
+
+  it("QA rendered own recourse: manager who participates also retains own acknowledgement and objection", () => {
+    hooks.render = { index: 0, manager: true };
+    const html = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
+    expect(html).toContain("Согласен с этой отметкой");
+    expect(html).toContain("Запросить исправление");
+    expect(html).toContain("История изменений");
+    expect(html).toContain("Other manager");
+    expect(html).toContain('aria-label="Состав"');
+    expect(html).toContain("Фактическое посещение");
   });
 });

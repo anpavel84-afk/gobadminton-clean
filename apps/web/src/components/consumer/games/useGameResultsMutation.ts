@@ -214,7 +214,8 @@ export function validateGameResultsSuccess(
       record.acknowledgedVersion === attendanceVersion &&
       typeof record.version === "number" &&
       record.version === attendanceVersion &&
-      (record.value === "present" || record.value === "absent" || record.value === "unknown")
+      // Only present/absent with exact version+ack confirm; unknown/malformed stay UNKNOWN.
+      (record.value === "present" || record.value === "absent")
     );
   }
 
@@ -267,6 +268,8 @@ export function useGameResultsMutation(
     {
       validateSuccess: validateGameResultsSuccess,
       validatePending: (pending) => validateGameResultsPending(pending, gameId),
+      // Opt-in: unparseable marker stays in storage as HOLD (no overwrite / silent reset).
+      holdCorruptStorage: true,
     },
   );
 }

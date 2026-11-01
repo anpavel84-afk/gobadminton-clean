@@ -447,7 +447,10 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                       </p>
                     ) : null}
                   </SurfacePanel>
-                ) : (
+                ) : null}
+                {/* Own attendance/provenance/ack/objection independent of manager roster.
+                    Creator without seat (no myAttendance) is not a participant — skip. */}
+                {my || !isManager ? (
                   <SurfacePanel tone="soft" className="gb-postgame__panel gb-postgame__notice-card">
                     <SectionHeader title="Организатор отметил ваше посещение" />
                     {my && my.value !== "unknown" ? (
@@ -490,7 +493,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                       <p>Пока нет отметки по вашему участию. Молчание не создаёт согласие.</p>
                     )}
                   </SurfacePanel>
-                )}
+                ) : null}
               </div>
 
               <aside className="gb-postgame__rail">
@@ -536,7 +539,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       ) : null}
 
       {markTarget?.mode === "single" && (
-        <ProfileDialog title="Отметить посещение" onClose={() => !busy && setMarkTarget(null)}>
+        <ProfileDialog
+          title="Отметить посещение"
+          className="profile-dialog--postgame"
+          lockBodyScroll
+          onClose={() => !busy && setMarkTarget(null)}
+        >
           <form
             className="gb-postgame__dialog-form"
             onSubmit={(e) => {
@@ -579,7 +587,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       )}
 
       {bulkConfirmOpen && (
-        <ProfileDialog title="Пришли все выбранные" onClose={() => !busy && setBulkConfirmOpen(false)}>
+        <ProfileDialog
+          title="Пришли все выбранные"
+          className="profile-dialog--postgame"
+          lockBodyScroll
+          onClose={() => !busy && setBulkConfirmOpen(false)}
+        >
           <div className="gb-postgame__dialog-form">
             <p>Выбор пуст по умолчанию. Подтвердите конкретные имена и версии — без динамического «остатка».</p>
             <ul className="gb-postgame__bulk-list">
@@ -607,7 +620,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       )}
 
       {disputeOpen && my && (
-        <ProfileDialog title="Запросить исправление" onClose={() => !busy && setDisputeOpen(false)}>
+        <ProfileDialog
+          title="Запросить исправление"
+          className="profile-dialog--postgame"
+          lockBodyScroll
+          onClose={() => !busy && setDisputeOpen(false)}
+        >
           <form
             className="gb-postgame__dialog-form"
             onSubmit={(e) => {
@@ -628,7 +646,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       )}
 
       {historyOpen && (
-        <ProfileDialog title="История изменений" onClose={() => setHistoryOpen(false)}>
+        <ProfileDialog
+          title="История изменений"
+          className="profile-dialog--postgame"
+          lockBodyScroll
+          onClose={() => setHistoryOpen(false)}
+        >
           <ol className="gb-postgame__history">
             {historyLines.length === 0 ? <li>Пока нет записей.</li> : historyLines.map((line) => <li key={line}>{line}</li>)}
           </ol>
@@ -636,7 +659,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       )}
 
       {outcomeOpen && results && (
-        <ProfileDialog title="Итог встречи" onClose={() => !busy && setOutcomeOpen(false)}>
+        <ProfileDialog
+          title="Итог встречи"
+          className="profile-dialog--postgame"
+          lockBodyScroll
+          onClose={() => !busy && setOutcomeOpen(false)}
+        >
           <form
             className="gb-postgame__dialog-form"
             onSubmit={(e) => {

@@ -156,4 +156,29 @@ describe("useSocialMutation validateSuccess pending identity", () => {
     expect(apiFetch).not.toHaveBeenCalled();
     expect(storage.get("gb-fr04-pending:actor:hold")).toContain("held-key");
   });
+
+  it("holdCorruptStorage opt-in: unparseable JSON stays HOLD; default callers ignore", async () => {
+    storage.set("gb-fr04-pending:actor:corrupt", "{broken-json");
+    const opted = render("actor:corrupt", { holdCorruptStorage: true });
+    expect(opted.code).toBe("hold");
+    expect(opted.pending).toBe(true);
+    expect(opted.run("/v1/x", {})).toBe(false);
+    opted.retry();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(storage.get("gb-fr04-pending:actor:corrupt")).toBe("{broken-json");
+
+    // Fresh hook slots — default caller must not inherit prior scope state.
+    hooks.slots = [];
+    hooks.cursor = 0;
+    hooks.effects = [];
+    hooks.cleanups = [];
+    storage.set("gb-fr04-pending:actor:default", "{broken-json");
+    vi.mocked(apiFetch).mockResolvedValue({ ok: false, status: 0, error: "unknown" });
+    const plain = render("actor:default");
+    expect(plain.code).toBe("");
+    expect(plain.pending).toBe(false);
+    expect(plain.run("/v1/y", {})).toBe(true);
+    await settle();
+    expect(apiFetch).toHaveBeenCalled();
+  });
 });

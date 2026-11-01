@@ -247,8 +247,8 @@
   }
 
   /* ProfileDialog skin — [open] only; closed native <dialog> stays UA-hidden.
-   * Invitation opt-in (.profile-dialog--invitation) shares shell without .fr3 page wrapper. */
-  :is(.fr3 .profile-dialog, .profile-dialog--invitation)[open] {
+   * Invitation / postgame opt-in families share shell without .fr3 page wrapper. */
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation, .profile-dialog--postgame)[open] {
     display: flex;
     flex-direction: column;
     width: min(560px, calc(100vw - 48px));
@@ -259,7 +259,7 @@
   }
 
   /* Control row 44 + gap 8 reserved above title (24+44+8 = 76); X at shell 24. */
-  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation, .profile-dialog--postgame) > header {
     position: relative;
     flex: 0 0 auto;
     display: block;
@@ -268,7 +268,7 @@
     border-bottom: 1px solid var(--gb-line, #dfe4dc);
   }
 
-  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header h2 {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation, .profile-dialog--postgame) > header h2 {
     margin: 0;
     font-size: var(--gb-overlay-title-size);
     line-height: var(--gb-overlay-title-line);
@@ -276,13 +276,13 @@
     color: var(--gb-ink, #13221a);
   }
 
-  :is(.fr3 .profile-dialog, .profile-dialog--invitation) > header .gb-close-button {
+  :is(.fr3 .profile-dialog, .profile-dialog--invitation, .profile-dialog--postgame) > header .gb-close-button {
     position: absolute;
     top: var(--gb-overlay-shell-pad);
     right: var(--gb-overlay-shell-pad);
   }
 
-  :is(.fr3 .profile-dialog__body, .profile-dialog--invitation .profile-dialog__body) {
+  :is(.fr3 .profile-dialog__body, .profile-dialog--invitation .profile-dialog__body, .profile-dialog--postgame .profile-dialog__body) {
     display: block;
     flex: 1 1 auto;
     min-height: 0;
