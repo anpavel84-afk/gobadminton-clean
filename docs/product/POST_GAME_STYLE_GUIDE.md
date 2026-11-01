@@ -1,8 +1,8 @@
 OWNER APPROVED VISUALS · 2026-11-01 · User «Проверил запускай». Implementation authorized DEV within parent372/approved comments. Historical draft language below retained as design provenance, superseded only for visual approval. Not a claim of implementation or QA/DEV acceptance. Preserve product/privacy contracts; no public private-feedback conversion.
 
-# Post-game UI · proposed extension v1
+# Post-game UI · Owner-approved extension v1
 
-**DRAFT · OWNER_REVIEW_PENDING · #372.** Предложение применяется только после Owner approval. Не заменяет и не редактирует `SITEWIDE_UI_STYLE_GUIDE.md` или `DESKTOP_OVERLAY_STYLE_GUIDE.md`. Product model уже принят; сейчас рассматривается визуальная реализация.
+**OWNER_APPROVED VISUALS · #372 · 2026-11-01.** Визуальное расширение Owner принял («Проверил запускай»). Не заменяет и не редактирует `SITEWIDE_UI_STYLE_GUIDE.md` или `DESKTOP_OVERLAY_STYLE_GUIDE.md`. Product model уже принят; ниже — утверждённые визуальные паттерны для DEV-переноса. Не утверждает implementation/QA/DEV acceptance.
 
 Предмет: одна существующая игра, «Участники / Итоги», её notice/attendance/dispute/feedback, вход из MyGames/history. Нет нового shell, feed card redesign, публичного рейтинга или нового overlay engine.
 
@@ -70,4 +70,4 @@ Loading не выглядит как пустой факт; empty допуска
 
 ## Review boundary
 
-Owner должен оценить композицию, ритм, копирайт, способы выбора/исправления и mobile поведение в [галерее](index.html). Семантика product model не пересогласовывается. После принятия trusted автор переносит только утверждённые паттерны в текущие компоненты; активные Guide обновляются отдельной разрешённой правкой. Данный файл остаётся proposed, пока решения нет.
+Owner принял композицию, ритм, копирайт, способы выбора/исправления и mobile поведение в [галерее](https://files.anpavel.ru/projects/gobadminton/design/style-guide/postgame/20261101-astra-v1/index.html). Семантика product model, privacy и контракты не пересогласовываются. Trusted автор переносит только утверждённые визуальные паттерны в текущие компоненты; активные Guide обновляются отдельной разрешённой правкой. Данный файл фиксирует Owner-approved visuals; implementation/QA/DEV acceptance остаются отдельными gates.

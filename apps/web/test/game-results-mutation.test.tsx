@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as React from "react";
 import type { AttendanceDispute, AttendanceRecord, GameResults } from "../src/lib/consumer-types";
 import {
   gameResultsMutationScope,
@@ -19,7 +20,7 @@ const hooks = vi.hoisted(() => ({
 }));
 
 vi.mock("react", async (importOriginal) => {
-  const actual = await importOriginal();
+  const actual = await importOriginal<typeof React>();
   return {
     ...actual,
     useState<T>(initial: T) {
