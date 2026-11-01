@@ -5,7 +5,7 @@
 export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.3" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.20.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.21.0" as const;
 
 export type FeatureAvailability =
   | "available"
