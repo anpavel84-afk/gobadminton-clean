@@ -28,14 +28,15 @@ import { Button } from "../Button";
 import { ContentContainer, SurfacePanel } from "../Surfaces";
 import { Avatar, ProfileDialog, SectionHeader } from "../players/ProfileComposition";
 import {
+  type GameResultsMutationApi,
   type GameResultsMutationData,
   useGameResultsMutation,
 } from "./useGameResultsMutation";
+import { GameFeedbackPanel } from "./GameFeedbackPanel";
 import "../../../styles/postgame.css";
 
 type Tab = "attendance" | "clarification" | "feedback";
 type MarkTarget = { record: AttendanceRecord; mode: "single" | "bulk-review" } | null;
-type GameResultsMutationApi = ReturnType<typeof useGameResultsMutation>;
 
 /**
  * Immutable actor+game operation host: one useGameResultsMutation instance for this
@@ -872,10 +873,18 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
           ) : null}
 
           {tab === "feedback" ? (
-            <SurfacePanel tone="bordered" className="gb-postgame__panel">
-              <SectionHeader title="Обратная связь" />
-              <p>Раздел появится позже. Кнопки отправки сейчас не предлагаются.</p>
-            </SurfacePanel>
+            <GameFeedbackPanel
+              gameId={gameId}
+              feedback={results?.feedback}
+              mutation={mutation}
+              busy={busy}
+              unknownOp={unknownOp}
+              onLocalNotice={setNotice}
+              noteSubjects={(results?.attendance?.roster ?? []).map((row) => ({
+                contextId: row.contextId,
+                displayName: row.displayName,
+              }))}
+            />
           ) : null}
         </>
       ) : null}

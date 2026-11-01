@@ -56,8 +56,9 @@ describe("PG-1b game results helpers", () => {
     );
     expect(page).toContain("GameResultsPage");
     expect(composition).toContain("Участники / Итоги");
-    expect(composition).toContain("Кнопки отправки сейчас не предлагаются");
+    expect(composition).toContain("GameFeedbackPanel");
     expect(composition).toContain("useGameResultsMutation");
+    expect(composition).not.toContain("Кнопки отправки сейчас не предлагаются");
     expect(composition).toContain("Согласен с этой отметкой");
     expect(composition).not.toContain('|| "Исправление"');
     expect(composition).not.toContain("phantom");

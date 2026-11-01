@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.4" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.5" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.23.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,24 +425,24 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Уточнение посещения: ответ, согласие и служебное разрешение спора",
+  title: "Приватные отзывы и личные заметки после игры — PG-3",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "Ответ организатора и исправление отметки (включая неизвестно) без одностороннего закрытия возражения.",
-    "Явное согласие участника с текущей известной отметкой и точной версией открытого спора.",
-    "Запрос помощи как прогресс обращения — без автоматической жалобы и без ложного назначения.",
-    "Ограниченное независимое решение в Admin Cases по назначенному обращению со step-up.",
+    "Приватный отзыв игроку (play_again/neutral/difficulties), организации (1–5 или комментарий) и тренировке при доказанном trainer-led контексте.",
+    "Один ответ адресата, правка своего отзыва с версией, список своих отправленных/полученных.",
+    "Личная заметка менеджера: только автор читает/правит/удаляет; tombstone без воскрешения.",
   ],
   fixes: [
-    "На экране итогов компактный day/month badge в таймзоне игры; сброс лишних вертикальных полей только внутри postgame panel/rail.",
+    "Поле «Пояснение организатора» на вкладке уточнения использует общие стили формы на всю ширину.",
   ],
   known_limitations: [
-    "Это предложение кандидата alpha.4, не READY и не DEV ACCEPTED.",
-    "PG-3 отзывы/заметки и PG-4 полный поток ещё не входят.",
-    "PROD вне этого среза; действующий PROD остаётся alpha.2.",
+    "Это предложение кандидата alpha.5 / API 0.23.0, не READY и не DEV ACCEPTED.",
+    "Типизированное Safety-расширение жалобы на отзыв ещё remaining; используется существующая жалоба на игрока.",
+    "PG-4 полный пользовательский путь и публичные комментарии #394 не входят.",
+    "PROD вне этого среза; действующий PROD остаётся alpha.2; alpha.3/alpha.4 записи истории сохранены.",
     "Запись под флагом по умолчанию OFF до доверенной DEV-активации.",
-    "Owner UAT = NOT_TESTED; одобрение галерей не равно приёмке реализации.",
+    "Owner UAT = NOT_TESTED; одобрение макетов не равно приёмке реализации.",
     "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
   ],
   feature_catalogue: "delta",

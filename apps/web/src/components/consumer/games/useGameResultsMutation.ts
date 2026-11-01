@@ -3,7 +3,9 @@
 import type {
   AttendanceDispute,
   AttendanceRecord,
+  GamePersonalNote,
   GameResults,
+  GameReview,
 } from "../../../lib/consumer-types";
 import {
   type SocialMutationPending,
@@ -14,7 +16,10 @@ export type GameResultsMutationData =
   | AttendanceRecord
   | AttendanceDispute
   | GameResults
-  | { items: AttendanceRecord[] };
+  | GameReview
+  | GamePersonalNote
+  | { items: AttendanceRecord[] }
+  | { gameId: string; contextId: string; version: number; deleted: true };
 
 /**
  * Narrow domain host over useSocialMutation: immutable actor+game scope so a
@@ -70,10 +75,25 @@ type RecognizedAction =
   | { kind: "outcome"; gameId: string }
   | { kind: "disputeRespond"; disputeId: string }
   | { kind: "disputeHelp"; disputeId: string }
-  | { kind: "disputeWithdraw"; disputeId: string };
+  | { kind: "disputeWithdraw"; disputeId: string }
+  | { kind: "reviewCreate"; gameId: string }
+  | { kind: "reviewPatch"; reviewId: string }
+  | { kind: "reviewReply"; reviewId: string }
+  | { kind: "notePut"; gameId: string; contextId: string }
+  | { kind: "noteDelete"; gameId: string; contextId: string };
 
 function pathDisputeId(path: string): string | null {
   const match = path.match(/^\/v1\/attendance-disputes\/([^/]+)(?:\/(responses|help|withdraw))?$/);
+  return match?.[1] ?? null;
+}
+
+function pathReviewId(path: string): string | null {
+  const match = path.match(/^\/v1\/reviews\/([^/]+)(?:\/reply)?$/);
+  return match?.[1] ?? null;
+}
+
+function pathNoteContextId(path: string): string | null {
+  const match = path.match(/^\/v1\/games\/[^/]+\/notes\/([^/]+)$/);
   return match?.[1] ?? null;
 }
 
@@ -94,13 +114,34 @@ export function recognizeGameResultsAction(
       return { kind: "disputeWithdraw", disputeId };
     }
   }
+  const reviewId = pathReviewId(path);
+  if (reviewId) {
+    if (method === "PATCH" && path === `/v1/reviews/${reviewId}`) {
+      return { kind: "reviewPatch", reviewId };
+    }
+    if (method === "PUT" && path === `/v1/reviews/${reviewId}/reply`) {
+      return { kind: "reviewReply", reviewId };
+    }
+  }
   const gameId = pathGameId(path);
   if (!gameId) return null;
   if (method === "POST" && path === `/v1/games/${gameId}/attendance/bulk-present`) {
     return { kind: "bulk", gameId };
   }
+  if (method === "POST" && path === `/v1/games/${gameId}/reviews`) {
+    return { kind: "reviewCreate", gameId };
+  }
   if (method === "PUT" && path === `/v1/games/${gameId}/outcome`) {
     return { kind: "outcome", gameId };
+  }
+  const noteContextId = pathNoteContextId(path);
+  if (noteContextId) {
+    if (method === "PUT" && path === `/v1/games/${gameId}/notes/${noteContextId}`) {
+      return { kind: "notePut", gameId, contextId: noteContextId };
+    }
+    if (method === "DELETE" && path === `/v1/games/${gameId}/notes/${noteContextId}`) {
+      return { kind: "noteDelete", gameId, contextId: noteContextId };
+    }
   }
   const contextId = pathAttendanceContextId(path);
   if (!contextId || contextId === "bulk-present") return null;
@@ -127,8 +168,17 @@ export function validateGameResultsPending(
   if (!isObject(pending.body)) return false;
   const action = recognizeGameResultsAction(pending.path, pending.method);
   if (!action) return false;
-  if ("gameId" in action && action.gameId !== gameId) return false;
-  if (!("gameId" in action) && pathGameId(pending.path) != null && pathGameId(pending.path) !== gameId) {
+  if (gameId === "__dispute_scope__") {
+    // Dispute-scoped host validation bypasses game path equality below.
+  } else if ("gameId" in action && action.gameId !== gameId) {
+    return false;
+  } else if (
+    !("gameId" in action) &&
+    pathGameId(pending.path) != null &&
+    pathGameId(pending.path) !== gameId &&
+    action.kind !== "reviewPatch" &&
+    action.kind !== "reviewReply"
+  ) {
     return false;
   }
 
@@ -198,6 +248,35 @@ export function validateGameResultsPending(
       return (
         expectedVersion != null && (body.outcome === "held" || body.outcome === "not_held")
       );
+    }
+    case "reviewCreate": {
+      const body = pending.body as { kind?: unknown; experienceAssertion?: unknown };
+      return (
+        (body.kind === "peer" || body.kind === "organization" || body.kind === "training") &&
+        body.experienceAssertion === "i_experienced_this_game"
+      );
+    }
+    case "reviewPatch": {
+      return asPositiveInt((pending.body as { expectedVersion?: unknown }).expectedVersion) != null;
+    }
+    case "reviewReply": {
+      const body = pending.body as { expectedVersion?: unknown; text?: unknown };
+      return (
+        asNonNegInt(body.expectedVersion) != null &&
+        typeof body.text === "string" &&
+        body.text.trim().length > 0
+      );
+    }
+    case "notePut": {
+      const body = pending.body as { expectedVersion?: unknown; text?: unknown };
+      return (
+        asNonNegInt(body.expectedVersion) != null &&
+        typeof body.text === "string" &&
+        body.text.trim().length > 0
+      );
+    }
+    case "noteDelete": {
+      return asPositiveInt((pending.body as { expectedVersion?: unknown }).expectedVersion) != null;
     }
     default:
       return false;
@@ -348,8 +427,76 @@ export function validateGameResultsSuccess(
     );
   }
 
+  if (action.kind === "reviewCreate") {
+    const review = data as GameReview;
+    return (
+      typeof review.id === "string" &&
+      review.gameId === action.gameId &&
+      review.direction === "sent" &&
+      typeof review.version === "number" &&
+      review.version >= 1
+    );
+  }
+
+  if (action.kind === "reviewPatch") {
+    const review = data as GameReview;
+    const expectedVersion = asPositiveInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      review.id === action.reviewId &&
+      review.direction === "sent" &&
+      review.version === expectedVersion + 1
+    );
+  }
+
+  if (action.kind === "reviewReply") {
+    const review = data as GameReview;
+    const expectedVersion = asNonNegInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      review.id === action.reviewId &&
+      review.direction === "received" &&
+      !!review.reply &&
+      review.reply.version === expectedVersion + 1
+    );
+  }
+
+  if (action.kind === "notePut") {
+    const note = data as GamePersonalNote;
+    const expectedVersion = asNonNegInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      note.gameId === action.gameId &&
+      note.contextId === action.contextId &&
+      note.version === expectedVersion + 1 &&
+      typeof note.text === "string"
+    );
+  }
+
+  if (action.kind === "noteDelete") {
+    const receipt = data as { gameId: string; contextId: string; version: number; deleted: true };
+    const expectedVersion = asPositiveInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      receipt.gameId === action.gameId &&
+      receipt.contextId === action.contextId &&
+      receipt.deleted === true &&
+      receipt.version >= expectedVersion
+    );
+  }
+
   return false;
 }
+
+export type GameResultsMutationApi = ReturnType<typeof useGameResultsMutation>;
 
 export function useGameResultsMutation(
   actorId: string,

@@ -20,8 +20,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.4 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.4");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.5 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.5");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -30,8 +30,8 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
     expect(CURRENT_NAMED_RELEASE.feature_catalogue).toBe("delta");
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/отметк|возражен|обращен|уточнен/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/OFF|alpha\.2|NOT_TESTED/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/отзыв|заметк|приватн/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/OFF|alpha\.2|NOT_TESTED|alpha\.5/i);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
     expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);

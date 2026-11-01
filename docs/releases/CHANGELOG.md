@@ -1,15 +1,25 @@
 # GoBadminton release notes
 
-## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 candidate)
+## #372 — PG-3 private reviews + personal notes (0.1.0-alpha.5 candidate)
 
-Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. Runtime writes remain default OFF. **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 final DEV record retained below.
+Private peer/organization/training reviews with recipient reply singleton, author patch + history, personal manager notes with versioned tombstone, GET me/reviews, optional GameResults.feedback projection. API contract additive `0.23.0`. Migration `0048` additive. Writes remain `POST_GAME_INTERNAL_ENABLED` default OFF. Typed review Safety complaint extension remains **remaining** (existing player report reused). **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 and alpha.4 records retained below.
 
-- Application version (candidate): `0.1.0-alpha.4`
-- API contract (candidate): `0.22.0`
-- Refs: #372 / PG-2
+- Application version (candidate): `0.1.0-alpha.5`
+- API contract (candidate): `0.23.0`
+- Refs: #372 / PG-3
 - Independent QA / Product CI / DEV install: pending trusted process
 - Owner UAT: NOT_TESTED
-- Known limits: no PG-3/PG-4, PROD unchanged alpha.2
+- Known limits: no PG-4 / #394 public comments; PROD unchanged alpha.2; complaint typed extension remaining
+
+## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 DEV ACCEPTED)
+
+Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. DEV accepted candidate `d8b54e590e204c2cdf6df89f21c6ee09b34465d1` on base `7a36b8d94a5df412426155e5852fddd9da7b0045`, release `r41310911419-a1`, accepted_at unix `1793540078`. Runtime writes default OFF until DEV activation. PROD unchanged alpha.2. Owner UAT NOT_TESTED.
+
+- Application version: `0.1.0-alpha.4`
+- API contract: `0.22.0`
+- Refs: #372 / PG-2 / PR #441
+- DEV release: `r41310911419-a1`
+- Owner UAT: NOT_TESTED
 
 ## #372 — PG-1b attendance + results (0.1.0-alpha.3 DEV ACCEPTED)
 
