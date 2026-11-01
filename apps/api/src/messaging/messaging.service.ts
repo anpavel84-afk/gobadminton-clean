@@ -1,5 +1,6 @@
 import { unrestrictedSql } from "../restrictions/policy";
 import { avatarForPlayer, avatarForUser, type PlayerAvatar } from "../profiles/avatar-presentation";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -552,7 +553,7 @@ export class MessagingService {
           user_id: actorId,
         }, {
           publicPlayerId: row.peer_public_player_id,
-          displayName: row.peer_display_name,
+          displayName: safePublicDisplayName(row.peer_display_name),
           avatar: await avatarForPlayer(this.pool, row.peer_public_player_id),
         }),
       );
@@ -616,7 +617,7 @@ export class MessagingService {
       },
       {
         publicPlayerId: row.peer_public_player_id,
-        displayName: row.peer_display_name,
+        displayName: safePublicDisplayName(row.peer_display_name),
           avatar: await avatarForPlayer(this.pool, row.peer_public_player_id),
       },
     );
@@ -1048,7 +1049,7 @@ export class MessagingService {
       member.rows[0],
       {
         publicPlayerId: peer.rows[0].public_player_id,
-        displayName: peer.rows[0].display_name,
+        displayName: safePublicDisplayName(peer.rows[0].display_name),
         avatar: await avatarForUser(client, peerUserId),
       },
     );

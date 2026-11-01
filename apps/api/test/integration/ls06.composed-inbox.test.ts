@@ -88,12 +88,14 @@ type Session = {
 type InboxItem = {
   kind: string;
   id: string;
+  title?: string;
   lastActivityAt: string;
   unreadCount: number;
   attention: boolean;
   conversationId: string | null;
   invitationId: string | null;
   gameId: string | null;
+  peer?: { publicPlayerId: string; displayName: string } | null;
 };
 
 describeIntegration("LS-06 Composed Inbox", () => {
@@ -778,5 +780,99 @@ describeIntegration("LS-06 Composed Inbox", () => {
         gameChatUnread: 0,
       },
     });
+  });
+
+  it("inbox dm title/peer scrub email-shaped names; game chat title stays literal (#450 QA1)", async () => {
+    const owner = await login("vk");
+    const player = await login("yandex");
+    await ensureOpenProfile(owner, "Inbox Safe Owner", "inbox-safe-own");
+    const peer = await ensureOpenProfile(player, "Inbox Safe Player", "inbox-safe-pl");
+    const emailShaped = "legacy.inbox.peer@mail.example";
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [owner.userId, emailShaped],
+    );
+
+    const dmReq = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/requests",
+      headers: mutationHeaders(owner, `inbox-safe-dmr-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: {
+        targetPublicPlayerId: peer.publicPlayerId,
+        text: "Inbox hello",
+        clientMessageId: `inbox-safe-cmsg-${uniqueSuffix("m")}`,
+      },
+    });
+    expect(dmReq.statusCode).toBe(201);
+    const conversationId = (dmReq.json() as { conversation: { id: string } })
+      .conversation.id;
+
+    const gameTitle = "Турнир@court.example вечер";
+    const chatGame = await publishGame(owner, gameTitle);
+    const chatGameVersion = await pool.query<{ version: number }>(
+      `SELECT version FROM games WHERE id = $1`,
+      [chatGame.id],
+    );
+    const apply = await app.inject({
+      method: "POST",
+      url: `/v1/games/${chatGame.id}/participations`,
+      headers: mutationHeaders(player, `inbox-safe-app-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: { expectedGameVersion: chatGameVersion.rows[0]!.version },
+    });
+    expect([200, 201]).toContain(apply.statusCode);
+    const application = apply.json() as { id: string; version: number };
+    const confirm = await app.inject({
+      method: "POST",
+      url: `/v1/participations/${application.id}/confirm`,
+      headers: mutationHeaders(owner, `inbox-safe-cfm-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: { expectedVersion: application.version },
+    });
+    expect(confirm.statusCode).toBe(200);
+    const chatSend = await app.inject({
+      method: "POST",
+      url: `/v1/games/${chatGame.id}/chat/messages`,
+      headers: mutationHeaders(owner, `inbox-safe-chs-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: {
+        kind: "text",
+        text: "Сбор",
+        clientMessageId: `inbox-safe-cmsg-${uniqueSuffix("m2")}`,
+      },
+    });
+    expect(chatSend.statusCode).toBe(201);
+
+    const inbox = await app.inject({
+      method: "GET",
+      url: "/v1/me/inbox?limit=50",
+      cookies: player.cookies,
+    });
+    expect(inbox.statusCode).toBe(200);
+    const page = inbox.json() as { items: InboxItem[] };
+    const dmRow = page.items.find((i) => i.id === conversationId);
+    expect(dmRow).toBeDefined();
+    expect(dmRow!.kind).toBe("dm");
+    expect(dmRow!.title).toBe("Игрок");
+    expect(dmRow!.peer?.displayName).toBe("Игрок");
+    expect(JSON.stringify(dmRow)).not.toContain(emailShaped);
+
+    const chatRow = page.items.find((i) => i.kind === "game_chat" && i.gameId === chatGame.id);
+    expect(chatRow).toBeDefined();
+    expect(chatRow!.title).toBe(gameTitle);
+    expect(chatRow!.peer).toBeNull();
+
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [owner.userId, "Кирилл Панов"],
+    );
+    const ordinary = await app.inject({
+      method: "GET",
+      url: "/v1/me/inbox?limit=50",
+      cookies: player.cookies,
+    });
+    expect(ordinary.statusCode).toBe(200);
+    const ordinaryDm = (
+      ordinary.json() as { items: InboxItem[] }
+    ).items.find((i) => i.id === conversationId);
+    expect(ordinaryDm?.title).toBe("Кирилл Панов");
+    expect(ordinaryDm?.peer?.displayName).toBe("Кирилл Панов");
   });
 });
