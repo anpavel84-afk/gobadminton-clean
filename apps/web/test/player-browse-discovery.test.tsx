@@ -287,7 +287,21 @@ describe("player browse discovery · fluid send source contracts", () => {
     expect(pageSource).toContain("players-radar-band--compact");
     expect(pageSource).not.toContain("Игроки рядом с вами");
   });
+
+  it("own-profile prerequisite copy is layout-neutral for desktop and mobile (#445 C)", () => {
+    const neutral = "Предложения доступны, когда ваш профиль виден в каталоге.";
+    expect(offersHookSource).toContain(neutral);
+    expect(offersUiSource).toContain(neutral);
+    expect(offersHookSource).not.toContain("В режиме «Свайп»");
+    expect(offersUiSource).not.toContain("В режиме «Свайп»");
+    expect(offersHookSource).toContain("own_prerequisite");
+    expect(offersUiSource).toContain('href="/profile"');
+    // Layout entry names stay; gate text must not imply a missing mode toggle.
+    expect(pageSource).toContain("Свайп");
+    expect(pageSource).toContain("По одному");
+  });
 });
+
 
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0 }));
 vi.mock("react", () => ({

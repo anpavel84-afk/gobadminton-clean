@@ -1,16 +1,37 @@
 # GoBadminton release notes
 
-## #445 point 1 — create-game level range common track (0.1.0-alpha.6 candidate)
+## #445 followup points 2/3/5/6 — map aliases, finder, friends guidance (0.1.0-alpha.7 candidate)
 
-Visual QA repair for Go Bad report point 1 (source PR #433 / canonical #432): «От»/«До»
-native range handles share one visual track with stable global NTRP 1..7 coordinates and
-selected-interval fill. Defaults 3.0..3.5, inclusive `allowedLevelIds`, regular/trainer
-forms preserved. API contract unchanged. Points 2–6 of #445 are out of scope.
+Bounded visual-qa followup for #445 points 2, 3, 5 and 6 only (point 1 already DEV
+ACCEPTED as alpha.6). Legacy `/games/map` and `/venues` enter the existing canonical
+map; invalid non-game UUID terminates before API; neutral finder prerequisite fits
+desktop and mobile; Friends/recommendations show own-profile save/visibility guidance
+with `/profile` link instead of a false outage when own profile is unsaved/hidden.
+No auto opt-in and no backend permission changes. Source UI already written in prior
+commits; this descriptor is release metadata only. Point 4 needs reporter game URL/role;
+postgame fixture waits reporter ID. Do not claim all fresh users eligible, private
+profiles enabled, or all of #445 done.
 
-- Application version (candidate): `0.1.0-alpha.6`; API contract unchanged `0.22.0`.
-- Base accepted DEV: `84cedf79ec6d0582ef1197589acd808f9470f62c` (alpha.5 worker fix).
+- Application version (candidate): `0.1.0-alpha.7`; API contract unchanged `0.22.0`.
 - Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
-- Independent QA / Product CI / DEV acceptance: pending.
+- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Owner / Go Bad UAT: NOT_TESTED.
+- PG-3/PG-4 still not installed; PROD unchanged.
+
+## #445 point 1 — create-game level range common track (0.1.0-alpha.6 DEV ACCEPTED)
+
+Visual QA repair for Go Bad report point 1 (source PR #433 / canonical #432; delivery
+PR #446): «От»/«До» native range handles share one visual track with stable global
+NTRP 1..7 coordinates and selected-interval fill. Defaults 3.0..3.5, inclusive
+`allowedLevelIds`, regular/trainer forms preserved. API contract unchanged.
+Points 2–6 of #445 were out of scope for this release.
+
+- Application version: `0.1.0-alpha.6`; API contract unchanged `0.22.0`.
+- Accepted source: `4fdf232ac576b7c830c77405267795634b9ae43b` (merge / PR #446).
+- Product CI: run `41328299309`, 7/7 PASS.
+- DEV release: `r41329378049-a1` (accepted `2026-11-01T17:07:45Z`).
+- Digests: api `sha256:753b6ba373560b59cb0840b3d69ed19100629d8332004e208ac9fdced762c0c0`,
+  web `sha256:7a8c300478d2a2ab428cee687f5e64cfb3db294eb38f25f3f48dae9a16163e40`.
 - Owner / Go Bad visual UAT: NOT_TESTED.
 - PROD unchanged; PG3 parked separately.
 

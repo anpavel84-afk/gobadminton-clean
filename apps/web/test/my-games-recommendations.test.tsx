@@ -19,7 +19,11 @@ import {
   type GameRecommendationReceipt,
 } from "../src/lib/game-recommendations";
 
-vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn(), startAuth: vi.fn() }));
+vi.mock("../src/lib/api-client", () => ({
+  apiFetch: vi.fn(),
+  startAuth: vi.fn(),
+  getMySocialProfile: vi.fn(),
+}));
 vi.mock("../src/lib/friendships", () => ({
   getSocialCapabilities: vi.fn(),
   listFriends: vi.fn(),
@@ -43,10 +47,32 @@ vi.mock("../src/components/consumer/players/ProfileComposition", async () => {
   };
 });
 
-import { apiFetch } from "../src/lib/api-client";
+import { apiFetch, getMySocialProfile } from "../src/lib/api-client";
+import type { OwnSocialProfile } from "../src/lib/consumer-types";
 import { getSocialCapabilities, listFriends } from "../src/lib/friendships";
 import { GameRecommendationButton } from "../src/components/consumer/games/GameRecommendationButton";
 import { GameRecommendationsSection } from "../src/components/consumer/games/GameRecommendationsSection";
+
+const ownProfile = (over: Partial<OwnSocialProfile> = {}): OwnSocialProfile => ({
+  publicPlayerId: "own-1",
+  version: 1,
+  displayName: "Я",
+  cityId: "city",
+  areaKey: null,
+  level: null,
+  bio: null,
+  directoryVisible: true,
+  contactPolicy: "requests",
+  consentPolicyVersion: null,
+  optedInAt: null,
+  radarConsented: false,
+  radarConsentPolicyVersion: null,
+  radarConsentedAt: null,
+  socialEligible: true,
+  trainer: false,
+  lookingForGame: null,
+  ...over,
+});
 
 const hooks = vi.hoisted(() => ({
   slots: [] as unknown[],
@@ -462,6 +488,67 @@ describe("FR-3B recommendation UI lifecycle", () => {
       friends: true, gameRecommendations: false, gameAttention: false, socialPush: false,
     })).toBe(false);
     expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+  });
+
+  it("gated-off capability with hidden own profile shows /profile prerequisite, not a false outage", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { friends: false, gameRecommendations: false, gameAttention: false, socialPush: false },
+    });
+    vi.mocked(getMySocialProfile).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: ownProfile({ version: 0, directoryVisible: false, socialEligible: false }),
+    });
+
+    hooks.cursor = 0;
+    GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    expect(getSocialCapabilities).toHaveBeenCalled();
+    expect(getMySocialProfile).toHaveBeenCalled();
+    hooks.cursor = 0;
+    const tree = GameRecommendationsSection({ me });
+    flushEffects();
+
+    // Titles live on ProfileState props; labelOf only walks children (pass1 FAIL). Link stays a component node until render.
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(true);
+    expect(labelOf(tree)).toContain("Открыть профиль");
+    expect(elements(tree).some((el) => el.props.title === "Рекомендации сейчас недоступны")).toBe(false);
+    expect(
+      elements(tree).some(
+        (el) => el.props.href === "/profile" && labelOf(el.props.children).includes("Открыть профиль"),
+      ),
+    ).toBe(true);
+    expect(vi.mocked(apiFetch).mock.calls.some(([path]) => String(path).includes("/v1/me/game-recommendations"))).toBe(false);
+  });
+
+  it("gated-off capability with already-eligible own profile stays genuinely unavailable", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { friends: true, gameRecommendations: false, gameAttention: false, socialPush: false },
+    });
+    vi.mocked(getMySocialProfile).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: ownProfile({ version: 3, directoryVisible: true, socialEligible: true }),
+    });
+
+    hooks.cursor = 0;
+    GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    expect(getSocialCapabilities).toHaveBeenCalled();
+    expect(getMySocialProfile).toHaveBeenCalled();
+    hooks.cursor = 0;
+    const tree = GameRecommendationsSection({ me });
+    flushEffects();
+
+    expect(elements(tree).some((el) => el.props.title === "Рекомендации сейчас недоступны")).toBe(true);
+    expect(elements(tree).some((el) => el.props.title === "Сначала настройте свой профиль")).toBe(false);
+    expect(vi.mocked(apiFetch).mock.calls.some(([path]) => String(path).includes("/v1/me/game-recommendations"))).toBe(false);
   });
 
   it("send recovery control GETs actor-owned sent recommendations, not friends", async () => {

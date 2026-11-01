@@ -20,8 +20,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.6 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.6");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.7 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.7");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -30,10 +30,14 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
     expect(CURRENT_NAMED_RELEASE.feature_catalogue).toBe("delta");
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/общий визуальный трек|От.*До|NTRP/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#445|NOT_TESTED/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/пункты 2/);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/PG-3|friends|#436|DONE/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/games\/map|venues|каноническ/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/UUID|API/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/finder|Друзья|рекомендац|\/profile/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#445|NOT_TESTED|пункт 4/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/PG-3|PROD/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/не объявлена DONE|не обещается/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/#445 DONE|all 445 done|вся Issue PASS/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/PG-3|auto opt-in|#445 DONE/i);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
     expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);
@@ -53,7 +57,13 @@ describe("releases catalogue integrity", () => {
       row.application_version === "0.1.0-alpha.5"
       && row.source_sha === "84cedf79ec6d0582ef1197589acd808f9470f62c",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(8);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.6"
+      && row.source_sha === "4fdf232ac576b7c830c77405267795634b9ae43b"
+      && row.deployments[0]?.release_id === "r41329378049-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T17:07:45Z",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(9);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");
