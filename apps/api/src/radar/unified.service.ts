@@ -20,6 +20,7 @@ import { RadarFeatureService } from "./radar-feature";
 import { RadarBudgetService } from "./radar-budget.service";
 import { ProfilesService } from "../profiles/profiles.service";
 import { safeProviderAvatar } from "../profiles/avatar-presentation";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { quantizeUnified } from "./unified-location";
 import { assertUnifiedOrigin } from "./unified-origin";
 import { selectUnified, type UnifiedRow } from "./unified-selection";
@@ -325,7 +326,7 @@ export class UnifiedPlayersService {
       const items = page.map((row) => {
         const player = {
           publicPlayerId: row.public_player_id,
-          displayName: row.display_name,
+          displayName: safePublicDisplayName(row.display_name),
           cityId: row.city_id,
           areaKey: row.area_key,
           ...(row.directory_visible ? { bio: row.bio } : {}),

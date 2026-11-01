@@ -1964,20 +1964,23 @@ export function PlayerBrowseDeck({
                 )}
                 <div className="pb-copy">
                   {!detailsOpen ? (
-                    <div className="pb-identity">
-                      <div className="pb-identity-top">
-                        <span className="pb-eyebrow">ЗНАКОМИМСЯ НА КОРТЕ</span>
-                        <span className="pb-counter" aria-live="polite">{counter}</span>
+                    <>
+                      <div className="pb-identity">
+                        <div className="pb-identity-top">
+                          <span className="pb-eyebrow">ЗНАКОМИМСЯ НА КОРТЕ</span>
+                          <span className="pb-counter" aria-live="polite">{counter}</span>
+                        </div>
+                        {commitPending && intentPlayer && (
+                          <span className="pb-live" role="status">Готовим карточку…</span>
+                        )}
+                        <h2>{current.displayName}</h2>
+                        {locationLine && <p className="pb-meta"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{locationLine}</p>}
+                        <div className="pb-facts pb-facts--inline">
+                          <div className="pb-fact"><span>Уровень игры</span><strong>{levelLabel}</strong><small>Указан игроком</small></div>
+                          <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong><small>{current.lookingForGame ? "Ищет игру" : "Открыт к знакомству"}</small></div>
+                        </div>
                       </div>
-                      {commitPending && intentPlayer && (
-                        <span className="pb-live" role="status">Готовим карточку…</span>
-                      )}
-                      <h2>{current.displayName}</h2>
-                      {locationLine && <p className="pb-meta"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{locationLine}</p>}
-                      <div className="pb-facts pb-facts--inline">
-                        <div className="pb-fact"><span>Уровень игры</span><strong>{levelLabel}</strong><small>Указан игроком</small></div>
-                        <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong><small>{current.lookingForGame ? "Ищет игру" : "Открыт к знакомству"}</small></div>
-                      </div>
+                      {/* Excerpt + detail link are flex-none siblings of identity so overflow:hidden on identity cannot clip the link. */}
                       <div className="pb-excerpt">
                         {current.bio ? <p className="pb-bio pb-bio--preview">{current.bio}</p> : <p className="pb-bio pb-bio--preview">О себе пока ничего не написано.</p>}
                         <button type="button" className="pb-detail-toggle" aria-expanded={false} data-browse-no-drag="" onClick={openDetails}>
@@ -1985,7 +1988,7 @@ export function PlayerBrowseDeck({
                           <Chevron dir="right" />
                         </button>
                       </div>
-                    </div>
+                    </>
                   ) : (
                     <section className="pb-expanded" aria-label="Подробнее об игроке">
                       <div className="pb-expanded-heading">

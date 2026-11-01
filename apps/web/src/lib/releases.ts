@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.8" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.9" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,21 +425,20 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Социальные defaults ON для каталога и ЛС — #448",
+  title: "Безопасное публичное имя и понятный текст истории выпусков",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [
-    "Новые email/OAuth и отсутствующие ACTIVE-профили: directoryVisible и contactPolicy=requests по умолчанию ON; provenance owner_default отделён от реального согласия.",
-    "Безопасное автоматическое публичное имя без email-формы, без выдуманного города и без подделки consent.",
-  ],
+  additions: [],
   fixes: [
-    "Явный OFF пользователя сохраняется при login/reread; неизвестные изменённые legacy OFF не трогаются.",
-    "Миграция 0049 ограничена pristine/verified synthetic defaults и missing ACTIVE users; ambiguous/explicit старые OFF сохраняются.",
+    "В каталоге игроков, публичном профиле и личных сообщениях почтоподобное или пустое имя заменяется на «Игрок»; обычные имена без изменений; записанное имя в своём профиле не меняется.",
+    "Текст истории выпусков для недавних записей написан понятным русским языком без внутренних служебных обозначений.",
+    "В десктоп-слайдере игроков двухстрочное описание больше не обрезает снизу ссылку «Подробнее об игроке»: ссылка целиком видна над кнопками «Давай сыграем» / «Следующий».",
   ],
   known_limitations: [
-    "Owner policy для обоих окружений одобрена в source; фактический DEV/PROD deploy ещё не выполнен — отдельные будущие receipts.",
-    "Будущий пользовательский OFF не включается повторно; Radar/blocks/moderation без изменений; private email не становится публичным; география/skill не фабрикуются.",
-    "Частичный privacy backfill честен: verified initial synthetic/pristine → ON; нет гарантии сброса всех уже OFF; #445 OPEN/retest pending; PG-3/PG-4 не установлены; PROD остаётся alpha.2; UAT = NOT_TESTED.",
+    "Приёмка владельцем не выполнена.",
+    "Проверка прежнего приватного выбора в каталоге остаётся за доверенным оператором; массовое включение видимости не делалось.",
+    "Чат игры для пользователя без участия по-прежнему недоступен (открытое замечание из #445).",
+    "Основной сайт обновляется отдельно.",
   ],
   feature_catalogue: "delta",
 };
@@ -762,6 +761,45 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "GoBad authorized browser retest и OwnerUAT NOT_TESTED; конкретный аккаунт неизвестен.",
       "Пункт4 ждёт URL игры и роль репортёра; postgame fixture ждёт reporterID.",
       "Не весь #445 PASS; PG3 не установлен; PROD остаётсяalpha2."
+    ]
+  },
+  {
+    "source_sha": "26f3ba38d9c04730674b084c0266afc193662398",
+    "application_version": "0.1.0-alpha.8",
+    "version_label": "0.1.0-alpha.8",
+    "title": "Видимость в каталоге и личные сообщения по умолчанию с сохранением выбора пользователя",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41339991160-a1",
+        "accepted_at": "2026-11-01T19:18:15Z",
+        "api_digest": "sha256:343c821a5525c2e3ecff8906ac9838ba632867011d4b2ce07d111193f93442e0",
+        "web_digest": "sha256:c903877654bfa1d78a289608026f510124403040decd85aeaf738d8aba2023be",
+        "kind": "pipeline"
+      },
+      {
+        "environment": "prod",
+        "status": "ACCEPTED",
+        "release_id": null,
+        "accepted_at": "2026-11-01T19:30:08.857934Z",
+        "api_digest": "sha256:343c821a5525c2e3ecff8906ac9838ba632867011d4b2ce07d111193f93442e0",
+        "web_digest": "sha256:c903877654bfa1d78a289608026f510124403040decd85aeaf738d8aba2023be",
+        "kind": "managed_application_only"
+      }
+    ],
+    "additions": [
+      "Для подходящих учётных записей показ в каталоге и приём запросов на общение включены по умолчанию."
+    ],
+    "fixes": [
+      "Явное сохранённое выключение пользователем сохраняется."
+    ],
+    "known_limitations": [
+      "Приёмка владельцем полного сценария регистрации и входа не выполнена.",
+      "После установки выявлены замечания #450: безопасное публичное имя, проверка прежнего приватного выбора и понятный русский текст. Не объявлять их исправленными задним числом.",
+      "Техническая установка alpha.8 принята на обоих сайтах; браузерные замечания не стирают историю установки."
     ]
   },
 ] as const;

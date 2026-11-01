@@ -1,4 +1,5 @@
 import { avatarForPlayer, type PlayerAvatar } from "../profiles/avatar-presentation";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { badRequest, notFound, unprocessable } from "../auth/problem";
@@ -314,24 +315,27 @@ function projectItem(row: RawRow): InboxItemDto {
   } else {
     subtitle = GAME_CHAT_SUBTITLE;
   }
+  const peerTitle =
+    row.kind === "dm" || row.kind === "dm_request"
+      ? safePublicDisplayName(row.title)
+      : row.title;
   return {
     kind: row.kind,
     id: row.id,
     lastActivityAt: row.last_activity_at.toISOString(),
-    title: row.title,
+    title: peerTitle,
     subtitle,
     unreadCount,
     attention: row.attention,
     conversationId: row.conversation_id,
     invitationId: row.invitation_id,
     gameId: row.game_id,
-    peer:
-      row.peer_public_player_id && row.peer_display_name
-        ? {
-            publicPlayerId: row.peer_public_player_id,
-            displayName: row.peer_display_name,
-          }
-        : null,
+    peer: row.peer_public_player_id
+      ? {
+          publicPlayerId: row.peer_public_player_id,
+          displayName: safePublicDisplayName(row.peer_display_name),
+        }
+      : null,
     requestState: row.request_state,
     invitationStatus: row.invitation_status,
     muted: row.muted,
