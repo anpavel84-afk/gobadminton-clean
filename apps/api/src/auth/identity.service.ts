@@ -2,6 +2,10 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { DATABASE_POOL } from "../tokens";
 import { safeProviderAvatar } from "../profiles/avatar-presentation";
+import {
+  SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+  ensureDefaultSocialProfile,
+} from "../profiles/social-profile-defaults";
 import { lockAuthActor, usableAuthMethodCount } from "./auth-method.service";
 import { conflict } from "./problem";
 import type { VerifiedIdentity } from "./providers/types";
@@ -58,6 +62,11 @@ export class IdentityService {
           );
           row.display_name = identity.displayName;
         }
+        // Missing-profile fallback only; ON CONFLICT DO NOTHING preserves explicit OFF.
+        await ensureDefaultSocialProfile(client, {
+          userId: row.id,
+          displayName: row.display_name || SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+        });
         await client.query("COMMIT");
         return {
           id: row.id,
@@ -76,7 +85,7 @@ export class IdentityService {
         `INSERT INTO users (display_name, locale)
          VALUES ($1, 'ru')
          RETURNING id, status, locale, display_name`,
-        [identity.displayName?.trim() || "Игрок"],
+        [identity.displayName?.trim() || SOCIAL_PROFILE_SAFE_DISPLAY_NAME],
       );
       const user = createdUser.rows[0]!;
 
@@ -109,6 +118,10 @@ export class IdentityService {
         );
       }
 
+      await ensureDefaultSocialProfile(client, {
+        userId: user.id,
+        displayName: user.display_name || SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+      });
       await client.query("COMMIT");
       return {
         id: user.id,

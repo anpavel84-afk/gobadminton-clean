@@ -10,6 +10,7 @@ import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import { PairFenceService } from "../safety/pair-fence.service";
 import { avatarForUser } from "../profiles/avatar-presentation";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { unrestrictedSql } from "../restrictions/policy";
 import { assertDecision, canRequestAgain, createRequest, decideRequest, effectivePending, eligible, emptyView,
   friendsEnabled, listQuery, parse, unavailable, uuid, type Availability, type FriendshipRow } from "./friendships.policy";
@@ -237,7 +238,7 @@ export class FriendshipsService {
       : canRequest ? "none" : "unavailable";
     return { friendshipId: row.id, relationship, version: row.version,
       request: pending ? { id: row.request_id, expiresAt: row.expires_at!.toISOString() } : null,
-      peer: visible && (accepted || pending || canRequest) ? { publicPlayerId: peer.public_player_id, displayName: peer.display_name,
+      peer: visible && (accepted || pending || canRequest) ? { publicPlayerId: peer.public_player_id, displayName: safePublicDisplayName(peer.display_name),
         avatar: await avatarForUser(client, peerId) } : null,
       capabilities: { canRequest, canAccept: pending && row.recipient_user_id === actor,
         canDecline: row.state === "pending" && row.recipient_user_id === actor,
@@ -278,7 +279,7 @@ export class FriendshipsService {
         else if (friendsEnabled(this.env) && !ctx.blocked && profiles.length === 2 && profiles.every(eligible)) {
           const p = profiles.find(p => p.user_id === peer)!;
           items.push({ ...emptyView(), relationship: "none", peer: { publicPlayerId: p.public_player_id,
-            displayName: p.display_name, avatar: await avatarForUser(client, peer) },
+            displayName: safePublicDisplayName(p.display_name), avatar: await avatarForUser(client, peer) },
             capabilities: { ...emptyView().capabilities, canRequest: true } });
         } else items.push(emptyView());
       }

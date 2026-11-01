@@ -250,7 +250,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const valid = { expectedVersion: 0, cityId: MOSCOW_CITY_ID };
     const saved = await patchProfile(session, valid, saveKey);
     expect(saved.statusCode).toBe(201);
-    expect(saved.json()).toMatchObject({ version: 1, cityId: MOSCOW_CITY_ID, directoryVisible: false,
+    expect(saved.json()).toMatchObject({ version: 1, cityId: MOSCOW_CITY_ID, directoryVisible: true,
       contactPolicy: "requests", radarConsented: false, consentPolicyVersion: null, optedInAt: null,
       radarConsentPolicyVersion: null, radarConsentedAt: null, level: null, bio: null });
     expect(saved.json().displayName).toBe("OA2 Fictional Player");
@@ -279,7 +279,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const updated = await patchProfile(session, { expectedVersion: 1, cityId: MOSCOW_CITY_ID, bio: "Changed" });
     expect(updated.statusCode).toBe(200);
     expect(updated.json()).toMatchObject({ version: 2, bio: "Changed", radarConsented: true,
-      radarConsentedAt: created.json().radarConsentedAt, directoryVisible: false, contactPolicy: "requests" });
+      radarConsentedAt: created.json().radarConsentedAt, directoryVisible: true, contactPolicy: "requests" });
   });
 
   it.each([undefined, null])("optional city %s remains compatible at bootstrap and update", async cityId => {
@@ -287,7 +287,7 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     const created = await patchProfile(session, { expectedVersion: 0, ...(cityId === undefined ? {} : { cityId }) });
     expect(created.statusCode).toBe(201); expect(created.json().cityId).toBeNull();
     const updated = await patchProfile(session, { expectedVersion: 1, ...(cityId === undefined ? {} : { cityId }), bio: "Optional city" });
-    expect(updated.statusCode).toBe(200); expect(updated.json()).toMatchObject({ cityId: null, version: 2, directoryVisible: false, radarConsented: false, contactPolicy: "requests" });
+    expect(updated.statusCode).toBe(200); expect(updated.json()).toMatchObject({ cityId: null, version: 2, directoryVisible: true, radarConsented: false, contactPolicy: "requests" });
   });
 
   it("version conflicts precede catalog lookup and roll back reservations", async () => {
@@ -340,15 +340,21 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     expect(destination.pathname).toBe("/profile/setup");
     expect(destination.searchParams.get("returnTo")).toBe("/games/create");
     const own = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: owner.cookies });
-    expect(own.statusCode).toBe(200); expect(own.json().version).toBe(0); expect(own.json().cityId).toBeNull();
+    expect(own.statusCode).toBe(200);
+    // Owner #448: OAuth/getOwn materializes physical profile ON at v1 — use actual version.
+    const ownBody = own.json() as { version: number; cityId: string | null; directoryVisible: boolean; contactPolicy: string };
+    expect(ownBody.version).toBe(1);
+    expect(ownBody.cityId).toBeNull();
+    expect(ownBody.directoryVisible).toBe(true);
+    expect(ownBody.contactPolicy).toBe("requests");
     const saveKey = key();
-    const saved = await app.inject({ method: "PATCH", url: "/v1/me/social-profile", headers: mutationHeaders(owner, saveKey), payload: { expectedVersion: 0, cityId: MOSCOW_CITY_ID } });
-    expect(saved.statusCode).toBe(201);
-    expect(saved.json()).toMatchObject({ cityId: MOSCOW_CITY_ID, directoryVisible: false, contactPolicy: "requests", radarConsented: false, level: null, bio: null, version: 1 });
+    const saved = await app.inject({ method: "PATCH", url: "/v1/me/social-profile", headers: mutationHeaders(owner, saveKey), payload: { expectedVersion: ownBody.version, cityId: MOSCOW_CITY_ID } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ cityId: MOSCOW_CITY_ID, directoryVisible: true, contactPolicy: "requests", radarConsented: false, level: null, bio: null, version: ownBody.version + 1 });
     expect(saved.json().displayName).toBeTruthy();
     const reread = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: owner.cookies });
     expect(reread.json().cityId).toBe(MOSCOW_CITY_ID);
-    const replay = await app.inject({ method: "PATCH", url: "/v1/me/social-profile", headers: mutationHeaders(owner, saveKey), payload: { expectedVersion: 0, cityId: MOSCOW_CITY_ID } });
+    const replay = await app.inject({ method: "PATCH", url: "/v1/me/social-profile", headers: mutationHeaders(owner, saveKey), payload: { expectedVersion: ownBody.version, cityId: MOSCOW_CITY_ID } });
     expect(replay.json()).toEqual(saved.json());
     const venue = await app.inject({ method: "POST", url: "/v1/venues", headers: mutationHeaders(owner, key()), payload: { cityId: MOSCOW_CITY_ID, name: "Owner A Fictional Hall", address: "Fictional Moscow address", timezone: "Europe/Moscow", latitude: 55.75, longitude: 37.62 } });
     expect([200, 201]).toContain(venue.statusCode); venueId = venue.json().id;
@@ -402,7 +408,8 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     expect(inactiveTrainer.statusCode).toBe(409); expect(inactiveTrainer.json().code).toBe("TRAINER_PROFILE_INACTIVE");
     expect((await create(payload(30))).statusCode).toBe(201);
     const own = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: owner.cookies });
-    expect(own.json()).toMatchObject({ directoryVisible: false, contactPolicy: "requests", radarConsented: false });
+    // Game create/publish must not alter directory/contact/Radar preference independence.
+    expect(own.json()).toMatchObject({ directoryVisible: true, contactPolicy: "requests", radarConsented: false });
   });
 
   it("future bound and cursor advance exclude started games while managed history remains readable", async () => {

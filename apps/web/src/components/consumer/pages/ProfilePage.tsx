@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { deactivateTrainerProfile, deleteMyLookingForGame, getMe, getMySocialProfile, getTrainerProfile, listCities, logout, patchMySocialProfile, putMyLookingForGame, putMySocialProfileVisibility } from "../../../lib/api-client";
 import type { ApiResult } from "../../../lib/api-client";
 import type { City, Me, OwnSocialProfile, TrainerProfile } from "../../../lib/consumer-types";
-import { DIRECTORY_CONSENT_POLICY_VERSION, formatSocialLevel, isSocialDirectoryDisabled, lookingIntentActive, lookingIntentExpired, PILOT_LEVEL_OPTIONS, pilotSocialLevel } from "../../../lib/player-presentation";
+import { formatSocialLevel, isSocialDirectoryDisabled, lookingIntentActive, lookingIntentExpired, PILOT_LEVEL_OPTIONS, pilotSocialLevel } from "../../../lib/player-presentation";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { AuthEntry, Avatar, ProfileDialog, ProfileState, SectionHeader, Toggle, VisibilityRow } from "../players/ProfileComposition";
@@ -59,12 +59,20 @@ export function ProfilePage() {
       const m = await getMe(); if (!live) return;
       if (!m.ok) { setState(m.status === 401 ? "auth" : "error"); return; }
       setMe(m.data);
-      const [s, t, c] = await Promise.all([getMySocialProfile(), getTrainerProfile(), listCities()]); if (!live) return;
+      // OwnSocialProfile.trainer is authoritative hasActiveTrainer; skip automatic
+      // trainer-profile GET for ordinary non-trainers (legitimate 404 is not an error).
+      const [s, c] = await Promise.all([getMySocialProfile(), listCities()]); if (!live) return;
       if (s.ok) { hydrate(s.data); window.dispatchEvent(new Event("gb-profile-changed")); }
       else if (isSocialDirectoryDisabled(s)) setSocialUnavailable(true);
       else { setState(s.status === 401 ? "auth" : "error"); return; }
-      if (t.ok) setTrainer(t.data); else if (t.status !== 404) setTrainerError(true);
       if (c.ok) setCities(c.data.items);
+      if (s.ok && s.data.trainer) {
+        const t = await getTrainerProfile(); if (!live) return;
+        if (t.ok) setTrainer(t.data);
+        else if (t.status === 401) { setState("auth"); return; }
+        else if (t.status !== 404) setTrainerError(true);
+        // 404 race with social.trainer=true: keep trainer null, no fake success.
+      }
       setNeedsRefresh(false); setState("ready");
     })();
     return () => { live = false; };
@@ -88,13 +96,13 @@ export function ProfilePage() {
   async function toggleDirectoryVisible() {
     if (!me || !social || social.version < 1 || busy || needsRefresh) return;
     const next = !social.directoryVisible;
-    if (next && !social.cityId) {
-      edit();
-      setNotice("Сначала укажите город в игровом профиле, чтобы показывать профиль в каталоге.");
-      return;
-    }
+    // Owner #448: city is not a prerequisite for directory visibility; do not invent consent.
     setBusy(true); setNotice("");
-    const result = await putMySocialProfileVisibility({ directoryVisible: next, expectedVersion: social.version, consentPolicyVersion: next ? social.consentPolicyVersion ?? DIRECTORY_CONSENT_POLICY_VERSION : undefined }, me.csrfToken);
+    const result = await putMySocialProfileVisibility({
+      directoryVisible: next,
+      expectedVersion: social.version,
+      consentPolicyVersion: next && social.consentPolicyVersion ? social.consentPolicyVersion : undefined,
+    }, me.csrfToken);
     setBusy(false); if (!result.ok) { failed(result); return; }
     hydrate(result.data); setNotice(next ? "Профиль видим в каталоге." : "Профиль скрыт из каталога.");
   }
@@ -181,12 +189,10 @@ export function ProfilePage() {
             cover: social?.cover,
           }}
         />
-        <div className="own-profile-actionband player-profile-actionband">
-          <div className="player-profile-actions" data-surface="op-actions">
-            <Button variant="outline" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button>
-            <Button href="/profile/settings" variant="ghost">Настройки</Button>
-          </div>
-          {social && !socialUnavailable && <CoverEditor frameRef={coverFrame} onUnauthorized={() => setState("auth")} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onReconcile={hydrate} onChange={value => setSocial(current => current && value.version >= current.version ? { ...current, ...value } : current)} />}
+        <div className="own-profile-actions" role="group" aria-label="Действия профиля" data-surface="op-actions">
+          <Button variant="primary" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button>
+          {social && !socialUnavailable && <CoverEditor presentation="action-row" frameRef={coverFrame} onUnauthorized={() => setState("auth")} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onReconcile={hydrate} onChange={value => setSocial(current => current && value.version >= current.version ? { ...current, ...value } : current)} />}
+          <Button href="/profile/settings" variant="ghost">Настройки</Button>
         </div>
       </section>
       <div className="own-profile-layout"><div className="own-profile-main">

@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.6" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.11" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.23.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,25 +425,19 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Приватные отзывы и личные заметки после игры — PG-3",
+  title: "Карта: загрузка и пустой каталог; профиль без лишнего запроса тренера",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [
-    "Приватный отзыв игроку (play_again/neutral/difficulties), организации (1–5 или комментарий) и тренировке при доказанном trainer-led контексте.",
-    "Один ответ адресата, правка своего отзыва с версией, список своих отправленных/полученных.",
-    "Личная заметка менеджера: только автор читает/правит/удаляет; tombstone без воскрешения.",
-  ],
+  additions: [],
   fixes: [
-    "Поле «Пояснение организатора» на вкладке уточнения использует общие стили формы на всю ширину.",
+    "Карта корректно показывает загрузку и отсутствие результатов.",
+    "Для обычного игрока страницы профиля и создания игры не запрашивают отсутствующий тренерский профиль без необходимости.",
   ],
   known_limitations: [
-    "Это предложение кандидата alpha.6 / API 0.23.0, не READY и не DEV ACCEPTED; merge SHA/дата не привязаны до live projection.",
-    "Типизированное Safety-расширение жалобы на отзыв ещё remaining; используется существующая жалоба на игрока.",
-    "PG-4 полный пользовательский путь и публичные комментарии #394 не входят.",
-    "PROD вне этого среза; действующий PROD остаётся alpha.2 / email=false; alpha.3/alpha.4/alpha.5 записи истории сохранены.",
-    "Запись под флагом по умолчанию OFF до доверенной DEV-активации.",
-    "Owner UAT = NOT_TESTED; одобрение макетов не равно приёмке реализации.",
-    "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
+    "Приёмка владельцем после обычного входа ещё не выполнена.",
+    "Холодная загрузка модуля карты и сети может занимать несколько секунд; это не выдаётся за готовый экран.",
+    "Замечания #445 по чату для неучастника и отдельные пункты #450 не объявлены закрытыми этим выпуском.",
+    "Основной сайт обновляется отдельно.",
   ],
   feature_catalogue: "delta",
 };
@@ -650,7 +644,7 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     ],
     "fixes": [],
     "known_limitations": [
-      "PROD остаётся alpha.2; PG3/4/comments не выпущены; Owner/Admin UAT NOT_TESTED."
+      "PROD остаётся alpha2; PG3/4/comments не выпущены; Owner/Admin UAT NOT_TESTED."
     ]
   },
   {
@@ -680,7 +674,188 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "known_limitations": [
       "Публичный DEV discovery email=true; это не доказательство доставки до реального ящика.",
       "Registration/recovery/Owner UAT NOT_TESTED.",
-      "PROD остаётся alpha.2, email=false."
+      "PROD остаётся alpha2, email false."
+    ]
+  },
+  {
+    "source_sha": "84cedf79ec6d0582ef1197589acd808f9470f62c",
+    "application_version": "0.1.0-alpha.5",
+    "version_label": "0.1.0-alpha.5",
+    "title": "Исправление worker email-code на принятом alpha.5",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41319296538-a1",
+        "accepted_at": "2026-11-01T15:08:02Z",
+        "api_digest": "sha256:5306ba8d603fdcb9acd150a6c8c53f43caebe91ccfbb0e4a5d614ae350a2af1c",
+        "web_digest": "sha256:8d47c1b883a4f7121c314497725b17c36bf6432c0c0521d63843f92978d11ef4",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Отдельная DEV-установка того же application version 0.1.0-alpha.5 с source SHA worker-fix (не смешивается с SMTP source 06991)."
+    ],
+    "known_limitations": [
+      "Тот же номер alpha.5 при другом source SHA и отдельном deploy receipt.",
+      "Owner UAT NOT_TESTED; PROD не изменён."
+    ]
+  },
+  {
+    "source_sha": "4fdf232ac576b7c830c77405267795634b9ae43b",
+    "application_version": "0.1.0-alpha.6",
+    "version_label": "0.1.0-alpha.6",
+    "title": "Диапазон уровней: единая шкала и два ползунка — #445, пункт1",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41329378049-a1",
+        "accepted_at": "2026-11-01T17:07:45Z",
+        "api_digest": "sha256:753b6ba373560b59cb0840b3d69ed19100629d8332004e208ac9fdced762c0c0",
+        "web_digest": "sha256:7a8c300478d2a2ab428cee687f5e64cfb3db294eb38f25f3f48dae9a16163e40",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Только пункт1 #445: два ползунка на общей шкале1–7 с шагом0.5, зависимыми ARIA-границами и включительным диапазоном."
+    ],
+    "known_limitations": [
+      "Пункты2–6 #445 ещё не доставлены этим выпуском; всяIssue не PASS.",
+      "Go Bad retest, authenticated live creation и physicaliPhoneUAT NOT_TESTED.",
+      "PG-3 не установлен; PROD остаётсяalpha.2."
+    ]
+  },
+  {
+    "source_sha": "dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc",
+    "application_version": "0.1.0-alpha.7",
+    "version_label": "0.1.0-alpha.7",
+    "title": "Подсказки своего профиля и канонические переходы — #445, пункты2/3/5/6",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41331655353-a1",
+        "accepted_at": "2026-11-01T17:33:52Z",
+        "api_digest": "sha256:c11807e1d7d9661f284a64236288c98f8afc1a53d1029c59ec51c9121b9f3705",
+        "web_digest": "sha256:25a6f51d6d5b5a5218a9b8e2ae84fdf3561dde274e1ff6705bb07501f1e9fba1",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Подсказки о собственном скрытом/несохранённом профиле для социальных действий.",
+      "Канонические переходы /games/map и /venues → /games?view=map; неверная игра404.",
+      "Нейтральный finder в пределах пунктов2/3/5/6 #445."
+    ],
+    "known_limitations": [
+      "GoBad authorized browser retest и OwnerUAT NOT_TESTED; конкретный аккаунт неизвестен.",
+      "Пункт4 ждёт URL игры и роль репортёра; postgame fixture ждёт reporterID.",
+      "Не весь #445 PASS; PG3 не установлен; PROD остаётсяalpha2."
+    ]
+  },
+  {
+    "source_sha": "26f3ba38d9c04730674b084c0266afc193662398",
+    "application_version": "0.1.0-alpha.8",
+    "version_label": "0.1.0-alpha.8",
+    "title": "Видимость в каталоге и личные сообщения по умолчанию с сохранением выбора пользователя",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41339991160-a1",
+        "accepted_at": "2026-11-01T19:18:15Z",
+        "api_digest": "sha256:343c821a5525c2e3ecff8906ac9838ba632867011d4b2ce07d111193f93442e0",
+        "web_digest": "sha256:c903877654bfa1d78a289608026f510124403040decd85aeaf738d8aba2023be",
+        "kind": "pipeline"
+      },
+      {
+        "environment": "prod",
+        "status": "ACCEPTED",
+        "release_id": null,
+        "accepted_at": "2026-11-01T19:30:08.857934Z",
+        "api_digest": "sha256:343c821a5525c2e3ecff8906ac9838ba632867011d4b2ce07d111193f93442e0",
+        "web_digest": "sha256:c903877654bfa1d78a289608026f510124403040decd85aeaf738d8aba2023be",
+        "kind": "managed_application_only"
+      }
+    ],
+    "additions": [
+      "Для подходящих учётных записей показ в каталоге и приём запросов на общение включены по умолчанию."
+    ],
+    "fixes": [
+      "Явное сохранённое выключение пользователем сохраняется."
+    ],
+    "known_limitations": [
+      "Приёмка владельцем полного сценария регистрации и входа не выполнена.",
+      "После установки выявлены замечания #450: безопасное публичное имя, проверка прежнего приватного выбора и понятный русский текст. Не объявлять их исправленными задним числом.",
+      "Техническая установка alpha.8 принята на обоих сайтах; браузерные замечания не стирают историю установки."
+    ]
+  },
+  {
+    "source_sha": "783a1897167be1f531312b9a6812b6240181e2c3",
+    "application_version": "0.1.0-alpha.9",
+    "version_label": "0.1.0-alpha.9",
+    "title": "Безопасные публичные имена, понятные заметки и ссылка профиля на компьютере",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41345457119-a1",
+        "accepted_at": "2026-11-01T20:21:50Z",
+        "api_digest": "sha256:722cf29edad73ef6c30bc215a0a69801259b581b46faf12a421293c0b41f1267",
+        "web_digest": "sha256:d13dc563b86e7f36c2dfa168a93e25dbd9ea6d2c605904ecd0668f5832c440d1",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Безопасное имя игрока без отображения email на связанных публичных и личных экранах.",
+      "Понятный русский текст истории выпусков.",
+      "Ссылка полного профиля остаётся видимой при двухстрочном описании на компьютере."
+    ],
+    "known_limitations": [
+      "Проверка владельцем после обычного входа ещё не выполнена.",
+      "Замечания по конкретным ролям в чате и весь список #450/#445 не объявлены закрытыми.",
+      "Этот выпуск alpha.9 принят только на DEV; PROD сохранил alpha.8."
+    ]
+  },
+  {
+    "source_sha": "1dc5000280d617c3160fc959ee87607db394410c",
+    "application_version": "0.1.0-alpha.10",
+    "version_label": "0.1.0-alpha.10",
+    "title": "Удобный ряд действий в своём профиле",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41349542541-a1",
+        "accepted_at": "2026-11-01T21:03:36Z",
+        "api_digest": "sha256:a71fe6979b045a09bb348cce3e7f57ffbab952e5b52edc632849ef3776e49970",
+        "web_digest": "sha256:3d57f99e22af3f1fac4a64956a38745862d434abd42ce17f9ff026e7cf0a87b0",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Действия «Изменить профиль», «Изменить обложку» и «Настройки» собраны в компактную группу своего профиля."
+    ],
+    "known_limitations": [
+      "Установленный интерфейс проверен на синтетических данных; проверка владельцем после обычного входа не выполнена.",
+      "Alpha.10 установлена только на DEV; PROD остался на принятой alpha.8."
     ]
   },
 ] as const;

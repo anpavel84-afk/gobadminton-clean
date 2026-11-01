@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps eleven confirmed seed deployments including accepted alpha.1–alpha.5 and dedupes identical live rows", () => {
+  it("keeps eighteen confirmed seed deployments including accepted alpha.1–alpha.10 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(11);
+    expect(seedCount).toBe(18);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -279,6 +279,11 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.3"
       || row.application_version === "0.1.0-alpha.4"
       || row.application_version === "0.1.0-alpha.5"
+      || row.application_version === "0.1.0-alpha.6"
+      || row.application_version === "0.1.0-alpha.7"
+      || row.application_version === "0.1.0-alpha.8"
+      || row.application_version === "0.1.0-alpha.9"
+      || row.application_version === "0.1.0-alpha.10"
       || row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(true);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
@@ -297,18 +302,63 @@ describe("history seed integrity", () => {
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.4"
-      && row.source_sha === "7a36b8d94a5df412426155e5852fddd9da7b0045"
-      && row.deployments[0]?.release_id === "r41310911419-a1"
-      && row.deployments[0]?.accepted_at === "2026-11-01T13:34:38Z",
+      && row.source_sha === "7a36b8d94a5df412426155e5852fddd9da7b0045",
     )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.5")).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.5"
       && row.source_sha === "06991b099317a702dc102eeef53ee64cfa841f0e"
-      && row.deployments[0]?.release_id === "r41317332177-a1"
-      && row.deployments[0]?.accepted_at === "2026-11-01T14:52:56Z"
-      && /SMTP|email-code|почтов/i.test(row.additions.join(" ")),
+      && row.deployments[0]?.release_id === "r41317332177-a1",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.6");
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.5"
+      && row.source_sha === "84cedf79ec6d0582ef1197589acd808f9470f62c"
+      && row.deployments[0]?.release_id === "r41319296538-a1",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.6"
+      && row.source_sha === "4fdf232ac576b7c830c77405267795634b9ae43b"
+      && row.deployments[0]?.release_id === "r41329378049-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T17:07:45Z"
+      && row.deployments[0]?.api_digest === "sha256:753b6ba373560b59cb0840b3d69ed19100629d8332004e208ac9fdced762c0c0"
+      && row.deployments[0]?.web_digest === "sha256:7a8c300478d2a2ab428cee687f5e64cfb3db294eb38f25f3f48dae9a16163e40",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.7"
+      && row.source_sha === "dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc"
+      && row.deployments[0]?.release_id === "r41331655353-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T17:33:52Z"
+      && row.deployments[0]?.api_digest === "sha256:c11807e1d7d9661f284a64236288c98f8afc1a53d1029c59ec51c9121b9f3705"
+      && row.deployments[0]?.web_digest === "sha256:25a6f51d6d5b5a5218a9b8e2ae84fdf3561dde274e1ff6705bb07501f1e9fba1",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.8"
+      && row.source_sha === "26f3ba38d9c04730674b084c0266afc193662398"
+      && row.deployments[0]?.release_id === "r41339991160-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T19:18:15Z"
+      && row.deployments[0]?.api_digest === "sha256:343c821a5525c2e3ecff8906ac9838ba632867011d4b2ce07d111193f93442e0"
+      && row.deployments[1]?.environment === "prod"
+      && row.deployments[1]?.accepted_at === "2026-11-01T19:30:08.857934Z"
+      && row.deployments[1]?.kind === "managed_application_only",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.9"
+      && row.source_sha === "783a1897167be1f531312b9a6812b6240181e2c3"
+      && row.deployments[0]?.release_id === "r41345457119-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T20:21:50Z"
+      && row.deployments[0]?.api_digest === "sha256:722cf29edad73ef6c30bc215a0a69801259b581b46faf12a421293c0b41f1267"
+      && row.deployments[0]?.web_digest === "sha256:d13dc563b86e7f36c2dfa168a93e25dbd9ea6d2c605904ecd0668f5832c440d1"
+      && row.deployments.length === 1,
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.10"
+      && row.source_sha === "1dc5000280d617c3160fc959ee87607db394410c"
+      && row.deployments[0]?.release_id === "r41349542541-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T21:03:36Z"
+      && row.deployments[0]?.api_digest === "sha256:a71fe6979b045a09bb348cce3e7f57ffbab952e5b52edc632849ef3776e49970"
+      && row.deployments[0]?.web_digest === "sha256:3d57f99e22af3f1fac4a64956a38745862d434abd42ce17f9ff026e7cf0a87b0"
+      && row.deployments.length === 1,
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.flatMap((row) => row.deployments).map((d) => d.accepted_at)).toEqual([
       "2026-10-31T20:28:18Z",
       "2026-10-31T23:22:12.477839Z",
@@ -321,6 +371,13 @@ describe("history seed integrity", () => {
       "2026-11-01T10:54:33Z",
       "2026-11-01T13:34:38Z",
       "2026-11-01T14:52:56Z",
+      "2026-11-01T15:08:02Z",
+      "2026-11-01T17:07:45Z",
+      "2026-11-01T17:33:52Z",
+      "2026-11-01T19:18:15Z",
+      "2026-11-01T19:30:08.857934Z",
+      "2026-11-01T20:21:50Z",
+      "2026-11-01T21:03:36Z",
     ]);
   });
 

@@ -3,8 +3,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { FriendshipList } from "@gobadminton/contracts/friendship-types";
 import { privateViews } from "../../../lib/private-view";
-import { getMe } from "../../../lib/api-client";
-import type { Me } from "../../../lib/consumer-types";
+import { getMe, getMySocialProfile } from "../../../lib/api-client";
+import type { Me, OwnSocialProfile } from "../../../lib/consumer-types";
 import { getSocialCapabilities, listFriends, type FriendsTab } from "../../../lib/friendships";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
@@ -12,6 +12,12 @@ import { AuthEntry, Avatar, ProfileState } from "../players/ProfileComposition";
 import { FriendActions } from "../friends/FriendActions";
 
 const tabs: Array<[FriendsTab, string]> = [["accepted", "Друзья"], ["incoming", "Входящие"], ["outgoing", "Исходящие"]];
+
+/** Own profile must be saved and publicly eligible before Friends lists are admitted. */
+function ownFriendsPrerequisite(profile: OwnSocialProfile): boolean {
+  return profile.version < 1 || !profile.directoryVisible || !profile.socialEligible;
+}
+
 export function FriendsPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [tab, setTab] = useState<FriendsTab>("accepted");
@@ -37,7 +43,15 @@ export function FriendsPage() {
       const capabilities = await getSocialCapabilities();
       if (!live) return;
       if (!capabilities.ok) { setState(capabilities.status === 401 ? "guest" : [403,404,503].includes(capabilities.status) ? "unavailable" : "error"); return; }
-      if (!capabilities.data.friends) { setState("unavailable"); return; }
+      if (!capabilities.data.friends) {
+        // Do not fetch private friend lists while capability is denied.
+        const social = await getMySocialProfile();
+        if (!live) return;
+        if (!social.ok) { setState(social.status === 401 ? "guest" : "error"); return; }
+        setMe(actor.data);
+        setState(ownFriendsPrerequisite(social.data) ? "prerequisite" : "unavailable");
+        return;
+      }
       const result = await listFriends(tab, cursor);
       if (!live) return;
       if (!result.ok) { setState(result.status === 401 ? "guest" : [403,404,503].includes(result.status) ? "unavailable" : "error"); return; }
@@ -55,6 +69,7 @@ export function FriendsPage() {
       <div className="friends-tabs" role="group" aria-label="Списки друзей">{tabs.map(([value, label]) => <button key={value} type="button" className="friends-tabs__tab" aria-pressed={tab === value} onClick={() => { setPage(null); setState("loading"); setTab(value); setCursor(null); setReload(n => n + 1); }}>{label}</button>)}</div>
       {state === "loading" && <ProfileState title="Загружаем друзей…" state="loading" />}
       {state === "guest" && <section className="profile-section"><p>Войдите, чтобы увидеть друзей и запросы.</p><AuthEntry returnPath="/friends" /></section>}
+      {state === "prerequisite" && <ProfileState title="Сначала настройте свой профиль">Сохраните игровой профиль и включите видимость в каталоге. <Link href="/profile">Открыть профиль</Link></ProfileState>}
       {state === "unavailable" && <ProfileState title="Друзья сейчас недоступны">Проверьте доступность игрового профиля и повторите попытку. Запрос на общение для дружбы не требуется.</ProfileState>}
       {state === "error" && <ProfileState title="Не удалось загрузить друзей" state="error" retry={refresh}>Обновите список перед следующими действиями.</ProfileState>}
       {state === "ready" && page && me && <>

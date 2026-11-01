@@ -489,7 +489,7 @@ export function usePlayerBrowseOffers({
     if (ownSocialStatus === "hidden") {
       setEligibilityKind("own_prerequisite");
       setEligibilityMessage(
-        "В режиме «Свайп» предложения доступны, когда ваш профиль виден в каталоге.",
+        "Предложения доступны, когда ваш профиль виден в каталоге.",
       );
       setEligibleIds([]);
       return;

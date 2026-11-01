@@ -187,6 +187,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0046_game_attendance",
         "0047_attendance_dispute_resolution",
         "0048_game_reviews_notes",
+        "0049_social_profile_defaults",
       ]);
       // 0047 PG-2 dispute resolution: physical tables beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_responses')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_responses");

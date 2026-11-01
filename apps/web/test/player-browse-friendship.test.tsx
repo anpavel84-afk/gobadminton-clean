@@ -70,4 +70,15 @@ describe("profile friendship remains intact outside browse deck", () => {
     expect(friendshipSource).toMatch(/friendCommand\(/);
     expect(friendCommand(none, "peer-1", "request")?.path).toBe("/v1/friend-requests");
   });
+
+  it("finder layout CTAs unchanged while friendship scope stays outside deck (#445 C negative)", () => {
+    const pageSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../src/components/consumer/pages/PlayersDirectoryPage.tsx"),
+      "utf8",
+    );
+    expect(pageSource).toContain("Свайп");
+    expect(pageSource).toContain("По одному");
+    expect(deckSource).not.toContain("PlayerBrowseFriendship");
+    expect(deckSource).toContain("PlayerBrowsePlayInterest");
+  });
 });

@@ -344,8 +344,15 @@ describeIntegration("P2 private discovery preference on real PostgreSQL/PostGIS"
     const initial = await get(owner);
     expect(initial.json()).toEqual({ cityId: null, version: 0 });
     expect(initial.headers["cache-control"]).toBe("private, no-store");
-    expect((await pool.query("SELECT count(*)::int AS n FROM player_social_profiles WHERE user_id=$1", [owner.userId])).rows[0].n).toBe(0);
-    await pool.query("INSERT INTO player_social_profiles(user_id,city_id,display_name) VALUES($1,$2,'Synthetic public city')", [other.userId, moscow]);
+    // Owner #448: OAuth/getOwn may already materialize a default social profile — baseline then compare.
+    const ownerSocialBefore = (await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [owner.userId])).rows;
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET city_id=$2, display_name='Synthetic public city'
+       WHERE user_id=$1`,
+      [other.userId, moscow],
+    );
+    expect((await pool.query("SELECT count(*)::int AS n FROM player_social_profiles WHERE user_id=$1", [other.userId])).rows[0].n).toBe(1);
     const before = (await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [other.userId])).rows;
     const a = await put(owner, input);
     const b = await put(other, { cityId: petersburg, expectedVersion: 0 });
@@ -356,12 +363,21 @@ describeIntegration("P2 private discovery preference on real PostgreSQL/PostGIS"
     expect((await get(other)).json()).toEqual(b.json());
     expect((await app.inject({ method: "GET", url: `${route}?userId=${other.userId}`, cookies: owner.cookies })).json()).toEqual(a.json());
     expect((await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [other.userId])).rows).toEqual(before);
+    expect((await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [owner.userId])).rows).toEqual(ownerSocialBefore);
     for (const table of ["radar_consent_events", "radar_presences", "user_game_preferences", "outbox_events"]) {
       const field = ["outbox_events"].includes(table) ? "aggregate_id" : "user_id";
       expect((await pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE ${field}=$1`, [owner.userId])).rows[0].n).toBe(0);
     }
     // Explicit synthetic directory consent is unrelated to the saved discovery choice.
-    await pool.query("UPDATE player_social_profiles SET directory_visible=true,consent_policy_version='synthetic-p2',opted_in_at=now() WHERE user_id=$1", [other.userId]);
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET directory_visible=true,
+           directory_visibility_provenance='user_consent',
+           consent_policy_version='synthetic-p2',
+           opted_in_at=now()
+       WHERE user_id=$1`,
+      [other.userId],
+    );
     const publicId = (await pool.query("SELECT public_player_id FROM player_social_profiles WHERE user_id=$1", [other.userId])).rows[0].public_player_id;
     const publicPlayer = await app.inject({ method: "GET", url: `/v1/players/${publicId}` });
     expect(publicPlayer.statusCode).toBe(200);

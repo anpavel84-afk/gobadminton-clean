@@ -488,6 +488,20 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       ).rowCount,
     ).toBe(0);
   });
+  it("unified public player displayName scrubs email-shaped stored names (#450)", async () => {
+    const emailShaped = "unified.legacy@mail.example";
+    const peer = await person(emailShaped, true);
+    const s = await query();
+    const row = s.items.find((i) => i.publicPlayerId === peer.publicId);
+    expect(row).toBeTruthy();
+    expect(row!.player.displayName).toBe("Игрок");
+    expect(JSON.stringify(row)).not.toContain(emailShaped);
+    const stored = await pool.query<{ display_name: string }>(
+      "SELECT display_name FROM player_social_profiles WHERE user_id=$1",
+      [peer.id],
+    );
+    expect(stored.rows[0]?.display_name).toBe(emailShaped);
+  });
   it("P-only projection withholds bio/area/looking and cannot unlock directory detail or DM", async () => {
     const p = await person("Private", false);
     await pool.query(

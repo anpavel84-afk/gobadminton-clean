@@ -46,7 +46,7 @@ export function warmGamesVenueMapModule(): Promise<void> {
 
 /** Public venues never depend on Radar consent, a location fix or a people query. */
 export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnToList }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void }) {
-  const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean; venuesFulfilled: boolean } | null>(null);
   const [mapAvailable, setMapAvailable] = useState(true);
   const [mapErrorCardShown, setMapErrorCardShown] = useState(false);
   useEffect(() => { setMapErrorCardShown(false); }, [cityId]);
@@ -70,15 +70,21 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
         setError(!venues.ok || !games.ok);
         setSnapshot(previous => {
           const retained = previous?.cityId === cityId ? previous : null;
-          return { cityId, venues: venues.ok ? venues.data : retained?.venues ?? [],
-            games: games.ok ? games.data : [], gamesReady: games.ok && venues.ok };
+          return {
+            cityId,
+            venues: venues.ok ? venues.data : retained?.venues ?? [],
+            games: games.ok ? games.data : [],
+            gamesReady: games.ok && venues.ok,
+            // Genuine empty only for the latest fulfilled current-city venues response.
+            venuesFulfilled: venues.ok,
+          };
         });
         setNow(Date.now()); setLoading(false);
-      }).catch(() => { if (!signal.aborted) { setError(true); setSnapshot(previous => previous?.cityId === cityId ? { ...previous, gamesReady: false } : null); setLoading(false); } });
+      }).catch(() => { if (!signal.aborted) { setError(true); setSnapshot(previous => previous?.cityId === cityId ? { ...previous, gamesReady: false, venuesFulfilled: false } : null); setLoading(false); } });
     });
     const reload = () => polling.refresh();
     // A session change invalidates permissions immediately, even during a load.
-    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, gamesReady: false } : null); setRefresh(n => n + 1); };
+    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, gamesReady: false, venuesFulfilled: false } : null); setRefresh(n => n + 1); };
     window.addEventListener("focus", reload); window.addEventListener("online", reload);
     window.addEventListener("gb-session-changed", sessionChanged);
     return () => {
@@ -163,7 +169,7 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
             galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
             onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection} />
         </VenuePopup>}
-        {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
+        {!loading && snapshot?.cityId === cityId && snapshot.venuesFulfilled && !venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
         {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
           <summary>Площадки списком — карта или координаты недоступны</summary>
           <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => selectVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>

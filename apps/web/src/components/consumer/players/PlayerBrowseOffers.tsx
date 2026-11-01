@@ -221,7 +221,7 @@ export function PlayerBrowseFinderGate({
         <h2>Сначала откройте свой профиль</h2>
         <p>
           {eligibility.message
-            || "В режиме «Свайп» предложения доступны, когда ваш профиль виден в каталоге."}
+            || "Предложения доступны, когда ваш профиль виден в каталоге."}
         </p>
         <Button variant="dark" href="/profile">К настройкам профиля</Button>
         {onRetry && (

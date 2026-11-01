@@ -1261,9 +1261,12 @@ WHERE c.id = $1
       Number(beforeEpoch) + 1,
     );
 
+    // Direct restore after API opt-out must set truthful provenance (not leave user_opt_out).
     await pool.query(
       `UPDATE player_social_profiles
-       SET directory_visible = true, contact_policy = 'requests'
+       SET directory_visible = true,
+           contact_policy = 'requests',
+           directory_visibility_provenance = 'owner_default'
        WHERE user_id = $1`,
       [b.userId],
     );
@@ -1292,17 +1295,18 @@ WHERE c.id = $1
       cookies: a.cookies,
     });
     expect(fresh.statusCode).toBe(200);
+    // Owner #448: getOwn materializes physical profile ON at version 1.
     expect(fresh.json()).toMatchObject({
-      version: 0,
+      version: 1,
       contactPolicy: "requests",
-      directoryVisible: false,
+      directoryVisible: true,
     });
     const created = await app.inject({
       method: "PATCH",
       url: "/v1/me/social-profile",
       headers: mutationHeaders(a, `def-${uniqueSuffix("k")}-xxxxxxxx`),
       payload: {
-        expectedVersion: 0,
+        expectedVersion: (fresh.json() as { version: number }).version,
         displayName: "Default Policy",
         cityId: MOSCOW_CITY_ID,
       },
@@ -1320,10 +1324,106 @@ WHERE c.id = $1
     });
     expect(closed.statusCode).toBe(200);
     expect(closed.json()).toMatchObject({ contactPolicy: "closed" });
+    // Closing DM contact must not flip directory / shared social epoch by itself.
+    expect(closed.json()).toMatchObject({
+      directoryVisible: true,
+      version: (created.json() as { version: number }).version + 1,
+    });
     const dbDefault = await pool.query<{ column_default: string }>(
       `SELECT column_default FROM information_schema.columns
        WHERE table_name = 'player_social_profiles' AND column_name = 'contact_policy'`,
     );
     expect(dbDefault.rows[0]?.column_default ?? "").toMatch(/requests/);
+  });
+
+  it("conversation DTO peer displayName scrubs email-shaped legacy storage (#450 QA1)", async () => {
+    const a = await login("vk");
+    const b = await login("yandex");
+    await ensureOpenProfile(a, "Alpha Safe Peer", "safe-a");
+    const peer = await ensureOpenProfile(b, "Beta Safe Peer", "safe-b");
+    const emailShaped = "legacy.dm.peer@mail.example";
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [b.userId, emailShaped],
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/conversations/requests",
+      headers: mutationHeaders(a, `safe-dmr-${uniqueSuffix("k")}-xxxxxxxx`),
+      payload: {
+        targetPublicPlayerId: peer.publicPlayerId,
+        text: "Привет, сыграем?",
+        clientMessageId: `safe-cmsg-${uniqueSuffix("m")}`,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const createdBody = created.json() as {
+      conversation: {
+        id: string;
+        peer: { publicPlayerId: string; displayName: string };
+      };
+      receipt: { messageId: string };
+    };
+    expect(createdBody.conversation.peer.displayName).toBe("Игрок");
+    expect(JSON.stringify(createdBody)).not.toContain(emailShaped);
+
+    const header = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${createdBody.conversation.id}`,
+      cookies: a.cookies,
+    });
+    expect(header.statusCode).toBe(200);
+    const headerBody = header.json() as {
+      peer: { displayName: string };
+    };
+    expect(headerBody.peer.displayName).toBe("Игрок");
+    expect(JSON.stringify(headerBody)).not.toContain(emailShaped);
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/conversations",
+      cookies: a.cookies,
+    });
+    expect(list.statusCode).toBe(200);
+    const listItem = (
+      list.json() as {
+        items: Array<{ id: string; peer: { displayName: string } }>;
+      }
+    ).items.find((row) => row.id === createdBody.conversation.id);
+    expect(listItem?.peer.displayName).toBe("Игрок");
+    expect(JSON.stringify(listItem)).not.toContain(emailShaped);
+
+    const msgs = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${createdBody.conversation.id}/messages?limit=10`,
+      cookies: a.cookies,
+    });
+    expect(msgs.statusCode).toBe(200);
+    const page = msgs.json() as {
+      items: Array<{ text: string | null }>;
+    };
+    expect(page.items[0]?.text).toBe("Привет, сыграем?");
+    expect(JSON.stringify(page)).not.toContain(emailShaped);
+
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [b.userId, "Анна Смирнова"],
+    );
+    const ordinary = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${createdBody.conversation.id}`,
+      cookies: a.cookies,
+    });
+    expect(ordinary.statusCode).toBe(200);
+    expect(
+      (ordinary.json() as { peer: { displayName: string } }).peer.displayName,
+    ).toBe("Анна Смирнова");
+
+    const guest = await app.inject({
+      method: "GET",
+      url: `/v1/conversations/${createdBody.conversation.id}`,
+    });
+    expect(guest.statusCode).toBe(401);
   });
 });

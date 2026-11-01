@@ -382,9 +382,16 @@ describeIntegration("Radar demo activation privacy/demo matrix", () => {
     yandexIdentity.current = publicUser;
     const live = await login("yandex");
     const demo = await login("vk", demoUserId(1));
+    const owned = await app.inject({ method: "GET", url: "/v1/me/social-profile", cookies: live.cookies });
+    expect(owned.statusCode).toBe(200);
     const patch = await app.inject({ method: "PATCH", url: "/v1/me/social-profile",
       headers: mutationHeaders(live, `consent-${uniqueSuffix("k")}`),
-      payload: { displayName: "Internal synthetic live-path tester", radarConsented: true, radarConsentPolicyVersion: "radar-mvp-v1" } });
+      payload: {
+        expectedVersion: (owned.json() as { version: number }).version,
+        displayName: "Internal synthetic live-path tester",
+        radarConsented: true,
+        radarConsentPolicyVersion: "radar-mvp-v1",
+      } });
     expect(patch.statusCode).toBeLessThan(300);
     const start = async (session: Session) => {
       const r = await app.inject({ method: "POST", url: "/v1/me/radar/activations",

@@ -21,11 +21,13 @@ export function ProfileCover({ url, prepared }: { url?: string | null; prepared?
   return <FetchedProfileCover url={url} />;
 }
 
-export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onReconcile, onUnauthorized }: {
+export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onReconcile, onUnauthorized, presentation }: {
   frameRef?: RefObject<HTMLDivElement | null>;
   cover?: CoverReceipt["cover"]; version: number; csrfToken: string; disabled: boolean;
   onBusy: (value: boolean) => void; onChange: (value: CoverReceipt) => void; onUnauthorized: () => void;
   onReconcile: (value: OwnSocialProfile) => void;
+  /** Own-profile compact action row (#402); default presentation unchanged elsewhere. */
+  presentation?: "action-row";
 }) {
   const [frameRatio, setFrameRatio] = useState<number | null>(null);
   useEffect(() => {
@@ -118,9 +120,10 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
       if (mounted.current) { setSaving(false); callbacks.current.onBusy(false); }
     }
   }
-  return <section className="profile-cover-controls" aria-label="Обложка профиля" aria-busy={saving || preparing}>
+  const actionRow = presentation === "action-row";
+  return <section className={actionRow ? "profile-cover-controls profile-cover-controls--action-row" : "profile-cover-controls"} aria-label="Обложка профиля" aria-busy={saving || preparing}>
     <Button variant="outline" disabled={disabled || saving} onClick={() => { setOpen(true); setError(""); }}>Изменить обложку</Button>
-    {notice && <p role="status">{notice}</p>}
+    {notice && <p role="status" className={actionRow ? "profile-cover-controls__notice" : undefined}>{notice}</p>}
     {open && <ProfileDialog title="Обложка профиля" onClose={() => { if (!saving) { setOpen(false); setFile(null); setPreview(null); } }}>
       <p>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации. На сервер отправляется только выбранный фрагмент. Обложка следует видимости профиля.</p>
       <input ref={input} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Выбрать изображение обложки" disabled={saving} onChange={event => { const next = event.target.files?.[0]; event.target.value = ""; if (next) { setFile(next); setCrop({ x: .5, y: .5 }); } }} />

@@ -7,6 +7,7 @@ import { GEO_POLICY, geographicStartSchema, geographicTakeoverSchema, GEO_CONTRA
 import { assertCapabilities } from "../restrictions/policy";
 import { ProfilesService } from "../profiles/profiles.service";
 import { avatarForUser, type PlayerAvatar } from "../profiles/avatar-presentation";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { Inject, Injectable } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
@@ -921,7 +922,7 @@ export class RadarService {
           player: {
             canRequestContact: contactable.has(row.user_id),
             publicPlayerId: row.public_player_id,
-            displayName: row.display_name,
+            displayName: safePublicDisplayName(row.display_name),
             avatar: await avatarForUser(client, row.user_id),
             level:
               row.level_scale_id &&
@@ -998,7 +999,7 @@ export class RadarService {
         player: {
           canRequestContact: contactable.has(redeemed.targetUserId),
           publicPlayerId: redeemed.publicPlayerId,
-          displayName: redeemed.displayName,
+          displayName: safePublicDisplayName(redeemed.displayName),
           avatar,
           level:
             redeemed.levelScaleId &&

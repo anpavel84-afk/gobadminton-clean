@@ -58,6 +58,24 @@ export function parseNtrpLevelRange(value: string): { lower: number; upper: numb
 
 export type NtrpLevelBound = "lower" | "upper";
 
+/** Stable visual % on the shared global NTRP track (1..7). Independent of the other thumb. */
+export function ntrpLevelVisualPercent(value: number): number {
+  const snapped = snapClampNtrpLevel(value);
+  return ((snapped - NTRP_LEVEL_MIN) / (NTRP_LEVEL_MAX - NTRP_LEVEL_MIN)) * 100;
+}
+
+/** Selected-interval fill on the shared track; left/width in % of global 1..7. */
+export function ntrpLevelSelectedFillStyle(
+  lower: number,
+  upper: number,
+): { left: string; width: string } {
+  const lo = ntrpLevelVisualPercent(lower);
+  const hi = ntrpLevelVisualPercent(upper);
+  const left = Math.min(lo, hi);
+  const width = Math.max(0, Math.abs(hi - lo));
+  return { left: `${left}%`, width: `${width}%` };
+}
+
 /** Apply a native range value to one bound; clamp to the other endpoint; never reverse. */
 export function applyNtrpLevelBoundChange(
   bound: NtrpLevelBound,
@@ -76,4 +94,71 @@ export function applyNtrpLevelBoundChange(
   }
   const upper = Math.max(snapped, stableLower);
   return { lower: stableLower, upper, serialized: serializeNtrpLevelIds(stableLower, upper) };
+}
+
+/** Logical ARIA min for a thumb: lower stays global 1; upper is limited by current lower. */
+export function ntrpLevelAriaValueMin(bound: NtrpLevelBound, lower: number, upper: number): number {
+  void upper;
+  return bound === "lower" ? NTRP_LEVEL_MIN : snapClampNtrpLevel(lower);
+}
+
+/** Logical ARIA max for a thumb: upper stays global 7; lower is limited by current upper. */
+export function ntrpLevelAriaValueMax(bound: NtrpLevelBound, lower: number, upper: number): number {
+  void lower;
+  return bound === "lower" ? snapClampNtrpLevel(upper) : NTRP_LEVEL_MAX;
+}
+
+/** Painted thumb diameter used for overlap / hit targeting (matches games.css). */
+export const NTRP_LEVEL_THUMB_HIT_PX = 22;
+
+/** Map a pointer X on the shared global track to a snapped NTRP value. */
+export function ntrpLevelValueFromTrackClientX(
+  clientX: number,
+  trackLeft: number,
+  trackWidth: number,
+): number {
+  if (!(trackWidth > 0) || !Number.isFinite(clientX) || !Number.isFinite(trackLeft)) {
+    return NTRP_LEVEL_DEFAULT_LOWER;
+  }
+  const ratio = Math.min(1, Math.max(0, (clientX - trackLeft) / trackWidth));
+  return snapClampNtrpLevel(NTRP_LEVEL_MIN + ratio * (NTRP_LEVEL_MAX - NTRP_LEVEL_MIN));
+}
+
+/**
+ * Choose which thumb a pointer gesture should drive.
+ * Overlapped / equal thumbs: left-of-center or leftward direction → lower; else upper.
+ * Returns null when the pointer is not near either thumb (track click does not jump).
+ */
+export function resolveNtrpLevelPointerBound(
+  clientX: number,
+  trackLeft: number,
+  trackWidth: number,
+  lower: number,
+  upper: number,
+  options?: { directionDx?: number; hitPx?: number },
+): NtrpLevelBound | null {
+  if (!(trackWidth > 0) || !Number.isFinite(clientX) || !Number.isFinite(trackLeft)) return null;
+  const hitPx = options?.hitPx ?? NTRP_LEVEL_THUMB_HIT_PX;
+  const stableLower = snapClampNtrpLevel(lower);
+  const stableUpper = snapClampNtrpLevel(upper);
+  const lowerX = trackLeft + (ntrpLevelVisualPercent(stableLower) / 100) * trackWidth;
+  const upperX = trackLeft + (ntrpLevelVisualPercent(stableUpper) / 100) * trackWidth;
+  const distLower = Math.abs(clientX - lowerX);
+  const distUpper = Math.abs(clientX - upperX);
+  const nearLower = distLower <= hitPx;
+  const nearUpper = distUpper <= hitPx;
+  if (!nearLower && !nearUpper) return null;
+
+  const overlapped = stableLower === stableUpper || Math.abs(lowerX - upperX) <= hitPx;
+  if (overlapped && nearLower && nearUpper) {
+    const dx = options?.directionDx;
+    if (typeof dx === "number" && dx !== 0 && Number.isFinite(dx)) {
+      return dx < 0 ? "lower" : "upper";
+    }
+    const mid = (lowerX + upperX) / 2;
+    return clientX <= mid ? "lower" : "upper";
+  }
+  if (nearLower && !nearUpper) return "lower";
+  if (nearUpper && !nearLower) return "upper";
+  return distLower <= distUpper ? "lower" : "upper";
 }

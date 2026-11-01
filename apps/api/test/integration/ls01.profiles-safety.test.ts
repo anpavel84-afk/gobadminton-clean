@@ -269,30 +269,32 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
     return { publicPlayerId: body.publicPlayerId, version: body.version };
   }
 
-  it("legacy user is hidden until explicit opt-in; projection omits private IDs", async () => {
+  it("Owner #448 default materializes directory ON; projection omits private IDs", async () => {
     const a = await login("vk");
     const b = await login("yandex");
 
-    const empty = await app.inject({
+    const own = await app.inject({
       method: "GET",
       url: "/v1/me/social-profile",
       cookies: a.cookies,
     });
-    expect(empty.statusCode).toBe(200);
-    expect(empty.json()).toMatchObject({
-      version: 0,
-      directoryVisible: false,
-      publicPlayerId: null,
+    expect(own.statusCode).toBe(200);
+    expect(own.json()).toMatchObject({
+      directoryVisible: true,
+      contactPolicy: "requests",
+      consentPolicyVersion: null,
+      optedInAt: null,
     });
+    expect((own.json() as { version: number }).version).toBeGreaterThanOrEqual(1);
+    expect((own.json() as { publicPlayerId: string | null }).publicPlayerId).toBeTruthy();
 
-    const listHidden = await app.inject({
+    const list = await app.inject({
       method: "GET",
       url: "/v1/players",
       cookies: b.cookies,
     });
-    expect(listHidden.statusCode).toBe(200);
-    const hiddenItems = (listHidden.json() as { items: unknown[] }).items;
-    expect(Array.isArray(hiddenItems)).toBe(true);
+    expect(list.statusCode).toBe(200);
+    expect(Array.isArray((list.json() as { items: unknown[] }).items)).toBe(true);
 
     const profile = await ensureVisibleProfile(a, "Alpha LS01", "a1");
     const detail = await app.inject({
@@ -831,6 +833,64 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
       a.userId,
       "ls01-a@example.com",
     ], "detail");
+  });
+
+  it("public directory/detail scrub email-shaped stored names without rewriting own storage (#450)", async () => {
+    const a = await login("vk");
+    const profile = await ensureVisibleProfile(a, "Ordinary Public Name", "email-scrub");
+    const emailShaped = "legacy.stored@mail.example";
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [a.userId, emailShaped],
+    );
+
+    const own = await app.inject({
+      method: "GET",
+      url: "/v1/me/social-profile",
+      cookies: a.cookies,
+    });
+    expect(own.statusCode).toBe(200);
+    expect((own.json() as { displayName: string }).displayName).toBe(emailShaped);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/v1/players/${profile.publicPlayerId}`,
+    });
+    expect(detail.statusCode).toBe(200);
+    const detailBody = detail.json() as Record<string, unknown>;
+    expect(detailBody.displayName).toBe("Игрок");
+    expect(JSON.stringify(detailBody)).not.toContain(emailShaped);
+    expect(JSON.stringify(detailBody)).not.toContain("ls01-a@example.com");
+
+    const list = await app.inject({ method: "GET", url: "/v1/players" });
+    expect(list.statusCode).toBe(200);
+    const item = (
+      list.json() as {
+        items: Array<{ publicPlayerId: string; displayName: string }>;
+      }
+    ).items.find((row) => row.publicPlayerId === profile.publicPlayerId);
+    expect(item?.displayName).toBe("Игрок");
+    expect(JSON.stringify(item)).not.toContain(emailShaped);
+
+    await pool.query(
+      `UPDATE player_social_profiles SET display_name = $2 WHERE user_id = $1`,
+      [a.userId, "Анна Смирнова"],
+    );
+    const ordinary = await app.inject({
+      method: "GET",
+      url: `/v1/players/${profile.publicPlayerId}`,
+    });
+    expect(ordinary.statusCode).toBe(200);
+    expect((ordinary.json() as { displayName: string }).displayName).toBe(
+      "Анна Смирнова",
+    );
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/v1/players/00000000-0000-4000-8000-000000000099",
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ code: "RESOURCE_UNAVAILABLE" });
   });
 
   it("anonymous reads hide hidden, ineligible, disabled, and missing profiles uniformly", async () => {

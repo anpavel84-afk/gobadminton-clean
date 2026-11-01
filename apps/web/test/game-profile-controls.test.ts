@@ -123,6 +123,34 @@ describe("game-profile-controls-v001", () => {
     expect(profile).toContain("deactivateTrainerProfile");
   });
 
+  it("Q-GPC-04 skips automatic trainer-profile GET when OwnSocialProfile.trainer is false", async () => {
+    const profile = await readSource(
+      "../src/components/consumer/pages/ProfilePage.tsx",
+    );
+    const create = await readSource(
+      "../src/components/consumer/pages/CreateGamePage.tsx",
+    );
+    const trainerEdit = await readSource(
+      "../src/components/consumer/pages/TrainerProfileEditPage.tsx",
+    );
+    // Profile: social first; trainer fetch only when authoritative social.trainer is true.
+    expect(profile).toContain("getMySocialProfile()");
+    expect(profile).toContain("if (s.ok && s.data.trainer)");
+    expect(profile).toContain("getTrainerProfile()");
+    expect(profile).not.toMatch(
+      /Promise\.all\(\[\s*getMySocialProfile\(\),\s*getTrainerProfile\(\)/,
+    );
+    // Create: preferences always; trainer fetch gated on profile.data.trainer.
+    expect(create).toContain("getGamePreferences()");
+    expect(create).toContain("if (profile.data.trainer)");
+    expect(create).toContain("getTrainerProfile()");
+    expect(create).not.toMatch(
+      /Promise\.all\(\[\s*getTrainerProfile\(\),\s*getGamePreferences\(\)/,
+    );
+    // Explicit trainer edit page still loads profile (incl. inactive) for its own route.
+    expect(trainerEdit).toContain("getTrainerProfile()");
+  });
+
   it("Q-GPC-03 surfaces non-creator managed games with honest relation labels", async () => {
     const page = await readSource(
       "../src/components/consumer/pages/MyGamesPage.tsx",

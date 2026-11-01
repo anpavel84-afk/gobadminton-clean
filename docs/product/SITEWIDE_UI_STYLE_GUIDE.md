@@ -71,13 +71,17 @@ Accepted Spacious40 overlay foundations, mobile sheets, gestures, history, and f
 
 Opt-in ProfileDialog family `.profile-dialog--invitation` (no `.fr3`/`.fr4` page wrapper required). One title «Пригласить на игру»; body hint «Приглашение не резервирует место.»; shared `.gb-invitation-card` for preferred and normal chooser with real title/time/timezone and full-width «Отправить приглашение» CTA (same `invite(g)`, no auto-send/confirm step). Desktop ≥1024: shell 560 / inset 40 / X 44@24; mobile ≤720: bottom sheet radius 28 / inset 20 / safe-area; single body scroll. Create form date/time: scoped `minmax(0,1fr)` intrinsic sizing, 16px native inputs, optional WebKit value normalization; keep native pickers/required/readOnly/timezone — no `overflow:hidden` clipping.
 
-## Create game level range (#432)
+## Create game level range (#432 / #445 point 1)
 
-Owner-directed FormGroup control: two separate native `type=range` sliders (От / До) for inclusive NTRP 1.0–7.0 step 0.5; summary `3,0–3,5`; no manual comma typing. Same presentation in normal / trainer / embedded create forms via `.gb-game-level-range`. Compact 44px rows, lime accent, focus-visible; min cannot exceed max (clamp to other endpoint). Do not reuse social pilot level options or dual-thumb frameworks.
+Owner-directed FormGroup control: two native `type=range` handles (От / До) on **one shared visual track** with stable global NTRP 1.0–7.0 step 0.5 coordinates; selected interval fill; summary `3,0–3,5`; no manual comma typing. Native `min`/`max` stay 1..7 for both handles (do not remap visual coordinates from the other thumb); crossing clamps via helpers. Same presentation in normal / trainer / embedded create forms via `.gb-game-level-range`. Compact 44px control, lime fill/accent, focus-visible on thumbs; separate keyboard focus/aria. Do not reuse social pilot level options or dual-thumb UI libraries.
 
 ## Messages composition (#394 desktop repair)
 
 Owner-ordered desktop messenger repair (UAT followup): two-pane host on the existing shell rail (`336px` inbox ≥901, `320px` at 721–900); shared 88px pane-header baseline; single-row native filter select (`all` / `unread` / `attention`) instead of wrapping pills or rubricator headers; pending request as directional first message in the scroll body with compact status/decision footer outside scroll; independent inbox-list and conversation-body scroll. Dialogs keep Spacious40; mobile focused host, Back, RootNav, and keyboard/safe-area behavior stay as today (one nav reserve). No new tokens.
+
+## Own profile actions (#402)
+
+Under the shared own-profile hero, one open `role="group"` (`.own-profile-actions`): primary lime «Изменить профиль», outline «Изменить обложку» (`CoverEditor` `presentation="action-row"` between edit and settings), ghost «Настройки» with real `/profile/settings` href. Equal min-height 48; desktop left-aligned slots 200 / 200 / 132, gap 12; ≤720 stack full-width, gap 10. No white action card, captions, or new icons. Scope styles to the direct cover trigger only — not dialog controls. Preserve hero/cover/avatar/name and existing edit/cover/settings handlers.
 
 ## Out of scope
 

@@ -13,6 +13,7 @@ import {
 import { assertUnifiedOrigin } from "./unified-origin";
 import { geographicCity } from "./geographic-contract";
 import { isDemoUuid } from "../database/demo-ids";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import type { RedeemedRadarProof } from "./radar-proof.service";
 const unavailable = (): never => {
   throw notFound("RESOURCE_UNAVAILABLE", "Результат Radar недоступен");
@@ -137,7 +138,7 @@ export async function redeemUnifiedProof(
   return {
     targetUserId: p.targetId,
     publicPlayerId: row.public_player_id,
-    displayName: row.display_name,
+    displayName: safePublicDisplayName(row.display_name),
     levelScaleId: row.level_scale_id,
     levelScaleVersion: row.level_scale_version,
     levelId: row.level_id,
