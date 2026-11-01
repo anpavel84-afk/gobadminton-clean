@@ -1,19 +1,38 @@
 # GoBadminton release notes
 
-## #402 — own profile actions under hero (0.1.0-alpha.10 candidate)
+## #445/#450 residual — map empty gate + trainer fetch skip (0.1.0-alpha.11 candidate)
 
-Compact open action group on `/profile` under the shared hero: lime «Изменить
-профиль», outline «Изменить обложку», ghost «Настройки». Layout and cover
-handlers only; no API/privacy/public-profile change. API wire remains `0.22.0`.
-Base accepted DEV alpha.9 `783a1897…`. PROD remains accepted alpha.8. Owner UAT:
-NOT_TESTED.
+Map no longer announces an empty city catalogue while venues are loading or the
+venues response failed; genuine empty is gated on a fulfilled current-city venues
+result (sr-only). Ordinary non-trainers no longer auto-GET `/v1/me/trainer-profile`
+from `/profile` and `/games/create` when `OwnSocialProfile.trainer` is false; active
+trainers still fetch real version/status. API wire unchanged `0.22.0`. Base accepted
+DEV alpha.10 `1dc50002…`. PROD remains accepted alpha.8. Owner UAT: NOT_TESTED.
 
-- Application version (candidate): `0.1.0-alpha.10`; API contract unchanged `0.22.0`.
-- Base accepted SHA: `783a1897167be1f531312b9a6812b6240181e2c3` (alpha.9 DEV).
+- Application version (candidate): `0.1.0-alpha.11`; API contract unchanged `0.22.0`.
+- Base accepted SHA: `1dc5000280d617c3160fc959ee87607db394410c` (alpha.10 DEV).
 - Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
 - Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
 - Owner UAT: NOT_TESTED.
+- Does not claim all of #445/#450 closed; chat non-participant 404 and unrelated items remain.
 - PG-3/PG-4 untouched; C5 untouched; no PROD activation.
+
+## #402 — own profile actions under hero (0.1.0-alpha.10 DEV ACCEPTED)
+
+Compact open action group on `/profile` under the shared hero: lime «Изменить
+профиль», outline «Изменить обложку», ghost «Настройки». Layout and cover
+handlers only; no API/privacy/public-profile change. Accepted on DEV
+`r41349542541-a1` (`2026-11-01T21:03:36Z`), source
+`1dc5000280d617c3160fc959ee87607db394410c`. API wire remains `0.22.0`.
+PROD remains accepted alpha.8. Owner UAT: NOT_TESTED.
+
+- Application version: `0.1.0-alpha.10`; API contract unchanged `0.22.0`.
+- Accepted source: `1dc5000280d617c3160fc959ee87607db394410c`.
+- DEV release: `r41349542541-a1` (accepted `2026-11-01T21:03:36Z`).
+- Digests: api `sha256:a71fe6979b045a09bb348cce3e7f57ffbab952e5b52edc632849ef3776e49970`,
+  web `sha256:3d57f99e22af3f1fac4a64956a38745862d434abd42ce17f9ff026e7cf0a87b0`.
+- Owner UAT: NOT_TESTED.
+- PROD unchanged (remains alpha.8).
 
 ## #450 — safe public name + Russian release history (0.1.0-alpha.9 DEV ACCEPTED)
 

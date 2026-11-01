@@ -86,6 +86,7 @@ it("registers the real loading component with ssr:false and resolves to the exac
   expect(html).toContain('data-testid="resolved-venue-map"');
   expect(html).not.toContain("Загружаем карту…");
   expect(html).toContain("Загружаем все площадки и расписание…");
+  expect(html).not.toContain("В каталоге города пока нет площадок");
   expect(mapExport.mock.calls.at(-1)?.[0]).toEqual({
     venues: [], counts: null, selectedVenueId: null,
     onSelect: expect.any(Function), onDeselect: expect.any(Function),

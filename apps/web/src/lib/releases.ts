@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.10" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.11" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,16 +425,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Действия в своём профиле под шапкой",
+  title: "Карта: загрузка и пустой каталог; профиль без лишнего запроса тренера",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [
-    "Обновлено расположение действий в своём профиле: «Изменить профиль», «Настройки» и «Изменить обложку».",
+  additions: [],
+  fixes: [
+    "Карта корректно показывает загрузку и отсутствие результатов.",
+    "Для обычного игрока страницы профиля и создания игры не запрашивают отсутствующий тренерский профиль без необходимости.",
   ],
-  fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
-    "Публичные профили других игроков, API и настройки приватности этим выпуском не менялись.",
+    "Холодная загрузка модуля карты и сети может занимать несколько секунд; это не выдаётся за готовый экран.",
+    "Замечания #445 по чату для неучастника и отдельные пункты #450 не объявлены закрытыми этим выпуском.",
     "Основной сайт обновляется отдельно.",
   ],
   feature_catalogue: "delta",
@@ -827,6 +829,33 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Проверка владельцем после обычного входа ещё не выполнена.",
       "Замечания по конкретным ролям в чате и весь список #450/#445 не объявлены закрытыми.",
       "Этот выпуск alpha.9 принят только на DEV; PROD сохранил alpha.8."
+    ]
+  },
+  {
+    "source_sha": "1dc5000280d617c3160fc959ee87607db394410c",
+    "application_version": "0.1.0-alpha.10",
+    "version_label": "0.1.0-alpha.10",
+    "title": "Удобный ряд действий в своём профиле",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41349542541-a1",
+        "accepted_at": "2026-11-01T21:03:36Z",
+        "api_digest": "sha256:a71fe6979b045a09bb348cce3e7f57ffbab952e5b52edc632849ef3776e49970",
+        "web_digest": "sha256:3d57f99e22af3f1fac4a64956a38745862d434abd42ce17f9ff026e7cf0a87b0",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Действия «Изменить профиль», «Изменить обложку» и «Настройки» собраны в компактную группу своего профиля."
+    ],
+    "known_limitations": [
+      "Установленный интерфейс проверен на синтетических данных; проверка владельцем после обычного входа не выполнена.",
+      "Alpha.10 установлена только на DEV; PROD остался на принятой alpha.8."
     ]
   },
 ] as const;
