@@ -1,7 +1,19 @@
 import Link from "next/link";
 import { ConsumerShell } from "../ConsumerShell";
+import { ReleaseLink } from "../ReleaseLink";
 export const documents = { terms: "Пользовательское соглашение", privacy: "Политика конфиденциальности", rules: "Правила сервиса" } as const;
-function ReadingFooter() { return <nav className="mobile-reading-footer" aria-label="Навигация по материалам"><Link href="/games">← К играм</Link><Link href="/legal">Документы</Link><Link href="/help">Помощь</Link></nav>; }
+function ReadingFooter() {
+  return (
+    <nav className="mobile-reading-footer" aria-label="Навигация по материалам">
+      <Link href="/games">← К играм</Link>
+      <span className="mobile-reading-footer-links">
+        <Link href="/legal">Документы</Link>
+        <Link href="/help">Помощь</Link>
+        <ReleaseLink />
+      </span>
+    </nav>
+  );
+}
 export function EditorialPage({ help = false }: { help?: boolean }) {
   return <ConsumerShell active="none" title={help ? "Помощь" : "О GoBadminton"} mode="local" reading><div className="fr6-content content-page">
     <header className="gb-page-local-header">

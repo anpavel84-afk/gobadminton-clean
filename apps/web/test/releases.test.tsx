@@ -1,0 +1,77 @@
+import { createElement, type AnchorHTMLAttributes } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { DesktopFooter } from "../src/components/consumer/DesktopFooter";
+import { ReleaseLink, isDevReleasesHost } from "../src/components/consumer/ReleaseLink";
+import {
+  CURRENT_APPLICATION_VERSION,
+  FIRST_ALPHA_FEATURES,
+  FIRST_NAMED_RELEASE,
+  SWITCHED_OFF_INTERNAL,
+  TRUSTED_HISTORICAL_SEED,
+  groupFeatures,
+  runtimeBuildGitSha,
+  shortSha,
+} from "../src/lib/releases";
+import { GET as healthGet } from "../src/app/health/route";
+
+vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
+
+describe("releases catalogue integrity", () => {
+  it("binds first named version to this build catalogue without retroactive history numbers", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
+    expect(FIRST_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
+    expect(FIRST_NAMED_RELEASE.source_sha).toBeNull();
+    expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
+    expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
+    expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);
+    expect(TRUSTED_HISTORICAL_SEED.every((row) => row.application_version == null)).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(2);
+    expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
+    expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
+    expect(shortSha("unknown")).toBe("неизвестно");
+  });
+
+  it("does not invent GIT_SHA when unset", () => {
+    const previous = process.env.GIT_SHA;
+    delete process.env.GIT_SHA;
+    expect(runtimeBuildGitSha()).toBe("unknown");
+    process.env.GIT_SHA = "  deadbeef  ";
+    expect(runtimeBuildGitSha()).toBe("deadbeef");
+    if (previous == null) delete process.env.GIT_SHA;
+    else process.env.GIT_SHA = previous;
+  });
+});
+
+describe("health applicationVersion + gitSha", () => {
+  it("reports current application version and runtime gitSha without secrets", async () => {
+    process.env.GIT_SHA = "11558239cf284a2f20e3c1c6906ae217c703325f";
+    const response = healthGet();
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: "ok",
+      service: "gobadminton-web",
+      applicationVersion: CURRENT_APPLICATION_VERSION,
+      gitSha: "11558239cf284a2f20e3c1c6906ae217c703325f",
+    });
+    expect(JSON.stringify(body)).not.toMatch(/password|token|secret|DATABASE/i);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+});
+
+describe("DEV-only release link and footer version badge", () => {
+  it("keeps ReleaseLink empty on SSR and exposes host helper", () => {
+    expect(isDevReleasesHost("dev.gobadminton.ru")).toBe(true);
+    expect(isDevReleasesHost("gobadminton.ru")).toBe(false);
+    const html = renderToStaticMarkup(createElement(ReleaseLink));
+    expect(html).toBe("");
+  });
+
+  it("shows plain version badge without a PROD /releases href", () => {
+    const html = renderToStaticMarkup(createElement(DesktopFooter));
+    expect(html).toContain(CURRENT_APPLICATION_VERSION);
+    expect(html).toContain("gb-site-footer-version");
+    expect(html).not.toContain('href="/releases"');
+    expect(html).toContain('href="/about"');
+  });
+});
