@@ -1795,7 +1795,7 @@
     height: 100%;
     min-width: 0;
     min-height: 0;
-    padding: 30px 34px 22px;
+    padding: 26px 34px 18px;
     overflow: hidden;
     gap: 0;
     grid-template-columns: none;
@@ -1806,8 +1806,11 @@
     padding: 18px 28px 16px;
   }
 
+  /* Header/name/facts may shrink; excerpt+link reserved below (not inside overflow:hidden). */
   .gb-player-browse[data-browse-desktop="true"] .pb-identity {
-    flex: 1;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
   }
@@ -1817,7 +1820,8 @@
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    margin-bottom: 14px;
+    flex: none;
+    margin-bottom: 10px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-eyebrow {
@@ -1829,25 +1833,32 @@
 
   .gb-player-browse[data-browse-desktop="true"] .pb-identity h2 {
     margin: 0;
+    flex: none;
     font-size: 34px;
     letter-spacing: -1.3px;
     line-height: 1.12;
     overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-identity .pb-meta {
     display: flex;
     align-items: center;
     gap: 7px;
+    flex: none;
     color: #b7c7b7;
     font-size: 12px;
-    margin-top: 11px;
+    margin-top: 8px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-facts--inline {
     display: flex;
     gap: 30px;
-    margin: 22px 0 16px;
+    flex: none;
+    margin: 14px 0 10px;
     grid-template-columns: none;
   }
 
@@ -1877,10 +1888,19 @@
     color: #829986;
   }
 
+  /* Reserved band: up to two bio lines + full «Подробнее об игроке» above the action footer. */
+  .gb-player-browse[data-browse-desktop="true"] .pb-excerpt {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin-top: 0;
+  }
+
   .gb-player-browse[data-browse-desktop="true"] .pb-bio--preview {
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
+    -webkit-line-clamp: 2;
     overflow: hidden;
     font-size: 12px;
     line-height: 1.65;
@@ -1889,11 +1909,14 @@
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-detail-toggle {
+    flex: none;
     color: #b6ef66;
     font-size: 11px;
     font-weight: 600;
     min-height: 32px;
-    padding: 9px 0;
+    margin: 4px 0 0;
+    padding: 6px 0;
+    overflow: visible;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded {
@@ -2219,14 +2242,15 @@
 
 @media (min-width: 1024px) and (max-height: 800px) {
   .gb-player-browse[data-browse-desktop="true"] .pb-card--desktop .pb-copy {
-    padding-top: 22px;
-    padding-bottom: 18px;
+    padding-top: 20px;
+    padding-bottom: 14px;
   }
 
-  .gb-player-browse[data-browse-desktop="true"] .pb-identity-top { margin-bottom: 10px; }
+  .gb-player-browse[data-browse-desktop="true"] .pb-identity-top { margin-bottom: 8px; }
   .gb-player-browse[data-browse-desktop="true"] .pb-identity h2 { font-size: 30px; }
-  .gb-player-browse[data-browse-desktop="true"] .pb-facts--inline { margin: 16px 0 12px; }
-  .gb-player-browse[data-browse-desktop="true"] .pb-profile-bottom { padding-top: 14px; margin-top: 10px; }
+  .gb-player-browse[data-browse-desktop="true"] .pb-identity .pb-meta { margin-top: 6px; }
+  .gb-player-browse[data-browse-desktop="true"] .pb-facts--inline { margin: 10px 0 8px; }
+  .gb-player-browse[data-browse-desktop="true"] .pb-profile-bottom { padding-top: 10px; margin-top: 6px; }
 }
 
 /* ——— Owner mobile <1024 (#404): native <dialog> fullscreen + 1:1 swipe ——— */
