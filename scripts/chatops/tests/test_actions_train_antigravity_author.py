@@ -392,8 +392,12 @@ class Invocation(unittest.TestCase):
             p = Mock(pid=99999999,returncode=None)
             def communicate(input,timeout):
                 self.assertNotIn(TOKEN.encode(),input); self.assertNotIn(REFRESH.encode(),input)
-                p._input_offset = len(input)
+                p._input_offset = len(input)-(1 if mode == 'stdin-short' else 0)
                 if mode == 'timeout': raise subprocess.TimeoutExpired(argv,timeout)
+                if mode == 'timeout-partial':
+                    kwargs['stdout'].write(wire(rows()[:2]))
+                    kwargs['stdout'].flush()
+                    raise subprocess.TimeoutExpired(argv,timeout)
                 if mode != 'empty': (work/'allowed.txt').write_text('after\n')
                 if mode == 'delete': (work/'allowed.txt').unlink()
                 if mode == 'offscope': (work/'other.txt').write_text('bad')
@@ -417,10 +421,11 @@ class Invocation(unittest.TestCase):
                 raw = wire(events or rows())
                 if mode == 'malformed-stdout': raw += b'not JSON\n'
                 if mode == 'stream-secret': raw += TOKEN.encode()
-                if mode == 'stderr-secret': kwargs['stderr'].write(REFRESH.encode())
+                if mode in ('stderr-secret', 'exit-stderr-secret'):
+                    kwargs['stderr'].write(REFRESH.encode())
                 if mode == 'stream-oversize': raw = b'x'*(N.MAX_OUT+1)
                 kwargs['stdout'].write(raw); kwargs['stdout'].flush(); kwargs['stderr'].flush()
-                p.returncode = 7 if mode == 'exit' else 0
+                p.returncode = 7 if mode in ('exit', 'exit-stderr-secret') else 0
             p.communicate.side_effect = communicate
             p.poll.side_effect = lambda:p.returncode
             return p
@@ -473,6 +478,46 @@ class Invocation(unittest.TestCase):
     def test_timeout(self):
         with self.assertRaises(N.ReviewError): self.invoke('timeout')
         self.assert_failed()
+    def test_nonzero_retains_scanned_raw_before_exit_gate(self):
+        with self.assertRaises(N.ReviewError): self.invoke('exit')
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['exit_code'], 7)
+        self.assertEqual(receipt['failure_reason'], 'provider_nonzero_exit')
+        self.assertEqual(receipt['processing_stage'], 'streams_retained')
+        raw = next(self.outbox.rglob('stdout')).read_bytes()
+        self.assertEqual(receipt['stdout_sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(receipt['stderr_sha256'], hashlib.sha256(b'').hexdigest())
+        self.assertFalse((self.source/'allowed.txt').read_text() == 'after\n')
+
+    def test_unconfirmed_stdin_retains_scanned_raw_without_qualifying(self):
+        with self.assertRaises(N.ReviewError): self.invoke('stdin-short')
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['exit_code'], 0)
+        self.assertEqual(receipt['failure_reason'], 'stdin_delivery_unconfirmed')
+        self.assertEqual(receipt['processing_stage'], 'streams_retained')
+        self.assertTrue(next(self.outbox.rglob('stdout')).read_bytes())
+
+    def test_interrupted_provider_retains_partial_safe_output(self):
+        with self.assertRaises(N.ReviewError): self.invoke('timeout-partial')
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['failure_reason'], 'provider_timeout')
+        self.assertEqual(receipt['processing_stage'], 'streams_retained')
+        raw = next(self.outbox.rglob('stdout')).read_bytes()
+        self.assertEqual(receipt['stdout_sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertTrue(raw)
+        self.assertNotIn(TOKEN.encode(), raw)
+
+    def test_nonzero_with_credentials_never_archives_raw(self):
+        with self.assertRaises(N.ReviewError): self.invoke('exit-stderr-secret')
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertIsNone(receipt['stdout_sha256'])
+        self.assertEqual(receipt['failure_reason'], 'provider_output_scan_refused')
+        self.assertFalse([p for p in self.outbox.rglob('stdout') if p.is_file()])
+        self.assertFalse([p for p in self.outbox.rglob('stderr') if p.is_file()])
 
     def test_protocol_failure_retains_safe_raw_and_finite_stage(self):
         """After credential-clean streams, protocol FAIL keeps raw+stage; no import/READY."""
