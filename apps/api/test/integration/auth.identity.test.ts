@@ -181,6 +181,37 @@ describeIntegration("F-02 identity/session integration", () => {
     expect(body1.csrfToken).toBeTruthy();
     expect(JSON.stringify(body1)).not.toMatch(/test-access|vk-secret|provider-access/i);
 
+    // Owner #448: OAuth signup materializes social defaults; repeat login must not flip OFF.
+    const social = await pool.query<{
+      directory_visible: boolean;
+      contact_policy: string;
+      directory_visibility_provenance: string;
+      consent_policy_version: string | null;
+      city_id: string | null;
+      display_name: string;
+    }>(
+      `SELECT directory_visible, contact_policy, directory_visibility_provenance,
+              consent_policy_version, city_id, display_name
+       FROM player_social_profiles WHERE user_id = $1`,
+      [body1.id],
+    );
+    expect(social.rows[0]).toMatchObject({
+      directory_visible: true,
+      contact_policy: "requests",
+      directory_visibility_provenance: "owner_default",
+      consent_policy_version: null,
+      city_id: null,
+      display_name: "Player A",
+    });
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET directory_visible = false,
+           contact_policy = 'closed',
+           directory_visibility_provenance = 'user_opt_out'
+       WHERE user_id = $1`,
+      [body1.id],
+    );
+
     const second = await login("vk");
     const me2 = await app.inject({
       method: "GET",
@@ -189,6 +220,20 @@ describeIntegration("F-02 identity/session integration", () => {
     });
     expect(me2.statusCode).toBe(200);
     expect(me2.json().id).toBe(body1.id);
+    const retained = await pool.query<{
+      directory_visible: boolean;
+      contact_policy: string;
+      directory_visibility_provenance: string;
+    }>(
+      `SELECT directory_visible, contact_policy, directory_visibility_provenance
+       FROM player_social_profiles WHERE user_id = $1`,
+      [body1.id],
+    );
+    expect(retained.rows[0]).toMatchObject({
+      directory_visible: false,
+      contact_policy: "closed",
+      directory_visibility_provenance: "user_opt_out",
+    });
   });
 
   it("does not auto-link different provider subjects that share email", async () => {

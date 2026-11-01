@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps thirteen confirmed seed deployments including accepted alpha.1–alpha.6 and dedupes identical live rows", () => {
+  it("keeps fourteen confirmed seed deployments including accepted alpha.1–alpha.7 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(13);
+    expect(seedCount).toBe(14);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -280,6 +280,7 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.4"
       || row.application_version === "0.1.0-alpha.5"
       || row.application_version === "0.1.0-alpha.6"
+      || row.application_version === "0.1.0-alpha.7"
       || row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(true);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
@@ -319,6 +320,14 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.api_digest === "sha256:753b6ba373560b59cb0840b3d69ed19100629d8332004e208ac9fdced762c0c0"
       && row.deployments[0]?.web_digest === "sha256:7a8c300478d2a2ab428cee687f5e64cfb3db294eb38f25f3f48dae9a16163e40",
     )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.7"
+      && row.source_sha === "dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc"
+      && row.deployments[0]?.release_id === "r41331655353-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T17:33:52Z"
+      && row.deployments[0]?.api_digest === "sha256:c11807e1d7d9661f284a64236288c98f8afc1a53d1029c59ec51c9121b9f3705"
+      && row.deployments[0]?.web_digest === "sha256:25a6f51d6d5b5a5218a9b8e2ae84fdf3561dde274e1ff6705bb07501f1e9fba1",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.flatMap((row) => row.deployments).map((d) => d.accepted_at)).toEqual([
       "2026-10-31T20:28:18Z",
       "2026-10-31T23:22:12.477839Z",
@@ -333,6 +342,7 @@ describe("history seed integrity", () => {
       "2026-11-01T14:52:56Z",
       "2026-11-01T15:08:02Z",
       "2026-11-01T17:07:45Z",
+      "2026-11-01T17:33:52Z",
     ]);
   });
 

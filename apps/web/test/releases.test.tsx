@@ -20,8 +20,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.7 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.7");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.8 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.8");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -30,14 +30,13 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(FIRST_NAMED_RELEASE.feature_catalogue).toBe("full_baseline");
     expect(CURRENT_NAMED_RELEASE.feature_catalogue).toBe("delta");
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/games\/map|venues|каноническ/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/UUID|API/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/finder|Друзья|рекомендац|\/profile/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#445|NOT_TESTED|пункт 4/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/PG-3|PROD/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/не объявлена DONE|не обещается/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/#445 DONE|all 445 done|вся Issue PASS/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/PG-3|auto opt-in|#445 DONE/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/directoryVisible|contactPolicy|owner_default|каталог|ЛС/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/имя|email|город|consent/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/OFF|login|reread|0049|legacy/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/NOT_TESTED|deploy|PROD|alpha\.2/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#445|PG-3|Radar|email/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/DEV ACCEPTED|installed|PROD updated|#445 DONE/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/PG-3|SMTP|PROD deploy|#445 DONE/i);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
     expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);
@@ -63,7 +62,13 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.release_id === "r41329378049-a1"
       && row.deployments[0]?.accepted_at === "2026-11-01T17:07:45Z",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(9);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.7"
+      && row.source_sha === "dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc"
+      && row.deployments[0]?.release_id === "r41331655353-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-01T17:33:52Z",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(10);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

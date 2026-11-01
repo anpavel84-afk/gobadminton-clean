@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { deactivateTrainerProfile, deleteMyLookingForGame, getMe, getMySocialProfile, getTrainerProfile, listCities, logout, patchMySocialProfile, putMyLookingForGame, putMySocialProfileVisibility } from "../../../lib/api-client";
 import type { ApiResult } from "../../../lib/api-client";
 import type { City, Me, OwnSocialProfile, TrainerProfile } from "../../../lib/consumer-types";
-import { DIRECTORY_CONSENT_POLICY_VERSION, formatSocialLevel, isSocialDirectoryDisabled, lookingIntentActive, lookingIntentExpired, PILOT_LEVEL_OPTIONS, pilotSocialLevel } from "../../../lib/player-presentation";
+import { formatSocialLevel, isSocialDirectoryDisabled, lookingIntentActive, lookingIntentExpired, PILOT_LEVEL_OPTIONS, pilotSocialLevel } from "../../../lib/player-presentation";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { AuthEntry, Avatar, ProfileDialog, ProfileState, SectionHeader, Toggle, VisibilityRow } from "../players/ProfileComposition";
@@ -88,13 +88,13 @@ export function ProfilePage() {
   async function toggleDirectoryVisible() {
     if (!me || !social || social.version < 1 || busy || needsRefresh) return;
     const next = !social.directoryVisible;
-    if (next && !social.cityId) {
-      edit();
-      setNotice("Сначала укажите город в игровом профиле, чтобы показывать профиль в каталоге.");
-      return;
-    }
+    // Owner #448: city is not a prerequisite for directory visibility; do not invent consent.
     setBusy(true); setNotice("");
-    const result = await putMySocialProfileVisibility({ directoryVisible: next, expectedVersion: social.version, consentPolicyVersion: next ? social.consentPolicyVersion ?? DIRECTORY_CONSENT_POLICY_VERSION : undefined }, me.csrfToken);
+    const result = await putMySocialProfileVisibility({
+      directoryVisible: next,
+      expectedVersion: social.version,
+      consentPolicyVersion: next && social.consentPolicyVersion ? social.consentPolicyVersion : undefined,
+    }, me.csrfToken);
     setBusy(false); if (!result.ok) { failed(result); return; }
     hydrate(result.data); setNotice(next ? "Профиль видим в каталоге." : "Профиль скрыт из каталога.");
   }

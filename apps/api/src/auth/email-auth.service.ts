@@ -16,6 +16,10 @@ import { forbidden, notFound, problem, serviceUnavailable, unprocessable } from 
 import { ProviderRegistry } from "./providers/registry";
 import { normalizeReturnPath } from "./return-path";
 import { SessionService, type IssuedSession } from "./session.service";
+import {
+  SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+  ensureDefaultSocialProfile,
+} from "../profiles/social-profile-defaults";
 type Purpose = "login_signup" | "link" | "change_current" | "change";
 type Challenge = {
     id: string;
@@ -329,12 +333,27 @@ export class EmailAuthService {
                 else {
                     const user = await client.query<{
                         id: string;
-                    }>("INSERT INTO users(display_name,locale) VALUES('Игрок','ru') RETURNING id");
+                    }>("INSERT INTO users(display_name,locale) VALUES($1,'ru') RETURNING id", [
+                        SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+                    ]);
                     userId = user.rows[0]!.id;
                     await client.query("INSERT INTO email_auth_methods(user_id,email_canonical,email_display) VALUES($1,$2,$3)", [userId, row.email_canonical, row.email_display]);
                 }
-                if (!error)
+                if (!error) {
+                    // Owner #448 defaults for new users; DO NOTHING preserves explicit OFF.
+                    // Never use the mailbox as a public display name.
+                    const named = await client.query<{ display_name: string }>(
+                        "SELECT display_name FROM users WHERE id=$1",
+                        [userId!],
+                    );
+                    await ensureDefaultSocialProfile(client, {
+                        userId: userId!,
+                        displayName:
+                            named.rows[0]?.display_name?.trim() ||
+                            SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
+                    });
                     issued = await this.sessions.createConsumerSession(userId!, client);
+                }
             }
             await client.query("UPDATE email_auth_challenges SET state='consumed',consumed_at=now(),code_ciphertext=NULL WHERE id=$1", [id]);
             return { error, issued, returnPath: row.return_path };

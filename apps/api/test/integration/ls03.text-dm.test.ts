@@ -1261,9 +1261,12 @@ WHERE c.id = $1
       Number(beforeEpoch) + 1,
     );
 
+    // Direct restore after API opt-out must set truthful provenance (not leave user_opt_out).
     await pool.query(
       `UPDATE player_social_profiles
-       SET directory_visible = true, contact_policy = 'requests'
+       SET directory_visible = true,
+           contact_policy = 'requests',
+           directory_visibility_provenance = 'owner_default'
        WHERE user_id = $1`,
       [b.userId],
     );
@@ -1292,17 +1295,18 @@ WHERE c.id = $1
       cookies: a.cookies,
     });
     expect(fresh.statusCode).toBe(200);
+    // Owner #448: getOwn materializes physical profile ON at version 1.
     expect(fresh.json()).toMatchObject({
-      version: 0,
+      version: 1,
       contactPolicy: "requests",
-      directoryVisible: false,
+      directoryVisible: true,
     });
     const created = await app.inject({
       method: "PATCH",
       url: "/v1/me/social-profile",
       headers: mutationHeaders(a, `def-${uniqueSuffix("k")}-xxxxxxxx`),
       payload: {
-        expectedVersion: 0,
+        expectedVersion: (fresh.json() as { version: number }).version,
         displayName: "Default Policy",
         cityId: MOSCOW_CITY_ID,
       },
@@ -1320,6 +1324,11 @@ WHERE c.id = $1
     });
     expect(closed.statusCode).toBe(200);
     expect(closed.json()).toMatchObject({ contactPolicy: "closed" });
+    // Closing DM contact must not flip directory / shared social epoch by itself.
+    expect(closed.json()).toMatchObject({
+      directoryVisible: true,
+      version: (created.json() as { version: number }).version + 1,
+    });
     const dbDefault = await pool.query<{ column_default: string }>(
       `SELECT column_default FROM information_schema.columns
        WHERE table_name = 'player_social_profiles' AND column_name = 'contact_policy'`,

@@ -59,6 +59,9 @@ run("owned cover: disposable PostGIS API", () => {
   it("publishes only a moderated derivative; hidden cover is owner-only",async()=>{
     const r=await upload();expect(r.statusCode,r.body).toBe(200);version=r.json().version;url=r.json().cover.uploadedUrl;
     expect(url).toMatch(/^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/);
+    // Owner #448 materializes directory ON; hide explicitly so outsider/anonymous stay 404.
+    const hide=await app.inject({method:"PUT",url:"/v1/me/social-profile/visibility",headers:{...own,"content-type":"application/json","idempotency-key":randomUUID()},payload:{directoryVisible:false,expectedVersion:version}});
+    expect(hide.statusCode,hide.body).toBe(200);version=hide.json().version;
     expect((await read()).statusCode).toBe(404);expect((await read(other)).statusCode).toBe(404);
     const image=await read(own);expect(image.statusCode).toBe(200);expect(image.headers["cache-control"]).toBe("no-store");expect(image.headers.vary).toBe("Cookie");
     const meta=await sharp(image.rawPayload).metadata();expect(meta).toMatchObject({width:1200,height:400,format:"png"});expect(meta.exif).toBeUndefined();expect(meta.icc).toBeUndefined();
@@ -74,7 +77,8 @@ run("owned cover: disposable PostGIS API", () => {
     const del=await app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...own,"content-type":"application/json","idempotency-key":key,"x-profile-version":String(expected)},payload:{expectedVersion:expected}});expect(del.statusCode).toBe(409);
   });
   it("public visibility and bilateral block are checked for each media read",async()=>{
-    await pool.query("UPDATE player_social_profiles SET directory_visible=true,city_id=(SELECT id FROM cities LIMIT 1),consent_policy_version='directory-mvp-v1',opted_in_at=now() WHERE user_id=$1",[user]);
+    // Restore public directory after explicit hide: consent stamps + truthful provenance.
+    await pool.query("UPDATE player_social_profiles SET directory_visible=true,directory_visibility_provenance='user_consent',city_id=(SELECT id FROM cities LIMIT 1),consent_policy_version='directory-mvp-v1',opted_in_at=now() WHERE user_id=$1",[user]);
     expect((await read()).statusCode).toBe(200);expect((await read(other)).statusCode).toBe(200);
     // Use the normal Safety API with this TestApp's isolated directory flag.
     // Both directions must fence media; unblock through the same pair transaction.

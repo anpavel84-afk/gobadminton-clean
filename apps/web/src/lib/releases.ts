@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.7" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.8" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,20 +425,21 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Карта/venues, finder и guidance друзей — #445 followup",
+  title: "Социальные defaults ON для каталога и ЛС — #448",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [],
+  additions: [
+    "Новые email/OAuth и отсутствующие ACTIVE-профили: directoryVisible и contactPolicy=requests по умолчанию ON; provenance owner_default отделён от реального согласия.",
+    "Безопасное автоматическое публичное имя без email-формы, без выдуманного города и без подделки consent.",
+  ],
   fixes: [
-    "Устаревшие входы /games/map и /venues ведут на существующую каноническую карту /games?view=map.",
-    "Невалидный не-игровой UUID в пути игры завершает экран до вызова API.",
-    "Нейтральный prerequisite finder подходит и desktop «По одному», и mobile «Свайп».",
-    "Друзья и рекомендации показывают guidance сохранить/открыть видимость своего профиля со ссылкой /profile вместо ложного outage, когда свой профиль ещё не сохранён или скрыт.",
+    "Явный OFF пользователя сохраняется при login/reread; неизвестные изменённые legacy OFF не трогаются.",
+    "Миграция 0049 ограничена pristine/verified synthetic defaults и missing ACTIVE users; ambiguous/explicit старые OFF сохраняются.",
   ],
   known_limitations: [
-    "Пункт 4 #445 требует URL/роль игры от репортёра; postgame fixture ждёт reporter ID.",
-    "Не обещается, что все новые пользователи eligible или что приватные профили включены; вся #445 не объявлена DONE.",
-    "Go Bad / Owner UAT = NOT_TESTED; PG-3/PG-4 не установлены; PROD не изменён; без auto opt-in и без смены backend-разрешений.",
+    "Owner policy для обоих окружений одобрена в source; фактический DEV/PROD deploy ещё не выполнен — отдельные будущие receipts.",
+    "Будущий пользовательский OFF не включается повторно; Radar/blocks/moderation без изменений; private email не становится публичным; география/skill не фабрикуются.",
+    "Частичный privacy backfill честен: verified initial synthetic/pristine → ON; нет гарантии сброса всех уже OFF; #445 OPEN/retest pending; PG-3/PG-4 не установлены; PROD остаётся alpha.2; UAT = NOT_TESTED.",
   ],
   feature_catalogue: "delta",
 };
@@ -731,6 +732,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Пункты2–6 #445 ещё не доставлены этим выпуском; всяIssue не PASS.",
       "Go Bad retest, authenticated live creation и physicaliPhoneUAT NOT_TESTED.",
       "PG-3 не установлен; PROD остаётсяalpha.2."
+    ]
+  },
+  {
+    "source_sha": "dd3839814fdb4ed8e05a64301e4aaaacff5cf0cc",
+    "application_version": "0.1.0-alpha.7",
+    "version_label": "0.1.0-alpha.7",
+    "title": "Подсказки своего профиля и канонические переходы — #445, пункты2/3/5/6",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41331655353-a1",
+        "accepted_at": "2026-11-01T17:33:52Z",
+        "api_digest": "sha256:c11807e1d7d9661f284a64236288c98f8afc1a53d1029c59ec51c9121b9f3705",
+        "web_digest": "sha256:25a6f51d6d5b5a5218a9b8e2ae84fdf3561dde274e1ff6705bb07501f1e9fba1",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Подсказки о собственном скрытом/несохранённом профиле для социальных действий.",
+      "Канонические переходы /games/map и /venues → /games?view=map; неверная игра404.",
+      "Нейтральный finder в пределах пунктов2/3/5/6 #445."
+    ],
+    "known_limitations": [
+      "GoBad authorized browser retest и OwnerUAT NOT_TESTED; конкретный аккаунт неизвестен.",
+      "Пункт4 ждёт URL игры и роль репортёра; postgame fixture ждёт reporterID.",
+      "Не весь #445 PASS; PG3 не установлен; PROD остаётсяalpha2."
     ]
   },
 ] as const;
