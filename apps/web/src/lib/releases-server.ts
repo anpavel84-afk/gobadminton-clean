@@ -4,7 +4,7 @@
 
 import {
   CURRENT_APPLICATION_VERSION,
-  FIRST_NAMED_RELEASE,
+  CURRENT_NAMED_RELEASE,
   TRUSTED_HISTORICAL_SEED,
   normalizeRepoSha40,
   runtimeBuildGitSha,
@@ -322,10 +322,10 @@ function seedTitleFor(sha: string): Pick<HistoryRow, "title" | "version_label" |
   }
   if (sha === runtimeBuildGitSha() && sha !== "unknown") {
     return {
-      title: FIRST_NAMED_RELEASE.title,
+      title: CURRENT_NAMED_RELEASE.title,
       version_label: CURRENT_APPLICATION_VERSION,
       application_version: CURRENT_APPLICATION_VERSION,
-      owner_uat: FIRST_NAMED_RELEASE.owner_uat,
+      owner_uat: CURRENT_NAMED_RELEASE.owner_uat,
     };
   }
   return {
@@ -468,7 +468,7 @@ export async function loadReleasesPageModel(): Promise<ReleasesPageModel> {
     env.projection.state === "ok" ? env.projection.data : null,
   );
   const named: NamedReleaseNotes = {
-    ...FIRST_NAMED_RELEASE,
+    ...CURRENT_NAMED_RELEASE,
     source_sha: null,
   };
   const buildSha = runtimeBuildGitSha();

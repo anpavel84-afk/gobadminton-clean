@@ -2,7 +2,9 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.2" as const;
+/** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
+export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.20.0" as const;
 
 export type FeatureAvailability =
@@ -398,7 +400,7 @@ export const SWITCHED_OFF_INTERNAL: readonly { id: string; title: string; note: 
 ] as const;
 
 export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
-  application_version: CURRENT_APPLICATION_VERSION,
+  application_version: FIRST_NAMED_APPLICATION_VERSION,
   title: "Первый именованный выпуск: что умеет приложение",
   source_sha: null,
   owner_uat: "NOT_TESTED",
@@ -418,6 +420,25 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
     "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
   ],
   feature_catalogue: "full_baseline",
+};
+
+/** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
+export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
+  application_version: CURRENT_APPLICATION_VERSION,
+  title: "Исправление ложного конца подборки в «Свайп»",
+  source_sha: null,
+  owner_uat: "NOT_TESTED",
+  additions: [],
+  fixes: [
+    "Режим «Свайп» дожидается готовности собственного профиля и не показывает ложный конец подборки",
+    "Скрытый собственный профиль объясняется со ссылкой на настройки, без автосмены приватности",
+    "Ошибка или отсутствие профиля и временная недоступность предложений отделены от настоящего конца списка",
+  ],
+  known_limitations: [
+    "Исправление режима «Свайп» ещё не проверялось владельцем после обычного входа",
+    "Номер текущей установки подтверждается только после фактической установки, а не по кандидату в разработке",
+  ],
+  feature_catalogue: "delta",
 };
 
 /** Confirmed historical deployments only; application versions remain unnumbered. */
@@ -492,6 +513,40 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Владелец ещё не проверял сервис после обычного входа",
       "Номер alpha ещё не присвоен",
       "Admin остаётся служебным; вход по email, результаты после игры и push не включены"
+    ]
+  },
+  {
+    "source_sha": "8733578a2f8a6cfd860371e8a2c2aa39f1b885bb",
+    "application_version": FIRST_NAMED_APPLICATION_VERSION,
+    "version_label": FIRST_NAMED_APPLICATION_VERSION,
+    "title": "Первый именованный выпуск 0.1.0-alpha.1",
+    "api_contract_version": "0.20.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41257679087-a1",
+        "accepted_at": "2026-11-01T00:45:11Z",
+        "api_digest": "sha256:fbb8e6328131c2b0fdbb4dee1d2e8083e18f1444ac9be92dc90ecb794977e230",
+        "web_digest": "sha256:7747c12431a31a97819994af36c0d11069c963098ccd77504ab9b9ca0dd76860",
+        "kind": "pipeline"
+      },
+      {
+        "environment": "prod",
+        "status": "ACCEPTED",
+        "release_id": null,
+        "accepted_at": "2026-11-01T00:47:25.574224Z",
+        "api_digest": "sha256:fbb8e6328131c2b0fdbb4dee1d2e8083e18f1444ac9be92dc90ecb794977e230",
+        "web_digest": "sha256:7747c12431a31a97819994af36c0d11069c963098ccd77504ab9b9ca0dd76860",
+        "kind": "managed_application_only"
+      }
+    ],
+    "additions": [],
+    "fixes": [],
+    "known_limitations": [
+      "Владелец ещё не проверял сервис после обычного входа в браузере",
+      "Полный базовый каталог первой alpha сохранён под номером 0.1.0-alpha.1"
     ]
   },
 ] as const;

@@ -14,6 +14,7 @@ import {
 import {
   CURRENT_APPLICATION_VERSION,
   FIRST_ALPHA_FEATURES,
+  FIRST_NAMED_APPLICATION_VERSION,
   TRUSTED_HISTORICAL_SEED,
   formatReleaseDateRu,
   normalizeRepoSha40,
@@ -253,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps four confirmed seed deployments and dedupes identical live rows", () => {
+  it("keeps six confirmed seed deployments including accepted alpha.1 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(4);
+    expect(seedCount).toBe(6);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -271,14 +272,24 @@ describe("history seed integrity", () => {
     };
     const rows = buildHistoryRows(TRUSTED_HISTORICAL_SEED, [live, null]);
     expect(rows.filter((row) => row.source_sha.startsWith("11558239") && row.environment === "dev")).toHaveLength(1);
-    expect(rows.every((row) => row.application_version == null || row.application_version === CURRENT_APPLICATION_VERSION)).toBe(true);
+    expect(rows.every((row) =>
+      row.application_version == null
+      || row.application_version === FIRST_NAMED_APPLICATION_VERSION
+      || row.application_version === CURRENT_APPLICATION_VERSION,
+    )).toBe(true);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
-    expect(TRUSTED_HISTORICAL_SEED.every((row) => row.application_version == null)).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === FIRST_NAMED_APPLICATION_VERSION
+      && row.source_sha === "8733578a2f8a6cfd860371e8a2c2aa39f1b885bb",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.flatMap((row) => row.deployments).map((d) => d.accepted_at)).toEqual([
       "2026-10-31T20:28:18Z",
       "2026-10-31T23:22:12.477839Z",
       "2026-11-01T00:02:38Z",
       "2026-11-01T00:04:47.811785Z",
+      "2026-11-01T00:45:11Z",
+      "2026-11-01T00:47:25.574224Z",
     ]);
   });
 

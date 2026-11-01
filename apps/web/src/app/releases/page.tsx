@@ -232,7 +232,7 @@ export default async function ReleasesPage() {
         <section className="gb-releases-section" aria-labelledby="releases-features">
           <h2 id="releases-features">Что умеет приложение</h2>
           <p>
-            Базовый список функций первой alpha по фактическому коду.
+            Базовый список функций первой alpha (0.1.0-alpha.1) по фактическому коду.
             «Доступно» значит, что функция есть в сборке — это ещё не отдельная проверка владельцем после входа.
           </p>
           <div className="gb-releases-groups">
