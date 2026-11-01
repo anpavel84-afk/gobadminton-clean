@@ -1,24 +1,37 @@
 # GoBadminton release notes
 
-## #372 — PG-3 private reviews + personal notes (0.1.0-alpha.5 candidate)
+## #372 — PG-3 private reviews + personal notes (0.1.0-alpha.6 prospective)
 
-Private peer/organization/training reviews with recipient reply singleton, author patch + history, personal manager notes with versioned tombstone, GET me/reviews, optional GameResults.feedback projection. API contract additive `0.23.0`. Migration `0048` additive. Writes remain `POST_GAME_INTERNAL_ENABLED` default OFF. Typed review Safety complaint extension remains **remaining** (existing player report reused). **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 and alpha.4 records retained below.
+Private peer/organization/training reviews with recipient reply singleton, author patch + history, personal manager notes with versioned tombstone, GET me/reviews, optional GameResults.feedback projection. API contract additive `0.23.0`. Migration `0048` additive. Writes remain `POST_GAME_INTERNAL_ENABLED` default OFF. Typed review Safety complaint extension remains **remaining** (existing player report reused). **Not** READY / not DEV ACCEPTED / not PROD. Prospective only: current merge SHA and acceptance date unbound until accepted live projection. Historical alpha.3 / alpha.4 / SMTP alpha.5 records retained below.
 
-- Application version (candidate): `0.1.0-alpha.5`
+- Application version (prospective candidate): `0.1.0-alpha.6`
 - API contract (candidate): `0.23.0`
 - Refs: #372 / PG-3
 - Independent QA / Product CI / DEV install: pending trusted process
 - Owner UAT: NOT_TESTED
-- Known limits: no PG-4 / #394 public comments; PROD unchanged alpha.2; complaint typed extension remaining
+- Known limits: no PG-4 / #394 public comments; PROD unchanged alpha.2 / email=false; complaint typed extension remaining
+
+## #442 — SMTP one-time code delivery (0.1.0-alpha.5 DEV ACCEPTED)
+
+TLS SMTP transport (REG.RU) wired to the existing durable email-code queue and worker. Login code sent from `info@gobadminton.ru`; transient errors keep prior bounded retries. Worker bound to the accepted API registry manifest reference; secrets read only by protected worker runtime. Public DEV discovery reports email=true — **not** proof of delivery to a real mailbox. Registration/recovery/Owner UAT NOT_TESTED. PROD remains alpha.2 with email=false; no PROD email enablement claimed.
+
+- Application version: `0.1.0-alpha.5`
+- API contract: `0.22.0`
+- Accepted source: `06991b099317a702dc102eeef53ee64cfa841f0e`
+- Refs: #442 / PR #443
+- DEV release: `r41317332177-a1` (accepted `2026-11-01T14:52:56Z`)
+- Owner UAT: NOT_TESTED
+- Delivery to real mailbox: NOT_VERIFIED by release receipt
 
 ## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 DEV ACCEPTED)
 
-Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. DEV accepted candidate `d8b54e590e204c2cdf6df89f21c6ee09b34465d1` on base `7a36b8d94a5df412426155e5852fddd9da7b0045`, release `r41310911419-a1`, accepted_at unix `1793540078`. Runtime writes default OFF until DEV activation. PROD unchanged alpha.2. Owner UAT NOT_TESTED.
+Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. DEV accepted source `7a36b8d94a5df412426155e5852fddd9da7b0045`, release `r41310911419-a1`, accepted_at `2026-11-01T13:34:38Z`. Runtime writes default OFF until DEV activation. PROD unchanged alpha.2. Owner UAT NOT_TESTED.
 
 - Application version: `0.1.0-alpha.4`
 - API contract: `0.22.0`
+- Accepted source: `7a36b8d94a5df412426155e5852fddd9da7b0045`
 - Refs: #372 / PG-2 / PR #441
-- DEV release: `r41310911419-a1`
+- DEV release: `r41310911419-a1` (accepted `2026-11-01T13:34:38Z`)
 - Owner UAT: NOT_TESTED
 
 ## #372 — PG-1b attendance + results (0.1.0-alpha.3 DEV ACCEPTED)
