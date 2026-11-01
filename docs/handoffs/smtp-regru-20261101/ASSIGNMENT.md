@@ -1,5 +1,7 @@
 # Owner-direct SMTP slice · 2026-11-01
 
+Canonical Issue: #442.
+
 Role: bounded implementer/OPS of the explicit Owner SMTP assignment, not a second
 PMA. Repo anpavel84-afk/gobadminton-clean; base DEV
 7a36b8d94a5df412426155e5852fddd9da7b0045. Current execution rules: DEV AGENTS.md Lean Delivery v2 at the exact base SHA,
