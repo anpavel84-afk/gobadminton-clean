@@ -35,7 +35,8 @@ Install dev-worker.py and its systemd unit from scripts/mail. This runs the
 existing `dist/worker-main.js` and its existing queues/schedules, not a second
 scheduler implementation. No other mail worker may be running. It verifies the
 accepted DEV API SHA, image digest, exact DEV origins and enabled SMTP; uses the
-API environment privately and mounts the existing root-only password read-only.
+API environment privately, selects only the existing DEV database network
+(`gobadminton_dev_preview_internal`, regardless of additional API web networks), and mounts the existing root-only password read-only.
 The container has no Linux capabilities, a read-only root filesystem, and no-new-
 privileges. Root inside this restricted container is needed to read the authorized
 root:root 0600 bind mount; the public API remains its existing nonroot UID.
