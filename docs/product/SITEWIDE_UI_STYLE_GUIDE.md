@@ -79,6 +79,10 @@ Owner-directed FormGroup control: two native `type=range` handles (От / До) 
 
 Owner-ordered desktop messenger repair (UAT followup): two-pane host on the existing shell rail (`336px` inbox ≥901, `320px` at 721–900); shared 88px pane-header baseline; single-row native filter select (`all` / `unread` / `attention`) instead of wrapping pills or rubricator headers; pending request as directional first message in the scroll body with compact status/decision footer outside scroll; independent inbox-list and conversation-body scroll. Dialogs keep Spacious40; mobile focused host, Back, RootNav, and keyboard/safe-area behavior stay as today (one nav reserve). No new tokens.
 
+## Own profile actions (#402)
+
+Under the shared own-profile hero, one open `role="group"` (`.own-profile-actions`): primary lime «Изменить профиль», outline «Изменить обложку» (`CoverEditor` `presentation="action-row"` between edit and settings), ghost «Настройки» with real `/profile/settings` href. Equal min-height 48; desktop left-aligned slots 200 / 200 / 132, gap 12; ≤720 stack full-width, gap 10. No white action card, captions, or new icons. Scope styles to the direct cover trigger only — not dialog controls. Preserve hero/cover/avatar/name and existing edit/cover/settings handlers.
+
 ## Out of scope
 
 Backend/API/migrations, new features, feed rewrite, gallery JS/synthetic data in the app, PROD deploy, mass cleanup migration to `main`.

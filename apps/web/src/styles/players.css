@@ -98,9 +98,29 @@
 .fr3 .own-profile-guest__panel { padding: 28px; border: 1px solid var(--gb-line); border-radius: 20px; background: var(--gb-white); display: grid; gap: 16px; max-width: 720px; }
 /* Own profile: reuse shared player-profile-hero; controls sit below, not on the photo. */
 .fr3 .own-profile-identity { position: relative; margin-bottom: 24px; display: grid; gap: 16px; }
-.fr3 .own-profile-actionband { margin-top: 0; }
-.fr3 .own-profile-actionband > .profile-cover-controls { margin: 0; padding: 0; }
-.fr3 .own-profile-actionband .player-profile-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+/* #402 own-profile actions: open compact group under hero — no white card/captions. */
+.fr3 .own-profile-actions {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-start;
+  gap: 12px; margin: 0; padding: 0; border: 0; background: transparent; max-width: 100%;
+}
+.fr3 .own-profile-actions > .gb-c23-btn {
+  flex: 0 1 200px; width: 200px; max-width: 100%; min-width: 0; min-height: 48px;
+  box-sizing: border-box; white-space: normal;
+}
+.fr3 .own-profile-actions > .gb-c23-btn--ghost {
+  flex-basis: 132px; width: 132px;
+}
+.fr3 .own-profile-actions > .profile-cover-controls--action-row {
+  flex: 0 1 200px; width: 200px; max-width: 100%; min-width: 0;
+  margin: 0; padding: 0; display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+}
+/* Direct trigger only — do not restyle CoverEditor dialog descendants. */
+.fr3 .own-profile-actions > .profile-cover-controls--action-row > .gb-c23-btn {
+  width: 100%; min-height: 48px; box-sizing: border-box; white-space: normal;
+}
+.fr3 .own-profile-actions > .profile-cover-controls--action-row > .profile-cover-controls__notice {
+  margin: 0; font-size: 13px; line-height: 1.4; color: var(--gb-ink-soft);
+}
 /* Legacy cover-frame alias: CoverEditor / older selectors may still query this class on the shared visual. */
 .fr3 .own-profile-identity .player-profile-visual.own-profile-avatar,
 .fr3 .own-profile-avatar { position: relative; overflow: hidden; background: var(--gb-lime); display: grid; place-items: center; }
@@ -425,8 +445,12 @@
   .fr3 .own-profile-avatar--compact { min-height:180px; }
   .fr3 .own-profile-avatar--measure { min-height: 0; }
   .fr3 .own-profile-avatar:not(.player-profile-visual) > .avatar { width:108px; height:108px; font-size:25px; }
-  .fr3 .own-profile-actionband .player-profile-actions { flex-direction:column; align-items:stretch; }
-  .fr3 .own-profile-actionband .player-profile-actions .gb-c23-btn { width:100%; }
+  .fr3 .own-profile-actions { flex-direction: column; align-items: stretch; gap: 10px; }
+  .fr3 .own-profile-actions > .gb-c23-btn,
+  .fr3 .own-profile-actions > .gb-c23-btn--ghost,
+  .fr3 .own-profile-actions > .profile-cover-controls--action-row {
+    flex: none; width: 100%;
+  }
   .fr3 .own-profile-intro .gb-c23-btn { width:100%; }
   .fr3 .own-profile-main { gap:12px; min-width:0; }
   .fr3 .profile-section { padding:20px; }

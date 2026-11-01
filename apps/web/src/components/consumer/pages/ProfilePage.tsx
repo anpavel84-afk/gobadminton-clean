@@ -181,12 +181,10 @@ export function ProfilePage() {
             cover: social?.cover,
           }}
         />
-        <div className="own-profile-actionband player-profile-actionband">
-          <div className="player-profile-actions" data-surface="op-actions">
-            <Button variant="outline" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button>
-            <Button href="/profile/settings" variant="ghost">Настройки</Button>
-          </div>
-          {social && !socialUnavailable && <CoverEditor frameRef={coverFrame} onUnauthorized={() => setState("auth")} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onReconcile={hydrate} onChange={value => setSocial(current => current && value.version >= current.version ? { ...current, ...value } : current)} />}
+        <div className="own-profile-actions" role="group" aria-label="Действия профиля" data-surface="op-actions">
+          <Button variant="primary" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button>
+          {social && !socialUnavailable && <CoverEditor presentation="action-row" frameRef={coverFrame} onUnauthorized={() => setState("auth")} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onReconcile={hydrate} onChange={value => setSocial(current => current && value.version >= current.version ? { ...current, ...value } : current)} />}
+          <Button href="/profile/settings" variant="ghost">Настройки</Button>
         </div>
       </section>
       <div className="own-profile-layout"><div className="own-profile-main">
