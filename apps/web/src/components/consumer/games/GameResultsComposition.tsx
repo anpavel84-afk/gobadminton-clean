@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   getAttendanceHistory,
   getGame,
@@ -22,11 +22,39 @@ import {
 import { Button } from "../Button";
 import { ContentContainer, SurfacePanel } from "../Surfaces";
 import { Avatar, ProfileDialog, SectionHeader } from "../players/ProfileComposition";
-import { useGameResultsMutation } from "./useGameResultsMutation";
+import {
+  type GameResultsMutationData,
+  useGameResultsMutation,
+} from "./useGameResultsMutation";
 import "../../../styles/postgame.css";
 
 type Tab = "attendance" | "clarification" | "feedback";
 type MarkTarget = { record: AttendanceRecord; mode: "single" | "bulk-review" } | null;
+type GameResultsMutationApi = ReturnType<typeof useGameResultsMutation>;
+
+/**
+ * Immutable actor+game operation host: one useGameResultsMutation instance for this
+ * mount only. Parent keys by `${actorId}:${gameId}` so A→B / game change remounts
+ * (live=false + generation bump) and cannot retry or clear across hosts.
+ */
+function GameResultsMutationHost({
+  actorId,
+  gameId,
+  csrf,
+  onSuccess,
+  onRefresh,
+  children,
+}: {
+  actorId: string;
+  gameId: string;
+  csrf: string;
+  onSuccess: (data: GameResultsMutationData) => void;
+  onRefresh: () => void;
+  children: (mutation: GameResultsMutationApi) => ReactNode;
+}) {
+  const mutation = useGameResultsMutation(actorId, gameId, csrf, onSuccess, onRefresh);
+  return <>{children(mutation)}</>;
+}
 
 function initials(name: string): string {
   return name
@@ -77,9 +105,6 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const actorRef = useRef<string | null>(null);
   actorRef.current = me?.id ?? null;
 
-  const actorId = me?.id ?? `anon:${gameId}`;
-  const csrf = me?.csrfToken ?? "";
-
   function clearSensitiveUi() {
     setResults(null);
     setGame(null);
@@ -103,6 +128,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     const account = await getMe();
     if (request !== epoch.current) return;
     if (!account.ok) {
+      actorRef.current = null;
       setMe(null);
       clearSensitiveUi();
       setState(account.status === 401 ? "auth" : "error");
@@ -115,6 +141,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     if (actorRef.current && actorRef.current !== account.data.id) return;
     if (!resultsRes.ok) {
       if (resultsRes.status === 401) {
+        actorRef.current = null;
         setMe(null);
         clearSensitiveUi();
         setState("auth");
@@ -135,37 +162,9 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setState("ready");
   }
 
-  const mutation = useGameResultsMutation(
-    actorId,
-    gameId,
-    csrf,
-    () => {
-      // Native callback applies only while this actor still owns the page host.
-      if (!actorRef.current || actorRef.current !== actorId) return;
-      setMarkTarget(null);
-      setBulkConfirmOpen(false);
-      setBulkSelected({});
-      setDisputeOpen(false);
-      setDisputeText("");
-      setOutcomeOpen(false);
-      setNotice(null);
-      void reload();
-    },
-    () => {
-      if (!actorRef.current || actorRef.current !== actorId) return;
-      void reload();
-    },
-  );
-
-  const writes = canOfferAttendanceWrites(results);
-  const isManager = Boolean(results?.attendance?.roster);
-  const my = results?.attendance?.myAttendance ?? null;
-  const busy = mutation.busy;
-  const unknownOp = mutation.pending;
-  const displayNotice = notice ?? (mutation.notice || null);
-
   useEffect(() => {
     epoch.current += 1;
+    actorRef.current = null;
     setMe(null);
     clearSensitiveUi();
     setState("loading");
@@ -173,6 +172,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     const onSession = () => {
       // Synchronously invalidate async ownership + clear private/UI transients.
       epoch.current += 1;
+      actorRef.current = null;
       setMe(null);
       clearSensitiveUi();
       setState("auth");
@@ -184,6 +184,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       window.removeEventListener("gb-private-expired", onSession);
       window.removeEventListener("gb-session-changed", onSession);
       epoch.current += 1;
+      actorRef.current = null;
     };
   }, [gameId]);
 
@@ -192,114 +193,118 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     return roster.filter((row) => bulkSelected[row.contextId]);
   }, [results, bulkSelected]);
 
-  function runWrite(path: string, body: object, method: string): boolean {
-    if (!me || unknownOp || busy) return false;
-    setNotice(null);
-    // Synchronous admission: double-click before re-render is rejected by hook lock/pending.
-    return mutation.run(path, body, method);
-  }
+  function renderWritable(mutation: GameResultsMutationApi) {
+    const writes = canOfferAttendanceWrites(results);
+    const isManager = Boolean(results?.attendance?.roster);
+    const my = results?.attendance?.myAttendance ?? null;
+    const busy = mutation.busy;
+    const unknownOp = mutation.pending;
+    const displayNotice = notice ?? (mutation.notice || null);
 
-  function submitMark() {
-    if (!me || !markTarget || markTarget.mode !== "single") return;
-    const record = markTarget.record;
-    const reason = markReason.trim();
-    if (record.version > 0 && !reason) {
-      setNotice("Укажите причину исправления.");
-      return;
+    function runWrite(path: string, body: object, method: string): boolean {
+      if (!me || unknownOp || busy) return false;
+      setNotice(null);
+      // Synchronous admission: double-click before re-render is rejected by hook lock/pending.
+      return mutation.run(path, body, method);
     }
-    runWrite(
-      `/v1/games/${gameId}/attendance/${record.contextId}`,
-      {
-        expectedVersion: record.version,
-        value: markValue,
-        late: markValue === "present" ? markLate : false,
-        ...(record.version > 0 ? { correctionReason: reason } : {}),
-      },
-      "PUT",
-    );
-  }
 
-  function submitBulk() {
-    if (!me || selectedBulkItems.length === 0) return;
-    runWrite(
-      `/v1/games/${gameId}/attendance/bulk-present`,
-      {
-        items: selectedBulkItems.map((row) => ({
-          contextId: row.contextId,
-          expectedVersion: row.version,
-        })),
-        confirmedExactSelection: true,
-      },
-      "POST",
-    );
-  }
-
-  function submitAck() {
-    if (!me || !my) return;
-    runWrite(
-      `/v1/games/${gameId}/attendance/${my.contextId}/acknowledgements`,
-      { attendanceVersion: my.version },
-      "POST",
-    );
-  }
-
-  function submitDispute() {
-    if (!me || !my) return;
-    const explanation = disputeText.trim();
-    if (!explanation) {
-      setNotice("Укажите пояснение.");
-      return;
+    function submitMark() {
+      if (!me || !markTarget || markTarget.mode !== "single") return;
+      const record = markTarget.record;
+      const reason = markReason.trim();
+      if (record.version > 0 && !reason) {
+        setNotice("Укажите причину исправления.");
+        return;
+      }
+      runWrite(
+        `/v1/games/${gameId}/attendance/${record.contextId}`,
+        {
+          expectedVersion: record.version,
+          value: markValue,
+          late: markValue === "present" ? markLate : false,
+          ...(record.version > 0 ? { correctionReason: reason } : {}),
+        },
+        "PUT",
+      );
     }
-    runWrite(
-      `/v1/games/${gameId}/attendance/${my.contextId}/disputes`,
-      { attendanceVersion: my.version, explanation },
-      "POST",
-    );
-  }
 
-  async function openHistory(contextId: string) {
-    const request = epoch.current;
-    const history = await getAttendanceHistory(gameId, contextId);
-    if (request !== epoch.current) return;
-    if (!history.ok) {
-      setNotice(history.error);
-      return;
+    function submitBulk() {
+      if (!me || selectedBulkItems.length === 0) return;
+      runWrite(
+        `/v1/games/${gameId}/attendance/bulk-present`,
+        {
+          items: selectedBulkItems.map((row) => ({
+            contextId: row.contextId,
+            expectedVersion: row.version,
+          })),
+          confirmedExactSelection: true,
+        },
+        "POST",
+      );
     }
-    setHistoryLines(
-      history.data.items.map(
-        (item) =>
-          `v${item.version}: ${attendanceLabel(item.after.value)}${item.after.late ? " · опоздание" : ""} · ${item.actorDisplay} · ${item.source} · ${item.recordedAt}`,
-      ),
-    );
-    setHistoryOpen(true);
-  }
 
-  function submitOutcome() {
-    if (!me || !results) return;
-    const needsReason = outcomeValue === "not_held" || results.outcome.version > 0;
-    const reason = outcomeReason.trim();
-    if (needsReason && !reason) {
-      setNotice("Укажите причину.");
-      return;
+    function submitAck() {
+      if (!me || !my) return;
+      runWrite(
+        `/v1/games/${gameId}/attendance/${my.contextId}/acknowledgements`,
+        { attendanceVersion: my.version },
+        "POST",
+      );
     }
-    runWrite(
-      `/v1/games/${gameId}/outcome`,
-      {
-        expectedVersion: results.outcome.version,
-        outcome: outcomeValue,
-        ...(needsReason ? { reason } : {}),
-      },
-      "PUT",
-    );
-  }
 
-  return (
-    <ContentContainer className="gb-postgame" data-surface="game-results">
-      <a className="gb-postgame__back" href="/my-games">← К моим играм</a>
-      <h1>Участники / Итоги</h1>
+    function submitDispute() {
+      if (!me || !my) return;
+      const explanation = disputeText.trim();
+      if (!explanation) {
+        setNotice("Укажите пояснение.");
+        return;
+      }
+      runWrite(
+        `/v1/games/${gameId}/attendance/${my.contextId}/disputes`,
+        { attendanceVersion: my.version, explanation },
+        "POST",
+      );
+    }
 
+    async function openHistory(contextId: string) {
+      const request = epoch.current;
+      const history = await getAttendanceHistory(gameId, contextId);
+      if (request !== epoch.current) return;
+      if (!history.ok) {
+        setNotice(history.error);
+        return;
+      }
+      setHistoryLines(
+        history.data.items.map(
+          (item) =>
+            `v${item.version}: ${attendanceLabel(item.after.value)}${item.after.late ? " · опоздание" : ""} · ${item.actorDisplay} · ${item.source} · ${item.recordedAt}`,
+        ),
+      );
+      setHistoryOpen(true);
+    }
+
+    function submitOutcome() {
+      if (!me || !results) return;
+      const needsReason = outcomeValue === "not_held" || results.outcome.version > 0;
+      const reason = outcomeReason.trim();
+      if (needsReason && !reason) {
+        setNotice("Укажите причину.");
+        return;
+      }
+      runWrite(
+        `/v1/games/${gameId}/outcome`,
+        {
+          expectedVersion: results.outcome.version,
+          outcome: outcomeValue,
+          ...(needsReason ? { reason } : {}),
+        },
+        "PUT",
+      );
+    }
+
+    return (
+      <>
       {state === "loading" ? <p role="status">Загружаем итоги…</p> : null}
-      {state === "auth" ? <p>Войдите, чтобы открыть итоги игры.</p> : null}
       {state === "forbidden" ? <p>Итоги этой игры недоступны.</p> : null}
       {state === "error" ? (
         <div>
@@ -664,6 +669,55 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             </Button>
           </form>
         </ProfileDialog>
+      )}
+      </>
+    );
+  }
+
+  return (
+    <ContentContainer className="gb-postgame" data-surface="game-results">
+      <a className="gb-postgame__back" href="/my-games">← К моим играм</a>
+      <h1>Участники / Итоги</h1>
+
+      {!me ? (
+        <>
+          {state === "loading" ? <p role="status">Загружаем итоги…</p> : null}
+          {state === "auth" ? <p>Войдите, чтобы открыть итоги игры.</p> : null}
+          {state === "error" ? (
+            <div>
+              <p>{error}</p>
+              <Button onClick={() => void reload()}>Обновить</Button>
+            </div>
+          ) : null}
+          {state !== "loading" && state !== "auth" && state !== "error" ? (
+            <p>Войдите, чтобы открыть итоги игры.</p>
+          ) : null}
+        </>
+      ) : (
+        <GameResultsMutationHost
+          key={`${me.id}:${gameId}`}
+          actorId={me.id}
+          gameId={gameId}
+          csrf={me.csrfToken}
+          onSuccess={() => {
+            // Native callback applies only while this actor still owns the page host.
+            if (!actorRef.current || actorRef.current !== me.id) return;
+            setMarkTarget(null);
+            setBulkConfirmOpen(false);
+            setBulkSelected({});
+            setDisputeOpen(false);
+            setDisputeText("");
+            setOutcomeOpen(false);
+            setNotice(null);
+            void reload();
+          }}
+          onRefresh={() => {
+            if (!actorRef.current || actorRef.current !== me.id) return;
+            void reload();
+          }}
+        >
+          {(mutation) => renderWritable(mutation)}
+        </GameResultsMutationHost>
       )}
     </ContentContainer>
   );
