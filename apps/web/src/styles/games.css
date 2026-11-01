@@ -219,10 +219,10 @@
 .gb-game-stepper { display: flex; align-items: center; gap: 8px; }
 .gb-game-stepper button { flex: none; width: 44px; height: 44px; border: 1px solid var(--gb-line); border-radius: 12px; background: var(--gb-paper); font-size: 22px; cursor: pointer; }
 .gb-game-stepper input { text-align: center; }
-/* #432 create level range — two native ranges; shared form/trainer/embedded. */
+/* #445 point1 / #433 create level range — one shared track, two native handles. */
 .gb-game-level-range {
   display: grid;
-  gap: 8px;
+  gap: var(--gb-space-2);
   min-width: 0;
   width: 100%;
   max-width: 100%;
@@ -233,7 +233,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--gb-space-2);
   min-width: 0;
 }
 .gb-game-level-range__summary {
@@ -242,22 +242,78 @@
   font-variant-numeric: tabular-nums;
   color: var(--gb-ink);
 }
-.gb-game-level-range__row {
-  display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr) 2.75rem;
-  align-items: center;
-  gap: 10px;
+.gb-game-level-range__bounds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gb-space-2);
   min-width: 0;
-  min-height: 44px;
-  box-sizing: border-box;
+}
+.gb-game-level-range__bound {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 .gb-game-level-range__label {
   font-size: 13px;
   font-weight: 600;
   color: var(--gb-ink-soft);
 }
+.gb-game-level-range__value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--gb-ink);
+}
+.gb-game-level-range__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.gb-game-level-range__control {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  /* Horizontal thumb drag in JS; vertical page scroll stays available. */
+  touch-action: pan-y;
+  cursor: pointer;
+}
+.gb-game-level-range__rail,
+.gb-game-level-range__fill {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 6px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.gb-game-level-range__rail {
+  background: var(--gb-line);
+  z-index: 0;
+}
+.gb-game-level-range__fill {
+  right: auto;
+  background: var(--gb-lime);
+  z-index: 1;
+}
 .gb-game-field .gb-game-level-range__input[type="range"],
 .gb-game-level-range__input[type="range"] {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   display: block;
   box-sizing: border-box;
   width: 100%;
@@ -272,19 +328,78 @@
   background: transparent;
   accent-color: var(--gb-lime);
   cursor: pointer;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.gb-game-level-range__input--upper {
+  z-index: 3;
+}
+.gb-game-level-range__control[data-active-bound="lower"] .gb-game-level-range__input--lower,
+.gb-game-level-range__control--equal[data-active-bound="lower"] .gb-game-level-range__input--lower {
+  z-index: 4;
+}
+.gb-game-level-range__control[data-active-bound="upper"] .gb-game-level-range__input--upper {
+  z-index: 4;
+}
+.gb-game-level-range__input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+.gb-game-level-range__input[type="range"]::-moz-range-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+.gb-game-level-range__input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -8px;
+  border: 2px solid var(--gb-ink);
+  border-radius: 50%;
+  background: var(--gb-paper);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
+  /* Pointer targeting is on the control (nearest/overlap); thumbs stay paint-only. */
+  pointer-events: none;
+  cursor: pointer;
+}
+.gb-game-level-range__input[type="range"]::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--gb-ink);
+  border-radius: 50%;
+  background: var(--gb-paper);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
+  pointer-events: none;
+  cursor: pointer;
+}
+.gb-game-level-range__control--disabled {
+  cursor: not-allowed;
+}
+.gb-game-level-range__input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.gb-game-level-range__input[type="range"]:disabled::-webkit-slider-thumb,
+.gb-game-level-range__input[type="range"]:disabled::-moz-range-thumb {
+  cursor: not-allowed;
+  pointer-events: none;
 }
 .gb-game-level-range__input[type="range"]:focus {
   outline: none;
 }
-.gb-game-level-range__input[type="range"]:focus-visible {
+.gb-game-level-range__input[type="range"]:focus-visible::-webkit-slider-thumb {
   outline: 3px solid var(--gb-purple);
   outline-offset: 3px;
 }
-.gb-game-level-range__value {
-  text-align: right;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--gb-ink);
+.gb-game-level-range__input[type="range"]:focus-visible::-moz-range-thumb {
+  outline: 3px solid var(--gb-purple);
+  outline-offset: 3px;
 }
 .gb-game-form-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 .gb-game-preview-heading { margin: 10px 0 24px; }

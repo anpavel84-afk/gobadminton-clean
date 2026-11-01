@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.5" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.6" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,15 +425,17 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Доставка кода входа через почту GoBadminton",
+  title: "Общий ползунок уровней при создании игры",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: ["Отправка одноразового кода входа с info@gobadminton.ru через существующую очередь доставки."],
-  fixes: ["Временные ошибки почтового сервера обрабатываются ограниченными повторными попытками."],
+  additions: [],
+  fixes: [
+    "Диапазон уровней на форме создания: один общий визуальный трек и два доступных ползунка «От»/«До» со стабильными координатами шкалы NTRP 1…7.",
+  ],
   known_limitations: [
-    "Доступность в текущей установке подтверждается после DEV-приёмки и реальной проверки доставки.",
-    "Регистрация и восстановление доступа ещё не прошли пользовательскую приёмку.",
-    "PROD не изменён; Owner UAT = NOT_TESTED.",
+    "Исправление только пункта 1 отчёта visual-qa #445; пункты 2–6 не входят в этот выпуск.",
+    "Визуальная проверка Owner/Go Bad после DEV ещё не выполнена (UAT = NOT_TESTED).",
+    "PROD не изменён; API-контракт остаётся 0.22.0.",
   ],
   feature_catalogue: "delta",
 };
@@ -612,6 +614,92 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Полный PG-2 разбор/разрешение споров не входили в alpha.3.",
       "PG-3/PG-4 и отзывы не входили.",
       "PROD оставался alpha.2; Owner UAT NOT_TESTED."
+    ]
+  },
+  {
+    "source_sha": "7a36b8d94a5df412426155e5852fddd9da7b0045",
+    "application_version": "0.1.0-alpha.4",
+    "version_label": "0.1.0-alpha.4",
+    "title": "Посещаемость: ответы на возражения и scoped Cases — PG-2",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41310911419-a1",
+        "accepted_at": "2026-11-01T13:34:38Z",
+        "api_digest": "sha256:dd88f39038e53a9c31ed39ae4460f0029f2ea04aa643d0c01bc4d580a77d5bd3",
+        "web_digest": "sha256:e108bd3e17ca7eb0edbedcbc31fd938cde5ab02c880bac6c9c4b9ec09d3270d0",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Ответ/исправление организатора без одностороннего закрытия открытого спора.",
+      "Точное версионное согласие участника и запрос помощи.",
+      "Scoped independent assigned Admin intake/read/resolve с применимыми guards.",
+      "Атомарные аудит, история и уведомления."
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "PROD остаётся alpha2; PG3/4/comments не выпущены; Owner/Admin UAT NOT_TESTED."
+    ]
+  },
+  {
+    "source_sha": "06991b099317a702dc102eeef53ee64cfa841f0e",
+    "application_version": "0.1.0-alpha.5",
+    "version_label": "0.1.0-alpha.5",
+    "title": "Доставка одноразового кода через существующую почтовую очередь",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41317332177-a1",
+        "accepted_at": "2026-11-01T14:52:56Z",
+        "api_digest": "sha256:2280fd8640411adef252d36a923b186e4d0b66bf6bab188bcdaadedaf786d64c",
+        "web_digest": "sha256:8664904fc2a4f111cf73ac528e85ea87407ff6bc3f134e3a1bdee5776ef2761e",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "TLS SMTP transport REG.RU подключён к существующей durable email-code очереди и worker."
+    ],
+    "fixes": [
+      "Код входа отправляется от info@gobadminton.ru; временные ошибки обрабатываются прежними ограниченными повторами."
+    ],
+    "known_limitations": [
+      "Публичный DEV discovery email=true; это не доказательство доставки до реального ящика.",
+      "Registration/recovery/Owner UAT NOT_TESTED.",
+      "PROD остаётся alpha2, email false."
+    ]
+  },
+  {
+    "source_sha": "84cedf79ec6d0582ef1197589acd808f9470f62c",
+    "application_version": "0.1.0-alpha.5",
+    "version_label": "0.1.0-alpha.5",
+    "title": "Исправление worker email-code на принятом alpha.5",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41319296538-a1",
+        "accepted_at": "2026-11-01T15:08:02Z",
+        "api_digest": "sha256:5306ba8d603fdcb9acd150a6c8c53f43caebe91ccfbb0e4a5d614ae350a2af1c",
+        "web_digest": "sha256:8d47c1b883a4f7121c314497725b17c36bf6432c0c0521d63843f92978d11ef4",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Отдельная DEV-установка того же application version 0.1.0-alpha.5 с source SHA worker-fix (не смешивается с SMTP source 06991)."
+    ],
+    "known_limitations": [
+      "Тот же номер alpha.5 при другом source SHA и отдельном deploy receipt.",
+      "Owner UAT NOT_TESTED; PROD не изменён."
     ]
   },
 ] as const;

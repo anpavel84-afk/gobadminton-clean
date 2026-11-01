@@ -1,26 +1,47 @@
 # GoBadminton release notes
 
-## REG.RU SMTP email-code delivery (0.1.0-alpha.5 candidate)
+## #445 point 1 — create-game level range common track (0.1.0-alpha.6 candidate)
+
+Visual QA repair for Go Bad report point 1 (source PR #433 / canonical #432): «От»/«До»
+native range handles share one visual track with stable global NTRP 1..7 coordinates and
+selected-interval fill. Defaults 3.0..3.5, inclusive `allowedLevelIds`, regular/trainer
+forms preserved. API contract unchanged. Points 2–6 of #445 are out of scope.
+
+- Application version (candidate): `0.1.0-alpha.6`; API contract unchanged `0.22.0`.
+- Base accepted DEV: `84cedf79ec6d0582ef1197589acd808f9470f62c` (alpha.5 worker fix).
+- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+- Independent QA / Product CI / DEV acceptance: pending.
+- Owner / Go Bad visual UAT: NOT_TESTED.
+- PROD unchanged; PG3 parked separately.
+
+## REG.RU SMTP email-code delivery (0.1.0-alpha.5 accepted)
 
 Existing email-code API and pg-boss delivery queue gain verified TLS SMTP delivery
 from info@gobadminton.ru, with protected worker-only password file, bounded retries
-and private error reporting. Fake delivery remains local/test only.
+and private error reporting. Fake delivery remains local/test only. Distinct later
+DEV install of the same application version used worker-fix source `84ced…`
+(`r41319296538-a1`); digests/receipts are not mixed under SMTP source `06991…`.
 
-- Application version (candidate): `0.1.0-alpha.5`; API contract unchanged `0.22.0`.
-- Independent QA / Product CI / DEV acceptance: pending.
-- Real delivery and email-code UAT: pending; registration/recovery NOT_TESTED.
-- PROD unchanged; SMTP ACK-loss/crash duplicate window remains documented.
+- Application version: `0.1.0-alpha.5`; API contract unchanged `0.22.0`.
+- SMTP source: `06991b099317a702dc102eeef53ee64cfa841f0e`, release `r41317332177-a1`
+  (accepted `2026-11-01T14:52:56Z`).
+- Worker-fix source: `84cedf79ec6d0582ef1197589acd808f9470f62c`, release `r41319296538-a1`
+  (accepted `2026-11-01T15:08:02Z`).
+- Owner UAT: NOT_TESTED; PROD unchanged.
 
-## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 candidate)
+## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 DEV ACCEPTED)
 
-Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. Runtime writes remain default OFF. **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 final DEV record retained below.
+Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. DEV accepted source `7a36b8d94a5df412426155e5852fddd9da7b0045`, PR `#441`, Product CI `41310154224` 7/7, release `r41310911419-a1`, accepted `2026-11-01T13:34:38Z`. Postgame/cases subsequently activated DEV only. PG-3/PG-4 not delivered. PROD unchanged. Owner UAT NOT_TESTED. Alpha.3 final DEV record retained below.
 
-- Application version (candidate): `0.1.0-alpha.4`
-- API contract (candidate): `0.22.0`
-- Refs: #372 / PG-2
-- Independent QA / Product CI / DEV install: pending trusted process
+- Application version: `0.1.0-alpha.4`
+- API contract: `0.22.0`
+- Refs: #372 / PG-2 / PR #441
+- Accepted source: `7a36b8d94a5df412426155e5852fddd9da7b0045`
+- Product CI: run `41310154224`, 7/7 PASS
+- DEV release: `r41310911419-a1` (accepted `2026-11-01T13:34:38Z`)
+- Postgame/cases: activated DEV only after acceptance
 - Owner UAT: NOT_TESTED
-- Known limits: no PG-3/PG-4, PROD unchanged alpha.2
+- Known limits: no PG-3/PG-4, PROD unchanged
 
 ## #372 — PG-1b attendance + results (0.1.0-alpha.3 DEV ACCEPTED)
 
