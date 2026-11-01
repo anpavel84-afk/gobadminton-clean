@@ -17,7 +17,7 @@ Owner visuals approved 2026-11-01; product model OWNER_CONFIRMED. Freeze matches
 | Method/path | Permission | Notes |
 |---|---|---|
 | `POST /admin/cases/attendance-dispute-intake` | `case.manage` + step-up | Creates case **without** abuse_report; links `game`; unique dispute→case; assigns self. |
-| `GET/POST /admin/cases/{caseId}/attendance-disputes/{disputeId}` | `case.manage` or assigned `case.assigned.manage` | Exact case/dispute/attendance versions. Resolutions: uphold_current / correct_present / correct_absent / clear_unknown / insufficient_evidence. Server derives reviewer provenance; client cannot set `independently_verified`. Reviewer ≠ subject/manager/participant. |
+| `GET/POST /admin/cases/{caseId}/attendance-disputes/{disputeId}` | assigned `case.manage` or assigned `case.assigned.manage` | Exact case/dispute/attendance versions. Local read requires current assignment + capability + independent-party eligibility (no global `case.manage` bypass). Resolutions: uphold_current / correct_present / correct_absent / clear_unknown / insufficient_evidence. Server derives reviewer provenance; client cannot set `independently_verified`. Reviewer ≠ subject / any historic manager or creator / participant. Legacy Cases metadata APIs unchanged. |
 
 ## Invariants
 

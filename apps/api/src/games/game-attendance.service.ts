@@ -1407,6 +1407,22 @@ export class GameAttendanceService {
     disputeId: string,
     userId: string,
   ): Promise<{ id: string; version: number; status: string; game_id: string; participation_id: string }> {
+    // Identifiers without lock; Game before participation/dispute (ACK keeps attendance→dispute).
+    const tip = (
+      await client.query<{
+        id: string;
+        version: number;
+        status: string;
+        game_id: string;
+        participation_id: string;
+        user_id: string;
+      }>(`SELECT id, version, status, game_id, participation_id, user_id FROM game_attendance_disputes WHERE id = $1`, [
+        disputeId,
+      ])
+    ).rows[0];
+    if (!tip || tip.user_id !== userId) unavailable();
+    await this.lockGame(client, tip.game_id);
+    await client.query(`SELECT id FROM participations WHERE id = $1 FOR UPDATE`, [tip.participation_id]);
     const row = (
       await client.query<{
         id: string;
@@ -1415,12 +1431,18 @@ export class GameAttendanceService {
         game_id: string;
         participation_id: string;
         user_id: string;
-      }>(`SELECT * FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`, [disputeId])
+      }>(`SELECT id, version, status, game_id, participation_id, user_id FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`, [
+        disputeId,
+      ])
     ).rows[0];
-    if (!row || row.user_id !== userId) unavailable();
-    // Lock order: ActorFence → Game → participation → dispute (already locked).
-    await this.lockGame(client, row.game_id);
-    await client.query(`SELECT id FROM participations WHERE id = $1 FOR UPDATE`, [row.participation_id]);
+    if (
+      !row ||
+      row.user_id !== userId ||
+      row.game_id !== tip.game_id ||
+      row.participation_id !== tip.participation_id
+    ) {
+      unavailable();
+    }
     return row;
   }
 
@@ -1436,6 +1458,22 @@ export class GameAttendanceService {
     participation_id: string;
     user_id: string;
   }> {
+    const tip = (
+      await client.query<{
+        id: string;
+        version: number;
+        status: string;
+        game_id: string;
+        participation_id: string;
+        user_id: string;
+      }>(`SELECT id, version, status, game_id, participation_id, user_id FROM game_attendance_disputes WHERE id = $1`, [
+        disputeId,
+      ])
+    ).rows[0];
+    if (!tip) unavailable();
+    await this.lockGame(client, tip.game_id);
+    await this.assertCurrentManager(client, tip.game_id, managerUserId);
+    await client.query(`SELECT id FROM participations WHERE id = $1 FOR UPDATE`, [tip.participation_id]);
     const row = (
       await client.query<{
         id: string;
@@ -1444,12 +1482,18 @@ export class GameAttendanceService {
         game_id: string;
         participation_id: string;
         user_id: string;
-      }>(`SELECT * FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`, [disputeId])
+      }>(`SELECT id, version, status, game_id, participation_id, user_id FROM game_attendance_disputes WHERE id = $1 FOR UPDATE`, [
+        disputeId,
+      ])
     ).rows[0];
-    if (!row) unavailable();
-    await this.lockGame(client, row.game_id);
-    await this.assertCurrentManager(client, row.game_id, managerUserId);
-    await client.query(`SELECT id FROM participations WHERE id = $1 FOR UPDATE`, [row.participation_id]);
+    if (
+      !row ||
+      row.game_id !== tip.game_id ||
+      row.participation_id !== tip.participation_id ||
+      row.user_id !== tip.user_id
+    ) {
+      unavailable();
+    }
     return row;
   }
 

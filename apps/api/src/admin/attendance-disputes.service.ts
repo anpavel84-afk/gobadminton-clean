@@ -63,14 +63,23 @@ export class AdminAttendanceDisputesService {
     }
   }
 
-  private async scopedCase(client: PoolClient, actor: AdminActor, caseId: string): Promise<CaseRow> {
+  private async scopedCase(
+    client: PoolClient,
+    actor: AdminActor,
+    caseId: string,
+    forUpdate = true,
+  ): Promise<CaseRow> {
     const row = (
-      await client.query<CaseRow>("SELECT * FROM support_cases WHERE id=$1 FOR UPDATE", [caseId])
+      await client.query<CaseRow>(
+        `SELECT * FROM support_cases WHERE id=$1${forUpdate ? " FOR UPDATE" : ""}`,
+        [caseId],
+      )
     ).rows[0];
+    // Local PG-2 read/resolve: assignment + current capability; no global case.manage bypass.
     if (
       !row ||
-      (!manages(actor) &&
-        (!assignedManage(actor) || row.assigned_to !== actor.principalId))
+      row.assigned_to !== actor.principalId ||
+      !(manages(actor) || assignedManage(actor))
     ) {
       throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
     }
@@ -80,7 +89,7 @@ export class AdminAttendanceDisputesService {
   private async assertReviewerEligible(
     client: PoolClient,
     actor: AdminActor,
-    dispute: DisputeRow,
+    dispute: Pick<DisputeRow, "game_id" | "user_id">,
   ): Promise<string> {
     const principal = (
       await client.query<{ user_id: string; status: string }>(
@@ -95,9 +104,17 @@ export class AdminAttendanceDisputesService {
     if (reviewerUserId === dispute.user_id) {
       throw forbidden("REVIEWER_SUBJECT_CONFLICT", "Проверяющий не может быть предметом спора");
     }
+    const creator = await client.query(
+      `SELECT 1 FROM games WHERE id=$1 AND created_by_user_id=$2 LIMIT 1`,
+      [dispute.game_id, reviewerUserId],
+    );
+    if (creator.rows[0]) {
+      throw forbidden("REVIEWER_MANAGER_CONFLICT", "Организатор игры не может быть независимым проверяющим");
+    }
+    // Any historic manager seat (active or revoked) is a conflict — not only current active.
     const manager = await client.query(
       `SELECT 1 FROM game_managers
-       WHERE game_id=$1 AND user_id=$2 AND status='active' AND role IN ('owner','manager')
+       WHERE game_id=$1 AND user_id=$2 AND role IN ('owner','manager')
        LIMIT 1`,
       [dispute.game_id, reviewerUserId],
     );
@@ -112,6 +129,54 @@ export class AdminAttendanceDisputesService {
       throw forbidden("REVIEWER_PARTICIPANT_CONFLICT", "Участник игры не может быть независимым проверяющим");
     }
     return reviewerUserId;
+  }
+
+  /** Identifiers only — no row lock. Lock Game before participation/attendance/dispute. */
+  private async disputeTip(
+    client: PoolClient,
+    disputeId: string,
+  ): Promise<DisputeRow | undefined> {
+    return (
+      await client.query<DisputeRow>(
+        `SELECT id, game_id, participation_id, user_id, challenged_version, explanation,
+                status, version, help_progress
+         FROM game_attendance_disputes WHERE id=$1`,
+        [disputeId],
+      )
+    ).rows[0];
+  }
+
+  private async lockGameThenParticipation(
+    client: PoolClient,
+    gameId: string,
+    participationId: string,
+  ): Promise<void> {
+    await client.query(`SELECT id FROM games WHERE id=$1 FOR UPDATE`, [gameId]);
+    await client.query(`SELECT id FROM participations WHERE id=$1 FOR UPDATE`, [participationId]);
+  }
+
+  private async lockDisputeAfterGame(
+    client: PoolClient,
+    tip: DisputeRow,
+  ): Promise<DisputeRow> {
+    await this.lockGameThenParticipation(client, tip.game_id, tip.participation_id);
+    const locked = (
+      await client.query<DisputeRow>(
+        `SELECT id, game_id, participation_id, user_id, challenged_version, explanation,
+                status, version, help_progress
+         FROM game_attendance_disputes WHERE id=$1 FOR UPDATE`,
+        [tip.id],
+      )
+    ).rows[0];
+    if (
+      !locked ||
+      locked.game_id !== tip.game_id ||
+      locked.participation_id !== tip.participation_id ||
+      locked.user_id !== tip.user_id
+    ) {
+      throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+    }
+    return locked;
   }
 
   private async displayName(client: PoolClient, userId: string): Promise<string> {
@@ -232,25 +297,21 @@ export class AdminAttendanceDisputesService {
       async (client, actor, keyHash) => {
         await this.requirePg2(client);
         if (!manages(actor)) throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
-        // Lock order: case authority advisory (adminTransaction) → dispute → game → participation → case insert.
-        const dispute = (
-          await client.query<DisputeRow>(
-            `SELECT id, game_id, participation_id, user_id, challenged_version, explanation,
-                    status, version, help_progress
-             FROM game_attendance_disputes WHERE id=$1 FOR UPDATE`,
-            [input.disputeId],
-          )
-        ).rows[0];
-        if (!dispute || dispute.status !== "open") {
+        // Lock order: advisory → Game → participation → dispute; case row created only after Game.
+        const tip = await this.disputeTip(client, input.disputeId);
+        if (!tip || tip.status !== "open") {
+          throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+        }
+        if (tip.version !== input.expectedDisputeVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
+        }
+        const dispute = await this.lockDisputeAfterGame(client, tip);
+        if (dispute.status !== "open") {
           throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
         }
         if (dispute.version !== input.expectedDisputeVersion) {
           throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
         }
-        await client.query(`SELECT id FROM games WHERE id=$1 FOR UPDATE`, [dispute.game_id]);
-        await client.query(`SELECT id FROM participations WHERE id=$1 FOR UPDATE`, [
-          dispute.participation_id,
-        ]);
         const existing = (
           await client.query<{ case_id: string }>(
             `SELECT case_id FROM game_attendance_dispute_case_links WHERE dispute_id=$1`,
@@ -327,6 +388,9 @@ export class AdminAttendanceDisputesService {
       async (client, actor) => {
         await this.requirePg2(client);
         if (!manages(actor)) throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        const tip = await this.disputeTip(client, input.disputeId);
+        if (!tip) throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+        await this.assertReviewerEligible(client, actor, tip);
       },
     );
   }
@@ -335,7 +399,7 @@ export class AdminAttendanceDisputesService {
     this.enabled();
     return this.admin.privilegedRead(request, "user.lookup", async (client, actor) => {
       await this.requirePg2(client);
-      const caseRow = await this.scopedCase(client, actor, caseId);
+      const caseRow = await this.scopedCase(client, actor, caseId, false);
       const link = (
         await client.query<{ dispute_id: string; game_id: string }>(
           `SELECT dispute_id, game_id FROM game_attendance_dispute_case_links
@@ -344,15 +408,11 @@ export class AdminAttendanceDisputesService {
         )
       ).rows[0];
       if (!link) throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
-      const dispute = (
-        await client.query<DisputeRow>(
-          `SELECT id, game_id, participation_id, user_id, challenged_version, explanation,
-                  status, version, help_progress
-           FROM game_attendance_disputes WHERE id=$1`,
-          [disputeId],
-        )
-      ).rows[0];
-      if (!dispute) throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+      const dispute = await this.disputeTip(client, disputeId);
+      if (!dispute || dispute.game_id !== link.game_id) {
+        throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+      }
+      const reviewerUserId = await this.assertReviewerEligible(client, actor, dispute);
       const attendance = (
         await client.query<AttendanceRow>(
           `SELECT * FROM game_attendance WHERE participation_id=$1`,
@@ -386,6 +446,14 @@ export class AdminAttendanceDisputesService {
           [disputeId],
         )
       ).rows;
+      const canCap = manages(actor) || assignedManage(actor);
+      const assignedHere = caseRow.assigned_to === actor.principalId;
+      const canResolve =
+        postGameWritesEnabled(this.env) &&
+        canCap &&
+        assignedHere &&
+        Boolean(reviewerUserId) &&
+        dispute.status === "open";
       await appendAudit(client, {
         actor,
         action: "admin.attendance_dispute.read",
@@ -433,12 +501,7 @@ export class AdminAttendanceDisputesService {
             recordedAt: item.recorded_at.toISOString(),
           })),
         },
-        allowedActions: {
-          canResolve:
-            postGameWritesEnabled(this.env) &&
-            caseRow.assigned_to === actor.principalId &&
-            dispute.status === "open",
-        },
+        allowedActions: { canResolve },
       };
     });
   }
@@ -463,37 +526,26 @@ export class AdminAttendanceDisputesService {
       { caseId, disputeId, ...input },
       async (client, actor, keyHash) => {
         await this.requirePg2(client);
-        // Lock order: advisory → case → dispute → game → participation → attendance.
+        // Lock order: advisory → existing Case (consumer never locks Case) → Game →
+        // participation → dispute → attendance. Never dispute-before-Game.
         const caseRow = await this.scopedCase(client, actor, caseId);
-        if (caseRow.assigned_to !== actor.principalId) {
-          throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно назначение на это обращение");
-        }
         if (caseRow.version !== input.expectedCaseVersion) {
           throw conflict("CASE_VERSION_CONFLICT", "Обращение уже изменено");
         }
         const link = (
-          await client.query(
-            `SELECT 1 FROM game_attendance_dispute_case_links
+          await client.query<{ game_id: string }>(
+            `SELECT game_id FROM game_attendance_dispute_case_links
              WHERE case_id=$1 AND dispute_id=$2`,
             [caseId, disputeId],
           )
         ).rows[0];
         if (!link) throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
-        const dispute = (
-          await client.query<DisputeRow>(
-            `SELECT id, game_id, participation_id, user_id, challenged_version, explanation,
-                    status, version, help_progress
-             FROM game_attendance_disputes WHERE id=$1 FOR UPDATE`,
-            [disputeId],
-          )
-        ).rows[0];
-        if (!dispute) throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
-        if (dispute.game_id !== (
-          await client.query<{ game_id: string }>(
-            `SELECT game_id FROM game_attendance_dispute_case_links WHERE case_id=$1 AND dispute_id=$2`,
-            [caseId, disputeId],
-          )
-        ).rows[0]?.game_id) {
+        const tip = await this.disputeTip(client, disputeId);
+        if (!tip || tip.game_id !== link.game_id) {
+          throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+        }
+        const dispute = await this.lockDisputeAfterGame(client, tip);
+        if (dispute.game_id !== link.game_id) {
           throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
         }
         if (dispute.status !== "open") {
@@ -502,10 +554,6 @@ export class AdminAttendanceDisputesService {
         if (dispute.version !== input.expectedDisputeVersion) {
           throw conflict("VERSION_CONFLICT", "Версия возражения устарела");
         }
-        await client.query(`SELECT id FROM games WHERE id=$1 FOR UPDATE`, [dispute.game_id]);
-        await client.query(`SELECT id FROM participations WHERE id=$1 FOR UPDATE`, [
-          dispute.participation_id,
-        ]);
         const reviewerUserId = await this.assertReviewerEligible(client, actor, dispute);
         const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
         const attendance = (
@@ -738,18 +786,21 @@ export class AdminAttendanceDisputesService {
       },
       async (client, actor) => {
         await this.requirePg2(client);
-        const caseRow = await this.scopedCase(client, actor, caseId);
-        if (caseRow.assigned_to !== actor.principalId) {
-          throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно назначение на это обращение");
-        }
+        await this.scopedCase(client, actor, caseId);
         const link = (
-          await client.query(
-            `SELECT 1 FROM game_attendance_dispute_case_links
+          await client.query<{ game_id: string }>(
+            `SELECT game_id FROM game_attendance_dispute_case_links
              WHERE case_id=$1 AND dispute_id=$2`,
             [caseId, disputeId],
           )
         ).rows[0];
         if (!link) throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+        const tip = await this.disputeTip(client, disputeId);
+        if (!tip || tip.game_id !== link.game_id) {
+          throw notFound("DISPUTE_UNAVAILABLE", "Возражение недоступно");
+        }
+        // Revalidate current eligibility/assignment on replay; do not require still-open.
+        await this.assertReviewerEligible(client, actor, tip);
       },
     );
   }
