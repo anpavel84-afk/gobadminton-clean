@@ -1,0 +1,18 @@
+[Unit]
+Description=GoBadminton existing pg-boss worker (accepted DEV API release)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 -I /usr/local/lib/gobadminton-mail/dev-worker.py
+ExecStop=-/usr/bin/docker stop --time 25 gobadminton-dev-mail-worker
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=35
+
+[Install]
+WantedBy=multi-user.target
