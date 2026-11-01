@@ -315,6 +315,63 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     expect(bulk.json().items[0]).toMatchObject({ contextId, value: "present", version: 3 });
   });
 
+  it("removed-after-start after mark retains own results/recourse; outsider 404; no foreign roster", async () => {
+    const g = await createEndedGame(manager);
+    const contextId = await confirmWithTransition(g.id, participant.userId, -4);
+
+    const marked = await put(manager, `/v1/games/${g.id}/attendance/${contextId}`, {
+      expectedVersion: 0,
+      value: "present",
+      late: false,
+    });
+    expect(marked.statusCode).toBe(200);
+    expect(marked.json()).toMatchObject({ contextId, value: "present", version: 1 });
+
+    await pool.query(`UPDATE participations SET status='removed' WHERE id=$1`, [contextId]);
+    await pool.query(
+      `INSERT INTO participation_transitions
+         (participation_id, from_status, to_status, actor_id, reason_code, aggregate_version, game_version, at)
+       VALUES ($1, 'confirmed', 'removed', $2, 'test_remove_after_start', 2, 1, clock_timestamp() - interval '30 minutes')`,
+      [contextId, manager.userId],
+    );
+
+    const ownResults = await get(participant, `/v1/games/${g.id}/results`);
+    expect(ownResults.statusCode).toBe(200);
+    expect(ownResults.json().attendance.roster).toBeNull();
+    expect(ownResults.json().attendance.myAttendance).toMatchObject({
+      contextId,
+      value: "present",
+      version: 1,
+    });
+
+    const history = await get(participant, `/v1/games/${g.id}/attendance/${contextId}/history`);
+    expect(history.statusCode).toBe(200);
+    expect(history.json().items.length).toBeGreaterThanOrEqual(1);
+
+    const dispute = await post(participant, `/v1/games/${g.id}/attendance/${contextId}/disputes`, {
+      attendanceVersion: 1,
+      explanation: "Нужно уточнить опоздание",
+    });
+    expect(dispute.statusCode).toBe(201);
+    expect(dispute.json().status).toBe("open");
+
+    const ack = await post(participant, `/v1/games/${g.id}/attendance/${contextId}/acknowledgements`, {
+      attendanceVersion: 1,
+    });
+    expect(ack.statusCode).toBe(200);
+    expect(ack.json().acknowledgedVersion).toBe(1);
+
+    expect((await get(outsider, `/v1/games/${g.id}/results`)).statusCode).toBe(404);
+    const outsiderHistory = await get(outsider, `/v1/games/${g.id}/attendance/${contextId}/history`);
+    expect(outsiderHistory.statusCode).toBe(404);
+
+    const managerResults = await get(manager, `/v1/games/${g.id}/results`);
+    expect(managerResults.statusCode).toBe(200);
+    expect(managerResults.json().attendance.roster.map((r: { contextId: string }) => r.contextId)).toContain(
+      contextId,
+    );
+  });
+
   it("idempotent PUT replay; version conflict; concurrent revoke private 404", async () => {
     const g = await createEndedGame(manager);
     const contextId = await confirmWithTransition(g.id, participant.userId);

@@ -2,15 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  acknowledgeAttendance,
-  bulkPresentAttendance,
-  disputeAttendance,
   getAttendanceHistory,
   getGame,
   getGameResults,
   getMe,
-  putGameAttendance,
-  putGameOutcome,
 } from "../../../lib/api-client";
 import type {
   AttendanceRecord,
@@ -27,6 +22,7 @@ import {
 import { Button } from "../Button";
 import { ContentContainer, SurfacePanel } from "../Surfaces";
 import { Avatar, ProfileDialog, SectionHeader } from "../players/ProfileComposition";
+import { useGameResultsMutation } from "./useGameResultsMutation";
 import "../../../styles/postgame.css";
 
 type Tab = "attendance" | "clarification" | "feedback";
@@ -64,8 +60,6 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("attendance");
-  const [busy, setBusy] = useState(false);
-  const [unknownOp, setUnknownOp] = useState(false);
   const [markTarget, setMarkTarget] = useState<MarkTarget>(null);
   const [markValue, setMarkValue] = useState<AttendanceValue>("present");
   const [markLate, setMarkLate] = useState(false);
@@ -79,21 +73,38 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [outcomeOpen, setOutcomeOpen] = useState(false);
   const [outcomeValue, setOutcomeValue] = useState<"held" | "not_held">("held");
   const [outcomeReason, setOutcomeReason] = useState("");
-  const mutation = useRef(false);
   const epoch = useRef(0);
+  const actorRef = useRef<string | null>(null);
+  actorRef.current = me?.id ?? null;
 
-  const writes = canOfferAttendanceWrites(results);
-  const isManager = Boolean(results?.attendance?.roster);
-  const my = results?.attendance?.myAttendance ?? null;
+  const actorId = me?.id ?? `anon:${gameId}`;
+  const csrf = me?.csrfToken ?? "";
+
+  function clearSensitiveUi() {
+    setResults(null);
+    setGame(null);
+    setMarkTarget(null);
+    setBulkSelected({});
+    setBulkConfirmOpen(false);
+    setDisputeOpen(false);
+    setDisputeText("");
+    setHistoryOpen(false);
+    setHistoryLines([]);
+    setOutcomeOpen(false);
+    setNotice(null);
+    setError(null);
+  }
 
   async function reload() {
     const request = ++epoch.current;
     setState("loading");
     setError(null);
-    setUnknownOp(false);
+    // Readonly reload must not clear unresolved mutation identity / pending storage.
     const account = await getMe();
     if (request !== epoch.current) return;
     if (!account.ok) {
+      setMe(null);
+      clearSensitiveUi();
       setState(account.status === 401 ? "auth" : "error");
       setError("Не удалось проверить вход.");
       return;
@@ -101,15 +112,17 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setMe(account.data);
     const [gameRes, resultsRes] = await Promise.all([getGame(gameId), getGameResults(gameId)]);
     if (request !== epoch.current) return;
+    if (actorRef.current && actorRef.current !== account.data.id) return;
     if (!resultsRes.ok) {
       if (resultsRes.status === 401) {
+        setMe(null);
+        clearSensitiveUi();
         setState("auth");
         return;
       }
       if (resultsRes.status === 404) {
+        clearSensitiveUi();
         setState("forbidden");
-        setResults(null);
-        setGame(null);
         return;
       }
       setState("error");
@@ -117,16 +130,53 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       return;
     }
     setResults(resultsRes.data);
+    // Public getGame may 404 while authorized own results remain usable.
     setGame(gameRes.ok ? gameRes.data : null);
     setState("ready");
   }
 
+  const mutation = useGameResultsMutation(
+    actorId,
+    gameId,
+    csrf,
+    () => {
+      // Native callback applies only while this actor still owns the page host.
+      if (!actorRef.current || actorRef.current !== actorId) return;
+      setMarkTarget(null);
+      setBulkConfirmOpen(false);
+      setBulkSelected({});
+      setDisputeOpen(false);
+      setDisputeText("");
+      setOutcomeOpen(false);
+      setNotice(null);
+      void reload();
+    },
+    () => {
+      if (!actorRef.current || actorRef.current !== actorId) return;
+      void reload();
+    },
+  );
+
+  const writes = canOfferAttendanceWrites(results);
+  const isManager = Boolean(results?.attendance?.roster);
+  const my = results?.attendance?.myAttendance ?? null;
+  const busy = mutation.busy;
+  const unknownOp = mutation.pending;
+  const displayNotice = notice ?? (mutation.notice || null);
+
   useEffect(() => {
+    epoch.current += 1;
+    setMe(null);
+    clearSensitiveUi();
+    setState("loading");
     void reload();
     const onSession = () => {
+      // Synchronously invalidate async ownership + clear private/UI transients.
+      epoch.current += 1;
       setMe(null);
-      setResults(null);
+      clearSensitiveUi();
       setState("auth");
+      // Prior actor pending remains under that actor's scope key — no silent delete/resend.
     };
     window.addEventListener("gb-private-expired", onSession);
     window.addEventListener("gb-session-changed", onSession);
@@ -142,97 +192,75 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     return roster.filter((row) => bulkSelected[row.contextId]);
   }, [results, bulkSelected]);
 
-  async function runMutation(label: string, work: () => Promise<{ ok: boolean; status: number; error?: string; problem?: { code?: string } }>) {
-    if (!me || mutation.current) return;
-    mutation.current = true;
-    setBusy(true);
+  function runWrite(path: string, body: object, method: string): boolean {
+    if (!me || unknownOp || busy) return false;
     setNotice(null);
-    setUnknownOp(false);
-    try {
-      const result = await work();
-      if (!result.ok) {
-        if (result.status === 0 || result.status >= 500) {
-          setUnknownOp(true);
-          setNotice(`${label}: результат неизвестен. Проверьте ту же операцию, не меняя данные.`);
-          return;
-        }
-        if (result.problem?.code === "VERSION_CONFLICT") {
-          setNotice("Версия устарела. Обновите данные и повторите.");
-          await reload();
-          return;
-        }
-        setNotice(result.error ?? "Не удалось выполнить действие.");
-        return;
-      }
-      setNotice(null);
-      await reload();
-    } finally {
-      mutation.current = false;
-      setBusy(false);
-    }
+    // Synchronous admission: double-click before re-render is rejected by hook lock/pending.
+    return mutation.run(path, body, method);
   }
 
-  async function submitMark() {
+  function submitMark() {
     if (!me || !markTarget || markTarget.mode !== "single") return;
     const record = markTarget.record;
-    await runMutation("Отметка", () =>
-      putGameAttendance(
-        gameId,
-        record.contextId,
-        {
-          expectedVersion: record.version,
-          value: markValue,
-          late: markValue === "present" ? markLate : false,
-          ...(record.version > 0 ? { correctionReason: markReason.trim() || "Исправление" } : {}),
-        },
-        me.csrfToken,
-      ),
+    const reason = markReason.trim();
+    if (record.version > 0 && !reason) {
+      setNotice("Укажите причину исправления.");
+      return;
+    }
+    runWrite(
+      `/v1/games/${gameId}/attendance/${record.contextId}`,
+      {
+        expectedVersion: record.version,
+        value: markValue,
+        late: markValue === "present" ? markLate : false,
+        ...(record.version > 0 ? { correctionReason: reason } : {}),
+      },
+      "PUT",
     );
-    setMarkTarget(null);
   }
 
-  async function submitBulk() {
+  function submitBulk() {
     if (!me || selectedBulkItems.length === 0) return;
-    await runMutation("Массовая отметка", () =>
-      bulkPresentAttendance(
-        gameId,
-        {
-          items: selectedBulkItems.map((row) => ({
-            contextId: row.contextId,
-            expectedVersion: row.version,
-          })),
-          confirmedExactSelection: true,
-        },
-        me.csrfToken,
-      ),
-    );
-    setBulkConfirmOpen(false);
-    setBulkSelected({});
-  }
-
-  async function submitAck() {
-    if (!me || !my) return;
-    await runMutation("Подтверждение", () =>
-      acknowledgeAttendance(gameId, my.contextId, my.version, me.csrfToken),
+    runWrite(
+      `/v1/games/${gameId}/attendance/bulk-present`,
+      {
+        items: selectedBulkItems.map((row) => ({
+          contextId: row.contextId,
+          expectedVersion: row.version,
+        })),
+        confirmedExactSelection: true,
+      },
+      "POST",
     );
   }
 
-  async function submitDispute() {
+  function submitAck() {
     if (!me || !my) return;
-    await runMutation("Возражение", () =>
-      disputeAttendance(
-        gameId,
-        my.contextId,
-        { attendanceVersion: my.version, explanation: disputeText.trim() },
-        me.csrfToken,
-      ),
+    runWrite(
+      `/v1/games/${gameId}/attendance/${my.contextId}/acknowledgements`,
+      { attendanceVersion: my.version },
+      "POST",
     );
-    setDisputeOpen(false);
-    setDisputeText("");
+  }
+
+  function submitDispute() {
+    if (!me || !my) return;
+    const explanation = disputeText.trim();
+    if (!explanation) {
+      setNotice("Укажите пояснение.");
+      return;
+    }
+    runWrite(
+      `/v1/games/${gameId}/attendance/${my.contextId}/disputes`,
+      { attendanceVersion: my.version, explanation },
+      "POST",
+    );
   }
 
   async function openHistory(contextId: string) {
+    const request = epoch.current;
     const history = await getAttendanceHistory(gameId, contextId);
+    if (request !== epoch.current) return;
     if (!history.ok) {
       setNotice(history.error);
       return;
@@ -246,22 +274,23 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setHistoryOpen(true);
   }
 
-  async function submitOutcome() {
+  function submitOutcome() {
     if (!me || !results) return;
-    await runMutation("Итог", () =>
-      putGameOutcome(
-        gameId,
-        {
-          expectedVersion: results.outcome.version,
-          outcome: outcomeValue,
-          ...(outcomeValue === "not_held" || results.outcome.version > 0
-            ? { reason: outcomeReason.trim() || "Уточнение итога" }
-            : {}),
-        },
-        me.csrfToken,
-      ),
+    const needsReason = outcomeValue === "not_held" || results.outcome.version > 0;
+    const reason = outcomeReason.trim();
+    if (needsReason && !reason) {
+      setNotice("Укажите причину.");
+      return;
+    }
+    runWrite(
+      `/v1/games/${gameId}/outcome`,
+      {
+        expectedVersion: results.outcome.version,
+        outcome: outcomeValue,
+        ...(needsReason ? { reason } : {}),
+      },
+      "PUT",
     );
-    setOutcomeOpen(false);
   }
 
   return (
@@ -312,8 +341,15 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             </button>
           </div>
 
-          {notice ? <p className="gb-postgame__notice" role="status">{notice}</p> : null}
-          {unknownOp ? <p className="gb-postgame__unknown" role="status">Состояние операции неизвестно — не считаем успехом.</p> : null}
+          {displayNotice ? <p className="gb-postgame__notice" role="status">{displayNotice}</p> : null}
+          {unknownOp ? (
+            <p className="gb-postgame__unknown" role="status">
+              Состояние операции неизвестно — не считаем успехом.{" "}
+              <Button variant="outline" disabled={busy} onClick={() => mutation.retry()}>
+                Проверить ту же отправку
+              </Button>
+            </p>
+          ) : null}
 
           {tab === "attendance" ? (
             <div className="gb-postgame__layout">
@@ -331,7 +367,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                     {results.outcome.version > 0 ? ` · версия ${results.outcome.version}` : ""}
                   </p>
                   {results.allowedActions.canRecordOutcome ? (
-                    <Button disabled={busy} onClick={() => setOutcomeOpen(true)}>Указать итог</Button>
+                    <Button disabled={busy || unknownOp} onClick={() => setOutcomeOpen(true)}>Указать итог</Button>
                   ) : null}
                 </SurfacePanel>
 
@@ -344,7 +380,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                     </p>
                     {writes && results.attendance?.allowedActions.canBulkPresent ? (
                       <Button
-                        disabled={busy}
+                        disabled={busy || unknownOp}
                         onClick={() => {
                           setBulkSelected({});
                           setBulkConfirmOpen(true);
@@ -386,7 +422,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                           {writes && row.allowedActions.canSetAttendance ? (
                             <Button
                               variant="outline"
-                              disabled={busy}
+                              disabled={busy || unknownOp}
                               onClick={() => {
                                 setMarkTarget({ record: row, mode: "single" });
                                 setMarkValue(row.value === "absent" ? "absent" : "present");
@@ -427,10 +463,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                         </p>
                         <div className="gb-postgame__actions">
                           {writes && my.allowedActions.canAcknowledge ? (
-                            <Button disabled={busy} onClick={() => void submitAck()}>Всё верно</Button>
+                            <Button disabled={busy || unknownOp} onClick={() => submitAck()}>
+                              Согласен с этой отметкой
+                            </Button>
                           ) : null}
                           {writes && my.allowedActions.canDispute ? (
-                            <Button variant="outline" disabled={busy} onClick={() => setDisputeOpen(true)}>
+                            <Button variant="outline" disabled={busy || unknownOp} onClick={() => setDisputeOpen(true)}>
                               Запросить исправление
                             </Button>
                           ) : null}
@@ -439,6 +477,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                           </Button>
                         </div>
                         <p className="gb-postgame__helper">
+                          «Согласен с этой отметкой» — явное согласие с точной версией отметки, не просто ознакомление.
                           Уведомление сохранено в «Моих играх», а не только в чате.
                         </p>
                       </>
@@ -497,30 +536,37 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             className="gb-postgame__dialog-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void submitMark();
+              submitMark();
             }}
           >
             <p>{markTarget.record.displayName}</p>
             <label className="profile-field">
               Отметка
-              <select value={markValue} onChange={(e) => setMarkValue(e.target.value as AttendanceValue)} disabled={busy}>
+              <select value={markValue} onChange={(e) => setMarkValue(e.target.value as AttendanceValue)} disabled={busy || unknownOp}>
                 <option value="present">Пришёл</option>
                 <option value="absent">Не пришёл</option>
               </select>
             </label>
             {markValue === "present" ? (
               <label className="profile-field">
-                <input type="checkbox" checked={markLate} onChange={(e) => setMarkLate(e.target.checked)} disabled={busy} />{" "}
+                <input type="checkbox" checked={markLate} onChange={(e) => setMarkLate(e.target.checked)} disabled={busy || unknownOp} />{" "}
                 Опоздание
               </label>
             ) : null}
             {markTarget.record.version > 0 ? (
               <label className="profile-field">
                 Причина исправления
-                <textarea value={markReason} maxLength={500} rows={3} onChange={(e) => setMarkReason(e.target.value)} disabled={busy} />
+                <textarea
+                  value={markReason}
+                  maxLength={500}
+                  rows={3}
+                  required
+                  onChange={(e) => setMarkReason(e.target.value)}
+                  disabled={busy || unknownOp}
+                />
               </label>
             ) : null}
-            <Button type="submit" disabled={busy || (markTarget.record.version > 0 && !markReason.trim())}>
+            <Button type="submit" disabled={busy || unknownOp || (markTarget.record.version > 0 && !markReason.trim())}>
               Сохранить
             </Button>
           </form>
@@ -538,7 +584,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                     <input
                       type="checkbox"
                       checked={Boolean(bulkSelected[row.contextId])}
-                      disabled={busy}
+                      disabled={busy || unknownOp}
                       onChange={(e) =>
                         setBulkSelected((current) => ({ ...current, [row.contextId]: e.target.checked }))
                       }
@@ -548,7 +594,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                 </li>
               ))}
             </ul>
-            <Button disabled={busy || selectedBulkItems.length === 0} onClick={() => void submitBulk()}>
+            <Button disabled={busy || unknownOp || selectedBulkItems.length === 0} onClick={() => submitBulk()}>
               Да, пришли все выбранные
             </Button>
           </div>
@@ -561,7 +607,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             className="gb-postgame__dialog-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void submitDispute();
+              submitDispute();
             }}
           >
             <p>
@@ -569,9 +615,9 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             </p>
             <label className="profile-field">
               Пояснение
-              <textarea required maxLength={500} rows={4} value={disputeText} onChange={(e) => setDisputeText(e.target.value)} disabled={busy} />
+              <textarea required maxLength={500} rows={4} value={disputeText} onChange={(e) => setDisputeText(e.target.value)} disabled={busy || unknownOp} />
             </label>
-            <Button type="submit" disabled={busy || !disputeText.trim()}>Отправить</Button>
+            <Button type="submit" disabled={busy || unknownOp || !disputeText.trim()}>Отправить</Button>
           </form>
         </ProfileDialog>
       )}
@@ -590,12 +636,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             className="gb-postgame__dialog-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void submitOutcome();
+              submitOutcome();
             }}
           >
             <label className="profile-field">
               Итог
-              <select value={outcomeValue} onChange={(e) => setOutcomeValue(e.target.value as "held" | "not_held")} disabled={busy}>
+              <select value={outcomeValue} onChange={(e) => setOutcomeValue(e.target.value as "held" | "not_held")} disabled={busy || unknownOp}>
                 <option value="held">Состоялась</option>
                 <option value="not_held">Не состоялась</option>
               </select>
@@ -603,10 +649,19 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             {(outcomeValue === "not_held" || results.outcome.version > 0) && (
               <label className="profile-field">
                 Причина
-                <textarea required maxLength={500} rows={3} value={outcomeReason} onChange={(e) => setOutcomeReason(e.target.value)} disabled={busy} />
+                <textarea required maxLength={500} rows={3} value={outcomeReason} onChange={(e) => setOutcomeReason(e.target.value)} disabled={busy || unknownOp} />
               </label>
             )}
-            <Button type="submit" disabled={busy}>Сохранить итог</Button>
+            <Button
+              type="submit"
+              disabled={
+                busy ||
+                unknownOp ||
+                ((outcomeValue === "not_held" || results.outcome.version > 0) && !outcomeReason.trim())
+              }
+            >
+              Сохранить итог
+            </Button>
           </form>
         </ProfileDialog>
       )}

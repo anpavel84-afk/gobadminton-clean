@@ -2,7 +2,7 @@
 
 ## #372 — PG-1b attendance + results (0.1.0-alpha.3 candidate)
 
-Bounded post-game attendance with provenance, durable own notice + acknowledge, basic dispute, and unified results screen within PG-1b. Runtime write flag remains default OFF; do not claim DEV-ready/exposed until trusted activation. PROD stays on accepted alpha.2. First named alpha.1 baseline unchanged; trusted history seed retains alpha.1 and appends accepted alpha.2 DEV/PROD receipts. Candidate SHA, QA, release ID, and acceptance dates unknown until trusted DEV ACCEPTED.
+Bounded post-game attendance with provenance, durable own notice + explicit mark-version agreement, basic dispute, and unified results screen within PG-1b. Pass-3: durable UNKNOWN mutation host (shared useSocialMutation), auth/game epoch invalidation, own removed-after-start recourse, no invented correction reason, eligibility rejects stale confirmed_at after pre-start withdraw. Runtime write flag remains default OFF; do not claim DEV-ready/exposed until trusted activation. PROD stays on accepted alpha.2. First named alpha.1 baseline unchanged; trusted history seed retains alpha.1 and appends accepted alpha.2 DEV/PROD receipts. Candidate SHA, QA, release ID, and acceptance dates unknown until trusted DEV ACCEPTED.
 
 - Application version (candidate): `0.1.0-alpha.3`
 - Refs: #372 / PG-1b

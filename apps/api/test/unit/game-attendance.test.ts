@@ -99,6 +99,26 @@ describe("PG-1b attendance policy", () => {
         ends,
       ),
     ).toEqual({ eligible: false, proof: null });
+    // Stale current=confirmed + old confirmedAt cannot override pre-start withdraw.
+    expect(
+      eligibleFromTransitions(
+        withdrawnBeforeStart,
+        starts,
+        "confirmed",
+        new Date("2026-10-20T00:00:00.000Z"),
+        ends,
+      ),
+    ).toEqual({ eligible: false, proof: null });
+    // New concrete confirmation after that withdraw, within the game window, is markable.
+    expect(
+      eligibleFromTransitions(
+        withdrawnBeforeStart,
+        starts,
+        "confirmed",
+        new Date("2026-10-24T12:00:00.000Z"),
+        ends,
+      ),
+    ).toEqual({ eligible: true, proof: "current_confirmed" });
     // Current confirmed after ends cannot prove membership for this game window.
     expect(
       eligibleFromTransitions([], starts, "confirmed", new Date("2026-10-24T18:00:00.000Z"), ends),

@@ -95,7 +95,16 @@ export class GameAttendanceService {
     }
   }
 
-  private async accessRole(client: PoolClient | Pool, gameId: string, userId: string): Promise<AccessRole> {
+  /**
+   * Manager (active), current confirmed participant, or own historical post-game
+   * context via frozen as-of-start eligibility / durable own attendance or notice.
+   * Does not grant manager roster or foreign participation rights.
+   */
+  async resolveAccessRole(
+    client: PoolClient | Pool,
+    gameId: string,
+    userId: string,
+  ): Promise<AccessRole> {
     const manager = await client.query(
       `SELECT 1 FROM game_managers
        WHERE game_id = $1 AND user_id = $2 AND status = 'active' AND role IN ('owner', 'manager')
@@ -103,11 +112,53 @@ export class GameAttendanceService {
       [gameId, userId],
     );
     if (manager.rows[0]) return "manager";
-    const participant = await client.query(
-      `SELECT 1 FROM participations WHERE game_id = $1 AND user_id = $2 AND status = 'confirmed' LIMIT 1`,
+    const participant = await client.query<{
+      id: string;
+      status: string;
+      confirmed_at: Date | null;
+    }>(
+      `SELECT id, status, confirmed_at FROM participations
+       WHERE game_id = $1 AND user_id = $2
+       LIMIT 1`,
       [gameId, userId],
     );
-    return participant.rows[0] ? "participant" : "none";
+    const own = participant.rows[0];
+    if (!own) return "none";
+    if (own.status === "confirmed") return "participant";
+
+    const durable = await client.query(
+      `SELECT 1 FROM game_attendance WHERE participation_id = $1
+       UNION ALL
+       SELECT 1 FROM game_attendance_notices WHERE participation_id = $1
+       LIMIT 1`,
+      [own.id],
+    );
+    if (durable.rows[0]) return "participant";
+
+    const bounds = (
+      await client.query<{ starts_at: Date; ends_at: Date }>(
+        `SELECT starts_at, ends_at FROM games WHERE id = $1`,
+        [gameId],
+      )
+    ).rows[0];
+    if (!bounds?.starts_at || !bounds.ends_at) return "none";
+    const transitions = await client.query<{ to_status: string; at: Date; id: string }>(
+      `SELECT to_status, at, id FROM participation_transitions
+       WHERE participation_id = $1 ORDER BY at ASC, id ASC`,
+      [own.id],
+    );
+    const verdict = eligibleFromTransitions(
+      transitions.rows,
+      bounds.starts_at,
+      own.status,
+      own.confirmed_at,
+      bounds.ends_at,
+    );
+    return verdict.eligible ? "participant" : "none";
+  }
+
+  private async accessRole(client: PoolClient | Pool, gameId: string, userId: string): Promise<AccessRole> {
+    return this.resolveAccessRole(client, gameId, userId);
   }
 
   private async displayName(client: PoolClient | Pool, userId: string): Promise<string> {
@@ -301,7 +352,40 @@ export class GameAttendanceService {
     if (!bounds?.starts_at || !bounds.ends_at) unavailable();
 
     const eligible = await this.loadEligibleContexts(client, gameId, bounds.starts_at, bounds.ends_at);
-    const own = eligible.find((row) => row.userId === userId) ?? null;
+    let own = eligible.find((row) => row.userId === userId) ?? null;
+    // Own durable attendance/notice after removal: project personal record without
+    // inventing manager roster membership when not in eligible markable set.
+    if (!own && role === "participant") {
+      const part = (
+        await client.query<{ id: string; display_name: string }>(
+          `SELECT p.id,
+                  COALESCE(NULLIF(TRIM(sp.display_name), ''), NULLIF(TRIM(u.display_name), ''), 'Игрок') AS display_name
+           FROM participations p
+           JOIN users u ON u.id = p.user_id
+           LEFT JOIN player_social_profiles sp ON sp.user_id = p.user_id
+           WHERE p.game_id = $1 AND p.user_id = $2
+           LIMIT 1`,
+          [gameId, userId],
+        )
+      ).rows[0];
+      if (part) {
+        const durable = await client.query(
+          `SELECT 1 FROM game_attendance WHERE participation_id = $1
+           UNION ALL
+           SELECT 1 FROM game_attendance_notices WHERE participation_id = $1
+           LIMIT 1`,
+          [part.id],
+        );
+        if (durable.rows[0]) {
+          own = {
+            participationId: part.id,
+            userId,
+            displayName: part.display_name,
+            eligibleProof: "transition_as_of_start",
+          };
+        }
+      }
+    }
 
     if (role === "participant") {
       const myAttendance = own

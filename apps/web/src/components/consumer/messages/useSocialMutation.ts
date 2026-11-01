@@ -4,12 +4,15 @@ import { apiFetch } from "../../../lib/api-client";
 import { socialError } from "../../../lib/messaging-presentation";
 
 type Pending = { path: string; body: object; key: string; method: string };
+export type SocialMutationPending = Pending;
 export type SocialMutationOptions<T> = {
   /**
    * Opt-in: when set, a 2xx body must pass before pending clears / onSuccess runs.
    * Failed validation keeps unresolved identity (UNKNOWN) — default callers omit this.
+   * Optional second arg is the frozen pending identity (path/body/key/method) for
+   * target reconciliation; old single-arg validators remain valid.
    */
-  validateSuccess?: (data: T) => boolean;
+  validateSuccess?: (data: T, pending?: Pending) => boolean;
 };
 /** Persist unresolved identity across reload; explicit replay uses identical body/key. */
 export function useSocialMutation<T>(
@@ -55,7 +58,7 @@ export function useSocialMutation<T>(
       if (validate) {
         let accepted = false;
         try {
-          accepted = Boolean(validate(result.data));
+          accepted = invokeValidate(validate, result.data, value);
         } catch {
           // Validator throw ≡ UNKNOWN: keep pending, no onSuccess, no unhandled JS error.
           accepted = false;
@@ -85,4 +88,14 @@ export function useSocialMutation<T>(
     },
     retry() { if (pending) void perform(pending); },
   };
+}
+
+// Ensure validateSuccess receives frozen pending identity when callers opt in.
+function invokeValidate<T>(
+  validate: ((data: T, pending?: Pending) => boolean) | undefined,
+  data: T,
+  pending: Pending,
+): boolean {
+  if (!validate) return true;
+  return Boolean(validate(data, pending));
 }

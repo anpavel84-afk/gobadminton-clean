@@ -425,6 +425,20 @@ export function eligibleFromTransitions(
       Number.isFinite(confirmedAt.getTime()) &&
       confirmedAt.getTime() <= endsAt.getTime()
     ) {
+      // After a definite pre-start withdraw/remove/reject/pending, only a *new*
+      // confirmation (confirmed_at strictly after that as-of-start status) can
+      // establish markable context. Stale confirmed_at from before the conflict
+      // must not override contradictory history.
+      if (statusAtStart !== null && PRESTART_NON_CONFIRMED.has(statusAtStart)) {
+        let lastPrestartAt: Date | null = null;
+        for (const row of ordered) {
+          if (row.at.getTime() <= startsAt.getTime()) lastPrestartAt = row.at;
+          else break;
+        }
+        if (!lastPrestartAt || confirmedAt.getTime() <= lastPrestartAt.getTime()) {
+          return { eligible: false, proof: null };
+        }
+      }
       return { eligible: true, proof: "current_confirmed" };
     }
     // Missing / future / after-end confirmation timestamp cannot prove membership.

@@ -2,7 +2,7 @@
 .gb-postgame {
   display: grid;
   gap: 24px;
-  padding: 24px 20px 40px;
+  padding: 0 0 40px;
   color: var(--gb-ink);
 }
 
@@ -210,7 +210,7 @@
 
 @media (min-width: 1024px) {
   .gb-postgame {
-    padding: 28px 40px 48px;
+    padding: 0 0 48px;
   }
 
   .gb-postgame__panel {

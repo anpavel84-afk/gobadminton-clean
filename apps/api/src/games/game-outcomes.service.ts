@@ -86,22 +86,9 @@ export class GameOutcomesService {
   }
 
   private async accessRole(client: PoolClient | Pool, gameId: string, userId: string): Promise<AccessRole> {
-    const manager = await client.query(
-      `SELECT 1
-       FROM game_managers
-       WHERE game_id = $1 AND user_id = $2 AND status = 'active' AND role IN ('owner', 'manager')
-       LIMIT 1`,
-      [gameId, userId],
-    );
-    if (manager.rows[0]) return "manager";
-    const participant = await client.query(
-      `SELECT 1
-       FROM participations
-       WHERE game_id = $1 AND user_id = $2 AND status = 'confirmed'
-       LIMIT 1`,
-      [gameId, userId],
-    );
-    return participant.rows[0] ? "participant" : "none";
+    // Delegate so removed-after-start own marked participants retain results access
+    // via frozen eligibility / durable attendance proof (no foreign roster grant).
+    return this.attendance.resolveAccessRole(client, gameId, userId);
   }
 
   private async readOutcome(client: PoolClient | Pool, gameId: string): Promise<OutcomeRow | null> {
