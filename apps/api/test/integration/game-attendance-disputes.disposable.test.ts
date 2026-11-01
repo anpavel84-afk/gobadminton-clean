@@ -354,4 +354,23 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
     );
     expect(notices.rows[0]!.n).toBe(4);
   });
+
+  it("revision snapshot/reason guard rejects version>1 with null before snapshot and null reason (23514)", async () => {
+    const g = await createEndedGame(manager);
+    const contextId = await confirmWithTransition(g.id, participant.userId);
+    // Unused positive version avoids UNIQUE 23505 masking the CHECK contract.
+    const unusedVersion = 17;
+    await expect(
+      pool.query(
+        `INSERT INTO game_attendance_revisions
+           (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+            before_value, after_value, before_late, after_late,
+            before_correction_reason, after_correction_reason, reason)
+         VALUES ($1, $2, $3, $4, $5, 'manager_explicit',
+                 NULL, 'present', NULL, false,
+                 NULL, NULL, NULL)`,
+        [contextId, g.id, participant.userId, unusedVersion, manager.userId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
 });

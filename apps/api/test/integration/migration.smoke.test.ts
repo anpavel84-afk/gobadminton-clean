@@ -291,6 +291,23 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           "game_attendance_dispute_responses_deny_truncate",
           "game_attendance_dispute_responses_immutable",
         ]);
+        // 0046 snapshot/reason guard must survive 0047 on the side relation OID
+        // (catalog def match; not global conname / migration SQL text alone).
+        const sideRevisionSnapshotGuard = await sideClient.query<{ n: string }>(
+          `SELECT count(*)::text AS n
+           FROM pg_constraint con
+           WHERE con.conrelid = 'side.game_attendance_revisions'::regclass
+             AND con.contype = 'c'
+             AND pg_get_constraintdef(con.oid) ILIKE '%resource_version = 1%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%before_value IS NULL%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%before_late IS NULL%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%before_correction_reason IS NULL%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%resource_version > 1%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%before_value IS NOT NULL%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%before_late IS NOT NULL%'
+             AND pg_get_constraintdef(con.oid) ILIKE '%reason IS NOT NULL%'`,
+        );
+        expect(sideRevisionSnapshotGuard.rows[0]?.n).toBe("1");
       } finally {
         await sideClient.query("RESET search_path");
         await sideClient.query("DROP SCHEMA IF EXISTS side CASCADE");
@@ -313,6 +330,22 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.game_attendance')::text AS name")).rows[0]?.name).toBe("game_attendance");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_notices')::text AS name")).rows[0]?.name).toBe("game_attendance_notices");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_disputes')::text AS name")).rows[0]?.name).toBe("game_attendance_disputes");
+      // 0046 revision snapshot/reason guard remains on public OID after 0047 (catalog, not conname).
+      const publicRevisionSnapshotGuard = await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n
+         FROM pg_constraint con
+         WHERE con.conrelid = 'public.game_attendance_revisions'::regclass
+           AND con.contype = 'c'
+           AND pg_get_constraintdef(con.oid) ILIKE '%resource_version = 1%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%before_value IS NULL%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%before_late IS NULL%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%before_correction_reason IS NULL%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%resource_version > 1%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%before_value IS NOT NULL%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%before_late IS NOT NULL%'
+           AND pg_get_constraintdef(con.oid) ILIKE '%reason IS NOT NULL%'`,
+      );
+      expect(publicRevisionSnapshotGuard.rows[0]?.n).toBe("1");
       const galleryIndexes = await pool.query<{ indexname: string }>(
         `SELECT indexname FROM pg_indexes WHERE tablename='venue_gallery_items'
            AND indexname IN ('venue_gallery_active_position','venue_gallery_one_main','venue_gallery_venue_active')

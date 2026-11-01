@@ -38,9 +38,10 @@ ALTER TABLE game_attendance_revisions
   ADD CONSTRAINT game_attendance_revisions_source_check
   CHECK (source IN ('manager_explicit', 'self_attested', 'case_reviewer'));
 
-ALTER TABLE game_attendance_revisions DROP CONSTRAINT IF EXISTS game_attendance_revisions_check;
-ALTER TABLE game_attendance_revisions DROP CONSTRAINT IF EXISTS game_attendance_revisions_check1;
-ALTER TABLE game_attendance_revisions DROP CONSTRAINT IF EXISTS game_attendance_revisions_check2;
+-- Replace ONLY the after_late value constraint (OID + after_late def). Do not blanket-drop
+-- game_attendance_revisions_check/check1/check2: 0046's anonymous snapshot/reason guard
+-- (resource_version=1 ⇒ before* NULL; version>1 ⇒ before_value/before_late/reason NOT NULL)
+-- shares those auto-names and must remain exactly as applied.
 DO $$
 DECLARE
   rel regclass := 'game_attendance_revisions'::regclass;
