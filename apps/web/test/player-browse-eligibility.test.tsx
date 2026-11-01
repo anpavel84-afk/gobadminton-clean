@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import type * as React from "react";
+import type * as ApiClient from "../src/lib/api-client";
+import type * as PlayInterests from "../src/lib/play-interests";
 import type { OwnSocialProfile, PublicPlayer } from "../src/lib/consumer-types";
 import type { PlayInterestView } from "@gobadminton/contracts/friendship-types";
 
@@ -81,7 +83,7 @@ vi.mock("react", async (importOriginal) => {
 });
 
 vi.mock("../src/lib/api-client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/api-client")>();
+  const actual = await importOriginal<typeof ApiClient>();
   return {
     ...actual,
     getMe: apiMocks.getMe,
@@ -90,7 +92,7 @@ vi.mock("../src/lib/api-client", async (importOriginal) => {
 });
 
 vi.mock("../src/lib/play-interests", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/play-interests")>();
+  const actual = await importOriginal<typeof PlayInterests>();
   return {
     ...actual,
     getPlayInterestStates: playInterestMocks.getPlayInterestStates,
@@ -429,7 +431,7 @@ describe("player browse eligibility · hooked effect flow (#438 repair)", () => 
     }));
 
     let catalogPlayers = [peer("page-a"), peer("page-b")];
-    let hasMore = true;
+    const hasMore = true;
     let moreBusy = false;
     const onLoadMore = vi.fn(() => {
       moreBusy = true;
