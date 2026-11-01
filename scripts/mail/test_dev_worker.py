@@ -18,7 +18,7 @@ class WorkerImageTest(unittest.TestCase):
         api = {'Image': 'sha256:' + 'c' * 64, 'Config': {'Image': image, 'Env': [
             'GIT_SHA=' + sha, 'APP_ENV=stage', 'PUBLIC_API_ORIGIN=https://dev.gobadminton.ru',
             'PUBLIC_WEB_ORIGIN=https://dev.gobadminton.ru', 'EMAIL_AUTH_TRANSPORT=smtp']},
-            'NetworkSettings': {'Networks': {'synthetic-dev-net': {}}}}
+            'NetworkSettings': {'Networks': {'gobadminton_dev_preview_internal': {}, 'gobadminton_dev_preview_web_api': {}}}}
         with tempfile.TemporaryDirectory() as tmp, patch.object(worker, 'RUNTIME', Path(tmp)), \
                 patch.object(worker.os, 'geteuid', return_value=0), \
                 patch.object(Path, 'read_text', return_value=json.dumps(accepted)), \
@@ -27,6 +27,7 @@ class WorkerImageTest(unittest.TestCase):
             worker.main()
             args = execute.call_args.args[1]
             self.assertEqual(args[-3:], [image, 'node', 'dist/worker-main.js'])
+            self.assertEqual(args[args.index('--network')+1], 'gobadminton_dev_preview_internal')
             self.assertEqual((Path(tmp) / 'dev-worker.env').stat().st_mode & 0o777, 0o600)
             self.assertNotIn('SMTP_PASSWORD', (Path(tmp) / 'dev-worker.env').read_bytes().decode())
             api['Config']['Image'] = 'some-other-image'
