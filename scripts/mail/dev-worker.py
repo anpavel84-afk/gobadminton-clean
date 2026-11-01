@@ -24,9 +24,10 @@ def main():
     env = dict(item.split('=', 1) for item in api['Config']['Env'])
     if env.get('GIT_SHA') != sha or api['Config']['Image'] != image_ref or env.get('APP_ENV') not in ('mvp', 'stage') or env.get('PUBLIC_API_ORIGIN') != 'https://dev.gobadminton.ru' or env.get('PUBLIC_WEB_ORIGIN') != 'https://dev.gobadminton.ru' or env.get('EMAIL_AUTH_TRANSPORT') != 'smtp':
         raise ValueError('DEV API image/config mismatch')
-    networks = list(api['NetworkSettings']['Networks'])
-    if len(networks) != 1:
-        raise ValueError('single DEV network required')
+    networks = api['NetworkSettings']['Networks']
+    network = 'gobadminton_dev_preview_internal'
+    if network not in networks:
+        raise ValueError('existing DEV database network required')
     env['SERVICE_NAME'] = 'gobadminton-worker'
     env['MAIL_AUTH_FILE'] = '/run/gobadminton-mail/info-mail.auth'
     # Password never enters environment or Docker command arguments.
@@ -40,7 +41,7 @@ def main():
     args = ['/usr/bin/docker', 'run', '--rm', '--name', NAME,
             '--label', 'gobadminton.role=dev-mail-worker', '--user', '0:0',
             '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
-            '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=16m', '--network', networks[0],
+            '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=16m', '--network', network,
             '--env-file', str(private_env), '--mount',
             'type=bind,src=/srv/gobadminton/mail-runtime/info-mail.auth,dst=/run/gobadminton-mail/info-mail.auth,readonly',
             image_ref, 'node', 'dist/worker-main.js']
