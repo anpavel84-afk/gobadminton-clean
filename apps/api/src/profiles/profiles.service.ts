@@ -25,6 +25,11 @@ import {
 import type { AppEnv } from "../config/env";
 import { APP_ENV } from "../tokens";
 import { SocialFeatureService } from "./social-feature";
+import {
+  DIRECTORY_VISIBILITY_PROVENANCE,
+  ensureDefaultSocialProfile,
+  type DirectoryVisibilityProvenance,
+} from "./social-profile-defaults";
 
 export type LevelDto = {
   scaleId: string;
@@ -119,6 +124,7 @@ type ProfileRow = {
   bio: string | null;
   directory_visible: boolean;
   contact_policy: "requests" | "closed";
+  directory_visibility_provenance: DirectoryVisibilityProvenance;
   consent_policy_version: string | null;
   opted_in_at: Date | null;
   radar_consented: boolean;
@@ -142,8 +148,8 @@ type LookingRow = {
 
 const PROFILE_SELECT = `user_id, public_player_id, display_name, city_id, area_key,
   level_scale_id, level_scale_version, level_id, bio, directory_visible,
-  contact_policy, consent_policy_version, opted_in_at, radar_consented,
-  radar_consent_policy_version, radar_consented_at, social_eligible, version`;
+  contact_policy, directory_visibility_provenance, consent_policy_version, opted_in_at,
+  radar_consented, radar_consent_policy_version, radar_consented_at, social_eligible, version`;
 
 @Injectable()
 export class ProfilesService {
@@ -158,7 +164,16 @@ export class ProfilesService {
 
   async getOwn(userId: string): Promise<OwnSocialProfileDto> {
     this.feature.assertEnabled();
-    const profile = await this.loadProfile(this.pool, userId);
+    let profile = await this.loadProfile(this.pool, userId);
+    if (!profile) {
+      // One-time missing-profile materialization (INSERT DO NOTHING). Never UPDATEs.
+      const name = await accountDisplayName(this.pool, userId);
+      await ensureDefaultSocialProfile(this.pool, {
+        userId,
+        displayName: name || null,
+      });
+      profile = await this.loadProfile(this.pool, userId);
+    }
     const looking = await this.loadLookingEffective(this.pool, userId);
     const trainer = await this.hasActiveTrainer(this.pool, userId);
     if (!profile) {
@@ -220,10 +235,11 @@ export class ProfilesService {
             `INSERT INTO player_social_profiles (
                user_id, display_name, city_id, area_key,
                level_scale_id, level_scale_version, level_id, bio,
-               contact_policy, radar_consented, radar_consent_policy_version,
+               directory_visible, contact_policy, directory_visibility_provenance,
+               radar_consented, radar_consent_policy_version,
                radar_consented_at, social_eligible, version
              ) VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1
+               $1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, $11, $12, $13, $14, 1
              )
              RETURNING ${PROFILE_SELECT}`,
             [
@@ -236,6 +252,7 @@ export class ProfilesService {
               level?.levelId ?? null,
               normalized.bio ?? null,
               normalized.contactPolicy ?? "requests",
+              DIRECTORY_VISIBILITY_PROVENANCE.OWNER_DEFAULT,
               normalized.radarConsented ?? false,
               normalized.radarConsented
                 ? (normalized.radarConsentPolicyVersion ??
@@ -304,14 +321,23 @@ export class ProfilesService {
             nextRadarAt = null;
           }
           // Directory visibility stays as stored; patch does not toggle it.
-          // If fields required for opt-in are removed while visible, reject.
+          // Owner #448: visible owner_default may lack city; user_consent keeps stamps.
+          if (existing.directory_visible && nextDisplay.trim().length < 1) {
+            throw unprocessable(
+              "DIRECTORY_FIELDS_REQUIRED",
+              "Для видимого профиля нужно displayName",
+            );
+          }
           if (
             existing.directory_visible &&
-            (nextDisplay.trim().length < 1 || nextCity === null)
+            existing.directory_visibility_provenance ===
+              DIRECTORY_VISIBILITY_PROVENANCE.USER_CONSENT &&
+            (existing.consent_policy_version === null ||
+              existing.opted_in_at === null)
           ) {
             throw unprocessable(
               "DIRECTORY_FIELDS_REQUIRED",
-              "Для видимого профиля нужны displayName и cityId",
+              "Для видимого профиля с индивидуальным согласием нужны метки consent",
             );
           }
           if (nextCity) await assertCity(client, nextCity);
@@ -418,26 +444,38 @@ export class ProfilesService {
         }
         let consent = existing.consent_policy_version;
         let optedInAt = existing.opted_in_at;
+        let provenance = existing.directory_visibility_provenance;
         if (normalized.directoryVisible) {
-          if (
-            existing.display_name.trim().length < 1 ||
-            !existing.city_id
-          ) {
+          if (existing.display_name.trim().length < 1) {
             throw unprocessable(
               "DIRECTORY_FIELDS_REQUIRED",
-              "Для opt-in нужны displayName и cityId",
+              "Для публикации в каталоге нужно displayName",
             );
           }
-          const policy =
-            normalized.consentPolicyVersion ?? DIRECTORY_CONSENT_POLICY_VERSION;
-          if (policy !== DIRECTORY_CONSENT_POLICY_VERSION) {
-            throw unprocessable(
-              "CONSENT_POLICY_VERSION_INVALID",
-              "Некорректная версия согласия каталога",
-            );
+          if (normalized.consentPolicyVersion !== undefined) {
+            const policy = normalized.consentPolicyVersion;
+            if (policy !== DIRECTORY_CONSENT_POLICY_VERSION) {
+              throw unprocessable(
+                "CONSENT_POLICY_VERSION_INVALID",
+                "Некорректная версия согласия каталога",
+              );
+            }
+            consent = policy;
+            optedInAt = existing.opted_in_at ?? new Date();
+            provenance = DIRECTORY_VISIBILITY_PROVENANCE.USER_CONSENT;
+          } else if (
+            existing.consent_policy_version &&
+            existing.opted_in_at
+          ) {
+            provenance = DIRECTORY_VISIBILITY_PROVENANCE.USER_CONSENT;
+            consent = existing.consent_policy_version;
+            optedInAt = existing.opted_in_at;
+          } else {
+            // Owner #448 product default — do not forge consent or invent city.
+            provenance = DIRECTORY_VISIBILITY_PROVENANCE.OWNER_DEFAULT;
           }
-          consent = policy;
-          optedInAt = existing.opted_in_at ?? new Date();
+        } else {
+          provenance = DIRECTORY_VISIBILITY_PROVENANCE.USER_OPT_OUT;
         }
         // Opt-out must NOT clear radar consent (ADR-004 / assignment).
         const updated = await client.query<ProfileRow>(
@@ -445,11 +483,18 @@ export class ProfilesService {
            SET directory_visible = $2,
                consent_policy_version = $3,
                opted_in_at = $4,
+               directory_visibility_provenance = $5,
                version = version + 1,
                updated_at = now()
            WHERE user_id = $1
            RETURNING ${PROFILE_SELECT}`,
-          [userId, normalized.directoryVisible, consent, optedInAt],
+          [
+            userId,
+            normalized.directoryVisible,
+            consent,
+            optedInAt,
+            provenance,
+          ],
         );
         const looking = await this.loadLookingEffective(client, userId);
         const trainer = await this.hasActiveTrainer(client, userId);
@@ -927,7 +972,7 @@ function emptyOwnProfile(trainer: boolean): OwnSocialProfileDto {
     areaKey: null,
     level: null,
     bio: null,
-    directoryVisible: false,
+    directoryVisible: true,
     contactPolicy: "requests",
     consentPolicyVersion: null,
     optedInAt: null,
@@ -1321,7 +1366,7 @@ function isUuid(value: string): boolean {
 }
 
 async function accountDisplayName(
-  client: PoolClient,
+  client: Pool | PoolClient,
   userId: string,
 ): Promise<string> {
   const result = await client.query<{ display_name: string }>(

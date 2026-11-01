@@ -269,30 +269,32 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
     return { publicPlayerId: body.publicPlayerId, version: body.version };
   }
 
-  it("legacy user is hidden until explicit opt-in; projection omits private IDs", async () => {
+  it("Owner #448 default materializes directory ON; projection omits private IDs", async () => {
     const a = await login("vk");
     const b = await login("yandex");
 
-    const empty = await app.inject({
+    const own = await app.inject({
       method: "GET",
       url: "/v1/me/social-profile",
       cookies: a.cookies,
     });
-    expect(empty.statusCode).toBe(200);
-    expect(empty.json()).toMatchObject({
-      version: 0,
-      directoryVisible: false,
-      publicPlayerId: null,
+    expect(own.statusCode).toBe(200);
+    expect(own.json()).toMatchObject({
+      directoryVisible: true,
+      contactPolicy: "requests",
+      consentPolicyVersion: null,
+      optedInAt: null,
     });
+    expect((own.json() as { version: number }).version).toBeGreaterThanOrEqual(1);
+    expect((own.json() as { publicPlayerId: string | null }).publicPlayerId).toBeTruthy();
 
-    const listHidden = await app.inject({
+    const list = await app.inject({
       method: "GET",
       url: "/v1/players",
       cookies: b.cookies,
     });
-    expect(listHidden.statusCode).toBe(200);
-    const hiddenItems = (listHidden.json() as { items: unknown[] }).items;
-    expect(Array.isArray(hiddenItems)).toBe(true);
+    expect(list.statusCode).toBe(200);
+    expect(Array.isArray((list.json() as { items: unknown[] }).items)).toBe(true);
 
     const profile = await ensureVisibleProfile(a, "Alpha LS01", "a1");
     const detail = await app.inject({
