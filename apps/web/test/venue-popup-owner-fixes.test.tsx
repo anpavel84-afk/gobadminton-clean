@@ -166,8 +166,8 @@ describe("production venue popup presentation with real React", () => {
     for (const html of [embedded, full]) {
       for (const field of ["title", "venueMode", "venueId", "startDate", "startTime", "capacity", "format", "visibility", "contact", "venueTerms"]) expect(html).toContain(`id="${field}"`);
       expect(html).not.toContain('id="levels"');
-      expect(html).toMatch(/<input\b[^>]*\btype="range"[^>]*\bmin="1"[^>]*\bmax="7"[^>]*\bstep="0\.5"[^>]*\bvalue="3"[^>]*\baria-valuemin="1"[^>]*\baria-valuemax="3\.5"[^>]*\baria-label="Нижний уровень"/);
-      expect(html).toMatch(/<input\b[^>]*\btype="range"[^>]*\bmin="1"[^>]*\bmax="7"[^>]*\bstep="0\.5"[^>]*\bvalue="3\.5"[^>]*\baria-valuemin="3"[^>]*\baria-valuemax="7"[^>]*\baria-label="Верхний уровень"/);
+      expect(html).toMatch(/<input\b[^>]*\btype="range"[^>]*\bmin="1"[^>]*\bmax="7"[^>]*\bstep="0\.5"[^>]*\baria-valuemin="1"[^>]*\baria-valuemax="3\.5"[^>]*\baria-label="Нижний уровень"[^>]*\bvalue="3"/);
+      expect(html).toMatch(/<input\b[^>]*\btype="range"[^>]*\bmin="1"[^>]*\bmax="7"[^>]*\bstep="0\.5"[^>]*\baria-valuemin="3"[^>]*\baria-valuemax="7"[^>]*\baria-label="Верхний уровень"[^>]*\bvalue="3\.5"/);
       expect(html).toContain('type="file"'); expect(html).toContain("Далее — к созданию"); expect(html).toContain("Отмена");
       if (step === "preview") { expect(html).toContain("Создать игру"); expect(html).toContain("Назад к редактированию"); expect(html).toMatch(/<form[^>]*hidden=""/); }
     }
