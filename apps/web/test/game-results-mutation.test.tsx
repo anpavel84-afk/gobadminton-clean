@@ -486,6 +486,39 @@ describe("PG-1b game results mutation host", () => {
     ).toBe(false);
   });
 
+  it("QA: ACK pending/success require positive integer attendanceVersion", () => {
+    const ackPath = `/v1/games/${gameId}/attendance/${contextId}/acknowledgements`;
+    const pendingOf = (attendanceVersion: unknown) => ({
+      path: ackPath,
+      method: "POST" as const,
+      body: { attendanceVersion },
+      key: "qa-ack-version",
+    });
+
+    expect(validateGameResultsPending(pendingOf(0), gameId)).toBe(false);
+    expect(validateGameResultsPending(pendingOf(-1), gameId)).toBe(false);
+    expect(validateGameResultsPending(pendingOf(1.5), gameId)).toBe(false);
+    expect(validateGameResultsPending(pendingOf("2"), gameId)).toBe(false);
+    expect(validateGameResultsPending(pendingOf(2), gameId)).toBe(true);
+
+    // Zero-version probe: present/absent receipt with version=ack=0 must not clear UNKNOWN.
+    expect(
+      validateGameResultsSuccess(record({ value: "present", version: 0, acknowledgedVersion: 0 }), pendingOf(0)),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(record({ value: "absent", version: 0, acknowledgedVersion: 0 }), pendingOf(0)),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(record({ value: "present", version: -1, acknowledgedVersion: -1 }), pendingOf(-1)),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(record({ value: "present", version: 2, acknowledgedVersion: 2 }), pendingOf(1.5)),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(record({ value: "present", version: 2, acknowledgedVersion: 2 }), pendingOf(2)),
+    ).toBe(true);
+  });
+
   it("QA: unparseable persisted operation stays HOLD and blocks new intent", () => {
     storage.set(`gb-fr04-pending:${actor}:game-results:${gameId}`, "{broken-json");
     vi.mocked(apiFetch).mockResolvedValue({ ok: false, status: 0, error: "unknown" });

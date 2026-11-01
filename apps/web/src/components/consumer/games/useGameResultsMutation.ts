@@ -43,6 +43,11 @@ function asNonNegInt(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+/** ACK targets a real assertion version — 0/negative/non-integer are not admitable. */
+function asPositiveInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
+}
+
 type BulkRequestItem = { contextId: string; expectedVersion: number };
 
 function parseBulkRequestItems(body: object): BulkRequestItem[] | null {
@@ -125,7 +130,7 @@ export function validateGameResultsPending(
       return true;
     }
     case "ack": {
-      return asNonNegInt((pending.body as { attendanceVersion?: unknown }).attendanceVersion) != null;
+      return asPositiveInt((pending.body as { attendanceVersion?: unknown }).attendanceVersion) != null;
     }
     case "dispute": {
       const body = pending.body as { attendanceVersion?: unknown; explanation?: unknown };
@@ -205,7 +210,7 @@ export function validateGameResultsSuccess(
 
   if (action.kind === "ack") {
     const record = data as AttendanceRecord;
-    const attendanceVersion = asNonNegInt(
+    const attendanceVersion = asPositiveInt(
       (pending.body as { attendanceVersion?: unknown }).attendanceVersion,
     );
     if (attendanceVersion == null) return false;
@@ -214,7 +219,7 @@ export function validateGameResultsSuccess(
       record.acknowledgedVersion === attendanceVersion &&
       typeof record.version === "number" &&
       record.version === attendanceVersion &&
-      // Only present/absent with exact version+ack confirm; unknown/malformed stay UNKNOWN.
+      // Only present/absent with exact positive version+ack confirm; unknown/malformed stay UNKNOWN.
       (record.value === "present" || record.value === "absent")
     );
   }
