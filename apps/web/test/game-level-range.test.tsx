@@ -9,6 +9,9 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useId: () => "level-range",
     useState: <T,>(initial: T) => [initial, vi.fn()] as [T, React.Dispatch<React.SetStateAction<T>>],
+    // Direct function-component invocation (no React render dispatcher): stable ref objects.
+    useRef: <T,>(initial: T) => ({ current: initial }),
+    useEffect: () => {},
   };
 });
 
@@ -16,9 +19,13 @@ import { GameLevelRange } from "../src/components/consumer/games/GameLevelRange"
 import {
   applyNtrpLevelBoundChange,
   inclusiveNtrpLevelIds,
+  ntrpLevelAriaValueMax,
+  ntrpLevelAriaValueMin,
   ntrpLevelSelectedFillStyle,
+  ntrpLevelValueFromTrackClientX,
   ntrpLevelVisualPercent,
   parseNtrpLevelRange,
+  resolveNtrpLevelPointerBound,
   serializeNtrpLevelIds,
 } from "../src/lib/game-level-range";
 
@@ -87,6 +94,68 @@ describe("shared global track coordinates", () => {
   });
 });
 
+describe("dependent logical ARIA bounds vs global visual scale", () => {
+  it("keeps visual helpers on global 1..7 while ARIA follows the other thumb", () => {
+    expect(ntrpLevelVisualPercent(3)).toBeGreaterThan(0);
+    expect(ntrpLevelAriaValueMin("lower", 3, 3.5)).toBe(1);
+    expect(ntrpLevelAriaValueMax("lower", 3, 3.5)).toBe(3.5);
+    expect(ntrpLevelAriaValueMin("upper", 3, 3.5)).toBe(3);
+    expect(ntrpLevelAriaValueMax("upper", 3, 3.5)).toBe(7);
+
+    expect(ntrpLevelAriaValueMin("lower", 7, 7)).toBe(1);
+    expect(ntrpLevelAriaValueMax("lower", 7, 7)).toBe(7);
+    expect(ntrpLevelAriaValueMin("upper", 7, 7)).toBe(7);
+    expect(ntrpLevelAriaValueMax("upper", 7, 7)).toBe(7);
+
+    expect(ntrpLevelAriaValueMin("lower", 1, 4)).toBe(1);
+    expect(ntrpLevelAriaValueMax("lower", 1, 4)).toBe(4);
+    expect(ntrpLevelAriaValueMin("upper", 1, 4)).toBe(1);
+    expect(ntrpLevelAriaValueMax("upper", 1, 4)).toBe(7);
+  });
+});
+
+describe("pointer hit-testing for overlapped thumbs", () => {
+  const trackLeft = 0;
+  const trackWidth = 390;
+
+  it("maps client X onto the snapped global scale", () => {
+    expect(ntrpLevelValueFromTrackClientX(0, trackLeft, trackWidth)).toBe(1);
+    expect(ntrpLevelValueFromTrackClientX(390, trackLeft, trackWidth)).toBe(7);
+    expect(ntrpLevelValueFromTrackClientX((2 / 6) * 390, trackLeft, trackWidth)).toBe(3);
+  });
+
+  it("picks nearest thumb when separated", () => {
+    const lowerX = (ntrpLevelVisualPercent(2.5) / 100) * trackWidth;
+    const upperX = (ntrpLevelVisualPercent(4) / 100) * trackWidth;
+    expect(resolveNtrpLevelPointerBound(lowerX, trackLeft, trackWidth, 2.5, 4)).toBe("lower");
+    expect(resolveNtrpLevelPointerBound(upperX, trackLeft, trackWidth, 2.5, 4)).toBe("upper");
+    // Midway between 2.5 and 4.0 on a 390px track is outside the 22px thumb hit radius.
+    const between = (lowerX + upperX) / 2;
+    expect(resolveNtrpLevelPointerBound(between, trackLeft, trackWidth, 2.5, 4)).toBeNull();
+  });
+
+  it("selects lower from the left side of equal max thumbs (A-01 FAIL receipt)", () => {
+    const sharedX = (ntrpLevelVisualPercent(7) / 100) * trackWidth;
+    expect(resolveNtrpLevelPointerBound(sharedX - 6, trackLeft, trackWidth, 7, 7)).toBe("lower");
+    expect(resolveNtrpLevelPointerBound(sharedX + 6, trackLeft, trackWidth, 7, 7)).toBe("upper");
+    expect(
+      resolveNtrpLevelPointerBound(sharedX, trackLeft, trackWidth, 7, 7, { directionDx: -60 }),
+    ).toBe("lower");
+    expect(
+      resolveNtrpLevelPointerBound(sharedX, trackLeft, trackWidth, 7, 7, { directionDx: 60 }),
+    ).toBe("upper");
+  });
+
+  it("selects either thumb when equal at min or an interior value", () => {
+    const atMin = (ntrpLevelVisualPercent(1) / 100) * trackWidth;
+    expect(resolveNtrpLevelPointerBound(atMin + 4, trackLeft, trackWidth, 1, 1)).toBe("upper");
+    expect(resolveNtrpLevelPointerBound(atMin - 4, trackLeft, trackWidth, 1, 1)).toBe("lower");
+    const interior = (ntrpLevelVisualPercent(4) / 100) * trackWidth;
+    expect(resolveNtrpLevelPointerBound(interior - 5, trackLeft, trackWidth, 4, 4)).toBe("lower");
+    expect(resolveNtrpLevelPointerBound(interior + 5, trackLeft, trackWidth, 4, 4)).toBe("upper");
+  });
+});
+
 describe("GameLevelRange common-track controls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -115,7 +184,7 @@ describe("GameLevelRange common-track controls", () => {
     );
   });
 
-  it("keeps both native inputs on global 1..7 and fires inclusive payloads", () => {
+  it("keeps native inputs on global 1..7 and exposes dependent ARIA bounds", () => {
     const seen: string[] = [];
     const tree = GameLevelRange({
       value: "3.0, 3.5",
@@ -135,9 +204,10 @@ describe("GameLevelRange common-track controls", () => {
     expect(upper.props.max).toBe(7);
     expect(lower.props.step).toBe(0.5);
     expect(upper.props.step).toBe(0.5);
+    // Global visual DOM min/max stay 1..7; ARIA follows the other thumb.
     expect(lower.props["aria-valuemin"]).toBe(1);
-    expect(lower.props["aria-valuemax"]).toBe(7);
-    expect(upper.props["aria-valuemin"]).toBe(1);
+    expect(lower.props["aria-valuemax"]).toBe(3.5);
+    expect(upper.props["aria-valuemin"]).toBe(3);
     expect(upper.props["aria-valuemax"]).toBe(7);
     expect(lower.props["aria-valuenow"]).toBe(3);
     expect(upper.props["aria-valuenow"]).toBe(3.5);
@@ -204,12 +274,85 @@ describe("GameLevelRange common-track controls", () => {
     expect(equalRanges[1]!.props.min).toBe(1);
     expect(equalRanges[1]!.props.max).toBe(7);
     expect(equalRanges[1]!.props.value).toBe(4);
+    expect(equalRanges[0]!.props["aria-valuemin"]).toBe(1);
+    expect(equalRanges[0]!.props["aria-valuemax"]).toBe(4);
+    expect(equalRanges[1]!.props["aria-valuemin"]).toBe(4);
+    expect(equalRanges[1]!.props["aria-valuemax"]).toBe(7);
     expect(equalRanges[0]!.props["aria-valuenow"]).toBe(4);
     expect(equalRanges[1]!.props["aria-valuenow"]).toBe(4);
     expect(typeof equalRanges[0]!.props.onFocus).toBe("function");
     expect(typeof equalRanges[1]!.props.onFocus).toBe("function");
-    expect(typeof equalRanges[0]!.props.onPointerDown).toBe("function");
-    expect(typeof equalRanges[1]!.props.onPointerDown).toBe("function");
+  });
+
+  it("moves the lower thumb left from equal max via control pointer capture (A-01)", () => {
+    let current = "7.0";
+    const capture = new Set<number>();
+    const target = {
+      setPointerCapture: vi.fn((id: number) => capture.add(id)),
+      hasPointerCapture: (id: number) => capture.has(id),
+      releasePointerCapture: vi.fn((id: number) => capture.delete(id)),
+      getBoundingClientRect: () => ({
+        left: 0,
+        width: 390,
+        right: 390,
+        top: 0,
+        bottom: 44,
+        height: 44,
+        x: 0,
+        y: 0,
+        toJSON() {
+          return {};
+        },
+      }),
+    };
+
+    const render = () => {
+      const tree = GameLevelRange({
+        value: current,
+        onChange: (next) => {
+          current = next;
+        },
+      });
+      const control = elements(tree).find((node) =>
+        String(node.props.className ?? "").includes("gb-game-level-range__control"),
+      );
+      if (!control) throw new Error("missing control");
+      const ref = control.props.ref as { current: unknown } | undefined;
+      if (ref) ref.current = target;
+      return control;
+    };
+
+    const control = render();
+    const sharedX = (ntrpLevelVisualPercent(7) / 100) * 390;
+    const down = {
+      clientX: sharedX - 6,
+      clientY: 22,
+      pointerId: 9,
+      pointerType: "touch",
+      isPrimary: true,
+      button: 0,
+      currentTarget: target,
+      preventDefault: vi.fn(),
+    };
+    (control.props.onPointerDown as (event: typeof down) => void)(down);
+    expect(capture.has(9)).toBe(false);
+
+    const move = {
+      ...down,
+      clientX: sharedX - 66,
+      clientY: 22,
+    };
+    // Re-render so handlers close over updated valueRef path via same tree... valueRef updates
+    // inside the first tree instance; call move on the same control handlers.
+    (control.props.onPointerMove as (event: typeof move) => void)(move);
+    expect(capture.has(9)).toBe(true);
+    expect(current).not.toBe("7.0");
+    const parsed = parseNtrpLevelRange(current);
+    expect(parsed.upper).toBe(7);
+    expect(parsed.lower).toBeLessThan(7);
+
+    (control.props.onPointerUp as (event: typeof move) => void)(move);
+    expect(capture.has(9)).toBe(false);
   });
 
   it("preserves disabled state on both accessible handles", () => {

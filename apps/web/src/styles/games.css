@@ -285,6 +285,9 @@
   min-width: 0;
   height: 44px;
   margin: 0;
+  /* Horizontal thumb drag in JS; vertical page scroll stays available. */
+  touch-action: pan-y;
+  cursor: pointer;
 }
 .gb-game-level-range__rail,
 .gb-game-level-range__fill {
@@ -361,7 +364,8 @@
   border-radius: 50%;
   background: var(--gb-paper);
   box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
-  pointer-events: auto;
+  /* Pointer targeting is on the control (nearest/overlap); thumbs stay paint-only. */
+  pointer-events: none;
   cursor: pointer;
 }
 .gb-game-level-range__input[type="range"]::-moz-range-thumb {
@@ -371,8 +375,11 @@
   border-radius: 50%;
   background: var(--gb-paper);
   box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
-  pointer-events: auto;
+  pointer-events: none;
   cursor: pointer;
+}
+.gb-game-level-range__control--disabled {
+  cursor: not-allowed;
 }
 .gb-game-level-range__input[type="range"]:disabled {
   cursor: not-allowed;

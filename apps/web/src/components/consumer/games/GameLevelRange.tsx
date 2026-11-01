@@ -1,6 +1,12 @@
 "use client";
 
-import { useId, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   NTRP_LEVEL_MAX,
   NTRP_LEVEL_MIN,
@@ -8,8 +14,12 @@ import {
   applyNtrpLevelBoundChange,
   formatNtrpLevelDisplay,
   formatNtrpLevelSummary,
+  ntrpLevelAriaValueMax,
+  ntrpLevelAriaValueMin,
   ntrpLevelSelectedFillStyle,
+  ntrpLevelValueFromTrackClientX,
   parseNtrpLevelRange,
+  resolveNtrpLevelPointerBound,
 } from "../../../lib/game-level-range";
 
 export type GameLevelRangeProps = {
@@ -18,9 +28,18 @@ export type GameLevelRangeProps = {
   disabled?: boolean;
 };
 
+type DragState = {
+  pointerId: number;
+  bound: "lower" | "upper";
+  startX: number;
+  startY: number;
+  captured: boolean;
+};
+
 /**
  * Two native range controls on one shared visual track (global NTRP 1..7).
  * От/До stay separately focusable; crossing clamps to the other endpoint.
+ * Pointer/touch hit-testing picks either overlapped thumb without prior keyboard focus.
  */
 export function GameLevelRange({ value, onChange, disabled = false }: GameLevelRangeProps) {
   const uid = useId();
@@ -31,6 +50,155 @@ export function GameLevelRange({ value, onChange, disabled = false }: GameLevelR
   const fill = ntrpLevelSelectedFillStyle(lower, upper);
   const [activeBound, setActiveBound] = useState<"lower" | "upper" | null>(null);
   const equalBounds = lower === upper;
+  const controlRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const valueRef = useRef({ lower, upper, serialized: value });
+  const disabledRef = useRef(disabled);
+  const onChangeRef = useRef(onChange);
+  valueRef.current = { lower, upper, serialized: value };
+  disabledRef.current = disabled;
+  onChangeRef.current = onChange;
+
+  function clearDrag(control: HTMLDivElement | null) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    if (control?.hasPointerCapture?.(drag.pointerId)) {
+      try {
+        control.releasePointerCapture(drag.pointerId);
+      } catch {
+        /* already released */
+      }
+    }
+    dragRef.current = null;
+  }
+
+  function applyPointerValue(clientX: number, bound: "lower" | "upper") {
+    const control = controlRef.current;
+    if (!control) return;
+    const rect = control.getBoundingClientRect();
+    const raw = ntrpLevelValueFromTrackClientX(clientX, rect.left, rect.width);
+    const current = valueRef.current;
+    const next = applyNtrpLevelBoundChange(bound, raw, current.lower, current.upper);
+    if (!next || next.serialized === current.serialized) return;
+    valueRef.current = { lower: next.lower, upper: next.upper, serialized: next.serialized };
+    onChangeRef.current(next.serialized);
+  }
+
+  function refineBoundForEqual(
+    drag: DragState,
+    directionDx: number,
+    trackLeft: number,
+    trackWidth: number,
+  ) {
+    const current = valueRef.current;
+    if (current.lower !== current.upper) return drag.bound;
+    const refined = resolveNtrpLevelPointerBound(
+      drag.startX,
+      trackLeft,
+      trackWidth,
+      current.lower,
+      current.upper,
+      { directionDx },
+    );
+    if (refined && refined !== drag.bound) {
+      drag.bound = refined;
+      setActiveBound(refined);
+    }
+    return drag.bound;
+  }
+
+  function onControlPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (disabledRef.current || !event.isPrimary || event.button !== 0) return;
+    const control = controlRef.current;
+    if (!control) return;
+    const rect = control.getBoundingClientRect();
+    const bound = resolveNtrpLevelPointerBound(
+      event.clientX,
+      rect.left,
+      rect.width,
+      valueRef.current.lower,
+      valueRef.current.upper,
+    );
+    if (!bound) return;
+
+    dragRef.current = {
+      pointerId: event.pointerId,
+      bound,
+      startX: event.clientX,
+      startY: event.clientY,
+      captured: false,
+    };
+    setActiveBound(bound);
+
+    // Mouse/pen: capture immediately. Touch waits for horizontal intent so pan-y can scroll.
+    if (event.pointerType === "mouse" || event.pointerType === "pen") {
+      try {
+        control.setPointerCapture(event.pointerId);
+        dragRef.current.captured = true;
+      } catch {
+        dragRef.current.captured = false;
+      }
+      applyPointerValue(event.clientX, bound);
+    }
+  }
+
+  function onControlPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || disabledRef.current) return;
+    const control = controlRef.current;
+    if (!control) return;
+    const rect = control.getBoundingClientRect();
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+
+    if (!drag.captured) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+        dragRef.current = null;
+        setActiveBound(null);
+        return;
+      }
+      if (Math.abs(dx) < 4) return;
+      refineBoundForEqual(drag, dx, rect.left, rect.width);
+      try {
+        control.setPointerCapture(event.pointerId);
+        drag.captured = true;
+      } catch {
+        return;
+      }
+    } else if (valueRef.current.lower === valueRef.current.upper && dx !== 0) {
+      refineBoundForEqual(drag, dx, rect.left, rect.width);
+    }
+
+    applyPointerValue(event.clientX, drag.bound);
+  }
+
+  function onControlPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    clearDrag(controlRef.current);
+  }
+
+  function onControlPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    clearDrag(controlRef.current);
+    setActiveBound(null);
+  }
+
+  function onLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+  }
+
+  useEffect(() => {
+    return () => {
+      clearDrag(controlRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!disabled) return;
+    clearDrag(controlRef.current);
+    setActiveBound(null);
+  }, [disabled]);
 
   function onLowerInput(event: { target: { value: string } }) {
     const next = applyNtrpLevelBoundChange("lower", event.target.value, lower, upper);
@@ -63,12 +231,20 @@ export function GameLevelRange({ value, onChange, disabled = false }: GameLevelR
         </span>
       </div>
       <div
-        className={
-          equalBounds
-            ? "gb-game-level-range__control gb-game-level-range__control--equal"
-            : "gb-game-level-range__control"
-        }
+        ref={controlRef}
+        className={[
+          "gb-game-level-range__control",
+          equalBounds ? "gb-game-level-range__control--equal" : "",
+          disabled ? "gb-game-level-range__control--disabled" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         data-active-bound={activeBound ?? undefined}
+        onPointerDown={onControlPointerDown}
+        onPointerMove={onControlPointerMove}
+        onPointerUp={onControlPointerUp}
+        onPointerCancel={onControlPointerCancel}
+        onLostPointerCapture={onLostPointerCapture}
       >
         <div className="gb-game-level-range__rail" aria-hidden="true" />
         <div
@@ -88,12 +264,11 @@ export function GameLevelRange({ value, onChange, disabled = false }: GameLevelR
           step={NTRP_LEVEL_STEP}
           value={lower}
           disabled={disabled}
-          aria-valuemin={NTRP_LEVEL_MIN}
-          aria-valuemax={NTRP_LEVEL_MAX}
+          aria-valuemin={ntrpLevelAriaValueMin("lower", lower, upper)}
+          aria-valuemax={ntrpLevelAriaValueMax("lower", lower, upper)}
           aria-valuenow={lower}
           aria-valuetext={formatNtrpLevelDisplay(lower)}
           aria-label="Нижний уровень"
-          onPointerDown={() => setActiveBound("lower")}
           onFocus={() => setActiveBound("lower")}
           onBlur={() => setActiveBound((current) => (current === "lower" ? null : current))}
           onChange={onLowerInput}
@@ -110,12 +285,11 @@ export function GameLevelRange({ value, onChange, disabled = false }: GameLevelR
           step={NTRP_LEVEL_STEP}
           value={upper}
           disabled={disabled}
-          aria-valuemin={NTRP_LEVEL_MIN}
-          aria-valuemax={NTRP_LEVEL_MAX}
+          aria-valuemin={ntrpLevelAriaValueMin("upper", lower, upper)}
+          aria-valuemax={ntrpLevelAriaValueMax("upper", lower, upper)}
           aria-valuenow={upper}
           aria-valuetext={formatNtrpLevelDisplay(upper)}
           aria-label="Верхний уровень"
-          onPointerDown={() => setActiveBound("upper")}
           onFocus={() => setActiveBound("upper")}
           onBlur={() => setActiveBound((current) => (current === "upper" ? null : current))}
           onChange={onUpperInput}

@@ -1,44 +1,39 @@
-# Issue #445 point 1 — Create game level range common-track repair
+# Issue #445 point 1 — Level range overlap pointer + dependent ARIA (A-01 / A-02)
 
-From: Cursor Auto (`OWNER_STANDING_VISUAL_QA_445_A_LEVEL_RANGE_REPAIR`, attempt 1, base `84cedf79ec6d0582ef1197589acd808f9470f62c`).
-To: PMA Chrome proof (mobile+desktop) → independent Codex Sol Medium QA → mandatory Product CI → trusted DEV ACCEPTED → Go Bad retest.
-Status: SOURCE CANDIDATE only. **UAT = NOT_TESTED**. Source PASS ≠ visual UAT. Do **not** close #445. Points 2–6 out of scope. PG3 parked separately (do not claim installed). PROD forbidden.
+From: Cursor Auto (`OWNER_STANDING_VISUAL_QA_445_A_LEVEL_RANGE_REPAIR`, attempt 2, base `5870d26d1e87d9d94ae800b54c890571546ad0ba`).
+To: PMA Chrome helper re-proof (mobile390 equal-thumb left drag + ARIA) → independent Codex Sol Medium QA → mandatory Product CI → trusted DEV → Go Bad retest.
+Status: SOURCE CANDIDATE only. **UAT = NOT_TESTED**. Do **not** close #445. Points 2–6 out of scope. PROD forbidden. No fake PASS.
 
-## Defect (verbatim Go Bad / source PR #433, canonical #432)
+## Retained first browser FAIL (product verdict input — not erased)
 
-**Create game level range (#433)**: two separate sliders («От»/«До») instead of one two-handle slider. «До» thumb position wrong/inverted: at До=3.5 (max) thumb sits ~13% of track; when От moves to 3.5, До thumb goes to 0%.
+PMA actual component+React+CSS Chromium receipt (`visual445-component-browser-pass1/receipt.json`, status **FAIL**):
 
-- Route: existing create-game form.
-- Expected: one shared visual track / two bounds; stable thumb positions; usable mobile/desktop.
-- Actual (before): two tracks with changing min/max → incompatible coordinates.
-- PMA: global NTRP v1 range 1..7 step 0.5; 3.5 is default upper, not max 7. Do not change global level scale / API payload to fit the report wording.
+1. **A-01** `equal_maximum_thumbs_cannot_separate_lower_with_left_drag` @390: after keyboard both=7 and blur, touch shared thumb near left and drag left ~60px → both stayed 7. Upper painted above always captured pointer; `data-active-bound` z-index only after focus did not help ordinary touch.
+2. **A-02** `logical_aria_range_not_updated_with_other_thumb` @390 and @1440: `aria-valuemin`/`aria-valuemax` stayed global 1..7 despite clamp against the other thumb.
 
-## Design inputs (acknowledged)
+Non-overlap native touch and keyboard paths in that receipt worked. WAI multi-thumb summary (input material): each thumb exposes limits it can actually select; native DOM min/max may stay global for visual coordinates.
 
-- Owner-approved design URL: `https://files.anpavel.ru/projects/gobadminton/design/style-guide/sitewide/20261029-owner-v3/index.html#create/form/desktop` and `#create/form/mobile`
-- Local verified PNGs (capture-receipt **PASS**):
-  - `create-approved-v3-desktop.png`
-  - `create-approved-v3-mobile.png`
-- Static mock shows text field `3.0, 3.5`; Owner report explicitly requires one common track + two handles. No new Astra/design round/UI library.
+Author pass1 `preqa-browser-findings.json` matches the same A-01/A-02. Fixture-build / harness errors are **not** a product verdict; the Chromium semanticFailures above are.
 
-## Repair (scoped)
+## Repair (this attempt — allowed paths only)
 
-1. `GameLevelRange.tsx` — both native ranges keep `min=1` `max=7`; stacked on one `.gb-game-level-range__control` with rail + selected fill; separate labels/focus/aria; active-bound z-index so overlapping equal thumbs stay reachable; disabled preserved.
-2. `game-level-range.ts` — `ntrpLevelVisualPercent` / `ntrpLevelSelectedFillStyle`; existing clamp helpers unchanged (`min<=max`, inclusive ids, defaults 3.0..3.5).
-3. `games.css` — styles scoped under `.gb-game-level-range` only.
-4. Tests — common-track contract, shared coordinates, two accessible handles, Home/End extremes, equal-thumb, disabled; create-form wire reuse.
-5. Releases — prospective app `0.1.0-alpha.6` (API `0.22.0` unchanged); alpha.4 + dual alpha.5 (06991 SMTP + 84ced worker) seeded; alpha.6 SHA/date unbound until DEV receipt.
-6. `SITEWIDE_UI_STYLE_GUIDE.md` + `CHANGELOG.md` + this handoff.
+1. `GameLevelRange.tsx` — control-level pointer hit-testing + `setPointerCapture`; overlapped/equal thumbs resolve by left-of-center or drag direction (lower← / upper→) without prior keyboard focus; touch waits for horizontal intent so `touch-action: pan-y` can scroll; pointercancel / lostcapture / disabled / unmount cleanup; native keyboard inputs unchanged (two focusable ranges, no hidden manual values).
+2. `game-level-range.ts` — `resolveNtrpLevelPointerBound`, `ntrpLevelValueFromTrackClientX`, `ntrpLevelAriaValueMin` / `Max`; existing clamp / inclusive payload / global visual % helpers retained.
+3. `games.css` — thumbs paint-only (`pointer-events: none`); control owns pointer; `touch-action: pan-y`; active z-index retained for keyboard focus painting.
+4. Tests — global visual DOM min/max 1..7 checked separately from dependent ARIA; overlapped equal-max pointer harness moves lower left; create-form wire reuse.
 
-## Checks (author)
+ARIA now: lower `aria-valuemin=1` / `aria-valuemax=CURRENT_UPPER`; upper `aria-valuemin=CURRENT_LOWER` / `aria-valuemax=7`. Native `min`/`max` stay 1..7.
 
-- Affected web unit tests / typecheck / lint — see evidence run.
-- Independent Sol Medium QA + Product CI + DEV ACCEPTED + Go Bad browser retest — outstanding trusted process.
-- Author self-check ≠ independent QA.
+## Author checks (not independent QA)
 
-## Remaining / non-goals
+- `vitest` `test/game-level-range.test.tsx` + `test/create-game-venue-cta.test.tsx` — pass.
+- Scoped `tsc --noEmit` + eslint on touched web files — pass.
+- Author pointer harness exercises equal-max left drag → lower decreases; **not** a substitute for PMA Chrome native touch proof.
+- Fixed native Touch / ARIA still **pending** PMA Chrome helper + independent QA + CI + DEV + Go Bad. No READY/ACTIVE claim.
 
-- #445 points 2–6 not fixed; issue stays open.
-- No modelRoot / Git / AGENTS / runtime / PROD / auth / sessions / API / schema changes.
-- No PG3/4/comments DONE claim; no mass cleanup; no new framework.
-- Owner UAT after DEV: NOT_TESTED until Go Bad browser PASS.
+## Non-goals
+
+- #445 points 2–6 untouched; issue stays open.
+- No Git / AGENTS / runtime / PROD / API / schema / release edits.
+- No new gesture library or broad redesign.
+- Standing AGENTS already in source — not edited by author.
