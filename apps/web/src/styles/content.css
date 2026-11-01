@@ -57,3 +57,60 @@
   .gb-app-shell--reading .gb-shell-content { padding-bottom: 0; }
   .fr6-content .mobile-reading-footer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }
+
+/* #434 DEV releases catalogue — scoped to /releases + footer version chip. */
+.gb-site-footer-version { display: inline-flex; align-items: center; gap: 10px; color: rgba(255,255,255,.64); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.gb-site-footer-releases-link { color: var(--gb-lime); text-decoration: underline; text-underline-offset: 2px; }
+.mobile-reading-footer-links { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.gb-releases-page { max-width: 960px; }
+.gb-releases-hero { margin: 0 0 36px; padding: 28px 0 8px; }
+.gb-releases-hero h1 { margin: 12px 0 16px; font: 700 40px/1.08 var(--gb-font); letter-spacing: -.04em; }
+.gb-releases-hero p { max-width: 46rem; color: var(--gb-ink-soft); font-size: 16px; line-height: 1.6; }
+.gb-releases-meta { color: var(--gb-ink-soft); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.gb-releases-section { margin: 0 0 40px; }
+.gb-releases-section > h2 { margin: 0 0 10px; font: 700 26px/1.2 var(--gb-font); letter-spacing: -.02em; }
+.gb-releases-section > p { max-width: 46rem; margin: 0 0 18px; color: var(--gb-ink-soft); line-height: 1.6; }
+.gb-releases-env-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.gb-releases-env-card { min-width: 0; padding: 22px; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-md); background: var(--gb-white); }
+.gb-releases-env-card h2 { margin: 0 0 6px; font: 700 20px var(--gb-font); }
+.gb-releases-env-card > header p { margin: 0 0 16px; color: var(--gb-ink-soft); font-size: 14px; line-height: 1.45; }
+.gb-releases-env-card dl { margin: 0; display: grid; gap: 10px; }
+.gb-releases-env-card dl > div { display: grid; gap: 2px; min-width: 0; }
+.gb-releases-env-card dt { color: var(--gb-purple); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.gb-releases-env-card dd { margin: 0; overflow-wrap: anywhere; font-size: 14px; line-height: 1.45; }
+.gb-releases-note { margin: 12px 0 0; color: var(--gb-ink-soft); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.gb-releases-list-block { margin: 0 0 16px; }
+.gb-releases-list-block h3 { margin: 0 0 8px; font: 700 16px var(--gb-font); }
+.gb-releases-list-block ul, .gb-releases-limits { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; color: var(--gb-ink-soft); line-height: 1.55; }
+.gb-releases-groups { display: grid; gap: 18px; }
+.gb-releases-group { min-width: 0; padding: 20px 22px; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-md); background: var(--gb-white); }
+.gb-releases-group h3 { margin: 0 0 12px; font: 700 18px var(--gb-font); }
+.gb-releases-group ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.gb-releases-group li { display: grid; gap: 4px; min-width: 0; }
+.gb-releases-group li strong { font-size: 15px; }
+.gb-releases-group li span { color: var(--gb-ink-soft); font-size: 14px; line-height: 1.55; }
+.gb-releases-group li em { color: #5a675f; font-size: 13px; line-height: 1.5; font-style: normal; }
+.gb-releases-history { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.gb-releases-history li { min-width: 0; padding: 18px 20px; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-md); background: var(--gb-white); }
+.gb-releases-history-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.gb-releases-history-head span { color: var(--gb-purple); font-size: 12px; letter-spacing: .06em; text-transform: none; }
+.gb-releases-history p { margin: 0 0 6px; color: var(--gb-ink-soft); line-height: 1.5; }
+.gb-releases-details { margin: 14px 0 0; }
+.gb-releases-details > summary {
+  cursor: pointer;
+  color: var(--gb-ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+  list-style-position: outside;
+}
+.gb-releases-details[open] > summary { margin-bottom: 10px; }
+.gb-releases-details dl { margin: 0; display: grid; gap: 10px; }
+.gb-releases-details dl > div { display: grid; gap: 2px; min-width: 0; }
+.gb-releases-details dt { color: var(--gb-purple); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.gb-releases-details dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; color: var(--gb-ink-soft); }
+@media (max-width:720px) {
+  .gb-releases-hero h1 { font-size: 30px; }
+  .gb-releases-env-grid { grid-template-columns: 1fr; }
+  .gb-releases-group, .gb-releases-env-card, .gb-releases-history li { padding: 18px; }
+  .mobile-reading-footer-links { max-width: 70%; }
+}

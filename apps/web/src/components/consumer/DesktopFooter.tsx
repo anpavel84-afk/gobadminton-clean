@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ConsumerLogo } from "./Logo";
+import { ReleaseLink } from "./ReleaseLink";
+import { CURRENT_APPLICATION_VERSION } from "../../lib/releases";
 
 const groups = [
   { title: "Продукт", items: [
@@ -32,7 +34,14 @@ export function DesktopFooter() {
           </div>
         ))}
       </div>
-      <div className="gb-site-footer-bottom"><span>© 2026 GoBadminton. Все права защищены.</span><span>Game first.</span></div>
+      <div className="gb-site-footer-bottom">
+        <span>© 2026 GoBadminton. Все права защищены.</span>
+        <span className="gb-site-footer-version">
+          <span>{CURRENT_APPLICATION_VERSION}</span>
+          <ReleaseLink className="gb-site-footer-releases-link" />
+        </span>
+        <span>Game first.</span>
+      </div>
     </footer>
   );
 }
