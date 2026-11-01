@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.9" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.10" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,19 +425,16 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Безопасное публичное имя и понятный текст истории выпусков",
+  title: "Действия в своём профиле под шапкой",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [],
-  fixes: [
-    "В каталоге игроков, публичном профиле и личных сообщениях почтоподобное или пустое имя заменяется на «Игрок»; обычные имена без изменений; записанное имя в своём профиле не меняется.",
-    "Текст истории выпусков для недавних записей написан понятным русским языком без внутренних служебных обозначений.",
-    "В десктоп-слайдере игроков двухстрочное описание больше не обрезает снизу ссылку «Подробнее об игроке»: ссылка целиком видна над кнопками «Давай сыграем» / «Следующий».",
+  additions: [
+    "Обновлено расположение действий в своём профиле: «Изменить профиль», «Настройки» и «Изменить обложку».",
   ],
+  fixes: [],
   known_limitations: [
-    "Приёмка владельцем не выполнена.",
-    "Проверка прежнего приватного выбора в каталоге остаётся за доверенным оператором; массовое включение видимости не делалось.",
-    "Чат игры для пользователя без участия по-прежнему недоступен (открытое замечание из #445).",
+    "Приёмка владельцем после обычного входа ещё не выполнена.",
+    "Публичные профили других игроков, API и настройки приватности этим выпуском не менялись.",
     "Основной сайт обновляется отдельно.",
   ],
   feature_catalogue: "delta",
@@ -800,6 +797,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем полного сценария регистрации и входа не выполнена.",
       "После установки выявлены замечания #450: безопасное публичное имя, проверка прежнего приватного выбора и понятный русский текст. Не объявлять их исправленными задним числом.",
       "Техническая установка alpha.8 принята на обоих сайтах; браузерные замечания не стирают историю установки."
+    ]
+  },
+  {
+    "source_sha": "783a1897167be1f531312b9a6812b6240181e2c3",
+    "application_version": "0.1.0-alpha.9",
+    "version_label": "0.1.0-alpha.9",
+    "title": "Безопасные публичные имена, понятные заметки и ссылка профиля на компьютере",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41345457119-a1",
+        "accepted_at": "2026-11-01T20:21:50Z",
+        "api_digest": "sha256:722cf29edad73ef6c30bc215a0a69801259b581b46faf12a421293c0b41f1267",
+        "web_digest": "sha256:d13dc563b86e7f36c2dfa168a93e25dbd9ea6d2c605904ecd0668f5832c440d1",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Безопасное имя игрока без отображения email на связанных публичных и личных экранах.",
+      "Понятный русский текст истории выпусков.",
+      "Ссылка полного профиля остаётся видимой при двухстрочном описании на компьютере."
+    ],
+    "known_limitations": [
+      "Проверка владельцем после обычного входа ещё не выполнена.",
+      "Замечания по конкретным ролям в чате и весь список #450/#445 не объявлены закрытыми.",
+      "Этот выпуск alpha.9 принят только на DEV; PROD сохранил alpha.8."
     ]
   },
 ] as const;

@@ -1,23 +1,37 @@
 # GoBadminton release notes
 
-## #450 — safe public name + Russian release history (0.1.0-alpha.9 candidate)
+## #402 — own profile actions under hero (0.1.0-alpha.10 candidate)
+
+Compact open action group on `/profile` under the shared hero: lime «Изменить
+профиль», outline «Изменить обложку», ghost «Настройки». Layout and cover
+handlers only; no API/privacy/public-profile change. API wire remains `0.22.0`.
+Base accepted DEV alpha.9 `783a1897…`. PROD remains accepted alpha.8. Owner UAT:
+NOT_TESTED.
+
+- Application version (candidate): `0.1.0-alpha.10`; API contract unchanged `0.22.0`.
+- Base accepted SHA: `783a1897167be1f531312b9a6812b6240181e2c3` (alpha.9 DEV).
+- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Owner UAT: NOT_TESTED.
+- PG-3/PG-4 untouched; C5 untouched; no PROD activation.
+
+## #450 — safe public name + Russian release history (0.1.0-alpha.9 DEV ACCEPTED)
 
 Visual QA repair on accepted alpha.8 (`26f3ba38…`). Public directory, player
 profile, unified/radar and friendship peer DTOs scrub email-shaped or empty
 display names to «Игрок» at the read boundary without rewriting own-profile or
-login storage; catalogue cursor ordering stays on raw stored names. Alpha.8
-accepted history for both sites is recorded in Russian user-facing prose;
-current descriptor is alpha.9 delta. API wire remains `0.22.0`. No fixture
-visibility rewrite; no chat rights change; trainer-profile HTTP 404 stays
-normal missing-profile (no client console.error). Alpha.9 pending acceptance;
-no automatic PROD activation.
+login storage; catalogue cursor ordering stays on raw stored names. Accepted on
+DEV `r41345457119-a1` (`2026-11-01T20:21:50Z`), source
+`783a1897167be1f531312b9a6812b6240181e2c3`. PROD kept alpha.8. API wire
+`0.22.0`. Owner UAT: NOT_TESTED.
 
-- Application version (candidate): `0.1.0-alpha.9`; API contract unchanged `0.22.0`.
-- Base accepted SHA: `26f3ba38d9c04730674b084c0266afc193662398` (alpha.8 both DEV+PROD).
-- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
-- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Application version: `0.1.0-alpha.9`; API contract unchanged `0.22.0`.
+- Accepted source: `783a1897167be1f531312b9a6812b6240181e2c3`.
+- DEV release: `r41345457119-a1` (accepted `2026-11-01T20:21:50Z`).
+- Digests: api `sha256:722cf29edad73ef6c30bc215a0a69801259b581b46faf12a421293c0b41f1267`,
+  web `sha256:d13dc563b86e7f36c2dfa168a93e25dbd9ea6d2c605904ecd0668f5832c440d1`.
 - Owner / Go Bad UAT: NOT_TESTED.
-- PG-3/PG-4 untouched; C5 untouched.
+- PROD unchanged (remains alpha.8).
 
 ## #448 — visibility and messages defaults with preserved user choice (0.1.0-alpha.8 ACCEPTED both sites)
 
