@@ -461,6 +461,96 @@ run("Owner #448 social profile defaults", () => {
     });
   });
 
+  it("inactive or effectively restricted missing profiles are not materialized", async () => {
+    const countFor = async (userId: string) =>
+      (
+        await pool.query<{ n: string }>(
+          "SELECT count(*)::text AS n FROM player_social_profiles WHERE user_id=$1",
+          [userId],
+        )
+      ).rows[0]!.n;
+
+    const inactiveId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO users(display_name,locale,status)
+         VALUES('S448 Inactive','ru','disabled') RETURNING id`,
+      )
+    ).rows[0]!.id;
+    await ensureDefaultSocialProfile(pool, {
+      userId: inactiveId,
+      displayName: "S448 Inactive",
+    });
+    expect(await countFor(inactiveId)).toBe("0");
+
+    const principalUserId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO users(display_name,locale) VALUES('S448 Restrict Principal','ru') RETURNING id",
+      )
+    ).rows[0]!.id;
+    const principalId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",
+        [principalUserId],
+      )
+    ).rows[0]!.id;
+
+    for (const capability of [
+      "account.access",
+      "profile.public",
+      "social.directory",
+    ] as const) {
+      const restrictedId = (
+        await pool.query<{ id: string }>(
+          `INSERT INTO users(display_name,locale,status)
+           VALUES($1,'ru','active') RETURNING id`,
+          [`S448 Restricted ${capability}`],
+        )
+      ).rows[0]!.id;
+      await pool.query(
+        `INSERT INTO user_restrictions
+           (user_id, capability, reason_code, expires_at, created_by)
+         VALUES ($1, $2, 'synthetic_fixture', clock_timestamp() + interval '1 hour', $3)`,
+        [restrictedId, capability, principalId],
+      );
+      await ensureDefaultSocialProfile(pool, {
+        userId: restrictedId,
+        displayName: `S448 Restricted ${capability}`,
+      });
+      expect(await countFor(restrictedId)).toBe("0");
+    }
+
+    // Existing OFF on an otherwise eligible user stays OFF (no re-enable).
+    const offId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO users(display_name,locale) VALUES('S448 Guard Off','ru') RETURNING id",
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO player_social_profiles (
+         user_id, display_name, directory_visible, contact_policy,
+         directory_visibility_provenance, version
+       ) VALUES ($1,'S448 Guard Off', false, 'closed', $2, 3)`,
+      [offId, DIRECTORY_VISIBILITY_PROVENANCE.USER_OPT_OUT],
+    );
+    await ensureDefaultSocialProfile(pool, {
+      userId: offId,
+      displayName: "Should Not Win",
+    });
+    const retained = await pool.query(
+      `SELECT directory_visible, contact_policy, directory_visibility_provenance,
+              display_name, version
+       FROM player_social_profiles WHERE user_id=$1`,
+      [offId],
+    );
+    expect(retained.rows[0]).toMatchObject({
+      directory_visible: false,
+      contact_policy: "closed",
+      directory_visibility_provenance: DIRECTORY_VISIBILITY_PROVENANCE.USER_OPT_OUT,
+      display_name: "S448 Guard Off",
+      version: 3,
+    });
+  });
+
   it("scoped demo/pristine enable is CAS-once; modified and explicit OFF stay off", async () => {
     // Demo-shaped private closed fixture (operator cohort identity guards).
     const demoUserId = "d0f00001-0000-4000-8000-00000000a448";
