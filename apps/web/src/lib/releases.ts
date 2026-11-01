@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.6" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.7" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.22.0" as const;
@@ -425,17 +425,20 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Общий ползунок уровней при создании игры",
+  title: "Карта/venues, finder и guidance друзей — #445 followup",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [],
   fixes: [
-    "Диапазон уровней на форме создания: один общий визуальный трек и два доступных ползунка «От»/«До» со стабильными координатами шкалы NTRP 1…7.",
+    "Устаревшие входы /games/map и /venues ведут на существующую каноническую карту /games?view=map.",
+    "Невалидный не-игровой UUID в пути игры завершает экран до вызова API.",
+    "Нейтральный prerequisite finder подходит и desktop «По одному», и mobile «Свайп».",
+    "Друзья и рекомендации показывают guidance сохранить/открыть видимость своего профиля со ссылкой /profile вместо ложного outage, когда свой профиль ещё не сохранён или скрыт.",
   ],
   known_limitations: [
-    "Исправление только пункта 1 отчёта visual-qa #445; пункты 2–6 не входят в этот выпуск.",
-    "Визуальная проверка Owner/Go Bad после DEV ещё не выполнена (UAT = NOT_TESTED).",
-    "PROD не изменён; API-контракт остаётся 0.22.0.",
+    "Пункт 4 #445 требует URL/роль игры от репортёра; postgame fixture ждёт reporter ID.",
+    "Не обещается, что все новые пользователи eligible или что приватные профили включены; вся #445 не объявлена DONE.",
+    "Go Bad / Owner UAT = NOT_TESTED; PG-3/PG-4 не установлены; PROD не изменён; без auto opt-in и без смены backend-разрешений.",
   ],
   feature_catalogue: "delta",
 };
@@ -700,6 +703,34 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "known_limitations": [
       "Тот же номер alpha.5 при другом source SHA и отдельном deploy receipt.",
       "Owner UAT NOT_TESTED; PROD не изменён."
+    ]
+  },
+  {
+    "source_sha": "4fdf232ac576b7c830c77405267795634b9ae43b",
+    "application_version": "0.1.0-alpha.6",
+    "version_label": "0.1.0-alpha.6",
+    "title": "Диапазон уровней: единая шкала и два ползунка — #445, пункт1",
+    "api_contract_version": "0.22.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41329378049-a1",
+        "accepted_at": "2026-11-01T17:07:45Z",
+        "api_digest": "sha256:753b6ba373560b59cb0840b3d69ed19100629d8332004e208ac9fdced762c0c0",
+        "web_digest": "sha256:7a8c300478d2a2ab428cee687f5e64cfb3db294eb38f25f3f48dae9a16163e40",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Только пункт1 #445: два ползунка на общей шкале1–7 с шагом0.5, зависимыми ARIA-границами и включительным диапазоном."
+    ],
+    "known_limitations": [
+      "Пункты2–6 #445 ещё не доставлены этим выпуском; всяIssue не PASS.",
+      "Go Bad retest, authenticated live creation и physicaliPhoneUAT NOT_TESTED.",
+      "PG-3 не установлен; PROD остаётсяalpha.2."
     ]
   },
 ] as const;
