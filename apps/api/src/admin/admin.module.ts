@@ -6,6 +6,8 @@ import { AdminVenuesService } from "../venues/admin-venues.service";
 import { AdminVenuesController } from "./venues.controller";
 import { AdminCasesController } from "./cases.controller";
 import { AdminCasesService } from "./cases.service";
+import { AdminAttendanceDisputesController } from "./attendance-disputes.controller";
+import { AdminAttendanceDisputesService } from "./attendance-disputes.service";
 import { CASE_EVIDENCE_POLICY, SyntheticCaseEvidencePolicy } from "./case-evidence-policy";
 import { AdminUserRestrictionsController } from "./user-restrictions.controller";
 import { AdminUserRestrictionsService } from "./user-restrictions.service";
@@ -18,9 +20,17 @@ import { AdminService } from "./admin.service";
 import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
 @Module({
   imports: [GamesModule, ProfilesModule, ModerationModule],
-  controllers: [AdminVenuesController, AdminCasesController, AdminController, AdminGameModerationController, AdminUserRestrictionsController],
+  controllers: [
+    AdminVenuesController,
+    AdminCasesController,
+    AdminAttendanceDisputesController,
+    AdminController,
+    AdminGameModerationController,
+    AdminUserRestrictionsController,
+  ],
   providers: [
     AdminCasesService,
+    AdminAttendanceDisputesService,
     { provide: CASE_EVIDENCE_POLICY, useClass: SyntheticCaseEvidencePolicy },
     AdminService,
     AdminVenuesService,

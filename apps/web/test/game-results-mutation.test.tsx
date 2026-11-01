@@ -422,6 +422,66 @@ describe("PG-1b game results mutation host", () => {
       validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 2, value: "unknown" }), ackPending),
     ).toBe(false);
 
+    const resolvingAckPending = {
+      path: `/v1/games/${gameId}/attendance/${contextId}/acknowledgements`,
+      body: {
+        attendanceVersion: 2,
+        resolvingDisputeId: "disp-1",
+        expectedDisputeVersion: 3,
+      },
+      key: "ack-resolve",
+      method: "POST",
+    };
+    // Missing / unrelated dispute summary must NOT clear resolving UNKNOWN.
+    expect(
+      validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 2, value: "present" }), resolvingAckPending),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(
+        record({
+          version: 2,
+          acknowledgedVersion: 2,
+          value: "present",
+          dispute: { id: "other", status: "withdrawn", challengedVersion: 1, version: 1 },
+        }),
+        resolvingAckPending,
+      ),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(
+        record({
+          version: 2,
+          acknowledgedVersion: 2,
+          value: "present",
+          resolvedDispute: {
+            id: "disp-1",
+            resultingVersion: 4,
+            status: "resolved",
+            contextId,
+            attendanceVersion: 2,
+          },
+        }),
+        resolvingAckPending,
+      ),
+    ).toBe(true);
+    expect(
+      validateGameResultsSuccess(
+        record({
+          version: 2,
+          acknowledgedVersion: 2,
+          value: "present",
+          resolvedDispute: {
+            id: "disp-1",
+            resultingVersion: 3,
+            status: "resolved",
+            contextId,
+            attendanceVersion: 2,
+          },
+        }),
+        resolvingAckPending,
+      ),
+    ).toBe(false);
+
     const disputePending = {
       path: `/v1/games/${gameId}/attendance/${contextId}/disputes`,
       body: { attendanceVersion: 1, explanation: "Я была" },

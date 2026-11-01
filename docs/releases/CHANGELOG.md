@@ -1,16 +1,25 @@
 # GoBadminton release notes
 
-## #372 — PG-1b attendance + results (0.1.0-alpha.3 candidate)
+## #372 — PG-2 dispute response + scoped case resolution (0.1.0-alpha.4 candidate)
 
-Bounded post-game attendance with provenance, durable own notice + explicit mark-version agreement, basic dispute, and unified results screen within PG-1b. Pass-3: durable UNKNOWN mutation host (shared useSocialMutation), auth/game epoch invalidation, own removed-after-start recourse, no invented correction reason, eligibility rejects stale confirmed_at after pre-start withdraw. Runtime write flag remains default OFF; do not claim DEV-ready/exposed until trusted activation. PROD stays on accepted alpha.2. First named alpha.1 baseline unchanged; trusted history seed retains alpha.1 and appends accepted alpha.2 DEV/PROD receipts. Candidate SHA, QA, release ID, and acceptance dates unknown until trusted DEV ACCEPTED.
+Manager response/correction (including versioned unknown) without unilateral close; participant consent with exact open dispute versions; help escalation progress (not abuse report); staff intake case-from-dispute + scoped admin resolution under existing Cases/step-up/assignment. API contract additive `0.22.0`. Migration `0047` additive. Runtime writes remain default OFF. **Not** READY / not DEV ACCEPTED / not PROD. Alpha.3 final DEV record retained below.
 
-- Application version (candidate): `0.1.0-alpha.3`
-- Refs: #372 / PG-1b
-- Independent QA / Product CI / DEV install: pending
-- Runtime feature flag: default OFF (not claimed enabled)
+- Application version (candidate): `0.1.0-alpha.4`
+- API contract (candidate): `0.22.0`
+- Refs: #372 / PG-2
+- Independent QA / Product CI / DEV install: pending trusted process
 - Owner UAT: NOT_TESTED
-- Alpha.3 source SHA / acceptance dates: not invented
-- Known limits: no PG-2 adjudication, no ratings/reviews/comments, PROD out of this slice
+- Known limits: no PG-3/PG-4, PROD unchanged alpha.2
+
+## #372 — PG-1b attendance + results (0.1.0-alpha.3 DEV ACCEPTED)
+
+Bounded post-game attendance with provenance, durable own notice + explicit mark-version agreement, basic dispute, and unified results screen within PG-1b. DEV accepted source `7b75fbed6b2582c9594ff71566566df625b5672d`, release `r41298675161-a1`, accepted_at unix `1793530473` (`2026-11-01T10:54:33Z`). Config activation POST_GAME_INTERNAL_ENABLED on DEV only. PROD unchanged alpha.2. Owner UAT NOT_TESTED.
+
+- Application version: `0.1.0-alpha.3`
+- API contract: `0.21.0`
+- Refs: #372 / PG-1b / PR #440
+- DEV release: `r41298675161-a1`
+- Owner UAT: NOT_TESTED
 
 ## #438 — Swipe false exhaustion repair (0.1.0-alpha.2 accepted)
 

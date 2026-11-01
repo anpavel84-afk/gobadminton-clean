@@ -712,12 +712,21 @@ export function acknowledgeAttendance(
   contextId: string,
   attendanceVersion: number,
   csrfToken: string,
+  resolving?: { disputeId: string; expectedDisputeVersion: number },
 ) {
   return apiFetch<AttendanceRecord>(
     `/v1/games/${gameId}/attendance/${contextId}/acknowledgements`,
     {
       method: "POST",
-      body: JSON.stringify({ attendanceVersion }),
+      body: JSON.stringify({
+        attendanceVersion,
+        ...(resolving
+          ? {
+              resolvingDisputeId: resolving.disputeId,
+              expectedDisputeVersion: resolving.expectedDisputeVersion,
+            }
+          : {}),
+      }),
       csrfToken,
       idempotent: true,
     },
@@ -754,6 +763,41 @@ export function withdrawAttendanceDispute(
   csrfToken: string,
 ) {
   return apiFetch<AttendanceDispute>(`/v1/attendance-disputes/${disputeId}/withdraw`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function respondAttendanceDispute(
+  disputeId: string,
+  input: {
+    expectedVersion: number;
+    explanation: string;
+    correction?: {
+      expectedAttendanceVersion: number;
+      value: "present" | "absent" | "unknown";
+      late?: boolean;
+      correctionReason: string;
+    };
+  },
+  csrfToken: string,
+) {
+  return apiFetch<AttendanceDispute>(`/v1/attendance-disputes/${disputeId}/responses`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function requestAttendanceDisputeHelp(
+  disputeId: string,
+  input: { expectedVersion: number; explanation: string },
+  csrfToken: string,
+) {
+  return apiFetch<AttendanceDispute>(`/v1/attendance-disputes/${disputeId}/help`, {
     method: "POST",
     body: JSON.stringify(input),
     csrfToken,

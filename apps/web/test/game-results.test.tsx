@@ -1,8 +1,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { attendanceLabel, canOfferAttendanceWrites, resultsPath } from "../src/lib/game-results";
-import type { GameResults } from "../src/lib/consumer-types";
+import {
+  attendanceLabel,
+  canOfferAttendanceWrites,
+  defaultOpenDisputeId,
+  listOpenAttendanceDisputes,
+  resultsPath,
+} from "../src/lib/game-results";
+import type { AttendanceRecord, GameResults } from "../src/lib/consumer-types";
 
 describe("PG-1b game results helpers", () => {
   it("labels attendance without inventing present/absent from time", () => {
@@ -66,5 +72,73 @@ describe("PG-1b game results helpers", () => {
     expect(summary).toContain("Участники / Итоги");
     expect(summary).not.toContain("ManageGamePage");
     expect(summary).not.toContain("MyGameDetailPage");
+  });
+
+  it("manager open-dispute list exposes two concurrent roster disputes without closing the first", () => {
+    const row = (
+      id: string,
+      disputeId: string,
+      name: string,
+      over: Partial<AttendanceRecord> = {},
+    ): AttendanceRecord => ({
+      contextId: id,
+      value: "absent",
+      version: 2,
+      late: false,
+      assertion: { actorDisplay: "Mgr", source: "manager_explicit", at: "2026-11-01T00:00:00.000Z" },
+      acknowledgedVersion: null,
+      dispute: {
+        id: disputeId,
+        status: "open",
+        challengedVersion: 1,
+        version: 1,
+      },
+      displayName: name,
+      allowedActions: {
+        canSetAttendance: true,
+        canAcknowledge: false,
+        canDispute: false,
+        canWithdrawDispute: false,
+        canRespondDispute: true,
+      },
+      ...over,
+    });
+    const results: GameResults = {
+      gameId: "10000000-0000-4000-8000-000000000001",
+      outcome: { value: "held", version: 1, reason: null, provenance: null },
+      attendance: {
+        installed: true,
+        writesEnabled: true,
+        myAttendance: null,
+        roster: [
+          row("20000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000001", "Анна"),
+          row("20000000-0000-4000-8000-000000000002", "30000000-0000-4000-8000-000000000002", "Борис"),
+        ],
+        rosterNextCursor: null,
+        summary: { rosterCount: 2, marked: 2, unknown: 0, underClarification: 2, agreed: 0 },
+        allowedActions: { canRecordAttendance: true, canBulkPresent: true },
+      },
+      allowedActions: { canRecordOutcome: true },
+    };
+    const open = listOpenAttendanceDisputes(results);
+    expect(open).toHaveLength(2);
+    expect(open.map((item) => item.disputeId)).toEqual([
+      "30000000-0000-4000-8000-000000000001",
+      "30000000-0000-4000-8000-000000000002",
+    ]);
+    expect(open[1]?.displayName).toBe("Борис");
+    expect(defaultOpenDisputeId(results)).toBe("30000000-0000-4000-8000-000000000001");
+    // Second remains selectable while first stays open — list is not collapsed to one.
+    expect(open.every((item) => item.version === 1)).toBe(true);
+
+    const composition = readFileSync(
+      path.resolve(__dirname, "../src/components/consumer/games/GameResultsComposition.tsx"),
+      "utf8",
+    );
+    expect(composition).toContain("selectOpenDispute");
+    expect(composition).toContain("Открыть уточнение");
+    expect(composition).toContain("listOpenAttendanceDisputes");
+    expect(composition).toContain("resetDraft: true");
+    expect(composition).toContain("gb-postgame__dispute-picks");
   });
 });

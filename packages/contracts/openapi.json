@@ -2,8 +2,8 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.21.0",
-    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI."
+    "version": "0.22.0",
+    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off."
   },
   "x-document-status": "DESIGN_DRAFT",
   "servers": [
@@ -812,6 +812,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
           "401": {
             "$ref": "#/components/responses/Problem"
           },
@@ -825,9 +828,6 @@
             "$ref": "#/components/responses/Problem"
           },
           "default": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "400": {
             "$ref": "#/components/responses/Problem"
           }
         },
@@ -1207,6 +1207,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Exact existing venue reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Venue"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Created unverified venue",
             "content": {
@@ -1243,16 +1253,6 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
-          },
-          "200": {
-            "description": "Exact existing venue reused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Venue"
-                }
-              }
-            }
           }
         }
       },
@@ -3208,10 +3208,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3297,10 +3297,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3386,10 +3386,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3475,10 +3475,10 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -3528,10 +3528,10 @@
           "409": {
             "$ref": "#/components/responses/Problem"
           },
-          "429": {
+          "426": {
             "$ref": "#/components/responses/Problem"
           },
-          "426": {
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -5284,10 +5284,10 @@
           "422": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "503": {
+          "429": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "429": {
+          "503": {
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
@@ -6426,7 +6426,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6465,15 +6474,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": []
@@ -6510,7 +6510,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6549,15 +6558,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": []
@@ -6590,7 +6590,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6629,15 +6638,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -6708,7 +6708,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6747,15 +6756,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -6815,7 +6815,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6854,15 +6863,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -6954,7 +6954,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -6993,15 +7002,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7094,7 +7094,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7133,15 +7142,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7215,7 +7215,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7254,15 +7263,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7317,7 +7317,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7356,15 +7365,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7450,7 +7450,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7489,15 +7498,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7580,7 +7580,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7619,15 +7628,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7701,7 +7701,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7740,15 +7749,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7803,7 +7803,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7842,15 +7851,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -7936,7 +7936,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -7975,15 +7984,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8066,7 +8066,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8105,15 +8114,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8187,7 +8187,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8226,15 +8235,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8289,7 +8289,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8328,15 +8337,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8422,7 +8422,16 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8461,15 +8470,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
           }
         },
         "parameters": [
@@ -8534,7 +8534,34 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailUnlinkResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8570,33 +8597,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailUnlinkResult"
                 }
               }
             }
@@ -8653,7 +8653,34 @@
         "description": "Read-only browser status using JSON POST so browser supplies exact Origin. Same purpose/binding/session/freshness fences as GET status. No state change or code in response.",
         "security": [],
         "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8689,33 +8716,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -8796,7 +8796,34 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8832,33 +8859,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -8929,7 +8929,34 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -8965,33 +8992,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -9062,7 +9062,34 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "422": {
@@ -9098,33 +9125,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "404": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "409": {
-            "$ref": "#/components/responses/Problem"
-          },
-          "200": {
-            "description": "Success",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "no-store"
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmailChallenge"
                 }
               }
             }
@@ -10875,6 +10875,24 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Internal synthetic result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRestrictionsDetail"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Invalid bounded request",
             "content": {
@@ -10941,24 +10959,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "Internal synthetic result",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "const": "no-store"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserRestrictionsDetail"
                 }
               }
             }
@@ -11032,6 +11032,24 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Internal synthetic result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserRestrictionCommandResult"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Invalid bounded request",
             "content": {
@@ -11082,6 +11100,16 @@
               }
             }
           },
+          "422": {
+            "description": "Expiry must be future DB time within30 days",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Admin attempt budget exhausted",
             "content": {
@@ -11094,34 +11122,6 @@
           },
           "503": {
             "description": "Admin provider not configured",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "Internal synthetic result",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "const": "no-store"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserRestrictionCommandResult"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Expiry must be future DB time within30 days",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -13493,6 +13493,26 @@
               }
             }
           },
+          "201": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Safe problem response",
             "content": {
@@ -13553,36 +13573,6 @@
               }
             }
           },
-          "503": {
-            "description": "Safe problem response",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Actor-owned result",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FriendshipReceipt"
-                }
-              }
-            }
-          },
           "429": {
             "description": "Actor send cap; Retry-After. Recipient cap uses generic resource unavailable.",
             "headers": {
@@ -13593,6 +13583,16 @@
                 }
               }
             },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14482,16 +14482,6 @@
               }
             }
           },
-          "503": {
-            "description": "Safe problem response",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
           "429": {
             "description": "Actor send cap; Retry-After.",
             "headers": {
@@ -14502,6 +14492,16 @@
                 }
               }
             },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14748,10 +14748,10 @@
           "422": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "503": {
+          "429": {
             "$ref": "#/components/responses/AvatarProblem"
           },
-          "429": {
+          "503": {
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
@@ -15154,6 +15154,15 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
           "429": {
             "description": "Rate limit",
             "content": {
@@ -15163,15 +15172,6 @@
                 }
               }
             }
-          },
-          "413": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "415": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "422": {
-            "$ref": "#/components/responses/AvatarProblem"
           },
           "503": {
             "$ref": "#/components/responses/AvatarProblem"
@@ -15306,6 +15306,15 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
           "429": {
             "description": "Rate limit",
             "content": {
@@ -15315,15 +15324,6 @@
                 }
               }
             }
-          },
-          "413": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "415": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "422": {
-            "$ref": "#/components/responses/AvatarProblem"
           },
           "503": {
             "$ref": "#/components/responses/AvatarProblem"
@@ -15392,6 +15392,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverAccess"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Invalid request",
             "content": {
@@ -15448,16 +15458,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "Audited result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VenueCoverAccess"
                 }
               }
             }
@@ -15884,6 +15884,36 @@
               }
             }
           },
+          "201": {
+            "description": "Created exactly one recommendation and audit send.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameRecommendationReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No active cookie session/account; bearer does not authenticate this surface.",
             "content": {
@@ -15934,29 +15964,6 @@
               }
             }
           },
-          "500": {
-            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
           "429": {
             "description": "Actor game.recommend budget exhausted; Retry-After. Recipient exhaustion returns generic 404.",
             "content": {
@@ -15975,22 +15982,15 @@
               }
             }
           },
-          "201": {
-            "description": "Created exactly one recommendation and audit send.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
+          "500": {
+            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
+          },
+          "503": {
+            "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationReceipt"
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -16203,6 +16203,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No active cookie session/account; bearer does not authenticate this surface.",
             "content": {
@@ -16255,16 +16265,6 @@
           },
           "500": {
             "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
           },
           "503": {
             "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
@@ -16361,6 +16361,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No active cookie session/account; bearer does not authenticate this surface.",
             "content": {
@@ -16413,16 +16423,6 @@
           },
           "500": {
             "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
           },
           "503": {
             "description": "Friends admission OFF or migration0041 absent: writes unavailable.",
@@ -17619,7 +17619,7 @@
           "Games"
         ],
         "summary": "Acknowledge own attendance notice for exact version",
-        "description": "PG-1b. Self only. Old acknowledgement does not apply to a newer version.",
+        "description": "PG-1b/PG-2. Self only. Explicit accept of current known assertion. Optional resolvingDisputeId+expectedDisputeVersion closes own open objection and returns resolvedDispute receipt bound to that id/version/context/attendance. Open-dispute summary alone is not closure proof. Unknown cannot be acknowledged. Silence never writes.",
         "security": [
           {
             "cookieSession": []
@@ -18277,6 +18277,442 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/attendance-disputes/{disputeId}/responses": {
+      "post": {
+        "operationId": "respondAttendanceDispute",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Manager response / optional correction for open attendance dispute",
+        "description": "PG-2. Current manager. Response/correction never unilaterally closes objection. Idempotency-Key + cookie/Origin/CSRF. Writes default OFF.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "disputeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondAttendanceDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated dispute; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceDispute"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/attendance-disputes/{disputeId}/help": {
+      "post": {
+        "operationId": "requestAttendanceDisputeHelp",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Request help escalation for own open attendance dispute",
+        "description": "PG-2. Self only. Records escalation progress — not an abuse report and not staff assignment. Writes default OFF.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "disputeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HelpAttendanceDisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated dispute; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceDispute"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/cases/attendance-dispute-intake": {
+      "post": {
+        "operationId": "adminAttendanceDisputeIntake",
+        "tags": [
+          "AdminCases"
+        ],
+        "summary": "Staff intake: create case from attendance dispute without abuse_report",
+        "description": "PG-2. Existing admin audience, step-up, case.manage. Links game source_kind + unique dispute→case mapping. Assigns to current actor.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "description": "Bound to Admin ticket or session; consumer CSRF rejected."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAttendanceDisputeIntakeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Case created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/cases/{caseId}/attendance-disputes/{disputeId}": {
+      "get": {
+        "operationId": "adminGetAttendanceDispute",
+        "tags": [
+          "AdminCases"
+        ],
+        "summary": "Scoped staff read of linked attendance dispute",
+        "description": "PG-2. case.manage or case.assigned.manage with assignment. Safe projection — no raw staff evidence/principal IDs beyond assignment, no private contacts.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "disputeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped dispute materials",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "adminResolveAttendanceDispute",
+        "tags": [
+          "AdminCases"
+        ],
+        "summary": "Scoped independent admin resolution of attendance dispute",
+        "description": "PG-2. Fresh step-up + assignment + exact versions. Server derives reviewer provenance. insufficient_evidence leaves dispute OPEN. Consumer cannot call.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "caseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "disputeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256
+            },
+            "description": "Bound to Admin ticket or session; consumer CSRF rejected."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAttendanceDisputeResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolution receipt",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }
@@ -29359,14 +29795,18 @@
             "maxLength": 80
           },
           "source": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "manager_explicit",
-              "self_attested",
-              null
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manager_explicit",
+                  "self_attested",
+                  "case_reviewer"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "at": {
@@ -29396,7 +29836,8 @@
             "type": "string",
             "enum": [
               "open",
-              "withdrawn"
+              "withdrawn",
+              "resolved"
             ]
           },
           "challengedVersion": {
@@ -29409,6 +29850,42 @@
           }
         }
       },
+      "AttendanceResolvedDisputeReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "resultingVersion",
+          "status",
+          "contextId",
+          "attendanceVersion"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resultingVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved"
+            ]
+          },
+          "contextId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attendanceVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "ACK-only authoritative receipt when resolvingDisputeId+expectedDisputeVersion closed that dispute in the same transaction. Not part of ordinary reads; absence of open-dispute summary is not proof of closure."
+      },
       "AttendanceRecordAllowedActions": {
         "type": "object",
         "additionalProperties": false,
@@ -29416,7 +29893,9 @@
           "canSetAttendance",
           "canAcknowledge",
           "canDispute",
-          "canWithdrawDispute"
+          "canWithdrawDispute",
+          "canRespondDispute",
+          "canRequestHelp"
         ],
         "properties": {
           "canSetAttendance": {
@@ -29429,6 +29908,12 @@
             "type": "boolean"
           },
           "canWithdrawDispute": {
+            "type": "boolean"
+          },
+          "canRespondDispute": {
+            "type": "boolean"
+          },
+          "canRequestHelp": {
             "type": "boolean"
           }
         }
@@ -29493,6 +29978,9 @@
           },
           "allowedActions": {
             "$ref": "#/components/schemas/AttendanceRecordAllowedActions"
+          },
+          "resolvedDispute": {
+            "$ref": "#/components/schemas/AttendanceResolvedDisputeReceipt"
           }
         }
       },
@@ -29624,7 +30112,8 @@
             "type": "string",
             "enum": [
               "present",
-              "absent"
+              "absent",
+              "unknown"
             ]
           },
           "late": {
@@ -29705,6 +30194,15 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
+          },
+          "resolvingDisputeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedDisputeVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
           }
         }
       },
@@ -29765,7 +30263,14 @@
             "type": "string",
             "enum": [
               "opened",
-              "withdrawn"
+              "withdrawn",
+              "manager_responded",
+              "manager_corrected",
+              "party_acknowledged",
+              "help_requested",
+              "case_linked",
+              "reviewer_resolved",
+              "left_open_insufficient_evidence"
             ]
           },
           "explanation": {
@@ -29796,6 +30301,13 @@
           "updatedAt",
           "withdrawnAt",
           "withdrawReason",
+          "resolvedAt",
+          "resolutionKind",
+          "latestManagerResponse",
+          "helpProgress",
+          "caseProgress",
+          "challengedAssertion",
+          "currentAssertion",
           "history",
           "allowedActions"
         ],
@@ -29816,7 +30328,8 @@
             "type": "string",
             "enum": [
               "open",
-              "withdrawn"
+              "withdrawn",
+              "resolved"
             ]
           },
           "challengedVersion": {
@@ -29864,11 +30377,175 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "canWithdraw"
+              "canWithdraw",
+              "canRespond",
+              "canRequestHelp",
+              "canAcknowledgeCurrent"
             ],
             "properties": {
               "canWithdraw": {
                 "type": "boolean"
+              },
+              "canRespond": {
+                "type": "boolean"
+              },
+              "canRequestHelp": {
+                "type": "boolean"
+              },
+              "canAcknowledgeCurrent": {
+                "type": "boolean"
+              }
+            }
+          },
+          "resolvedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolutionKind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64
+          },
+          "latestManagerResponse": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "helpProgress": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "requested",
+                  "case_opened",
+                  "in_review",
+                  "awaiting_information",
+                  "resolved",
+                  "left_open_insufficient_evidence"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "caseProgress": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "linked",
+              "status"
+            ],
+            "properties": {
+              "linked": {
+                "type": "boolean"
+              },
+              "status": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "requested",
+                      "case_opened",
+                      "in_review",
+                      "awaiting_information",
+                      "resolved",
+                      "left_open_insufficient_evidence"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "challengedAssertion": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "version",
+                  "value",
+                  "late",
+                  "source",
+                  "actorDisplay",
+                  "recordedAt"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "value": {
+                    "type": "string",
+                    "enum": [
+                      "present",
+                      "absent",
+                      "unknown"
+                    ]
+                  },
+                  "late": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "manager_explicit",
+                      "self_attested",
+                      "case_reviewer"
+                    ]
+                  },
+                  "actorDisplay": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "recordedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currentAssertion": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "version",
+              "late",
+              "assertion"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "unknown",
+                  "present",
+                  "absent"
+                ]
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "late": {
+                "type": "boolean"
+              },
+              "assertion": {
+                "$ref": "#/components/schemas/AttendanceAssertion"
               }
             }
           }
@@ -29905,7 +30582,8 @@
                     "type": "string",
                     "enum": [
                       "present",
-                      "absent"
+                      "absent",
+                      "unknown"
                     ]
                   },
                   "late": {
@@ -29930,7 +30608,8 @@
                 "type": "string",
                 "enum": [
                   "present",
-                  "absent"
+                  "absent",
+                  "unknown"
                 ]
               },
               "late": {
@@ -29949,7 +30628,8 @@
             "type": "string",
             "enum": [
               "manager_explicit",
-              "self_attested"
+              "self_attested",
+              "case_reviewer"
             ]
           },
           "recordedAt": {
@@ -30014,7 +30694,8 @@
             "type": "string",
             "enum": [
               "manager_explicit",
-              "self_attested"
+              "self_attested",
+              "case_reviewer"
             ]
           },
           "actorDisplay": {
@@ -30103,6 +30784,161 @@
               "null"
             ],
             "maxLength": 2048
+          }
+        }
+      },
+      "RespondAttendanceDisputeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "explanation"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "correction": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "expectedAttendanceVersion",
+              "value",
+              "correctionReason"
+            ],
+            "properties": {
+              "expectedAttendanceVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "value": {
+                "type": "string",
+                "enum": [
+                  "present",
+                  "absent",
+                  "unknown"
+                ]
+              },
+              "late": {
+                "type": "boolean"
+              },
+              "correctionReason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            }
+          }
+        }
+      },
+      "HelpAttendanceDisputeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "explanation"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "AdminAttendanceDisputeIntakeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "disputeId",
+          "expectedDisputeVersion",
+          "reasonCode",
+          "assignToSelf"
+        ],
+        "properties": {
+          "disputeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedDisputeVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "reasonCode": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]{2,63}$"
+          },
+          "assignToSelf": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
+      "AdminAttendanceDisputeResolveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedCaseVersion",
+          "expectedDisputeVersion",
+          "expectedAttendanceVersion",
+          "resolution",
+          "reason",
+          "reasonCode"
+        ],
+        "properties": {
+          "expectedCaseVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "expectedDisputeVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          },
+          "expectedAttendanceVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "uphold_current",
+              "correct_present",
+              "correct_absent",
+              "clear_unknown",
+              "insufficient_evidence"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "reasonCode": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]{2,63}$"
           }
         }
       }

@@ -37,6 +37,13 @@ describe("PG-1b attendance policy", () => {
         correctionReason: "Исправление",
       }).correctionReason,
     ).toBe("Исправление");
+    expect(
+      parse(putAttendanceRequest, {
+        expectedVersion: 1,
+        value: "unknown",
+        correctionReason: "Сброс в неизвестно",
+      }).value,
+    ).toBe("unknown");
   });
 
   it("bulk-present requires confirmedExactSelection and rejects duplicates", () => {
@@ -146,6 +153,8 @@ describe("PG-1b attendance policy", () => {
       canAcknowledge: false,
       canDispute: false,
       canWithdrawDispute: false,
+      canRespondDispute: false,
+      canRequestHelp: false,
     });
     expect(unknown).toMatchObject({
       value: "unknown",
@@ -193,6 +202,8 @@ describe("PG-1b attendance policy", () => {
         canAcknowledge: false,
         canDispute: false,
         canWithdrawDispute: false,
+        canRespondDispute: false,
+        canRequestHelp: false,
       }),
     });
     const controller = new GameAttendanceController(
