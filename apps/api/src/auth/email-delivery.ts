@@ -3,6 +3,7 @@ import type { PgBoss } from "pg-boss";
 import type { AppEnv } from "../config/env";
 import { hmacSha256Hex, openSecret } from "./crypto";
 import { EMAIL_CLEANUP_QUEUE, EMAIL_DEAD_QUEUE, EMAIL_DELIVERY_QUEUE, emailAuthEnabled } from "./email-security";
+import { authMessageId } from "./auth-mail-template";
 import { MailDeliveryError, type MailTransport } from "./mail-transport";
 export type EmailDeliveryPayload = {
     challengeId: string;
@@ -71,8 +72,8 @@ export async function deliverEmail(input: {
                     new Date(windowStart + 3_600_000), input.env.EMAIL_AUTH_GLOBAL_HOURLY_BUDGET]);
             if (!budget.rows[0]) throw new MailDeliveryError("permanent");
             const sent = await input.transport.sendAuthCode({ to: row.email_canonical, code, expiresAt: row.expires_at, deliveryId: `${id}:${generation}` });
-            // Adapter IDs are opaque; only our deterministic fake ID is accepted in E1.
-            messageId = sent.messageId === `fake:${id}:${generation}` ? sent.messageId : null;
+            // Persist only our own opaque deterministic identifiers, never provider responses.
+            messageId = [ `fake:${id}:${generation}`, authMessageId(`${id}:${generation}`) ].includes(sent.messageId) ? sent.messageId : null;
         }
         catch (error) {
             errorClass = error instanceof MailDeliveryError ? error.kind : "ciphertext_invalid";
