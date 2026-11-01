@@ -1,0 +1,5 @@
+# Fixed DEV profile only. Contains paths, never passwords or email-code secrets.
+services:
+  api:
+    env_file:
+      - /srv/gobadminton/mail-runtime/dev-email.env

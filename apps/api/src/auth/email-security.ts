@@ -8,6 +8,9 @@ export const EMAIL_DELIVERY_QUEUE = "auth.email.delivery";
 export const EMAIL_DEAD_QUEUE = "auth.email.delivery.dead";
 export const EMAIL_CLEANUP_QUEUE = "auth.email.cleanup";
 export function emailAuthEnabled(env: AppEnv): boolean {
+    return env.EMAIL_AUTH_TRANSPORT === "smtp" || fakeMailEnabled(env);
+}
+export function fakeMailEnabled(env: AppEnv): boolean {
     return env.EMAIL_AUTH_TRANSPORT === "fake" && env.NODE_ENV === "test" && env.APP_ENV === "local"
         && [env.PUBLIC_API_ORIGIN, env.PUBLIC_WEB_ORIGIN].every(origin => ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname));
 }

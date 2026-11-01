@@ -1,4 +1,4 @@
-import { FakeMailTransport } from "./auth/mail-transport";
+import { createMailTransport } from "./auth/smtp-mail-transport";
 import { emailAuthEnabled } from "./auth/email-security";
 import "reflect-metadata";
 import { loadEnv } from "./config/env";
@@ -15,7 +15,7 @@ async function bootstrap(): Promise<void> {
     connectionString: env.DATABASE_URL,
     pool: database.pool,
     gitSha: env.GIT_SHA,
-    ...(emailAuthEnabled(env) ? {email: {env, transport: new FakeMailTransport(env)}} : {}),
+    ...(emailAuthEnabled(env) ? {email: {env, transport: createMailTransport(env)}} : {}),
     maxPool: Number.parseInt(process.env.DATABASE_POOL_MAX ?? "4", 10) || 4,
   });
 

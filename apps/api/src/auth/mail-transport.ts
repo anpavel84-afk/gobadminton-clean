@@ -1,7 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { AppEnv } from "../config/env";
 import { APP_ENV } from "../tokens";
-import { emailAuthEnabled } from "./email-security";
+import { fakeMailEnabled } from "./email-security";
 export type AuthMail = {
     to: string;
     code: string;
@@ -24,7 +24,7 @@ export class FakeMailTransport implements MailTransport {
     constructor(
     @Inject(APP_ENV)
     private readonly env: AppEnv) { }
-    private assertTestOnly() { if (!emailAuthEnabled(this.env))
+    private assertTestOnly() { if (!fakeMailEnabled(this.env))
         throw new Error("FAKE_MAIL_TEST_ONLY"); }
     failNext(deliveryId: string, failures: Array<"temporary" | "permanent">): void {
         this.assertTestOnly();

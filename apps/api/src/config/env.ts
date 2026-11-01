@@ -72,7 +72,14 @@ export const envSchema = z
     ADMIN_AUTH_PEPPER: z.string().min(32).optional(),
     ADMIN_VK_REDIRECT_URI: z.string().url().optional(),
     ADMIN_YANDEX_REDIRECT_URI: z.string().url().optional(),
-    EMAIL_AUTH_TRANSPORT: z.enum(["fake"]).optional(),
+    EMAIL_AUTH_TRANSPORT: z.enum(["fake", "smtp"]).optional(),
+    MAIL_SMTP_HOST: z.literal("mail.hosting.reg.ru").default("mail.hosting.reg.ru"),
+    MAIL_SMTP_PORT: z.coerce.number().pipe(z.literal(465)).default(465),
+    MAIL_SMTP_SECURE: z.enum(["true", "1"]).default("true"),
+    MAIL_SMTP_USERNAME: z.literal("info@gobadminton.ru").default("info@gobadminton.ru"),
+    MAIL_FROM_ADDRESS: z.literal("info@gobadminton.ru").default("info@gobadminton.ru"),
+    MAIL_REPLY_TO: z.literal("info@gobadminton.ru").default("info@gobadminton.ru"),
+    MAIL_AUTH_FILE: z.string().startsWith("/").default("/srv/gobadminton/mail-runtime/info-mail.auth"),
     EMAIL_AUTH_HMAC_SECRET: z.string().min(32).optional(),
     EMAIL_AUTH_ENCRYPTION_SECRET: z.string().min(32).optional(),
     EMAIL_AUTH_RATE_SECRET: z.string().min(32).optional(),
@@ -261,10 +268,10 @@ export const envSchema = z
       }
     }
     if (raw.EMAIL_AUTH_TRANSPORT) {
-      if (raw.NODE_ENV !== "test" || raw.APP_ENV !== "local" ||
+      if (raw.EMAIL_AUTH_TRANSPORT === "fake" && (raw.NODE_ENV !== "test" || raw.APP_ENV !== "local" ||
           ![raw.PUBLIC_API_ORIGIN, raw.PUBLIC_WEB_ORIGIN, ...splitCsv(raw.ALLOWED_WEB_ORIGINS)].every(origin =>
             ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname)) ||
-          !["localhost", "127.0.0.1", "::1"].includes(raw.HOST)) {
+          !["localhost", "127.0.0.1", "::1"].includes(raw.HOST))) {
         ctx.addIssue({code: "custom", path: ["EMAIL_AUTH_TRANSPORT"], message: "Fake mail requires loopback local NODE_ENV=test"});
       }
       const secrets = [raw.EMAIL_AUTH_HMAC_SECRET, raw.EMAIL_AUTH_ENCRYPTION_SECRET, raw.EMAIL_AUTH_RATE_SECRET];
@@ -318,6 +325,13 @@ export const envSchema = z
       ADMIN_VK_REDIRECT_URI: raw.ADMIN_VK_REDIRECT_URI,
       ADMIN_YANDEX_REDIRECT_URI: raw.ADMIN_YANDEX_REDIRECT_URI,
       EMAIL_AUTH_TRANSPORT: raw.EMAIL_AUTH_TRANSPORT,
+      MAIL_SMTP_HOST: raw.MAIL_SMTP_HOST,
+      MAIL_SMTP_PORT: raw.MAIL_SMTP_PORT,
+      MAIL_SMTP_SECURE: raw.MAIL_SMTP_SECURE,
+      MAIL_SMTP_USERNAME: raw.MAIL_SMTP_USERNAME,
+      MAIL_FROM_ADDRESS: raw.MAIL_FROM_ADDRESS,
+      MAIL_REPLY_TO: raw.MAIL_REPLY_TO,
+      MAIL_AUTH_FILE: raw.MAIL_AUTH_FILE,
       EMAIL_AUTH_HMAC_SECRET: raw.EMAIL_AUTH_HMAC_SECRET,
       EMAIL_AUTH_ENCRYPTION_SECRET: raw.EMAIL_AUTH_ENCRYPTION_SECRET,
       EMAIL_AUTH_RATE_SECRET: raw.EMAIL_AUTH_RATE_SECRET,
