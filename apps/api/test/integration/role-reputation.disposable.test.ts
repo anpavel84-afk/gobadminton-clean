@@ -134,15 +134,15 @@ run("#394 role reputation — disposable", () => {
       `INSERT INTO player_social_profiles
          (user_id, public_player_id, display_name, directory_visible, social_eligible,
           contact_policy, directory_visibility_provenance, consent_policy_version)
-       VALUES ($1, $2, $3, true, true, 'closed', 'owner_explicit', 'v1')`,
+       VALUES ($1, $2, $3, true, true, 'closed', 'owner_default', 'v1')`,
       [userId, randomUUID(), `Player ${label}`],
     );
-    const session = await sessions.createSession(userId);
+    const issued = await sessions.createConsumerSession(userId);
     return {
       userId,
-      sessionId: session.id,
-      csrfToken: session.csrfToken,
-      cookie: `${SESSION_COOKIE}=${session.token}`,
+      sessionId: issued.session.id,
+      csrfToken: issued.csrfToken,
+      cookie: `${SESSION_COOKIE}=${encodeURIComponent(issued.sessionToken)}`,
     };
   }
 
