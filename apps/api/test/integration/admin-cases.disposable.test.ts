@@ -383,36 +383,38 @@ run("Admin Cases · private peer review report source read", () => {
       },
       moderator,
     );
-    // Capture evidence must not copy private text.
+    // Synthetic TTL unset like DEV: capture_evidence correctly denied; no evidence copy.
     const detail = await adminGet(`cases/${caseId}`, support);
+    const versionBeforeCapture = detail.json().version as number;
     const linkId = detail.json().links.find((l: { sourceKind: string }) => l.sourceKind === "report").id;
     const capture = await adminPost(
       `cases/${caseId}/commands`,
       {
         action: "capture_evidence",
-        expectedVersion: detail.json().version,
+        expectedVersion: versionBeforeCapture,
         reasonCode: "synthetic_review",
         linkId,
       },
       support,
     );
-    expect(capture.statusCode, capture.body).toBe(200);
-    const evidenceId = capture.json().evidenceId as string;
-    const evidence = await adminGet(`cases/${caseId}/evidence/${evidenceId}`, support);
-    expect(evidence.statusCode).toBe(200);
-    expect(JSON.stringify(evidence.json())).not.toMatch(/EXACT_OLD_REVISION|EDITED_AFTER_REPORT|оскорб/i);
-    expect(evidence.json().payload.targetKind).toBe("game_review");
+    expect(capture.statusCode, capture.body).toBe(422);
+    expect(capture.json().code).toBe("CASE_EVIDENCE_POLICY_DISABLED");
+    expect(
+      (await pool.query("SELECT 1 FROM case_evidence_items WHERE case_id=$1", [caseId])).rowCount,
+    ).toBe(0);
+    const afterFailedCapture = await adminGet(`cases/${caseId}`, support);
+    expect(afterFailedCapture.statusCode).toBe(200);
+    expect(afterFailedCapture.json().version).toBe(versionBeforeCapture);
 
     // Versioned resolution note without mutating private review.
     const beforeReview = (
       await pool.query(`SELECT version, comment FROM game_reviews WHERE id=$1`, [reviewId])
     ).rows[0];
-    const afterCapture = await adminGet(`cases/${caseId}`, support);
     const resolve = await adminPost(
       `cases/${caseId}/commands`,
       {
         action: "note",
-        expectedVersion: afterCapture.json().version,
+        expectedVersion: versionBeforeCapture,
         reasonCode: "synthetic_review",
         noteCode: "resolution_recorded",
       },

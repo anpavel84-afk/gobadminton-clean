@@ -846,6 +846,8 @@ export function GameFeedbackPanel({
       {reportingReview ? (
         <ProfileDialog
           title="Пожаловаться на отзыв"
+          className="profile-dialog--postgame"
+          lockBodyScroll
           onClose={() => {
             if (!busy) {
               setReportingReview(null);
