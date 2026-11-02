@@ -96,6 +96,8 @@ const CASE_A = "a0000000-0000-4000-8000-000000000001";
 const CASE_B = "a0000000-0000-4000-8000-000000000002";
 const REPORT_A = "b0000000-0000-4000-8000-000000000001";
 const PRIVATE_COMMENT = "PRIVATE_PEER_BODY_SHOULD_NOT_LEAK";
+/** Actual adminRequest contract: relative path, no leading slash. */
+const REVIEW_PATH_A = `cases/${CASE_A}/review-reports/${REPORT_A}`;
 
 const detailA = {
   id: CASE_A,
@@ -196,19 +198,35 @@ describe("Admin Cases private review-source read race", () => {
     renderTree();
     flushEffects();
 
+    // Positive control: fresh + current case, completed read really shows private body
+    // (proves the race assertions are not merely hiding all review views).
+    transport.handler = (path) => {
+      if (path === REVIEW_PATH_A) return reviewPayload;
+      throw new Error(`unexpected path ${path}`);
+    };
+    (openReviewButton().props.onClick as () => void)();
+    expect(transport.calls.some((c) => c.path === REVIEW_PATH_A)).toBe(true);
+    await work;
+    expect(treeText()).toContain(PRIVATE_COMMENT);
+
+    // Mid-request step-up expiry: effect clears source; late success must not reintroduce body.
+    transport.calls = [];
+    hooks.slots[SLOT.reviewSource]!.value = null;
+    renderTree();
+    flushEffects();
+
     let resolveRead!: (value: typeof reviewPayload) => void;
     const held = new Promise<typeof reviewPayload>((resolve) => {
       resolveRead = resolve;
     });
     transport.handler = (path) => {
-      if (path.includes("/review-reports/")) return held;
+      if (path === REVIEW_PATH_A) return held;
       throw new Error(`unexpected path ${path}`);
     };
 
     (openReviewButton().props.onClick as () => void)();
-    expect(transport.calls.some((c) => c.path.includes(`/cases/${CASE_A}/review-reports/${REPORT_A}`))).toBe(true);
+    expect(transport.calls.some((c) => c.path === REVIEW_PATH_A)).toBe(true);
 
-    // Mid-request step-up expiry: effect clears source; late success must not reintroduce body.
     freshFlag = false;
     renderTree();
     flushEffects();
@@ -217,8 +235,14 @@ describe("Admin Cases private review-source read race", () => {
     expect(treeText()).not.toContain(PRIVATE_COMMENT);
     expect(hooks.slots[SLOT.reviewSource]!.value).toBe(null);
 
-    // Second phase: case change while a prior read is still outstanding.
+    // Restoring fresh must not resurrect the superseded late response.
     freshFlag = true;
+    renderTree();
+    flushEffects();
+    expect(treeText()).not.toContain(PRIVATE_COMMENT);
+    expect(hooks.slots[SLOT.reviewSource]!.value).toBe(null);
+
+    // Second phase: case change while a prior read is still outstanding.
     hooks.slots[SLOT.detail]!.value = detailA;
     hooks.slots[SLOT.reviewSource]!.value = null;
     renderTree();
@@ -229,7 +253,7 @@ describe("Admin Cases private review-source read race", () => {
       resolveStale = resolve;
     });
     transport.handler = (path) => {
-      if (path.includes(`/cases/${CASE_A}/review-reports/`)) return stale;
+      if (path === REVIEW_PATH_A) return stale;
       throw new Error(`unexpected path ${path}`);
     };
     (openReviewButton().props.onClick as () => void)();
@@ -242,6 +266,13 @@ describe("Admin Cases private review-source read race", () => {
     expect(treeText()).not.toContain(PRIVATE_COMMENT);
     const stored = hooks.slots[SLOT.reviewSource]!.value as { caseId?: string; comment?: string } | null;
     expect(stored === null || stored.caseId !== CASE_A).toBe(true);
+    expect(treeText()).not.toContain(PRIVATE_COMMENT);
+
+    // Restoring prior case + fresh still must not resurrect the superseded CASE_A body.
+    hooks.slots[SLOT.detail]!.value = detailA;
+    freshFlag = true;
+    renderTree();
+    flushEffects();
     expect(treeText()).not.toContain(PRIVATE_COMMENT);
   });
 });
