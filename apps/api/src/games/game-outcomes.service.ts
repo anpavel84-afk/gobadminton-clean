@@ -27,6 +27,7 @@ import {
 } from "./game-outcomes.policy";
 import { GameAttendanceService } from "./game-attendance.service";
 import { GameFeedbackService } from "./game-feedback.service";
+import { RoleReputationService } from "./role-reputation.service";
 
 type AccessRole = "manager" | "participant" | "none";
 
@@ -39,6 +40,7 @@ export class GameOutcomesService {
     private readonly idempotency: IdempotencyService,
     private readonly attendance: GameAttendanceService,
     private readonly feedback: GameFeedbackService,
+    private readonly roleReputation: RoleReputationService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -333,6 +335,14 @@ export class GameOutcomesService {
              WHERE id = $1 AND status = 'published'`,
             [gameId],
           );
+        }
+        if (body.outcome === "held") {
+          await this.roleReputation.confirmRolesAtHeld(client, {
+            gameId,
+            outcomeVersion: nextVersion,
+            actorUserId: userId,
+            source: "manager_explicit",
+          });
         }
         const row = (await this.readOutcome(client, gameId))!;
         const revisionsPage = await this.readRevisionsPage(client, gameId, {

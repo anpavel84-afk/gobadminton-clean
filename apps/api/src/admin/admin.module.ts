@@ -14,6 +14,8 @@ import { AdminUserRestrictionsService } from "./user-restrictions.service";
 import { GamesModule } from "../games/games.module";
 import { AdminGameModerationController } from "./game-moderation.controller";
 import { AdminGameModerationService } from "./game-moderation.service";
+import { AdminRoleReputationController } from "./role-reputation.controller";
+import { AdminRoleReputationService } from "./role-reputation.service";
 import { Module } from "@nestjs/common";
 import { AdminController } from "./admin.controller";
 import { AdminService } from "./admin.service";
@@ -24,6 +26,7 @@ import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
     AdminVenuesController,
     AdminCasesController,
     AdminAttendanceDisputesController,
+    AdminRoleReputationController,
     AdminController,
     AdminGameModerationController,
     AdminUserRestrictionsController,
@@ -31,6 +34,7 @@ import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
   providers: [
     AdminCasesService,
     AdminAttendanceDisputesService,
+    AdminRoleReputationService,
     { provide: CASE_EVIDENCE_POLICY, useClass: SyntheticCaseEvidencePolicy },
     AdminService,
     AdminVenuesService,

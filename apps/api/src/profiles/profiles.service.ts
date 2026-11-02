@@ -822,6 +822,11 @@ export class ProfilesService {
     };
   }
 
+  /**
+   * Public-profile gate reused by #394 role-reputation profile surface.
+   * Role summaries stay on RoleReputationService; this method must remain the
+   * directory visibility / block / restriction fence (unavailable ≠ zero count).
+   */
   async getDirectoryPlayer(
     viewerId: string | null,
     publicPlayerId: string,
