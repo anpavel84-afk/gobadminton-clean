@@ -12,14 +12,30 @@ import {
   useSocialMutation,
 } from "../messages/useSocialMutation";
 
+export type ReviewReportReceipt = {
+  reportId: string;
+  status: "submitted";
+  reviewId: string;
+  version: number;
+};
+
 export type GameResultsMutationData =
   | AttendanceRecord
   | AttendanceDispute
   | GameResults
   | GameReview
   | GamePersonalNote
+  | ReviewReportReceipt
   | { items: AttendanceRecord[] }
   | { gameId: string; contextId: string; version: number; deleted: true };
+
+const REVIEW_REPORT_REASONS = new Set([
+  "harassment",
+  "spam",
+  "fake_profile",
+  "inappropriate",
+  "other",
+]);
 
 /**
  * Narrow domain host over useSocialMutation: immutable actor+game scope so a
@@ -111,6 +127,7 @@ type RecognizedAction =
   | { kind: "reviewCreate"; gameId: string }
   | { kind: "reviewPatch"; reviewId: string }
   | { kind: "reviewReply"; reviewId: string }
+  | { kind: "reviewReport"; reviewId: string }
   | { kind: "notePut"; gameId: string; contextId: string }
   | { kind: "noteDelete"; gameId: string; contextId: string };
 
@@ -120,7 +137,7 @@ function pathDisputeId(path: string): string | null {
 }
 
 function pathReviewId(path: string): string | null {
-  const match = path.match(/^\/v1\/reviews\/([^/]+)(?:\/reply)?$/);
+  const match = path.match(/^\/v1\/reviews\/([^/]+)(?:\/(?:reply|report))?$/);
   return match?.[1] ?? null;
 }
 
@@ -153,6 +170,9 @@ export function recognizeGameResultsAction(
     }
     if (method === "PUT" && path === `/v1/reviews/${reviewId}/reply`) {
       return { kind: "reviewReply", reviewId };
+    }
+    if (method === "POST" && path === `/v1/reviews/${reviewId}/report`) {
+      return { kind: "reviewReport", reviewId };
     }
   }
   const gameId = pathGameId(path);
@@ -209,7 +229,8 @@ export function validateGameResultsPending(
     pathGameId(pending.path) != null &&
     pathGameId(pending.path) !== gameId &&
     action.kind !== "reviewPatch" &&
-    action.kind !== "reviewReply"
+    action.kind !== "reviewReply" &&
+    action.kind !== "reviewReport"
   ) {
     return false;
   }
@@ -299,6 +320,22 @@ export function validateGameResultsPending(
         body.text.trim().length > 0
       );
     }
+    case "reviewReport": {
+      const body = pending.body as {
+        expectedVersion?: unknown;
+        reasonCode?: unknown;
+        shareReviewWithSupport?: unknown;
+        gameId?: unknown;
+      };
+      return (
+        asPositiveInt(body.expectedVersion) != null &&
+        typeof body.reasonCode === "string" &&
+        REVIEW_REPORT_REASONS.has(body.reasonCode) &&
+        body.shareReviewWithSupport === true &&
+        typeof body.gameId === "string" &&
+        body.gameId === gameId
+      );
+    }
     case "notePut": {
       const body = pending.body as { expectedVersion?: unknown; text?: unknown };
       return (
@@ -325,8 +362,13 @@ export function validateGameResultsSuccess(
   if (!action) return false;
   if ("gameId" in action) {
     if (!validateGameResultsPending(pending, action.gameId)) return false;
+  } else if (action.kind === "reviewReport") {
+    // Report path has no game segment; host correlation is the frozen body.gameId.
+    const bodyGameId =
+      isObject(pending.body) && typeof pending.body.gameId === "string" ? pending.body.gameId : null;
+    if (!bodyGameId || !validateGameResultsPending(pending, bodyGameId)) return false;
   } else {
-    // Dispute-scoped routes are host-bound by dispute id; shape-check without game path.
+    // Dispute-scoped routes / review patch+reply are host-bound without a path game id.
     if (!validateGameResultsPending(pending, "__dispute_scope__")) return false;
   }
 
@@ -561,6 +603,26 @@ export function validateGameResultsSuccess(
       review.direction === "received" &&
       !!review.reply &&
       review.reply.version === expectedVersion + 1
+    );
+  }
+
+  if (action.kind === "reviewReport") {
+    const receipt = data as ReviewReportReceipt;
+    const body = pending.body as {
+      expectedVersion?: unknown;
+      gameId?: unknown;
+    };
+    const expectedVersion = asPositiveInt(body.expectedVersion);
+    // Exact reviewId/version binding only — never accept a loose {reportId} across reviews.
+    return (
+      expectedVersion != null &&
+      typeof body.gameId === "string" &&
+      body.gameId.length > 0 &&
+      typeof receipt.reportId === "string" &&
+      receipt.reportId.length > 0 &&
+      receipt.status === "submitted" &&
+      receipt.reviewId === action.reviewId &&
+      receipt.version === expectedVersion
     );
   }
 

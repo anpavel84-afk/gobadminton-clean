@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.18" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.19" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.26.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.27.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,17 +425,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Мобильные кнопки комментариев",
+  title: "Жалоба на полученный приватный отзыв",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [],
-  fixes: [
-    "Исправлено расположение кнопок отправки, ответа и редактирования комментариев на телефоне: подписи больше не сжимаются в вертикальную колонку",
+  additions: [
+    "На полученный приватный отзыв можно подать жалобу. Перед отправкой пользователь явно разрешает назначенному специалисту прочитать выбранную редакцию отзыва только для разбора обращения",
   ],
+  fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
     "Публичная запись отзывов о площадке остаётся закрытой.",
     "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле.",
+    "Жалоба сама по себе не скрывает и не удаляет отзыв и не открывает доступ всему персоналу.",
   ],
   feature_catalogue: "delta",
 };
@@ -1057,6 +1058,34 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "additions": [],
     "fixes": [
       "Уточнены действия и пояснения в комментариях и обратной связи: свои действия безопасности скрыты, удалённые записи обозначены нейтрально, отсутствие отметки посещения и ограничения отзывов объясняются понятнее."
+    ],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена.",
+      "Публичная запись отзывов о площадке остаётся закрытой.",
+      "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле."
+    ]
+  },
+  {
+    "source_sha": "6cd66a77068d6ab2faa283867d6320896b0c5177",
+    "application_version": "0.1.0-alpha.18",
+    "version_label": "0.1.0-alpha.18",
+    "title": "Мобильные кнопки комментариев",
+    "api_contract_version": "0.26.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41456359306-a1",
+        "accepted_at": "2026-11-02T13:55:41Z",
+        "api_digest": "sha256:a48a7bebe6cc86b56a0ed08760f94f8db4aac2bd55f8d262354cab77a066e34b",
+        "web_digest": "sha256:81fc859c425688f551f5f427362a5e49dd55cc28665337ee904db634efb1bd69",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Исправлено расположение кнопок отправки, ответа и редактирования комментариев на телефоне: подписи больше не сжимаются в вертикальную колонку"
     ],
     "known_limitations": [
       "Приёмка владельцем после обычного входа ещё не выполнена.",

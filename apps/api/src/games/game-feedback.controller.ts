@@ -69,6 +69,25 @@ export class GameFeedbackController {
     return result.body;
   }
 
+  @Post("reviews/:reviewId/report")
+  @Header("Cache-Control", "no-store")
+  async reportReview(
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+    @Param("reviewId") reviewId: string,
+  ) {
+    const actor = await this.auth.requireCookieMutation(request);
+    const result = await this.feedback.reportReview(
+      actor.userId,
+      actor.sessionId,
+      this.idempotency.requireKey(request.headers["idempotency-key"]),
+      reviewId,
+      request.body,
+    );
+    reply.status(result.statusCode);
+    return result.body;
+  }
+
   @Get("me/reviews")
   @Header("Cache-Control", "no-store")
   async listMine(

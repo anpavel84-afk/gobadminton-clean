@@ -1,19 +1,36 @@
 # GoBadminton release notes
 
-## #467 visual QA mobile composer button (0.1.0-alpha.18 candidate)
+## #394/#372 private peer typed report (0.1.0-alpha.19 candidate)
 
-Prospective alpha.18 CSS repair Refs #467 / #394: top comment composer submit
+Prospective alpha.19 Refs #394 / #372: recipient of a private peer review can
+report that exact revision with explicit consent so an assigned Cases reviewer
+may read the immutable revision. Migration 0053 binds `abuse_reports(game_review)`
+to `game_review_revisions`; no private text copied into synthetic evidence;
+no auto-hide/delete; public venue writer remains closed. Overall #394/#372
+PARTIAL. API contract `0.27.0`. Owner UAT: NOT_TESTED. No fabricated
+candidate/merge/acceptance SHA or date.
+
+- Application version (candidate): `0.1.0-alpha.19`; API contract `0.27.0`.
+- Prior accepted DEV: alpha.18 `6cd66a77068d6ab2faa283867d6320896b0c5177`
+  (`r41456359306-a1`, `2026-11-02T13:55:41Z`) — preserved exactly in history seed.
+- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Owner UAT: NOT_TESTED.
+- C5 untouched; no PROD activation.
+
+## #467 visual QA mobile composer button (0.1.0-alpha.18 DEV ACCEPTED)
+
+Accepted alpha.18 CSS repair Refs #467 / #394: top comment composer submit
 and reply/edit controls use the actual shared Button class so mobile full-row
 CTA matches; «Отправить» no longer wraps letter-per-line in the 40px avatar
 column. Desktop three-column and mobile two-column composer grids preserved;
 inline/reply stay one column on mobile. No API/schema/security/business-logic
-changes. API contract remains `0.26.0`. Owner UAT: NOT_TESTED. No fabricated
-candidate/merge/acceptance SHA or date.
+changes. API contract `0.26.0`. Owner UAT: NOT_TESTED.
 
-- Application version (candidate): `0.1.0-alpha.18`; API contract `0.26.0`.
-- Prior accepted DEV: alpha.17 `b28ce4bed4ba33f7fe1e90ebc1b7a86495e8806e`
-  (`r41452395940-a1`, `2026-11-02T13:28:07Z`) — preserved exactly in history seed.
-- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Application version: `0.1.0-alpha.18`; API contract `0.26.0`.
+- Accepted source: `6cd66a77068d6ab2faa283867d6320896b0c5177`.
+- DEV release: `r41456359306-a1` (accepted `2026-11-02T13:55:41Z`).
+- Digests: api `sha256:a48a7bebe6cc86b56a0ed08760f94f8db4aac2bd55f8d262354cab77a066e34b`,
+  web `sha256:81fc859c425688f551f5f427362a5e49dd55cc28665337ee904db634efb1bd69`.
 - Owner UAT: NOT_TESTED.
 - C5 untouched; no PROD activation.
 

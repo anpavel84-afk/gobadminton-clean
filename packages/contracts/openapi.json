@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.26.0",
+    "version": "0.27.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -20638,6 +20638,256 @@
           }
         }
       }
+    },
+    "/reviews/{reviewId}/report": {
+      "post": {
+        "operationId": "reportGameReview",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Report a received private peer review at an exact version",
+        "description": "PG-3/#394/#372. Current authorized recipient of a private peer review only. Requires expectedVersion, supported reason/detail, and shareReviewWithSupport:true. Server derives game/author/recipient; binds abuse_reports(game_review) to immutable game_review_revisions. Same actor/review/version does not create duplicate reports. Cookie+CSRF+Origin+Idempotency. No-store. Does not publish, hide, or block.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reviewId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportGameReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing same-key or same actor/review/version receipt; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameReviewReportReceipt"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created typed report receipt; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameReviewReportReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Private indistinguishable missing/foreign; no-store.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "VERSION_CONFLICT",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid consent/input",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/cases/{id}/review-reports/{reportId}": {
+      "get": {
+        "operationId": "adminReadCaseReviewReport",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Assigned reviewer reads consented exact private peer review revision",
+        "description": "Only currently assigned independent reviewer with evidence.assigned.read and fresh step-up. case.manage alone or unassigned staff is insufficient. Returns source from immutable game_review_revisions; no copy into case_evidence_items. Audited read; no mutation. Safe 403/404 on reassignment/expiry/revoked/COI/cross-case.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "reportId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact consented revision fields; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCaseReviewReportSource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable / cross-case / unassigned",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-client-surface": "admin-only"
+      }
     }
   },
   "components": {
@@ -28807,51 +29057,101 @@
         ]
       },
       "AdminReportListItem": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "targetKind": {
-            "type": "string",
-            "const": "player"
-          },
-          "targetPublicPlayerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "reasonCode": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "caseId": {
-            "anyOf": [
-              {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
                 "type": "string",
                 "format": "uuid"
               },
-              {
-                "type": "null"
+              "targetKind": {
+                "type": "string",
+                "const": "player"
+              },
+              "targetPublicPlayerId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "caseId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "targetPublicPlayerId",
+              "reasonCode",
+              "state",
+              "createdAt",
+              "caseId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "game_review"
+              },
+              "targetPublicPlayerId": {
+                "type": "null"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "caseId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "reasonCode",
+              "state",
+              "createdAt",
+              "caseId"
             ]
           }
-        },
-        "required": [
-          "id",
-          "targetKind",
-          "targetPublicPlayerId",
-          "reasonCode",
-          "state",
-          "createdAt",
-          "caseId"
         ]
       },
       "AdminCaseList": {
@@ -29074,6 +29374,14 @@
           "sourceId": {
             "type": "string",
             "format": "uuid"
+          },
+          "targetKind": {
+            "type": "string",
+            "enum": [
+              "player",
+              "game_review"
+            ],
+            "description": "Optional; present on report links from abuse_reports.target_kind. Omitted for game links."
           }
         },
         "required": [
@@ -29493,39 +29801,77 @@
         ]
       },
       "AdminSafeReport": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "player"
+              },
+              "targetPublicPlayerId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "targetPublicPlayerId",
+              "reasonCode",
+              "state",
+              "createdAt"
+            ]
           },
-          "targetKind": {
-            "type": "string",
-            "const": "player"
-          },
-          "targetPublicPlayerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "reasonCode": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "game_review"
+              },
+              "targetPublicPlayerId": {
+                "type": "null"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "reasonCode",
+              "state",
+              "createdAt"
+            ]
           }
-        },
-        "required": [
-          "id",
-          "targetKind",
-          "targetPublicPlayerId",
-          "reasonCode",
-          "state",
-          "createdAt"
         ]
       },
       "AdminEvidenceGameState": {
@@ -33077,7 +33423,8 @@
         "additionalProperties": false,
         "required": [
           "canEdit",
-          "canReply"
+          "canReply",
+          "canReport"
         ],
         "properties": {
           "canEdit": {
@@ -33085,6 +33432,10 @@
           },
           "canReply": {
             "type": "boolean"
+          },
+          "canReport": {
+            "type": "boolean",
+            "description": "Received private peer only; server-computed."
           }
         }
       },
@@ -33450,7 +33801,7 @@
             }
           }
         },
-        "description": "UI hints only; commands revalidate. Peer create requires confirmed shared experience (held + permitted present both sides). Complaint remains existing Safety player report; typed review Safety extension recorded as remaining — #394 PARTIAL."
+        "description": "UI hints only; commands revalidate. Peer create requires confirmed shared experience. Received private peer may report exact revision with explicit consent (#394 PARTIAL). Player-profile complaintReuse remains; public venue writer CLOSED."
       },
       "GameFeedbackSlice": {
         "type": "object",
@@ -33793,6 +34144,159 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
+          }
+        }
+      },
+      "ReportGameReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "reasonCode",
+          "shareReviewWithSupport",
+          "gameId"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "harassment",
+              "spam",
+              "fake_profile",
+              "inappropriate",
+              "other"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "shareReviewWithSupport": {
+            "type": "boolean",
+            "const": true
+          },
+          "gameId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client/host correlation; server verifies against derived review.game_id."
+          }
+        }
+      },
+      "GameReviewReportReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reportId",
+          "status",
+          "reviewId",
+          "version"
+        ],
+        "properties": {
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "const": "submitted"
+          },
+          "reviewId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "Safe exact reviewId/version binding with reportId/status — no body/recipient/identity."
+      },
+      "AdminCaseReviewReportSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "reportId",
+          "reviewId",
+          "gameId",
+          "version",
+          "kind",
+          "peerRating",
+          "comment",
+          "tags",
+          "recordedAt",
+          "reasonCode",
+          "reportState"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reviewId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "kind": {
+            "type": "string",
+            "const": "peer"
+          },
+          "peerRating": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "play_again",
+              "neutral",
+              "difficulties",
+              null
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reasonCode": {
+            "type": "string"
+          },
+          "reportState": {
+            "type": "string"
           }
         }
       }

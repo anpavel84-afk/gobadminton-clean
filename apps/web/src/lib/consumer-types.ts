@@ -522,7 +522,12 @@ export type GameReview = {
     editedAt: string | null;
     updatedAt: string;
   } | null;
-  allowedActions: { canEdit: boolean; canReply: boolean };
+  allowedActions: {
+    canEdit: boolean;
+    canReply: boolean;
+    /** Additive 0.27: received private peer only; omit/false = hide report. */
+    canReport?: boolean;
+  };
 };
 
 export type GamePersonalNote = {

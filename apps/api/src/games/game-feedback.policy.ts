@@ -169,6 +169,39 @@ export type ReviewReplyView = {
 export type ReviewAllowedActions = {
   canEdit: boolean;
   canReply: boolean;
+  /** Additive: received private peer only; server-computed. */
+  canReport: boolean;
+};
+
+export const REVIEW_REPORT_REASON_CODES = [
+  "harassment",
+  "spam",
+  "fake_profile",
+  "inappropriate",
+  "other",
+] as const;
+
+export type ReviewReportReasonCode = (typeof REVIEW_REPORT_REASON_CODES)[number];
+
+export const reportReviewRequest = z
+  .object({
+    expectedVersion: z.number().int().min(1).max(2147483647),
+    reasonCode: z.enum(REVIEW_REPORT_REASON_CODES),
+    detail: plainBounded(1000).nullable().optional(),
+    /** Literal true — explicit consent to share THAT revision with assigned Cases reviewer. */
+    shareReviewWithSupport: z.literal(true),
+    /** Client/host correlation; server verifies against derived review.game_id. */
+    gameId: uuid,
+  })
+  .strict();
+
+export type ReportReviewRequest = z.infer<typeof reportReviewRequest>;
+
+export type ReviewReportReceipt = {
+  reportId: string;
+  status: "submitted";
+  reviewId: string;
+  version: number;
 };
 
 export type ReviewView = {

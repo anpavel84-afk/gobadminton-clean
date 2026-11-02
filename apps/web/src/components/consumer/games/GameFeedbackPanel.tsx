@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type {
+  AbuseReportReasonCode,
   GameFeedbackSlice,
   GamePersonalNote,
   GameReview,
@@ -10,9 +11,10 @@ import type {
   ReviewKind,
 } from "../../../lib/consumer-types";
 import { peerCreateReasonLabel } from "../../../lib/consumer-types";
+import { REPORT_REASON_OPTIONS } from "../../../lib/player-presentation";
 import type { SocialMutationPending } from "../messages/useSocialMutation";
 import { Button } from "../Button";
-import { SectionHeader } from "../players/ProfileComposition";
+import { ProfileDialog, SectionHeader } from "../players/ProfileComposition";
 import { SurfacePanel } from "../Surfaces";
 import type { GameResultsMutationApi } from "./useGameResultsMutation";
 
@@ -103,6 +105,13 @@ export function GameFeedbackPanel({
   const [noteText, setNoteText] = useState("");
   const [editingNoteContextId, setEditingNoteContextId] = useState("");
   const [editingNoteText, setEditingNoteText] = useState("");
+  const [reportingReview, setReportingReview] = useState<GameReview | null>(null);
+  const [reportReason, setReportReason] = useState<AbuseReportReasonCode>("harassment");
+  const [reportDetail, setReportDetail] = useState("");
+  const [reportConsent, setReportConsent] = useState(false);
+  const reportFlight = useRef<{ path: string; method: string; body: Record<string, unknown>; reviewId: string } | null>(
+    null,
+  );
   const boundGame = useRef(gameId);
   boundGame.current = gameId;
   const reviewFlight = useRef<ReviewFlight | null>(null);
@@ -213,8 +222,24 @@ export function GameFeedbackPanel({
       noteCreateFlight.current = null;
     }
 
+    const report = reportFlight.current;
+    if (
+      report &&
+      boundGame.current === gameId &&
+      pending.path === report.path &&
+      pending.method === report.method &&
+      sameFrozenBody(pending.body, report.body)
+    ) {
+      setReportingReview(null);
+      setReportDetail("");
+      setReportConsent(false);
+      setReportReason("harassment");
+      reportFlight.current = null;
+      onLocalNotice("Жалоба на отзыв отправлена");
+    }
+
     onConfirmedOperationSeen?.();
-  }, [confirmedOperation, gameId, onConfirmedOperationSeen]);
+  }, [confirmedOperation, gameId, onConfirmedOperationSeen, onLocalNotice]);
 
   if (!feedback?.installed) {
     return (
@@ -289,6 +314,24 @@ export function GameFeedbackPanel({
       },
       "PUT",
     );
+  }
+
+  function submitReport(review: GameReview) {
+    if (busy || unknownOp || !review.allowedActions.canReport) return;
+    if (!reportConsent) return;
+    if (boundGame.current !== gameId) return;
+    const path = `/v1/reviews/${review.id}/report`;
+    const body = {
+      expectedVersion: review.version,
+      reasonCode: reportReason,
+      detail: reportDetail.trim() || null,
+      shareReviewWithSupport: true as const,
+      gameId,
+    };
+    onLocalNotice(null);
+    reportFlight.current = { path, method: "POST", body, reviewId: review.id };
+    // Preserve pending-key machinery; do not blind-resend on unknownOp.
+    mutation.run(path, body, "POST");
   }
 
   /** Create requires canCreateNote; edit of an existing own note uses note.canEdit only. */
@@ -655,6 +698,21 @@ export function GameFeedbackPanel({
                       </Button>
                     </>
                   ) : null}
+                  {review.allowedActions.canReport ? (
+                    <Button
+                      variant="ghost"
+                      disabled={busy || unknownOp}
+                      onClick={() => {
+                        setReportingReview(review);
+                        setReportConsent(false);
+                        setReportDetail("");
+                        setReportReason("harassment");
+                        onLocalNotice(null);
+                      }}
+                    >
+                      Пожаловаться на отзыв
+                    </Button>
+                  ) : null}
                 </article>
               ))}
               {sent.length > 0 ? (
@@ -781,10 +839,72 @@ export function GameFeedbackPanel({
         <SectionHeader title="Об этой встрече" />
         <p>Отзыв приватный и отделён от посещения. Нет публичного рейтинга и смены навыка.</p>
         <p className="gb-postgame__helper">
-          Если нужно пожаловаться на участника, откройте его профиль и отправьте жалобу там — это отдельное действие,
-          не часть отзыва.
+          Жалоба на полученный отзыв передаёт выбранную редакцию только назначенному разборщику. Жалоба на игрока
+          по-прежнему оформляется в его профиле — это отдельное действие.
         </p>
       </aside>
+      {reportingReview ? (
+        <ProfileDialog
+          title="Пожаловаться на отзыв"
+          className="profile-dialog--postgame"
+          lockBodyScroll
+          onClose={() => {
+            if (!busy) {
+              setReportingReview(null);
+              setReportConsent(false);
+            }
+          }}
+        >
+          <form
+            className="gb-postgame__dialog-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitReport(reportingReview);
+            }}
+          >
+            <p>
+              Будет передана точная редакция этого отзыва (версия {reportingReview.version}), без публикации и без
+              блокировки игрока.
+            </p>
+            <label className="profile-field">
+              Причина
+              <select
+                value={reportReason}
+                disabled={busy || unknownOp}
+                onChange={(e) => setReportReason(e.target.value as AbuseReportReasonCode)}
+              >
+                {REPORT_REASON_OPTIONS.map((o) => (
+                  <option key={o.code} value={o.code}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="profile-field">
+              Подробности
+              <textarea
+                value={reportDetail}
+                onChange={(e) => setReportDetail(e.target.value)}
+                maxLength={1000}
+                rows={3}
+                disabled={busy || unknownOp}
+              />
+            </label>
+            <label className="confirmation">
+              <input
+                type="checkbox"
+                checked={reportConsent}
+                disabled={busy || unknownOp}
+                onChange={(e) => setReportConsent(e.target.checked)}
+              />
+              Разрешаю назначенному специалисту прочитать выбранную редакцию отзыва только для разбора обращения
+            </label>
+            <Button type="submit" disabled={busy || unknownOp || !reportConsent}>
+              Отправить жалобу
+            </Button>
+          </form>
+        </ProfileDialog>
+      ) : null}
     </div>
   );
 }
