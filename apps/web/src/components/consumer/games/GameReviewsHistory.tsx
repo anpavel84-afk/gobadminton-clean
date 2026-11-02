@@ -17,7 +17,7 @@ type ListState = "loading" | "ready" | "empty" | "error" | "auth" | "unavailable
 
 const PAGE_LIMIT = 20;
 
-function reviewContextLabel(review: GameReview): string {
+function reviewContextLabel(): string {
   // DTO has no game title — honest fallback only.
   return "К итогам игры";
 }
@@ -211,7 +211,7 @@ export function GameReviewsHistory() {
             <li key={review.id} className="gb-postgame-history-entry" data-kind={review.kind}>
               <div className="gb-postgame-history-entry__body">
                 <span className="gb-postgame__eyebrow">{reviewKindLabel(review.kind)}</span>
-                <h3>{reviewContextLabel(review)}</h3>
+                <h3>{reviewContextLabel()}</h3>
                 <p>
                   {review.kind === "peer"
                     ? peerReviewHistoryLabel(review.peerRating)

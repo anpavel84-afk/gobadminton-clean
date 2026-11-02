@@ -117,12 +117,6 @@ function textOf(node: ReactNode): string {
   return labelOf(node);
 }
 
-function hrefs(node: ReactNode): string[] {
-  return walk(node)
-    .filter((el) => (el.type === "a" || typeof el.props.href === "string") && typeof el.props.href === "string")
-    .map((el) => String(el.props.href));
-}
-
 function flushEffects() {
   const queued = hooks.effects.splice(0);
   for (const entry of queued) entry.run();
