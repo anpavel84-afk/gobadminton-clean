@@ -21,8 +21,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.16 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.16");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.17 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.17");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.26.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -38,8 +38,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/отзыв|посещен/i);
-    expect(currentProse).toMatch(/подтвержд|уточнен/i);
+    expect(currentProse).toMatch(/комментар|отзыв|посещен/i);
+    expect(currentProse).toMatch(/нейтраль|уточнен|безопасн/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -146,10 +146,21 @@ describe("releases catalogue integrity", () => {
       && row.deployments.length === 1
       && row.api_contract_version === "0.25.0",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(18);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.16"
+      && row.source_sha === "841bbec37739f56e9561a756731490891ed70d19"
+      && row.deployments[0]?.release_id === "r41445689826-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-02T12:47:49Z"
+      && row.deployments[0]?.api_digest === "sha256:9de709055304dc3c668e74ab71c3569e300c08aea75ef4ec264263e49bd02f1a"
+      && row.deployments[0]?.web_digest === "sha256:4b3012934ce4f9ab4bf68c5738a29e84edbb359fe8fa4390d9705e664f161e12"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.26.0"
+      && row.title === "Подтверждённый совместный опыт и уточнение посещения",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(19);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(23);
+    ).toBe(24);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

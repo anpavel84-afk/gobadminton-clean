@@ -352,7 +352,9 @@ describe("PG-3 feedback client mutation fencing", () => {
     expect(panel).toContain("Без публичного рейтинга");
     expect(panel).toContain("mutation.run");
     expect(panel).toContain(`/v1/games/\${gameId}/reviews`);
-    expect(panel).toContain("типизированное расширение Safety");
+    expect(panel).toContain("отправьте жалобу там");
+    expect(panel).not.toContain("типизированное расширение Safety");
+    expect(panel).not.toMatch(/\bSafety\b/);
     expect(panel).not.toContain("demoReview");
     expect(css).toContain(".gb-postgame .profile-field");
     expect(css).toContain("width: 100%");
