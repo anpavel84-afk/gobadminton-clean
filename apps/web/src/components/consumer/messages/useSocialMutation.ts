@@ -29,7 +29,12 @@ export type SocialMutationOptions<T> = {
 export function useSocialMutation<T>(
   scope: string,
   csrf: string,
-  onSuccess: (data: T) => void,
+  /**
+   * Called only after validated 2xx for the same generation.
+   * Optional second arg is the frozen pending identity (path/body/key/method).
+   * Old single-arg callbacks remain valid.
+   */
+  onSuccess: (data: T, pending?: Pending) => void,
   onRefresh: () => void,
   persist = true,
   options?: SocialMutationOptions<T>,
@@ -170,7 +175,9 @@ export function useSocialMutation<T>(
         }
       }
       save(null);
-      onSuccess(result.data);
+      // Carry exact frozen request so hosts can clear matching drafts only.
+      // pending==null / void run admission is never treated as success here.
+      onSuccess(result.data, value);
     } else {
       setLastStatus(result.status);
       setRetryAfterSeconds(result.retryAfterSeconds ?? null);

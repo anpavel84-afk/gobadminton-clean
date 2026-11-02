@@ -291,6 +291,131 @@
   gap: 12px;
 }
 
+/* Shared form fields: full-width label+control stack (fixes manager clarification inline textarea). */
+.gb-postgame .profile-field,
+.gb-postgame__dialog-form .profile-field {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  width: 100%;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.gb-postgame .profile-field :is(input:not([type="checkbox"]), select, textarea),
+.gb-postgame__dialog-form .profile-field :is(input:not([type="checkbox"]), select, textarea) {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid var(--gb-line);
+  border-radius: 12px;
+  background: var(--gb-white);
+  color: var(--gb-ink);
+  font: 400 16px var(--gb-font);
+  box-sizing: border-box;
+}
+
+.gb-postgame .profile-field textarea,
+.gb-postgame__dialog-form .profile-field textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.gb-postgame .profile-field:has(> input[type="checkbox"]),
+.gb-postgame__dialog-form .profile-field:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-weight: 500;
+}
+
+.gb-postgame__eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gb-ink-soft);
+}
+
+.gb-postgame__segment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gb-postgame__segment-btn {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--gb-line);
+  border-radius: 999px;
+  background: var(--gb-white);
+  color: var(--gb-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gb-postgame__segment-btn[aria-selected="true"] {
+  background: var(--gb-ink);
+  border-color: var(--gb-ink);
+  color: var(--gb-white);
+}
+
+.gb-postgame__choice-set {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.gb-postgame__choice-set legend {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.gb-postgame__choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
+  border: 1px solid var(--gb-line);
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.gb-postgame__choice strong,
+.gb-postgame__choice small {
+  display: block;
+}
+
+.gb-postgame__choice small {
+  color: var(--gb-ink-soft);
+  font-weight: 400;
+}
+
+.gb-postgame__tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gb-postgame__tag-row .gb-postgame__pill[aria-pressed="true"] {
+  background: var(--gb-ink);
+  color: var(--gb-white);
+  border-color: var(--gb-ink);
+}
+
+.gb-postgame__review-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-top: 1px solid var(--gb-line);
+}
+
 .gb-postgame__bulk-list,
 .gb-postgame__history {
   list-style: none;

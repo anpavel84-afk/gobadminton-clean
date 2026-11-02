@@ -467,6 +467,77 @@ export type GameAttendanceSlice = {
   };
 };
 
+export type PeerReviewTag = "communication" | "teamwork" | "agreements";
+export type PeerReviewRating = "play_again" | "neutral" | "difficulties";
+export type ReviewKind = "peer" | "organization" | "training";
+
+export type GameReview = {
+  id: string;
+  gameId: string;
+  kind: ReviewKind;
+  subjectContextId: string | null;
+  recipientDisplay: string;
+  peerRating: PeerReviewRating | null;
+  organizationScore: number | null;
+  comment: string | null;
+  tags: PeerReviewTag[];
+  experienceAssertion: "i_experienced_this_game";
+  discrepancyExplanation: string | null;
+  attendanceContext:
+    | "present"
+    | "absent"
+    | "unknown"
+    | "contested"
+    | "not_participant_manager"
+    | "outcome_not_held";
+  outcomeContext: "unknown" | "held" | "not_held";
+  version: number;
+  editedAt: string | null;
+  createdAt: string;
+  direction: "sent" | "received";
+  reply: {
+    text: string;
+    version: number;
+    editedAt: string | null;
+    updatedAt: string;
+  } | null;
+  allowedActions: { canEdit: boolean; canReply: boolean };
+};
+
+export type GamePersonalNote = {
+  gameId: string;
+  contextId: string;
+  subjectDisplay: string;
+  text: string;
+  version: number;
+  updatedAt: string;
+  allowedActions: { canEdit: boolean; canDelete: boolean };
+};
+
+export type GameFeedbackSlice = {
+  installed: boolean;
+  writesEnabled: boolean;
+  capabilities: {
+    installed: boolean;
+    writesEnabled: boolean;
+    canCreatePeer: boolean;
+    canCreateOrganization: boolean;
+    canCreateTraining: boolean;
+    canCreateNote: boolean;
+    peerSubjects: Array<{ contextId: string; displayName: string }>;
+    organizationRecipientDisplay: string | null;
+    complaintReuse: "existing_player_report";
+    remaining: Array<"typed_review_safety_extension">;
+  };
+  myNotes: GamePersonalNote[];
+  gameReviews: GameReview[];
+};
+
+export type MeReviewsPage = {
+  items: GameReview[];
+  nextCursor: string | null;
+};
+
 export type GameResults = {
   gameId: string;
   outcome: {
@@ -489,6 +560,7 @@ export type GameResults = {
   }>;
   revisionsNextCursor?: string | null;
   attendance?: GameAttendanceSlice;
+  feedback?: GameFeedbackSlice;
   allowedActions: {
     canRecordOutcome: boolean;
     canRecordAttendance?: boolean;

@@ -104,6 +104,8 @@ export type GameResultsView = {
   revisionsNextCursor?: string | null;
   /** PG-1b additive attendance projection; omitted only when schema not installed. */
   attendance?: GameResultsAttendanceSlice;
+  /** PG-3 additive private feedback projection; optional / backward-compatible. */
+  feedback?: unknown;
   allowedActions: {
     canRecordOutcome: boolean;
     canRecordAttendance?: boolean;

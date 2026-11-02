@@ -186,12 +186,19 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0045_venue_gallery",
         "0046_game_attendance",
         "0047_attendance_dispute_resolution",
+        "0048_game_reviews_notes",
         "0049_social_profile_defaults",
       ]);
       // 0047 PG-2 dispute resolution: physical tables beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_responses')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_responses");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_case_links')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_case_links");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_resolutions')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_resolutions");
+      // 0048 PG-3 reviews/notes: physical tables beyond ledger filename alone.
+      expect((await pool.query("SELECT to_regclass('public.game_reviews')::text AS name")).rows[0]?.name).toBe("game_reviews");
+      expect((await pool.query("SELECT to_regclass('public.game_review_revisions')::text AS name")).rows[0]?.name).toBe("game_review_revisions");
+      expect((await pool.query("SELECT to_regclass('public.game_review_replies')::text AS name")).rows[0]?.name).toBe("game_review_replies");
+      expect((await pool.query("SELECT to_regclass('public.game_personal_notes')::text AS name")).rows[0]?.name).toBe("game_personal_notes");
+      expect((await pool.query("SELECT to_regclass('public.game_personal_note_revisions')::text AS name")).rows[0]?.name).toBe("game_personal_note_revisions");
       // Second-schema apply (same fixture pattern as url-storage dual search_path): 0047
       // local constraints + 6 history immutability triggers must exist on side OIDs so
       // public catalog rows cannot mask a missing side protection.

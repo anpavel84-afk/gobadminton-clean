@@ -3,7 +3,9 @@
 import type {
   AttendanceDispute,
   AttendanceRecord,
+  GamePersonalNote,
   GameResults,
+  GameReview,
 } from "../../../lib/consumer-types";
 import {
   type SocialMutationPending,
@@ -14,7 +16,10 @@ export type GameResultsMutationData =
   | AttendanceRecord
   | AttendanceDispute
   | GameResults
-  | { items: AttendanceRecord[] };
+  | GameReview
+  | GamePersonalNote
+  | { items: AttendanceRecord[] }
+  | { gameId: string; contextId: string; version: number; deleted: true };
 
 /**
  * Narrow domain host over useSocialMutation: immutable actor+game scope so a
@@ -48,6 +53,38 @@ function asPositiveInt(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
 }
 
+/**
+ * Normalize optional review text the same way create stores omitted/blank as null.
+ * Returns false when the wire value is an unexpected type (keep UNKNOWN).
+ */
+function normalizeOptionalReviewText(value: unknown): string | null | false {
+  if (value == null) return null;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+const PEER_REVIEW_TAGS = new Set(["communication", "teamwork", "agreements"]);
+
+function normalizeReviewTags(value: unknown): string[] | null {
+  if (value == null) return [];
+  if (!Array.isArray(value)) return null;
+  const tags: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !PEER_REVIEW_TAGS.has(item)) return null;
+    tags.push(item);
+  }
+  return tags;
+}
+
+function sameReviewTags(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
 type BulkRequestItem = { contextId: string; expectedVersion: number };
 
 function parseBulkRequestItems(body: object): BulkRequestItem[] | null {
@@ -70,10 +107,25 @@ type RecognizedAction =
   | { kind: "outcome"; gameId: string }
   | { kind: "disputeRespond"; disputeId: string }
   | { kind: "disputeHelp"; disputeId: string }
-  | { kind: "disputeWithdraw"; disputeId: string };
+  | { kind: "disputeWithdraw"; disputeId: string }
+  | { kind: "reviewCreate"; gameId: string }
+  | { kind: "reviewPatch"; reviewId: string }
+  | { kind: "reviewReply"; reviewId: string }
+  | { kind: "notePut"; gameId: string; contextId: string }
+  | { kind: "noteDelete"; gameId: string; contextId: string };
 
 function pathDisputeId(path: string): string | null {
   const match = path.match(/^\/v1\/attendance-disputes\/([^/]+)(?:\/(responses|help|withdraw))?$/);
+  return match?.[1] ?? null;
+}
+
+function pathReviewId(path: string): string | null {
+  const match = path.match(/^\/v1\/reviews\/([^/]+)(?:\/reply)?$/);
+  return match?.[1] ?? null;
+}
+
+function pathNoteContextId(path: string): string | null {
+  const match = path.match(/^\/v1\/games\/[^/]+\/notes\/([^/]+)$/);
   return match?.[1] ?? null;
 }
 
@@ -94,13 +146,34 @@ export function recognizeGameResultsAction(
       return { kind: "disputeWithdraw", disputeId };
     }
   }
+  const reviewId = pathReviewId(path);
+  if (reviewId) {
+    if (method === "PATCH" && path === `/v1/reviews/${reviewId}`) {
+      return { kind: "reviewPatch", reviewId };
+    }
+    if (method === "PUT" && path === `/v1/reviews/${reviewId}/reply`) {
+      return { kind: "reviewReply", reviewId };
+    }
+  }
   const gameId = pathGameId(path);
   if (!gameId) return null;
   if (method === "POST" && path === `/v1/games/${gameId}/attendance/bulk-present`) {
     return { kind: "bulk", gameId };
   }
+  if (method === "POST" && path === `/v1/games/${gameId}/reviews`) {
+    return { kind: "reviewCreate", gameId };
+  }
   if (method === "PUT" && path === `/v1/games/${gameId}/outcome`) {
     return { kind: "outcome", gameId };
+  }
+  const noteContextId = pathNoteContextId(path);
+  if (noteContextId) {
+    if (method === "PUT" && path === `/v1/games/${gameId}/notes/${noteContextId}`) {
+      return { kind: "notePut", gameId, contextId: noteContextId };
+    }
+    if (method === "DELETE" && path === `/v1/games/${gameId}/notes/${noteContextId}`) {
+      return { kind: "noteDelete", gameId, contextId: noteContextId };
+    }
   }
   const contextId = pathAttendanceContextId(path);
   if (!contextId || contextId === "bulk-present") return null;
@@ -127,8 +200,17 @@ export function validateGameResultsPending(
   if (!isObject(pending.body)) return false;
   const action = recognizeGameResultsAction(pending.path, pending.method);
   if (!action) return false;
-  if ("gameId" in action && action.gameId !== gameId) return false;
-  if (!("gameId" in action) && pathGameId(pending.path) != null && pathGameId(pending.path) !== gameId) {
+  if (gameId === "__dispute_scope__") {
+    // Dispute-scoped host validation bypasses game path equality below.
+  } else if ("gameId" in action && action.gameId !== gameId) {
+    return false;
+  } else if (
+    !("gameId" in action) &&
+    pathGameId(pending.path) != null &&
+    pathGameId(pending.path) !== gameId &&
+    action.kind !== "reviewPatch" &&
+    action.kind !== "reviewReply"
+  ) {
     return false;
   }
 
@@ -198,6 +280,35 @@ export function validateGameResultsPending(
       return (
         expectedVersion != null && (body.outcome === "held" || body.outcome === "not_held")
       );
+    }
+    case "reviewCreate": {
+      const body = pending.body as { kind?: unknown; experienceAssertion?: unknown };
+      return (
+        (body.kind === "peer" || body.kind === "organization" || body.kind === "training") &&
+        body.experienceAssertion === "i_experienced_this_game"
+      );
+    }
+    case "reviewPatch": {
+      return asPositiveInt((pending.body as { expectedVersion?: unknown }).expectedVersion) != null;
+    }
+    case "reviewReply": {
+      const body = pending.body as { expectedVersion?: unknown; text?: unknown };
+      return (
+        asNonNegInt(body.expectedVersion) != null &&
+        typeof body.text === "string" &&
+        body.text.trim().length > 0
+      );
+    }
+    case "notePut": {
+      const body = pending.body as { expectedVersion?: unknown; text?: unknown };
+      return (
+        asNonNegInt(body.expectedVersion) != null &&
+        typeof body.text === "string" &&
+        body.text.trim().length > 0
+      );
+    }
+    case "noteDelete": {
+      return asPositiveInt((pending.body as { expectedVersion?: unknown }).expectedVersion) != null;
     }
     default:
       return false;
@@ -348,14 +459,150 @@ export function validateGameResultsSuccess(
     );
   }
 
+  if (action.kind === "reviewCreate") {
+    const review = data as GameReview;
+    const body = pending.body as {
+      kind?: unknown;
+      subjectContextId?: unknown;
+      peerRating?: unknown;
+      organizationScore?: unknown;
+      comment?: unknown;
+      tags?: unknown;
+      experienceAssertion?: unknown;
+      discrepancyExplanation?: unknown;
+    };
+    // Explicit duplicate 200 returns the prior owned projection without applying a new body.
+    // Same-body idempotent replay is valid; mismatched requested fields stay UNKNOWN.
+    if (typeof review.id !== "string" || !review.id) return false;
+    if (review.gameId !== action.gameId) return false;
+    if (review.direction !== "sent") return false;
+    if (typeof review.version !== "number" || review.version < 1) return false;
+    if (body.kind !== "peer" && body.kind !== "organization" && body.kind !== "training") {
+      return false;
+    }
+    if (review.kind !== body.kind) return false;
+    if (review.experienceAssertion !== "i_experienced_this_game") return false;
+    if (body.experienceAssertion !== "i_experienced_this_game") return false;
+    if (review.experienceAssertion !== body.experienceAssertion) return false;
+
+    const requestedComment = normalizeOptionalReviewText(body.comment);
+    const requestedDiscrepancy = normalizeOptionalReviewText(body.discrepancyExplanation);
+    if (requestedComment === false || requestedDiscrepancy === false) return false;
+    const responseComment = normalizeOptionalReviewText(review.comment);
+    const responseDiscrepancy = normalizeOptionalReviewText(review.discrepancyExplanation);
+    if (responseComment === false || responseDiscrepancy === false) return false;
+    if (responseComment !== requestedComment) return false;
+    if (responseDiscrepancy !== requestedDiscrepancy) return false;
+
+    if (body.kind === "peer") {
+      if (typeof body.subjectContextId !== "string" || !body.subjectContextId) return false;
+      if (review.subjectContextId !== body.subjectContextId) return false;
+      if (
+        body.peerRating !== "play_again" &&
+        body.peerRating !== "neutral" &&
+        body.peerRating !== "difficulties"
+      ) {
+        return false;
+      }
+      if (review.peerRating !== body.peerRating) return false;
+      if (review.organizationScore != null) return false;
+      const requestedTags = normalizeReviewTags(body.tags);
+      if (requestedTags == null) return false;
+      if (!sameReviewTags(review.tags ?? [], requestedTags)) return false;
+      return true;
+    }
+
+    if (review.subjectContextId != null) return false;
+    if (review.peerRating != null) return false;
+    if ((review.tags ?? []).length > 0) return false;
+    if (body.tags !== undefined) {
+      const requestedTags = normalizeReviewTags(body.tags);
+      if (requestedTags == null || requestedTags.length > 0) return false;
+    }
+
+    if (body.kind === "organization") {
+      const requestedScore =
+        body.organizationScore === undefined ? null : asPositiveInt(body.organizationScore);
+      if (body.organizationScore !== undefined && requestedScore == null) return false;
+      if (requestedScore != null && (requestedScore < 1 || requestedScore > 5)) return false;
+      if (review.organizationScore !== requestedScore) return false;
+      if (requestedScore == null && requestedComment == null) return false;
+      return true;
+    }
+
+    // training
+    if (review.organizationScore != null) return false;
+    if (body.organizationScore !== undefined) return false;
+    if (requestedComment == null) return false;
+    return true;
+  }
+
+  if (action.kind === "reviewPatch") {
+    const review = data as GameReview;
+    const expectedVersion = asPositiveInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      review.id === action.reviewId &&
+      review.direction === "sent" &&
+      review.version === expectedVersion + 1
+    );
+  }
+
+  if (action.kind === "reviewReply") {
+    const review = data as GameReview;
+    const expectedVersion = asNonNegInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      review.id === action.reviewId &&
+      review.direction === "received" &&
+      !!review.reply &&
+      review.reply.version === expectedVersion + 1
+    );
+  }
+
+  if (action.kind === "notePut") {
+    const note = data as GamePersonalNote;
+    const expectedVersion = asNonNegInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      note.gameId === action.gameId &&
+      note.contextId === action.contextId &&
+      note.version === expectedVersion + 1 &&
+      typeof note.text === "string"
+    );
+  }
+
+  if (action.kind === "noteDelete") {
+    const receipt = data as { gameId: string; contextId: string; version: number; deleted: true };
+    const expectedVersion = asPositiveInt(
+      (pending.body as { expectedVersion?: unknown }).expectedVersion,
+    );
+    return (
+      expectedVersion != null &&
+      receipt.gameId === action.gameId &&
+      receipt.contextId === action.contextId &&
+      receipt.deleted === true &&
+      receipt.version >= expectedVersion
+    );
+  }
+
   return false;
 }
+
+export type GameResultsMutationApi = ReturnType<typeof useGameResultsMutation>;
 
 export function useGameResultsMutation(
   actorId: string,
   gameId: string,
   csrf: string,
-  onSuccess: (data: GameResultsMutationData) => void,
+  /** Forwards validated success + frozen pending; single-arg callers stay compatible. */
+  onSuccess: (data: GameResultsMutationData, pending?: SocialMutationPending) => void,
   onRefresh: () => void,
 ) {
   const persist = Boolean(actorId) && !actorId.startsWith("anon:");

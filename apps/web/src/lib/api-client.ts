@@ -15,7 +15,9 @@ import type {
   CreateVenueInput,
   Game,
   GamePage,
+  GamePersonalNote,
   GameResults,
+  GameReview,
   LookingForGamePutInput,
   LookingIntent,
   LinkedProvidersResponse,
@@ -23,6 +25,7 @@ import type {
   ManagedGamePage,
   Me,
   MeGameResultsPage,
+  MeReviewsPage,
   OwnSocialProfile,
   Participation,
   ParticipationPage,
@@ -811,6 +814,93 @@ export function listMyGameResults(query: { limit?: number; cursor?: string } = {
   if (query.cursor) params.set("cursor", query.cursor);
   const qs = params.toString();
   return apiFetch<MeGameResultsPage>(`/v1/me/game-results${qs ? `?${qs}` : ""}`);
+}
+
+export function createGameReview(
+  gameId: string,
+  input: Record<string, unknown>,
+  csrfToken: string,
+) {
+  return apiFetch<GameReview>(`/v1/games/${gameId}/reviews`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function patchGameReview(
+  reviewId: string,
+  input: Record<string, unknown>,
+  csrfToken: string,
+) {
+  return apiFetch<GameReview>(`/v1/reviews/${reviewId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function putGameReviewReply(
+  reviewId: string,
+  input: { expectedVersion: number; text: string },
+  csrfToken: string,
+) {
+  return apiFetch<GameReview>(`/v1/reviews/${reviewId}/reply`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function listMyReviews(query: {
+  limit?: number;
+  cursor?: string;
+  direction?: "sent" | "received";
+} = {}) {
+  const params = new URLSearchParams();
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.direction) params.set("direction", query.direction);
+  const qs = params.toString();
+  return apiFetch<MeReviewsPage>(`/v1/me/reviews${qs ? `?${qs}` : ""}`);
+}
+
+export function putGamePersonalNote(
+  gameId: string,
+  contextId: string,
+  input: { expectedVersion: number; text: string },
+  csrfToken: string,
+) {
+  return apiFetch<GamePersonalNote>(`/v1/games/${gameId}/notes/${contextId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
+}
+
+export function deleteGamePersonalNote(
+  gameId: string,
+  contextId: string,
+  input: { expectedVersion: number },
+  csrfToken: string,
+) {
+  return apiFetch<{ gameId: string; contextId: string; version: number; deleted: true }>(
+    `/v1/games/${gameId}/notes/${contextId}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(input),
+      csrfToken,
+      idempotent: true,
+    },
+  );
+}
+
+export function getGamePersonalNote(gameId: string, contextId: string) {
+  return apiFetch<GamePersonalNote>(`/v1/games/${gameId}/notes/${contextId}`);
 }
 
 /** Both RFC Retry-After forms; never schedule an earlier retry. */

@@ -27,15 +27,17 @@ import type { AttendanceDispute } from "../../../lib/consumer-types";
 import { Button } from "../Button";
 import { ContentContainer, SurfacePanel } from "../Surfaces";
 import { Avatar, ProfileDialog, SectionHeader } from "../players/ProfileComposition";
+import type { SocialMutationPending } from "../messages/useSocialMutation";
 import {
+  type GameResultsMutationApi,
   type GameResultsMutationData,
   useGameResultsMutation,
 } from "./useGameResultsMutation";
+import { GameFeedbackPanel } from "./GameFeedbackPanel";
 import "../../../styles/postgame.css";
 
 type Tab = "attendance" | "clarification" | "feedback";
 type MarkTarget = { record: AttendanceRecord; mode: "single" | "bulk-review" } | null;
-type GameResultsMutationApi = ReturnType<typeof useGameResultsMutation>;
 
 /**
  * Immutable actor+game operation host: one useGameResultsMutation instance for this
@@ -53,7 +55,7 @@ function GameResultsMutationHost({
   actorId: string;
   gameId: string;
   csrf: string;
-  onSuccess: (data: GameResultsMutationData) => void;
+  onSuccess: (data: GameResultsMutationData, pending?: SocialMutationPending) => void;
   onRefresh: () => void;
   children: (mutation: GameResultsMutationApi) => ReactNode;
 }) {
@@ -114,6 +116,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
   const [outcomeOpen, setOutcomeOpen] = useState(false);
   const [outcomeValue, setOutcomeValue] = useState<"held" | "not_held">("held");
   const [outcomeReason, setOutcomeReason] = useState("");
+  /** Exact frozen request after validated success — feedback panel clears matching drafts only. */
+  const [confirmedOperation, setConfirmedOperation] = useState<SocialMutationPending | null>(null);
   const epoch = useRef(0);
   const disputeFetchGen = useRef(0);
   const selectedDisputeRef = useRef<string | null>(null);
@@ -147,6 +151,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setOutcomeOpen(false);
     setNotice(null);
     setError(null);
+    setConfirmedOperation(null);
   }
 
   async function loadDisputeDetail(disputeId: string, opts?: { resetDraft?: boolean }) {
@@ -163,7 +168,15 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
   async function reload() {
     const request = ++epoch.current;
-    setState("loading");
+    // Capture bound actor before getMe — session event is not the only actor-change signal.
+    const boundActor = actorRef.current;
+    // Same-context refresh: keep the ready surface mounted so GameFeedbackPanel drafts
+    // and noteCreateFlight/noteEditFlight survive until matching confirmedOperation.
+    // Initial load and cleared boundaries (no me/results) still enter loading.
+    // Auth/not-found/revocation/actor-change paths below still clearSensitiveUi and unmount.
+    if (me == null || results == null) {
+      setState("loading");
+    }
     setError(null);
     // Readonly reload must not clear unresolved mutation identity / pending storage.
     const account = await getMe();
@@ -176,7 +189,17 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       setError("Не удалось проверить вход.");
       return;
     }
-    setMe(account.data);
+    // Actor A→B via getMe (no gb-session-changed): clear A's private surface BEFORE host B.
+    // Same confirmed actor keeps panel/drafts mounted (do not reintroduce QA8 always-hide).
+    // Prior actor pending stays under that actor's scope key — no blind replay/delete.
+    if (boundActor != null && boundActor !== account.data.id) {
+      clearSensitiveUi();
+      setState("loading");
+      actorRef.current = account.data.id;
+      setMe(account.data);
+    } else {
+      setMe(account.data);
+    }
     const [gameRes, resultsRes] = await Promise.all([getGame(gameId), getGameResults(gameId)]);
     // dispute detail loaded after results when open — see below after results ok
     if (request !== epoch.current) return;
@@ -189,7 +212,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
         setState("auth");
         return;
       }
-      if (resultsRes.status === 404) {
+      // Known unauthorized: hide prior private results (403/404), not only 401.
+      if (resultsRes.status === 403 || resultsRes.status === 404) {
         clearSensitiveUi();
         setState("forbidden");
         return;
@@ -432,7 +456,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
     return (
       <>
-      {state === "loading" ? <p role="status">Загружаем итоги…</p> : null}
+      {state === "loading" && !results ? <p role="status">Загружаем итоги…</p> : null}
       {state === "forbidden" ? <p>Итоги этой игры недоступны.</p> : null}
       {state === "error" ? (
         <div>
@@ -441,7 +465,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
         </div>
       ) : null}
 
-      {state === "ready" && results ? (
+      {/* Keep feedback panel mounted across ordinary same-context results refresh. */}
+      {results && (state === "ready" || state === "loading") ? (
         <>
           <SurfacePanel tone="bordered" className="gb-postgame__context">
             <div className="gb-postgame__date" aria-hidden={!game}>
@@ -872,10 +897,20 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
           ) : null}
 
           {tab === "feedback" ? (
-            <SurfacePanel tone="bordered" className="gb-postgame__panel">
-              <SectionHeader title="Обратная связь" />
-              <p>Раздел появится позже. Кнопки отправки сейчас не предлагаются.</p>
-            </SurfacePanel>
+            <GameFeedbackPanel
+              gameId={gameId}
+              feedback={results?.feedback}
+              mutation={mutation}
+              busy={busy}
+              unknownOp={unknownOp}
+              onLocalNotice={setNotice}
+              confirmedOperation={confirmedOperation}
+              onConfirmedOperationSeen={() => setConfirmedOperation(null)}
+              noteSubjects={(results?.attendance?.roster ?? []).map((row) => ({
+                contextId: row.contextId,
+                displayName: row.displayName,
+              }))}
+            />
           ) : null}
         </>
       ) : null}
@@ -1070,7 +1105,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
           actorId={me.id}
           gameId={gameId}
           csrf={me.csrfToken}
-          onSuccess={() => {
+          onSuccess={(_data, pending) => {
             // Native callback applies only while this actor still owns the page host.
             if (!actorRef.current || actorRef.current !== me.id) return;
             setMarkTarget(null);
@@ -1080,6 +1115,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             setDisputeText("");
             setOutcomeOpen(false);
             setNotice(null);
+            // Forward exact frozen request; panel matches review/note drafts only.
+            if (pending) setConfirmedOperation(pending);
             void reload();
           }}
           onRefresh={() => {

@@ -26,6 +26,7 @@ import {
   type RevisionsQuery,
 } from "./game-outcomes.policy";
 import { GameAttendanceService } from "./game-attendance.service";
+import { GameFeedbackService } from "./game-feedback.service";
 
 type AccessRole = "manager" | "participant" | "none";
 
@@ -37,6 +38,7 @@ export class GameOutcomesService {
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
     private readonly attendance: GameAttendanceService,
+    private readonly feedback: GameFeedbackService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -204,10 +206,12 @@ export class GameOutcomesService {
         now,
         { rosterLimit: revisionsRaw.rosterLimit, rosterCursor: revisionsRaw.rosterCursor },
       );
+      const feedback = await this.feedback.enrichResults(client, gameId, userId, role, game, now);
       if (!installed) {
         return {
           ...unknownOutcome(gameId, false),
           attendance,
+          feedback,
           allowedActions: {
             canRecordOutcome: false,
             canRecordAttendance: attendance.allowedActions.canRecordAttendance,
@@ -222,6 +226,7 @@ export class GameOutcomesService {
       return {
         ...base,
         attendance,
+        feedback,
         allowedActions: {
           ...base.allowedActions,
           canRecordAttendance: attendance.allowedActions.canRecordAttendance,
@@ -350,11 +355,20 @@ export class GameOutcomesService {
           refreshed,
           now,
         );
+        const feedback = await this.feedback.enrichResults(
+          client,
+          gameId,
+          userId,
+          "manager",
+          refreshed,
+          now,
+        );
         return {
           statusCode: 200,
           body: {
             ...base,
             attendance,
+            feedback,
             allowedActions: {
               ...base.allowedActions,
               canRecordAttendance: attendance.allowedActions.canRecordAttendance,

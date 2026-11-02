@@ -1,21 +1,42 @@
 # GoBadminton release notes
 
-## #445/#450 residual — map empty gate + trainer fetch skip (0.1.0-alpha.11 candidate)
+## #372 PG-3 — private note draft lifecycle (0.1.0-alpha.12 candidate)
+
+Create-note draft and edit-note editor on delete no longer clear immediately after
+`mutation.run` admission. Clear/close only after matching validated success of the
+exact frozen PUT/DELETE with unchanged current draft/editor (same fence as pass7
+review + saveExistingNote). UNKNOWN / conflict / unrelated success keep text and
+idempotency identity. API contract note `0.23.0` (existing PG-3 wire; schema not
+rewritten here). Historical alpha.11 DEV seed retained. PROD remains accepted
+alpha.8. Owner UAT: NOT_TESTED. No fabricated DEV ACCEPTED / Owner PASS for alpha.12.
+
+- Application version (candidate): `0.1.0-alpha.12`; API contract `0.23.0`.
+- Prior accepted DEV: alpha.11 `acec520281d07f30d3fa855043be7d613ba56db1`
+  (`r41361963371-a1`, `2026-11-01T23:30:16Z`).
+- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Owner UAT: NOT_TESTED.
+- Full typed Safety complaint extension (PG-4) and public comments #394 not claimed done.
+- C5 untouched; no PROD activation.
+
+## #445/#450 residual — map empty gate + trainer fetch skip (0.1.0-alpha.11 DEV ACCEPTED)
 
 Map no longer announces an empty city catalogue while venues are loading or the
 venues response failed; genuine empty is gated on a fulfilled current-city venues
 result (sr-only). Ordinary non-trainers no longer auto-GET `/v1/me/trainer-profile`
 from `/profile` and `/games/create` when `OwnSocialProfile.trainer` is false; active
-trainers still fetch real version/status. API wire unchanged `0.22.0`. Base accepted
-DEV alpha.10 `1dc50002…`. PROD remains accepted alpha.8. Owner UAT: NOT_TESTED.
+trainers still fetch real version/status. Accepted on DEV `r41361963371-a1`
+(`2026-11-01T23:30:16Z`), source `acec520281d07f30d3fa855043be7d613ba56db1`.
+API wire `0.22.0`. PROD remains accepted alpha.8. Owner UAT: NOT_TESTED.
 
-- Application version (candidate): `0.1.0-alpha.11`; API contract unchanged `0.22.0`.
-- Base accepted SHA: `1dc5000280d617c3160fc959ee87607db394410c` (alpha.10 DEV).
-- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
-- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
+- Application version: `0.1.0-alpha.11`; API contract unchanged `0.22.0`.
+- Accepted source: `acec520281d07f30d3fa855043be7d613ba56db1`.
+- DEV release: `r41361963371-a1` (accepted `2026-11-01T23:30:16Z`).
+- Digests: api `sha256:a89e5c9c8018914c6ac6aee2bbb666c6d99a0fd892db5aad0ede730056e9667c`,
+  web `sha256:efcbef6285944a2ea38f1156c00dd234756cf4834d2d7edb4281d6d115ace534`.
 - Owner UAT: NOT_TESTED.
 - Does not claim all of #445/#450 closed; chat non-participant 404 and unrelated items remain.
-- PG-3/PG-4 untouched; C5 untouched; no PROD activation.
+- PROD unchanged (remains alpha.8).
 
 ## #402 — own profile actions under hero (0.1.0-alpha.10 DEV ACCEPTED)
 
