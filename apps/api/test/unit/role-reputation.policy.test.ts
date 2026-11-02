@@ -144,6 +144,32 @@ describe("role reputation policy", () => {
     expect(a).toBe(b);
     expect(a).not.toBe(c);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
+    const reply = projectionHash({
+      subjectUserId: subject,
+      role: "organization",
+      audience: "public",
+      text: "Ответ\nвторая строка",
+      topics: [],
+      reviewRevision: 2,
+    });
+    const replyOtherRev = projectionHash({
+      subjectUserId: subject,
+      role: "organization",
+      audience: "public",
+      text: "Ответ\nвторая строка",
+      topics: [],
+      reviewRevision: 3,
+    });
+    expect(reply).not.toBe(replyOtherRev);
+    expect(reply).not.toBe(
+      projectionHash({
+        subjectUserId: subject,
+        role: "organization",
+        audience: "public",
+        text: "Ответ\nвторая строка",
+        topics: [],
+      }),
+    );
     expect(topicsAllowedForRole("organization", ["agreements", "flow"])).toBe(true);
     expect(topicsAllowedForRole("organization", ["explanations"])).toBe(false);
     expect(topicsAllowedForRole("training", ["explanations", "attention"])).toBe(true);

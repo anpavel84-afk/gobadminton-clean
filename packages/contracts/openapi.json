@@ -21021,7 +21021,7 @@
         "tags": [
           "Games"
         ],
-        "summary": "Preview exact consent projection hash for public role review text",
+        "summary": "Preview exact consent projection hash for public role review or subject reply",
         "security": [
           {
             "cookieSession": []
@@ -21051,40 +21051,79 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "role",
-                  "subjectRoleHandle",
-                  "text"
-                ],
-                "properties": {
-                  "role": {
-                    "type": "string",
-                    "enum": [
-                      "organization",
-                      "training"
-                    ]
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "role",
+                      "subjectRoleHandle",
+                      "text"
+                    ],
+                    "properties": {
+                      "targetKind": {
+                        "type": "string",
+                        "enum": [
+                          "review"
+                        ]
+                      },
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "organization",
+                          "training"
+                        ]
+                      },
+                      "subjectRoleHandle": {
+                        "type": "string",
+                        "minLength": 32,
+                        "maxLength": 32,
+                        "pattern": "^[0-9a-f]{32}$"
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "topics": {
+                        "type": "array",
+                        "maxItems": 2,
+                        "items": {
+                          "type": "string"
+                        },
+                        "default": []
+                      }
+                    }
                   },
-                  "subjectRoleHandle": {
-                    "type": "string",
-                    "minLength": 32,
-                    "maxLength": 32
-                  },
-                  "text": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
-                  },
-                  "topics": {
-                    "type": "array",
-                    "maxItems": 2,
-                    "items": {
-                      "type": "string"
-                    },
-                    "default": []
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "targetKind",
+                      "reviewHandle",
+                      "text"
+                    ],
+                    "properties": {
+                      "targetKind": {
+                        "type": "string",
+                        "enum": [
+                          "reply"
+                        ]
+                      },
+                      "reviewHandle": {
+                        "type": "string",
+                        "minLength": 32,
+                        "maxLength": 32,
+                        "pattern": "^[0-9a-f]{32}$"
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    }
                   }
-                }
+                ]
               }
             }
           }
@@ -21287,206 +21326,6 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": true
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Receipt",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/role-reviews/{id}/reply-commands": {
-      "post": {
-        "operationId": "roleReviewReplyCommand",
-        "tags": [
-          "Games"
-        ],
-        "summary": "Historical subject reply commands",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
-          },
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must match a configured consumer web origin."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Receipt",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          }
-        }
-      }
-    },
-    "/role-reviews/{id}/reports": {
-      "post": {
-        "operationId": "reportRoleReview",
-        "tags": [
-          "Games"
-        ],
-        "summary": "Report exact public role review/reply revision (does not auto-hide)",
-        "description": "#394. Separate from private peer game_review reports. Report never hides published text.",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
-          },
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must match a configured consumer web origin."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "targetKind",
-                  "expectedRevision",
-                  "reasonCode"
-                ],
-                "properties": {
-                  "targetKind": {
-                    "type": "string",
-                    "enum": [
-                      "review",
-                      "reply"
-                    ]
-                  },
-                  "expectedRevision": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
-                  "reasonCode": {
-                    "type": "string",
-                    "enum": [
-                      "harassment",
-                      "spam",
-                      "inappropriate",
-                      "pii",
-                      "threat",
-                      "fabrication",
-                      "other"
-                    ]
-                  },
-                  "explanation": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
-                  }
-                }
               }
             }
           }
@@ -21837,6 +21676,222 @@
         "responses": {
           "200": {
             "description": "Scoped source",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/role-reviews/{reviewHandle}/reply-commands": {
+      "post": {
+        "operationId": "roleReviewReplyCommand",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Historical subject reply commands by public reviewHandle",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reviewHandle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "description": "Opaque public reviewHandle from public projection (not private slot UUID)."
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Receipt",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/role-reviews/{reviewHandle}/reports": {
+      "post": {
+        "operationId": "reportRoleReview",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Report exact public role review/reply revision by public reviewHandle (does not auto-hide)",
+        "description": "#394. Separate from private peer game_review reports. Report never hides published text.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reviewHandle",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "description": "Opaque public reviewHandle from public projection (not private slot UUID)."
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Optional permitted game-context for surface re-check; does not authorize by handle alone."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "targetKind",
+                  "expectedRevision",
+                  "reasonCode"
+                ],
+                "properties": {
+                  "targetKind": {
+                    "type": "string",
+                    "enum": [
+                      "review",
+                      "reply"
+                    ]
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "harassment",
+                      "spam",
+                      "inappropriate",
+                      "pii",
+                      "threat",
+                      "fabrication",
+                      "other"
+                    ]
+                  },
+                  "explanation": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Receipt",
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -35363,6 +35418,8 @@
           "topics",
           "authorLabel",
           "experienceState",
+          "publishedRevision",
+          "replyAggregateVersion",
           "reply",
           "allowedActions"
         ],
@@ -35415,7 +35472,8 @@
                 "additionalProperties": false,
                 "required": [
                   "text",
-                  "experienceState"
+                  "experienceState",
+                  "publishedRevision"
                 ],
                 "properties": {
                   "text": {
@@ -35428,6 +35486,10 @@
                     "enum": [
                       "published"
                     ]
+                  },
+                  "publishedRevision": {
+                    "type": "integer",
+                    "minimum": 1
                   }
                 }
               }
@@ -35448,6 +35510,14 @@
                 "type": "boolean"
               }
             }
+          },
+          "publishedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "replyAggregateVersion": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

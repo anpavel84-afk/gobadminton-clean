@@ -1,12 +1,15 @@
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AdminModule } from "../../src/admin/admin.module";
+import { ADMIN_COOKIE, type AdminRole } from "../../src/admin/rbac";
 import { SESSION_COOKIE } from "../../src/auth/constants";
+import { hashSecret, sealSecret } from "../../src/auth/crypto";
 import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
@@ -23,6 +26,8 @@ import { buildTestCoreModule } from "./test-core.module";
  */
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 const origin = "http://127.0.0.1:3001";
+const adminOrigin = "http://localhost:18995";
+const pepper = "role-rep-consumer-admin-pepper-32chars!!";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
@@ -49,6 +54,13 @@ function disposableUrl() {
 }
 
 type Actor = { userId: string; sessionId: string; csrfToken: string; cookie: string };
+type AdminActor = {
+  id: string;
+  userId: string;
+  token: string;
+  csrf: string;
+  sessionId: string;
+};
 
 run("#394 role reputation — disposable", () => {
   let app: NestFastifyApplication;
@@ -58,6 +70,7 @@ run("#394 role reputation — disposable", () => {
   let organizer: Actor;
   let participant: Actor;
   let outsider: Actor;
+  let moderator: AdminActor;
   const migrations = path.resolve(__dirname, "../../migrations");
 
   beforeAll(async () => {
@@ -103,9 +116,19 @@ run("#394 role reputation — disposable", () => {
       CONTENT_MODERATION_FINGERPRINT_SECRET: "role-rep-synthetic-fingerprint!!!!!",
       POST_GAME_INTERNAL_ENABLED: "1",
       SOCIAL_DIRECTORY_ENABLED: "1",
+      ADMIN_INTERNAL_ENABLED: "1",
+      CASES_INTERNAL_ENABLED: "1",
+      ADMIN_ORIGIN: adminOrigin,
+      ADMIN_AUTH_PEPPER: pepper,
     });
     const ref = await Test.createTestingModule({
-      imports: [buildTestCoreModule(env, pool), GamesModule, VenuesModule, ProfilesModule],
+      imports: [
+        buildTestCoreModule(env, pool),
+        GamesModule,
+        VenuesModule,
+        ProfilesModule,
+        AdminModule,
+      ],
     }).compile();
     app = ref.createNestApplication<NestFastifyApplication>(new FastifyAdapter({ logger: false }));
     await app.register(cookie);
@@ -117,6 +140,7 @@ run("#394 role reputation — disposable", () => {
     organizer = await actor("org");
     participant = await actor("part");
     outsider = await actor("out");
+    moderator = await adminActor("moderator");
   }, 180000);
 
   afterAll(async () => {
@@ -126,10 +150,7 @@ run("#394 role reputation — disposable", () => {
 
   async function actor(label: string): Promise<Actor> {
     const userId = randomUUID();
-    await pool.query(
-      `INSERT INTO users (id, status) VALUES ($1, 'active')`,
-      [userId],
-    );
+    await pool.query(`INSERT INTO users (id, status) VALUES ($1, 'active')`, [userId]);
     await pool.query(
       `INSERT INTO player_social_profiles
          (user_id, public_player_id, display_name, directory_visible, social_eligible,
@@ -146,46 +167,93 @@ run("#394 role reputation — disposable", () => {
     };
   }
 
+  async function adminActor(role: AdminRole): Promise<AdminActor> {
+    const userId = randomUUID();
+    await pool.query(`INSERT INTO users (id, status, display_name) VALUES ($1, 'active', $2)`, [
+      userId,
+      `admin-${role}`,
+    ]);
+    const id = (
+      await pool.query(
+        "INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",
+        [userId],
+      )
+    ).rows[0].id as string;
+    await pool.query(
+      "INSERT INTO admin_role_grants(principal_id,role,reason_code) VALUES($1,$2,'synthetic_fixture')",
+      [id, role],
+    );
+    const credentialId = randomUUID();
+    const token = randomUUID() + randomUUID();
+    const csrf = randomUUID();
+    await pool.query(
+      "INSERT INTO admin_webauthn_credentials(credential_id,principal_id,public_key) VALUES($1,$2,$3)",
+      [credentialId, id, Buffer.from("synthetic-role-rep-consumer")],
+    );
+    const sessionId = (
+      await pool.query(
+        "INSERT INTO admin_sessions(principal_id,credential_id,token_hash,csrf_ciphertext) VALUES($1,$2,$3,$4) RETURNING id",
+        [id, credentialId, hashSecret(pepper, token), sealSecret(pepper, csrf)],
+      )
+    ).rows[0].id as string;
+    await pool.query("UPDATE admin_sessions SET step_up_at=clock_timestamp() WHERE id=$1", [
+      sessionId,
+    ]);
+    return { id, userId, token, csrf, sessionId };
+  }
+
+  /**
+   * Complete SQL fixture aligned with working admin-cases / attendance games rows.
+   * Keeps synthetic time/attendance/proof correct; does not weaken constraints.
+   */
   async function seedHeldGame(opts: {
     organizerId: string;
     participantId: string;
     endsAt: Date;
     status?: string;
     outcome?: "held" | "not_held" | null;
-    future?: boolean;
   }) {
-    const venueId = randomUUID();
-    await pool.query(
-      `INSERT INTO venues (id, name, city_id, status, created_by_user_id, version)
-       VALUES ($1, 'Court', $2, 'active', $3, 1)
-       ON CONFLICT DO NOTHING`,
-      [venueId, MOSCOW_CITY_ID, opts.organizerId],
-    ).catch(async () => {
-      // venue schema may use different columns — fall back to existing city venue
-    });
     const venue = (
-      await pool.query<{ id: string }>(`SELECT id FROM venues LIMIT 1`)
-    ).rows[0];
+      await pool.query<{ id: string }>(
+        `INSERT INTO venues(
+           city_id, name, address, timezone, location, created_by_user_id,
+           lifecycle_state, normalized_name, normalized_address
+         ) VALUES (
+           $1, 'RoleRep Court', 'Synthetic address', 'Europe/Moscow',
+           ST_SetSRID(ST_MakePoint(37.62, 55.75), 4326)::geography, $2,
+           'unverified', 'rolerep court', 'synthetic address'
+         ) RETURNING id`,
+        [MOSCOW_CITY_ID, opts.organizerId],
+      )
+    ).rows[0]!;
     const gameId = randomUUID();
     const starts = new Date(opts.endsAt.getTime() - 3600_000);
+    const deadline = new Date(starts.getTime() - 3600_000);
     await pool.query(
       `INSERT INTO games (
          id, version, title, status, visibility, activity_kind, venue_id,
-         starts_at, ends_at, timezone, capacity, external_reserved_count,
+         starts_at, ends_at, timezone, application_deadline_at,
+         capacity, external_reserved_count,
+         format_key, level_scale_id, level_scale_version, allowed_level_ids,
+         settlement_mode, settlement_purpose, settlement_terms,
          created_by_user_id, host_display_name, host_public_contact,
-         settlement_purpose, published_at
+         published_at
        ) VALUES (
          $1, 1, 'Game', $2, 'public', 'regular', $3,
-         $4, $5, 'Europe/Moscow', 4, 0,
-         $6, 'Host', 'host@example.test',
-         'no_trainer_fee', clock_timestamp()
+         $4, $5, 'Europe/Moscow', $6,
+         4, 0,
+         'doubles', 'ntrp', 1, '["3.0","3.5"]'::jsonb,
+         'external', 'no_trainer_fee', 'Synthetic settlement terms',
+         $7, 'Host', 'host@example.test',
+         clock_timestamp()
        )`,
       [
         gameId,
         opts.status ?? "completed",
-        venue?.id ?? venueId,
+        venue.id,
         starts.toISOString(),
         opts.endsAt.toISOString(),
+        deadline.toISOString(),
         opts.organizerId,
       ],
     );
@@ -201,9 +269,11 @@ run("#394 role reputation — disposable", () => {
       [participationId, gameId, opts.participantId, starts.toISOString()],
     );
     await pool.query(
-      `INSERT INTO participation_transitions (id, participation_id, to_status, at)
-       VALUES ($1, $2, 'confirmed', $3)`,
-      [randomUUID(), participationId, starts.toISOString()],
+      `INSERT INTO participation_transitions
+         (id, participation_id, from_status, to_status, actor_id, reason_code,
+          aggregate_version, game_version, at)
+       VALUES ($1, $2, NULL, 'confirmed', $3, 'test_confirm', 1, 1, $4)`,
+      [randomUUID(), participationId, opts.participantId, starts.toISOString()],
     );
     if (opts.outcome === "held" || opts.outcome === "not_held") {
       await pool.query(
@@ -220,11 +290,18 @@ run("#394 role reputation — disposable", () => {
     }
     await pool.query(
       `INSERT INTO game_attendance
-         (participation_id, game_id, value, late, source, actor_user_id, version)
-       VALUES ($1, $2, 'present', false, 'manager_explicit', $3, 1)`,
-      [participationId, gameId, opts.organizerId],
+         (participation_id, game_id, user_id, value, late, source, actor_user_id, version)
+       VALUES ($1, $2, $3, 'present', false, 'manager_explicit', $4, 1)`,
+      [participationId, gameId, opts.participantId, opts.organizerId],
     );
-    // Planned + performed proof (no current-manager invention for missing history).
+    await pool.query(
+      `INSERT INTO game_attendance_revisions
+         (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+          recorded_at, before_value, after_value, before_late, after_late,
+          before_correction_reason, after_correction_reason)
+       VALUES ($1,$2,$3,1,$4,'manager_explicit',$5,NULL,'present',NULL,false,NULL,NULL)`,
+      [participationId, gameId, opts.participantId, opts.organizerId, starts.toISOString()],
+    );
     const rev1 = randomUUID();
     await pool.query(
       `INSERT INTO game_role_proof_revisions
@@ -256,26 +333,80 @@ run("#394 role reputation — disposable", () => {
         [gameId, rev2],
       );
     }
-    const handle = createHash("sha256").update(gameId).digest("hex").slice(0, 32);
-    await pool.query(
-      `INSERT INTO role_reputation_subjects
-         (subject_user_id, role, public_handle, version)
-       VALUES ($1,'organization',$2,1)
-       ON CONFLICT (subject_user_id, role) DO UPDATE SET updated_at=clock_timestamp()
-       RETURNING public_handle`,
-      [opts.organizerId, handle],
-    );
     const subject = (
+      await pool.query<{ public_handle: string }>(
+        `INSERT INTO role_reputation_subjects
+           (subject_user_id, role, public_handle, version)
+         VALUES ($1,'organization',$2,1)
+         ON CONFLICT (subject_user_id, role) DO UPDATE SET updated_at=clock_timestamp()
+         RETURNING public_handle`,
+        [opts.organizerId, randomUUID().replaceAll("-", "")],
+      )
+    ).rows[0]!;
+    const handle = (
       await pool.query<{ public_handle: string }>(
         `SELECT public_handle FROM role_reputation_subjects
          WHERE subject_user_id=$1 AND role='organization'`,
         [opts.organizerId],
       )
     ).rows[0]!;
-    return { gameId, participationId, roleHandle: subject.public_handle };
+    void subject;
+    return { gameId, participationId, roleHandle: handle.public_handle };
   }
 
-  it("outsider can read but not write; own past role can submit pending; self denied", async () => {
+  async function humanApprovePending(pendingIntakeId: string, expectedIntakeVersion = 1) {
+    const intake = await app.inject({
+      method: "POST",
+      url: "/v1/admin/cases/role-reputation-intake",
+      cookies: { [ADMIN_COOKIE]: moderator.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": moderator.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        pendingIntakeId,
+        expectedIntakeVersion,
+        reasonCode: "operations_review",
+        assignToSelf: true,
+      },
+    });
+    expect(intake.statusCode).toBe(200);
+    const caseId = intake.json().caseId as string;
+    const source = await app.inject({
+      method: "GET",
+      url: `/v1/admin/cases/${caseId}/role-review-source`,
+      cookies: { [ADMIN_COOKIE]: moderator.token },
+      headers: { origin: adminOrigin },
+    });
+    expect(source.statusCode).toBe(200);
+    const revision = source.json().reviewRevision;
+    expect(revision?.id).toBeTruthy();
+    const decide = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: moderator.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": moderator.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        action: "role_review_decide",
+        expectedCaseVersion: intake.json().caseVersion,
+        expectedResourceVersion: revision.resourceVersion,
+        targetKind: "review",
+        exactRevisionId: revision.id,
+        decision: "approve",
+        rationale: "Synthetic approve for disposable roundtrip",
+        reasonCode: "operations_review",
+      },
+    });
+    expect(decide.statusCode).toBe(200);
+    return { caseId, revision };
+  }
+
+  it("outsider can read but not write; own past role can submit pending; self denied; public handle roundtrip", async () => {
     const past = new Date("2026-10-01T18:00:00.000Z");
     const seeded = await seedHeldGame({
       organizerId: organizer.userId,
@@ -297,14 +428,35 @@ run("#394 role reputation — disposable", () => {
     expect(body).not.toHaveProperty("authorUserId");
     expect(JSON.stringify(body)).not.toContain(seeded.gameId);
 
-    const text = "Организация была слабой";
-    const hash = projectionHash({
-      subjectUserId: organizer.userId,
-      role: "organization",
-      audience: "public",
-      text,
-      topics: ["agreements"],
+    const multiline = "Организация была слабой\nСрыв договорённостей";
+    const preview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "content-type": "application/json",
+      },
+      payload: {
+        role: "organization",
+        subjectRoleHandle: seeded.roleHandle,
+        text: multiline,
+        topics: ["agreements"],
+      },
     });
+    expect(preview.statusCode).toBe(200);
+    const hash = preview.json().consentProjectionHash as string;
+    expect(hash).toBe(
+      projectionHash({
+        subjectUserId: organizer.userId,
+        role: "organization",
+        audience: "public",
+        text: multiline,
+        topics: ["agreements"],
+      }),
+    );
+
     const outsiderWrite = await app.inject({
       method: "POST",
       url: "/v1/me/role-reviews",
@@ -323,7 +475,7 @@ run("#394 role reputation — disposable", () => {
           outcomeVersion: 1,
           attendanceVersion: 1,
         },
-        text,
+        text: multiline,
         topics: ["agreements"],
         consentProjectionHash: hash,
       },
@@ -348,13 +500,13 @@ run("#394 role reputation — disposable", () => {
           outcomeVersion: 1,
           attendanceVersion: 1,
         },
-        text,
+        text: multiline,
         topics: ["agreements"],
         consentProjectionHash: projectionHash({
           subjectUserId: organizer.userId,
           role: "organization",
           audience: "public",
-          text,
+          text: multiline,
           topics: ["agreements"],
         }),
       },
@@ -379,7 +531,7 @@ run("#394 role reputation — disposable", () => {
           outcomeVersion: 1,
           attendanceVersion: 1,
         },
-        text,
+        text: multiline,
         topics: ["agreements"],
         consentProjectionHash: hash,
       },
@@ -387,6 +539,9 @@ run("#394 role reputation — disposable", () => {
     expect(ok.statusCode).toBe(200);
     expect(ok.json().pendingIntakeStatus).toBe("waiting_intake");
     expect(ok.json().status).toBe("submitted");
+    const ownId = ok.json().id as string;
+    const reviewHandle = ok.json().reviewHandle as string;
+    expect(reviewHandle).toMatch(/^[0-9a-f]{32}$/);
 
     // Pending not public.
     const after = await app.inject({
@@ -395,6 +550,179 @@ run("#394 role reputation — disposable", () => {
     });
     expect(after.json().publishedReviewCount).toBe(0);
     expect(after.json().items).toEqual([]);
+
+    const minePending = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { cookie: participant.cookie },
+    });
+    expect(minePending.statusCode).toBe(200);
+    const pendingItem = minePending
+      .json()
+      .items.find((i: { id: string }) => i.id === ownId);
+    expect(pendingItem.pendingIntakeStatus).toBe("waiting_intake");
+    expect(pendingItem.receiptToken).toBeTruthy();
+    expect(pendingItem.text).toBe(multiline);
+
+    // UUID path must not work for public reply/report (handle-only).
+    const uuidReport = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${ownId}/reports`,
+      headers: {
+        cookie: outsider.cookie,
+        "x-csrf-token": outsider.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        targetKind: "review",
+        expectedRevision: 1,
+        reasonCode: "spam",
+      },
+    });
+    expect(uuidReport.statusCode).toBeGreaterThanOrEqual(400);
+
+    const pending = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [ownId],
+      )
+    ).rows[0]!;
+    await humanApprovePending(pending.id, pending.version);
+
+    const mineLinked = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { cookie: participant.cookie },
+    });
+    const linkedItem = mineLinked.json().items.find((i: { id: string }) => i.id === ownId);
+    expect(linkedItem.pendingIntakeStatus).toBe("linked");
+    expect(linkedItem.receiptToken).toBeTruthy();
+
+    const published = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: outsider.cookie },
+    });
+    expect(published.statusCode).toBe(200);
+    expect(published.json().publishedReviewCount).toBe(1);
+    const item = published.json().items[0];
+    expect(item.reviewHandle).toBe(reviewHandle);
+    expect(item.publishedRevision).toBe(1);
+    expect(item.replyAggregateVersion).toBe(0);
+    expect(item.text).toBe(multiline);
+    expect(item.reply).toBeNull();
+    expect(JSON.stringify(published.json())).not.toContain(ownId);
+    expect(JSON.stringify(published.json())).not.toContain(organizer.userId);
+
+    const report = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reports`,
+      headers: {
+        cookie: outsider.cookie,
+        "x-csrf-token": outsider.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        targetKind: "review",
+        expectedRevision: item.publishedRevision,
+        reasonCode: "spam",
+      },
+    });
+    expect(report.statusCode).toBe(200);
+    expect(report.json().status).toBe("submitted");
+
+    const replyText = "Спасибо за отзыв\nУчтём";
+    const replyPreview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "content-type": "application/json",
+      },
+      payload: {
+        targetKind: "reply",
+        reviewHandle,
+        text: replyText,
+      },
+    });
+    expect(replyPreview.statusCode).toBe(200);
+    const replyHash = replyPreview.json().consentProjectionHash as string;
+    expect(replyHash).toBe(
+      projectionHash({
+        subjectUserId: organizer.userId,
+        role: "organization",
+        audience: "public",
+        text: replyText,
+        topics: [],
+        reviewRevision: item.publishedRevision,
+      }),
+    );
+
+    const subjectSelfReviewPreview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "content-type": "application/json",
+      },
+      payload: {
+        role: "organization",
+        subjectRoleHandle: seeded.roleHandle,
+        text: "self",
+        topics: ["agreements"],
+      },
+    });
+    expect(subjectSelfReviewPreview.statusCode).toBeGreaterThanOrEqual(400);
+
+    const reply = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: item.replyAggregateVersion,
+        expectedReviewRevision: item.publishedRevision,
+        text: replyText,
+        consentProjectionHash: replyHash,
+      },
+    });
+    expect(reply.statusCode).toBe(200);
+    expect(reply.json().status).toBe("submitted");
+
+    const outsiderReply = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: {
+        cookie: outsider.cookie,
+        "x-csrf-token": outsider.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: 0,
+        expectedReviewRevision: item.publishedRevision,
+        text: replyText,
+        consentProjectionHash: replyHash,
+      },
+    });
+    expect(outsiderReply.statusCode).toBeGreaterThanOrEqual(400);
 
     // Stale consent / duplicate new key.
     const stale = await app.inject({
@@ -415,7 +743,7 @@ run("#394 role reputation — disposable", () => {
           outcomeVersion: 1,
           attendanceVersion: 1,
         },
-        text,
+        text: multiline,
         topics: ["agreements"],
         consentProjectionHash: "0".repeat(64),
       },

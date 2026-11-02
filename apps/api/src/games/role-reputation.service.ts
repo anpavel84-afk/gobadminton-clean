@@ -6,6 +6,7 @@ import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { conflict, forbidden, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import {
   isPermittedPresentAssertion,
   type AttendanceSource,
@@ -93,7 +94,40 @@ export class RoleReputationService {
         [userId],
       )
     ).rows[0];
-    return row?.display_name ?? null;
+    if (!row) return null;
+    // Public projection only — same scrub as ProfilesService (email-as-name never leaks).
+    return safePublicDisplayName(row.display_name);
+  }
+
+  private isPublicHandle(value: string): boolean {
+    return /^[0-9a-f]{32}$/i.test(value);
+  }
+
+  private async loadSlotByPublicHandle(
+    client: PoolClient | Pool,
+    reviewHandle: string,
+  ): Promise<SlotRow | undefined> {
+    if (!this.isPublicHandle(reviewHandle)) return undefined;
+    return (
+      await client.query<SlotRow>(
+        `SELECT * FROM role_review_slots WHERE public_handle = $1`,
+        [reviewHandle.toLowerCase()],
+      )
+    ).rows[0];
+  }
+
+  /** Reader may report only when the same surface that exposes the item is open. */
+  private async readerMayAccessPublishedSlot(
+    client: PoolClient | Pool,
+    viewerId: string,
+    slot: SlotRow,
+    gameId?: string,
+  ): Promise<boolean> {
+    if (gameId) {
+      const surface = await this.gameSurfaceOpen(client, viewerId, gameId, slot.role);
+      return surface.open && surface.subjectUserId === slot.subject_user_id;
+    }
+    return this.profileSurfaceOpen(client, viewerId, slot.subject_user_id);
   }
 
   private async ensureSubject(
@@ -451,14 +485,20 @@ export class RoleReputationService {
       basis_under_review: boolean;
       updated_at: Date;
       approved_revision_id: string | null;
+      approved_resource_version: number;
       reply_text: string | null;
       reply_status: string | null;
+      reply_aggregate_version: number | null;
+      reply_approved_resource_version: number | null;
       subject_user_id: string;
       author_user_id: string;
     }>(
       `SELECT s.public_handle, s.role, r.body_text, r.topics, s.basis_under_review,
               s.updated_at, s.approved_revision_id, s.subject_user_id, s.author_user_id,
-              rr.body_text AS reply_text, rp.status AS reply_status
+              r.resource_version AS approved_resource_version,
+              rr.body_text AS reply_text, rp.status AS reply_status,
+              rp.version AS reply_aggregate_version,
+              rr.resource_version AS reply_approved_resource_version
        FROM role_review_slots s
        JOIN role_review_revisions r ON r.id = s.approved_revision_id
        LEFT JOIN role_review_replies rp ON rp.slot_id = s.id
@@ -486,9 +526,17 @@ export class RoleReputationService {
       topics: row.topics ?? [],
       authorLabel: publicAuthorLabel(row.role),
       experienceState: row.basis_under_review ? "basis_under_review" : "published",
+      publishedRevision: row.approved_resource_version,
+      replyAggregateVersion: row.reply_aggregate_version ?? 0,
       reply:
-        row.reply_status === "published" && row.reply_text
-          ? { text: row.reply_text, experienceState: "published" }
+        row.reply_status === "published" &&
+        row.reply_text &&
+        row.reply_approved_resource_version != null
+          ? {
+              text: row.reply_text,
+              experienceState: "published" as const,
+              publishedRevision: row.reply_approved_resource_version,
+            }
           : null,
       allowedActions: {
         canReport: Boolean(args.viewerId),
@@ -876,26 +924,58 @@ export class RoleReputationService {
   ): Promise<{ consentProjectionHash: string }> {
     const body = parseOrThrow(consentPreviewRequest, input);
     if (!(await this.installed(this.pool))) unavailable();
+    if ("targetKind" in body && body.targetKind === "reply") {
+      const slot = await this.loadSlotByPublicHandle(this.pool, body.reviewHandle);
+      if (!slot || slot.status !== "published" || !slot.approved_revision_id) {
+        unavailable();
+      }
+      if (slot.subject_user_id !== userId) {
+        throw forbidden("ROLE_REPLY_FORBIDDEN", "Ответ доступен только субъекту роли");
+      }
+      const approved = (
+        await this.pool.query<{ resource_version: number }>(
+          `SELECT resource_version FROM role_review_revisions WHERE id = $1`,
+          [slot.approved_revision_id],
+        )
+      ).rows[0];
+      if (!approved) unavailable();
+      return {
+        consentProjectionHash: projectionHash({
+          subjectUserId: slot.subject_user_id,
+          role: slot.role,
+          audience: "public",
+          text: body.text,
+          topics: [],
+          reviewRevision: approved.resource_version,
+        }),
+      };
+    }
+    const reviewBody = body as {
+      role: RoleKind;
+      subjectRoleHandle: string;
+      text: string;
+      topics: string[];
+    };
     const subject = (
       await this.pool.query<SubjectRow>(
         `SELECT * FROM role_reputation_subjects WHERE public_handle = $1`,
-        [body.subjectRoleHandle],
+        [reviewBody.subjectRoleHandle],
       )
     ).rows[0];
-    if (!subject || subject.role !== body.role) unavailable();
+    if (!subject || subject.role !== reviewBody.role) unavailable();
     if (subject.subject_user_id === userId) {
       throw forbidden("ROLE_REPUTATION_SELF", "Нельзя оценить себя");
     }
-    if (!topicsAllowedForRole(body.role, body.topics)) {
+    if (!topicsAllowedForRole(reviewBody.role, reviewBody.topics)) {
       throw unprocessable("ROLE_TOPICS_INVALID", "Некорректные темы");
     }
     return {
       consentProjectionHash: projectionHash({
         subjectUserId: subject.subject_user_id,
-        role: body.role,
+        role: reviewBody.role,
         audience: "public",
-        text: body.text,
-        topics: body.topics,
+        text: reviewBody.text,
+        topics: reviewBody.topics,
       }),
     };
   }
@@ -1150,8 +1230,15 @@ export class RoleReputationService {
        LEFT JOIN role_review_revisions pr ON pr.id = s.pending_revision_id
        LEFT JOIN LATERAL (
          SELECT receipt_token, status FROM role_reputation_pending_intakes
-         WHERE slot_id = s.id AND status = 'waiting_intake'
-         ORDER BY created_at DESC LIMIT 1
+         WHERE slot_id = s.id
+         ORDER BY
+           CASE status
+             WHEN 'waiting_intake' THEN 0
+             WHEN 'linked' THEN 1
+             ELSE 2
+           END,
+           created_at DESC
+         LIMIT 1
        ) pi ON true
        WHERE s.author_user_id = $1
        ORDER BY s.updated_at DESC
@@ -1159,24 +1246,30 @@ export class RoleReputationService {
       [userId],
     );
     return {
-      items: rows.rows.map((r) => ({
-        id: r.id,
-        reviewHandle: r.public_handle,
-        role: r.role,
-        status: r.status,
-        version: r.version,
-        text: r.body_text,
-        topics: r.topics ?? [],
-        receiptToken: r.receipt_token,
-        pendingIntakeStatus:
+      items: rows.rows.map((r) => {
+        const intakeStatus =
           r.intake_status === "waiting_intake"
-            ? "waiting_intake"
+            ? ("waiting_intake" as const)
             : r.intake_status === "linked"
-              ? "linked"
-              : "none",
-        approvedRevision: r.approved_version,
-        pendingRevision: r.pending_version,
-      })),
+              ? ("linked" as const)
+              : ("none" as const);
+        return {
+          id: r.id,
+          reviewHandle: r.public_handle,
+          role: r.role,
+          status: r.status,
+          version: r.version,
+          text: r.body_text,
+          topics: r.topics ?? [],
+          receiptToken:
+            intakeStatus === "waiting_intake" || intakeStatus === "linked"
+              ? r.receipt_token
+              : null,
+          pendingIntakeStatus: intakeStatus,
+          approvedRevision: r.approved_version,
+          pendingRevision: r.pending_version,
+        };
+      }),
     };
   }
 
@@ -1301,12 +1394,12 @@ export class RoleReputationService {
     userId: string,
     sessionId: string,
     key: string,
-    reviewId: string,
+    reviewHandle: string,
     input: unknown,
   ): Promise<{ statusCode: number; body: { version: number; status: string; receiptToken: string } }> {
     if (!postGameWritesEnabled(this.env)) writesUnavailable();
     const body = parseOrThrow(roleReplyCommandRequest, input);
-    const requestHash = this.idempotency.requestHash({ reviewId, ...body });
+    const requestHash = this.idempotency.requestHash({ reviewHandle, ...body });
     return this.mutations.runIdempotent({
       actorId: userId,
       sessionId,
@@ -1314,17 +1407,17 @@ export class RoleReputationService {
       key,
       requestHash,
       authorizeReplay: async (client) => {
-        const slot = (
-          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id = $1`, [reviewId])
-        ).rows[0];
+        const slot = await this.loadSlotByPublicHandle(client, reviewHandle);
         if (!slot || slot.subject_user_id !== userId) unavailable();
       },
       execute: async (client) => {
         if (!(await this.installed(client))) writesUnavailable();
+        const found = await this.loadSlotByPublicHandle(client, reviewHandle);
+        if (!found || found.subject_user_id !== userId) unavailable();
         const slot = (
           await client.query<SlotRow>(
             `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
-            [reviewId],
+            [found.id],
           )
         ).rows[0];
         if (!slot || slot.subject_user_id !== userId) unavailable();
@@ -1461,11 +1554,16 @@ export class RoleReputationService {
     userId: string,
     sessionId: string,
     key: string,
-    reviewId: string,
+    reviewHandle: string,
     input: unknown,
+    gameId?: string,
   ): Promise<{ statusCode: number; body: { reportId: string; receiptToken: string; status: "submitted" } }> {
     const body = parseOrThrow(roleReviewReportRequest, input);
-    const requestHash = this.idempotency.requestHash({ reviewId, ...body });
+    const requestHash = this.idempotency.requestHash({
+      reviewHandle,
+      gameId: gameId ?? null,
+      ...body,
+    });
     return this.mutations.runIdempotent({
       actorId: userId,
       sessionId,
@@ -1473,17 +1571,23 @@ export class RoleReputationService {
       key,
       requestHash,
       authorizeReplay: async (client) => {
-        const slot = (
-          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id = $1`, [reviewId])
-        ).rows[0];
+        const slot = await this.loadSlotByPublicHandle(client, reviewHandle);
         if (!slot || slot.status !== "published") unavailable();
+        if (!(await this.readerMayAccessPublishedSlot(client, userId, slot, gameId))) {
+          unavailable();
+        }
       },
       execute: async (client) => {
         if (!(await this.installed(client))) unavailable();
+        const found = await this.loadSlotByPublicHandle(client, reviewHandle);
+        if (!found || found.status !== "published") unavailable();
+        if (!(await this.readerMayAccessPublishedSlot(client, userId, found, gameId))) {
+          unavailable();
+        }
         const slot = (
           await client.query<SlotRow>(
             `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
-            [reviewId],
+            [found.id],
           )
         ).rows[0];
         if (!slot || slot.status !== "published") unavailable();

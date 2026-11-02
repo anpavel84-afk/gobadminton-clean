@@ -132,39 +132,41 @@ export class RoleReputationController {
     return result.body;
   }
 
-  @Post("role-reviews/:id/reply-commands")
+  @Post("role-reviews/:reviewHandle/reply-commands")
   @Header("Cache-Control", "no-store")
   async replyCommand(
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
-    @Param("id") id: string,
+    @Param("reviewHandle") reviewHandle: string,
   ) {
     const actor = await this.auth.requireCookieMutation(request);
     const result = await this.reputation.replyCommand(
       actor.userId,
       actor.sessionId,
       this.idempotency.requireKey(request.headers["idempotency-key"]),
-      id,
+      reviewHandle,
       request.body,
     );
     reply.status(result.statusCode);
     return result.body;
   }
 
-  @Post("role-reviews/:id/reports")
+  @Post("role-reviews/:reviewHandle/reports")
   @Header("Cache-Control", "no-store")
   async report(
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
-    @Param("id") id: string,
+    @Param("reviewHandle") reviewHandle: string,
+    @Query("gameId") gameId?: string,
   ) {
     const actor = await this.auth.requireCookieMutation(request);
     const result = await this.reputation.report(
       actor.userId,
       actor.sessionId,
       this.idempotency.requireKey(request.headers["idempotency-key"]),
-      id,
+      reviewHandle,
       request.body,
+      gameId,
     );
     reply.status(result.statusCode);
     return result.body;

@@ -7,15 +7,19 @@ import {
   type RoleKind,
 } from "./role-reputation.policy";
 
+/** Multiline plain text: CRLF→LF, allow LF, reject NUL/other controls, trim, bound. */
 const plainBounded = (max: number) =>
   z
     .string()
     .max(max)
-    .transform((value) => value.trim())
+    .transform((value) =>
+      value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim(),
+    )
     .refine((value) => value.length >= 1 && value.length <= max, { message: "bounds" })
     .refine((value) => {
       for (const ch of value) {
         const code = ch.codePointAt(0) ?? 0;
+        if (code === 0x0a) continue;
         if (code < 0x20 || code === 0x7f) return false;
       }
       return true;
@@ -25,6 +29,16 @@ const topicEnum = z.enum([
   ...ORGANIZATION_TOPICS,
   ...TRAINING_TOPICS,
 ]);
+
+const handle32 = z
+  .string()
+  .regex(/^[0-9a-f]{32}$/i)
+  .transform((v) => v.toLowerCase());
+
+const consentHash = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/i)
+  .transform((v) => v.toLowerCase());
 
 export const createRoleReviewRequest = z
   .object({
@@ -39,10 +53,7 @@ export const createRoleReviewRequest = z
       .strict(),
     text: plainBounded(ROLE_REPUTATION_TEXT_MAX),
     topics: z.array(topicEnum).max(2).default([]),
-    consentProjectionHash: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/i)
-      .transform((v) => v.toLowerCase()),
+    consentProjectionHash: consentHash,
   })
   .strict();
 
@@ -63,10 +74,7 @@ export const roleReviewCommandRequest = z.discriminatedUnion("action", [
         .strict(),
       text: plainBounded(ROLE_REPUTATION_TEXT_MAX),
       topics: z.array(topicEnum).max(2).default([]),
-      consentProjectionHash: z
-        .string()
-        .regex(/^[0-9a-f]{64}$/i)
-        .transform((v) => v.toLowerCase()),
+      consentProjectionHash: consentHash,
     })
     .strict(),
   z
@@ -89,10 +97,7 @@ export const roleReviewCommandRequest = z.discriminatedUnion("action", [
         .strict(),
       text: plainBounded(ROLE_REPUTATION_TEXT_MAX),
       topics: z.array(topicEnum).max(2).default([]),
-      consentProjectionHash: z
-        .string()
-        .regex(/^[0-9a-f]{64}$/i)
-        .transform((v) => v.toLowerCase()),
+      consentProjectionHash: consentHash,
     })
     .strict(),
   z
@@ -113,10 +118,7 @@ export const roleReplyCommandRequest = z.discriminatedUnion("action", [
       expectedVersion: z.number().int().min(0).max(2147483647),
       expectedReviewRevision: z.number().int().min(1).max(2147483647),
       text: plainBounded(ROLE_REPUTATION_TEXT_MAX),
-      consentProjectionHash: z
-        .string()
-        .regex(/^[0-9a-f]{64}$/i)
-        .transform((v) => v.toLowerCase()),
+      consentProjectionHash: consentHash,
     })
     .strict(),
   z
@@ -148,21 +150,36 @@ export const roleReviewReportRequest = z
 
 export type RoleReviewReportRequest = z.infer<typeof roleReviewReportRequest>;
 
-export const consentPreviewRequest = z
+const consentPreviewReviewBody = z
   .object({
+    targetKind: z.literal("review").optional(),
     role: z.enum(["organization", "training"]),
-    subjectRoleHandle: z
-      .string()
-      .regex(/^[0-9a-f]{32}$/i)
-      .transform((v) => v.toLowerCase()),
+    subjectRoleHandle: handle32,
     text: plainBounded(ROLE_REPUTATION_TEXT_MAX),
     topics: z.array(topicEnum).max(2).default([]),
   })
   .strict();
 
+const consentPreviewReplyBody = z
+  .object({
+    targetKind: z.literal("reply"),
+    reviewHandle: handle32,
+    text: plainBounded(ROLE_REPUTATION_TEXT_MAX),
+  })
+  .strict();
+
+/** Review shape stays backwards-compatible (targetKind optional/omitted). Reply is strict. */
+export const consentPreviewRequest = z.union([
+  consentPreviewReplyBody,
+  consentPreviewReviewBody,
+]);
+
+export type ConsentPreviewRequest = z.infer<typeof consentPreviewRequest>;
+
 export type PublicRoleReplyDto = {
   text: string;
   experienceState: "published";
+  publishedRevision: number;
 };
 
 export type PublicRoleReviewItemDto = {
@@ -172,6 +189,10 @@ export type PublicRoleReviewItemDto = {
   topics: string[];
   authorLabel: "Участник игры" | "Участник тренировки";
   experienceState: "published" | "basis_under_review";
+  /** Approved review revision resource_version (for report/reply expectedRevision). */
+  publishedRevision: number;
+  /** Reply tip aggregate version; 0 when no reply row yet (first submit expectedVersion). */
+  replyAggregateVersion: number;
   reply: PublicRoleReplyDto | null;
   allowedActions: {
     canReport: boolean;
