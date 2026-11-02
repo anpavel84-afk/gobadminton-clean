@@ -1,17 +1,23 @@
 # Handoff — #394 experience-policy guard (narrow VENUE close)
 
 **Assignment:** `OWNER_20261102_COMMENTS394_EXPERIENCE_POLICY_GUARD`
-**Author:** cursor:auto · attempt 8
-**Base:** `84a1a320e43df7f20ce23b40a25d802b96e1f4c0` (exact Owner assignment base; backend already accepted after QA2)
+**Author:** cursor:auto · attempt 9
+**Base:** `670dffcdce4cce5872f745a3120f27c5756387e8` (exact Owner assignment base)
 **Publication branch (trusted process only):** `owner/comments394-experience-policy-20261102`
 **QA route:** codex_sol_medium (independent delta) · Product CI / DEV by trusted integrator
 **Author does not claim QA / CI / DEV PASS. Owner UAT=NOT_TESTED. source_sha:null for prospective alpha.15.**
-**Scope this attempt:** disposable test + handoff only (no production code / release edits).
+**Scope this attempt:** CURRENT_NAMED_RELEASE user-facing Russian prose wording repair + short handoff only.
+
+## Attempt 9 repair (allowed paths only)
+
+1. **CI web FAIL preserved:** `releases.test.tsx` assertion `currentProse` must not match `/PROD остаётся alpha\.2|не развёрнут|не установлен/i` — matched user-facing limitation «…этим кандидатом не установлены» (CI run 41432385143; 1435 other web tests PASS).
+2. **releases.ts only:** reword CURRENT_NAMED_RELEASE `known_limitations` — remove Cases/PG3/#394/technical install phrasing; avoid brittle «не установлены»; state plainly: venue reviews await attendance confirmation + disputed-mark resolution; player feedback stays private (not a public profile wall); Owner UAT not done; full post-game review flow unfinished. Keep game Q&A addition and closed venue publication fix. No version/history/source_sha change; no gates/tests weakened.
+3. Prior FAIL/history/expenses/UNKNOWN preserved; backend/API/UI/reviewguards/disposable already independent QA3 PASS — not re-audited.
 
 ## Materials read (confirmed)
 
-- Independent Medium QA2 `final.txt` (reviewed_sha `84a1a320…`, verdict **FAIL**, one remaining P2 test fidelity) — sha256 `fb65064f1224467510f56f12194656a82204e78dfc249164ea6f7b5aac57abd2`
-- Prior QA1 FAIL + attempt 7 repair history preserved below (not erased)
+- CI web failure excerpt `ci-web-failure-excerpt.txt` — sha256 `6caaef743c608aa1a172c53febf4ff023d48675fea6379380650c7d2b28df912`
+- Prior QA1/QA2 FAIL + attempts 6–8 history preserved below (not erased)
 
 ## QA1 FAIL preserved (exact)
 
@@ -46,7 +52,22 @@
 2. VenuePage placeholder; contract/style/alpha15 notes; disposable deny cases.
 3. Author unit/web checks exit 0; disposable PostGIS NOT_TESTED in that worktree (no disposable DB).
 
-## Author verification commands / results (attempt 8)
+## Author verification commands / results (attempt 9)
+
+```bash
+export PATH=/opt/gb-slots/runtime/node/bin:$PATH
+pnpm install --offline --frozen-lockfile --ignore-scripts
+# → ERR_PNPM_NO_OFFLINE_TARBALL (next-16.3.8.tgz missing from store); node_modules absent.
+# Addressed vitest releases.test.tsx + releases-server.test.ts → NOT_TESTED here (deps unavailable).
+# Trusted PMA has store/deps and will run addressed tests after import.
+# Local deterministic prose regex check vs CI assertion patterns → ALL PASS
+#   (комментар; игр|площадк; forbid Safety/PG-4/PG-3/PROD/не установлен/Cases/#394; приёмк).
+# Input material sha256 match: 6caaef743c608aa1a172c53febf4ff023d48675fea6379380650c7d2b28df912
+# No broad web matrix; no API/disposable re-run this attempt.
+# Version 0.1.0-alpha.15 / source_sha:null / history seed unchanged.
+```
+
+## Author verification commands / results (attempt 8 — preserved)
 
 ```bash
 export PATH=/opt/gb-slots/runtime/node/bin:$PATH
@@ -62,12 +83,12 @@ export PATH=/opt/gb-slots/runtime/node/bin:$PATH
 
 ## Unresolved / residual #394
 
-- Independent delta QA after this fixture-only repair; Product CI; server DEV smoke / DEV ACCEPTED; Owner UAT=NOT_TESTED.
-- Full experience-review / Cases / attendance eligibility UI — out of this pass.
+- Independent delta QA after prose repair; Product CI; server DEV smoke / DEV ACCEPTED; Owner UAT=NOT_TESTED.
+- Full experience-review / attendance eligibility UI / public venue writing — out of this pass; not claimed available.
 - No Git publication / merge / deploy / PROD by author.
 - Prior FAIL/history/expenses/UNKNOWN preserved; old admissions not rewritten.
 
-## Allowed path diff (this repair / attempt 8)
+## Allowed path diff (this repair / attempt 9)
 
-- `apps/api/test/integration/comments.disposable.test.ts`
+- `apps/web/src/lib/releases.ts`
 - `docs/handoffs/comments394-game-venue.md`
