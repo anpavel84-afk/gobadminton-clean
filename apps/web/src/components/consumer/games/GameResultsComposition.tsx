@@ -677,7 +677,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                           ) : null}
                           {writes && my.allowedActions.canDispute ? (
                             <Button variant="outline" disabled={busy || unknownOp} onClick={() => setDisputeOpen(true)}>
-                              Запросить исправление
+                              Оспорить отметку
                             </Button>
                           ) : null}
                           <Button variant="outline" disabled={busy} onClick={() => void openHistory(my.contextId)}>
@@ -690,7 +690,32 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                         </p>
                       </>
                     ) : (
-                      <p>Пока нет отметки по вашему участию. Молчание не создаёт согласие.</p>
+                      <>
+                        <p className="gb-postgame__pill" data-tone="wait">
+                          {my?.dispute?.status === "open" ? "На уточнении" : "Посещение ещё не отмечено"}
+                        </p>
+                        <p>
+                          Посещение ещё не отмечено. Запись на игру сама по себе не подтверждает участие.
+                          Молчание не создаёт согласие.
+                        </p>
+                        <div className="gb-postgame__actions">
+                          {writes && my?.allowedActions.canDispute ? (
+                            <Button variant="outline" disabled={busy || unknownOp} onClick={() => setDisputeOpen(true)}>
+                              Попросить уточнение
+                            </Button>
+                          ) : null}
+                          {my?.dispute?.status === "open" ? (
+                            <Button variant="outline" disabled={busy} onClick={() => setTab("clarification")}>
+                              К уточнению
+                            </Button>
+                          ) : null}
+                          {my ? (
+                            <Button variant="outline" disabled={busy} onClick={() => void openHistory(my.contextId)}>
+                              История изменений
+                            </Button>
+                          ) : null}
+                        </div>
+                      </>
                     )}
                   </SurfacePanel>
                 ) : null}
@@ -1019,7 +1044,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
       {disputeOpen && my && (
         <ProfileDialog
-          title="Запросить исправление"
+          title={my.value === "unknown" ? "Попросить уточнение" : "Оспорить отметку"}
           className="profile-dialog--postgame"
           lockBodyScroll
           onClose={() => !busy && setDisputeOpen(false)}
@@ -1032,7 +1057,9 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
             }}
           >
             <p>
-              Текущая отметка: {attendanceLabel(my.value)}, версия {my.version}.
+              {my.value === "unknown"
+                ? "Отметки пока нет. Это запрос уточнения организатору, а не самостоятельная отметка присутствия."
+                : `Текущая отметка: ${attendanceLabel(my.value)}, версия ${my.version}.`}
             </p>
             <label className="profile-field">
               Пояснение

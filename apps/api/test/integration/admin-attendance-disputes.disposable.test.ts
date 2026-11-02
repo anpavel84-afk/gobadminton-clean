@@ -498,6 +498,124 @@ run("PG-2 admin attendance disputes — disposable", () => {
     );
   });
 
+  it("missing-mark challenged_version0 → intake → correct_present creates first assertion", async () => {
+    const managerUserId = await user("PG2 missing manager");
+    const participantUserId = await user("PG2 missing participant");
+    const venueId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address)
+         SELECT id,'PG2 missing venue','Synthetic','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.61,55.71),4326)::geography,$1,'unverified','pg2 missing venue','pg2 missing address'
+         FROM cities LIMIT 1 RETURNING id`,
+        [managerUserId],
+      )
+    ).rows[0]!.id;
+    const gameId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO games(
+           venue_id,title,status,visibility,starts_at,ends_at,timezone,application_deadline_at,
+           capacity,external_reserved_count,format_key,level_scale_id,level_scale_version,allowed_level_ids,
+           settlement_mode,settlement_purpose,settlement_terms,created_by_user_id,host_display_name,
+           host_public_contact,activity_kind,published_at
+         ) VALUES (
+           $1,'PG2 missing mark game','published','public',
+           clock_timestamp()-interval '3 hours',clock_timestamp()-interval '1 hour','Europe/Moscow',
+           clock_timestamp()-interval '4 hours',4,0,'doubles','test',1,'["test"]',
+           'external','no_trainer_fee','Synthetic terms',$2,'Host','contact','regular',
+           clock_timestamp()-interval '5 hours'
+         ) RETURNING id`,
+        [venueId, managerUserId],
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO game_managers(game_id,user_id,role,status) VALUES ($1,$2,'owner','active')
+       ON CONFLICT (game_id,user_id) DO UPDATE SET status='active', role='owner'`,
+      [gameId, managerUserId],
+    );
+    const participationId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO participations(game_id,user_id,status,confirmed_at)
+         VALUES ($1,$2,'confirmed',clock_timestamp()-interval '4 hours') RETURNING id`,
+        [gameId, participantUserId],
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO participation_transitions
+         (participation_id,from_status,to_status,actor_id,reason_code,aggregate_version,game_version,at)
+       VALUES ($1,NULL,'confirmed',$2,'test_confirm',1,1,clock_timestamp()-interval '4 hours')`,
+      [participationId, participantUserId],
+    );
+    const disputeId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO game_attendance_disputes
+           (participation_id,game_id,user_id,challenged_version,explanation,status,version,help_progress,help_requested_at)
+         VALUES ($1,$2,$3,0,'Нет отметки, прошу уточнить','open',2,'requested',clock_timestamp())
+         RETURNING id`,
+        [participationId, gameId, participantUserId],
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO game_attendance_dispute_revisions
+         (dispute_id,resource_version,actor_user_id,action,explanation)
+       VALUES ($1,1,$2,'opened','Нет отметки, прошу уточнить'),
+              ($1,2,$2,'help_requested','Нужна помощь')`,
+      [disputeId, participantUserId],
+    );
+
+    const intake = await post("cases/attendance-dispute-intake", {
+      disputeId,
+      expectedDisputeVersion: 2,
+      reasonCode: "attendance_intake",
+      assignToSelf: true,
+    });
+    expect(intake.statusCode, intake.body).toBe(200);
+    const caseId = intake.json().caseId as string;
+
+    const read = await get(`cases/${caseId}/attendance-disputes/${disputeId}`);
+    expect(read.statusCode, read.body).toBe(200);
+    expect(read.json().dispute).toMatchObject({
+      challengedVersion: 0,
+      challengedAssertion: null,
+      currentAssertion: { value: "unknown", version: 0 },
+    });
+
+    const resolve = await post(`cases/${caseId}/attendance-disputes/${disputeId}`, {
+      expectedCaseVersion: read.json().caseVersion,
+      expectedDisputeVersion: read.json().dispute.version,
+      expectedAttendanceVersion: 0,
+      resolution: "correct_present",
+      reason: "Независимо подтверждено присутствие по материалам",
+      reasonCode: "attendance_resolve",
+    });
+    expect(resolve.statusCode, resolve.body).toBe(200);
+    expect(resolve.json()).toMatchObject({
+      leavesOpen: false,
+      independentlyVerified: true,
+      resolution: "correct_present",
+      attendanceVersion: 1,
+    });
+    expect(
+      (await pool.query(`SELECT value, version, source, actor_user_id FROM game_attendance WHERE participation_id=$1`, [
+        participationId,
+      ])).rows[0],
+    ).toMatchObject({ value: "present", version: 1, source: "case_reviewer" });
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::int n FROM game_attendance_notices WHERE participation_id=$1 AND attendance_version=1`,
+          [participationId],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::int n FROM privileged_audit_events WHERE target_id=$1 AND action_key='admin.attendance_dispute.resolve'`,
+          [caseId],
+        )
+      ).rows[0].n,
+    ).toBe(1);
+  });
+
   it("wrong case/dispute, stale versions, unassigned and party/former-manager reviewer denials; replay after assignment loss", async () => {
     const seed = await seedOpenDispute({ formerManagerAsAdmin: otherModerator });
     const intake = await post("cases/attendance-dispute-intake", {

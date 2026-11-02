@@ -1,21 +1,35 @@
 # GoBadminton release notes
 
-## #394 game Q&A + venue restriction (0.1.0-alpha.15 candidate)
+## #394 confirmed experience + missing mark (0.1.0-alpha.16 candidate)
 
-Prospective alpha.15: public **game** questions/comments (guest read; authenticated
-create/reply/edit/tombstone, one reply depth) plus **central fail-closed** broad
-VENUE create/reply/update after Owner 02.11 attendance clarification. Venue GET
-returns empty / `canCreate:false` (no legacy row leak); VenuePage honest
-placeholder only — not a completed attendance/review system and not publicly
-writable venues. Player-profile comments held; PG3 stays private. Candidate only —
-`sourceSha` unbound until trusted ACCEPTED. API contract `0.25.0`. Owner UAT:
-NOT_TESTED. Parent #394 remains PARTIAL. Superseded PR465 broad VENUE policy was
-not DEV-installed (cancelled `41424816628`). Live remains accepted alpha.14.
+Prospective alpha.16: new **private peer** feedback only after a held game with
+explicit permitted present for both author and recipient and no open dispute;
+missing/unknown attendance opens real clarification through existing PG-2/Cases
+(`challenged_version` 0 via migration 0052). Public venue writer stays closed;
+public player wall/ratings stay off. Existing private reviews/notes unchanged.
+API contract `0.26.0`. Owner UAT: NOT_TESTED. Parent #394 remains PARTIAL
+(venue publication / typed reviewSafety not in this slice).
 
-- Application version (candidate): `0.1.0-alpha.15`; API contract `0.25.0`.
-- Prior accepted DEV: alpha.14 `8113359533e5a4cfb85c4520a7af1fff1571c9e4`
-  (`r41408629901-a1`, `2026-11-02T07:58:39Z`) — preserved; alpha.15 not accepted.
+- Application version (candidate): `0.1.0-alpha.16`; API contract `0.26.0`.
+- Prior accepted DEV: alpha.15 `36fd4b4cf4632efa3cc96e93f20a33c220b9708b`
+  (`r41434833713-a1`, `2026-11-02T11:23:40Z`) — preserved exactly in history seed.
 - Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Owner UAT: NOT_TESTED.
+- C5 untouched; no PROD activation.
+
+## #394 game Q&A + venue restriction (0.1.0-alpha.15 DEV ACCEPTED)
+
+Public **game** questions/comments plus **central fail-closed** broad VENUE
+create/reply/update. Venue GET empty / `canCreate:false`; VenuePage honest
+placeholder. Accepted on DEV `r41434833713-a1` (`2026-11-02T11:23:40Z`), source
+`36fd4b4cf4632efa3cc96e93f20a33c220b9708b`. API contract `0.25.0`. Owner UAT:
+NOT_TESTED. Parent #394 remains PARTIAL.
+
+- Application version: `0.1.0-alpha.15`; API contract `0.25.0`.
+- Accepted source: `36fd4b4cf4632efa3cc96e93f20a33c220b9708b`.
+- DEV release: `r41434833713-a1` (accepted `2026-11-02T11:23:40Z`).
+- Digests: api `sha256:c28855a6c8fee6ddbd53cf2e254cb34f08bb4d26c0a7b71ad738aff75f9a7505`,
+  web `sha256:3e56ffbe64c2092342a105a35f622260d472ac829e0a13734154ffd299ce0ba5`.
 - Owner UAT: NOT_TESTED.
 - C5 untouched; no PROD activation.
 

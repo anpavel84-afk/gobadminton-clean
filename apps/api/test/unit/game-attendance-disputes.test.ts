@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   acknowledgeAttendanceRequest,
+  disputeAttendanceRequest,
   helpDisputeRequest,
   parse,
   putAttendanceRequest,
@@ -24,6 +25,32 @@ describe("PG-2 attendance dispute policy", () => {
         correctionReason: "Не удалось подтвердить",
       }).value,
     ).toBe("unknown");
+  });
+
+  it("allows attendanceVersion 0 for missing-mark clarification; keeps known CAS shape", () => {
+    expect(
+      parse(disputeAttendanceRequest, {
+        attendanceVersion: 0,
+        explanation: "Организатор ещё не отметил посещение",
+      }).attendanceVersion,
+    ).toBe(0);
+    expect(
+      parse(disputeAttendanceRequest, {
+        attendanceVersion: 2,
+        explanation: "Я был на втором корте",
+      }).attendanceVersion,
+    ).toBe(2);
+    expect(
+      parse(respondDisputeRequest, {
+        expectedVersion: 1,
+        explanation: "Ставлю первую отметку",
+        correction: {
+          expectedAttendanceVersion: 0,
+          value: "present",
+          correctionReason: "Подтверждено по материалам",
+        },
+      }).correction?.expectedAttendanceVersion,
+    ).toBe(0);
   });
 
   it("ack requires dispute id and version together; unknown not in request shape alone", () => {

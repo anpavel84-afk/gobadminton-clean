@@ -684,7 +684,7 @@ describe("PG-1b game results mutation host", () => {
     hooks.render = { index: 0, manager: false };
     const html = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
     expect(html).toContain("Согласен с этой отметкой");
-    expect(html).toContain("Запросить исправление");
+    expect(html).toContain("Оспорить отметку");
     expect(html).toContain("Other manager");
     expect(html).not.toContain('aria-label="Состав"');
   });
@@ -693,7 +693,7 @@ describe("PG-1b game results mutation host", () => {
     hooks.render = { index: 0, manager: true };
     const html = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
     expect(html).toContain("Согласен с этой отметкой");
-    expect(html).toContain("Запросить исправление");
+    expect(html).toContain("Оспорить отметку");
     expect(html).toContain("История изменений");
     expect(html).toContain("Other manager");
     expect(html).toContain('aria-label="Состав"');

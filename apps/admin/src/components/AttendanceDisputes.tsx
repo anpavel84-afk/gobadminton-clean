@@ -479,12 +479,18 @@ export function AttendanceDisputes({
           <p className="notice">Статус: {detail.dispute.status === "open" ? "На уточнении" : detail.dispute.status}</p>
           <h4>Материалы этого дела</h4>
           <p>
-            Оспаривается версия {detail.dispute.challengedVersion}
-            {detail.dispute.challengedAssertion
-              ? `: «${valueLabel(detail.dispute.challengedAssertion.value)}»`
-              : ""}
-            . Сейчас: «{valueLabel(detail.dispute.currentAssertion.value)}», версия{" "}
-            {detail.dispute.currentAssertion.version}.
+            {detail.dispute.challengedVersion === 0 && !detail.dispute.challengedAssertion
+              ? "Отметки не было (версия 0)."
+              : `Оспаривается версия ${detail.dispute.challengedVersion}${
+                  detail.dispute.challengedAssertion
+                    ? `: «${valueLabel(detail.dispute.challengedAssertion.value)}»`
+                    : ""
+                }.`}{" "}
+            Сейчас:{" "}
+            {detail.dispute.currentAssertion.version === 0 && detail.dispute.currentAssertion.value === "unknown"
+              ? "отметки нет"
+              : `«${valueLabel(detail.dispute.currentAssertion.value)}», версия ${detail.dispute.currentAssertion.version}`}
+            .
           </p>
           <ol className="events">
             {detail.dispute.history.map((item) => (

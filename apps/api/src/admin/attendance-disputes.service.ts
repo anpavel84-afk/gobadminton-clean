@@ -215,49 +215,92 @@ export class AdminAttendanceDisputesService {
     }
     const nextVersion = currentVersion + 1;
     const late = false;
-    const source = "case_reviewer";
+    const source = "case_reviewer" as const;
     if (!existing) {
-      throw conflict("ATTENDANCE_MISSING", "Нет отметки для решения");
+      // Missing-mark case: explicit first assertion with expectedAttendanceVersion 0.
+      // Do not invent present automatically — caller chose correct_present/absent/unknown.
+      if (args.expectedVersion !== 0) {
+        throw conflict("ATTENDANCE_MISSING", "Нет отметки для решения");
+      }
+      if (args.value === "unknown") {
+        throw conflict("ATTENDANCE_UNKNOWN_INITIAL", "Неизвестное нельзя записать как первую отметку");
+      }
+      await client.query(
+        `INSERT INTO game_attendance
+           (participation_id, game_id, user_id, value, version, late, source, actor_user_id,
+            correction_reason, recorded_at, updated_at)
+         VALUES ($1,$2,$3,$4,1,$5,$6,$7,$8,$9,$9)`,
+        [
+          args.dispute.participation_id,
+          args.dispute.game_id,
+          args.dispute.user_id,
+          args.value,
+          late,
+          source,
+          args.actorUserId,
+          args.reason,
+          args.now,
+        ],
+      );
+      await client.query(
+        `INSERT INTO game_attendance_revisions
+           (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+            before_value, after_value, before_late, after_late,
+            before_correction_reason, after_correction_reason, reason, recorded_at)
+         VALUES ($1,$2,$3,1,$4,$5,NULL,$6,NULL,$7,NULL,$8,NULL,$9)`,
+        [
+          args.dispute.participation_id,
+          args.dispute.game_id,
+          args.dispute.user_id,
+          args.actorUserId,
+          source,
+          args.value,
+          late,
+          args.reason,
+          args.now,
+        ],
+      );
+    } else {
+      await client.query(
+        `UPDATE game_attendance
+         SET value=$2, version=$3, late=$4, source=$5, actor_user_id=$6,
+             correction_reason=$7, updated_at=$8
+         WHERE participation_id=$1`,
+        [
+          args.dispute.participation_id,
+          args.value,
+          nextVersion,
+          late,
+          source,
+          args.actorUserId,
+          args.reason,
+          args.now,
+        ],
+      );
+      await client.query(
+        `INSERT INTO game_attendance_revisions
+           (participation_id, game_id, user_id, resource_version, actor_user_id, source,
+            before_value, after_value, before_late, after_late,
+            before_correction_reason, after_correction_reason, reason, recorded_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [
+          args.dispute.participation_id,
+          args.dispute.game_id,
+          args.dispute.user_id,
+          nextVersion,
+          args.actorUserId,
+          source,
+          existing.value,
+          args.value,
+          existing.late,
+          late,
+          existing.correction_reason,
+          args.reason,
+          args.reason,
+          args.now,
+        ],
+      );
     }
-    await client.query(
-      `UPDATE game_attendance
-       SET value=$2, version=$3, late=$4, source=$5, actor_user_id=$6,
-           correction_reason=$7, updated_at=$8
-       WHERE participation_id=$1`,
-      [
-        args.dispute.participation_id,
-        args.value,
-        nextVersion,
-        late,
-        source,
-        args.actorUserId,
-        args.reason,
-        args.now,
-      ],
-    );
-    await client.query(
-      `INSERT INTO game_attendance_revisions
-         (participation_id, game_id, user_id, resource_version, actor_user_id, source,
-          before_value, after_value, before_late, after_late,
-          before_correction_reason, after_correction_reason, reason, recorded_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [
-        args.dispute.participation_id,
-        args.dispute.game_id,
-        args.dispute.user_id,
-        nextVersion,
-        args.actorUserId,
-        source,
-        existing.value,
-        args.value,
-        existing.late,
-        late,
-        existing.correction_reason,
-        args.reason,
-        args.reason,
-        args.now,
-      ],
-    );
     await client.query(
       `INSERT INTO game_attendance_notices
          (participation_id, game_id, user_id, attendance_version, value, late, source,

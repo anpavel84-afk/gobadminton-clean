@@ -2,7 +2,9 @@ OWNER APPROVED VISUALS · 2026-11-01 · User «Проверил запускай
 
 **Installed (source policy after Owner 02.11.2026 clarification):** shared comments block on ordinary **GameDetailPage** = public questions about the game (GAME Q&A). **VenuePage** no longer mounts broad CommentsSection; honest placeholder «Отзывы после игр появятся здесь» via existing `SurfacePanel` until postgame eligibility exists. Player PG3 stays private. Player-profile comments remain pending Owner audience/opt-out. Not a claim of QA/DEV acceptance or full #394 DONE.
 
-**Proposed (not installed):** experience-review flow / Cases / attendance-gated venue reviews — published proposal https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html (mark: proposal vs installed source). Preserve product/privacy contracts; no public private-feedback conversion; no 48h/14d gates in this pass.
+**Installed (confirmed-experience slice, private only):** peer create after held + permitted present both sides; missing/unknown → «Попросить уточнение» via existing PG-2 dispute; known → «Оспорить отметку». Safe `peerCreateReason` copy on GameFeedbackPanel. Public venue writer stays closed. See `POSTGAME_FEEDBACK_CONTRACT.md`.
+
+**Proposed (not installed):** public venue experience-review / Cases publication path — https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html. Preserve product/privacy contracts; no public private-feedback conversion.
 
 # Comments · Style Guide extension
 

@@ -206,7 +206,17 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     return id;
   }
 
-  async function createEndedGameWithPlayers() {
+  async function markPresent(gameId: string, contextId: string, expectedVersion = 0) {
+    const res = await put(manager, `/v1/games/${gameId}/attendance/${contextId}`, {
+      expectedVersion,
+      value: "present",
+    });
+    expect(res.statusCode).toBe(200);
+    return res;
+  }
+
+  async function createEndedGameWithPlayers(opts: { markBothPresent?: boolean } = {}) {
+    const markBothPresent = opts.markBothPresent !== false;
     const venue = await post(manager, "/v1/venues", {
       cityId: MOSCOW_CITY_ID,
       name: `PG3 court ${randomUUID()}`,
@@ -260,14 +270,22 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       expectedVersion: 0,
       outcome: "held",
     });
+    if (markBothPresent) {
+      await markPresent(gameId, annaContext);
+      await markPresent(gameId, ilyaContext);
+    }
     const results = await get(anna, `/v1/games/${gameId}/results`);
     expect(results.statusCode).toBe(200);
     expect(results.json().feedback.installed).toBe(true);
-    expect(
-      results.json().feedback.capabilities.peerSubjects.some(
-        (s: { contextId: string }) => s.contextId === ilyaContext,
-      ),
-    ).toBe(true);
+    if (markBothPresent) {
+      expect(results.json().feedback.capabilities.canCreatePeer).toBe(true);
+      expect(
+        results.json().feedback.capabilities.peerSubjects.some(
+          (s: { contextId: string }) => s.contextId === ilyaContext,
+        ),
+      ).toBe(true);
+      expect(results.json().feedback.capabilities.peerCreateReason ?? null).toBeNull();
+    }
     return { gameId, ilyaContext, annaContext };
   }
 
@@ -292,7 +310,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       subjectContextId: annaContext,
       peerRating: "play_again",
       experienceAssertion: "i_experienced_this_game",
-      discrepancyExplanation: "не отмечено, но я была",
     });
     expect([422, 404]).toContain(self.statusCode);
 
@@ -301,7 +318,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       subjectContextId: ilyaContext,
       peerRating: "play_again",
       experienceAssertion: "i_experienced_this_game",
-      discrepancyExplanation: "не относится",
     });
     expect(foreign.statusCode).toBe(404);
 
@@ -316,7 +332,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
         comment: "Спасибо за игру",
         tags: ["communication"],
         experienceAssertion: "i_experienced_this_game",
-        discrepancyExplanation: "отметка ещё неизвестна, но я играла",
       },
       createIdem,
     );
@@ -335,7 +350,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
         comment: "Спасибо за игру",
         tags: ["communication"],
         experienceAssertion: "i_experienced_this_game",
-        discrepancyExplanation: "отметка ещё неизвестна, но я играла",
       },
       createIdem,
     );
@@ -347,7 +361,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       subjectContextId: ilyaContext,
       peerRating: "neutral",
       experienceAssertion: "i_experienced_this_game",
-      discrepancyExplanation: "повтор",
     });
     // Owned duplicate must not 500 (aborted txn 25P02). 200 = existing receipt only.
     expect([200, 409]).toContain(dup.statusCode);
@@ -397,7 +410,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       kind: "organization",
       organizationScore: 5,
       experienceAssertion: "i_experienced_this_game",
-      discrepancyExplanation: "не отмечено, но встреча была",
     });
     expect([200, 201]).toContain(org.statusCode);
     expect(org.json().kind).toBe("organization");
@@ -497,6 +509,8 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       playingManager.userId,
     ]);
     const managerContext = await confirmWithTransition(gameId, playingManager.userId, -4);
+    // Self-mark by playing manager must not qualify — another manager marks present.
+    await markPresent(gameId, managerContext);
     const playingCaps = await get(playingManager, `/v1/games/${gameId}/results`);
     expect(playingCaps.statusCode).toBe(200);
     expect(playingCaps.json().feedback.capabilities.canCreatePeer).toBe(true);
@@ -517,7 +531,6 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       peerRating: "play_again",
       comment: "Играли вместе",
       experienceAssertion: "i_experienced_this_game",
-      discrepancyExplanation: "организатор тоже играл",
     });
     expect([200, 201]).toContain(playingPeer.statusCode);
     expect(playingPeer.json().direction).toBe("sent");
@@ -574,8 +587,127 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
       subjectContextId: ilyaContext,
       peerRating: "neutral",
       experienceAssertion: "i_experienced_this_game",
-      discrepancyExplanation: "флаг выключен",
     });
     expect(denied.statusCode).toBe(503);
+  });
+
+  it("confirmed-experience peer gate: missing/absent/dispute/self-mark denied; org+history preserved", async () => {
+    const { gameId, ilyaContext, annaContext } = await createEndedGameWithPlayers({
+      markBothPresent: false,
+    });
+    const unmarked = await get(anna, `/v1/games/${gameId}/results`);
+    expect(unmarked.json().feedback.capabilities.canCreatePeer).toBe(false);
+    expect(unmarked.json().feedback.capabilities.peerCreateReason).toBe("attendance_unmarked");
+    expect(unmarked.json().feedback.capabilities.peerSubjects).toEqual([]);
+
+    const missingPeer = await post(anna, `/v1/games/${gameId}/reviews`, {
+      kind: "peer",
+      subjectContextId: ilyaContext,
+      peerRating: "play_again",
+      experienceAssertion: "i_experienced_this_game",
+      discrepancyExplanation: "нельзя обойти gate пояснением",
+    });
+    expect(missingPeer.statusCode).toBe(422);
+
+    // Organization still available with discrepancy when unmarked.
+    const org = await post(anna, `/v1/games/${gameId}/reviews`, {
+      kind: "organization",
+      organizationScore: 4,
+      experienceAssertion: "i_experienced_this_game",
+      discrepancyExplanation: "игра была, отметки ещё нет",
+    });
+    expect([200, 201]).toContain(org.statusCode);
+
+    await markPresent(gameId, annaContext);
+    await put(manager, `/v1/games/${gameId}/attendance/${ilyaContext}`, {
+      expectedVersion: 0,
+      value: "absent",
+    });
+    const absentCaps = await get(anna, `/v1/games/${gameId}/results`);
+    expect(absentCaps.json().feedback.capabilities.canCreatePeer).toBe(false);
+    expect(absentCaps.json().feedback.capabilities.peerCreateReason).toBe("no_eligible_peers");
+
+    await put(manager, `/v1/games/${gameId}/attendance/${ilyaContext}`, {
+      expectedVersion: 1,
+      value: "present",
+      correctionReason: "Исправляю на present",
+    });
+    // Open dispute on recipient blocks peer subject.
+    const dispute = await post(ilya, `/v1/games/${gameId}/attendance/${ilyaContext}/disputes`, {
+      attendanceVersion: 2,
+      explanation: "Не согласен с опозданием формулировки",
+    });
+    expect(dispute.statusCode).toBe(201);
+    const disputedCaps = await get(anna, `/v1/games/${gameId}/results`);
+    expect(disputedCaps.json().feedback.capabilities.canCreatePeer).toBe(false);
+
+    await post(ilya, `/v1/attendance-disputes/${dispute.json().id}/withdraw`, {
+      expectedVersion: 1,
+    });
+
+    // Self-attested present for a third peer must not appear as subject.
+    const selfPeer = await actor("PG3 self peer");
+    const selfContext = await confirmWithTransition(gameId, selfPeer.userId, -4);
+    await pool.query(
+      `INSERT INTO game_attendance
+         (participation_id, game_id, user_id, value, version, late, source, actor_user_id, recorded_at, updated_at)
+       VALUES ($1,$2,$3,'present',1,false,'self_attested',$3,clock_timestamp(),clock_timestamp())`,
+      [selfContext, gameId, selfPeer.userId],
+    );
+    const eligible = await get(anna, `/v1/games/${gameId}/results`);
+    expect(eligible.json().feedback.capabilities.canCreatePeer).toBe(true);
+    expect(
+      eligible.json().feedback.capabilities.peerSubjects.some(
+        (s: { contextId: string }) => s.contextId === ilyaContext,
+      ),
+    ).toBe(true);
+    expect(
+      eligible.json().feedback.capabilities.peerSubjects.some(
+        (s: { contextId: string }) => s.contextId === selfContext,
+      ),
+    ).toBe(false);
+
+    const createIdem = key();
+    const created = await post(
+      anna,
+      `/v1/games/${gameId}/reviews`,
+      {
+        kind: "peer",
+        subjectContextId: ilyaContext,
+        peerRating: "neutral",
+        experienceAssertion: "i_experienced_this_game",
+      },
+      createIdem,
+    );
+    expect([200, 201]).toContain(created.statusCode);
+
+    // Editing old private review does not depend on newly acquired attendance permission.
+    await put(manager, `/v1/games/${gameId}/attendance/${annaContext}`, {
+      expectedVersion: 1,
+      value: "absent",
+      correctionReason: "Поздняя правка не блокирует edit",
+    });
+    const patched = await patch(anna, `/v1/reviews/${created.json().id}`, {
+      expectedVersion: created.json().version,
+      comment: "правка после смены отметки",
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().comment).toBe("правка после смены отметки");
+
+    // Same-key replay of successful create still returns receipt under current gate rules
+    // (stored receipt; new insert would fail after author absent).
+    const replay = await post(
+      anna,
+      `/v1/games/${gameId}/reviews`,
+      {
+        kind: "peer",
+        subjectContextId: ilyaContext,
+        peerRating: "neutral",
+        experienceAssertion: "i_experienced_this_game",
+      },
+      createIdem,
+    );
+    expect(replay.statusCode).toBe(created.statusCode);
+    expect(replay.json().id).toBe(created.json().id);
   });
 });

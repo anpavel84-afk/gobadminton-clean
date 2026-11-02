@@ -355,6 +355,68 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
     expect(notices.rows[0]!.n).toBe(4);
   });
 
+  it("missing mark version0 → clarification → help; unknown row uses actual version", async () => {
+    const g = await createEndedGame(manager);
+    const contextId = await confirmWithTransition(g.id, participant.userId);
+
+    const results = await get(participant, `/v1/games/${g.id}/results`);
+    expect(results.statusCode).toBe(200);
+    expect(results.json().attendance.myAttendance).toMatchObject({
+      value: "unknown",
+      version: 0,
+      allowedActions: expect.objectContaining({ canDispute: true, canAcknowledge: false }),
+    });
+
+    const missing = await post(participant, `/v1/games/${g.id}/attendance/${contextId}/disputes`, {
+      attendanceVersion: 0,
+      explanation: "Организатор ещё не отметил посещение",
+    });
+    expect(missing.statusCode).toBe(201);
+    expect(missing.json()).toMatchObject({
+      status: "open",
+      challengedVersion: 0,
+      challengedAssertion: null,
+      currentAssertion: { value: "unknown", version: 0 },
+      allowedActions: expect.objectContaining({ canRequestHelp: true, canAcknowledgeCurrent: false }),
+    });
+
+    const help = await post(participant, `/v1/attendance-disputes/${missing.json().id}/help`, {
+      expectedVersion: 1,
+      explanation: "Нужна независимая проверка без ответа организатора",
+    });
+    expect(help.statusCode).toBe(200);
+    expect(help.json().helpProgress).toBe("requested");
+    expect(help.json().caseProgress.linked).toBe(false);
+
+    // Unknown row (actual version) still uses its version, not forced 0.
+    const g2 = await createEndedGame(manager);
+    const context2 = await confirmWithTransition(g2.id, participant.userId);
+    expect(
+      (
+        await put(manager, `/v1/games/${g2.id}/attendance/${context2}`, {
+          expectedVersion: 0,
+          value: "present",
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await put(manager, `/v1/games/${g2.id}/attendance/${context2}`, {
+          expectedVersion: 1,
+          value: "unknown",
+          correctionReason: "Нет надёжного факта",
+        })
+      ).statusCode,
+    ).toBe(200);
+    const unknownDispute = await post(participant, `/v1/games/${g2.id}/attendance/${context2}/disputes`, {
+      attendanceVersion: 2,
+      explanation: "Прошу уточнить неизвестную отметку",
+    });
+    expect(unknownDispute.statusCode).toBe(201);
+    expect(unknownDispute.json().challengedVersion).toBe(2);
+    expect(unknownDispute.json().challengedAssertion).toMatchObject({ value: "unknown", version: 2 });
+  });
+
   it("revision snapshot/reason guard rejects version>1 with null before snapshot and null reason (23514)", async () => {
     const g = await createEndedGame(manager);
     const contextId = await confirmWithTransition(g.id, participant.userId);

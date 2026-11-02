@@ -6,7 +6,12 @@ import { conflict, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import { GameAttendanceService } from "./game-attendance.service";
-import { eligibleFromTransitions } from "./game-attendance.policy";
+import {
+  eligibleFromTransitions,
+  isPermittedPresentAssertion,
+  type AttendanceSource,
+  type AttendanceValue,
+} from "./game-attendance.policy";
 import {
   assertLifecycleForFeedback,
   createReviewRequest,
@@ -32,6 +37,7 @@ import {
   type FeedbackCapabilities,
   type GameFeedbackSlice,
   type MeReviewsPage,
+  type PeerCreateReasonCode,
   type PeerTag,
   type PersonalNoteView,
   type ReviewKind,
@@ -231,6 +237,114 @@ export class GameFeedbackService {
     return verdict.eligible ? own : null;
   }
 
+  private async readAttendanceAssertion(
+    client: PoolClient | Pool,
+    participationId: string,
+  ): Promise<{
+    value: AttendanceValue;
+    source: AttendanceSource;
+    actorUserId: string;
+    version: number;
+  } | null> {
+    const row = (
+      await client.query<{
+        value: AttendanceValue;
+        source: AttendanceSource;
+        actor_user_id: string;
+        version: number;
+      }>(
+        `SELECT value, source, actor_user_id, version FROM game_attendance WHERE participation_id = $1`,
+        [participationId],
+      )
+    ).rows[0];
+    if (!row) return null;
+    return {
+      value: row.value,
+      source: row.source,
+      actorUserId: row.actor_user_id,
+      version: row.version,
+    };
+  }
+
+  private async hasOpenDispute(client: PoolClient | Pool, participationId: string): Promise<boolean> {
+    return Boolean(
+      (
+        await client.query(
+          `SELECT 1 FROM game_attendance_disputes
+           WHERE participation_id = $1 AND status = 'open' LIMIT 1`,
+          [participationId],
+        )
+      ).rows[0],
+    );
+  }
+
+  /**
+   * Confirmed shared-experience predicate for one subject in a held game.
+   * Historical eligibility + permitted present + no open dispute.
+   * Safe for later venue reuse; does not disclose foreign reasons to callers.
+   */
+  private async subjectHasConfirmedExperience(
+    client: PoolClient | Pool,
+    participationId: string,
+    subjectUserId: string,
+    startsAt: Date,
+    endsAt: Date,
+    currentStatus: string,
+    confirmedAt: Date | null,
+  ): Promise<boolean> {
+    const transitions = await client.query<{ to_status: string; at: Date; id: string }>(
+      `SELECT to_status, at, id FROM participation_transitions
+       WHERE participation_id = $1 ORDER BY at ASC, id ASC`,
+      [participationId],
+    );
+    const verdict = eligibleFromTransitions(
+      transitions.rows,
+      startsAt,
+      currentStatus,
+      confirmedAt,
+      endsAt,
+    );
+    if (!verdict.eligible) return false;
+    if (await this.hasOpenDispute(client, participationId)) return false;
+    const assertion = await this.readAttendanceAssertion(client, participationId);
+    if (!assertion) return false;
+    return isPermittedPresentAssertion({
+      value: assertion.value,
+      source: assertion.source,
+      actorUserId: assertion.actorUserId,
+      subjectUserId,
+    });
+  }
+
+  private peerExperienceDenied(): never {
+    throw unprocessable(
+      "FEEDBACK_PEER_EXPERIENCE_UNCONFIRMED",
+      "Отзыв игроку доступен после подтверждённой совместной игры",
+    );
+  }
+
+  private derivePeerCreateReason(args: {
+    canCreatePeer: boolean;
+    lifecycleOk: boolean;
+    outcomeHeld: boolean;
+    ownEligible: boolean;
+    authorConfirmed: boolean;
+    authorOpenDispute: boolean;
+    authorAttendance: { value: AttendanceValue } | null;
+    peerSubjectsCount: number;
+  }): PeerCreateReasonCode | null {
+    if (args.canCreatePeer) return null;
+    if (!args.lifecycleOk || !args.outcomeHeld) return "game_not_confirmed";
+    if (!args.ownEligible) return "game_not_confirmed";
+    if (args.authorOpenDispute) return "attendance_clarifying";
+    if (!args.authorConfirmed) {
+      if (args.authorAttendance?.value === "absent") return "attendance_clarifying";
+      return "attendance_unmarked";
+    }
+    if (args.peerSubjectsCount === 0) return "no_eligible_peers";
+    return "no_eligible_peers";
+  }
+
   private async resolveAttendanceContext(
     client: PoolClient,
     gameId: string,
@@ -364,9 +478,15 @@ export class GameFeedbackService {
     const meta = await this.loadGameMeta(client, gameId);
     const organizer = await this.responsibleOrganizer(client, gameId);
     const afterEnd = game.ends_at.getTime() <= now.getTime();
+    // Org/training/notes: published|completed|cancelled after end (unchanged).
     const lifecycleOk =
       afterEnd &&
       (game.status === "published" || game.status === "completed" || game.status === "cancelled");
+    // Peer create: published|completed only (cancelled is not a held shared experience).
+    const peerLifecycleOk =
+      afterEnd && (game.status === "published" || game.status === "completed");
+    const outcome = await this.loadOutcomeValue(client, gameId);
+    const outcomeHeld = outcome === "held";
     // Peer authoring keys off concrete eligible own participation, not mutually exclusive access role.
     const ownEligible = await this.ownEligibleParticipation(
       client,
@@ -379,10 +499,40 @@ export class GameFeedbackService {
     const canAuthorAsManager = role === "manager";
     const canCreate = writesEnabled && lifecycleOk && (canAuthorAsParticipant || canAuthorAsManager);
 
+    let authorConfirmed = false;
+    let authorOpenDispute = false;
+    let authorAttendance: { value: AttendanceValue } | null = null;
+    if (ownEligible) {
+      authorOpenDispute = await this.hasOpenDispute(client, ownEligible.id);
+      authorAttendance = await this.readAttendanceAssertion(client, ownEligible.id);
+      authorConfirmed = await this.subjectHasConfirmedExperience(
+        client,
+        ownEligible.id,
+        userId,
+        meta.startsAt,
+        meta.endsAt,
+        ownEligible.status,
+        ownEligible.confirmed_at,
+      );
+    }
+
     let peerSubjects: Array<{ contextId: string; displayName: string }> = [];
-    if (canCreate && canAuthorAsParticipant) {
+    if (writesEnabled && peerLifecycleOk && outcomeHeld && authorConfirmed) {
       peerSubjects = await this.loadPeerSubjects(client, gameId, userId, meta.startsAt, meta.endsAt);
     }
+
+    const canCreatePeer =
+      writesEnabled && peerLifecycleOk && outcomeHeld && authorConfirmed && peerSubjects.length > 0;
+    const peerCreateReason = this.derivePeerCreateReason({
+      canCreatePeer,
+      lifecycleOk: peerLifecycleOk,
+      outcomeHeld,
+      ownEligible: canAuthorAsParticipant,
+      authorConfirmed,
+      authorOpenDispute,
+      authorAttendance,
+      peerSubjectsCount: peerSubjects.length,
+    });
 
     const trainingOk =
       canCreate &&
@@ -393,12 +543,13 @@ export class GameFeedbackService {
     const capabilities: FeedbackCapabilities = {
       installed: true,
       writesEnabled,
-      canCreatePeer: canCreate && canAuthorAsParticipant && peerSubjects.length > 0,
+      canCreatePeer,
       canCreateOrganization: canCreate && !!organizer && organizer.userId !== userId,
       canCreateTraining: !!trainingOk,
       canCreateNote: writesEnabled && lifecycleOk && role === "manager",
       peerSubjects,
       organizationRecipientDisplay: organizer && organizer.userId !== userId ? organizer.displayName : null,
+      peerCreateReason,
       complaintReuse: "existing_player_report",
       remaining: ["typed_review_safety_extension"],
     };
@@ -462,19 +613,17 @@ export class GameFeedbackService {
     const out: Array<{ contextId: string; displayName: string }> = [];
     for (const part of parts.rows) {
       if (part.user_id === viewerId) continue;
-      const transitions = await client.query<{ to_status: string; at: Date; id: string }>(
-        `SELECT to_status, at, id FROM participation_transitions
-         WHERE participation_id = $1 ORDER BY at ASC, id ASC`,
-        [part.id],
-      );
-      const verdict = eligibleFromTransitions(
-        transitions.rows,
+      // Same-game peers only when both have permitted present + no open dispute.
+      const confirmed = await this.subjectHasConfirmedExperience(
+        client,
+        part.id,
+        part.user_id,
         startsAt,
+        endsAt,
         part.status,
         part.confirmed_at,
-        endsAt,
       );
-      if (!verdict.eligible) continue;
+      if (!confirmed) continue;
       out.push({ contextId: part.id, displayName: part.display_name });
     }
     out.sort((a, b) => {
@@ -522,6 +671,7 @@ export class GameFeedbackService {
       execute: async (client) => {
         if (!postGameWritesEnabled(this.env)) writesUnavailable();
         if (!(await this.installed(client))) writesUnavailable();
+        // Lock Game first so peer admission and attendance/dispute mutations serialize.
         const locked = await this.lockGame(client, gameId);
         const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
         assertLifecycleForFeedback(locked, now);
@@ -531,14 +681,17 @@ export class GameFeedbackService {
 
         const outcome = await this.loadOutcomeValue(client, gameId);
         const attendanceContext = await this.resolveAttendanceContext(client, gameId, userId, role, outcome);
-        if (needsDiscrepancy(attendanceContext) && !body.discrepancyExplanation) {
-          throw unprocessable(
-            "FEEDBACK_DISCREPANCY_REQUIRED",
-            "Нужно пояснение расхождения с посещением или итога",
-          );
-        }
-        if (!needsDiscrepancy(attendanceContext) && body.discrepancyExplanation) {
-          throw unprocessable("FEEDBACK_DISCREPANCY_UNEXPECTED", "Пояснение расхождения не требуется");
+        // Organization/training keep discrepancy rules; peer uses confirmed-experience gate instead.
+        if (body.kind !== "peer") {
+          if (needsDiscrepancy(attendanceContext) && !body.discrepancyExplanation) {
+            throw unprocessable(
+              "FEEDBACK_DISCREPANCY_REQUIRED",
+              "Нужно пояснение расхождения с посещением или итога",
+            );
+          }
+          if (!needsDiscrepancy(attendanceContext) && body.discrepancyExplanation) {
+            throw unprocessable("FEEDBACK_DISCREPANCY_UNEXPECTED", "Пояснение расхождения не требуется");
+          }
         }
 
         const authorPart = await this.authorParticipation(client, gameId, userId);
@@ -563,8 +716,14 @@ export class GameFeedbackService {
         if (body.kind === "peer") {
           const subjectId = body.subjectContextId!;
           const subject = (
-            await client.query<{ id: string; user_id: string; game_id: string; status: string }>(
-              `SELECT id, user_id, game_id, status FROM participations WHERE id = $1 FOR UPDATE`,
+            await client.query<{
+              id: string;
+              user_id: string;
+              game_id: string;
+              status: string;
+              confirmed_at: Date | null;
+            }>(
+              `SELECT id, user_id, game_id, status, confirmed_at FROM participations WHERE id = $1 FOR UPDATE`,
               [subjectId],
             )
           ).rows[0];
@@ -574,11 +733,6 @@ export class GameFeedbackService {
           if (subject.user_id === userId) {
             throw unprocessable("FEEDBACK_SELF_PEER", "Нельзя оставить отзыв самому себе");
           }
-          const peers = await this.loadPeerSubjects(client, gameId, userId, meta.startsAt, meta.endsAt);
-          if (!peers.some((p) => p.contextId === subjectId)) {
-            throw unprocessable("FEEDBACK_SUBJECT_FOREIGN", "Контекст адресата недоступен");
-          }
-          // Reject pending/unknown foreign contexts already filtered by eligibility.
           subjectParticipationId = subject.id;
           recipientUserId = subject.user_id;
         } else if (body.kind === "organization") {
@@ -603,12 +757,38 @@ export class GameFeedbackService {
         // Game row is locked above: same-game writers serialize. Precheck returns the
         // stored projection only (does not apply this request's fields). SAVEPOINT keeps
         // a late UNIQUE 23505 from aborting the outer txn before owned lookup (25P02).
+        // Owned receipt is returned before the confirmed-experience gate so UNIQUE/history
+        // survives later attendance changes; new inserts still require the gate.
         const ownedPrior = await this.findOwnedDuplicate(client, gameId, userId, body);
         if (ownedPrior) {
           return {
             statusCode: 200,
             body: await this.projectReview(client, ownedPrior, userId, true),
           };
+        }
+
+        if (body.kind === "peer") {
+          if (body.discrepancyExplanation) {
+            throw unprocessable("FEEDBACK_DISCREPANCY_UNEXPECTED", "Пояснение расхождения не требуется");
+          }
+          const peerLifecycleOk =
+            locked.ends_at.getTime() <= now.getTime() &&
+            (locked.status === "published" || locked.status === "completed");
+          if (!peerLifecycleOk || outcome !== "held") this.peerExperienceDenied();
+          const authorOk = await this.subjectHasConfirmedExperience(
+            client,
+            ownEligible!.id,
+            userId,
+            meta.startsAt,
+            meta.endsAt,
+            ownEligible!.status,
+            ownEligible!.confirmed_at,
+          );
+          if (!authorOk) this.peerExperienceDenied();
+          const peers = await this.loadPeerSubjects(client, gameId, userId, meta.startsAt, meta.endsAt);
+          if (!peers.some((p) => p.contextId === subjectParticipationId)) {
+            this.peerExperienceDenied();
+          }
         }
 
         let inserted: ReviewRow;

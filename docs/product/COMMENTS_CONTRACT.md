@@ -9,7 +9,7 @@
 - **VenuePage** does **not** mount broad `CommentsSection`; honest placeholder only: «Отзывы после игр появятся здесь». Contacts / gallery / map / game create unchanged.
 - Author **owned delete/withdrawal** of a legacy venue row remains on the existing owned-delete path (auth, version CAS, idempotency, tombstone audit). Shared public-parent check still applies; it must not block authorized withdrawal. No migration rewrite; data/revisions retained.
 - Player-profile comments **not** enabled. Private Postgame (PG3) reviews/notes and chats stay separate — never imported or exposed as public player reviews.
-- Proposed postgame venue/player experience-review product (attendance gate, Cases, 48h/14d, public venue cards) is documented as a **proposal** at https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html — **not installed** in this pass.
+- Confirmed **private peer** create + missing-mark clarification (not venue publication) is specified in `POSTGAME_FEEDBACK_CONTRACT.md` (API `0.26.0` candidate). Public venue experience-review / typed reviewSafety remain **not installed**; proposal material: https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html.
 
 ## Data
 
