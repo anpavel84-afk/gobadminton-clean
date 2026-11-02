@@ -1,4 +1,4 @@
-OWNER APPROVED VISUALS · 2026-11-01 · User «Проверил запускай». Implementation authorized DEV within parent372/approved comments. Historical draft language below retained as design provenance, superseded only for visual approval. Not a claim of implementation or QA/DEV acceptance. Preserve product/privacy contracts; no public private-feedback conversion.
+OWNER APPROVED VISUALS · 2026-11-01 · User «Проверил запускай». Implementation authorized DEV within parent372/approved comments. Historical draft language below retained as design provenance, superseded only for visual approval. #394 GAME+VENUE first slice implements this shared block on ordinary GameDetailPage / VenuePage; player-profile context remains pending Owner audience/opt-out. Not a claim of QA/DEV acceptance or full #394 DONE. Preserve product/privacy contracts; no public private-feedback conversion.
 
 # Comments · Style Guide extension
 

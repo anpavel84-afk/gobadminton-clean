@@ -6,6 +6,7 @@ import { CityHintController } from "./discovery/city-hint.controller";
 import { APP_FILTER } from "@nestjs/core";
 import { AdminModule } from "./admin/admin.module";
 import { AuthModule } from "./auth/auth.module";
+import { CommentsModule } from "./comments/comments.module";
 import { ProblemExceptionFilter } from "./common/problem.filter";
 import { CoreModule } from "./core.module";
 import { GamesModule } from "./games/games.module";
@@ -37,6 +38,7 @@ import { VenuesModule } from "./venues/venues.module";
     InvitationsModule,
     ProfilesModule,
     SafetyModule,
+    CommentsModule,
     FriendshipsModule,
     PlayInterestsModule,
     GameRecommendationsModule,

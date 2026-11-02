@@ -14,6 +14,7 @@ import { GameRecommendationButton } from "../games/GameRecommendationButton";
 import { GameActionBar } from "../games/GameActionBar";
 import { GameVenueContacts } from "../games/GameVenueContacts";
 import { GameCourtBookingPanel } from "../games/GameCourtBooking";
+import { CommentsSection } from "../comments/CommentsSection";
 import { isRecommendableGame } from "../../../lib/game-recommendations";
 
 function ParticipationActions({ game, own, busy, notice, readable, onRequest, onReload }: {
@@ -137,6 +138,16 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
                 <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>
               </section>
             )}
+            {game.status === "published" && game.visibility === "public" ? (
+              <CommentsSection
+                kind="game"
+                entityId={game.id}
+                me={me}
+                parentPublic
+                authReturnPath={`/games/${gameId}`}
+                description="Вопросы об этой игре и короткий разговор до встречи"
+              />
+            ) : null}
           </div>
           <aside className="gb-game-booking gb-game-booking--note" aria-label="Перед встречей">
             <strong>Перед встречей</strong>
