@@ -519,34 +519,24 @@ describe("#394 comments private boundary", () => {
     expect(mutation.run).not.toHaveBeenCalled();
   });
 
-  it("VenuePage private-expired fences deferred getMe without reload loop", async () => {
-    const pendingMe = deferred<{ ok: true; status: number; data: Me }>();
-    vi.mocked(getMe).mockImplementation(() => pendingMe.promise as never);
+  it("VenuePage shows honest reviews placeholder without broad CommentsSection composer", async () => {
+    vi.mocked(getMe).mockResolvedValue({ ok: true, status: 200, data: me });
 
     hooks.cursor = 0;
     VenuePage({ venueId });
     flushEffects();
-    await settle(4);
-
-    expect(vi.mocked(getMe)).toHaveBeenCalledTimes(1);
-    window.dispatchEvent(new Event("gb-private-expired"));
-    await settle(4);
-
-    // Must not start another getMe from private-expired (no meReload bump).
-    expect(vi.mocked(getMe)).toHaveBeenCalledTimes(1);
-
-    hooks.cursor = 0;
-    VenuePage({ venueId });
-    await settle(2);
-
-    pendingMe.resolve({ ok: true, status: 200, data: me });
     await settle(6);
 
     hooks.cursor = 0;
-    const tree = VenuePage({ venueId });
-    // Late getMe must not restore me into comments after expiry.
-    expect(renderToStaticMarkup(tree)).not.toContain("Ваш комментарий");
-    expect(vi.mocked(getMe)).toHaveBeenCalledTimes(1);
+    const html = renderToStaticMarkup(VenuePage({ venueId }));
+    expect(html).toContain("Отзывы после игр появятся здесь");
+    expect(html).not.toContain("Ваш комментарий");
+    expect(html).not.toContain("Войдите, чтобы оставить комментарий");
+    expect(html).not.toContain("напишите");
+    expect(html).not.toMatch(/canCreate|eligibility|Можно поделиться/i);
+    // VenuePage no longer mounts session-bound comments me path.
+    expect(vi.mocked(getMe)).not.toHaveBeenCalled();
+    expect(vi.mocked(listEntityComments)).not.toHaveBeenCalled();
   });
 
   it("CommentsSection ignores late replies and mutation success after session/expiry fence", async () => {

@@ -9,6 +9,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { SessionService } from "../../src/auth/session.service";
 import { CommentsModule } from "../../src/comments/comments.module";
+import type { CommentView } from "../../src/comments/comments.policy";
+import { IdempotencyService } from "../../src/common/idempotency.service";
+import { MutationRunner } from "../../src/common/mutation-runner.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
@@ -384,10 +387,312 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     const repliesAfter = await get(null, `${gameUrl}?parentCommentId=${rootId}`);
     expect(repliesAfter.json().items[0].body).toBe("В 18:00 у входа");
 
-    // Venue path works on canonical id.
-    const venueComment = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null });
-    expect(venueComment.statusCode).toBe(201);
-    expect((await get(null, venueUrl)).json().items).toHaveLength(1);
+    // Broad VENUE create/reply/update fail-closed (Owner 02.11); GAME Q&A above unchanged.
+    const venueListGuest = await get(null, venueUrl);
+    expect(venueListGuest.statusCode).toBe(200);
+    expect(venueListGuest.json()).toMatchObject({
+      entityKind: "venue",
+      entityId: venueId,
+      items: [],
+      visibleCount: 0,
+      canCreate: false,
+      nextCursor: null,
+    });
+    expect((await get(peer, venueUrl)).json().canCreate).toBe(false);
+
+    const venueCreateIdem = key();
+    const venueCreate = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
+    expect(venueCreate.statusCode).toBe(403);
+    expect(venueCreate.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    // Same-key retry after 403: no SUCCESS receipt was stored; each attempt re-executes and stays denied.
+    const venueCreateRetry = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
+    expect(venueCreateRetry.statusCode).toBe(403);
+    expect(venueCreateRetry.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    // Pre-policy SUCCESS create: real MutationRunner+IdempotencyService transaction (test-only
+    // historical fixture, not an exposed bypass). Same actor/session/key/operation/requestHash as
+    // later HTTP POST; receipt+source write commit atomically with actual venue root + audit.
+    const mutations = app.get(MutationRunner);
+    const idempotency = app.get(IdempotencyService);
+    const prePolicyCreateKey = key();
+    const prePolicyText = "LEGACY_PRE_POLICY_VENUE_CREATE";
+    const prePolicyCreateHash = idempotency.requestHash({
+      kind: "venue",
+      entityId: venueId,
+      parentCommentId: null,
+      text: prePolicyText,
+    });
+    const prePolicyCreated = await mutations.runIdempotent<CommentView>({
+      actorId: peer.userId,
+      sessionId: peer.sessionId,
+      operation: "comments.create",
+      key: prePolicyCreateKey,
+      requestHash: prePolicyCreateHash,
+      requiredCapabilities: ["account.access", "profile.public"],
+      authorizeReplay: async () => {
+        // Fixture-only historical create; live HTTP path re-authorizes under current guard.
+      },
+      execute: async (client) => {
+        const inserted = (
+          await client.query<{
+            id: string;
+            created_at: Date;
+            updated_at: Date;
+          }>(
+            `INSERT INTO entity_comments
+               (entity_kind, entity_id, parent_comment_id, author_user_id, body, version)
+             VALUES ('venue', $1, NULL, $2, $3, 1)
+             RETURNING id, created_at, updated_at`,
+            [venueId, peer.userId, prePolicyText],
+          )
+        ).rows[0]!;
+        await client.query(
+          `INSERT INTO entity_comment_revisions
+             (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
+           VALUES ($1, 'venue', $2, 1, $3, $4, false)`,
+          [inserted.id, venueId, peer.userId, prePolicyText],
+        );
+        const body: CommentView = {
+          id: inserted.id,
+          entityKind: "venue",
+          entityId: venueId,
+          parentCommentId: null,
+          body: prePolicyText,
+          deleted: false,
+          version: 1,
+          createdAt: inserted.created_at.toISOString(),
+          updatedAt: inserted.updated_at.toISOString(),
+          edited: false,
+          mine: true,
+          author: {
+            publicPlayerId: peer.publicPlayerId,
+            displayName: "Comment peer",
+            avatar: { uploadedUrl: null, providerUrl: null },
+            profilePublic: true,
+          },
+          replyCount: 0,
+        };
+        return { statusCode: 201, body };
+      },
+    });
+    expect(prePolicyCreated.statusCode).toBe(201);
+    expect(prePolicyCreated.body).toMatchObject({
+      entityKind: "venue",
+      entityId: venueId,
+      parentCommentId: null,
+      body: prePolicyText,
+      deleted: false,
+      version: 1,
+      mine: true,
+    });
+    const prePolicyRow = await pool.query<{
+      id: string;
+      body: string | null;
+      version: number;
+      deleted_at: Date | null;
+      author_user_id: string;
+    }>(
+      `SELECT id, body, version, deleted_at, author_user_id FROM entity_comments
+       WHERE id=$1 AND entity_kind='venue' AND entity_id=$2`,
+      [prePolicyCreated.body.id, venueId],
+    );
+    expect(prePolicyRow.rows).toHaveLength(1);
+    expect(prePolicyRow.rows[0]).toMatchObject({
+      id: prePolicyCreated.body.id,
+      body: prePolicyText,
+      version: 1,
+      deleted_at: null,
+      author_user_id: peer.userId,
+    });
+    const prePolicyAudit = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+       WHERE comment_id=$1 AND entity_kind='venue' AND entity_id=$2
+         AND resource_version=1 AND tombstone=false AND after_body=$3`,
+      [prePolicyCreated.body.id, venueId, prePolicyText],
+    );
+    expect(Number(prePolicyAudit.rows[0]?.n)).toBe(1);
+    const prePolicyReceipt = await pool.query<{
+      reservation_state: string;
+      status_code: number;
+      response_body: CommentView;
+      request_hash: string;
+    }>(
+      `SELECT reservation_state, status_code, response_body, request_hash
+       FROM idempotency_records
+       WHERE actor_id=$1 AND operation='comments.create' AND key_hash=$2`,
+      [peer.userId, idempotency.keyHash(prePolicyCreateKey)],
+    );
+    expect(prePolicyReceipt.rows).toHaveLength(1);
+    expect(prePolicyReceipt.rows[0]?.reservation_state).toBe("completed");
+    expect(prePolicyReceipt.rows[0]?.status_code).toBe(201);
+    expect(prePolicyReceipt.rows[0]?.request_hash).toBe(prePolicyCreateHash);
+    expect(prePolicyReceipt.rows[0]?.response_body?.id).toBe(prePolicyCreated.body.id);
+    expect(Number(
+      (await pool.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM entity_comments
+         WHERE entity_kind='venue' AND entity_id=$1 AND body=$2`,
+        [venueId, prePolicyText],
+      )).rows[0]?.n,
+    )).toBe(1);
+
+    // Same-key HTTP POST against current guard: deny replay; no second row/revision.
+    const prePolicyCreateReplay = await post(
+      peer,
+      venueUrl,
+      { text: prePolicyText, parentCommentId: null },
+      prePolicyCreateKey,
+    );
+    expect(prePolicyCreateReplay.statusCode).toBe(403);
+    expect(prePolicyCreateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    expect(Number(
+      (await pool.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM entity_comments
+         WHERE entity_kind='venue' AND entity_id=$1 AND body=$2`,
+        [venueId, prePolicyText],
+      )).rows[0]?.n,
+    )).toBe(1);
+    expect(Number(
+      (await pool.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM entity_comment_revisions WHERE comment_id=$1`,
+        [prePolicyCreated.body.id],
+      )).rows[0]?.n,
+    )).toBe(1);
+
+    // GET hides the MutationRunner-created pre-policy venue root (and its thread).
+    const prePolicyList = await get(null, venueUrl);
+    expect(prePolicyList.statusCode).toBe(200);
+    expect(prePolicyList.json().items).toEqual([]);
+    expect(prePolicyList.json().visibleCount).toBe(0);
+    expect(JSON.stringify(prePolicyList.json())).not.toMatch(/LEGACY_PRE_POLICY_VENUE_CREATE/);
+    const prePolicyThread = await get(null, `${venueUrl}?parentCommentId=${prePolicyCreated.body.id}`);
+    expect(prePolicyThread.statusCode).toBe(200);
+    expect(prePolicyThread.json().items).toEqual([]);
+    expect(prePolicyThread.json().visibleCount).toBe(0);
+
+    // Direct-seeded legacy venue rows must not appear on GET; owned withdrawal still works.
+    const legacyVenueRootId = randomUUID();
+    const legacyReplyId = randomUUID();
+    await pool.query(
+      `INSERT INTO entity_comments
+         (id, entity_kind, entity_id, parent_comment_id, author_user_id, body, version)
+       VALUES
+         ($1, 'venue', $2, NULL, $3, 'LEGACY_VENUE_ROOT_SENTINEL', 1),
+         ($4, 'venue', $2, $1, $3, 'LEGACY_VENUE_REPLY_SENTINEL', 1)`,
+      [legacyVenueRootId, venueId, peer.userId, legacyReplyId],
+    );
+    await pool.query(
+      `INSERT INTO entity_comment_revisions
+         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
+       VALUES
+         ($1, 'venue', $2, 1, $3, 'LEGACY_VENUE_ROOT_SENTINEL', false),
+         ($4, 'venue', $2, 1, $3, 'LEGACY_VENUE_REPLY_SENTINEL', false)`,
+      [legacyVenueRootId, venueId, peer.userId, legacyReplyId],
+    );
+    const seededList = await get(null, venueUrl);
+    expect(seededList.statusCode).toBe(200);
+    expect(seededList.json().items).toEqual([]);
+    expect(seededList.json().visibleCount).toBe(0);
+    expect(JSON.stringify(seededList.json())).not.toMatch(/LEGACY_VENUE_|peer|Comment peer/i);
+    const seededThread = await get(null, `${venueUrl}?parentCommentId=${legacyVenueRootId}`);
+    expect(seededThread.statusCode).toBe(200);
+    expect(seededThread.json().items).toEqual([]);
+    expect(seededThread.json().visibleCount).toBe(0);
+
+    const venueReply = await post(author, venueUrl, {
+      text: "reply to legacy",
+      parentCommentId: legacyVenueRootId,
+    });
+    expect(venueReply.statusCode).toBe(403);
+    expect(venueReply.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    const venueUpdateIdem = key();
+    const venueUpdate = await put(peer, `/v1/comments/${legacyVenueRootId}`, {
+      text: "try edit legacy",
+      expectedVersion: 1,
+    }, venueUpdateIdem);
+    expect(venueUpdate.statusCode).toBe(403);
+    expect(venueUpdate.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    // Same-key retry after 403: no SUCCESS receipt; paired execute/authorizeReplay stay closed.
+    const venueUpdateRetry = await put(peer, `/v1/comments/${legacyVenueRootId}`, {
+      text: "try edit legacy",
+      expectedVersion: 1,
+    }, venueUpdateIdem);
+    expect(venueUpdateRetry.statusCode).toBe(403);
+    expect(venueUpdateRetry.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    const foreignVenueDelete = await del(author, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 1 });
+    expect(foreignVenueDelete.statusCode).toBe(404);
+
+    const venueDeleteIdem = key();
+    const ownedVenueDelete = await del(
+      peer,
+      `/v1/comments/${legacyVenueRootId}`,
+      { expectedVersion: 1 },
+      venueDeleteIdem,
+    );
+    expect(ownedVenueDelete.statusCode).toBe(200);
+    expect(ownedVenueDelete.json()).toMatchObject({
+      id: legacyVenueRootId,
+      entityKind: "venue",
+      body: null,
+      deleted: true,
+      version: 2,
+    });
+    const tombstone = await pool.query<{ body: string | null; deleted_at: Date | null; version: number }>(
+      "SELECT body, deleted_at, version FROM entity_comments WHERE id=$1",
+      [legacyVenueRootId],
+    );
+    expect(tombstone.rows[0]?.body).toBeNull();
+    expect(tombstone.rows[0]?.deleted_at).not.toBeNull();
+    expect(tombstone.rows[0]?.version).toBe(2);
+    const audit = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+       WHERE comment_id=$1 AND tombstone=true AND resource_version=2`,
+      [legacyVenueRootId],
+    );
+    expect(Number(audit.rows[0]?.n)).toBe(1);
+
+    // Same-key SUCCESS delete replay: returns saved receipt; no second tombstone revision.
+    const ownedVenueDeleteReplay = await del(
+      peer,
+      `/v1/comments/${legacyVenueRootId}`,
+      { expectedVersion: 1 },
+      venueDeleteIdem,
+    );
+    expect(ownedVenueDeleteReplay.statusCode).toBe(200);
+    expect(ownedVenueDeleteReplay.json()).toEqual(ownedVenueDelete.json());
+    expect(ownedVenueDeleteReplay.json()).toMatchObject({
+      id: legacyVenueRootId,
+      deleted: true,
+      version: 2,
+    });
+    const auditAfterReplay = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+       WHERE comment_id=$1 AND tombstone=true`,
+      [legacyVenueRootId],
+    );
+    expect(Number(auditAfterReplay.rows[0]?.n)).toBe(1);
+
+    // New DELETE key on tombstone must not create another deletion/revision; foreign stays denied.
+    const newKeyOnTombstone = await del(peer, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 2 });
+    expect(newKeyOnTombstone.statusCode).toBe(404);
+    expect(
+      Number(
+        (
+          await pool.query<{ n: string }>(
+            `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+             WHERE comment_id=$1 AND tombstone=true`,
+            [legacyVenueRootId],
+          )
+        ).rows[0]?.n,
+      ),
+    ).toBe(1);
+    expect(
+      (await del(author, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 2 })).statusCode,
+    ).toBe(404);
+
+    // GET still empty after owned withdrawal (no leak of tombstone identity).
+    expect((await get(null, venueUrl)).json().items).toEqual([]);
 
     // Unavailable / private parent → indistinguishable 404, no count leak.
     const draftOnly = await post(author, "/v1/games", {
