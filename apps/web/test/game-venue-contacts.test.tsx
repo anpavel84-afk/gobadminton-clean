@@ -37,9 +37,16 @@ vi.mock("../src/components/consumer/games/GameDetailComposition", () => ({ GameH
 vi.mock("../src/components/consumer/games/GameShare", () => ({ GameShare: () => null }));
 vi.mock("../src/components/consumer/games/GameActionBar", () => ({ GameActionBar: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock("next/link", () => ({ default: ({ children, ...props }: { children: React.ReactNode }) => <a {...props}>{children}</a> }));
-vi.mock("../src/lib/api-client", () => ({ getGame: vi.fn(), getMe: vi.fn(), listAllMyParticipations: vi.fn(), requestParticipation: vi.fn() }));
+vi.mock("../src/lib/api-client", () => ({
+  getGame: vi.fn(),
+  getMe: vi.fn(),
+  listAllMyParticipations: vi.fn(),
+  requestParticipation: vi.fn(),
+  // GameDetailPage mounts GameCourtBookingPanel; panel GET must settle without unhandled rejection.
+  getGameCourtBooking: vi.fn(),
+}));
 vi.mock("../src/lib/messaging-api", () => ({ getGameChat: vi.fn() }));
-import { getGame, getMe, listAllMyParticipations } from "../src/lib/api-client";
+import { getGame, getGameCourtBooking, getMe, listAllMyParticipations } from "../src/lib/api-client";
 import { getGameChat } from "../src/lib/messaging-api";
 import { GameDetailPage } from "../src/components/consumer/pages/GameDetailPage";
 const publicVenue: VenueSummary = { id: "venue", name: "Зал", address: "Адрес", cityId: "city", timezone: "UTC" };
@@ -55,6 +62,8 @@ beforeEach(() => {
   vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: game });
   vi.mocked(getMe).mockResolvedValue({ ok: true, status: 200, data: { id: "viewer", displayName: "Viewer", csrfToken: "test", locale: "ru", linkedProviders: [] } });
   vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [] });
+  // Indistinguishable private 404: contact assertions stay independent of booking panel surface.
+  vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: false, status: 404, error: "not_found" });
   vi.mocked(getGameChat).mockResolvedValue({ ok: false, status: 403, error: "denied" });
 });
 afterEach(() => { hooks.cleanups.forEach(fn => fn()); vi.unstubAllGlobals(); vi.clearAllMocks(); });
