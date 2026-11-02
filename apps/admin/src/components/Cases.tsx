@@ -28,9 +28,17 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
  const [cases,setCases]=useState<Page<Case>|null>(null),[reports,setReports]=useState<Page<Report>|null>(null),[target,setTarget]=useState(""),[reportId,setReportId]=useState(""),[detail,setDetail]=useState<Detail|null>(null);
  const [action,setAction]=useState<keyof typeof actions>("note"),[status,setStatus]=useState<keyof typeof statuses>("in_review"),[note,setNote]=useState<keyof typeof notes>("review_started"),[value,setValue]=useState(""),[linkId,setLinkId]=useState("");
  const [reason,setReason]=useState(""),[confirmed,setConfirmed]=useState(false),[notice,setNotice]=useState(""),[uncertain,setUncertain]=useState(false),[evidence,setEvidence]=useState<Page<Evidence>|null>(null),[payload,setPayload]=useState<Record<string,unknown>|null>(null);
- const [reviewSource,setReviewSource]=useState<ReviewSource|null>(null);
+ const [reviewSource,setReviewSource]=useState<(ReviewSource&{caseId:string})|null>(null);
  const pending=useRef<{path:string;key:string;body:object}|null>(null);
+ const reviewReadGen=useRef(0);
+ const reviewScope=useRef({fresh,caseId:null as string|null,version:null as number|null,assignedTo:null as string|null});
  const assignedTo=detail?.assignedTo??null;
+ reviewScope.current={fresh,caseId:detail?.id??null,version:detail?.version??null,assignedTo};
+ function dropReviewSource(){reviewReadGen.current+=1;setReviewSource(null);}
+ function reviewReadCurrent(gen:number,caseId:string,version:number,assignee:string|null){
+  const scope=reviewScope.current;
+  return gen===reviewReadGen.current&&scope.fresh&&scope.caseId===caseId&&scope.version===version&&scope.assignedTo===assignee;
+ }
  useEffect(()=>{
   if(!detail || busy || uncertain)return;
   let active=true;
@@ -40,24 +48,26 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
     if(active){
      if(next.version!==detail.version)setConfirmed(false);
      // Clear sensitive private payload on poll/reassign/case change.
-     if(next.assignedTo!==assignedTo || next.version!==detail.version){setReviewSource(null);setPayload(null);}
+     if(next.assignedTo!==assignedTo || next.version!==detail.version){dropReviewSource();setPayload(null);}
      setDetail(old=>old?{...next,history:old.version===next.version?old.history:next.history}:old);
     }
    }
-   catch {if(active){setDetail(null);setEvidence(null);setPayload(null);setReviewSource(null);setCases(null);}}
+   catch {if(active){setDetail(null);setEvidence(null);setPayload(null);dropReviewSource();setCases(null);}}
   };
   const timer=setInterval(()=>void update(),15000);
   window.addEventListener("focus",update);
   return ()=>{active=false;clearInterval(timer);window.removeEventListener("focus",update);};
  },[detail?.id,detail?.version,assignedTo,busy,uncertain]);
- useEffect(()=>{if(!fresh){setPayload(null);setReviewSource(null);}},[fresh]);
- function reset(){setConfirmed(false);pending.current=null;setUncertain(false);setEvidence(null);setPayload(null);setReviewSource(null);}
+ useEffect(()=>{if(!fresh){setPayload(null);dropReviewSource();}},[fresh]);
+ // Invalidate in-flight private source reads on case change / reassignment / unmount.
+ useEffect(()=>{dropReviewSource();return()=>{reviewReadGen.current+=1;};},[detail?.id,detail?.version,assignedTo]);
+ function reset(){setConfirmed(false);pending.current=null;setUncertain(false);setEvidence(null);setPayload(null);dropReviewSource();}
  async function open(id:string){setDetail(null);setCases(null);setReports(null);reset();setNotice("");setDetail(await adminRequest<Detail>(`cases/${id}`));setTarget(id);}
  async function list(more=false){await run(async()=>{const next=await adminRequest<Page<Case>>(`cases${more&&cases?.nextBeforeId?`?beforeId=${cases.nextBeforeId}`:""}`);setCases(more&&cases?{...next,items:[...cases.items,...next.items]}:next);});}
  async function queue(more=false){await run(async()=>{const next=await adminRequest<Page<Report>>(`reports${more&&reports?.nextBeforeId?`?beforeId=${reports.nextBeforeId}`:""}`);setReports(more&&reports?{...next,items:[...reports.items,...next.items]}:next);});}
  async function submit(create=false,retry=false){await run(async()=>{
   const request=retry?pending.current:{path:create?"cases":`cases/${detail!.id}/commands`,key:crypto.randomUUID(),body:create?{reportId:reportId.trim(),reasonCode:reason}:{action,expectedVersion:detail!.version,reasonCode:reason,...(action==="status"?{status}:action==="note"?{noteCode:note}:action==="assign"?{principalId:value.trim()||null}:action==="link_report"?{reportId:value.trim()}:action==="link_game"?{gameId:value.trim()}:{linkId})}};
-  if(!request)return;pending.current=request;setPayload(null);setReviewSource(null);setNotice("");
+  if(!request)return;pending.current=request;setPayload(null);dropReviewSource();setNotice("");
   try {const result=await adminRequest<{id:string}>(request.path,request.body,session.csrfToken,request.key);await open(result.id);setReason("");setNotice("Действие сохранено.");}
   catch(cause){
    if(cause instanceof AdminError&&cause.status<500){reset();if(cause.code==="CASE_VERSION_CONFLICT"&&detail)await open(detail.id);if([401,403,404].includes(cause.status)){setDetail(null);setCases(null);setReports(null);}}
@@ -65,25 +75,34 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
    throw cause;
   }
  });}
- async function materials(more=false){await run(async()=>{setPayload(null);setEvidence(null);try{const next=await adminRequest<Page<Evidence>>(`cases/${detail!.id}/evidence${more&&evidence?.nextBeforeId?`?beforeId=${evidence.nextBeforeId}`:""}`);setEvidence(more&&evidence?{...next,items:[...evidence.items,...next.items]}:next);}catch(cause){setReviewSource(null);if(cause instanceof AdminError&&[401,403,404].includes(cause.status))setDetail(null);throw cause;}});}
- async function read(id:string){await run(async()=>{setPayload(null);setReviewSource(null);try{const result=await adminRequest<{payload:Record<string,unknown>}>(`cases/${detail!.id}/evidence/${id}`);setPayload(result.payload);}catch(cause){setEvidence(null);setReviewSource(null);if(cause instanceof AdminError&&[401,403,404].includes(cause.status))setDetail(null);throw cause;}});}
- async function readReviewReport(linkedReportId:string){await run(async()=>{setPayload(null);setReviewSource(null);try{
-  const result=await adminRequest<ReviewSource>(`cases/${detail!.id}/review-reports/${linkedReportId}`);
-  setReviewSource({
-   reportId:result.reportId,
-   reviewId:result.reviewId,
-   version:result.version,
-   peerRating:result.peerRating,
-   comment:result.comment,
-   tags:Array.isArray(result.tags)?result.tags:[],
-   reasonCode:result.reasonCode,
-   recordedAt:result.recordedAt,
-  });
- }catch(cause){
-  setReviewSource(null);
-  if(cause instanceof AdminError&&[401,403,404].includes(cause.status)){setDetail(null);setEvidence(null);}
-  throw cause;
- }});}
+ async function materials(more=false){await run(async()=>{setPayload(null);setEvidence(null);try{const next=await adminRequest<Page<Evidence>>(`cases/${detail!.id}/evidence${more&&evidence?.nextBeforeId?`?beforeId=${evidence.nextBeforeId}`:""}`);setEvidence(more&&evidence?{...next,items:[...evidence.items,...next.items]}:next);}catch(cause){dropReviewSource();if(cause instanceof AdminError&&[401,403,404].includes(cause.status))setDetail(null);throw cause;}});}
+ async function read(id:string){await run(async()=>{setPayload(null);dropReviewSource();try{const result=await adminRequest<{payload:Record<string,unknown>}>(`cases/${detail!.id}/evidence/${id}`);setPayload(result.payload);}catch(cause){setEvidence(null);dropReviewSource();if(cause instanceof AdminError&&[401,403,404].includes(cause.status))setDetail(null);throw cause;}});}
+ async function readReviewReport(linkedReportId:string){await run(async()=>{
+  const caseId=detail!.id,version=detail!.version,assignee=detail!.assignedTo??null;
+  setPayload(null);setReviewSource(null);
+  const gen=++reviewReadGen.current;
+  try{
+   const result=await adminRequest<ReviewSource>(`cases/${caseId}/review-reports/${linkedReportId}`);
+   if(!reviewReadCurrent(gen,caseId,version,assignee))return;
+   setReviewSource({
+    caseId,
+    reportId:result.reportId,
+    reviewId:result.reviewId,
+    version:result.version,
+    peerRating:result.peerRating,
+    comment:result.comment,
+    tags:Array.isArray(result.tags)?result.tags:[],
+    reasonCode:result.reasonCode,
+    recordedAt:result.recordedAt,
+   });
+  }catch(cause){
+   // Late errors for a superseded read must not clear an unrelated new case/selection.
+   if(gen!==reviewReadGen.current||reviewScope.current.caseId!==caseId||reviewScope.current.version!==version||reviewScope.current.assignedTo!==assignee)throw cause;
+   setReviewSource(null);
+   if(cause instanceof AdminError&&[401,403,404].includes(cause.status)){setDetail(null);setEvidence(null);}
+   throw cause;
+  }
+ });}
  const locked=busy||uncertain,validReason=/^[a-z][a-z0-9_]{2,63}$/.test(reason);
  const transitions=detail?({open:["in_review","resolved","closed"],in_review:["resolved","closed"],resolved:["closed","open"],closed:["open"]} as Record<string,string[]>)[detail.status]:[];
  const validCommand=action==="status"?transitions?.includes(status):action==="note"?true:action==="assign"?(!value.trim()||uuid(value.trim())):action==="capture_evidence"?Boolean(linkId)&&fresh:uuid(value.trim());
@@ -112,15 +131,15 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
    <h3>Материалы</h3>{!fresh&&<div className="notice"><p>Подтвердите вход для просмотра материалов.</p><button className="button outline" disabled={busy} onClick={()=>void stepup()}>Подтвердить вход</button></div>}<button className="button outline" disabled={locked||!fresh} onClick={()=>void materials()}>Посмотреть материалы</button>
    {evidence&&(evidence.items.length?<ul className="events">{evidence.items.map(item=><li key={item.id}><strong>{item.kind==="report_summary"?"Сводка жалобы":"Состояние игры"}</strong><small>Доступно до {new Date(item.expiresAt).toLocaleString("ru-RU")}</small><button className="button outline" disabled={locked||!fresh||!item.readable} onClick={()=>void read(item.id)}>Открыть материал</button></li>)}</ul>:<div className="notice">Материалов пока нет.</div>)}{evidence?.nextBeforeId&&<button className="button outline" disabled={locked||!fresh} onClick={()=>void materials(true)}>Ещё материалы</button>}
    {payload&&<dl>{Object.entries(payload).map(([key,val])=><div key={key}><dt>{{id:"Источник",status:"Статус игры",state:"Статус жалобы",targetKind:"Тип объекта",targetPublicPlayerId:"Идентификатор игрока",reasonCode:"Причина жалобы",createdAt:"Создано",lifecycleVersion:"Версия игры",moderationState:"Состояние модерации",requestsLocked:"Заявки закрыты",moderationVersion:"Версия модерации"}[key]??"Сведения"}</dt><dd>{String(val)}</dd></div>)}</dl>}
-   {reviewSource&&<div className="notice"><h3>Источник отзыва (согласованная редакция)</h3><dl>
+   {reviewSource&&fresh&&detail.id===reviewSource.caseId?<div className="notice"><h3>Источник отзыва (согласованная редакция)</h3><dl>
     <div><dt>Версия</dt><dd>{reviewSource.version}</dd></div>
     <div><dt>Оценка</dt><dd>{reviewSource.peerRating?peerLabels[reviewSource.peerRating]??reviewSource.peerRating:"—"}</dd></div>
     <div><dt>Текст</dt><dd>{reviewSource.comment??"—"}</dd></div>
     {reviewSource.tags.length>0?<div><dt>Теги</dt><dd>{reviewSource.tags.join(", ")}</dd></div>:null}
     <div><dt>Причина жалобы</dt><dd>{reviewSource.reasonCode}</dd></div>
     <div><dt>Зафиксировано</dt><dd>{new Date(reviewSource.recordedAt).toLocaleString("ru-RU")}</dd></div>
-   </dl></div>}
-   <h3>История</h3><ol className="events">{detail.history.map(item=><li key={item.id}><strong>{item.action==="create"?"Обращение создано":actions[item.action as keyof typeof actions]}</strong>{item.noteCode&&<span>{notes[item.noteCode as keyof typeof notes]}</span>}<small>{new Date(item.createdAt).toLocaleString("ru-RU")}</small></li>)}</ol>{detail.nextHistoryBeforeVersion&&<button className="button outline" disabled={locked} onClick={()=>void run(async()=>{const next=await adminRequest<Detail>(`cases/${detail.id}?beforeVersion=${detail.nextHistoryBeforeVersion}`);setDetail({...next,history:[...detail.history,...next.history]});setPayload(null);setReviewSource(null);})}>Более ранние действия</button>}
+   </dl></div>:null}
+   <h3>История</h3><ol className="events">{detail.history.map(item=><li key={item.id}><strong>{item.action==="create"?"Обращение создано":actions[item.action as keyof typeof actions]}</strong>{item.noteCode&&<span>{notes[item.noteCode as keyof typeof notes]}</span>}<small>{new Date(item.createdAt).toLocaleString("ru-RU")}</small></li>)}</ol>{detail.nextHistoryBeforeVersion&&<button className="button outline" disabled={locked} onClick={()=>void run(async()=>{const next=await adminRequest<Detail>(`cases/${detail.id}?beforeVersion=${detail.nextHistoryBeforeVersion}`);setDetail({...next,history:[...detail.history,...next.history]});setPayload(null);dropReviewSource();})}>Более ранние действия</button>}
   </>}
  </>;
 }
