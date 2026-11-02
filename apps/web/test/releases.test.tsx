@@ -21,8 +21,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.17 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.17");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.18 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.18");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.26.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -38,8 +38,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/комментар|отзыв|посещен/i);
-    expect(currentProse).toMatch(/нейтраль|уточнен|безопасн/i);
+    expect(currentProse).toMatch(/комментар|кнопк|телефон/i);
+    expect(currentProse).toMatch(/отправ|расположен|сжима/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -157,10 +157,21 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.26.0"
       && row.title === "Подтверждённый совместный опыт и уточнение посещения",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(19);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.17"
+      && row.source_sha === "b28ce4bed4ba33f7fe1e90ebc1b7a86495e8806e"
+      && row.deployments[0]?.release_id === "r41452395940-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-02T13:28:07Z"
+      && row.deployments[0]?.api_digest === "sha256:f4a4d7a038d67b66ecf9829cdb396bb589ee5109350acec11ccee2857be3886a"
+      && row.deployments[0]?.web_digest === "sha256:fff841c229641f53e55a14ed6860a113e5bb148eb8c869247c9d83b5eae94d48"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.26.0"
+      && row.title === "Уточнения действий в комментариях и пояснений после игры",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(20);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(24);
+    ).toBe(25);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

@@ -1,19 +1,36 @@
 # GoBadminton release notes
 
-## #467 visual QA comments + postgame copy (0.1.0-alpha.17 candidate)
+## #467 visual QA mobile composer button (0.1.0-alpha.18 candidate)
 
-Prospective alpha.17 UI repair Refs #467 / #394: own comment menu shows only
+Prospective alpha.18 CSS repair Refs #467 / #394: top comment composer submit
+and reply/edit controls use the actual shared Button class so mobile full-row
+CTA matches; «Отправить» no longer wraps letter-per-line in the 40px avatar
+column. Desktop three-column and mobile two-column composer grids preserved;
+inline/reply stay one column on mobile. No API/schema/security/business-logic
+changes. API contract remains `0.26.0`. Owner UAT: NOT_TESTED. No fabricated
+candidate/merge/acceptance SHA or date.
+
+- Application version (candidate): `0.1.0-alpha.18`; API contract `0.26.0`.
+- Prior accepted DEV: alpha.17 `b28ce4bed4ba33f7fe1e90ebc1b7a86495e8806e`
+  (`r41452395940-a1`, `2026-11-02T13:28:07Z`) — preserved exactly in history seed.
+- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Owner UAT: NOT_TESTED.
+- C5 untouched; no PROD activation.
+
+## #467 visual QA comments + postgame copy (0.1.0-alpha.17 DEV ACCEPTED)
+
+Accepted alpha.17 UI repair Refs #467 / #394: own comment menu shows only
 Edit/Delete (no self block/report); deleted root and reply tombstones are
 neutral without author metadata; venue reviews placeholder explains public
 reviews after confirmed participation are not available yet; missing attendance
 heading matches actual state; feedback side copy drops implementation jargon.
-No API/schema/security changes. API contract remains `0.26.0`. Owner UAT:
-NOT_TESTED. No fabricated candidate/merge/acceptance.
+No API/schema/security changes. API contract `0.26.0`. Owner UAT: NOT_TESTED.
 
-- Application version (candidate): `0.1.0-alpha.17`; API contract `0.26.0`.
-- Prior accepted DEV: alpha.16 `841bbec37739f56e9561a756731490891ed70d19`
-  (`r41445689826-a1`, `2026-11-02T12:47:49Z`) — preserved exactly in history seed.
-- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Application version: `0.1.0-alpha.17`; API contract `0.26.0`.
+- Accepted source: `b28ce4bed4ba33f7fe1e90ebc1b7a86495e8806e`.
+- DEV release: `r41452395940-a1` (accepted `2026-11-02T13:28:07Z`).
+- Digests: api `sha256:f4a4d7a038d67b66ecf9829cdb396bb589ee5109350acec11ccee2857be3886a`,
+  web `sha256:fff841c229641f53e55a14ed6860a113e5bb148eb8c869247c9d83b5eae94d48`.
 - Owner UAT: NOT_TESTED.
 - C5 untouched; no PROD activation.
 
