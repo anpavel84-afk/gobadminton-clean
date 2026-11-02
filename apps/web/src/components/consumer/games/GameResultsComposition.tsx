@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   getAttendanceDispute,
   getAttendanceHistory,
@@ -22,6 +23,8 @@ import {
   defaultOpenDisputeId,
   formatGameDateBadge,
   listOpenAttendanceDisputes,
+  parseResultsSection,
+  type ResultsSection,
 } from "../../../lib/game-results";
 import type { AttendanceDispute } from "../../../lib/consumer-types";
 import { Button } from "../Button";
@@ -36,7 +39,7 @@ import {
 import { GameFeedbackPanel } from "./GameFeedbackPanel";
 import "../../../styles/postgame.css";
 
-type Tab = "attendance" | "clarification" | "feedback";
+type Tab = ResultsSection;
 type MarkTarget = { record: AttendanceRecord; mode: "single" | "bulk-review" } | null;
 
 /**
@@ -88,13 +91,16 @@ function formatWhen(iso: string | undefined, timezone?: string): string {
 }
 
 export function GameResultsComposition({ gameId }: { gameId: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const sectionFromUrl = parseResultsSection(searchParams.get("section"));
   const [me, setMe] = useState<Me | null>(null);
   const [game, setGame] = useState<Game | null>(null);
   const [results, setResults] = useState<GameResults | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "auth" | "error" | "forbidden">("loading");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("attendance");
+  const [tab, setTab] = useState<Tab>(sectionFromUrl);
   const [markTarget, setMarkTarget] = useState<MarkTarget>(null);
   const [markValue, setMarkValue] = useState<AttendanceValue>("present");
   const [markLate, setMarkLate] = useState(false);
@@ -273,6 +279,20 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     };
   }, [gameId]);
 
+  // Legitimate route ?section= only — untrusted values already normalized by parseResultsSection.
+  useEffect(() => {
+    setTab(sectionFromUrl);
+  }, [sectionFromUrl]);
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "attendance") params.delete("section");
+    else params.set("section", next);
+    const qs = params.toString();
+    router.replace(qs ? `/my-games/${gameId}/results?${qs}` : `/my-games/${gameId}/results`);
+  }
+
   const selectedBulkItems = useMemo(() => {
     const roster = results?.attendance?.roster ?? [];
     return roster.filter((row) => bulkSelected[row.contextId]);
@@ -289,7 +309,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     const displayNotice = notice ?? (mutation.notice || null);
 
     function selectOpenDispute(disputeId: string) {
-      setTab("clarification");
+      selectTab("clarification");
       void loadDisputeDetail(disputeId, { resetDraft: true });
     }
 
@@ -491,18 +511,18 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
           </SurfacePanel>
 
           <div className="gb-postgame__tabs" role="tablist" aria-label="Разделы итогов">
-            <button type="button" role="tab" aria-selected={tab === "attendance"} onClick={() => setTab("attendance")}>
+            <button type="button" role="tab" aria-selected={tab === "attendance"} onClick={() => selectTab("attendance")}>
               Посещение
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={tab === "clarification"}
-              onClick={() => setTab("clarification")}
+              onClick={() => selectTab("clarification")}
             >
               Уточнение{openDisputes.length > 0 ? ` · ${openDisputes.length}` : ""}
             </button>
-            <button type="button" role="tab" aria-selected={tab === "feedback"} onClick={() => setTab("feedback")}>
+            <button type="button" role="tab" aria-selected={tab === "feedback"} onClick={() => selectTab("feedback")}>
               Обратная связь
             </button>
           </div>
@@ -1082,7 +1102,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
   return (
     <ContentContainer className="gb-postgame" data-surface="game-results">
-      <a className="gb-postgame__back" href="/my-games">← К моим играм</a>
+      <a className="gb-postgame__back" href="/my-games?view=history">← К моим играм</a>
       <h1>Участники / Итоги</h1>
 
       {!me ? (

@@ -451,3 +451,86 @@
     justify-items: start;
   }
 }
+
+/* PG-4 · compact own history + private reviews on My Games history */
+.gb-postgame-history-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--gb-line);
+  background: transparent;
+}
+
+.gb-postgame-history-entry__body {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.gb-postgame-history-entry__body h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.gb-postgame-history-entry__body p,
+.gb-postgame-history-entry__comment,
+.gb-postgame-history-entry__reply {
+  margin: 0;
+  color: var(--gb-ink-soft);
+  font-size: 14px;
+}
+
+.gb-postgame-history-entry__action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.gb-postgame-own-history,
+.gb-postgame-history-reviews {
+  margin-top: 28px;
+  display: grid;
+  gap: 12px;
+}
+
+.gb-postgame-history-reviews__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0;
+}
+
+.gb-postgame-history-reviews__list .gb-postgame-history-entry {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.gb-postgame-own-history__more,
+.gb-postgame-history-reviews__more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .gb-postgame-history-entry {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .gb-postgame-history-entry__action {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+  }
+
+  .gb-postgame-history-entry__action .gb-c23-btn {
+    width: 100%;
+  }
+
+  .gb-postgame-history-reviews__list .gb-postgame-history-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
