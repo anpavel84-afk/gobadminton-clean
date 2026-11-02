@@ -1081,4 +1081,154 @@ describe("PG-3 host+panel same-context draft lifecycle", () => {
       false,
     );
   });
+
+  it("getMe A→B clears A private feedback before delayed results GET (no session event)", async () => {
+    const privateA = "Приватная заметка актёра A";
+    vi.mocked(getGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: resultsWithFeedback(
+        feedbackSlice(
+          [
+            {
+              gameId,
+              contextId,
+              subjectDisplay: "Кирилл",
+              text: privateA,
+              version: 1,
+              updatedAt: "2026-11-01T01:00:00.000Z",
+              allowedActions: { canEdit: true, canDelete: true },
+            },
+          ],
+          false,
+        ),
+      ),
+    });
+    await settle();
+    let tree = openNotesTab(renderHost());
+    expect(renderToStaticMarkup(tree)).toContain(privateA);
+
+    let nodes = nodesOf(tree);
+    const changeBtn = nodes.find((n) => String(n.props.children) === "Изменить");
+    expect(changeBtn).toBeTruthy();
+    (changeBtn!.props.onClick as () => void)();
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    expect(nodes.some((n) => n.type === "textarea" && n.props.value === privateA)).toBe(true);
+
+    let resolveResults: (value: unknown) => void = () => {};
+    const deferredResults = new Promise((resolve) => {
+      resolveResults = resolve;
+    });
+    vi.mocked(getMe).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { id: actorB, csrfToken: "csrf-b", displayName: "Actor B", locale: "ru", linkedProviders: [] },
+    });
+    vi.mocked(getGameResults).mockImplementation(() => deferredResults as Promise<never>);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { gameId, contextId, version: 1, deleted: true },
+    });
+
+    const del = nodes.find((n) => String(n.props.children) === "Удалить");
+    expect(del).toBeTruthy();
+    (del!.props.onClick as () => void)();
+    for (let i = 0; i < 16; i += 1) {
+      renderHost();
+      await Promise.resolve();
+    }
+    tree = renderHost();
+    const midHtml = renderToStaticMarkup(tree);
+    // A private results/panel must be gone before B's GET settles; B must not adopt A state.
+    expect(midHtml).not.toContain(privateA);
+    expect(nodesOf(tree).some((n) => n.type === "textarea" && n.props.value === privateA)).toBe(false);
+    expect(midHtml).toContain("Загружаем итоги");
+
+    resolveResults({
+      ok: true,
+      status: 200,
+      data: resultsWithFeedback(feedbackSlice([], false)),
+    });
+    tree = await settle();
+    expect(renderToStaticMarkup(tree)).not.toContain(privateA);
+  });
+
+  it("getMe A→B with results 403/404 keeps A private surface hidden", async () => {
+    const privateA = "Секретные итоги актёра A";
+    async function assertUnauthorizedHidesA(status: 403 | 404) {
+      hooks.slots = [];
+      hooks.cursor = 0;
+      hooks.effects = [];
+      hooks.cleanups = [];
+      vi.mocked(getMe).mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: { id: actor, csrfToken: "csrf", displayName: "Actor", locale: "ru", linkedProviders: [] },
+      });
+      vi.mocked(getGameResults).mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: resultsWithFeedback(
+          feedbackSlice(
+            [
+              {
+                gameId,
+                contextId,
+                subjectDisplay: "Кирилл",
+                text: privateA,
+                version: 1,
+                updatedAt: "2026-11-01T01:00:00.000Z",
+                allowedActions: { canEdit: true, canDelete: true },
+              },
+            ],
+            false,
+          ),
+        ),
+      });
+      await settle();
+      let tree = openNotesTab(renderHost());
+      expect(renderToStaticMarkup(tree)).toContain(privateA);
+      let nodes = nodesOf(tree);
+      const changeBtn = nodes.find((n) => String(n.props.children) === "Изменить");
+      (changeBtn!.props.onClick as () => void)();
+      tree = renderHost();
+      nodes = nodesOf(tree);
+
+      vi.mocked(getMe).mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: {
+          id: actorB,
+          csrfToken: "csrf-b",
+          displayName: "Actor B",
+          locale: "ru",
+          linkedProviders: [],
+        },
+      });
+      vi.mocked(getGameResults).mockResolvedValue({
+        ok: false,
+        status,
+        error: status === 403 ? "forbidden" : "missing",
+      });
+      vi.mocked(apiFetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: { gameId, contextId, version: 1, deleted: true },
+      });
+      const del = nodes.find((n) => String(n.props.children) === "Удалить");
+      (del!.props.onClick as () => void)();
+      tree = await settle();
+      const html = renderToStaticMarkup(tree);
+      expect(html).not.toContain(privateA);
+      expect(nodesOf(tree).some((n) => n.type === "textarea" && n.props.value === privateA)).toBe(
+        false,
+      );
+      expect(html).toContain("Итоги этой игры недоступны");
+    }
+
+    await assertUnauthorizedHidesA(403);
+    await assertUnauthorizedHidesA(404);
+  });
 });

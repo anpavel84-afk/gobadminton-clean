@@ -151,6 +151,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
     setOutcomeOpen(false);
     setNotice(null);
     setError(null);
+    setConfirmedOperation(null);
   }
 
   async function loadDisputeDetail(disputeId: string, opts?: { resetDraft?: boolean }) {
@@ -167,10 +168,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
   async function reload() {
     const request = ++epoch.current;
+    // Capture bound actor before getMe — session event is not the only actor-change signal.
+    const boundActor = actorRef.current;
     // Same-context refresh: keep the ready surface mounted so GameFeedbackPanel drafts
     // and noteCreateFlight/noteEditFlight survive until matching confirmedOperation.
     // Initial load and cleared boundaries (no me/results) still enter loading.
-    // Auth/not-found/revocation paths below still clearSensitiveUi and unmount.
+    // Auth/not-found/revocation/actor-change paths below still clearSensitiveUi and unmount.
     if (me == null || results == null) {
       setState("loading");
     }
@@ -186,7 +189,17 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
       setError("Не удалось проверить вход.");
       return;
     }
-    setMe(account.data);
+    // Actor A→B via getMe (no gb-session-changed): clear A's private surface BEFORE host B.
+    // Same confirmed actor keeps panel/drafts mounted (do not reintroduce QA8 always-hide).
+    // Prior actor pending stays under that actor's scope key — no blind replay/delete.
+    if (boundActor != null && boundActor !== account.data.id) {
+      clearSensitiveUi();
+      setState("loading");
+      actorRef.current = account.data.id;
+      setMe(account.data);
+    } else {
+      setMe(account.data);
+    }
     const [gameRes, resultsRes] = await Promise.all([getGame(gameId), getGameResults(gameId)]);
     // dispute detail loaded after results when open — see below after results ok
     if (request !== epoch.current) return;
@@ -199,7 +212,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
         setState("auth");
         return;
       }
-      if (resultsRes.status === 404) {
+      // Known unauthorized: hide prior private results (403/404), not only 401.
+      if (resultsRes.status === 403 || resultsRes.status === 404) {
         clearSensitiveUi();
         setState("forbidden");
         return;
