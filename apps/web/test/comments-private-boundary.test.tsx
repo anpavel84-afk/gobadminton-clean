@@ -187,6 +187,7 @@ import { CommentsSection } from "../src/components/consumer/comments/CommentsSec
 import { VenuePage } from "../src/components/consumer/venues/VenuePage";
 
 const venueId = "20000000-0000-4000-8000-000000000002";
+const gameId = "10000000-0000-4000-8000-000000000001";
 const commentId = "30000000-0000-4000-8000-000000000003";
 const otherCommentId = "30000000-0000-4000-8000-000000000099";
 const actorA = "actor-a";
@@ -867,6 +868,8 @@ describe("#394 comments private boundary", () => {
     const ownItem: EntityComment = {
       ...replyComment,
       id: commentId,
+      entityKind: "game",
+      entityId: gameId,
       parentCommentId: null,
       body: "own public profile comment",
       replyCount: 0,
@@ -881,6 +884,8 @@ describe("#394 comments private boundary", () => {
     const otherItem: EntityComment = {
       ...replyComment,
       id: otherCommentId,
+      entityKind: "game",
+      entityId: gameId,
       parentCommentId: null,
       body: "other author comment",
       replyCount: 0,
@@ -892,19 +897,37 @@ describe("#394 comments private boundary", () => {
         profilePublic: true,
       },
     };
+    const gameOwnPage: EntityCommentPage = {
+      ...emptyPage,
+      entityKind: "game",
+      entityId: gameId,
+      parentCommentId: null,
+      items: [ownItem],
+      visibleCount: 1,
+      canCreate: true,
+    };
+    const gameOtherPage: EntityCommentPage = {
+      ...emptyPage,
+      entityKind: "game",
+      entityId: gameId,
+      parentCommentId: null,
+      items: [otherItem],
+      visibleCount: 1,
+      canCreate: true,
+    };
 
     vi.mocked(listEntityComments).mockResolvedValue({
       ok: true,
       status: 200,
-      data: { ...emptyPage, items: [ownItem], visibleCount: 1, canCreate: true },
+      data: gameOwnPage,
     });
     hooks.cursor = 0;
     CommentsSection({
       kind: "game",
-      entityId: venueId,
+      entityId: gameId,
       me,
       parentPublic: true,
-      authReturnPath: `/games/${venueId}`,
+      authReturnPath: `/games/${gameId}`,
       description: "Вопросы об игре",
     });
     await settle(12);
@@ -912,10 +935,10 @@ describe("#394 comments private boundary", () => {
     hooks.cursor = 0;
     let html = renderToStaticMarkup(CommentsSection({
       kind: "game",
-      entityId: venueId,
+      entityId: gameId,
       me,
       parentPublic: true,
-      authReturnPath: `/games/${venueId}`,
+      authReturnPath: `/games/${gameId}`,
       description: "Вопросы об игре",
     }));
     expect(html).toContain("Изменить");
@@ -928,16 +951,16 @@ describe("#394 comments private boundary", () => {
     vi.mocked(listEntityComments).mockResolvedValue({
       ok: true,
       status: 200,
-      data: { ...emptyPage, items: [otherItem], visibleCount: 1, canCreate: true },
+      data: gameOtherPage,
     });
     hooks.slots[1] = "desc";
     hooks.cursor = 0;
     CommentsSection({
       kind: "game",
-      entityId: venueId,
+      entityId: gameId,
       me,
       parentPublic: true,
-      authReturnPath: `/games/${venueId}`,
+      authReturnPath: `/games/${gameId}`,
       description: "Вопросы об игре",
     });
     await settle(12);
@@ -945,10 +968,10 @@ describe("#394 comments private boundary", () => {
     hooks.cursor = 0;
     html = renderToStaticMarkup(CommentsSection({
       kind: "game",
-      entityId: venueId,
+      entityId: gameId,
       me,
       parentPublic: true,
-      authReturnPath: `/games/${venueId}`,
+      authReturnPath: `/games/${gameId}`,
       description: "Вопросы об игре",
     }));
     expect(html).toContain("Заблокировать");
@@ -964,6 +987,8 @@ describe("#394 comments private boundary", () => {
     const deletedRoot: EntityComment = {
       ...replyComment,
       id: commentId,
+      entityKind: "game",
+      entityId: gameId,
       parentCommentId: null,
       body: null,
       deleted: true,
@@ -979,6 +1004,8 @@ describe("#394 comments private boundary", () => {
     const deletedReply: EntityComment = {
       ...replyComment,
       id: replyId,
+      entityKind: "game",
+      entityId: gameId,
       parentCommentId: commentId,
       body: null,
       deleted: true,
@@ -994,6 +1021,8 @@ describe("#394 comments private boundary", () => {
     const liveReply: EntityComment = {
       ...replyComment,
       id: "40000000-0000-4000-8000-000000000045",
+      entityKind: "game",
+      entityId: gameId,
       parentCommentId: commentId,
       body: "live child reply kept",
       deleted: false,
@@ -1006,35 +1035,47 @@ describe("#394 comments private boundary", () => {
         profilePublic: true,
       },
     };
+    const gameRootPage: EntityCommentPage = {
+      ...emptyPage,
+      entityKind: "game",
+      entityId: gameId,
+      parentCommentId: null,
+      items: [deletedRoot],
+      visibleCount: 1,
+      canCreate: false,
+    };
+    const gameRepliesPage: EntityCommentPage = {
+      ...emptyPage,
+      entityKind: "game",
+      entityId: gameId,
+      parentCommentId: commentId,
+      items: [deletedReply, liveReply],
+      visibleCount: 2,
+      canCreate: false,
+    };
 
     vi.mocked(listEntityComments).mockImplementation(async (_kind, _id, opts) => {
       if (opts && "parentCommentId" in opts && opts.parentCommentId === commentId) {
         return {
           ok: true,
           status: 200,
-          data: {
-            ...emptyPage,
-            parentCommentId: commentId,
-            items: [deletedReply, liveReply],
-            visibleCount: 2,
-            canCreate: false,
-          },
+          data: gameRepliesPage,
         };
       }
       return {
         ok: true,
         status: 200,
-        data: { ...emptyPage, items: [deletedRoot], visibleCount: 1, canCreate: false },
+        data: gameRootPage,
       };
     });
 
     hooks.cursor = 0;
     CommentsSection({
       kind: "game",
-      entityId: venueId,
+      entityId: gameId,
       me,
       parentPublic: true,
-      authReturnPath: `/games/${venueId}`,
+      authReturnPath: `/games/${gameId}`,
       description: "Вопросы об игре",
     });
     await settle(12);
@@ -1044,10 +1085,10 @@ describe("#394 comments private boundary", () => {
     hooks.cursor = 0;
     const html = renderToStaticMarkup(CommentsSection({
       kind: "game",
-      entityId: venueId,
+      entityId: gameId,
       me,
       parentPublic: true,
-      authReturnPath: `/games/${venueId}`,
+      authReturnPath: `/games/${gameId}`,
       description: "Вопросы об игре",
     }));
     expect(html).toContain("Комментарий удалён");
