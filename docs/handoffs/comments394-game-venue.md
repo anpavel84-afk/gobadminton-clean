@@ -1,55 +1,64 @@
-# Handoff — #394 GAME+VENUE public comments (pass 5 own-menu write-cap repair)
+# Handoff — #394 experience-policy guard (narrow VENUE close)
 
-**Assignment:** `OWNER_20261102_COMMENTS394_OWN_READONLY_MENU_REPAIR`
-**Author:** cursor:auto · attempt 5
-**Base / exact candidate:** `b6cbf467d97835b5fab477ce775a49e641817b78`
-**Publication branch (trusted process only):** `owner/comments394-public-20261102`
+**Assignment:** `OWNER_20261102_COMMENTS394_EXPERIENCE_POLICY_GUARD`
+**Author:** cursor:auto · attempt 6
+**Base:** `d5bad5bdec556f029c49f89524fe0aa28f5ca8fc` (merged PR465 broad VENUE superseded before DEV install)
+**Publication branch (trusted process only):** `owner/comments394-experience-policy-20261102`
 **QA route:** codex_sol_medium (independent) · Product CI / DEV by trusted integrator
-**Author does not claim QA / CI / DEV PASS.**
+**Author does not claim QA / CI / DEV PASS. Alpha15 not accepted. Live remains alpha14.**
 
 ## Materials read (confirmed)
 
-- `/tmp/gb-cursor-211-owner-quota-se9s4h6k/data/design-inputs/final.txt` (Codex Medium FAIL · SHA `b6cbf467…` · 1 finding P2 own Edit/Delete under canCreate=false)
+- `OWNER_DIRECTION.md` (Owner 02 Nov attendance/experience clarification)
+- `RECOMMENDATION.md` / **FIRST section** of `CURSOR_BRIEF.md` (bounded repair only; subsequent Cases design = proposal OUTSIDE THIS PASS)
+- Proposal mock scene-4 (not installed): https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html
 
 ## Exact repair delivered (allowed paths only)
 
-1. **Own write menu gate** (`CommentsSection.tsx`): own Edit/Delete (and edit form / delete dialog) require bound `currentPage.canCreate`, same write capability as composer/replies. Own comment body stays readable. Independent author safety actions on other authors unchanged. Guest remains read-only. Stale open edit/delete chrome cleared when caps revoke. `admitMutation` rejects POST/PUT/DELETE when `!canCreate` (API unchanged; errors not suppressed).
-2. **Boundary harness** (`comments-private-boundary.test.tsx`): extend with own comment under `canCreate=false` — body visible, own Edit/Delete absent, read-only note; allowed `canCreate=true` still shows Edit/Delete + composer. Prior guest / late-2xx / CSRF / pending-id / UNKNOWN / actor-bind cases preserved.
-3. **Handoff** updated for this pass. No API / migration / layout / release / global-hook changes.
+1. **API fail-closed broad VENUE** (`comments.service.ts`): create/reply/update + authorizeReplay → `COMMENT_VENUE_WRITES_CLOSED`. GET venue list after public parent + normal params → empty page / `canCreate:false` (no legacy row/count/reply/identity leak). Owned delete/withdrawal unchanged (auth/version/idempotency/tombstone). GAME Q&A fences unchanged. No attendance fabrication.
+2. **VenuePage**: remove broad `CommentsSection`; `SurfacePanel` placeholder «Отзывы после игр появятся здесь». Contacts/gallery/map intact.
+3. **Contract / style / handoff / alpha15 notes**: GAME = public questions; VENUE broad writer closed pending postgame eligibility; PG3 private; proposal link marked proposed vs installed. Preserve alpha14 receipt; `source_sha: null` for prospective alpha15.
+4. **Tests**: disposable cases for venue create/reply/update/replay deny, seeded legacy GET hide, owned delete vs foreign 404, GAME path preserved; web VenuePage no composer + game CommentsSection unaffected; private-boundary VenuePage placeholder.
 
 ## Author verification commands / results
 
 ```bash
 export PATH=/opt/gb-slots/runtime/node/bin:$PATH
 
-# web (comments boundary + SSR only)
-cd apps/web
-../../node_modules/.bin/vitest run \
-  test/comments-private-boundary.test.tsx test/comments.test.tsx
-# → 2 files · 8 passed (6 boundary + 2 SSR) · exit 0
+# api unit
+cd apps/api && ../../node_modules/.bin/vitest run --project unit test/unit/comments.test.ts
+# → 1 file · 6 passed · exit 0
 
-../../node_modules/.bin/tsc -p tsconfig.json --noEmit
-# → exit 0
+# web addressed
+cd apps/web && ../../node_modules/.bin/vitest run \
+  test/comments.test.tsx test/comments-private-boundary.test.tsx
+# → 2 files · 9 passed · exit 0
 
-../../node_modules/.bin/eslint \
-  src/components/consumer/comments/CommentsSection.tsx \
-  test/comments-private-boundary.test.tsx
-# → exit 0 · clean
+# typecheck + eslint on touched paths → exit 0
+
+# disposable PostGIS comments.disposable.test.ts
+# → NOT_TESTED by author: RUN_DB_INTEGRATION / DATABASE_URL unset (no disposable DB in this worktree).
+#   Trusted PMA should run on empty gobadminton_comments_disposable.
 ```
 
-**NOT RUN by author:** disposable PostGIS / business DB (API unchanged — no repeat). Migration unchanged. Root migration/type version/styling shell unchanged.
+## Unresolved / residual #394
 
-Reuse frozen (not re-run by author): migration0051 PASS · prior disposable/business evidence · prior web matrix on accepted base.
-
-## Unresolved / out of scope
-
+- Full experience-review / Cases / attendance eligibility UI — **out of this pass** (proposal only).
 - Independent Codex QA, Product CI, DEV ACCEPTED, Owner UAT=NOT_TESTED.
 - No Git publication / merge / deploy by author.
-- Player-profile comments (pending Owner audience/opt-out).
-- Prior 3 independent Medium findings remain accepted; original FAIL/history preserved.
+- Cancelled DEV `41424816628` never installed; do not claim alpha15 accepted.
+- Prior FAIL/history/expenses/UNKNOWN preserved; old admissions not rewritten.
 
 ## Allowed path diff (this repair)
 
-- `apps/web/src/components/consumer/comments/CommentsSection.tsx`
+- `apps/api/src/comments/comments.service.ts`
+- `apps/api/test/integration/comments.disposable.test.ts`
+- `apps/api/test/unit/comments.test.ts` (unchanged expectations; GAME unit transport retained)
+- `apps/web/src/components/consumer/venues/VenuePage.tsx`
+- `apps/web/test/comments.test.tsx`
 - `apps/web/test/comments-private-boundary.test.tsx`
+- `apps/web/src/lib/releases.ts`
+- `docs/releases/CHANGELOG.md`
+- `docs/product/COMMENTS_CONTRACT.md`
+- `docs/product/COMMENTS_STYLE_GUIDE.md`
 - `docs/handoffs/comments394-game-venue.md`

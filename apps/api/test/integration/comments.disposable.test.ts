@@ -384,10 +384,105 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     const repliesAfter = await get(null, `${gameUrl}?parentCommentId=${rootId}`);
     expect(repliesAfter.json().items[0].body).toBe("В 18:00 у входа");
 
-    // Venue path works on canonical id.
-    const venueComment = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null });
-    expect(venueComment.statusCode).toBe(201);
-    expect((await get(null, venueUrl)).json().items).toHaveLength(1);
+    // Broad VENUE create/reply/update fail-closed (Owner 02.11); GAME Q&A above unchanged.
+    const venueListGuest = await get(null, venueUrl);
+    expect(venueListGuest.statusCode).toBe(200);
+    expect(venueListGuest.json()).toMatchObject({
+      entityKind: "venue",
+      entityId: venueId,
+      items: [],
+      visibleCount: 0,
+      canCreate: false,
+      nextCursor: null,
+    });
+    expect((await get(peer, venueUrl)).json().canCreate).toBe(false);
+
+    const venueCreateIdem = key();
+    const venueCreate = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
+    expect(venueCreate.statusCode).toBe(403);
+    expect(venueCreate.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    // authorizeReplay of a would-be success key also denied (no prior receipt created).
+    const venueCreateReplay = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
+    expect(venueCreateReplay.statusCode).toBe(403);
+    expect(venueCreateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    // Direct-seeded legacy venue rows must not appear on GET; owned withdrawal still works.
+    const legacyVenueRootId = randomUUID();
+    const legacyReplyId = randomUUID();
+    await pool.query(
+      `INSERT INTO entity_comments
+         (id, entity_kind, entity_id, parent_comment_id, author_user_id, body, version)
+       VALUES
+         ($1, 'venue', $2, NULL, $3, 'LEGACY_VENUE_ROOT_SENTINEL', 1),
+         ($4, 'venue', $2, $1, $3, 'LEGACY_VENUE_REPLY_SENTINEL', 1)`,
+      [legacyVenueRootId, venueId, peer.userId, legacyReplyId],
+    );
+    await pool.query(
+      `INSERT INTO entity_comment_revisions
+         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
+       VALUES
+         ($1, 'venue', $2, 1, $3, 'LEGACY_VENUE_ROOT_SENTINEL', false),
+         ($4, 'venue', $2, 1, $3, 'LEGACY_VENUE_REPLY_SENTINEL', false)`,
+      [legacyVenueRootId, venueId, peer.userId, legacyReplyId],
+    );
+    const seededList = await get(null, venueUrl);
+    expect(seededList.statusCode).toBe(200);
+    expect(seededList.json().items).toEqual([]);
+    expect(seededList.json().visibleCount).toBe(0);
+    expect(JSON.stringify(seededList.json())).not.toMatch(/LEGACY_VENUE_|peer|Comment peer/i);
+    const seededThread = await get(null, `${venueUrl}?parentCommentId=${legacyVenueRootId}`);
+    expect(seededThread.statusCode).toBe(200);
+    expect(seededThread.json().items).toEqual([]);
+    expect(seededThread.json().visibleCount).toBe(0);
+
+    const venueReply = await post(author, venueUrl, {
+      text: "reply to legacy",
+      parentCommentId: legacyVenueRootId,
+    });
+    expect(venueReply.statusCode).toBe(403);
+    expect(venueReply.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    const venueUpdateIdem = key();
+    const venueUpdate = await put(peer, `/v1/comments/${legacyVenueRootId}`, {
+      text: "try edit legacy",
+      expectedVersion: 1,
+    }, venueUpdateIdem);
+    expect(venueUpdate.statusCode).toBe(403);
+    expect(venueUpdate.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    const venueUpdateReplay = await put(peer, `/v1/comments/${legacyVenueRootId}`, {
+      text: "try edit legacy",
+      expectedVersion: 1,
+    }, venueUpdateIdem);
+    expect(venueUpdateReplay.statusCode).toBe(403);
+    expect(venueUpdateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    const foreignVenueDelete = await del(author, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 1 });
+    expect(foreignVenueDelete.statusCode).toBe(404);
+
+    const ownedVenueDelete = await del(peer, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 1 });
+    expect(ownedVenueDelete.statusCode).toBe(200);
+    expect(ownedVenueDelete.json()).toMatchObject({
+      id: legacyVenueRootId,
+      entityKind: "venue",
+      body: null,
+      deleted: true,
+      version: 2,
+    });
+    const tombstone = await pool.query<{ body: string | null; deleted_at: Date | null; version: number }>(
+      "SELECT body, deleted_at, version FROM entity_comments WHERE id=$1",
+      [legacyVenueRootId],
+    );
+    expect(tombstone.rows[0]?.body).toBeNull();
+    expect(tombstone.rows[0]?.deleted_at).not.toBeNull();
+    expect(tombstone.rows[0]?.version).toBe(2);
+    const audit = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+       WHERE comment_id=$1 AND tombstone=true AND resource_version=2`,
+      [legacyVenueRootId],
+    );
+    expect(Number(audit.rows[0]?.n)).toBe(1);
+    // GET still empty after owned withdrawal (no leak of tombstone identity).
+    expect((await get(null, venueUrl)).json().items).toEqual([]);
 
     // Unavailable / private parent → indistinguishable 404, no count leak.
     const draftOnly = await post(author, "/v1/games", {

@@ -96,6 +96,28 @@ export class CommentsService {
       await client.query("BEGIN");
       try {
         await this.lockAndAssertPublicParent(client, kind, entityId);
+        // Broad VENUE public list closed pending postgame eligibility (#394 Owner 02.11):
+        // verify public parent + normal params, never project legacy venue rows/counts/replies.
+        if (kind === "venue") {
+          if (query.cursor) {
+            decodeCursor(query.cursor, {
+              entityKind: kind,
+              entityId,
+              parentCommentId,
+              order,
+            });
+          }
+          await client.query("COMMIT");
+          return {
+            entityKind: kind,
+            entityId,
+            parentCommentId,
+            items: [],
+            nextCursor: null,
+            visibleCount: 0,
+            canCreate: false,
+          };
+        }
         if (parentCommentId) {
           await this.assertRootParent(client, kind, entityId, parentCommentId);
         }
@@ -341,10 +363,12 @@ export class CommentsService {
       authorizeReplay: async (client) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
+        this.assertBroadVenueWriteClosed(row.entity_kind);
       },
       execute: async (client) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
+        this.assertBroadVenueWriteClosed(row.entity_kind);
         if (row.version !== body.expectedVersion) {
           throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
         }
@@ -529,8 +553,22 @@ export class CommentsService {
   }
 
   /**
+   * Broad VENUE create/reply/update closed until real postgame attendance eligibility.
+   * Owned delete/withdrawal stays on its own path and must not call this guard.
+   */
+  private assertBroadVenueWriteClosed(kind: EntityCommentKind): void {
+    if (kind === "venue") {
+      throw forbidden(
+        "COMMENT_VENUE_WRITES_CLOSED",
+        "Комментарии к площадке временно недоступны",
+      );
+    }
+  }
+
+  /**
    * List projection of write eligibility — same capability + game-organizer block gates as create.
    * Does not invent admin policy; read stays available when false.
+   * Broad VENUE create is always false (no fabricated attendance eligibility).
    */
   private async resolveCanCreate(
     client: PoolClient,
@@ -539,6 +577,7 @@ export class CommentsService {
     viewerId: string | null,
   ): Promise<boolean> {
     if (!viewerId) return false;
+    if (kind === "venue") return false;
     if (this.env.USER_RESTRICTIONS_INTERNAL_ENABLED) {
       const allowed = await client.query(
         `SELECT 1 WHERE ${unrestrictedSql(true, "$1", ["account.access", "profile.public"])}`,
@@ -570,6 +609,8 @@ export class CommentsService {
     actorId: string,
     parentCommentId: string | null,
   ): Promise<void> {
+    // Fail-closed for VENUE create/reply (and authorizeReplay of prior successes).
+    this.assertBroadVenueWriteClosed(kind);
     if (kind === "game") {
       const organizer = (
         await client.query<{ created_by_user_id: string }>(

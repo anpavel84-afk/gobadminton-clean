@@ -1,17 +1,21 @@
 # GoBadminton release notes
 
-## #394 public comments GAME+VENUE (0.1.0-alpha.15 candidate)
+## #394 game Q&A + venue restriction (0.1.0-alpha.15 candidate)
 
-Public comments block on ordinary published game and venue pages: guest read,
-authenticated create/reply/edit/tombstone, one reply depth. Player-profile
-comments held for Owner audience/opt-out. Candidate only — source SHA unbound
-until trusted ACCEPTED. API contract `0.25.0`. Owner UAT: NOT_TESTED.
-Parent #394 remains PARTIAL.
+Prospective alpha.15: public **game** questions/comments (guest read; authenticated
+create/reply/edit/tombstone, one reply depth) plus **central fail-closed** broad
+VENUE create/reply/update after Owner 02.11 attendance clarification. Venue GET
+returns empty / `canCreate:false` (no legacy row leak); VenuePage honest
+placeholder only — not a completed attendance/review system and not publicly
+writable venues. Player-profile comments held; PG3 stays private. Candidate only —
+`sourceSha` unbound until trusted ACCEPTED. API contract `0.25.0`. Owner UAT:
+NOT_TESTED. Parent #394 remains PARTIAL. Superseded PR465 broad VENUE policy was
+not DEV-installed (cancelled `41424816628`). Live remains accepted alpha.14.
 
 - Application version (candidate): `0.1.0-alpha.15`; API contract `0.25.0`.
 - Prior accepted DEV: alpha.14 `8113359533e5a4cfb85c4520a7af1fff1571c9e4`
-  (`r41408629901-a1`, `2026-11-02T07:58:39Z`).
-- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+  (`r41408629901-a1`, `2026-11-02T07:58:39Z`) — preserved; alpha.15 not accepted.
+- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
 - Owner UAT: NOT_TESTED.
 - C5 untouched; no PROD activation.
 

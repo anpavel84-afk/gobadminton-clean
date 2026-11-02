@@ -1,12 +1,16 @@
-OWNER APPROVED VISUALS · 2026-11-01 · User «Проверил запускай». Implementation authorized DEV within parent372/approved comments. Historical draft language below retained as design provenance, superseded only for visual approval. #394 GAME+VENUE first slice implements this shared block on ordinary GameDetailPage / VenuePage; player-profile context remains pending Owner audience/opt-out. Not a claim of QA/DEV acceptance or full #394 DONE. Preserve product/privacy contracts; no public private-feedback conversion.
+OWNER APPROVED VISUALS · 2026-11-01 · User «Проверил запускай». Implementation authorized DEV within parent372/approved comments. Historical draft language below retained as design provenance, superseded only for visual approval.
+
+**Installed (source policy after Owner 02.11.2026 clarification):** shared comments block on ordinary **GameDetailPage** = public questions about the game (GAME Q&A). **VenuePage** no longer mounts broad CommentsSection; honest placeholder «Отзывы после игр появятся здесь» via existing `SurfacePanel` until postgame eligibility exists. Player PG3 stays private. Player-profile comments remain pending Owner audience/opt-out. Not a claim of QA/DEV acceptance or full #394 DONE.
+
+**Proposed (not installed):** experience-review flow / Cases / attendance-gated venue reviews — published proposal https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html (mark: proposal vs installed source). Preserve product/privacy contracts; no public private-feedback conversion; no 48h/14d gates in this pass.
 
 # Comments · Style Guide extension
 
-**DRAFT / Owner approval pending / 01.11.2026.** Предложение, не дополнение к уже утверждённым правилам. Reference: `index.html`; политика и seams: `DESIGN.md`.
+**DRAFT / Owner approval pending / 01.11.2026.** Предложение, не дополнение к уже утверждённым правилам. Reference: `index.html`; политика и seams: `DESIGN.md`. Keep history below.
 
 ## Область
 
-Единый comments block для обычных страниц игры, площадки, публичного профиля игрока. Не применять к приватным сообщениям, чату игры, Postgame feedback, оценкам, заметкам или Radar inspector. Реализация и права пока не приняты.
+Единый comments block для обычных страниц **игры** (установлено). Исторически также площадки и публичного профиля игрока — для площадки broad writer **закрыт** до eligibility; профиль игрока не включён. Не применять к приватным сообщениям, чату игры, Postgame feedback, оценкам, заметкам или Radar inspector.
 
 ## Токены и композиция
 

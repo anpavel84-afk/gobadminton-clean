@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createElement, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -58,5 +60,29 @@ describe("#394 CommentsSection", () => {
       }),
     );
     expect(html).toBe("");
+  });
+
+  it("VenuePage has no unrestricted composer; game CommentsSection guest entry unchanged", () => {
+    const venueSrc = readFileSync(
+      resolve(__dirname, "../src/components/consumer/venues/VenuePage.tsx"),
+      "utf8",
+    );
+    expect(venueSrc).toContain("Отзывы после игр появятся здесь");
+    expect(venueSrc).toMatch(/SurfacePanel/);
+    expect(venueSrc).not.toMatch(/CommentsSection/);
+    expect(venueSrc).not.toMatch(/Войдите, чтобы оставить комментарий|Ваш комментарий|canCreate/);
+
+    const gameHtml = renderToStaticMarkup(
+      createElement(CommentsSection, {
+        kind: "game",
+        entityId: "10000000-0000-4000-8000-000000000001",
+        me: null,
+        parentPublic: true,
+        authReturnPath: "/games/10000000-0000-4000-8000-000000000001",
+        description: "Вопросы об этой игре и короткий разговор до встречи",
+      }),
+    );
+    expect(gameHtml).toContain("Войдите, чтобы оставить комментарий");
+    expect(gameHtml).toContain("Вопросы об этой игре");
   });
 });
