@@ -1,8 +1,11 @@
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
+import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -22,6 +25,26 @@ const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 const origin = "http://localhost:18980";
 const webOrigin = "http://127.0.0.1:18982";
 const pepper = "a3-review-report-admin-pepper-at-least-32chars";
+
+/** Local AJV2020 guard against CURRENT openapi.json (no new deps/files). */
+const openapiContract = JSON.parse(
+  readFileSync(path.resolve(__dirname, "../../../../packages/contracts/openapi.json"), "utf8"),
+);
+const contractAjv = new Ajv2020({ strict: false, allErrors: true });
+addFormats(contractAjv);
+const contractValidators = new Map<string, ReturnType<typeof contractAjv.compile>>();
+function assertContract(schemaName: string, value: unknown) {
+  let validate = contractValidators.get(schemaName);
+  if (!validate) {
+    validate = contractAjv.compile({
+      components: openapiContract.components,
+      $ref: `#/components/schemas/${schemaName}`,
+    });
+    contractValidators.set(schemaName, validate);
+  }
+  const wire = JSON.parse(JSON.stringify(value));
+  expect(validate(wire), JSON.stringify(validate.errors)).toBe(true);
+}
 
 type AdminActor = {
   id: string;
@@ -290,6 +313,19 @@ run("Admin Cases · private peer review report source read", () => {
     });
     expect(report.statusCode, report.body).toBe(201);
     const reportId = report.json().reportId as string;
+    assertContract("GameReviewReportReceipt", report.json());
+
+    const reportsQueue = await adminGet(`reports?reportId=${reportId}`);
+    expect(reportsQueue.statusCode, reportsQueue.body).toBe(200);
+    assertContract("AdminReportList", reportsQueue.json());
+    expect(reportsQueue.json().items).toHaveLength(1);
+    expect(reportsQueue.json().items[0]).toMatchObject({
+      id: reportId,
+      targetKind: "game_review",
+      reasonCode: "harassment",
+      caseId: null,
+    });
+    expect(reportsQueue.json().items[0]).not.toHaveProperty("targetPublicPlayerId");
 
     const patched = await app.inject({
       method: "PATCH",
@@ -316,6 +352,24 @@ run("Admin Cases · private peer review report source read", () => {
 
     const d0 = await adminGet(`cases/${caseId}`, moderator);
     expect(d0.statusCode).toBe(200);
+    assertContract("AdminCaseDetail", d0.json());
+    expect(d0.json().links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceKind: "report",
+          sourceId: reportId,
+          targetKind: "game_review",
+        }),
+      ]),
+    );
+    const reportsAfterLink = await adminGet(`reports?reportId=${reportId}`);
+    expect(reportsAfterLink.statusCode, reportsAfterLink.body).toBe(200);
+    assertContract("AdminReportList", reportsAfterLink.json());
+    expect(reportsAfterLink.json().items[0]).toMatchObject({
+      id: reportId,
+      targetKind: "game_review",
+      caseId,
+    });
     const assign = await adminPost(
       `cases/${caseId}/commands`,
       {
@@ -327,6 +381,13 @@ run("Admin Cases · private peer review report source read", () => {
       moderator,
     );
     expect(assign.statusCode, assign.body).toBe(200);
+    const afterAssign = await adminGet(`cases/${caseId}`, support);
+    expect(afterAssign.statusCode, afterAssign.body).toBe(200);
+    assertContract("AdminCaseDetail", afterAssign.json());
+    expect(afterAssign.json().links.find((l: { sourceKind: string }) => l.sourceKind === "report")).toMatchObject({
+      sourceId: reportId,
+      targetKind: "game_review",
+    });
 
     // Stale step-up denies.
     await pool.query("UPDATE admin_sessions SET step_up_at=now()-interval '11 minutes' WHERE id=$1", [
@@ -337,6 +398,7 @@ run("Admin Cases · private peer review report source read", () => {
 
     const read = await adminGet(`cases/${caseId}/review-reports/${reportId}`, support);
     expect(read.statusCode, read.body).toBe(200);
+    assertContract("AdminCaseReviewReportSource", read.json());
     expect(read.json()).toMatchObject({
       caseId,
       reportId,

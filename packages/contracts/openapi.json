@@ -29374,6 +29374,14 @@
           "sourceId": {
             "type": "string",
             "format": "uuid"
+          },
+          "targetKind": {
+            "type": "string",
+            "enum": [
+              "player",
+              "game_review"
+            ],
+            "description": "Optional; present on report links from abuse_reports.target_kind. Omitted for game links."
           }
         },
         "required": [
