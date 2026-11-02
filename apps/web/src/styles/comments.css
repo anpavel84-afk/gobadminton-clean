@@ -111,7 +111,7 @@
   background: #fff;
   color: var(--gb-comments-ink);
 }
-.gb-consumer .gb-comments__composer > .gb-button {
+.gb-consumer .gb-comments__composer > .gb-c23-btn {
   align-self: end;
   min-height: 44px;
   background: var(--gb-comments-lime);
@@ -122,7 +122,12 @@
   .gb-consumer .gb-comments__composer {
     grid-template-columns: 40px minmax(0, 1fr);
   }
-  .gb-consumer .gb-comments__composer > .gb-button {
+  /* Keep edit/reply one-column; do not reintroduce avatar+field grid. */
+  .gb-consumer .gb-comments__composer--inline,
+  .gb-consumer .gb-comments__composer--reply {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gb-consumer .gb-comments__composer > .gb-c23-btn {
     grid-column: 1 / -1;
     width: 100%;
   }

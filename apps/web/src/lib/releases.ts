@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.17" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.18" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.26.0" as const;
@@ -425,12 +425,12 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Уточнения действий в комментариях и пояснений после игры",
+  title: "Мобильные кнопки комментариев",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [],
   fixes: [
-    "Уточнены действия и пояснения в комментариях и обратной связи: свои действия безопасности скрыты, удалённые записи обозначены нейтрально, отсутствие отметки посещения и ограничения отзывов объясняются понятнее.",
+    "Исправлено расположение кнопок отправки, ответа и редактирования комментариев на телефоне: подписи больше не сжимаются в вертикальную колонку",
   ],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
@@ -1030,6 +1030,34 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Если отметка отсутствует или вызывает вопросы, можно обратиться за уточнением через существующий процесс разбора посещения."
     ],
     "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена.",
+      "Публичная запись отзывов о площадке остаётся закрытой.",
+      "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле."
+    ]
+  },
+  {
+    "source_sha": "b28ce4bed4ba33f7fe1e90ebc1b7a86495e8806e",
+    "application_version": "0.1.0-alpha.17",
+    "version_label": "0.1.0-alpha.17",
+    "title": "Уточнения действий в комментариях и пояснений после игры",
+    "api_contract_version": "0.26.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41452395940-a1",
+        "accepted_at": "2026-11-02T13:28:07Z",
+        "api_digest": "sha256:f4a4d7a038d67b66ecf9829cdb396bb589ee5109350acec11ccee2857be3886a",
+        "web_digest": "sha256:fff841c229641f53e55a14ed6860a113e5bb148eb8c869247c9d83b5eae94d48",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Уточнены действия и пояснения в комментариях и обратной связи: свои действия безопасности скрыты, удалённые записи обозначены нейтрально, отсутствие отметки посещения и ограничения отзывов объясняются понятнее."
+    ],
     "known_limitations": [
       "Приёмка владельцем после обычного входа ещё не выполнена.",
       "Публичная запись отзывов о площадке остаётся закрытой.",
