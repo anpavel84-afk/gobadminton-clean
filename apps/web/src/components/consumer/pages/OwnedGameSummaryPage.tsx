@@ -20,6 +20,7 @@ import {
   GameStatusBadge,
 } from "../games/GameDetailComposition";
 import { ManagerApplicants } from "../games/ManagerApplicants";
+import { GameCourtBookingPanel } from "../games/GameCourtBooking";
 import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
@@ -61,13 +62,13 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
   }, [gameId]);
 
   useEffect(() => {
-    let cancelled = false; ++epoch.current;
+    const request = ++epoch.current;
     setState("loading"); setGame(null); setMe(null); setApplicants([]); setApplicantsState("loading");
     setError(null);
     setNotice(null);
     void (async () => {
       const account = await getMe();
-      if (cancelled) return;
+      if (request !== epoch.current) return;
       if (!account.ok) {
         if (account.status === 401) {
           setState("auth");
@@ -79,7 +80,7 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
       }
       setMe(account.data);
       const result = await getMyManagedGame(gameId);
-      if (cancelled) return;
+      if (request !== epoch.current) return;
       if (!result.ok) {
         if (result.status === 401) {
           setState("auth");
@@ -98,16 +99,35 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
       await loadApplicants();
     })();
     return () => {
-      cancelled = true; ++epoch.current;
+      ++epoch.current;
     };
   }, [gameId, reloadToken, loadApplicants]);
 
-
-
   useEffect(() => {
-    const changed = () => { ++epoch.current; setState("loading"); setGame(null); setMe(null); setApplicants([]); setReloadToken(n => n + 1); };
-    window.addEventListener("gb-session-changed", changed);
-    return () => window.removeEventListener("gb-session-changed", changed);
+    const clearPrivate = () => {
+      // Invalidate in-flight getMe/getMyManagedGame/applicants without unmount.
+      ++epoch.current;
+      setGame(null);
+      setMe(null);
+      setApplicants([]);
+      setApplicantsState("loading");
+      setError(null);
+      setNotice(null);
+      setBusyId(null);
+      setState("auth");
+    };
+    const onSession = () => {
+      clearPrivate();
+      // New session reloads through the existing load effect path.
+      setReloadToken((n) => n + 1);
+    };
+    // private-expired: clear only — do not bump reloadToken (avoids getMe 401 loop).
+    window.addEventListener("gb-private-expired", clearPrivate);
+    window.addEventListener("gb-session-changed", onSession);
+    return () => {
+      window.removeEventListener("gb-private-expired", clearPrivate);
+      window.removeEventListener("gb-session-changed", onSession);
+    };
   }, []);
 
   const mutable =
@@ -235,7 +255,10 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
           }}>Опубликовать черновик</Button>}
 
           <div className="gb-game-detail-grid">
-            <GameTerms game={game} showCapacity={false} />
+            <div>
+              <GameTerms game={game} showCapacity={false} />
+              {me ? <GameCourtBookingPanel gameId={game.id} meId={me.id} csrfToken={me.csrfToken} /> : null}
+            </div>
             <aside className="gb-management-summary" aria-label="Управление игрой">
               <div className="gb-management-summary__status">
                 <GameStatusBadge tone={game.status}>{({ draft: "Черновик", published: "Опубликовано", cancelled: "Игра отменена", completed: "Завершена" })[game.status]}</GameStatusBadge>

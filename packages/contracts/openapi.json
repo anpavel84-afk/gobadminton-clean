@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.23.0",
+    "version": "0.24.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -18362,6 +18362,26 @@
               }
             }
           },
+          "201": {
+            "description": "Authorized private review projection; no-store. (created)",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameReview"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Problem details",
             "content": {
@@ -18414,26 +18434,6 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
-          },
-          "201": {
-            "description": "Authorized private review projection; no-store. (created)",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameReview"
-                }
-              }
-            }
           }
         }
       }
@@ -18987,6 +18987,26 @@
               }
             }
           },
+          "201": {
+            "description": "Own note projection; no-store. (created)",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GamePersonalNote"
+                }
+              }
+            }
+          },
           "400": {
             "description": "Problem details",
             "content": {
@@ -19039,26 +19059,6 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
-          },
-          "201": {
-            "description": "Own note projection; no-store. (created)",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GamePersonalNote"
-                }
-              }
-            }
           }
         }
       },
@@ -19633,6 +19633,210 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/court-booking": {
+      "get": {
+        "operationId": "getGameCourtBooking",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Read organizer-declared court-booking status for a game",
+        "description": "#386. Active session required. Current active owner/manager or confirmed participant (same private venue-contacts audience). Returns singleton DTO; missing row projects unspecified/version 0/updatedAt null. no-store. Foreign/missing → indistinguishable private 404. Never public/list/map projection. Status is organizer_declared only — not provider-verified.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Court-booking projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCourtBooking"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putGameCourtBooking",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Update organizer-declared court-booking status",
+        "description": "#386. Current active owner/manager only via GameAuthority. expectedVersion + Idempotency-Key + cookie/Origin/CSRF + MutationRunner. Same-key same-body recovers one effect; stale expectedVersion → conflict. Statuses: unspecified|arranging|organizer_confirmed|not_arranged. declarationSource always organizer_declared. No booking provider/payments.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGameCourtBookingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated court-booking projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCourtBooking"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -32470,6 +32674,86 @@
           }
         },
         "description": "Optional backward-compatible results field. Private notes/reviews only for current actor ACL. No unbounded roster or raw DB rows. x-gobadminton-actorMutationBudgetPerGame: 80 (count, no time window)."
+      },
+      "CourtBookingStatus": {
+        "type": "string",
+        "enum": [
+          "unspecified",
+          "arranging",
+          "organizer_confirmed",
+          "not_arranged"
+        ],
+        "description": "Organizer-declared court arrangement status. Labels: Не указано / Договариваемся / Подтверждено организатором / Не удалось договориться."
+      },
+      "GameCourtBooking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "status",
+          "version",
+          "updatedAt",
+          "declarationSource",
+          "allowedActions"
+        ],
+        "properties": {
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CourtBookingStatus"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "declarationSource": {
+            "type": "string",
+            "enum": [
+              "organizer_declared"
+            ]
+          },
+          "allowedActions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "canUpdate"
+            ],
+            "properties": {
+              "canUpdate": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "description": "#386 singleton. Initial unspecified/version 0/updatedAt null. declarationSource always organizer_declared. canUpdate true only for current active owner/manager."
+      },
+      "PutGameCourtBookingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "status"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "status": {
+            "$ref": "#/components/schemas/CourtBookingStatus"
+          }
+        }
       }
     }
   }

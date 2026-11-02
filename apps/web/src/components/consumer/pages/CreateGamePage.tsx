@@ -45,6 +45,7 @@ import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { VenuePickerDialog } from "../games/VenuePickerDialog";
+import { VenueBookingHelp } from "../games/VenueBookingHelp";
 import { resolveSelectedVenue } from "../../../lib/venue-picker-utils";
 
 type Step = "setup" | "load-error" | "loading" | "auth" | "activity" | "form" | "preview" | "published" | "unknown" | "conflict";
@@ -541,6 +542,17 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
             </div></div>
             {customDuration && <label className="gb-game-field">Длительность в минутах<input id="duration" aria-invalid={gameDurationMinutes(draft.durationMinutes) === null} type="number" min={1} max={MAX_GAME_DURATION_MINUTES} step={1} required value={draft.durationMinutes} onChange={e => setDraft({ ...draft, durationMinutes: e.target.value })} /><small>От 1 до {MAX_GAME_DURATION_MINUTES} целых минут.</small>{gameDurationMinutes(draft.durationMinutes) === null && <small role="alert">Укажите положительное целое число минут в этом диапазоне.</small>}</label>}
             <div className="gb-game-field"><span>Окончание</span><output>{previewPayload?.endsAt && location ? new Date(previewPayload.endsAt).toLocaleString("ru-RU", { timeZone: location.timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "Укажите начало и длительность"}</output><small>Заявки закрываются в момент начала.</small></div>
+            <div className="gb-game-field gb-game-field--wide">
+              <VenueBookingHelp
+                venue={selectedVenue ?? null}
+                createNewVenue={draft.createNewVenue}
+                startDate={draft.startDate}
+                startTime={draft.startTime}
+                durationMinutes={draft.durationMinutes}
+                timezone={location?.timezone}
+                accountKey={me?.id ?? "guest"}
+              />
+            </div>
           </div></section>
           <section className="gb-game-form-group" aria-labelledby="gb-create-game-section-3"><h2 id="gb-create-game-section-3" className="gb-game-form-group-title">Для кого</h2><div className="gb-game-fields">
             <div className="gb-game-field"><label htmlFor="capacity">Количество мест</label><div className="gb-game-stepper"><button type="button" aria-label="Уменьшить количество мест" disabled={draft.capacity <= 1} onClick={() => setDraft({ ...draft, capacity: draft.capacity - 1 })}>−</button><input id="capacity" type="number" min={1} max={1000} required value={draft.capacity} onChange={e => setDraft({ ...draft, capacity: Number(e.target.value) })} /><button type="button" aria-label="Увеличить количество мест" disabled={draft.capacity >= 1000} onClick={() => setDraft({ ...draft, capacity: draft.capacity + 1 })}>+</button></div></div>

@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.13" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.14" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.23.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.24.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,22 +425,21 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "После игры: личная история участий и обратная связь",
+  title: "Площадка при создании игры: контакты и договорённость о корте",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "В истории «Мои игры» показываются личные итоги, даже если публичная карточка игры недоступна.",
-    "На вкладке истории доступны полученные и отправленные личные отзывы со ссылкой к итогам игры.",
+    "При выборе известной площадки во время создания игры показываются её опубликованные контакты и черновик сообщения для договорённости о корте.",
+    "Организатор может указать статус договорённости о корте со своих слов; участники видят тот же статус только для чтения.",
   ],
   fixes: [
-    "Прошедшая игра с личным итогом больше не остаётся одновременно в «Ближайших» и в истории.",
-    "В разделе «Управляю» личные итоги участия не подмешиваются без подтверждённой роли управления.",
-    "В полученных отзывах имя адресата больше не выглядит как имя автора.",
+    "Черновик сообщения копируется только после успешной записи в буфер; при отказе текст остаётся для ручного копирования.",
+    "При смене площадки, времени или аккаунта устаревшие контакты и отметка о копировании сбрасываются.",
   ],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
-    "Жалоба на конкретный отзыв ещё недоступна.",
-    "Публичные комментарии к итогам игры этим выпуском не обещаны.",
+    "Приложение не бронирует корт и не принимает оплату — договорённость остаётся вне сервиса.",
+    "Публичные комментарии и полный каталог договорённостей этим выпуском не обещаны.",
   ],
   feature_catalogue: "delta",
 };
@@ -920,6 +919,37 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "DEV-схема и включённая запись подтверждены; проверка интерфейса на синтетических данных не заменяет приёмку в живом аккаунте.",
       "Полное типизированное расширение Safety-жалоб PG-3, PG-4 и публичные комментарии ещё не объявлены завершёнными.",
       "Alpha.12 установлена только на DEV; PROD остаётся принятой alpha.8."
+    ]
+  },
+  {
+    "source_sha": "c936031114f57c23f6faa9a01757374b912819ed",
+    "application_version": "0.1.0-alpha.13",
+    "version_label": "0.1.0-alpha.13",
+    "title": "После игры: история встреч и переход к обратной связи — PG-4 UI",
+    "api_contract_version": "0.23.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41394102899-a1",
+        "accepted_at": "2026-11-02T05:32:06Z",
+        "api_digest": "sha256:5bfc4c1139d6edceebfc4b2e3f49203daa08d56448847c1db2783c56d0f6fdb7",
+        "web_digest": "sha256:573d6792e5c5d51629c1328348f209fb0785b10d87da13b38282366cd603177a",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Переход из своей истории встреч к итогам и разделу обратной связи."
+    ],
+    "fixes": [
+      "Отображение истории и прямого перехода к обратной связи на компьютере и телефоне; безопасное поведение при недоступных приватных данных."
+    ],
+    "known_limitations": [
+      "Установленный интерфейс проверен на синтетических read-only данных, не в живой сессии владельца.",
+      "Полное типизированное расширение Safety по отзывам остаётся незавершённым; весь #372 не объявлен завершённым.",
+      "Публичные комментарии #394 выполняются позже.",
+      "Выпуск принят только на DEV; PROD остался принятой alpha.8."
     ]
   },
 ] as const;

@@ -2,6 +2,8 @@ import { GameCoverService } from "./game-cover.service";
 import { GameCoverController } from "./game-cover.controller";
 import { GameAttendanceController } from "./game-attendance.controller";
 import { GameAttendanceService } from "./game-attendance.service";
+import { GameCourtBookingController } from "./game-court-booking.controller";
+import { GameCourtBookingService } from "./game-court-booking.service";
 import { GameFeedbackController } from "./game-feedback.controller";
 import { GameFeedbackService } from "./game-feedback.service";
 import { GameOutcomesController } from "./game-outcomes.controller";
@@ -34,6 +36,7 @@ import { MeGamesController } from "./me-games.controller";
     GameCoverController,
     GameOutcomesController,
     GameAttendanceController,
+    GameCourtBookingController,
     GameFeedbackController,
     GamesController,
     MeGamesController,
@@ -41,6 +44,7 @@ import { MeGamesController } from "./me-games.controller";
   providers: [
     GameCoverService,
     GameAttendanceService,
+    GameCourtBookingService,
     GameFeedbackService,
     GameOutcomesService,
     GamesService,
