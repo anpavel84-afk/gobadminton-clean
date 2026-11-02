@@ -303,6 +303,9 @@ export class GameAttendanceService {
         : null;
     const isOwn = context.userId === viewerId;
     const actorDisplay = row ? await this.displayName(client, row.actor_user_id) : null;
+    // Missing mark (no row) and unknown row: clarification via dispute, not fake present.
+    // Known present/absent: classic challenge. No ACK for unknown/missing.
+    const canRequestClarification = writesEnabled && isOwn && !dispute;
     const actions: AttendanceAllowedActions = {
       canSetAttendance: canManagerWrite,
       canAcknowledge:
@@ -311,16 +314,30 @@ export class GameAttendanceService {
         knownFact &&
         !!row &&
         acknowledgedVersion !== row.version,
-      canDispute: writesEnabled && isOwn && knownFact && !!row && !dispute,
+      canDispute: canRequestClarification && (knownFact || !row || row.value === "unknown"),
       canWithdrawDispute: writesEnabled && isOwn && !!dispute,
       canRespondDispute: writesEnabled && pg2 && role === "manager" && !!dispute,
       canRequestHelp: writesEnabled && pg2 && isOwn && !!dispute,
     };
+    const disputeSummary = dispute
+      ? {
+          id: dispute.id,
+          status: dispute.status as "open",
+          challengedVersion: dispute.challenged_version,
+          version: dispute.version,
+        }
+      : null;
     if (!row) {
-      return unknownAttendanceRecord(context.participationId, context.displayName, {
-        ...emptyAttendanceActions(),
-        canSetAttendance: canManagerWrite,
-      });
+      return {
+        ...unknownAttendanceRecord(context.participationId, context.displayName, {
+          ...emptyAttendanceActions(),
+          canSetAttendance: canManagerWrite,
+          canDispute: canRequestClarification,
+          canWithdrawDispute: writesEnabled && isOwn && !!dispute,
+          canRequestHelp: writesEnabled && pg2 && isOwn && !!dispute,
+        }),
+        dispute: disputeSummary,
+      };
     }
     return {
       contextId: context.participationId,
@@ -333,14 +350,7 @@ export class GameAttendanceService {
         at: row.updated_at.toISOString(),
       },
       acknowledgedVersion,
-      dispute: dispute
-        ? {
-            id: dispute.id,
-            status: dispute.status,
-            challengedVersion: dispute.challenged_version,
-            version: dispute.version,
-          }
-        : null,
+      dispute: disputeSummary,
       displayName: context.displayName,
       allowedActions: actions,
     };
@@ -982,6 +992,7 @@ export class GameAttendanceService {
       execute: async (client) => {
         if (!postGameWritesEnabled(this.env)) writesUnavailable();
         if (!(await this.installed(client))) writesUnavailable();
+        // lockOwnContext locks Game then participation (same order as attendance writes).
         const participation = await this.lockOwnContext(client, gameId, contextId, userId);
         const attendance = (
           await client.query<AttendanceRow>(
@@ -990,22 +1001,25 @@ export class GameAttendanceService {
           )
         ).rows[0];
         if (!attendance) {
-          throw conflict("ATTENDANCE_MISSING", "Нет отметки для возражения");
-        }
-        if (attendance.version !== body.attendanceVersion) {
+          // Missing mark: only version 0 — real clarification route, not a fake present row.
+          if (body.attendanceVersion !== 0) {
+            throw conflict("VERSION_CONFLICT", "Версия посещения устарела");
+          }
+        } else if (attendance.version !== body.attendanceVersion) {
           throw conflict("VERSION_CONFLICT", "Версия посещения устарела");
         }
         const open = await this.readOpenDispute(client, participation.id);
         if (open) {
           throw conflict("DISPUTE_ALREADY_OPEN", "Уже есть открытое возражение");
         }
+        const challengedVersion = attendance ? attendance.version : 0;
         const inserted = (
           await client.query<{ id: string; created_at: Date; updated_at: Date; version: number }>(
             `INSERT INTO game_attendance_disputes
                (participation_id, game_id, user_id, challenged_version, explanation, status, version)
              VALUES ($1,$2,$3,$4,$5,'open',1)
              RETURNING id, created_at, updated_at, version`,
-            [participation.id, gameId, userId, body.attendanceVersion, body.explanation],
+            [participation.id, gameId, userId, challengedVersion, body.explanation],
           )
         ).rows[0]!;
         await client.query(

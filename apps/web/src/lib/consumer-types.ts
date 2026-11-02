@@ -535,6 +535,13 @@ export type GamePersonalNote = {
   allowedActions: { canEdit: boolean; canDelete: boolean };
 };
 
+/** Own/generic peer create reason — never foreign attendance details. */
+export type PeerCreateReasonCode =
+  | "game_not_confirmed"
+  | "attendance_unmarked"
+  | "attendance_clarifying"
+  | "no_eligible_peers";
+
 export type GameFeedbackSlice = {
   installed: boolean;
   writesEnabled: boolean;
@@ -547,12 +554,30 @@ export type GameFeedbackSlice = {
     canCreateNote: boolean;
     peerSubjects: Array<{ contextId: string; displayName: string }>;
     organizationRecipientDisplay: string | null;
+    /** Optional additive; null/absent when peer create is available. */
+    peerCreateReason?: PeerCreateReasonCode | null;
     complaintReuse: "existing_player_report";
     remaining: Array<"typed_review_safety_extension">;
   };
   myNotes: GamePersonalNote[];
   gameReviews: GameReview[];
 };
+
+export function peerCreateReasonLabel(code: PeerCreateReasonCode | null | undefined): string | null {
+  if (!code) return null;
+  switch (code) {
+    case "game_not_confirmed":
+      return "Игра ещё не подтверждена";
+    case "attendance_unmarked":
+      return "Посещение ещё не отмечено";
+    case "attendance_clarifying":
+      return "Уточняем посещение";
+    case "no_eligible_peers":
+      return "Пока нет участников для отзыва";
+    default:
+      return null;
+  }
+}
 
 export type MeReviewsPage = {
   items: GameReview[];

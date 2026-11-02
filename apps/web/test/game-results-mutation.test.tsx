@@ -16,7 +16,21 @@ const hooks = vi.hoisted(() => ({
   effects: [] as Array<() => void>,
   cleanups: [] as Array<(() => void) | undefined>,
   /** When set, useState serves dual-role render fixtures (QA probe) instead of hook slots. */
-  render: null as null | { index: number; manager: boolean },
+  render: null as null | {
+    index: number;
+    manager: boolean;
+    myAttendance?: Partial<{
+      value: "present" | "absent" | "unknown";
+      version: number;
+      acknowledgedVersion: number | null;
+      dispute: {
+        id: string;
+        status: "open" | "withdrawn" | "resolved";
+        challengedVersion: number;
+        version: number;
+      } | null;
+    }>;
+  },
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -28,23 +42,29 @@ vi.mock("react", async (importOriginal) => {
         const i = hooks.render.index++;
         const rec = {
           contextId: "ctx",
-          value: "absent",
+          value: "absent" as const,
           version: 1,
           late: false,
           displayName: "Own manager",
           assertion: {
             actorDisplay: "Other manager",
-            source: "manager_explicit",
+            source: "manager_explicit" as const,
             at: "2026-11-01T00:00:00Z",
           },
-          acknowledgedVersion: null,
-          dispute: null,
+          acknowledgedVersion: null as number | null,
+          dispute: null as null | {
+            id: string;
+            status: "open" | "withdrawn" | "resolved";
+            challengedVersion: number;
+            version: number;
+          },
           allowedActions: {
             canSetAttendance: true,
             canAcknowledge: true,
             canDispute: true,
             canWithdrawDispute: false,
           },
+          ...hooks.render.myAttendance,
         };
         const results = {
           gameId: "g",
@@ -684,7 +704,7 @@ describe("PG-1b game results mutation host", () => {
     hooks.render = { index: 0, manager: false };
     const html = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
     expect(html).toContain("Согласен с этой отметкой");
-    expect(html).toContain("Запросить исправление");
+    expect(html).toContain("Оспорить отметку");
     expect(html).toContain("Other manager");
     expect(html).not.toContain('aria-label="Состав"');
   });
@@ -693,11 +713,36 @@ describe("PG-1b game results mutation host", () => {
     hooks.render = { index: 0, manager: true };
     const html = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
     expect(html).toContain("Согласен с этой отметкой");
-    expect(html).toContain("Запросить исправление");
+    expect(html).toContain("Оспорить отметку");
     expect(html).toContain("История изменений");
     expect(html).toContain("Other manager");
     expect(html).toContain('aria-label="Состав"');
     expect(html).toContain("Фактическое посещение");
+  });
+
+  it("QA rendered: missing version0 vs saved unknown version distinguish copy", () => {
+    hooks.render = {
+      index: 0,
+      manager: false,
+      myAttendance: { value: "unknown", version: 0, acknowledgedVersion: null },
+    };
+    const missing = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
+    expect(missing).toContain("Посещение ещё не отмечено");
+    expect(missing).toContain("Попросить уточнение");
+    expect(missing).not.toContain("Отметка требует уточнения");
+    expect(missing).not.toContain("Согласен с этой отметкой");
+
+    hooks.render = {
+      index: 0,
+      manager: false,
+      myAttendance: { value: "unknown", version: 2, acknowledgedVersion: null },
+    };
+    const savedUnknown = renderToStaticMarkup(createElement(GameResultsComposition, { gameId: "g" }));
+    expect(savedUnknown).toContain("Отметка требует уточнения");
+    expect(savedUnknown).toContain("версия 2");
+    expect(savedUnknown).toContain("Попросить уточнение");
+    expect(savedUnknown).not.toContain("Посещение ещё не отмечено");
+    expect(savedUnknown).not.toContain("Согласен с этой отметкой");
   });
 });
 

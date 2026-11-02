@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { isPermittedPresentAssertion } from "../../src/games/game-attendance.policy";
 import {
   createReviewRequest,
   needsDiscrepancy,
   parse,
   patchReviewRequest,
+  peerCreateReasonLabel,
   putNoteRequest,
   putReplyRequest,
   FEEDBACK_ACTOR_MUTATIONS_PER_GAME_MAX,
@@ -91,5 +93,58 @@ describe("PG-3 feedback policy", () => {
     expect(needsDiscrepancy("unknown")).toBe(true);
     expect(needsDiscrepancy("contested")).toBe(true);
     expect(needsDiscrepancy("outcome_not_held")).toBe(true);
+  });
+
+  it("permitted present rejects self-mark and self_attested", () => {
+    const subject = "10000000-0000-4000-8000-000000000001";
+    const manager = "10000000-0000-4000-8000-000000000002";
+    expect(
+      isPermittedPresentAssertion({
+        value: "present",
+        source: "manager_explicit",
+        actorUserId: manager,
+        subjectUserId: subject,
+      }),
+    ).toBe(true);
+    expect(
+      isPermittedPresentAssertion({
+        value: "present",
+        source: "case_reviewer",
+        actorUserId: manager,
+        subjectUserId: subject,
+      }),
+    ).toBe(true);
+    expect(
+      isPermittedPresentAssertion({
+        value: "present",
+        source: "self_attested",
+        actorUserId: subject,
+        subjectUserId: subject,
+      }),
+    ).toBe(false);
+    expect(
+      isPermittedPresentAssertion({
+        value: "present",
+        source: "manager_explicit",
+        actorUserId: subject,
+        subjectUserId: subject,
+      }),
+    ).toBe(false);
+    expect(
+      isPermittedPresentAssertion({
+        value: "absent",
+        source: "manager_explicit",
+        actorUserId: manager,
+        subjectUserId: subject,
+      }),
+    ).toBe(false);
+  });
+
+  it("maps peerCreateReason codes to safe Russian copy", () => {
+    expect(peerCreateReasonLabel("game_not_confirmed")).toBe("Игра ещё не подтверждена");
+    expect(peerCreateReasonLabel("attendance_unmarked")).toBe("Посещение ещё не отмечено");
+    expect(peerCreateReasonLabel("attendance_clarifying")).toBe("Уточняем посещение");
+    expect(peerCreateReasonLabel("no_eligible_peers")).toBe("Пока нет участников для отзыва");
+    expect(peerCreateReasonLabel(null)).toBeNull();
   });
 });

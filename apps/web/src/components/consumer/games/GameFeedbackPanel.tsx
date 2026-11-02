@@ -9,6 +9,7 @@ import type {
   PeerReviewTag,
   ReviewKind,
 } from "../../../lib/consumer-types";
+import { peerCreateReasonLabel } from "../../../lib/consumer-types";
 import type { SocialMutationPending } from "../messages/useSocialMutation";
 import { Button } from "../Button";
 import { SectionHeader } from "../players/ProfileComposition";
@@ -138,7 +139,8 @@ export function GameFeedbackPanel({
   }, [caps?.peerSubjects]);
 
   useEffect(() => {
-    if (!caps?.canCreatePeer && mode === "peer") {
+    // Keep peer mode when a safe peerCreateReason explains why create is closed.
+    if (!caps?.canCreatePeer && mode === "peer" && !caps?.peerCreateReason) {
       if (caps?.canCreateOrganization) setMode("organization");
       else if (caps?.canCreateTraining) setMode("training");
       else setMode("received");
@@ -232,11 +234,16 @@ export function GameFeedbackPanel({
   function submitReview(kind: ReviewKind) {
     if (!writes || busy || unknownOp) return;
     if (boundGame.current !== gameId) return;
+    // Avoid dispatch with obsolete peer capability if gate changed mid-flight.
+    if (kind === "peer" && !caps?.canCreatePeer) {
+      onLocalNotice(peerCreateReasonLabel(caps?.peerCreateReason) ?? "Пока нельзя отправить отзыв игроку");
+      return;
+    }
     const body: Record<string, unknown> = {
       kind,
       experienceAssertion: "i_experienced_this_game",
     };
-    if (discrepancy.trim()) body.discrepancyExplanation = discrepancy.trim();
+    if (kind !== "peer" && discrepancy.trim()) body.discrepancyExplanation = discrepancy.trim();
     if (kind === "peer") {
       if (!selectedSubject || !peerRating) return;
       body.subjectContextId = selectedSubject.contextId;
@@ -398,7 +405,12 @@ export function GameFeedbackPanel({
   }
 
   const modes: Array<{ id: Mode; label: string; show: boolean }> = [
-    { id: "peer", label: "Игроку", show: Boolean(caps?.canCreatePeer || subjects.length) },
+    {
+      id: "peer",
+      label: "Игроку",
+      // Keep visible so own peerCreateReason is not silently hidden.
+      show: Boolean(caps?.canCreatePeer || subjects.length || caps?.peerCreateReason),
+    },
     { id: "organization", label: "Организации", show: Boolean(caps?.canCreateOrganization || caps?.organizationRecipientDisplay) },
     { id: "training", label: "Тренировка", show: Boolean(caps?.canCreateTraining) },
     { id: "received", label: "Полученные", show: true },
@@ -435,21 +447,24 @@ export function GameFeedbackPanel({
 
           {mode === "peer" ? (
             <div className="gb-postgame__dialog-form">
+              {!caps?.canCreatePeer ? (
+                <p>{peerCreateReasonLabel(caps?.peerCreateReason) ?? "Пока нет участников для отзыва"}</p>
+              ) : null}
               {selectedSubject ? (
                 <div className="gb-postgame__who">
                   <strong>{selectedSubject.displayName}</strong>
                   <small>Отзыв увидите только вы и {selectedSubject.displayName.split(" ")[0]}</small>
                 </div>
-              ) : (
-                <p>Нет доступных адресатов для отзыва игроку.</p>
-              )}
+              ) : caps?.canCreatePeer ? (
+                <p>Пока нет участников для отзыва</p>
+              ) : null}
               {subjects.length > 1 ? (
                 <label className="profile-field">
                   Кому
                   <select
                     value={selectedSubject?.contextId ?? ""}
                     onChange={(e) => setSubjectId(e.target.value)}
-                    disabled={busy || unknownOp || !writes}
+                    disabled={busy || unknownOp || !writes || !caps?.canCreatePeer}
                   >
                     {subjects.map((s) => (
                       <option key={s.contextId} value={s.contextId}>
@@ -483,7 +498,7 @@ export function GameFeedbackPanel({
                   rows={3}
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  disabled={busy || unknownOp || !writes}
+                  disabled={busy || unknownOp || !writes || !caps?.canCreatePeer}
                 />
               </label>
               <div className="gb-postgame__tag-row">
@@ -493,23 +508,13 @@ export function GameFeedbackPanel({
                     type="button"
                     className="gb-postgame__pill"
                     aria-pressed={tags.includes(tag.value)}
-                    disabled={busy || unknownOp || !writes}
+                    disabled={busy || unknownOp || !writes || !caps?.canCreatePeer}
                     onClick={() => toggleTag(tag.value)}
                   >
                     {tag.label}
                   </button>
                 ))}
               </div>
-              <label className="profile-field">
-                Пояснение расхождения (если отметка не «пришёл»)
-                <textarea
-                  maxLength={500}
-                  rows={2}
-                  value={discrepancy}
-                  onChange={(e) => setDiscrepancy(e.target.value)}
-                  disabled={busy || unknownOp || !writes}
-                />
-              </label>
               <Button
                 disabled={busy || unknownOp || !writes || !caps?.canCreatePeer || !peerRating || !selectedSubject}
                 onClick={() => submitReview("peer")}

@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.15" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.16" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.25.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.26.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,19 +425,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Вопросы об игре и ограничение отзывов площадки",
+  title: "Подтверждённый совместный опыт и уточнение посещения",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "На странице игры можно задавать вопросы и отвечать после входа.",
+    "Новый приватный отзыв об игроке доступен после состоявшейся игры, когда посещение обоих участников явно подтверждено и нет открытого спора.",
+    "Если отметка отсутствует или вызывает вопросы, можно обратиться за уточнением через существующий процесс разбора посещения.",
   ],
-  fixes: [
-    "Публикация отзывов о площадке пока закрыта до проверки посещения после игры; прежние неподтверждённые записи не показываются.",
-  ],
+  fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
-    "Отзывы о площадке ждут подтверждения посещения и разбора спорных отметок; публичная запись пока недоступна.",
-    "Отзывы об игроке остаются приватными и не выводятся как публичная стена комментариев в профиле; полный сценарий отзывов после игры ещё не завершён.",
+    "Публичная запись отзывов о площадке остаётся закрытой.",
+    "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле.",
   ],
   feature_catalogue: "delta",
 };
@@ -977,6 +976,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Проверка владельцем в живом аккаунте не выполнена; установленный интерфейс проверен на синтетических read-only данных.",
       "Полный модуль #373 не объявлен завершённым.",
       "Выпуск установлен только на DEV; PROD остаётся принятой alpha.8."
+    ]
+  },
+  {
+    "source_sha": "36fd4b4cf4632efa3cc96e93f20a33c220b9708b",
+    "application_version": "0.1.0-alpha.15",
+    "version_label": "0.1.0-alpha.15",
+    "title": "Вопросы об игре и ограничение отзывов площадки",
+    "api_contract_version": "0.25.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41434833713-a1",
+        "accepted_at": "2026-11-02T11:23:40Z",
+        "api_digest": "sha256:c28855a6c8fee6ddbd53cf2e254cb34f08bb4d26c0a7b71ad738aff75f9a7505",
+        "web_digest": "sha256:3e56ffbe64c2092342a105a35f622260d472ac829e0a13734154ffd299ce0ba5",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "На странице игры можно задавать вопросы и отвечать после входа."
+    ],
+    "fixes": [
+      "Публикация отзывов о площадке пока закрыта до проверки посещения после игры; прежние неподтверждённые записи не показываются."
+    ],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена.",
+      "Отзывы о площадке ждут подтверждения посещения и разбора спорных отметок; публичная запись пока недоступна.",
+      "Отзывы об игроке остаются приватными и не выводятся как публичная стена комментариев в профиле; полный сценарий отзывов после игры ещё не завершён."
     ]
   },
 ] as const;

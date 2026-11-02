@@ -104,7 +104,8 @@ export const acknowledgeAttendanceRequest = z
 
 export const disputeAttendanceRequest = z
   .object({
-    attendanceVersion: z.number().int().min(1).max(2147483647),
+    /** 0 only when no attendance row exists (missing-mark clarification). Known rows use actual version. */
+    attendanceVersion: z.number().int().min(0).max(2147483647),
     explanation: plainBounded(ATTENDANCE_EXPLANATION_MAX),
   })
   .strict();
@@ -122,7 +123,8 @@ export const respondDisputeRequest = z
     explanation: plainBounded(ATTENDANCE_EXPLANATION_MAX),
     correction: z
       .object({
-        expectedAttendanceVersion: z.number().int().min(1).max(2147483647),
+        /** 0 allowed when creating the first assertion for a missing-mark dispute. */
+        expectedAttendanceVersion: z.number().int().min(0).max(2147483647),
         value: z.enum(["present", "absent", "unknown"]),
         late: z.boolean().optional(),
         correctionReason: plainBounded(ATTENDANCE_REASON_MAX),
@@ -580,4 +582,21 @@ export function summarizeRoster(records: AttendanceRecordView[]): AttendanceSumm
     underClarification,
     agreed,
   };
+}
+
+/**
+ * Permitted present assertion for confirmed shared experience (peer / later venue reuse).
+ * Requires manager_explicit or case_reviewer; actor must not be the subject (no self-mark).
+ * self_attested never qualifies. Creator/manager role alone is not an assertion.
+ */
+export function isPermittedPresentAssertion(args: {
+  value: AttendanceValue | string;
+  source: AttendanceSource | string | null;
+  actorUserId: string | null;
+  subjectUserId: string;
+}): boolean {
+  if (args.value !== "present") return false;
+  if (args.source !== "manager_explicit" && args.source !== "case_reviewer") return false;
+  if (!args.actorUserId || args.actorUserId === args.subjectUserId) return false;
+  return true;
 }

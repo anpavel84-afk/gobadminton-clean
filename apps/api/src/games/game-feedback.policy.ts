@@ -208,6 +208,13 @@ export type MeReviewsPage = {
   nextCursor: string | null;
 };
 
+/** Own/generic reason when peer create is unavailable — never foreign attendance details. */
+export type PeerCreateReasonCode =
+  | "game_not_confirmed"
+  | "attendance_unmarked"
+  | "attendance_clarifying"
+  | "no_eligible_peers";
+
 export type FeedbackCapabilities = {
   installed: boolean;
   writesEnabled: boolean;
@@ -217,6 +224,8 @@ export type FeedbackCapabilities = {
   canCreateNote: boolean;
   peerSubjects: Array<{ contextId: string; displayName: string }>;
   organizationRecipientDisplay: string | null;
+  /** Optional additive; absent/null when peer create is available or not applicable. */
+  peerCreateReason?: PeerCreateReasonCode | null;
   complaintReuse: "existing_player_report";
   remaining: Array<"typed_review_safety_extension">;
 };
@@ -315,12 +324,30 @@ export function emptyFeedbackSlice(writesEnabled: boolean): GameFeedbackSlice {
       canCreateNote: false,
       peerSubjects: [],
       organizationRecipientDisplay: null,
+      peerCreateReason: null,
       complaintReuse: "existing_player_report",
       remaining: ["typed_review_safety_extension"],
     },
     myNotes: [],
     gameReviews: [],
   };
+}
+
+/** Safe Russian copy for own peerCreateReason — server codes stay authoritative. */
+export function peerCreateReasonLabel(code: PeerCreateReasonCode | null | undefined): string | null {
+  if (!code) return null;
+  switch (code) {
+    case "game_not_confirmed":
+      return "Игра ещё не подтверждена";
+    case "attendance_unmarked":
+      return "Посещение ещё не отмечено";
+    case "attendance_clarifying":
+      return "Уточняем посещение";
+    case "no_eligible_peers":
+      return "Пока нет участников для отзыва";
+    default:
+      return null;
+  }
 }
 
 export function needsDiscrepancy(attendanceContext: AttendanceContext): boolean {
