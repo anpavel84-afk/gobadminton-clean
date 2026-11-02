@@ -694,20 +694,31 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     expect(patched.statusCode).toBe(200);
     expect(patched.json().comment).toBe("правка после смены отметки");
 
-    // Same-key replay of successful create still returns receipt under current gate rules
-    // (stored receipt; new insert would fail after author absent).
-    const replay = await post(
-      anna,
-      `/v1/games/${gameId}/reviews`,
-      {
-        kind: "peer",
-        subjectContextId: ilyaContext,
-        peerRating: "neutral",
-        experienceAssertion: "i_experienced_this_game",
-      },
-      createIdem,
-    );
-    expect(replay.statusCode).toBe(created.statusCode);
-    expect(replay.json().id).toBe(created.json().id);
+    // Same-key replay and ownedPrior/new-key duplicate must deny AFTER author absent —
+    // private edit/GET stay; POST create paths recheck current confirmed-experience admission.
+    const peerBody = {
+      kind: "peer" as const,
+      subjectContextId: ilyaContext,
+      peerRating: "neutral" as const,
+      experienceAssertion: "i_experienced_this_game" as const,
+    };
+    const replay = await post(anna, `/v1/games/${gameId}/reviews`, peerBody, createIdem);
+    expect(replay.statusCode).toBe(422);
+    expect(replay.json().code).toBe("FEEDBACK_PEER_EXPERIENCE_UNCONFIRMED");
+
+    const ownedDup = await post(anna, `/v1/games/${gameId}/reviews`, peerBody, key());
+    expect(ownedDup.statusCode).toBe(422);
+    expect(ownedDup.json().code).toBe("FEEDBACK_PEER_EXPERIENCE_UNCONFIRMED");
+
+    const sent = await get(anna, `/v1/me/reviews?direction=sent`);
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().items.some((r: { id: string }) => r.id === created.json().id)).toBe(true);
+    const ownResults = await get(anna, `/v1/games/${gameId}/results`);
+    expect(ownResults.statusCode).toBe(200);
+    expect(
+      (ownResults.json().feedback.gameReviews as Array<{ id: string }>).some(
+        (r) => r.id === created.json().id,
+      ),
+    ).toBe(true);
   });
 });

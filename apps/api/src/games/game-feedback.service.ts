@@ -323,6 +323,55 @@ export class GameFeedbackService {
     );
   }
 
+  /**
+   * Current peer-create admission under an already-held game lock.
+   * Shared by new insert, ownedPrior/new-key duplicate, and same-key authorizeReplay.
+   * Does not mutate or delete existing private reviews; GET/history stay separate.
+   */
+  private async assertCurrentPeerCreateAdmission(
+    client: PoolClient,
+    locked: LockedGameRow,
+    now: Date,
+    gameId: string,
+    userId: string,
+    subjectParticipationId: string,
+  ): Promise<void> {
+    const outcome = await this.loadOutcomeValue(client, gameId);
+    const peerLifecycleOk =
+      locked.ends_at.getTime() <= now.getTime() &&
+      (locked.status === "published" || locked.status === "completed");
+    if (!peerLifecycleOk || outcome !== "held") this.peerExperienceDenied();
+
+    const meta = await this.loadGameMeta(client, gameId);
+    const ownEligible = await this.ownEligibleParticipation(
+      client,
+      gameId,
+      userId,
+      meta.startsAt,
+      meta.endsAt,
+    );
+    if (!ownEligible) {
+      throw unprocessable(
+        "FEEDBACK_PEER_REQUIRES_PARTICIPATION",
+        "Отзыв игроку доступен участнику с контекстом",
+      );
+    }
+    const authorOk = await this.subjectHasConfirmedExperience(
+      client,
+      ownEligible.id,
+      userId,
+      meta.startsAt,
+      meta.endsAt,
+      ownEligible.status,
+      ownEligible.confirmed_at,
+    );
+    if (!authorOk) this.peerExperienceDenied();
+    const peers = await this.loadPeerSubjects(client, gameId, userId, meta.startsAt, meta.endsAt);
+    if (!peers.some((p) => p.contextId === subjectParticipationId)) {
+      this.peerExperienceDenied();
+    }
+  }
+
   private derivePeerCreateReason(args: {
     canCreatePeer: boolean;
     lifecycleOk: boolean;
@@ -663,10 +712,23 @@ export class GameFeedbackService {
       authorizeReplay: async (client, existing) => {
         if (!postGameWritesEnabled(this.env)) writesUnavailable();
         if (!(await this.installed(client))) writesUnavailable();
-        await this.lockGame(client, gameId);
+        const locked = await this.lockGame(client, gameId);
         const role = await this.attendance.resolveAccessRole(client, gameId, userId);
         if (role === "none") unavailable();
         if (existing.gameId !== gameId || existing.direction !== "sent") privateMissing();
+        // Same-key success receipt still requires CURRENT peer admission (no bypass after absent/unknown/dispute).
+        if (existing.kind === "peer") {
+          if (!existing.subjectContextId) this.peerExperienceDenied();
+          const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+          await this.assertCurrentPeerCreateAdmission(
+            client,
+            locked,
+            now,
+            gameId,
+            userId,
+            existing.subjectContextId,
+          );
+        }
       },
       execute: async (client) => {
         if (!postGameWritesEnabled(this.env)) writesUnavailable();
@@ -753,42 +815,32 @@ export class GameFeedbackService {
           recipientUserId = meta.trainerUserId;
         }
 
+        // Peer create (new insert AND ownedPrior/new-key duplicate) requires CURRENT admission.
+        // Preservation of private GET/edit does not authorize POST bypass after attendance changes.
+        if (body.kind === "peer") {
+          if (body.discrepancyExplanation) {
+            throw unprocessable("FEEDBACK_DISCREPANCY_UNEXPECTED", "Пояснение расхождения не требуется");
+          }
+          await this.assertCurrentPeerCreateAdmission(
+            client,
+            locked,
+            now,
+            gameId,
+            userId,
+            subjectParticipationId!,
+          );
+        }
+
         const tags = body.kind === "peer" ? (body.tags ?? []) : [];
         // Game row is locked above: same-game writers serialize. Precheck returns the
         // stored projection only (does not apply this request's fields). SAVEPOINT keeps
         // a late UNIQUE 23505 from aborting the outer txn before owned lookup (25P02).
-        // Owned receipt is returned before the confirmed-experience gate so UNIQUE/history
-        // survives later attendance changes; new inserts still require the gate.
         const ownedPrior = await this.findOwnedDuplicate(client, gameId, userId, body);
         if (ownedPrior) {
           return {
             statusCode: 200,
             body: await this.projectReview(client, ownedPrior, userId, true),
           };
-        }
-
-        if (body.kind === "peer") {
-          if (body.discrepancyExplanation) {
-            throw unprocessable("FEEDBACK_DISCREPANCY_UNEXPECTED", "Пояснение расхождения не требуется");
-          }
-          const peerLifecycleOk =
-            locked.ends_at.getTime() <= now.getTime() &&
-            (locked.status === "published" || locked.status === "completed");
-          if (!peerLifecycleOk || outcome !== "held") this.peerExperienceDenied();
-          const authorOk = await this.subjectHasConfirmedExperience(
-            client,
-            ownEligible!.id,
-            userId,
-            meta.startsAt,
-            meta.endsAt,
-            ownEligible!.status,
-            ownEligible!.confirmed_at,
-          );
-          if (!authorOk) this.peerExperienceDenied();
-          const peers = await this.loadPeerSubjects(client, gameId, userId, meta.startsAt, meta.endsAt);
-          if (!peers.some((p) => p.contextId === subjectParticipationId)) {
-            this.peerExperienceDenied();
-          }
         }
 
         let inserted: ReviewRow;
