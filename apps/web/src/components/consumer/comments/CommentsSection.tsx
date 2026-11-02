@@ -75,18 +75,57 @@ export function CommentsSection({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const generation = useRef(0);
+  /** Session/expiry fence: late GET/mutation callbacks ignored until host reactivates. */
+  const sessionLive = useRef(true);
+  const liveKind = useRef(kind);
+  const liveEntity = useRef(entityId);
+  const liveActor = useRef(me?.id ?? "guest");
+  liveKind.current = kind;
+  liveEntity.current = entityId;
   const actorKey = me?.id ?? "guest";
+  liveActor.current = actorKey;
   const scope = `comments:${kind}:${entityId}:${actorKey}`;
+
+  function clearPrivilegedSurface() {
+    setDraft("");
+    setReplyDraft("");
+    setReplyFor(null);
+    setEditId(null);
+    setEditDraft("");
+    setDeleteTarget(null);
+    setMenuFor(null);
+    setStatus("");
+    setExpandedReplies({});
+    setReplyCursors({});
+    setExpandedText({});
+  }
+
+  function fenceSession() {
+    sessionLive.current = false;
+    generation.current += 1;
+    clearPrivilegedSurface();
+  }
+
+  function sameContext(kindSnap: CommentEntityKind, entitySnap: string, actorSnap: string) {
+    return sessionLive.current
+      && liveKind.current === kindSnap
+      && liveEntity.current === entitySnap
+      && liveActor.current === actorSnap;
+  }
 
   const reload = useCallback(async (cursor?: string | null, append = false) => {
     const current = ++generation.current;
+    const kindSnap = kind;
+    const entitySnap = entityId;
+    const actorSnap = liveActor.current;
     if (!append) setState("loading");
-    const result = await listEntityComments(kind, entityId, {
+    const result = await listEntityComments(kindSnap, entitySnap, {
       cursor: cursor ?? undefined,
       order,
       limit: 20,
     });
     if (current !== generation.current) return;
+    if (!sameContext(kindSnap, entitySnap, actorSnap)) return;
     if (!result.ok) {
       if (!append) {
         setPage(null);
@@ -94,7 +133,7 @@ export function CommentsSection({
       }
       return;
     }
-    if (result.data.entityKind !== kind || result.data.entityId !== entityId) {
+    if (result.data.entityKind !== kindSnap || result.data.entityId !== entitySnap) {
       if (!append) {
         setPage(null);
         setState("error");
@@ -102,7 +141,7 @@ export function CommentsSection({
       return;
     }
     setPage((prev) => {
-      if (!append || !prev || prev.entityId !== entityId) return result.data;
+      if (!append || !prev || prev.entityId !== entitySnap) return result.data;
       return {
         ...result.data,
         items: [...prev.items, ...result.data.items],
@@ -113,33 +152,46 @@ export function CommentsSection({
   }, [kind, entityId, order]);
 
   useEffect(() => {
-    if (!parentPublic) return;
+    if (!parentPublic) {
+      fenceSession();
+      setPage(null);
+      setState("loading");
+      return;
+    }
+    // Host me/csrf or entity boundary: reactivate with fresh public read (no getMe here).
+    sessionLive.current = true;
     setPage(null);
-    setExpandedReplies({});
-    setReplyCursors({});
-    setReplyFor(null);
-    setEditId(null);
-    setDeleteTarget(null);
-    setMenuFor(null);
-    setDraft("");
-    setReplyDraft("");
-    setStatus("");
+    clearPrivilegedSurface();
     void reload();
-    const refresh = () => { void reload(); };
-    window.addEventListener("gb-session-changed", refresh);
-    window.addEventListener("gb-private-expired", refresh);
     return () => {
       generation.current += 1;
-      window.removeEventListener("gb-session-changed", refresh);
-      window.removeEventListener("gb-private-expired", refresh);
     };
   }, [parentPublic, reload, actorKey]);
+
+  useEffect(() => {
+    const onExpired = () => {
+      // Clear privileged UI immediately; do not GET/getMe (avoids 401 → private-expired loop).
+      fenceSession();
+    };
+    const onSession = () => {
+      fenceSession();
+      // New me/csrf arrives via host props; actorKey effect reactivates + fresh public read.
+    };
+    window.addEventListener("gb-private-expired", onExpired);
+    window.addEventListener("gb-session-changed", onSession);
+    return () => {
+      window.removeEventListener("gb-private-expired", onExpired);
+      window.removeEventListener("gb-session-changed", onSession);
+    };
+  }, []);
 
   const mutation = useSocialMutation<EntityComment>(
     scope,
     me?.csrfToken ?? "",
     (data, pending) => {
+      if (!sessionLive.current) return;
       if (!pending || data.entityKind !== kind || data.entityId !== entityId) return;
+      if (liveActor.current !== actorKey) return;
       setStatus("Комментарий сохранён.");
       if (pending.method === "POST" && !(pending.body as { parentCommentId?: string }).parentCommentId) {
         setDraft("");
@@ -159,9 +211,13 @@ export function CommentsSection({
       void reload();
       if (data.parentCommentId) void loadReplies(data.parentCommentId, true);
     },
-    () => { void reload(); },
+    () => {
+      if (!sessionLive.current || liveActor.current !== actorKey) return;
+      void reload();
+    },
     Boolean(me),
     {
+      holdCorruptStorage: true,
       validatePending: (pending) => {
         const pathOk = pending.path === createEntityCommentPath(kind, entityId)
           || /^\/v1\/comments\/[0-9a-f-]{36}$/i.test(pending.path);
@@ -191,10 +247,13 @@ export function CommentsSection({
         }
         if (pending.method === "PUT") {
           const body = pending.body as { text: string; expectedVersion: number };
+          // Bind to exact pending.path comment id — unrelated same version/body rejected.
+          if (pending.path !== updateEntityCommentPath(data.id)) return false;
           return !data.deleted && data.body === body.text && data.version === body.expectedVersion + 1 && data.mine;
         }
         if (pending.method === "DELETE") {
           const body = pending.body as { expectedVersion: number };
+          if (pending.path !== deleteEntityCommentPath(data.id)) return false;
           return data.deleted && data.body === null && data.version === body.expectedVersion + 1 && data.mine;
         }
         return false;
@@ -203,14 +262,20 @@ export function CommentsSection({
   );
 
   async function loadReplies(parentId: string, reset = false) {
+    const current = generation.current;
+    const kindSnap = kind;
+    const entitySnap = entityId;
+    const actorSnap = liveActor.current;
     const cursor = reset ? undefined : replyCursors[parentId] ?? undefined;
-    const result = await listEntityComments(kind, entityId, {
+    const result = await listEntityComments(kindSnap, entitySnap, {
       parentCommentId: parentId,
       cursor,
       order: "asc",
       limit: 20,
     });
-    if (!result.ok || result.data.entityId !== entityId) return;
+    if (current !== generation.current) return;
+    if (!sameContext(kindSnap, entitySnap, actorSnap)) return;
+    if (!result.ok || result.data.entityId !== entitySnap) return;
     setExpandedReplies((prev) => ({
       ...prev,
       [parentId]: reset
@@ -218,6 +283,15 @@ export function CommentsSection({
         : [...(prev[parentId] ?? []), ...result.data.items],
     }));
     setReplyCursors((prev) => ({ ...prev, [parentId]: result.data.nextCursor }));
+  }
+
+  function admitMutation(
+    path: string,
+    body: object,
+    method: "POST" | "PUT" | "DELETE" = "POST",
+  ): boolean {
+    if (!sessionLive.current || !me) return false;
+    return mutation.run(path, body, method);
   }
 
   if (!parentPublic) return null;
@@ -256,7 +330,7 @@ export function CommentsSection({
             if (!textReady(draft) || locked) return;
             const text = draft.replace(/^\s+|\s+$/gu, "");
             if (unicodeLen(text) > TEXT_MAX) return;
-            mutation.run(createEntityCommentPath(kind, entityId), { text, parentCommentId: null });
+            admitMutation(createEntityCommentPath(kind, entityId), { text, parentCommentId: null });
           }}
         >
           <Avatar name={me.displayName || "Вы"} tone="lime" />
@@ -321,7 +395,7 @@ export function CommentsSection({
                 onSaveEdit={() => {
                   if (!item.mine || !textReady(editDraft) || locked) return;
                   const text = editDraft.replace(/^\s+|\s+$/gu, "");
-                  mutation.run(updateEntityCommentPath(item.id), {
+                  admitMutation(updateEntityCommentPath(item.id), {
                     text,
                     expectedVersion: item.version,
                   }, "PUT");
@@ -338,7 +412,7 @@ export function CommentsSection({
                 onSubmitReply={() => {
                   if (!textReady(replyDraft) || locked) return;
                   const text = replyDraft.replace(/^\s+|\s+$/gu, "");
-                  mutation.run(createEntityCommentPath(kind, entityId), {
+                  admitMutation(createEntityCommentPath(kind, entityId), {
                     text,
                     parentCommentId: item.id,
                   });
@@ -385,7 +459,7 @@ export function CommentsSection({
               variant="dark"
               disabled={mutation.busy || mutation.pending}
               onClick={() => {
-                mutation.run(deleteEntityCommentPath(deleteTarget.id), {
+                admitMutation(deleteEntityCommentPath(deleteTarget.id), {
                   expectedVersion: deleteTarget.version,
                 }, "DELETE");
               }}

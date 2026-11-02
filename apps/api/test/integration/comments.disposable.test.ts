@@ -69,17 +69,24 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql")).sort()) {
       await migrate(file);
     }
+    // Isolated Admin simulation (HOST loopback, ADMIN_ORIGIN localhost ≠ PUBLIC_WEB, dedicated pepper).
+    const adminOrigin = "http://localhost:19494";
+    const adminPepper = "comments-synthetic-admin-pepper-only!!";
     env = loadEnv({
       NODE_ENV: "test",
       APP_ENV: "local",
+      HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
       PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
       PUBLIC_WEB_ORIGIN: origin,
       COOKIE_SECURE: "false",
       AUTH_PEPPER: "comments-synthetic-fixture-pepper!!",
       CONTENT_MODERATION_PROVIDER: "fake",
-      CONTENT_MODERATION_FINGERPRINT_SECRET: "comments-fingerprint-fixture!!",
+      CONTENT_MODERATION_FINGERPRINT_SECRET: "comments-synthetic-fingerprint-fixture-only",
       SOCIAL_DIRECTORY_ENABLED: "1",
+      ADMIN_INTERNAL_ENABLED: "1",
+      ADMIN_ORIGIN: adminOrigin,
+      ADMIN_AUTH_PEPPER: adminPepper,
       USER_RESTRICTIONS_INTERNAL_ENABLED: "1",
       GAME_MODERATION_INTERNAL_ENABLED: "1",
     });

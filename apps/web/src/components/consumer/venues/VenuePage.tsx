@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getMe } from "../../../lib/api-client";
 import type { ActivityKind, Me, Venue } from "../../../lib/consumer-types";
 import { ConsumerShell } from "../ConsumerShell";
@@ -16,8 +16,10 @@ export function VenuePage({venueId}:{venueId:string}) {
   const activityValue = new URLSearchParams(context.returnTo.split("?")[1] ?? "").get("activity");
   const activity: "all" | ActivityKind = activityValue === "regular" || activityValue === "trainer_led" ? activityValue : "all";
   const [reload,setReload]=useState(0);
+  const [meReload,setMeReload]=useState(0);
   const [result,setResult]=useState<{venueId:string;reload:number;venue:Venue|null;error:boolean}|null>(null);
   const [me,setMe]=useState<Me|null>(null);
+  const meEpoch=useRef(0);
   // A prop change hides the old profile before the next effect runs.
   const current=result?.venueId===venueId&&result.reload===reload?result:null;
   const venue=current?.venue ?? null;
@@ -32,22 +34,28 @@ export function VenuePage({venueId}:{venueId:string}) {
     }).catch(()=>{if(active)setResult({venueId,reload,venue:null,error:true});}).finally(()=>clearTimeout(timer));
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[venueId,reload]);
+  // Same fence as OwnedGameSummaryPage: expiry clears me + invalidates epoch (no getMe reload loop).
   useEffect(()=>{
-    let active=true;
+    const request=++meEpoch.current;
+    setMe(null);
     void getMe().then((account)=>{
-      if(!active)return;
+      if(request!==meEpoch.current)return;
       if(account.ok)setMe(account.data);
       else setMe(null);
-    });
-    const refresh=()=>{ void getMe().then((account)=>{ if(account.ok)setMe(account.data); else setMe(null); }); };
-    window.addEventListener("gb-session-changed", refresh);
-    window.addEventListener("gb-private-expired", refresh);
+    }).catch(()=>{ if(request===meEpoch.current)setMe(null); });
+    return ()=>{ ++meEpoch.current; };
+  },[venueId,meReload]);
+  useEffect(()=>{
+    const clearPrivate=()=>{ ++meEpoch.current; setMe(null); };
+    const onSession=()=>{ clearPrivate(); setMeReload((n)=>n+1); };
+    // private-expired: clear only — do not bump meReload (avoids getMe 401 → gb-private-expired loop).
+    window.addEventListener("gb-private-expired", clearPrivate);
+    window.addEventListener("gb-session-changed", onSession);
     return ()=>{
-      active=false;
-      window.removeEventListener("gb-session-changed", refresh);
-      window.removeEventListener("gb-private-expired", refresh);
+      window.removeEventListener("gb-private-expired", clearPrivate);
+      window.removeEventListener("gb-session-changed", onSession);
     };
-  },[venueId]);
+  },[]);
   // Comments bind to canonical venue.id after UI alias resolution; stale ids never enabled here.
   const commentsParentPublic = Boolean(venue && venue.id);
   return <ConsumerShell active="games" title="Площадка" mode="page" hideHeading><div className="gb-venue-page">

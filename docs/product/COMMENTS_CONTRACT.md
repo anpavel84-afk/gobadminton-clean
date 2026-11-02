@@ -48,6 +48,7 @@
 - Guest auth entry; loading / error / empty; load more; four-line clamp with explicit expand.
 - Safety actions reuse existing player report/block with truthful label **on author** — not a comment-report endpoint or auto-hide promise.
 - Scoped `comments.css` local tokens; Onest via shell; insets 40 desktop / 20 mobile.
+- Session/expiry: VenuePage clears `me` on `gb-private-expired` without getMe reload (no 401 loop); session-changed permits one fenced getMe. CommentsSection fences root/reply GET and mutation callbacks on both events, clears privileged drafts/menus immediately, denies new mutations under the expired fence, and does not call getMe; a new host me/csrf boundary reactivates with fresh public read. Pending PUT/DELETE success binds exact comment id in `pending.path`; corrupt storage held; UNKNOWN markers are not deleted on logout.
 
 ## Non-goals
 

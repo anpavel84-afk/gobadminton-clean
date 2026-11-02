@@ -1,8 +1,8 @@
-# Handoff — #394 GAME+VENUE public comments (pass 1)
+# Handoff — #394 GAME+VENUE public comments (pass 2 repair)
 
-**Assignment:** `OWNER_20261102_COMMENTS394_GAME_VENUE_FIRST_SLICE`
-**Author:** cursor:auto · attempt 1
-**Base / prepared revision:** `8113359533e5a4cfb85c4520a7af1fff1571c9e4` (accepted alpha14)
+**Assignment:** `OWNER_20261102_COMMENTS394_DB_FIXTURE_SESSION_BOUNDARY_REPAIR`
+**Author:** cursor:auto · attempt 2
+**Base / exactclean candidate:** `76cef4d05db3afc306772431644e7a0e5326f862`
 **Publication branch (trusted process only):** `owner/comments394-public-20261102`
 **QA route:** codex_sol_medium (independent) · Product CI / DEV by trusted integrator
 **Author does not claim QA / CI / DEV PASS.**
@@ -11,51 +11,49 @@
 
 | Kind | Delivered path | sha256 |
 |---|---|---|
-| text | `…/STYLE_GUIDE_COMMENTS.md` | `1cbcd536aceb21749c639aaefd89645439624226dc7a2c2239b30069866d238e` |
-| text | `…/DESIGN.md` | `3d2b2bc94a7fcf0ee9a1033db5cf5fec7762b0eaeb93a6449349ecca5f4cf16c` |
-| image | `…/game-normal-desktop.png` (opened as image) | `7a0dd9a497605761588ca3f1f45132f55b0ab4dc4fc2a5d11c1ac585787584f4` |
-| image | `…/venue-normal-mobile.png` (opened as image) | `aeaf93058ad6f5650cbb499c5b139de852ae6f55efe5e55bf6a8015df911fa13` |
-| text | `…/alpha14-history-seed-for-alpha15.json` | `a3024f805b5bab1d307ec2dfbe932cffa943e57a3eaecf7f14db421818869d02` |
+| text | `…/disposable-comments.disposable.log` | `f63fa2c7d2c51d57a593e4ea4bf101bb9b1a4a056f43dfc398173b8311d376a2` |
 
-Gallery DRAFT/PENDING phrases treated as historical visual provenance; Owner visual implementation approval (#372 comment 6555581830) governs.
+Pass-1 genuine 24 web / 6 API unit / contract / type / lint proof retained. Real migration on disposable PostGIS PASS (prior). Comments DB compound failed BEFORE execution due fixture env (log above) — fixed in this pass without disabling validation/gates.
 
-## Exact behavior delivered
+## Exact repair delivered
 
-See `docs/product/COMMENTS_CONTRACT.md`. OpenAPI bumped to `0.25.0`. Prospective app `0.1.0-alpha.15` with `source_sha: null`. Exact alpha14 seed inserted into trusted history (SHA/date/receipt/digests preserved). Parent #394 PARTIAL; UAT NOT_TESTED.
+1. **Integration fixture** (`comments.disposable.test.ts`): isolated Admin simulation — `HOST=127.0.0.1`, `ADMIN_INTERNAL_ENABLED`, `ADMIN_ORIGIN=http://localhost:19494` (distinct from PUBLIC_WEB), dedicated `ADMIN_AUTH_PEPPER`, fingerprint ≥32 chars; restriction/moderation flags remain TRUE. DBnameguard intact. `env.ts` untouched.
+2. **VenuePage getMe lifecycle**: expiry clears `me` + invalidates epoch, **no** getMe reload (no 401 loop). Session-changed clears then one fresh getMe fenced by epoch. Pattern matches accepted OwnedGameSummaryPage.
+3. **CommentsSection**: local `sessionLive` + generation/actor/entity fences on root GET, reply GET, and mutation success/refresh; privileged drafts/menus cleared on both `gb-private-expired` and `gb-session-changed`; mutations denied under expired fence; no getMe. Host me/csrf boundary reactivates with fresh public read.
+4. **Pending**: `holdCorruptStorage: true`; PUT/DELETE `validateSuccess` binds exact `pending.path` comment id. UNKNOWN storage not deleted on logout/expiry.
+5. **Tests**: `comments-private-boundary.test.tsx` — VenuePage deferred getMe, CommentsSection late reply/mutation after fence, exact pending id validation. Existing 2 SSR `comments.test.tsx` unchanged.
 
 ## Author verification commands / results
 
 ```bash
-pnpm --filter @gobadminton/api exec vitest run test/unit/comments.test.ts
-# → 6 passed
-
 pnpm --filter @gobadminton/web exec vitest run \
-  test/comments-api.test.ts test/comments.test.tsx \
-  test/releases.test.tsx test/releases-server.test.ts
-# → 24 passed (4 files)
+  test/comments-private-boundary.test.tsx test/comments.test.tsx
+# → 5 passed (3 boundary + 2 SSR)
 
-pnpm --filter @gobadminton/contracts run check
-# → CONTRACT CHECK: PASS (179 paths, OpenAPI 3.1.1, info 0.25.0)
-
-pnpm --filter @gobadminton/api exec tsc -p tsconfig.json --noEmit   # exit 0
 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit   # exit 0
+pnpm --filter @gobadminton/api exec tsc -p tsconfig.json --noEmit   # exit 0
 
-# Scoped eslint on changed TS/TSX: clean
+# Scoped eslint on allowed changed TS/TSX: clean
+
+# Fixture loadEnv parse (no DB): FIXTURE_LOADENV_PASS admin+restrictions+moderation true, fingerprint len 43
 ```
 
 Disposable PostGIS compound: `apps/api/test/integration/comments.disposable.test.ts`
-Guard: `DATABASE_URL` → `/gobadminton_comments_disposable` + `RUN_DB_INTEGRATION=1`.
-**DB status for this author pass:** NOT_RUN (no disposable PostGIS attached in author environment). Trusted PMA may run after import.
-
-Migration smoke expects `0051_entity_comments` + physical `entity_comments` / `entity_comment_revisions` (smoke itself NOT_RUN here — needs disposable DB).
+Guard: `DATABASE_URL` → `/gobadminton_comments_disposable` (or hosted `gb-ci-394-2-timestamp` /gobadminton) + `RUN_DB_INTEGRATION=1`.
+**DB status for this author pass:** NOT_RUN (no disposable PostGIS attached in author environment). Fixture env parse PASS only — do not claim DB PASS. Trusted PMA reruns real DB then independent Medium reviews.
 
 ## Unresolved / out of scope
 
 - Player-profile comments (pending Owner audience/opt-out).
 - Independent Codex QA, Product CI, DEV ACCEPTED, Owner UAT.
-- #464 cover/authorization (not reproduced on live alpha14; not part of this slice).
 - No Git publication / merge / deploy by author.
+- Release/migration/global unchanged audit not repeated (per assignment).
 
-## Allowed path diff (expected)
+## Allowed path diff (this repair)
 
-Migrations 0051 (+rollback), `apps/api/src/comments/*`, `app.module.ts`, API unit+integration+migration smoke, web CommentsSection + GameDetailPage + VenuePage, `comments-api/types`, `comments.css`, web tests, `releases.ts` (+tests), `COMMENTS_CONTRACT.md`, `COMMENTS_STYLE_GUIDE.md` (approval note already present), handoff, `CHANGELOG.md`, `packages/contracts/openapi.json`.
+- `apps/api/test/integration/comments.disposable.test.ts`
+- `apps/web/src/components/consumer/comments/CommentsSection.tsx`
+- `apps/web/src/components/consumer/venues/VenuePage.tsx`
+- `apps/web/test/comments-private-boundary.test.tsx` (new)
+- `docs/handoffs/comments394-game-venue.md`
+- `docs/product/COMMENTS_CONTRACT.md` (session-boundary note only if needed)
