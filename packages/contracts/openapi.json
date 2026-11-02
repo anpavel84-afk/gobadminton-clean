@@ -29057,51 +29057,101 @@
         ]
       },
       "AdminReportListItem": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "targetKind": {
-            "type": "string",
-            "const": "player"
-          },
-          "targetPublicPlayerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "reasonCode": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "caseId": {
-            "anyOf": [
-              {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
                 "type": "string",
                 "format": "uuid"
               },
-              {
-                "type": "null"
+              "targetKind": {
+                "type": "string",
+                "const": "player"
+              },
+              "targetPublicPlayerId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "caseId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "targetPublicPlayerId",
+              "reasonCode",
+              "state",
+              "createdAt",
+              "caseId"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "game_review"
+              },
+              "targetPublicPlayerId": {
+                "type": "null"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "caseId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "reasonCode",
+              "state",
+              "createdAt",
+              "caseId"
             ]
           }
-        },
-        "required": [
-          "id",
-          "targetKind",
-          "targetPublicPlayerId",
-          "reasonCode",
-          "state",
-          "createdAt",
-          "caseId"
         ]
       },
       "AdminCaseList": {
@@ -29743,39 +29793,77 @@
         ]
       },
       "AdminSafeReport": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "player"
+              },
+              "targetPublicPlayerId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "targetPublicPlayerId",
+              "reasonCode",
+              "state",
+              "createdAt"
+            ]
           },
-          "targetKind": {
-            "type": "string",
-            "const": "player"
-          },
-          "targetPublicPlayerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "reasonCode": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "game_review"
+              },
+              "targetPublicPlayerId": {
+                "type": "null"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "reasonCode",
+              "state",
+              "createdAt"
+            ]
           }
-        },
-        "required": [
-          "id",
-          "targetKind",
-          "targetPublicPlayerId",
-          "reasonCode",
-          "state",
-          "createdAt"
         ]
       },
       "AdminEvidenceGameState": {
