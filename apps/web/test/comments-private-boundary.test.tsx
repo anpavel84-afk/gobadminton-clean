@@ -121,15 +121,13 @@ vi.mock("../src/lib/api-client", () => ({
   getMe: vi.fn(),
 }));
 
-vi.mock("../src/lib/comments-api", () => ({
-  listEntityComments: vi.fn(),
-  createEntityCommentPath: (kind: string, id: string) =>
-    kind === "game" ? `/v1/games/${id}/comments` : `/v1/venues/${id}/comments`,
-  updateEntityCommentPath: (id: string) => `/v1/comments/${encodeURIComponent(id)}`,
-  deleteEntityCommentPath: (id: string) => `/v1/comments/${encodeURIComponent(id)}`,
-  isCommentView: (value: unknown) =>
-    Boolean(value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string"),
-}));
+vi.mock("../src/lib/comments-api", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    listEntityComments: vi.fn(),
+  };
+});
 
 vi.mock("next/link", () => ({
   default: (props: { children?: React.ReactNode }) => props.children ?? null,
@@ -375,6 +373,23 @@ describe("#394 comments private boundary", () => {
     });
     expect(renderToStaticMarkup(tree)).toContain("root");
 
+    const validMinePending = {
+      path: `/v1/venues/${venueId}/comments`,
+      method: "POST",
+      key: "idem-valid",
+      body: { text: "mine ok", parentCommentId: null as string | null },
+    };
+    const validMineBody: EntityComment = {
+      ...replyComment,
+      id: commentId,
+      parentCommentId: null,
+      body: "mine ok",
+      mine: true,
+      replyCount: 0,
+    };
+    // Live session: captured validateSuccess accepts matching mine 2xx.
+    expect(mutation.options?.validateSuccess?.(validMineBody, validMinePending)).toBe(true);
+
     // Invoke loadReplies through the real mutation-success handler (parentCommentId branch).
     mutation.onSuccess?.({
       ...replyComment,
@@ -391,6 +406,18 @@ describe("#394 comments private boundary", () => {
 
     window.dispatchEvent(new Event("gb-private-expired"));
     await settle(4);
+
+    // Expiry: validateSuccess must reject before shared-hook settlement (not only onSuccess hide).
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    expect(mutation.options?.validateSuccess?.(validMineBody, validMinePending)).toBe(false);
 
     pendingReplies.resolve({
       ok: true,
@@ -438,6 +465,98 @@ describe("#394 comments private boundary", () => {
     window.dispatchEvent(new Event("gb-private-expired"));
     await settle(2);
     expect(sessionStorage.getItem(key)).toContain("idem-preserved");
+    // Second expiry event: settlement fence still rejects valid mine 2xx.
+    expect(mutation.options?.validateSuccess?.(validMineBody, validMinePending)).toBe(false);
+
+    // Session-changed: same fence — validateSuccess false while me.id prop unchanged.
+    window.dispatchEvent(new Event("gb-session-changed"));
+    await settle(2);
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    expect(mutation.options?.validateSuccess?.(validMineBody, validMinePending)).toBe(false);
+
+    // Same actor + new CSRF: reactivate fresh public read; old pre-boundary reply closure rejected.
+    const callsBeforeReauth = vi.mocked(listEntityComments).mock.calls.length;
+    const meReauth: Me = { ...me, csrfToken: "csrf-a-rotated" };
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me: meReauth,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    await settle(12);
+    expect(vi.mocked(listEntityComments).mock.calls.length).toBeGreaterThan(callsBeforeReauth);
+    expect(mutation.options?.validateSuccess?.(validMineBody, validMinePending)).toBe(true);
+
+    const pendingOldCsrfReplies = deferred<{ ok: true; status: number; data: EntityCommentPage }>();
+    vi.mocked(listEntityComments).mockImplementation((_kind, _id, query) => {
+      if (query && "parentCommentId" in query && query.parentCommentId) {
+        return pendingOldCsrfReplies.promise as never;
+      }
+      return Promise.resolve({ ok: true, status: 200, data: rootPage }) as never;
+    });
+    // Mount under prior csrf, start reply GET, then rotate csrf while in flight.
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    await settle(8);
+    mutation.onSuccess?.({
+      ...replyComment,
+      body: "trigger replies old csrf",
+    }, {
+      path: `/v1/venues/${venueId}/comments`,
+      method: "POST",
+      key: "idem-old-csrf-replies",
+      body: { text: "trigger replies old csrf", parentCommentId: commentId },
+    });
+    await settle(2);
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me: meReauth,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    await settle(8);
+    pendingOldCsrfReplies.resolve({
+      ok: true,
+      status: 200,
+      data: {
+        ...emptyPage,
+        parentCommentId: commentId,
+        items: [{ ...replyComment, body: "stale pre-csrf-boundary reply" }],
+        visibleCount: 1,
+      },
+    });
+    await settle(6);
+    hooks.cursor = 0;
+    tree = CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me: meReauth,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    expect(renderToStaticMarkup(tree)).not.toContain("stale pre-csrf-boundary reply");
   });
 
   it("PUT/DELETE validateSuccess binds exact pending.path comment id", async () => {

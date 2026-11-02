@@ -31,6 +31,17 @@ type Props = {
   parentPublic: boolean;
 };
 
+/** In-memory actor+csrf identity — never logged or written to storage keys/DOM. */
+type AuthIdentity = { actor: string; csrf: string };
+
+function authIdentityOf(me: Me | null): AuthIdentity {
+  return { actor: me?.id ?? "guest", csrf: me?.csrfToken ?? "" };
+}
+
+function sameAuth(a: AuthIdentity, b: AuthIdentity): boolean {
+  return a.actor === b.actor && a.csrf === b.csrf;
+}
+
 function commentTime(iso: string): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return "";
@@ -79,12 +90,34 @@ export function CommentsSection({
   const sessionLive = useRef(true);
   const liveKind = useRef(kind);
   const liveEntity = useRef(entityId);
-  const liveActor = useRef(me?.id ?? "guest");
+  const liveAuth = useRef(authIdentityOf(me));
+  const hostAuth = authIdentityOf(me);
+  const actorKey = hostAuth.actor;
+  const hostCsrf = hostAuth.csrf;
   liveKind.current = kind;
   liveEntity.current = entityId;
-  const actorKey = me?.id ?? "guest";
-  liveActor.current = actorKey;
+  liveAuth.current = hostAuth;
   const scope = `comments:${kind}:${entityId}:${actorKey}`;
+  /** Sync hide privileged UI when entity/actor props cross a boundary (before paint). */
+  const boundarySeen = useRef({ kind, entityId, actor: actorKey });
+  if (
+    boundarySeen.current.kind !== kind
+    || boundarySeen.current.entityId !== entityId
+    || boundarySeen.current.actor !== actorKey
+  ) {
+    boundarySeen.current = { kind, entityId, actor: actorKey };
+    if (draft) setDraft("");
+    if (replyDraft) setReplyDraft("");
+    if (replyFor !== null) setReplyFor(null);
+    if (editId !== null) setEditId(null);
+    if (editDraft) setEditDraft("");
+    if (deleteTarget !== null) setDeleteTarget(null);
+    if (menuFor !== null) setMenuFor(null);
+    if (status) setStatus("");
+    if (Object.keys(expandedReplies).length) setExpandedReplies({});
+    if (Object.keys(replyCursors).length) setReplyCursors({});
+    if (Object.keys(expandedText).length) setExpandedText({});
+  }
 
   function clearPrivilegedSurface() {
     setDraft("");
@@ -106,18 +139,26 @@ export function CommentsSection({
     clearPrivilegedSurface();
   }
 
-  function sameContext(kindSnap: CommentEntityKind, entitySnap: string, actorSnap: string) {
+  function sameContext(kindSnap: CommentEntityKind, entitySnap: string, authSnap: AuthIdentity) {
     return sessionLive.current
       && liveKind.current === kindSnap
       && liveEntity.current === entitySnap
-      && liveActor.current === actorSnap;
+      && sameAuth(liveAuth.current, authSnap);
+  }
+
+  /** Settlement fence: reject before useSocialMutation save(null), not only in onSuccess. */
+  function settlementLive(): boolean {
+    return sessionLive.current
+      && liveKind.current === kind
+      && liveEntity.current === entityId
+      && sameAuth(liveAuth.current, hostAuth);
   }
 
   const reload = useCallback(async (cursor?: string | null, append = false) => {
     const current = ++generation.current;
     const kindSnap = kind;
     const entitySnap = entityId;
-    const actorSnap = liveActor.current;
+    const authSnap = { ...liveAuth.current };
     if (!append) setState("loading");
     const result = await listEntityComments(kindSnap, entitySnap, {
       cursor: cursor ?? undefined,
@@ -125,7 +166,7 @@ export function CommentsSection({
       limit: 20,
     });
     if (current !== generation.current) return;
-    if (!sameContext(kindSnap, entitySnap, actorSnap)) return;
+    if (!sameContext(kindSnap, entitySnap, authSnap)) return;
     if (!result.ok) {
       if (!append) {
         setPage(null);
@@ -160,13 +201,14 @@ export function CommentsSection({
     }
     // Host me/csrf or entity boundary: reactivate with fresh public read (no getMe here).
     sessionLive.current = true;
+    liveAuth.current = { actor: actorKey, csrf: hostCsrf };
     setPage(null);
     clearPrivilegedSurface();
     void reload();
     return () => {
       generation.current += 1;
     };
-  }, [parentPublic, reload, actorKey]);
+  }, [parentPublic, reload, actorKey, hostCsrf]);
 
   useEffect(() => {
     const onExpired = () => {
@@ -175,7 +217,7 @@ export function CommentsSection({
     };
     const onSession = () => {
       fenceSession();
-      // New me/csrf arrives via host props; actorKey effect reactivates + fresh public read.
+      // New me/csrf arrives via host props; actor+csrf effect reactivates + fresh public read.
     };
     window.addEventListener("gb-private-expired", onExpired);
     window.addEventListener("gb-session-changed", onSession);
@@ -187,11 +229,10 @@ export function CommentsSection({
 
   const mutation = useSocialMutation<EntityComment>(
     scope,
-    me?.csrfToken ?? "",
+    hostCsrf,
     (data, pending) => {
-      if (!sessionLive.current) return;
+      if (!settlementLive()) return;
       if (!pending || data.entityKind !== kind || data.entityId !== entityId) return;
-      if (liveActor.current !== actorKey) return;
       setStatus("Комментарий сохранён.");
       if (pending.method === "POST" && !(pending.body as { parentCommentId?: string }).parentCommentId) {
         setDraft("");
@@ -212,7 +253,7 @@ export function CommentsSection({
       if (data.parentCommentId) void loadReplies(data.parentCommentId, true);
     },
     () => {
-      if (!sessionLive.current || liveActor.current !== actorKey) return;
+      if (!settlementLive()) return;
       void reload();
     },
     Boolean(me),
@@ -237,6 +278,8 @@ export function CommentsSection({
         return false;
       },
       validateSuccess: (data, pending) => {
+        // Reject stale/expired/local context BEFORE shared-hook settlement (save null).
+        if (!settlementLive()) return false;
         if (!pending || !isCommentView(data)) return false;
         if (data.entityKind !== kind || data.entityId !== entityId) return false;
         if (pending.method === "POST") {
@@ -265,7 +308,7 @@ export function CommentsSection({
     const current = generation.current;
     const kindSnap = kind;
     const entitySnap = entityId;
-    const actorSnap = liveActor.current;
+    const authSnap = { ...liveAuth.current };
     const cursor = reset ? undefined : replyCursors[parentId] ?? undefined;
     const result = await listEntityComments(kindSnap, entitySnap, {
       parentCommentId: parentId,
@@ -274,7 +317,7 @@ export function CommentsSection({
       limit: 20,
     });
     if (current !== generation.current) return;
-    if (!sameContext(kindSnap, entitySnap, actorSnap)) return;
+    if (!sameContext(kindSnap, entitySnap, authSnap)) return;
     if (!result.ok || result.data.entityId !== entitySnap) return;
     setExpandedReplies((prev) => ({
       ...prev,
