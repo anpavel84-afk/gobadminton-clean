@@ -21,6 +21,7 @@
   - Venue: lifecycle `unverified|verified`, `canonical_venue_id IS NULL` (merged/retired stale ids → indistinguishable 404).
 - Parent locked in a short transaction; re-read after waiting so projection cannot diverge from visibility.
 - Guest may read public contexts. Create/reply/edit/delete require active authenticated cookie mutation (CSRF / Origin / Idempotency-Key) plus `account.access` + `profile.public`.
+- List `canCreate` mirrors those write gates (active viewer + restrictions + applicable game↔organizer block) without inventing admin policy; read stays available when false. UI shows composer only when `canCreate`; guests keep auth entry; authenticated read-only gets a concise reading-state note.
 - Only the comment author edits/deletes own entry. No new organizer/venue-owner/admin moderation rights.
 - Authenticated readers do not receive blocked-pair author body/avatar/identity in list/count. Writers cannot reply to a blocked author or post into a game when blocked with its organizer. Pair checks re-run on execute and replay.
 - Inactive/restricted/private author projection uses safe public display (`Игрок`) without email, private user id, or protected avatar.
@@ -48,7 +49,7 @@
 - Guest auth entry; loading / error / empty; load more; four-line clamp with explicit expand.
 - Safety actions reuse existing player report/block with truthful label **on author** — not a comment-report endpoint or auto-hide promise.
 - Scoped `comments.css` local tokens; Onest via shell; insets 40 desktop / 20 mobile.
-- Session/expiry: VenuePage clears `me` on `gb-private-expired` without getMe reload (no 401 loop); session-changed permits one fenced getMe. CommentsSection fences root/reply GET and mutation callbacks on both events, clears privileged drafts/menus immediately, denies new mutations under the expired fence, and does not call getMe; a new host me/csrf boundary reactivates with fresh public read. Pending PUT/DELETE success binds exact comment id in `pending.path`; corrupt storage held; UNKNOWN markers are not deleted on logout.
+- Session/expiry: VenuePage clears `me` on `gb-private-expired` without getMe reload (no 401 loop); session-changed permits one fenced getMe. CommentsSection fences root/reply GET and mutation callbacks on both events, clears privileged drafts/menus immediately, denies new mutations under the expired fence, and does not call getMe. Loaded pages bind kind/entity/actor-session and hide in render on mismatch before effects (no one-frame prior-reader disclosure). When host `me` is already null, private-expired restores one bounded public guest read (stale GET rejected; sort/retry accepted); authorized mutation validators are not revived. A new host me/csrf boundary reactivates with fresh public read. Pending PUT/DELETE success binds exact comment id in `pending.path`; corrupt storage held; UNKNOWN markers are not deleted on logout.
 
 ## Non-goals
 

@@ -34,12 +34,30 @@ type Props = {
 /** In-memory actor+csrf identity — never logged or written to storage keys/DOM. */
 type AuthIdentity = { actor: string; csrf: string };
 
+/** Immutable read context bound to a loaded page — hide on mismatch before effects. */
+type PageReadBind = {
+  kind: CommentEntityKind;
+  entityId: string;
+  actor: string;
+  csrf: string;
+};
+
 function authIdentityOf(me: Me | null): AuthIdentity {
   return { actor: me?.id ?? "guest", csrf: me?.csrfToken ?? "" };
 }
 
 function sameAuth(a: AuthIdentity, b: AuthIdentity): boolean {
   return a.actor === b.actor && a.csrf === b.csrf;
+}
+
+function pageBindMatches(bind: PageReadBind | null, kind: CommentEntityKind, entityId: string, auth: AuthIdentity): boolean {
+  return Boolean(
+    bind
+    && bind.kind === kind
+    && bind.entityId === entityId
+    && bind.actor === auth.actor
+    && bind.csrf === auth.csrf,
+  );
 }
 
 function commentTime(iso: string): string {
@@ -73,6 +91,8 @@ export function CommentsSection({
   const [authOpen, setAuthOpen] = useState(false);
   const [order, setOrder] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState<EntityCommentPage | null>(null);
+  /** Bind loaded page to the kind/entity/actor-session that fetched it. */
+  const [pageBind, setPageBind] = useState<PageReadBind | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [draft, setDraft] = useState("");
   const [replyFor, setReplyFor] = useState<string | null>(null);
@@ -85,18 +105,22 @@ export function CommentsSection({
   const [expandedText, setExpandedText] = useState<Record<string, boolean>>({});
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  /** Bumps only for guest public reactivation when host me stays null after private-expired. */
+  const [guestReadEpoch, setGuestReadEpoch] = useState(0);
   const generation = useRef(0);
   /** Session/expiry fence: late GET/mutation callbacks ignored until host reactivates. */
   const sessionLive = useRef(true);
   const liveKind = useRef(kind);
   const liveEntity = useRef(entityId);
   const liveAuth = useRef(authIdentityOf(me));
+  const liveGuest = useRef(me === null);
   const hostAuth = authIdentityOf(me);
   const actorKey = hostAuth.actor;
   const hostCsrf = hostAuth.csrf;
   liveKind.current = kind;
   liveEntity.current = entityId;
   liveAuth.current = hostAuth;
+  liveGuest.current = me === null;
   const scope = `comments:${kind}:${entityId}:${actorKey}`;
   /** Sync hide privileged UI when entity/actor props cross a boundary (before paint). */
   const boundarySeen = useRef({ kind, entityId, actor: actorKey });
@@ -118,6 +142,10 @@ export function CommentsSection({
     if (Object.keys(replyCursors).length) setReplyCursors({});
     if (Object.keys(expandedText).length) setExpandedText({});
   }
+  /** Render fence: never paint prior actor/entity page (count/body/mine) before effects. */
+  const currentPage = pageBindMatches(pageBind, kind, entityId, hostAuth) && sessionLive.current
+    ? page
+    : null;
 
   function clearPrivilegedSurface() {
     setDraft("");
@@ -159,7 +187,17 @@ export function CommentsSection({
     const kindSnap = kind;
     const entitySnap = entityId;
     const authSnap = { ...liveAuth.current };
-    if (!append) setState("loading");
+    const bind: PageReadBind = {
+      kind: kindSnap,
+      entityId: entitySnap,
+      actor: authSnap.actor,
+      csrf: authSnap.csrf,
+    };
+    if (!append) {
+      setState("loading");
+      setPage(null);
+      setPageBind(null);
+    }
     const result = await listEntityComments(kindSnap, entitySnap, {
       cursor: cursor ?? undefined,
       order,
@@ -170,6 +208,7 @@ export function CommentsSection({
     if (!result.ok) {
       if (!append) {
         setPage(null);
+        setPageBind(null);
         setState("error");
       }
       return;
@@ -177,10 +216,14 @@ export function CommentsSection({
     if (result.data.entityKind !== kindSnap || result.data.entityId !== entitySnap) {
       if (!append) {
         setPage(null);
+        setPageBind(null);
         setState("error");
       }
       return;
     }
+    // Accept only responses that still match the exact bound fence.
+    if (!pageBindMatches(bind, liveKind.current, liveEntity.current, liveAuth.current)) return;
+    if (!sessionLive.current) return;
     setPage((prev) => {
       if (!append || !prev || prev.entityId !== entitySnap) return result.data;
       return {
@@ -189,6 +232,7 @@ export function CommentsSection({
         visibleCount: result.data.visibleCount,
       };
     });
+    setPageBind(bind);
     setState("ready");
   }, [kind, entityId, order]);
 
@@ -196,28 +240,38 @@ export function CommentsSection({
     if (!parentPublic) {
       fenceSession();
       setPage(null);
+      setPageBind(null);
       setState("loading");
       return;
     }
-    // Host me/csrf or entity boundary: reactivate with fresh public read (no getMe here).
+    // Host me/csrf, entity boundary, or guest epoch: reactivate with fresh public read (no getMe).
     sessionLive.current = true;
     liveAuth.current = { actor: actorKey, csrf: hostCsrf };
     setPage(null);
+    setPageBind(null);
     clearPrivilegedSurface();
     void reload();
     return () => {
       generation.current += 1;
     };
-  }, [parentPublic, reload, actorKey, hostCsrf]);
+  }, [parentPublic, reload, actorKey, hostCsrf, guestReadEpoch]);
 
   useEffect(() => {
     const onExpired = () => {
       // Clear privileged UI immediately; do not GET/getMe (avoids 401 → private-expired loop).
       fenceSession();
+      // Guest me=null unchanged: host deps do not change — one bounded public reactivation.
+      if (liveGuest.current) {
+        setGuestReadEpoch((n) => n + 1);
+      }
     };
     const onSession = () => {
       fenceSession();
       // New me/csrf arrives via host props; actor+csrf effect reactivates + fresh public read.
+      // Guest-only: same as private-expired when host me stays null.
+      if (liveGuest.current) {
+        setGuestReadEpoch((n) => n + 1);
+      }
     };
     window.addEventListener("gb-private-expired", onExpired);
     window.addEventListener("gb-session-changed", onSession);
@@ -334,20 +388,32 @@ export function CommentsSection({
     method: "POST" | "PUT" | "DELETE" = "POST",
   ): boolean {
     if (!sessionLive.current || !me) return false;
+    if (method === "POST" && !currentPage?.canCreate) return false;
     return mutation.run(path, body, method);
+  }
+
+  /** User retry: reactivate guest public fence without getMe / mutation replay. */
+  function retryPublicRead() {
+    if (!sessionLive.current && liveGuest.current) {
+      sessionLive.current = true;
+      liveAuth.current = { actor: "guest", csrf: "" };
+    }
+    void reload();
   }
 
   if (!parentPublic) return null;
 
   const locked = mutation.busy || mutation.pending;
-  const count = page?.visibleCount;
+  const pageReady = Boolean(currentPage) && state === "ready";
+  const count = currentPage?.visibleCount;
+  const canCreate = Boolean(currentPage?.canCreate);
 
   return (
     <section className="gb-comments" aria-labelledby={headingId} data-entity-kind={kind}>
       <header className="gb-comments__header">
         <div className="gb-comments__title-row">
           <h2 id={headingId} tabIndex={-1}>Комментарии</h2>
-          {typeof count === "number" && state === "ready" ? (
+          {typeof count === "number" && pageReady ? (
             <span className="gb-comments__count" aria-label={`${count} комментариев`}>{count}</span>
           ) : null}
           <label className="gb-comments__order">
@@ -365,7 +431,12 @@ export function CommentsSection({
         <p className="gb-comments__description">{description}</p>
       </header>
 
-      {me ? (
+      {!me ? (
+        <div className="gb-comments__auth" role="note">
+          <p>Войдите, чтобы оставить комментарий. Чтение доступно без входа.</p>
+          <Button variant="outline" onClick={() => setAuthOpen(true)}>Войти</Button>
+        </div>
+      ) : pageReady && canCreate ? (
         <form
           className="gb-comments__composer"
           onSubmit={(e) => {
@@ -392,30 +463,29 @@ export function CommentsSection({
             Отправить
           </Button>
         </form>
-      ) : (
+      ) : pageReady && me ? (
         <div className="gb-comments__auth" role="note">
-          <p>Войдите, чтобы оставить комментарий. Чтение доступно без входа.</p>
-          <Button variant="outline" onClick={() => setAuthOpen(true)}>Войти</Button>
+          <p>Чтение доступно. Отправка комментариев сейчас недоступна.</p>
         </div>
-      )}
+      ) : null}
 
       <MutationNotice mutation={mutation} />
       {status ? <p className="gb-comments__status" role="status">{status}</p> : null}
 
-      {state === "loading" && !page ? <p className="gb-comments__feedback" role="status">Загружаем комментарии…</p> : null}
+      {state === "loading" && !currentPage ? <p className="gb-comments__feedback" role="status">Загружаем комментарии…</p> : null}
       {state === "error" ? (
         <div className="gb-comments__feedback" role="alert">
           <p>Не удалось загрузить комментарии.</p>
-          <Button variant="outline" onClick={() => void reload()}>Попробовать снова</Button>
+          <Button variant="outline" onClick={() => retryPublicRead()}>Попробовать снова</Button>
         </div>
       ) : null}
-      {state === "ready" && page && page.items.length === 0 ? (
+      {pageReady && currentPage && currentPage.items.length === 0 ? (
         <p className="gb-comments__empty" role="status">Пока нет комментариев. Начните разговор.</p>
       ) : null}
 
-      {page && page.items.length > 0 ? (
+      {currentPage && currentPage.items.length > 0 ? (
         <ul className="gb-comments__list">
-          {page.items.map((item) => (
+          {currentPage.items.map((item) => (
             <li key={item.id} className="gb-comments__item">
               <CommentArticle
                 item={item}
@@ -425,6 +495,7 @@ export function CommentsSection({
                 onMenu={() => setMenuFor((cur) => (cur === item.id ? null : item.id))}
                 onCloseMenu={() => setMenuFor(null)}
                 me={me}
+                canCreate={canCreate}
                 locked={locked}
                 editing={editId === item.id}
                 editDraft={editDraft}
@@ -453,7 +524,7 @@ export function CommentsSection({
                   if (!expandedReplies[item.id] && item.replyCount > 0) void loadReplies(item.id, true);
                 }}
                 onSubmitReply={() => {
-                  if (!textReady(replyDraft) || locked) return;
+                  if (!canCreate || !textReady(replyDraft) || locked) return;
                   const text = replyDraft.replace(/^\s+|\s+$/gu, "");
                   admitMutation(createEntityCommentPath(kind, entityId), {
                     text,
@@ -472,12 +543,12 @@ export function CommentsSection({
         </ul>
       ) : null}
 
-      {page?.nextCursor ? (
+      {currentPage?.nextCursor ? (
         <Button
           variant="outline"
           className="gb-comments__more"
           disabled={state === "loading" || locked}
-          onClick={() => void reload(page.nextCursor, true)}
+          onClick={() => void reload(currentPage.nextCursor, true)}
         >
           Показать ещё
         </Button>
@@ -528,6 +599,7 @@ function CommentArticle({
   onMenu,
   onCloseMenu,
   me,
+  canCreate,
   locked,
   editing,
   editDraft,
@@ -555,6 +627,7 @@ function CommentArticle({
   onMenu: () => void;
   onCloseMenu: () => void;
   me: Me | null;
+  canCreate: boolean;
   locked: boolean;
   editing: boolean;
   editDraft: string;
@@ -667,7 +740,7 @@ function CommentArticle({
         <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
       )}
 
-      {!item.deleted && me ? (
+      {!item.deleted && me && canCreate ? (
         <div className="gb-comment__actions">
           <button type="button" className="gb-comment__reply-toggle" onClick={onToggleReply} disabled={locked}>
             Ответить
@@ -728,7 +801,7 @@ function CommentArticle({
         <Button variant="outline" onClick={onMoreReplies}>Ещё ответы</Button>
       ) : null}
 
-      {replyOpen && me ? (
+      {replyOpen && me && canCreate ? (
         <form
           className="gb-comments__composer gb-comments__composer--reply"
           onSubmit={(e) => { e.preventDefault(); onSubmitReply(); }}

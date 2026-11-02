@@ -230,6 +230,7 @@ export class CommentsService {
           visibleCount = Number(total.rows[0]?.n ?? 0);
         }
 
+        const canCreate = await this.resolveCanCreate(client, kind, entityId, viewerId);
         await client.query("COMMIT");
         const page = rows.slice(0, limit);
         const hasMore = rows.length > limit;
@@ -250,7 +251,7 @@ export class CommentsService {
             })
             : null,
           visibleCount,
-          canCreate: Boolean(viewerId),
+          canCreate,
         };
       } catch (error) {
         await client.query("ROLLBACK");
@@ -525,6 +526,41 @@ export class CommentsService {
     ).rows[0];
     if (!parent || parent.parent_comment_id !== null) unavailable();
     return parent;
+  }
+
+  /**
+   * List projection of write eligibility — same capability + game-organizer block gates as create.
+   * Does not invent admin policy; read stays available when false.
+   */
+  private async resolveCanCreate(
+    client: PoolClient,
+    kind: EntityCommentKind,
+    entityId: string,
+    viewerId: string | null,
+  ): Promise<boolean> {
+    if (!viewerId) return false;
+    if (this.env.USER_RESTRICTIONS_INTERNAL_ENABLED) {
+      const allowed = await client.query(
+        `SELECT 1 WHERE ${unrestrictedSql(true, "$1", ["account.access", "profile.public"])}`,
+        [viewerId],
+      );
+      if (!allowed.rows[0]) return false;
+    }
+    if (kind === "game") {
+      const organizer = (
+        await client.query<{ created_by_user_id: string }>(
+          `SELECT created_by_user_id FROM games WHERE id = $1`,
+          [entityId],
+        )
+      ).rows[0];
+      if (!organizer) return false;
+      if (organizer.created_by_user_id !== viewerId) {
+        if (await this.pairBlocked(client, viewerId, organizer.created_by_user_id)) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   private async assertCanWrite(

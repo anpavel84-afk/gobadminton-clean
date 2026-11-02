@@ -263,6 +263,43 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
       canCreate: false,
     });
 
+    const unrestrictedList = await get(author, gameUrl);
+    expect(unrestrictedList.statusCode).toBe(200);
+    expect(unrestrictedList.json().canCreate).toBe(true);
+
+    // Restricted actor: list still readable, canCreate false, write 403 (capabilities unchanged).
+    const adminUserId = randomUUID();
+    await pool.query("INSERT INTO users(id,display_name) VALUES($1,$2)", [adminUserId, "Comments admin fixture"]);
+    const principal = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",
+        [adminUserId],
+      )
+    ).rows[0]!.id;
+    const restrictionId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO user_restrictions(user_id,capability,reason_code,expires_at,created_by)
+         VALUES ($1,'profile.public','synthetic_fixture',clock_timestamp()+interval '1 hour',$2)
+         RETURNING id`,
+        [outsider.userId, principal],
+      )
+    ).rows[0]!.id;
+    const restrictedList = await get(outsider, gameUrl);
+    expect(restrictedList.statusCode).toBe(200);
+    expect(restrictedList.json().canCreate).toBe(false);
+    expect(restrictedList.json().visibleCount).toBe(0);
+    const restrictedWrite = await post(outsider, gameUrl, { text: "restricted deny", parentCommentId: null });
+    expect(restrictedWrite.statusCode).toBe(403);
+    expect((await get(author, gameUrl)).json().canCreate).toBe(true);
+    expect((await get(null, gameUrl)).json().canCreate).toBe(false);
+    // Explicit reversal so later outsider block cases keep dedicated fixture semantics.
+    await pool.query(
+      `UPDATE user_restrictions
+       SET revoked_at=clock_timestamp(), revoked_by=$2, revoke_reason_code='synthetic_reversal', version=version+1
+       WHERE id=$1`,
+      [restrictionId, principal],
+    );
+
     const createIdem = key();
     const created = await post(author, gameUrl, { text: "Во сколько встречаемся?", parentCommentId: null }, createIdem);
     expect(created.statusCode).toBe(201);

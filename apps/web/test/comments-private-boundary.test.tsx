@@ -135,8 +135,15 @@ vi.mock("next/link", () => ({
 vi.mock("../src/components/consumer/ConsumerShell", () => ({
   ConsumerShell: ({ children }: { children: React.ReactNode }) => children,
 }));
+const buttons = vi.hoisted(() => ({
+  clicks: [] as Array<() => void>,
+}));
+
 vi.mock("../src/components/consumer/Button", () => ({
-  Button: (props: { children?: React.ReactNode }) => props.children ?? null,
+  Button: (props: { children?: React.ReactNode; onClick?: () => void }) => {
+    if (typeof props.onClick === "function") buttons.clicks.push(props.onClick);
+    return props.children ?? null;
+  },
 }));
 vi.mock("../src/components/consumer/venues/VenueGallery", () => ({
   VenueGallery: () => null,
@@ -257,6 +264,7 @@ const memoryStore = new Map<string, string>();
 
 beforeEach(() => {
   resetHooks();
+  buttons.clicks = [];
   mutation.busy = false;
   mutation.pending = false;
   mutation.notice = "";
@@ -300,6 +308,217 @@ afterEach(() => {
 });
 
 describe("#394 comments private boundary", () => {
+  it("hides prior actor page in render before effects on actor switch", async () => {
+    const pageA: EntityCommentPage = {
+      ...emptyPage,
+      items: [{
+        ...replyComment,
+        id: commentId,
+        parentCommentId: null,
+        body: "actor-a blocked-filter body",
+        mine: true,
+        replyCount: 0,
+      }],
+      visibleCount: 7,
+      canCreate: true,
+    };
+    const pageB: EntityCommentPage = {
+      ...emptyPage,
+      items: [{
+        ...replyComment,
+        id: otherCommentId,
+        parentCommentId: null,
+        body: "actor-b different block result",
+        mine: false,
+        replyCount: 0,
+      }],
+      visibleCount: 1,
+      canCreate: true,
+    };
+    vi.mocked(listEntityComments).mockResolvedValue({ ok: true, status: 200, data: pageA });
+
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    await settle(12);
+
+    hooks.cursor = 0;
+    let tree = CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    expect(renderToStaticMarkup(tree)).toContain("actor-a blocked-filter body");
+    expect(renderToStaticMarkup(tree)).toContain("7 комментариев");
+
+    const meB: Me = {
+      ...me,
+      id: "actor-b",
+      csrfToken: "csrf-b",
+      displayName: "Actor B",
+    };
+    vi.mocked(listEntityComments).mockResolvedValue({ ok: true, status: 200, data: pageB });
+    // Render under B before running effects — prior count/body/mine must not paint.
+    hooks.effects = [];
+    hooks.cursor = 0;
+    tree = CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me: meB,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    const htmlBeforeEffects = renderToStaticMarkup(tree);
+    expect(htmlBeforeEffects).not.toContain("actor-a blocked-filter body");
+    expect(htmlBeforeEffects).not.toContain("7 комментариев");
+    expect(htmlBeforeEffects).not.toContain("Ваш комментарий");
+    expect(hooks.effects.length).toBeGreaterThan(0);
+
+    await settle(12);
+    hooks.cursor = 0;
+    tree = CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me: meB,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    const htmlAfter = renderToStaticMarkup(tree);
+    expect(htmlAfter).toContain("actor-b different block result");
+    expect(htmlAfter).not.toContain("actor-a blocked-filter body");
+  });
+
+  it("guest me=null private-expired rejects stale GET and accepts fresh public read", async () => {
+    const pendingOld = deferred<{ ok: true; status: number; data: EntityCommentPage }>();
+    const pendingFresh = deferred<{ ok: true; status: number; data: EntityCommentPage }>();
+    const pendingRetry = deferred<{ ok: true; status: number; data: EntityCommentPage }>();
+    let wave = 0;
+    vi.mocked(listEntityComments).mockImplementation(() => {
+      wave += 1;
+      if (wave === 1) return pendingOld.promise as never;
+      if (wave === 2) return pendingFresh.promise as never;
+      return pendingRetry.promise as never;
+    });
+
+    const guestProps = {
+      kind: "venue" as const,
+      entityId: venueId,
+      me: null as Me | null,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    };
+
+    hooks.cursor = 0;
+    CommentsSection(guestProps);
+    await settle(4);
+    expect(wave).toBe(1);
+
+    // Ordinary getMe 401 → private-expired while host me stays null.
+    window.dispatchEvent(new Event("gb-private-expired"));
+    // Re-render so guestReadEpoch dep schedules one bounded public reload.
+    hooks.cursor = 0;
+    CommentsSection(guestProps);
+    await settle(8);
+    expect(wave).toBeGreaterThanOrEqual(2);
+
+    pendingOld.resolve({
+      ok: true,
+      status: 200,
+      data: {
+        ...emptyPage,
+        items: [{ ...replyComment, body: "stale guest pre-expiry body", mine: false }],
+        visibleCount: 3,
+        canCreate: false,
+      },
+    });
+    await settle(6);
+
+    hooks.cursor = 0;
+    let tree = CommentsSection(guestProps);
+    expect(renderToStaticMarkup(tree)).not.toContain("stale guest pre-expiry body");
+    expect(renderToStaticMarkup(tree)).not.toContain("3 комментариев");
+
+    pendingFresh.resolve({
+      ok: true,
+      status: 200,
+      data: {
+        ...emptyPage,
+        items: [{ ...replyComment, body: "fresh guest body", mine: false }],
+        visibleCount: 1,
+        canCreate: false,
+      },
+    });
+    await settle(10);
+
+    hooks.cursor = 0;
+    tree = CommentsSection(guestProps);
+    expect(renderToStaticMarkup(tree)).toContain("fresh guest body");
+    expect(vi.mocked(getMe)).not.toHaveBeenCalled();
+
+    // Sort (order slot) triggers a fresh public read under guest.
+    const callsBeforeSort = vi.mocked(listEntityComments).mock.calls.length;
+    // useState order is the second state slot (after authOpen).
+    hooks.slots[1] = "desc";
+    hooks.cursor = 0;
+    CommentsSection(guestProps);
+    await settle(10);
+    expect(vi.mocked(listEntityComments).mock.calls.length).toBeGreaterThan(callsBeforeSort);
+    expect(vi.mocked(listEntityComments).mock.calls.some((c) =>
+      Boolean(c[2] && (c[2] as { order?: string }).order === "desc"))).toBe(true);
+
+    // Force error then user retry without getMe / mutation replay.
+    vi.mocked(listEntityComments).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      data: null,
+    } as never);
+    hooks.slots[1] = "asc";
+    hooks.cursor = 0;
+    CommentsSection(guestProps);
+    await settle(10);
+
+    hooks.cursor = 0;
+    tree = CommentsSection(guestProps);
+    expect(renderToStaticMarkup(tree)).toContain("Не удалось загрузить комментарии");
+
+    // User retry: another private-expired with me=null unchanged → bounded public refresh.
+    vi.mocked(listEntityComments).mockImplementation(() => pendingRetry.promise as never);
+    const callsBeforeRetry = vi.mocked(listEntityComments).mock.calls.length;
+    window.dispatchEvent(new Event("gb-private-expired"));
+    hooks.cursor = 0;
+    CommentsSection(guestProps);
+    await settle(8);
+    expect(vi.mocked(listEntityComments).mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+    pendingRetry.resolve({
+      ok: true,
+      status: 200,
+      data: {
+        ...emptyPage,
+        items: [{ ...replyComment, body: "retry guest body", mine: false }],
+        visibleCount: 1,
+        canCreate: false,
+      },
+    });
+    await settle(10);
+    hooks.cursor = 0;
+    tree = CommentsSection(guestProps);
+    expect(renderToStaticMarkup(tree)).toContain("retry guest body");
+    expect(vi.mocked(getMe)).not.toHaveBeenCalled();
+    expect(mutation.run).not.toHaveBeenCalled();
+  });
+
   it("VenuePage private-expired fences deferred getMe without reload loop", async () => {
     const pendingMe = deferred<{ ok: true; status: number; data: Me }>();
     vi.mocked(getMe).mockImplementation(() => pendingMe.promise as never);
