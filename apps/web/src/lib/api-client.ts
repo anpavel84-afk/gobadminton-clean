@@ -14,10 +14,12 @@ import type {
   CreateGameInput,
   CreateVenueInput,
   Game,
+  GameCourtBooking,
   GamePage,
   GamePersonalNote,
   GameResults,
   GameReview,
+  PutGameCourtBookingInput,
   LookingForGamePutInput,
   LookingIntent,
   LinkedProvidersResponse,
@@ -672,6 +674,25 @@ export function putGameOutcome(
     body: JSON.stringify(input),
     csrfToken,
     idempotent: true,
+  });
+}
+
+export function getGameCourtBooking(gameId: string) {
+  return apiFetch<GameCourtBooking>(`/v1/games/${gameId}/court-booking`);
+}
+
+export function putGameCourtBooking(
+  gameId: string,
+  input: PutGameCourtBookingInput,
+  csrfToken: string,
+  idempotencyKey?: string,
+) {
+  return apiFetch<GameCourtBooking>(`/v1/games/${gameId}/court-booking`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
   });
 }
 

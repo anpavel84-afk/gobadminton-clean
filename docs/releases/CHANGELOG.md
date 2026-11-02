@@ -1,19 +1,36 @@
 # GoBadminton release notes
 
-## #372 PG-4 — private history journey (0.1.0-alpha.13 candidate)
+## #386 venue arrangement — contacts + court-booking status (0.1.0-alpha.14 candidate)
+
+Public venue contacts and a user-copy booking enquiry draft during game creation,
+plus private organizer-declared court-booking status for managers/participants.
+No platform booking or payments. Candidate only — source SHA unbound until
+trusted ACCEPTED. API contract `0.24.0`. Owner UAT: NOT_TESTED.
+
+- Application version (candidate): `0.1.0-alpha.14`; API contract `0.24.0`.
+- Prior accepted DEV: alpha.13 `c936031114f57c23f6faa9a01757374b912819ed`
+  (`r41394102899-a1`, `2026-11-02T05:32:06Z`).
+- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+- Owner UAT: NOT_TESTED.
+- Full #373 catalogue and public comments #394 not claimed done.
+- C5 untouched; no PROD activation.
+
+## #372 PG-4 — private history journey (0.1.0-alpha.13 DEV ACCEPTED)
 
 Personal post-game history on My Games: own results when the public game card is
 missing, private sent/received reviews on history, and relation-honest managed
-history. Candidate only — source SHA unbound until trusted ACCEPTED. API contract
-note remains `0.23.0`. Owner UAT: NOT_TESTED. Alpha.13 is not installed.
+history. Accepted on DEV `r41394102899-a1` (`2026-11-02T05:32:06Z`), source
+`c936031114f57c23f6faa9a01757374b912819ed`. API contract `0.23.0`.
+Owner UAT: NOT_TESTED.
 
-- Application version (candidate): `0.1.0-alpha.13`; API contract `0.23.0`.
-- Prior accepted DEV: alpha.12 `6383ef406f5944a299843939d391ab7886fdb5dd`
-  (`r41368959239-a1`, `2026-11-02T00:59:40Z`).
-- Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
+- Application version: `0.1.0-alpha.13`; API contract `0.23.0`.
+- Accepted source: `c936031114f57c23f6faa9a01757374b912819ed`.
+- DEV release: `r41394102899-a1` (accepted `2026-11-02T05:32:06Z`).
+- Digests: api `sha256:5bfc4c1139d6edceebfc4b2e3f49203daa08d56448847c1db2783c56d0f6fdb7`,
+  web `sha256:573d6792e5c5d51629c1328348f209fb0785b10d87da13b38282366cd603177a`.
 - Owner UAT: NOT_TESTED.
-- Complaint on a specific review still unavailable; public comments #394 not done.
-- C5 untouched; no PROD activation.
+- Full typed Safety residual for #372 remains OPEN; public comments #394 later.
+- PROD unchanged (remains alpha.8).
 
 ## #372 PG-3 — private note draft lifecycle (0.1.0-alpha.12 DEV ACCEPTED)
 

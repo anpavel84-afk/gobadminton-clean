@@ -20,6 +20,7 @@ import {
   GameStatusBadge,
 } from "../games/GameDetailComposition";
 import { ManagerApplicants } from "../games/ManagerApplicants";
+import { GameCourtBookingPanel } from "../games/GameCourtBooking";
 import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
@@ -235,7 +236,10 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
           }}>Опубликовать черновик</Button>}
 
           <div className="gb-game-detail-grid">
-            <GameTerms game={game} showCapacity={false} />
+            <div>
+              <GameTerms game={game} showCapacity={false} />
+              {me ? <GameCourtBookingPanel gameId={game.id} meId={me.id} csrfToken={me.csrfToken} /> : null}
+            </div>
             <aside className="gb-management-summary" aria-label="Управление игрой">
               <div className="gb-management-summary__status">
                 <GameStatusBadge tone={game.status}>{({ draft: "Черновик", published: "Опубликовано", cancelled: "Игра отменена", completed: "Завершена" })[game.status]}</GameStatusBadge>

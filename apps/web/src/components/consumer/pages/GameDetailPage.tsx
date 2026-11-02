@@ -13,6 +13,7 @@ import { GameShare } from "../games/GameShare";
 import { GameRecommendationButton } from "../games/GameRecommendationButton";
 import { GameActionBar } from "../games/GameActionBar";
 import { GameVenueContacts } from "../games/GameVenueContacts";
+import { GameCourtBookingPanel } from "../games/GameCourtBooking";
 import { isRecommendableGame } from "../../../lib/game-recommendations";
 
 function ParticipationActions({ game, own, busy, notice, readable, onRequest, onReload }: {
@@ -130,6 +131,7 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
           <div>
             <GameTerms game={game} />
             {me && <GameVenueContacts venue={game.venue} />}
+            {me && <GameCourtBookingPanel gameId={game.id} meId={me.id} csrfToken={me.csrfToken} />}
             {chatAvailable && (
               <section className="gb-game-chat-section" aria-label="Чат игры">
                 <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>

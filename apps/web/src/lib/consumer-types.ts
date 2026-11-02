@@ -162,6 +162,27 @@ export type GameDetail = Omit<Game, "venue"> & {
   };
 };
 
+/** #386 organizer-declared court-booking status; never provider-verified. */
+export type CourtBookingStatus =
+  | "unspecified"
+  | "arranging"
+  | "organizer_confirmed"
+  | "not_arranged";
+
+export type GameCourtBooking = {
+  gameId: string;
+  status: CourtBookingStatus;
+  version: number;
+  updatedAt: string | null;
+  declarationSource: "organizer_declared";
+  allowedActions: { canUpdate: boolean };
+};
+
+export type PutGameCourtBookingInput = {
+  expectedVersion: number;
+  status: CourtBookingStatus;
+};
+
 export type GameManagement = {
   role: "owner" | "manager";
   /** Server-derived from games.created_by_user_id; never client-supplied. */
