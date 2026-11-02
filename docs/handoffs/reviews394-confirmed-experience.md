@@ -1,21 +1,23 @@
 # Handoff · #394 confirmed experience + missing mark
 
 Assignment: `OWNER_20261102_REVIEWS394_CONFIRMED_EXPERIENCE_AND_MISSING_MARK`
-Base (this repair): `9e9f8ece2358375b7653765dea9671c65ea02bac`
-Prospective app: `0.1.0-alpha.16` · API `0.26.0` · UAT `NOT_TESTED` · `sourceSha: null`
+Base (this repair): `ac52039af98abe3ec3e562df64b074a6c6c13101`
+Attempt: 12 · Prospective app: `0.1.0-alpha.16` · API `0.26.0` · UAT `NOT_TESTED` · `sourceSha: null`
 #394 remains **PARTIAL** until venue-publication / typed reviewSafety.
 
-## QA1 FAIL (preserved) — two findings, this pass repairs only
+## CI FAIL (database job) — fixture only
 
-1. **P1** peer create: `authorizeReplay` + `ownedPrior` returned successful receipt after author → absent without CURRENT confirmed-experience gate.
-2. **P2** UI: saved `unknown` with `version>0` shown as missing («Посещение ещё не отмечено» / «Отметки пока нет»).
+CI `41442521684`: six jobs PASS; database ONLY 1 failure in existing PG-1a `test/integration/game-outcomes.disposable.test.ts:391` strict `feedback` `toEqual`. Expected capabilities missing optional new field `peerCreateReason`; actual includes `peerCreateReason: null` (schema 0048 not applied → empty actor-scoped slice). QA2 PASS on actual product code; changed feedback/disputes/admin/migration suites passed. Ordinary fixture compatibility — no Astra.
 
-QA1 accepted unchanged: staffCases / migration / normal-eligible / org+training / role checks + disposable DB suite logs.
+## Repair delivered (attempt 12)
 
-## Repair delivered (attempt 11)
+- **Fixture only.** Expected `managerBody.feedback.capabilities` now includes `peerCreateReason: null`. Kept strict `toEqual`; guest/outsider/revoked-manager 404 and replay-after-revoke negatives unchanged.
+- No production code / version / API / gate / schema change. No assert relaxation to partial match. No skip.
 
-- **P1.** Shared `assertCurrentPeerCreateAdmission` under game lock: ended + published|completed + held + historical eligibility BOTH + permitted present BOTH + no open dispute BOTH. Applied before ANY peer create response — same-key `authorizeReplay`, ownedPrior/new-key duplicate, and new insert. Private GET/history/edit unchanged; no delete/public expose of old reviews. Integration expects 422 `FEEDBACK_PEER_EXPERIENCE_UNCONFIRMED` for same-key + new-key after author absent; private sent history + gameReviews still readable.
-- **P2.** `GameResultsComposition`: missing = `my.version===0`; existing unknown = `my.value==='unknown' && version>0` → «Отметка требует уточнения» (+ version). Dialog matches. Clarification still uses actual `attendanceVersion`; no ACK-unknown / fake-present. Open-dispute pill stays «На уточнении». Web regression renders both fixtures (not string-only).
+## Prior repairs (preserved)
+
+- **P1.** Shared `assertCurrentPeerCreateAdmission` under game lock for peer create (replay / ownedPrior / insert).
+- **P2.** `GameResultsComposition`: missing = `my.version===0`; existing unknown = `my.value==='unknown' && version>0`.
 
 ## Not in this pass
 
@@ -23,6 +25,5 @@ Migration / admin / release / digest edits. Public venue writer. PROD. C5. New t
 
 ## Checks (author; not independent QA / not DEV)
 
-- `pnpm install --offline --frozen-lockfile --ignore-scripts`: **notrun** — store missing tarballs (`ERR_PNPM_NO_OFFLINE_TARBALL`); no network per assignment. Trusted PMA has deps + disposable DB.
-- Targeted web unit / API disposable integration: **notrun** here (deps/DB unavailable in author slot). Source + assertion edits ready for PMA/CI.
+- Disposable PostGIS for addressed outcome DB test: **notrun** here (isolated DB not available in author slot). Trusted PMA runs after import; no live DB / new auth.
 - Product CI / security / DEV smoke / Owner UAT: not claimed READY. Independent QA still required after this repair.

@@ -399,6 +399,7 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
         canCreateTraining: false,
         canCreateNote: false,
         peerSubjects: [],
+        peerCreateReason: null,
         organizationRecipientDisplay: null,
         complaintReuse: "existing_player_report",
         remaining: ["typed_review_safety_extension"],
