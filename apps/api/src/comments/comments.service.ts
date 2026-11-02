@@ -416,7 +416,9 @@ export class CommentsService {
       requestHash,
       requiredCapabilities: ["account.access", "profile.public"],
       authorizeReplay: async (client) => {
-        const row = await this.lockOwnedLiveComment(client, commentId, actorId);
+        // Same-key SUCCESS delete replay: own row is already tombstoned.
+        // Session/capability fences stay in MutationRunner; execute path unchanged.
+        const row = await this.lockOwnedTombstonedComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
       },
       execute: async (client) => {
@@ -666,6 +668,22 @@ export class CommentsService {
       )
     ).rows[0];
     if (!row || row.author_user_id !== actorId || row.deleted_at) unavailable();
+    return row;
+  }
+
+  /** Delete SUCCESS-receipt replay only: own tombstone + public parent still required. */
+  private async lockOwnedTombstonedComment(
+    client: PoolClient,
+    commentId: string,
+    actorId: string,
+  ): Promise<CommentRow> {
+    const row = (
+      await client.query<CommentRow>(
+        `SELECT * FROM entity_comments WHERE id = $1 FOR UPDATE`,
+        [commentId],
+      )
+    ).rows[0];
+    if (!row || row.author_user_id !== actorId || !row.deleted_at) unavailable();
     return row;
   }
 

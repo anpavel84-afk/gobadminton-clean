@@ -1,64 +1,62 @@
 # Handoff — #394 experience-policy guard (narrow VENUE close)
 
 **Assignment:** `OWNER_20261102_COMMENTS394_EXPERIENCE_POLICY_GUARD`
-**Author:** cursor:auto · attempt 6
-**Base:** `d5bad5bdec556f029c49f89524fe0aa28f5ca8fc` (merged PR465 broad VENUE superseded before DEV install)
+**Author:** cursor:auto · attempt 7
+**Base:** `e3a284c732f96d284f105d607ee07a32fbee2166` (exact Owner assignment base)
 **Publication branch (trusted process only):** `owner/comments394-experience-policy-20261102`
-**QA route:** codex_sol_medium (independent) · Product CI / DEV by trusted integrator
-**Author does not claim QA / CI / DEV PASS. Alpha15 not accepted. Live remains alpha14.**
+**QA route:** codex_sol_medium (independent delta) · Product CI / DEV by trusted integrator
+**Author does not claim QA / CI / DEV PASS. Owner UAT=NOT_TESTED. source_sha:null for prospective alpha.15.**
 
 ## Materials read (confirmed)
 
-- `OWNER_DIRECTION.md` (Owner 02 Nov attendance/experience clarification)
-- `RECOMMENDATION.md` / **FIRST section** of `CURSOR_BRIEF.md` (bounded repair only; subsequent Cases design = proposal OUTSIDE THIS PASS)
-- Proposal mock scene-4 (not installed): https://files.anpavel.ru/projects/gobadminton/design/style-guide/reviews/20261102-astra-v1/index.html
+- Independent Medium QA1 `final.txt` (reviewed_sha `e3a284c7…`, verdict **FAIL**, one P2)
+- Release-agent note `alpha15-release-notes-readonly-review.md` (editorial only)
+- Prior handoff attempt 6 evidence preserved below (not erased)
 
-## Exact repair delivered (allowed paths only)
+## QA1 FAIL preserved (exact)
 
-1. **API fail-closed broad VENUE** (`comments.service.ts`): create/reply/update + authorizeReplay → `COMMENT_VENUE_WRITES_CLOSED`. GET venue list after public parent + normal params → empty page / `canCreate:false` (no legacy row/count/reply/identity leak). Owned delete/withdrawal unchanged (auth/version/idempotency/tombstone). GAME Q&A fences unchanged. No attendance fabrication.
-2. **VenuePage**: remove broad `CommentsSection`; `SurfacePanel` placeholder «Отзывы после игр появятся здесь». Contacts/gallery/map intact.
-3. **Contract / style / handoff / alpha15 notes**: GAME = public questions; VENUE broad writer closed pending postgame eligibility; PG3 private; proposal link marked proposed vs installed. Preserve alpha14 receipt; `source_sha: null` for prospective alpha15.
-4. **Tests**: disposable cases for venue create/reply/update/replay deny, seeded legacy GET hide, owned delete vs foreign 404, GAME path preserved; web VenuePage no composer + game CommentsSection unaffected; private-boundary VenuePage placeholder.
+- **Verdict:** FAIL · **reviewed_sha:** `e3a284c732f96d284f105d607ee07a32fbee2166`
+- **P2** `apps/api/src/comments/comments.service.ts` ~418: same-key SUCCESS DELETE replay of own already-tombstoned legacy VENUE comment returned 404 because `authorizeReplay` called `lockOwnedLiveComment` (rejects deleted rows). Violates idempotent withdrawal. Disposable test covered only first delete.
+- **Repair required:** DELETE authorizeReplay must recognize OWN tombstone + current public parent and return saved receipt for SAME key; keep MutationRunner session/capability fences; new DELETE key on tombstone must not create another revision; do not loosen create/update guards; add addressed same-key delete replay in disposable test.
 
-## Author verification commands / results
+## Attempt 7 repair (allowed paths only)
+
+1. **DELETE authorizeReplay** (`comments.service.ts`): uses `lockOwnedTombstonedComment` (own + `deleted_at` set) then `lockAndAssertPublicParent`. Execute still uses `lockOwnedLiveComment` (new key on tombstone → 404, no extra revision). Create/update guards unchanged / still paired with `assertBroadVenueWriteClosed`.
+2. **Disposable test**: same-key SUCCESS venue DELETE replay → equal receipt/status/version, single tombstone audit; new key on tombstone + foreign stay 404. Misleading “authorizeReplay success” comments on create/update 403 retries corrected; one pre-policy SUCCESS `comments.create` receipt seeded via `IdempotencyService` hashes + `idempotency_records` fixture proves current create authorizeReplay denies with `COMMENT_VENUE_WRITES_CLOSED`.
+3. **CURRENT_NAMED_RELEASE only**: concise Russian user-facing additions/fixes; removed static «alpha.15 не принята — live alpha.14»; `source_sha: null`, `owner_uat: NOT_TESTED` kept. Alpha.14 accepted seed in `TRUSTED_HISTORICAL_SEED` unchanged.
+4. This handoff appends attempt 7 without overwriting prior FAIL/history.
+
+## Prior attempt 6 (preserved)
+
+**Base then:** `d5bad5bdec556f029c49f89524fe0aa28f5ca8fc` → candidate `e3a284c7…`
+1. API fail-closed broad VENUE create/reply/update + authorizeReplay → `COMMENT_VENUE_WRITES_CLOSED`. GET venue empty / `canCreate:false`. Owned delete left on live-lock path (P2 above). GAME Q&A unchanged.
+2. VenuePage placeholder; contract/style/alpha15 notes; disposable deny cases.
+3. Author unit/web checks exit 0; disposable PostGIS NOT_TESTED in that worktree (no disposable DB).
+
+## Author verification commands / results (attempt 7)
 
 ```bash
 export PATH=/opt/gb-slots/runtime/node/bin:$PATH
-
-# api unit
-cd apps/api && ../../node_modules/.bin/vitest run --project unit test/unit/comments.test.ts
-# → 1 file · 6 passed · exit 0
-
-# web addressed
-cd apps/web && ../../node_modules/.bin/vitest run \
-  test/comments.test.tsx test/comments-private-boundary.test.tsx
-# → 2 files · 9 passed · exit 0
-
-# typecheck + eslint on touched paths → exit 0
-
-# disposable PostGIS comments.disposable.test.ts
-# → NOT_TESTED by author: RUN_DB_INTEGRATION / DATABASE_URL unset (no disposable DB in this worktree).
-#   Trusted PMA should run on empty gobadminton_comments_disposable.
+# Worktree has no node_modules (network install forbidden in this pass).
+# vitest/tsc → NOT_TESTED here (binaries absent). Static review of allowed-path edits only.
+# Input materials sha256 match TASK_DATA:
+#   final.txt 0cb0a81d21bc55d460c48affedb5e8408c4998633a22c8df69e1737e324f4caf
+#   alpha15-release-notes-readonly-review.md 2ec93986b9124b1ee8fa068696380649babca6ffe3010bef4d46cb06a7cdc6ab
+# Disposable PostGIS → NOT_TESTED: RUN_DB_INTEGRATION/DATABASE_URL unset.
+# Trusted PMA required: empty gobadminton_comments_disposable + same-key DELETE replay +
+# pre-policy create SUCCESS-receipt deny; then independent delta QA + Product CI + DEV.
 ```
 
 ## Unresolved / residual #394
 
-- Full experience-review / Cases / attendance eligibility UI — **out of this pass** (proposal only).
-- Independent Codex QA, Product CI, DEV ACCEPTED, Owner UAT=NOT_TESTED.
-- No Git publication / merge / deploy by author.
-- Cancelled DEV `41424816628` never installed; do not claim alpha15 accepted.
+- Independent delta QA after this repair; Product CI; server DEV smoke / DEV ACCEPTED; Owner UAT=NOT_TESTED.
+- Full experience-review / Cases / attendance eligibility UI — out of this pass.
+- No Git publication / merge / deploy / PROD by author.
 - Prior FAIL/history/expenses/UNKNOWN preserved; old admissions not rewritten.
 
-## Allowed path diff (this repair)
+## Allowed path diff (this repair / attempt 7)
 
 - `apps/api/src/comments/comments.service.ts`
 - `apps/api/test/integration/comments.disposable.test.ts`
-- `apps/api/test/unit/comments.test.ts` (unchanged expectations; GAME unit transport retained)
-- `apps/web/src/components/consumer/venues/VenuePage.tsx`
-- `apps/web/test/comments.test.tsx`
-- `apps/web/test/comments-private-boundary.test.tsx`
 - `apps/web/src/lib/releases.ts`
-- `docs/releases/CHANGELOG.md`
-- `docs/product/COMMENTS_CONTRACT.md`
-- `docs/product/COMMENTS_STYLE_GUIDE.md`
 - `docs/handoffs/comments394-game-venue.md`

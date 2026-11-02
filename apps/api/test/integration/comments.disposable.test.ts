@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { SessionService } from "../../src/auth/session.service";
 import { CommentsModule } from "../../src/comments/comments.module";
+import { IdempotencyService } from "../../src/common/idempotency.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
@@ -401,10 +402,60 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     const venueCreate = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
     expect(venueCreate.statusCode).toBe(403);
     expect(venueCreate.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
-    // authorizeReplay of a would-be success key also denied (no prior receipt created).
-    const venueCreateReplay = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
-    expect(venueCreateReplay.statusCode).toBe(403);
-    expect(venueCreateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    // Same-key retry after 403: no SUCCESS receipt was stored; each attempt re-executes and stays denied.
+    const venueCreateRetry = await post(peer, venueUrl, { text: "Есть парковка?", parentCommentId: null }, venueCreateIdem);
+    expect(venueCreateRetry.statusCode).toBe(403);
+    expect(venueCreateRetry.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+
+    // Pre-policy SUCCESS create receipt (DB fixture via IdempotencyService hashes): current authorizeReplay denies it.
+    const idempotency = app.get(IdempotencyService);
+    const prePolicyCreateKey = key();
+    const prePolicyText = "LEGACY_PRE_POLICY_VENUE_CREATE";
+    const prePolicyCreateHash = idempotency.requestHash({
+      kind: "venue",
+      entityId: venueId,
+      parentCommentId: null,
+      text: prePolicyText,
+    });
+    await pool.query(
+      `INSERT INTO idempotency_records
+         (actor_id, operation, key_hash, request_hash, reservation_state,
+          status_code, response_body, expires_at)
+       VALUES ($1, 'comments.create', $2, $3, 'completed', 201, $4::jsonb, now() + interval '1 day')`,
+      [
+        peer.userId,
+        idempotency.keyHash(prePolicyCreateKey),
+        prePolicyCreateHash,
+        JSON.stringify({
+          id: randomUUID(),
+          entityKind: "venue",
+          entityId: venueId,
+          parentCommentId: null,
+          body: prePolicyText,
+          deleted: false,
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          edited: false,
+          mine: true,
+          author: {
+            publicPlayerId: peer.publicPlayerId,
+            displayName: "Comment peer",
+            avatar: { uploadedUrl: null, providerUrl: null },
+            profilePublic: true,
+          },
+          replyCount: 0,
+        }),
+      ],
+    );
+    const prePolicyCreateReplay = await post(
+      peer,
+      venueUrl,
+      { text: prePolicyText, parentCommentId: null },
+      prePolicyCreateKey,
+    );
+    expect(prePolicyCreateReplay.statusCode).toBe(403);
+    expect(prePolicyCreateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
 
     // Direct-seeded legacy venue rows must not appear on GET; owned withdrawal still works.
     const legacyVenueRootId = randomUUID();
@@ -449,17 +500,24 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     }, venueUpdateIdem);
     expect(venueUpdate.statusCode).toBe(403);
     expect(venueUpdate.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
-    const venueUpdateReplay = await put(peer, `/v1/comments/${legacyVenueRootId}`, {
+    // Same-key retry after 403: no SUCCESS receipt; paired execute/authorizeReplay stay closed.
+    const venueUpdateRetry = await put(peer, `/v1/comments/${legacyVenueRootId}`, {
       text: "try edit legacy",
       expectedVersion: 1,
     }, venueUpdateIdem);
-    expect(venueUpdateReplay.statusCode).toBe(403);
-    expect(venueUpdateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    expect(venueUpdateRetry.statusCode).toBe(403);
+    expect(venueUpdateRetry.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
 
     const foreignVenueDelete = await del(author, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 1 });
     expect(foreignVenueDelete.statusCode).toBe(404);
 
-    const ownedVenueDelete = await del(peer, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 1 });
+    const venueDeleteIdem = key();
+    const ownedVenueDelete = await del(
+      peer,
+      `/v1/comments/${legacyVenueRootId}`,
+      { expectedVersion: 1 },
+      venueDeleteIdem,
+    );
     expect(ownedVenueDelete.statusCode).toBe(200);
     expect(ownedVenueDelete.json()).toMatchObject({
       id: legacyVenueRootId,
@@ -481,6 +539,46 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
       [legacyVenueRootId],
     );
     expect(Number(audit.rows[0]?.n)).toBe(1);
+
+    // Same-key SUCCESS delete replay: returns saved receipt; no second tombstone revision.
+    const ownedVenueDeleteReplay = await del(
+      peer,
+      `/v1/comments/${legacyVenueRootId}`,
+      { expectedVersion: 1 },
+      venueDeleteIdem,
+    );
+    expect(ownedVenueDeleteReplay.statusCode).toBe(200);
+    expect(ownedVenueDeleteReplay.json()).toEqual(ownedVenueDelete.json());
+    expect(ownedVenueDeleteReplay.json()).toMatchObject({
+      id: legacyVenueRootId,
+      deleted: true,
+      version: 2,
+    });
+    const auditAfterReplay = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+       WHERE comment_id=$1 AND tombstone=true`,
+      [legacyVenueRootId],
+    );
+    expect(Number(auditAfterReplay.rows[0]?.n)).toBe(1);
+
+    // New DELETE key on tombstone must not create another deletion/revision; foreign stays denied.
+    const newKeyOnTombstone = await del(peer, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 2 });
+    expect(newKeyOnTombstone.statusCode).toBe(404);
+    expect(
+      Number(
+        (
+          await pool.query<{ n: string }>(
+            `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+             WHERE comment_id=$1 AND tombstone=true`,
+            [legacyVenueRootId],
+          )
+        ).rows[0]?.n,
+      ),
+    ).toBe(1);
+    expect(
+      (await del(author, `/v1/comments/${legacyVenueRootId}`, { expectedVersion: 2 })).statusCode,
+    ).toBe(404);
+
     // GET still empty after owned withdrawal (no leak of tombstone identity).
     expect((await get(null, venueUrl)).json().items).toEqual([]);
 
