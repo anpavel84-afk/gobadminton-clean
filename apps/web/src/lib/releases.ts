@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.14" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.15" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.24.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.25.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,21 +425,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Площадка при создании игры: контакты и договорённость о корте",
+  title: "Публичные комментарии к игре и площадке",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "При выборе известной площадки во время создания игры показываются её опубликованные контакты и черновик сообщения для договорённости о корте.",
-    "Организатор может указать статус договорённости о корте со своих слов; участники видят тот же статус только для чтения.",
+    "На страницах опубликованной публичной игры и площадки появился общий блок комментариев: чтение без входа, запись после входа, ответы одного уровня.",
+    "Автор может изменить или удалить свой комментарий; удалённый текст скрыт, место в разговоре сохраняется.",
   ],
-  fixes: [
-    "Черновик сообщения копируется только после успешной записи в буфер; при отказе текст остаётся для ручного копирования.",
-    "При смене площадки, времени или аккаунта устаревшие контакты и отметка о копировании сбрасываются.",
-  ],
+  fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
-    "Приложение не бронирует корт и не принимает оплату — договорённость остаётся вне сервиса.",
-    "Публичные комментарии и полный каталог договорённостей этим выпуском не обещаны.",
+    "Комментарии к профилю игрока этим выпуском не включаются — ждём отдельное решение владельца.",
+    "Родительский #394 остаётся частичным, пока не закрыт вопрос аудитории профиля.",
   ],
   feature_catalogue: "delta",
 };
@@ -950,6 +947,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Полное типизированное расширение Safety по отзывам остаётся незавершённым; весь #372 не объявлен завершённым.",
       "Публичные комментарии #394 выполняются позже.",
       "Выпуск принят только на DEV; PROD остался принятой alpha.8."
+    ]
+  },
+  {
+    "source_sha": "8113359533e5a4cfb85c4520a7af1fff1571c9e4",
+    "application_version": "0.1.0-alpha.14",
+    "version_label": "0.1.0-alpha.14",
+    "title": "Договорённость о корте со слов организатора",
+    "api_contract_version": "0.24.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41408629901-a1",
+        "accepted_at": "2026-11-02T07:58:39Z",
+        "api_digest": "sha256:e2a46301cee91589647ede9d1ecb6f69024918450dfbb261d81fcf83b1c1aeb8",
+        "web_digest": "sha256:81f4706494cf2cf1d2d1e1defae896e4d8ddb54fe2ce149ed820eff8b9b70705",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Организатор может указать статус договорённости о корте: не указано, договариваемся, подтверждено организатором или не удалось договориться."
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Сведения о договорённости заявляет организатор; приложение не проверяет фактическую бронь.",
+      "Проверка владельцем в живом аккаунте не выполнена; установленный интерфейс проверен на синтетических read-only данных.",
+      "Полный модуль #373 не объявлен завершённым.",
+      "Выпуск установлен только на DEV; PROD остаётся принятой alpha.8."
     ]
   },
 ] as const;
