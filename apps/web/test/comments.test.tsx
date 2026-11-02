@@ -68,9 +68,11 @@ describe("#394 CommentsSection", () => {
       "utf8",
     );
     expect(venueSrc).toContain("Отзывы после игр появятся здесь");
+    expect(venueSrc).toContain("Публичные отзывы после подтверждённого участия пока недоступны");
     expect(venueSrc).toMatch(/SurfacePanel/);
     expect(venueSrc).not.toMatch(/CommentsSection/);
     expect(venueSrc).not.toMatch(/Войдите, чтобы оставить комментарий|Ваш комментарий|canCreate/);
+    expect(venueSrc).not.toMatch(/отметьте|самостоятельн|напишите отзыв/i);
 
     const gameHtml = renderToStaticMarkup(
       createElement(CommentsSection, {
@@ -84,5 +86,16 @@ describe("#394 CommentsSection", () => {
     );
     expect(gameHtml).toContain("Войдите, чтобы оставить комментарий");
     expect(gameHtml).toContain("Вопросы об этой игре");
+  });
+
+  it("own-menu and tombstone policy are wired in CommentsSection source", () => {
+    const src = readFileSync(
+      resolve(__dirname, "../src/components/consumer/comments/CommentsSection.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("!item.mine");
+    expect(src).toContain("canAuthorSafety");
+    expect(src).toContain("Комментарий удалён");
+    expect(src).toMatch(/item\.deleted[\s\S]*?gb-comment__tombstone/);
   });
 });

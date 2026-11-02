@@ -1,8 +1,25 @@
 # GoBadminton release notes
 
-## #394 confirmed experience + missing mark (0.1.0-alpha.16 candidate)
+## #467 visual QA comments + postgame copy (0.1.0-alpha.17 candidate)
 
-Prospective alpha.16: new **private peer** feedback only after a held game with
+Prospective alpha.17 UI repair Refs #467 / #394: own comment menu shows only
+Edit/Delete (no self block/report); deleted root and reply tombstones are
+neutral without author metadata; venue reviews placeholder explains public
+reviews after confirmed participation are not available yet; missing attendance
+heading matches actual state; feedback side copy drops implementation jargon.
+No API/schema/security changes. API contract remains `0.26.0`. Owner UAT:
+NOT_TESTED. No fabricated candidate/merge/acceptance.
+
+- Application version (candidate): `0.1.0-alpha.17`; API contract `0.26.0`.
+- Prior accepted DEV: alpha.16 `841bbec37739f56e9561a756731490891ed70d19`
+  (`r41445689826-a1`, `2026-11-02T12:47:49Z`) — preserved exactly in history seed.
+- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Owner UAT: NOT_TESTED.
+- C5 untouched; no PROD activation.
+
+## #394 confirmed experience + missing mark (0.1.0-alpha.16 DEV ACCEPTED)
+
+Accepted alpha.16: new **private peer** feedback only after a held game with
 explicit permitted present for both author and recipient and no open dispute;
 missing/unknown attendance opens real clarification through existing PG-2/Cases
 (`challenged_version` 0 via migration 0052). Public venue writer stays closed;
@@ -10,10 +27,11 @@ public player wall/ratings stay off. Existing private reviews/notes unchanged.
 API contract `0.26.0`. Owner UAT: NOT_TESTED. Parent #394 remains PARTIAL
 (venue publication / typed reviewSafety not in this slice).
 
-- Application version (candidate): `0.1.0-alpha.16`; API contract `0.26.0`.
-- Prior accepted DEV: alpha.15 `36fd4b4cf4632efa3cc96e93f20a33c220b9708b`
-  (`r41434833713-a1`, `2026-11-02T11:23:40Z`) — preserved exactly in history seed.
-- Candidate source SHA / DEV receipt: unbound (`null`) until trusted ACCEPTED.
+- Application version: `0.1.0-alpha.16`; API contract `0.26.0`.
+- Accepted source: `841bbec37739f56e9561a756731490891ed70d19`.
+- DEV release: `r41445689826-a1` (accepted `2026-11-02T12:47:49Z`).
+- Digests: api `sha256:9de709055304dc3c668e74ab71c3569e300c08aea75ef4ec264263e49bd02f1a`,
+  web `sha256:4b3012934ce4f9ab4bf68c5738a29e84edbb359fe8fa4390d9705e664f161e12`.
 - Owner UAT: NOT_TESTED.
 - C5 untouched; no PROD activation.
 

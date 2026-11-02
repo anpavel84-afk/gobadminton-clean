@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.16" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.17" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.26.0" as const;
@@ -425,14 +425,13 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Подтверждённый совместный опыт и уточнение посещения",
+  title: "Уточнения действий в комментариях и пояснений после игры",
   source_sha: null,
   owner_uat: "NOT_TESTED",
-  additions: [
-    "Новый приватный отзыв об игроке доступен после состоявшейся игры, когда посещение обоих участников явно подтверждено и нет открытого спора.",
-    "Если отметка отсутствует или вызывает вопросы, можно обратиться за уточнением через существующий процесс разбора посещения.",
+  additions: [],
+  fixes: [
+    "Уточнены действия и пояснения в комментариях и обратной связи: свои действия безопасности скрыты, удалённые записи обозначены нейтрально, отсутствие отметки посещения и ограничения отзывов объясняются понятнее.",
   ],
-  fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена.",
     "Публичная запись отзывов о площадке остаётся закрытой.",
@@ -1006,6 +1005,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем после обычного входа ещё не выполнена.",
       "Отзывы о площадке ждут подтверждения посещения и разбора спорных отметок; публичная запись пока недоступна.",
       "Отзывы об игроке остаются приватными и не выводятся как публичная стена комментариев в профиле; полный сценарий отзывов после игры ещё не завершён."
+    ]
+  },
+  {
+    "source_sha": "841bbec37739f56e9561a756731490891ed70d19",
+    "application_version": "0.1.0-alpha.16",
+    "version_label": "0.1.0-alpha.16",
+    "title": "Подтверждённый совместный опыт и уточнение посещения",
+    "api_contract_version": "0.26.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41445689826-a1",
+        "accepted_at": "2026-11-02T12:47:49Z",
+        "api_digest": "sha256:9de709055304dc3c668e74ab71c3569e300c08aea75ef4ec264263e49bd02f1a",
+        "web_digest": "sha256:4b3012934ce4f9ab4bf68c5738a29e84edbb359fe8fa4390d9705e664f161e12",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Новый приватный отзыв об игроке доступен после состоявшейся игры, когда посещение обоих участников явно подтверждено и нет открытого спора.",
+      "Если отметка отсутствует или вызывает вопросы, можно обратиться за уточнением через существующий процесс разбора посещения."
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена.",
+      "Публичная запись отзывов о площадке остаётся закрытой.",
+      "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле."
     ]
   },
 ] as const;

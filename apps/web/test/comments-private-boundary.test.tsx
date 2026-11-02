@@ -168,9 +168,18 @@ vi.mock("../src/components/consumer/players/ProfileComposition", () => ({
   Avatar: () => null,
   ProfileDialog: ({ children }: { children?: React.ReactNode }) => children ?? null,
 }));
-vi.mock("../src/components/consumer/messages/ConversationSafety", () => ({
-  ConversationSafety: () => null,
-}));
+vi.mock("../src/components/consumer/messages/ConversationSafety", async () => {
+  const React = await import("react");
+  return {
+    ConversationSafety: () =>
+      React.createElement(
+        "div",
+        { "data-testid": "comment-safety" },
+        React.createElement("button", { type: "button", role: "menuitem" }, "Заблокировать"),
+        React.createElement("button", { type: "button", role: "menuitem" }, "Пожаловаться"),
+      ),
+  };
+});
 
 import { getMe } from "../src/lib/api-client";
 import { listEntityComments } from "../src/lib/comments-api";
@@ -530,10 +539,12 @@ describe("#394 comments private boundary", () => {
     hooks.cursor = 0;
     const html = renderToStaticMarkup(VenuePage({ venueId }));
     expect(html).toContain("Отзывы после игр появятся здесь");
+    expect(html).toContain("Публичные отзывы после подтверждённого участия пока недоступны");
     expect(html).not.toContain("Ваш комментарий");
     expect(html).not.toContain("Войдите, чтобы оставить комментарий");
     expect(html).not.toContain("напишите");
     expect(html).not.toMatch(/canCreate|eligibility|Можно поделиться/i);
+    expect(html).not.toMatch(/отметьте посещение|самостоятельно отметь/i);
     // VenuePage no longer mounts session-bound comments me path.
     expect(vi.mocked(getMe)).not.toHaveBeenCalled();
     expect(vi.mocked(listEntityComments)).not.toHaveBeenCalled();
@@ -847,6 +858,206 @@ describe("#394 comments private boundary", () => {
     expect(html).toContain("Изменить");
     expect(html).toContain("Удалить");
     expect(html).toContain("Ваш комментарий");
+    expect(html).not.toContain("Заблокировать");
+    expect(html).not.toContain("Пожаловаться");
+    expect(html).not.toContain("Действие в отношении автора");
+  });
+
+  it("own menu only Edit/Delete; other author still shows safety", async () => {
+    const ownItem: EntityComment = {
+      ...replyComment,
+      id: commentId,
+      parentCommentId: null,
+      body: "own public profile comment",
+      replyCount: 0,
+      mine: true,
+      author: {
+        displayName: "Actor A",
+        publicPlayerId: "player-self-public",
+        avatar: { uploadedUrl: null, providerUrl: null },
+        profilePublic: true,
+      },
+    };
+    const otherItem: EntityComment = {
+      ...replyComment,
+      id: otherCommentId,
+      parentCommentId: null,
+      body: "other author comment",
+      replyCount: 0,
+      mine: false,
+      author: {
+        displayName: "Other Player",
+        publicPlayerId: "player-other-public",
+        avatar: { uploadedUrl: null, providerUrl: null },
+        profilePublic: true,
+      },
+    };
+
+    vi.mocked(listEntityComments).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { ...emptyPage, items: [ownItem], visibleCount: 1, canCreate: true },
+    });
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "game",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/games/${venueId}`,
+      description: "Вопросы об игре",
+    });
+    await settle(12);
+    hooks.slots[14] = commentId;
+    hooks.cursor = 0;
+    let html = renderToStaticMarkup(CommentsSection({
+      kind: "game",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/games/${venueId}`,
+      description: "Вопросы об игре",
+    }));
+    expect(html).toContain("Изменить");
+    expect(html).toContain("Удалить");
+    expect(html).not.toContain("Заблокировать");
+    expect(html).not.toContain("Пожаловаться");
+    expect(html).not.toContain("Действие в отношении автора");
+    expect(html).not.toContain('data-testid="comment-safety"');
+
+    vi.mocked(listEntityComments).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { ...emptyPage, items: [otherItem], visibleCount: 1, canCreate: true },
+    });
+    hooks.slots[1] = "desc";
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "game",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/games/${venueId}`,
+      description: "Вопросы об игре",
+    });
+    await settle(12);
+    hooks.slots[14] = otherCommentId;
+    hooks.cursor = 0;
+    html = renderToStaticMarkup(CommentsSection({
+      kind: "game",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/games/${venueId}`,
+      description: "Вопросы об игре",
+    }));
+    expect(html).toContain("Заблокировать");
+    expect(html).toContain("Пожаловаться");
+    expect(html).toContain("Действие в отношении автора");
+    expect(html).toContain('data-testid="comment-safety"');
+    expect(html).not.toContain("Изменить");
+    expect(html).not.toContain("Удалить");
+  });
+
+  it("deleted root and reply tombstones hide author metadata while replies stay traversable", async () => {
+    const replyId = "40000000-0000-4000-8000-000000000044";
+    const deletedRoot: EntityComment = {
+      ...replyComment,
+      id: commentId,
+      parentCommentId: null,
+      body: null,
+      deleted: true,
+      mine: false,
+      replyCount: 1,
+      author: {
+        displayName: "Deleted Author",
+        publicPlayerId: "player-deleted",
+        avatar: { uploadedUrl: null, providerUrl: null },
+        profilePublic: true,
+      },
+    };
+    const deletedReply: EntityComment = {
+      ...replyComment,
+      id: replyId,
+      parentCommentId: commentId,
+      body: null,
+      deleted: true,
+      mine: false,
+      replyCount: 0,
+      author: {
+        displayName: "Deleted Reply Author",
+        publicPlayerId: "player-deleted-reply",
+        avatar: { uploadedUrl: null, providerUrl: null },
+        profilePublic: true,
+      },
+    };
+    const liveReply: EntityComment = {
+      ...replyComment,
+      id: "40000000-0000-4000-8000-000000000045",
+      parentCommentId: commentId,
+      body: "live child reply kept",
+      deleted: false,
+      mine: false,
+      replyCount: 0,
+      author: {
+        displayName: "Live Reply Author",
+        publicPlayerId: "player-live-reply",
+        avatar: { uploadedUrl: null, providerUrl: null },
+        profilePublic: true,
+      },
+    };
+
+    vi.mocked(listEntityComments).mockImplementation(async (_kind, _id, opts) => {
+      if (opts && "parentCommentId" in opts && opts.parentCommentId === commentId) {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            ...emptyPage,
+            parentCommentId: commentId,
+            items: [deletedReply, liveReply],
+            visibleCount: 2,
+            canCreate: false,
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: { ...emptyPage, items: [deletedRoot], visibleCount: 1, canCreate: false },
+      };
+    });
+
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "game",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/games/${venueId}`,
+      description: "Вопросы об игре",
+    });
+    await settle(12);
+
+    // expandedReplies is state slot 8 (0-based) in CommentsSection.
+    hooks.slots[8] = { [commentId]: [deletedReply, liveReply] };
+    hooks.cursor = 0;
+    const html = renderToStaticMarkup(CommentsSection({
+      kind: "game",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/games/${venueId}`,
+      description: "Вопросы об игре",
+    }));
+    expect(html).toContain("Комментарий удалён");
+    expect(html).toContain("live child reply kept");
+    expect(html).toContain("Live Reply Author");
+    expect(html).toContain("Скрыть ответы");
+    expect(html).not.toContain("Deleted Author");
+    expect(html).not.toContain("Deleted Reply Author");
+    expect(html).not.toContain("player-deleted");
+    expect(html).not.toContain("player-deleted-reply");
   });
 
   it("PUT/DELETE validateSuccess binds exact pending.path comment id", async () => {

@@ -652,7 +652,15 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                     Creator without seat (no myAttendance) is not a participant — skip. */}
                 {my || !isManager ? (
                   <SurfacePanel tone="soft" className="gb-postgame__panel gb-postgame__notice-card">
-                    <SectionHeader title="Организатор отметил ваше посещение" />
+                    <SectionHeader
+                      title={
+                        my && my.value !== "unknown"
+                          ? "Организатор отметил ваше посещение"
+                          : my && my.value === "unknown" && my.version > 0
+                            ? "Отметка требует уточнения"
+                            : "Посещение ещё не отмечено"
+                      }
+                    />
                     {my && my.value !== "unknown" ? (
                       <>
                         <p className="gb-postgame__pill" data-tone="wait">

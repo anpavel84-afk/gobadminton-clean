@@ -79,6 +79,20 @@ describe("PG-1b game results helpers", () => {
     expect(composition).not.toContain("phantom");
   });
 
+  it("missing attendance heading stays truthful — not a static organizer-marked claim", () => {
+    const composition = readFileSync(
+      path.resolve(__dirname, "../src/components/consumer/games/GameResultsComposition.tsx"),
+      "utf8",
+    );
+    expect(composition).toContain('? "Организатор отметил ваше посещение"');
+    expect(composition).toContain('? "Отметка требует уточнения"');
+    expect(composition).toContain(': "Посещение ещё не отмечено"');
+    // Static-only heading would always claim organizer marked attendance.
+    expect(composition).not.toMatch(
+      /<SectionHeader title="Организатор отметил ваше посещение"\s*\/>/,
+    );
+  });
+
   it("OwnedGameSummary exposes contextual Results entry via resultsPath", () => {
     const summary = readFileSync(
       path.resolve(__dirname, "../src/components/consumer/pages/OwnedGameSummaryPage.tsx"),

@@ -661,7 +661,10 @@ function CommentArticle({
 }) {
   const author = item.author ?? { displayName: "Игрок", publicPlayerId: null, avatar: { uploadedUrl: null, providerUrl: null }, profilePublic: false };
   const canWriteOwn = Boolean(item.mine && canCreate);
-  const canAuthorSafety = Boolean(me && author.profilePublic && author.publicPlayerId);
+  // Server `mine` is the only own-authority signal — never invent publicId fallback or self-safety.
+  const canAuthorSafety = Boolean(
+    me && !item.mine && author.profilePublic && author.publicPlayerId,
+  );
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menuOpen) return;
@@ -681,85 +684,89 @@ function CommentArticle({
 
   return (
     <article className={`gb-comment${item.deleted ? " is-deleted" : ""}`}>
-      <header className="gb-comment__meta">
-        <Avatar name={author.displayName} avatar={author.avatar} tone="yellow" />
-        <div className="gb-comment__identity">
-          {author.profilePublic && author.publicPlayerId ? (
-            <Link href={`/players/${encodeURIComponent(author.publicPlayerId)}`}>{author.displayName}</Link>
-          ) : (
-            <strong>{author.displayName}</strong>
-          )}
-          <time dateTime={item.createdAt}>{commentTime(item.createdAt)}{item.edited ? " · изменён" : ""}</time>
-        </div>
-        {!item.deleted && (canWriteOwn || canAuthorSafety) ? (
-          <div className="gb-comment__menu" ref={menuRef}>
-            <button
-              type="button"
-              className="gb-comment__menu-trigger"
-              aria-label="Действия с комментарием"
-              aria-expanded={menuOpen}
-              aria-haspopup="menu"
-              onClick={onMenu}
-            >
-              ⋯
-            </button>
-            {menuOpen ? (
-              <div className="gb-comment__menu-panel" role="menu">
-                {canWriteOwn ? (
-                  <>
-                    <button type="button" role="menuitem" disabled={locked} onClick={onStartEdit}>Изменить</button>
-                    <button type="button" role="menuitem" className="danger" disabled={locked} onClick={onDelete}>Удалить</button>
-                  </>
-                ) : null}
-                {me && author.profilePublic && author.publicPlayerId ? (
-                  <div className="gb-comment__safety" role="none">
-                    <p>Действие в отношении автора, не отдельная жалоба на комментарий.</p>
-                    <ConversationSafety
-                      playerId={author.publicPlayerId}
-                      me={me}
-                      onBlocked={onCloseMenu}
-                    />
+      {item.deleted ? (
+        <p className="gb-comment__tombstone">Комментарий удалён</p>
+      ) : (
+        <>
+          <header className="gb-comment__meta">
+            <Avatar name={author.displayName} avatar={author.avatar} tone="yellow" />
+            <div className="gb-comment__identity">
+              {author.profilePublic && author.publicPlayerId ? (
+                <Link href={`/players/${encodeURIComponent(author.publicPlayerId)}`}>{author.displayName}</Link>
+              ) : (
+                <strong>{author.displayName}</strong>
+              )}
+              <time dateTime={item.createdAt}>{commentTime(item.createdAt)}{item.edited ? " · изменён" : ""}</time>
+            </div>
+            {canWriteOwn || canAuthorSafety ? (
+              <div className="gb-comment__menu" ref={menuRef}>
+                <button
+                  type="button"
+                  className="gb-comment__menu-trigger"
+                  aria-label="Действия с комментарием"
+                  aria-expanded={menuOpen}
+                  aria-haspopup="menu"
+                  onClick={onMenu}
+                >
+                  ⋯
+                </button>
+                {menuOpen ? (
+                  <div className="gb-comment__menu-panel" role="menu">
+                    {canWriteOwn ? (
+                      <>
+                        <button type="button" role="menuitem" disabled={locked} onClick={onStartEdit}>Изменить</button>
+                        <button type="button" role="menuitem" className="danger" disabled={locked} onClick={onDelete}>Удалить</button>
+                      </>
+                    ) : null}
+                    {canAuthorSafety && me && author.publicPlayerId ? (
+                      <div className="gb-comment__safety" role="none">
+                        <p>Действие в отношении автора, не отдельная жалоба на комментарий.</p>
+                        <ConversationSafety
+                          playerId={author.publicPlayerId}
+                          me={me}
+                          onBlocked={onCloseMenu}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
             ) : null}
-          </div>
-        ) : null}
-      </header>
+          </header>
 
-      {item.deleted ? (
-        <p className="gb-comment__tombstone">Комментарий удалён</p>
-      ) : editing && canCreate ? (
-        <form
-          className="gb-comments__composer gb-comments__composer--inline"
-          onSubmit={(e) => { e.preventDefault(); onSaveEdit(); }}
-        >
-          <label className="gb-comments__field">
-            <span>Редактирование</span>
-            <textarea
-              rows={3}
-              maxLength={TEXT_MAX}
-              value={editDraft}
-              disabled={locked}
-              onChange={(e) => onEditDraft(e.target.value)}
-            />
-          </label>
-          <div className="gb-comments__dialog-actions">
-            <Button type="button" variant="outline" disabled={locked} onClick={onCancelEdit}>Отмена</Button>
-            <Button type="submit" disabled={locked || !textReady(editDraft)}>Сохранить</Button>
-          </div>
-        </form>
-      ) : (
-        <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
+          {editing && canCreate ? (
+            <form
+              className="gb-comments__composer gb-comments__composer--inline"
+              onSubmit={(e) => { e.preventDefault(); onSaveEdit(); }}
+            >
+              <label className="gb-comments__field">
+                <span>Редактирование</span>
+                <textarea
+                  rows={3}
+                  maxLength={TEXT_MAX}
+                  value={editDraft}
+                  disabled={locked}
+                  onChange={(e) => onEditDraft(e.target.value)}
+                />
+              </label>
+              <div className="gb-comments__dialog-actions">
+                <Button type="button" variant="outline" disabled={locked} onClick={onCancelEdit}>Отмена</Button>
+                <Button type="submit" disabled={locked || !textReady(editDraft)}>Сохранить</Button>
+              </div>
+            </form>
+          ) : (
+            <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
+          )}
+
+          {me && canCreate ? (
+            <div className="gb-comment__actions">
+              <button type="button" className="gb-comment__reply-toggle" onClick={onToggleReply} disabled={locked}>
+                Ответить
+              </button>
+            </div>
+          ) : null}
+        </>
       )}
-
-      {!item.deleted && me && canCreate ? (
-        <div className="gb-comment__actions">
-          <button type="button" className="gb-comment__reply-toggle" onClick={onToggleReply} disabled={locked}>
-            Ответить
-          </button>
-        </div>
-      ) : null}
 
       {item.replyCount > 0 ? (
         <button
@@ -777,32 +784,34 @@ function CommentArticle({
           {replies.map((reply) => (
             <li key={reply.id}>
               <article className={`gb-comment gb-comment--reply${reply.deleted ? " is-deleted" : ""}`}>
-                <header className="gb-comment__meta">
-                  <Avatar
-                    name={reply.author?.displayName ?? "Игрок"}
-                    avatar={reply.author?.avatar}
-                    tone="yellow"
-                    className="avatar avatar--yellow gb-comment__reply-avatar"
-                  />
-                  <div className="gb-comment__identity">
-                    {reply.author?.profilePublic && reply.author.publicPlayerId ? (
-                      <Link href={`/players/${encodeURIComponent(reply.author.publicPlayerId)}`}>
-                        {reply.author.displayName}
-                      </Link>
-                    ) : (
-                      <strong>{reply.author?.displayName ?? "Игрок"}</strong>
-                    )}
-                    <time dateTime={reply.createdAt}>{commentTime(reply.createdAt)}</time>
-                  </div>
-                </header>
                 {reply.deleted ? (
                   <p className="gb-comment__tombstone">Комментарий удалён</p>
                 ) : (
-                  <CommentBody
-                    text={reply.body ?? ""}
-                    expanded={Boolean(expandedTextMap[reply.id])}
-                    onExpand={() => onExpandText(reply.id)}
-                  />
+                  <>
+                    <header className="gb-comment__meta">
+                      <Avatar
+                        name={reply.author?.displayName ?? "Игрок"}
+                        avatar={reply.author?.avatar}
+                        tone="yellow"
+                        className="avatar avatar--yellow gb-comment__reply-avatar"
+                      />
+                      <div className="gb-comment__identity">
+                        {reply.author?.profilePublic && reply.author.publicPlayerId ? (
+                          <Link href={`/players/${encodeURIComponent(reply.author.publicPlayerId)}`}>
+                            {reply.author.displayName}
+                          </Link>
+                        ) : (
+                          <strong>{reply.author?.displayName ?? "Игрок"}</strong>
+                        )}
+                        <time dateTime={reply.createdAt}>{commentTime(reply.createdAt)}</time>
+                      </div>
+                    </header>
+                    <CommentBody
+                      text={reply.body ?? ""}
+                      expanded={Boolean(expandedTextMap[reply.id])}
+                      onExpand={() => onExpandText(reply.id)}
+                    />
+                  </>
                 )}
               </article>
             </li>
