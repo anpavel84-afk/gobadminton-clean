@@ -6,6 +6,7 @@ import {
   canOfferAttendanceWrites,
   defaultOpenDisputeId,
   listOpenAttendanceDisputes,
+  parseResultsSection,
   resultsPath,
 } from "../src/lib/game-results";
 import type { AttendanceRecord, GameResults } from "../src/lib/consumer-types";
@@ -39,10 +40,21 @@ describe("PG-1b game results helpers", () => {
     })).toBe(true);
   });
 
-  it("builds results path under my-games", () => {
+  it("builds results path under my-games with validated section entry", () => {
     expect(resultsPath("10000000-0000-4000-8000-000000000001")).toBe(
       "/my-games/10000000-0000-4000-8000-000000000001/results",
     );
+    expect(resultsPath("10000000-0000-4000-8000-000000000001", "feedback")).toBe(
+      "/my-games/10000000-0000-4000-8000-000000000001/results?section=feedback",
+    );
+    expect(resultsPath("10000000-0000-4000-8000-000000000001", "clarification")).toContain(
+      "section=clarification",
+    );
+    expect(parseResultsSection("feedback")).toBe("feedback");
+    expect(parseResultsSection("attendance")).toBe("attendance");
+    expect(parseResultsSection("clarification")).toBe("clarification");
+    expect(parseResultsSection("admin")).toBe("attendance");
+    expect(parseResultsSection(undefined)).toBe("attendance");
   });
 
   it("results page host wires GameResultsPage without fake PG-2/3 writes", () => {
@@ -58,6 +70,9 @@ describe("PG-1b game results helpers", () => {
     expect(composition).toContain("Участники / Итоги");
     expect(composition).toContain("GameFeedbackPanel");
     expect(composition).toContain("useGameResultsMutation");
+    expect(composition).toContain("parseResultsSection");
+    expect(composition).toContain("selectTab");
+    expect(composition).toContain('href="/my-games?view=history"');
     expect(composition).not.toContain("Кнопки отправки сейчас не предлагаются");
     expect(composition).toContain("Согласен с этой отметкой");
     expect(composition).not.toContain('|| "Исправление"');

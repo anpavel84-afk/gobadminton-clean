@@ -3,10 +3,65 @@ import { GameCover } from "./GameCover";
 import { GameShare } from "./GameShare";
 import { Avatar } from "../players/ProfileComposition";
 import type { ReactNode } from "react";
-import type { Game, ParticipationStatus } from "../../../lib/consumer-types";
+import type { Game, MeGameResultsPage, ParticipationStatus } from "../../../lib/consumer-types";
 import { discoveryGameWhen, discoveryFormat } from "../../../lib/discovery-presentation";
 import { capacityStatusLabel, participationLabel, settlementTerms } from "../../../lib/game-presentation";
+import {
+  attendanceLabel,
+  attendanceSourceLabel,
+  formatGameDateBadge,
+  ownResultPendingNotice,
+  resultsPath,
+} from "../../../lib/game-results";
 import { Button } from "../Button";
+
+type OwnResultsItem = MeGameResultsPage["items"][number];
+
+/**
+ * Compact own-history row from /me/game-results when public getGame is missing.
+ * Shows only server-proven title/date/own mark/provenance/notice — never invents venue/opponent.
+ */
+export function OwnResultsHistoryCard({ item }: { item: OwnResultsItem }) {
+  const badge = formatGameDateBadge(item.endsAt ?? undefined);
+  const pending = ownResultPendingNotice(item);
+  const source = item.attendance.assertion.source
+    ? attendanceSourceLabel(item.attendance.assertion.source)
+    : null;
+  return (
+    <article
+      className="gb-postgame-history-entry"
+      data-surface="own-results-history"
+      data-game-id={item.gameId}
+    >
+      <div className="gb-postgame__date" aria-hidden>
+        <strong>{badge.day}</strong>
+        <span>{badge.month}</span>
+      </div>
+      <div className="gb-postgame-history-entry__body">
+        <h3>{item.gameTitle ?? "Игра"}</h3>
+        <p>
+          Ваша отметка: {attendanceLabel(item.attendance.value)}
+          {item.attendance.late ? " · опоздание" : ""}
+          {source ? ` · ${source}` : ""}
+          {` · v${item.attendance.version}`}
+        </p>
+        {pending ? (
+          <span className="gb-postgame__pill" data-tone="wait">
+            Ждёт вашего ответа
+          </span>
+        ) : null}
+        {!item.gameTitle ? (
+          <small className="gb-personal-card__hint">Название с публичной карточки недоступно — показаны ваши итоги.</small>
+        ) : null}
+      </div>
+      <div className="gb-postgame-history-entry__action">
+        <Button variant="outline" href={resultsPath(item.gameId)}>
+          Участники / Итоги →
+        </Button>
+      </div>
+    </article>
+  );
+}
 
 export function GameStatusBadge({ tone, children }: { tone: string; children: ReactNode }) {
   return <span className="gb-game-status" data-tone={tone}>{children}</span>;

@@ -115,6 +115,18 @@ vi.mock("../src/lib/api-client", () => ({
   getAttendanceHistory: vi.fn(),
   getAttendanceDispute: vi.fn(),
 }));
+
+/** Empty section → default attendance; stable replace for URL-driven tab sync. */
+const nav = vi.hoisted(() => ({
+  replace: vi.fn(),
+  search: "",
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: nav.replace, push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(nav.search),
+}));
+
 import { apiFetch, getMe, getGame, getGameResults, getAttendanceDispute } from "../src/lib/api-client";
 import {
   Children,
@@ -192,6 +204,7 @@ describe("PG-1b game results mutation host", () => {
     hooks.cleanups = [];
     hooks.render = null;
     storage.clear();
+    nav.search = "";
     vi.resetAllMocks();
     vi.stubGlobal("crypto", { randomUUID: () => "results-attempt-key" });
     vi.stubGlobal("sessionStorage", {
@@ -833,6 +846,7 @@ describe("PG-3 host+panel same-context draft lifecycle", () => {
     hooks.cleanups = [];
     hooks.render = null;
     storage.clear();
+    nav.search = "";
     vi.resetAllMocks();
     vi.stubGlobal("crypto", { randomUUID: () => "host-lifecycle-key" });
     vi.stubGlobal("sessionStorage", {

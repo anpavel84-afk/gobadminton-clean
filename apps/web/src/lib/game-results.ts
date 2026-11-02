@@ -2,8 +2,15 @@ import type {
   AttendanceRecord,
   AttendanceValue,
   GameResults,
+  GameReview,
   MeGameResultsPage,
+  PeerReviewRating,
+  ReviewKind,
 } from "./consumer-types";
+
+export type ResultsSection = "attendance" | "clarification" | "feedback";
+
+export type MeGameResultsItem = MeGameResultsPage["items"][number];
 
 export function attendanceLabel(value: AttendanceValue | "unknown"): string {
   if (value === "present") return "Пришёл";
@@ -49,8 +56,74 @@ export function pendingOwnNotice(page: MeGameResultsPage | null | undefined): nu
   return page.items.filter((item) => item.notice && !item.notice.acknowledgedAt).length;
 }
 
-export function resultsPath(gameId: string): string {
-  return `/my-games/${gameId}/results`;
+/** Validated results tab from URL; unknown/untrusted values fall back to attendance. */
+export function parseResultsSection(raw: string | null | undefined): ResultsSection {
+  if (raw === "feedback" || raw === "clarification" || raw === "attendance") return raw;
+  return "attendance";
+}
+
+export function resultsPath(gameId: string, section?: ResultsSection): string {
+  const base = `/my-games/${gameId}/results`;
+  if (!section || section === "attendance") return base;
+  return `${base}?section=${section}`;
+}
+
+/** History-surface peer rating labels (distinct from create-form titles). */
+export function peerReviewHistoryLabel(rating: PeerReviewRating | null | undefined): string {
+  if (rating === "play_again") return "Сыграл бы снова";
+  if (rating === "neutral") return "Нейтрально";
+  if (rating === "difficulties") return "Были трудности";
+  return "—";
+}
+
+export function reviewKindLabel(kind: ReviewKind): string {
+  if (kind === "peer") return "Отзыв игроку";
+  if (kind === "organization") return "Отзыв организации";
+  return "Тренировочный отзыв";
+}
+
+export function reviewAudienceLabel(direction: GameReview["direction"]): string {
+  return direction === "sent" ? "Отправленные" : "Полученные";
+}
+
+/** Own private history rows not already covered by ordinary participation/managed cards. */
+export function ownResultsNotCoveredByGames(
+  items: MeGameResultsItem[],
+  coveredGameIds: ReadonlySet<string>,
+): MeGameResultsItem[] {
+  const seen = new Set<string>();
+  const out: MeGameResultsItem[] = [];
+  for (const item of items) {
+    if (coveredGameIds.has(item.gameId) || seen.has(item.gameId)) continue;
+    seen.add(item.gameId);
+    out.push(item);
+  }
+  return out;
+}
+
+export function findOwnResultForGame(
+  items: MeGameResultsItem[],
+  gameId: string,
+): MeGameResultsItem | undefined {
+  return items.find((item) => item.gameId === gameId);
+}
+
+/**
+ * Bucket timing from authoritative own-result endsAt only.
+ * Does not infer attendance/outcome. Invalid or missing → unknown.
+ */
+export function ownResultEndsAtBucket(
+  endsAt: string | null | undefined,
+  now = Date.now(),
+): "past" | "future" | "unknown" {
+  if (endsAt == null || endsAt === "") return "unknown";
+  const ms = Date.parse(endsAt);
+  if (!Number.isFinite(ms)) return "unknown";
+  return ms < now ? "past" : "future";
+}
+
+export function ownResultPendingNotice(item: MeGameResultsItem): boolean {
+  return Boolean(item.notice && !item.notice.acknowledgedAt);
 }
 
 /** Bounded open disputes from the current roster page + own attendance — no full-DB fetch. */

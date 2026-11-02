@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DesktopFooter } from "../src/components/consumer/DesktopFooter";
 import { ReleaseLink, isDevReleasesHost } from "../src/components/consumer/ReleaseLink";
 import {
+  API_CONTRACT_VERSION_NOTE,
   CURRENT_APPLICATION_VERSION,
   CURRENT_NAMED_RELEASE,
   FIRST_ALPHA_FEATURES,
@@ -15,14 +16,14 @@ import {
   runtimeBuildGitSha,
   shortSha,
 } from "../src/lib/releases";
-import "../src/lib/releases.test";
 import { GET as healthGet } from "../src/app/health/route";
 
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.12 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.12");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.13 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.13");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.23.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -37,7 +38,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/заметк|черновик|удален|подтвержд/i);
+    expect(currentProse).toMatch(/истори|отзыв|итог/i);
+    expect(currentProse).toMatch(/Жалоба на конкретный отзыв ещё недоступна/);
+    expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
     );
@@ -103,7 +106,20 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.accepted_at === "2026-11-01T23:30:16Z"
       && row.deployments.length === 1,
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(14);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.12"
+      && row.source_sha === "6383ef406f5944a299843939d391ab7886fdb5dd"
+      && row.deployments[0]?.release_id === "r41368959239-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-02T00:59:40Z"
+      && row.deployments[0]?.api_digest === "sha256:82ab7826723a89ec035c1777190fcef1134441b0f9ed6ddae6952507dc63fb82"
+      && row.deployments[0]?.web_digest === "sha256:4be8fe110f56f05469f30ecd2961a0a98ad704f7cfb6496b7aa37caf0e128f11"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.23.0",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(15);
+    expect(
+      TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
+    ).toBe(20);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   getGame,
@@ -9,28 +9,49 @@ import {
   listAllMyParticipations,
   listMyGameResults,
 } from "../../../lib/api-client";
-import type { Game, ManagedGame, Me, MeGameResultsPage, Participation } from "../../../lib/consumer-types";
+import type {
+  Game,
+  ManagedGame,
+  Me,
+  MeGameResultsPage,
+  Participation,
+} from "../../../lib/consumer-types";
 import {
   isActiveCreatedGame,
   isParticipatingHistoryRow,
   managedGameRelationLabel,
   participationLabel,
 } from "../../../lib/game-presentation";
-import { pendingOwnNotice, resultsPath } from "../../../lib/game-results";
+import {
+  findOwnResultForGame,
+  ownResultEndsAtBucket,
+  ownResultsNotCoveredByGames,
+  pendingOwnNotice,
+  resultsPath,
+} from "../../../lib/game-results";
 import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
-import { PersonalGameCard, GameStatusBadge } from "../games/GameDetailComposition";
+import {
+  OwnResultsHistoryCard,
+  PersonalGameCard,
+  GameStatusBadge,
+} from "../games/GameDetailComposition";
 import { GameRecommendationsSection } from "../games/GameRecommendationsSection";
+import { GameReviewsHistory } from "../games/GameReviewsHistory";
+import "../../../styles/postgame.css";
 
 type Relation = "participating" | "created";
 type View = "upcoming" | "history";
+type OwnResultsState = "idle" | "loading" | "ready" | "empty" | "error" | "auth" | "unavailable";
 
 type ParticipationRow = {
   participation: Participation;
   game: Game | null;
   gameError?: string;
 };
+
+const OWN_RESULTS_LIMIT = 20;
 
 export function MyGamesPage() {
   const router = useRouter();
@@ -42,12 +63,80 @@ export function MyGamesPage() {
   const [rows, setRows] = useState<ParticipationRow[]>([]);
   const [created, setCreated] = useState<ManagedGame[]>([]);
   const [me, setMe] = useState<Me | null>(null);
-  const [ownResults, setOwnResults] = useState<MeGameResultsPage | null>(null);
+  const [ownItems, setOwnItems] = useState<MeGameResultsPage["items"]>([]);
+  const [ownCursor, setOwnCursor] = useState<string | null>(null);
+  const [ownState, setOwnState] = useState<OwnResultsState>("idle");
+  const [ownError, setOwnError] = useState<string | null>(null);
+  const [ownLoadingMore, setOwnLoadingMore] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [state, setState] = useState<"loading" | "ready" | "error" | "auth">(
     "loading",
   );
   const [error, setError] = useState<string | null>(null);
+  const ownEpoch = useRef(0);
+  const ownItemsRef = useRef<MeGameResultsPage["items"]>([]);
+  ownItemsRef.current = ownItems;
+
+  function clearOwnPrivate() {
+    ownEpoch.current += 1;
+    ownItemsRef.current = [];
+    setOwnItems([]);
+    setOwnCursor(null);
+    setOwnError(null);
+    setOwnLoadingMore(false);
+    setOwnState("auth");
+  }
+
+  async function loadOwnResults(opts: { cursor?: string | null; append: boolean }) {
+    const request = ++ownEpoch.current;
+    if (!opts.append) {
+      setOwnState("loading");
+      setOwnError(null);
+      ownItemsRef.current = [];
+      setOwnItems([]);
+      setOwnCursor(null);
+    } else {
+      setOwnLoadingMore(true);
+    }
+    const page = await listMyGameResults({
+      limit: OWN_RESULTS_LIMIT,
+      cursor: opts.cursor ?? undefined,
+    });
+    if (request !== ownEpoch.current) return;
+    if (!page.ok) {
+      setOwnLoadingMore(false);
+      if (page.status === 401) {
+        clearOwnPrivate();
+        return;
+      }
+      if (page.status === 403 || page.status === 404) {
+        ownItemsRef.current = [];
+        setOwnItems([]);
+        setOwnCursor(null);
+        setOwnState("unavailable");
+        setOwnError(null);
+        return;
+      }
+      if (!opts.append) {
+        ownItemsRef.current = [];
+        setOwnItems([]);
+        setOwnCursor(null);
+        setOwnState("error");
+        setOwnError(page.error || "Не удалось загрузить ваши итоги.");
+      } else {
+        setOwnError(page.error || "Не удалось загрузить ещё итоги.");
+      }
+      return;
+    }
+    if (request !== ownEpoch.current) return;
+    const nextItems = opts.append ? [...ownItemsRef.current, ...page.data.items] : page.data.items;
+    ownItemsRef.current = nextItems;
+    setOwnItems(nextItems);
+    setOwnCursor(page.data.nextCursor);
+    setOwnLoadingMore(false);
+    setOwnError(null);
+    setOwnState(nextItems.length === 0 ? "empty" : "ready");
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -56,13 +145,19 @@ export function MyGamesPage() {
     setRows([]);
     setCreated([]);
     setMe(null);
-    setOwnResults(null);
+    ownEpoch.current += 1;
+    ownItemsRef.current = [];
+    setOwnItems([]);
+    setOwnCursor(null);
+    setOwnError(null);
+    setOwnLoadingMore(false);
+    setOwnState("loading");
     const clearPrivate = () => {
       cancelled = true;
       setMe(null);
       setRows([]);
       setCreated([]);
-      setOwnResults(null);
+      clearOwnPrivate();
       setState("auth");
     };
     const onSession = () => {
@@ -77,11 +172,11 @@ export function MyGamesPage() {
       if (!account.ok) {
         setState(account.status === 401 ? "auth" : "error");
         setError("Не удалось проверить вход. Попробуйте ещё раз.");
+        setOwnState(account.status === 401 ? "auth" : "error");
         return;
       }
       setMe(account.data);
-      const notices = await listMyGameResults({ limit: 20 });
-      if (!cancelled && notices.ok) setOwnResults(notices.data);
+      void loadOwnResults({ append: false });
 
       if (relation === "created") {
         // Include owner + non-creator manager rows from /v1/me/games.
@@ -121,6 +216,7 @@ export function MyGamesPage() {
     })();
     return () => {
       cancelled = true;
+      ownEpoch.current += 1;
       window.removeEventListener("gb-private-expired", clearPrivate);
       window.removeEventListener("gb-session-changed", onSession);
     };
@@ -136,10 +232,29 @@ export function MyGamesPage() {
 
   const visibleRows = useMemo(() => {
     return rows.filter(({ participation, game }) => {
-      const history = isParticipatingHistoryRow(game, participation.status);
+      let history = isParticipatingHistoryRow(game, participation.status);
+      // Public 404: use authoritative own endsAt for bucket only; unknown stays non-history.
+      if (!history && !game) {
+        const own = findOwnResultForGame(ownItems, participation.gameId);
+        if (own && ownResultEndsAtBucket(own.endsAt) === "past") history = true;
+      }
       return view === "history" ? history : !history;
     });
-  }, [rows, view]);
+  }, [rows, view, ownItems]);
+
+  const coveredGameIds = useMemo(() => {
+    const ids = new Set<string>();
+    // Cover every participation/managed id so one game cannot also appear as an orphan duplicate.
+    for (const row of rows) ids.add(row.participation.gameId);
+    for (const game of created) ids.add(game.id);
+    return ids;
+  }, [rows, created]);
+
+  const orphanOwnResults = useMemo(() => {
+    // Own results alone do not prove manager — keep personal orphans off «Управляю».
+    if (view !== "history" || relation !== "participating") return [];
+    return ownResultsNotCoveredByGames(ownItems, coveredGameIds);
+  }, [view, relation, ownItems, coveredGameIds]);
 
   const returnPath =
       relation === "created"
@@ -167,8 +282,14 @@ export function MyGamesPage() {
     go(relation, next);
   }
 
-  const listCount =
+  const ordinaryCount =
     relation === "created" ? visibleCreated.length : visibleRows.length;
+  const listCount =
+    view === "history" ? ordinaryCount + orphanOwnResults.length : ordinaryCount;
+  const ownResultsPage: MeGameResultsPage | null =
+    ownState === "ready" || ownState === "empty"
+      ? { items: ownItems, nextCursor: ownCursor }
+      : null;
 
   return (
     <ConsumerShell active="my-games" title="Мои игры" hideHeading>
@@ -218,7 +339,7 @@ export function MyGamesPage() {
             подтверждает присутствие на площадке и не означает оплату.
           </p>
         ) : null}
-        {state === "ready" && ownResults && pendingOwnNotice(ownResults) > 0 ? (
+        {state === "ready" && ownResultsPage && pendingOwnNotice(ownResultsPage) > 0 ? (
           <section className="gb-game-feedback" data-surface="postgame-notices" aria-label="Уведомления об итогах">
             <h2>Есть отметки посещения, которые ждут ответа</h2>
             <p>
@@ -226,7 +347,7 @@ export function MyGamesPage() {
               означает согласие.
             </p>
             <ul>
-              {ownResults.items
+              {ownResultsPage.items
                 .filter((item) => item.notice && !item.notice.acknowledgedAt)
                 .slice(0, 5)
                 .map((item) => (
@@ -309,7 +430,7 @@ export function MyGamesPage() {
           </div>
         ) : null}
 
-        {relation === "created" && state === "ready" && listCount > 0 ? (
+        {relation === "created" && state === "ready" && ordinaryCount > 0 ? (
           <div className="gb-personal-list-items" data-list="managed-by-me">
             {visibleCreated.map((game) => (
               <PersonalGameCard
@@ -344,32 +465,97 @@ export function MyGamesPage() {
           </div>
         ) : null}
 
-        {relation === "participating" && state === "ready" && listCount > 0 ? (
+        {relation === "participating" && state === "ready" && ordinaryCount > 0 ? (
           <div className="gb-personal-list-items">
-            {visibleRows.map(({ participation, game }) =>
-              game ? (
-                <PersonalGameCard
-                  key={participation.id}
-                  game={game}
-                  ownStatus={participation.status}
-                />
-              ) : (
-                <div key={participation.id} className="gb-game-feedback">
+            {visibleRows.map(({ participation, game }) => {
+              if (game) {
+                return (
+                  <PersonalGameCard
+                    key={participation.id}
+                    game={game}
+                    ownStatus={participation.status}
+                  />
+                );
+              }
+              const own = findOwnResultForGame(ownItems, participation.gameId);
+              if (own) {
+                return <OwnResultsHistoryCard key={participation.id} item={own} />;
+              }
+              return (
+                <div key={participation.id} className="gb-game-feedback" data-surface="game-details-unavailable">
                   <GameStatusBadge tone={participation.status}>
                     {participationLabel(participation.status)}
                   </GameStatusBadge>
                   <h3>Детали игры недоступны</h3>
                   <p>
                     Не удалось загрузить место и время. Ваша заявка сохранена.
+                    {ownState === "loading" ? " Проверяем ваши итоги…" : ""}
                   </p>
                   <Button variant="outline" onClick={retry}>
                     Обновить
                   </Button>
                 </div>
-              ),
-            )}
+              );
+            })}
           </div>
         ) : null}
+
+        {view === "history" && state === "ready" && orphanOwnResults.length > 0 ? (
+          <section
+            className="gb-postgame-own-history"
+            data-surface="own-results-orphan-history"
+            aria-label="Ваши итоги без публичной карточки"
+          >
+            <header className="gb-personal-list__heading gb-personal-list">
+              <div>
+                <span className="gb-game-kicker">Личная проекция итогов</span>
+                <h2>Ваши итоги</h2>
+              </div>
+              <b>{orphanOwnResults.length}</b>
+            </header>
+            <p className="gb-c23-helper">
+              Публичная карточка игры недоступна или состав изменился — ниже только ваши
+              серверные итоги, без выдуманного места или соперника.
+            </p>
+            <div className="gb-personal-list-items">
+              {orphanOwnResults.map((item) => (
+                <OwnResultsHistoryCard key={`${item.gameId}:${item.contextId}`} item={item} />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {view === "history" && state === "ready" && ownState === "error" ? (
+          <div className="gb-game-feedback" data-state="error" data-surface="own-results-error">
+            <h2>Не удалось загрузить ваши итоги</h2>
+            <p>{ownError}</p>
+            <Button variant="primary" onClick={() => void loadOwnResults({ append: false })}>
+              Обновить итоги
+            </Button>
+          </div>
+        ) : null}
+
+        {view === "history" && state === "ready" && ownState === "unavailable" ? (
+          <div className="gb-game-feedback" data-state="unavailable" data-surface="own-results-unavailable">
+            <h2>Личные итоги недоступны</h2>
+            <p>Сервер не открыл проекцию /me/game-results. Это не пустой список.</p>
+          </div>
+        ) : null}
+
+        {view === "history" && state === "ready" && (ownState === "ready" || ownState === "empty") && ownCursor ? (
+          <div className="gb-postgame-own-history__more">
+            {ownError ? <p className="gb-game-helper">{ownError}</p> : null}
+            <Button
+              variant="outline"
+              disabled={ownLoadingMore}
+              onClick={() => void loadOwnResults({ cursor: ownCursor, append: true })}
+            >
+              {ownLoadingMore ? "Загружаем…" : "Показать ещё итоги"}
+            </Button>
+          </div>
+        ) : null}
+
+        {view === "history" && state === "ready" && me ? <GameReviewsHistory /> : null}
           </div>
           {state === "ready" && me && view === "upcoming" ? (
             <aside className="gb-my-games-layout__rail" aria-label="Советы и приглашения">
