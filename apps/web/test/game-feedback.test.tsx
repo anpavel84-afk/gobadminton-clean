@@ -216,6 +216,10 @@ describe("PG-3 feedback client mutation fencing", () => {
       kind: "reviewReply",
       reviewId,
     });
+    expect(recognizeGameResultsAction(`/v1/reviews/${reviewId}/report`, "POST")).toEqual({
+      kind: "reviewReport",
+      reviewId,
+    });
     expect(recognizeGameResultsAction(`/v1/games/${gameId}/notes/${contextId}`, "PUT")).toEqual({
       kind: "notePut",
       gameId,
@@ -352,12 +356,28 @@ describe("PG-3 feedback client mutation fencing", () => {
     expect(panel).toContain("Без публичного рейтинга");
     expect(panel).toContain("mutation.run");
     expect(panel).toContain(`/v1/games/\${gameId}/reviews`);
-    expect(panel).toContain("отправьте жалобу там");
+    expect(panel).toContain("Пожаловаться на отзыв");
+    expect(panel).toContain("shareReviewWithSupport");
+    expect(panel).toContain("reportConsent");
+    expect(panel).toContain(`/v1/reviews/\${review.id}/report`);
     expect(panel).not.toContain("типизированное расширение Safety");
     expect(panel).not.toMatch(/\bSafety\b/);
     expect(panel).not.toContain("demoReview");
     expect(css).toContain(".gb-postgame .profile-field");
     expect(css).toContain("width: 100%");
+  });
+
+  it("received peer report UI requires unchecked consent and freezes original report key path", () => {
+    const panel = readFileSync(
+      path.resolve(__dirname, "../src/components/consumer/games/GameFeedbackPanel.tsx"),
+      "utf8",
+    );
+    expect(panel).toContain("checked={reportConsent}");
+    expect(panel).toContain("setReportConsent(false)");
+    expect(panel).toContain("if (!reportConsent) return");
+    expect(panel).toContain("reportFlight.current");
+    expect(panel).toContain("unknownOp");
+    expect(panel).toMatch(/canReport/);
   });
 
   it("own note edit stays available without canCreateNote; blocked when note.canEdit is false", () => {

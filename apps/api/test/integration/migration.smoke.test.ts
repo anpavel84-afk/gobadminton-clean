@@ -191,6 +191,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0050_game_court_booking",
         "0051_entity_comments",
         "0052_attendance_missing_disputes",
+        "0053_private_review_reports",
       ]);
       expect((await pool.query("SELECT to_regclass('public.game_court_booking')::text AS name")).rows[0]?.name).toBe("game_court_booking");
       expect((await pool.query("SELECT to_regclass('public.entity_comments')::text AS name")).rows[0]?.name).toBe("entity_comments");
@@ -215,6 +216,56 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.game_review_replies')::text AS name")).rows[0]?.name).toBe("game_review_replies");
       expect((await pool.query("SELECT to_regclass('public.game_personal_notes')::text AS name")).rows[0]?.name).toBe("game_personal_notes");
       expect((await pool.query("SELECT to_regclass('public.game_personal_note_revisions')::text AS name")).rows[0]?.name).toBe("game_personal_note_revisions");
+      expect((await pool.query("SELECT to_regclass('public.game_review_report_bindings')::text AS name")).rows[0]?.name).toBe("game_review_report_bindings");
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.abuse_reports'::regclass
+               AND conname = 'abuse_reports_target_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/game_review/);
+      // 0053 exact revision tuple FK (not fake CHECK TRUE) + immutable trigger.
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.game_review_report_bindings'::regclass
+               AND conname = 'game_review_report_bindings_revision_tuple_fkey'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/FOREIGN KEY.+game_review_revisions/i);
+      expect(
+        (
+          await pool.query(
+            `SELECT 1 FROM pg_constraint
+             WHERE conrelid = 'public.game_review_report_bindings'::regclass
+               AND conname = 'game_review_report_bindings_revision_match_chk'`,
+          )
+        ).rows,
+      ).toHaveLength(0);
+      expect(
+        (
+          await pool.query(
+            `SELECT 1 FROM pg_constraint
+             WHERE conrelid = 'public.game_review_revisions'::regclass
+               AND conname = 'game_review_revisions_report_binding_tuple_uidx'`,
+          )
+        ).rows,
+      ).toHaveLength(1);
+      expect(
+        (
+          await pool.query(
+            `SELECT tgname FROM pg_trigger
+             WHERE tgrelid = 'public.game_review_report_bindings'::regclass
+               AND tgname = 'game_review_report_bindings_immutable'
+               AND NOT tgisinternal`,
+          )
+        ).rows,
+      ).toHaveLength(1);
       // Second-schema apply (same fixture pattern as url-storage dual search_path): 0047
       // local constraints + 6 history immutability triggers must exist on side OIDs so
       // public catalog rows cannot mask a missing side protection.

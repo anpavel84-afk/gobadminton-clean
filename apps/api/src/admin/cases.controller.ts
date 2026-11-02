@@ -20,4 +20,9 @@ export class AdminCasesController {
  evidenceList(@Param("id") id:string,@Query() query:unknown,@Req() request:FastifyRequest){this.cases.enabled();return this.cases.evidenceList(request,parse(uuid,id),parse(casePageSchema,query));}
  @Get("cases/:id/evidence/:evidenceId") @Header("Cache-Control","no-store")
  evidenceRead(@Param("id") id:string,@Param("evidenceId") evidenceId:string,@Query() query:unknown,@Req() request:FastifyRequest){this.cases.enabled();parse(caseHistorySchema.pick({}),query);return this.cases.evidenceRead(request,parse(uuid,id),parse(uuid,evidenceId));}
+ @Get("cases/:id/review-reports/:reportId") @Header("Cache-Control","no-store")
+ reviewReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Req() request:FastifyRequest){
+  this.cases.enabled();
+  return this.cases.readReviewReport(request,parse(uuid,id),parse(uuid,reportId));
+ }
 }

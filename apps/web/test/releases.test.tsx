@@ -21,9 +21,9 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.18 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.18");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.26.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.19 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.19");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.27.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -38,8 +38,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/комментар|кнопк|телефон/i);
-    expect(currentProse).toMatch(/отправ|расположен|сжима/i);
+    expect(currentProse).toMatch(/жалоб|отзыв|редакц/i);
+    expect(currentProse).toMatch(/назначенн|специалист|разбор/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -168,10 +168,21 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.26.0"
       && row.title === "Уточнения действий в комментариях и пояснений после игры",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(20);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.18"
+      && row.source_sha === "6cd66a77068d6ab2faa283867d6320896b0c5177"
+      && row.deployments[0]?.release_id === "r41456359306-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-02T13:55:41Z"
+      && row.deployments[0]?.api_digest === "sha256:a48a7bebe6cc86b56a0ed08760f94f8db4aac2bd55f8d262354cab77a066e34b"
+      && row.deployments[0]?.web_digest === "sha256:81fc859c425688f551f5f427362a5e49dd55cc28665337ee904db634efb1bd69"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.26.0"
+      && row.title === "Мобильные кнопки комментариев",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(21);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(25);
+    ).toBe(26);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
     expect(shortSha("unknown")).toBe("неизвестно");

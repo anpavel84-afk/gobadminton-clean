@@ -419,6 +419,58 @@ describe("PG-1b game results mutation host", () => {
     expect(success.mock.calls[0]?.[0]).toEqual(record({ version: 1, value: "present", late: false }));
   });
 
+  it("review report pending/success binds exact reviewId/version/game; rejects foreign reportId", () => {
+    const reviewId = "20000000-0000-4000-8000-000000000044";
+    const otherReview = "20000000-0000-4000-8000-000000000055";
+    const pending = {
+      path: `/v1/reviews/${reviewId}/report`,
+      method: "POST",
+      key: "report-k1",
+      body: {
+        expectedVersion: 2,
+        reasonCode: "harassment",
+        shareReviewWithSupport: true,
+        gameId,
+      },
+    };
+    expect(validateGameResultsPending(pending, gameId)).toBe(true);
+    expect(
+      validateGameResultsPending(
+        { ...pending, body: { ...pending.body, shareReviewWithSupport: false } },
+        gameId,
+      ),
+    ).toBe(false);
+    expect(
+      validateGameResultsPending(
+        { ...pending, body: { ...pending.body, gameId: "30000000-0000-4000-8000-000000000099" } },
+        gameId,
+      ),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(
+        { reportId: "40000000-0000-4000-8000-000000000001", status: "submitted", reviewId, version: 2 },
+        pending,
+      ),
+    ).toBe(true);
+    expect(
+      validateGameResultsSuccess(
+        {
+          reportId: "40000000-0000-4000-8000-000000000001",
+          status: "submitted",
+          reviewId: otherReview,
+          version: 2,
+        },
+        pending,
+      ),
+    ).toBe(false);
+    expect(
+      validateGameResultsSuccess(
+        { reportId: "40000000-0000-4000-8000-000000000001", status: "submitted", reviewId, version: 3 },
+        pending,
+      ),
+    ).toBe(false);
+  });
+
   it("receipt binding rejects empty bulk and stale unknown outcome; matching responses pass", () => {
     const bulkPending = {
       path: `/v1/games/${gameId}/attendance/bulk-present`,

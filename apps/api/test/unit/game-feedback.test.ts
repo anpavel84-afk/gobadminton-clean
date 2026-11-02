@@ -8,6 +8,7 @@ import {
   peerCreateReasonLabel,
   putNoteRequest,
   putReplyRequest,
+  reportReviewRequest,
   FEEDBACK_ACTOR_MUTATIONS_PER_GAME_MAX,
   FEEDBACK_COMMENT_MAX,
 } from "../../src/games/game-feedback.policy";
@@ -146,5 +147,41 @@ describe("PG-3 feedback policy", () => {
     expect(peerCreateReasonLabel("attendance_clarifying")).toBe("Уточняем посещение");
     expect(peerCreateReasonLabel("no_eligible_peers")).toBe("Пока нет участников для отзыва");
     expect(peerCreateReasonLabel(null)).toBeNull();
+  });
+
+  it("report requires exact version, supported reason, literal consent and gameId", () => {
+    const gameId = "10000000-0000-4000-8000-000000000099";
+    expect(
+      parse(reportReviewRequest, {
+        expectedVersion: 2,
+        reasonCode: "harassment",
+        shareReviewWithSupport: true,
+        gameId,
+      }).shareReviewWithSupport,
+    ).toBe(true);
+    expect(() =>
+      parse(reportReviewRequest, {
+        expectedVersion: 2,
+        reasonCode: "harassment",
+        shareReviewWithSupport: false,
+        gameId,
+      }),
+    ).toThrow();
+    expect(() =>
+      parse(reportReviewRequest, {
+        expectedVersion: 0,
+        reasonCode: "harassment",
+        shareReviewWithSupport: true,
+        gameId,
+      }),
+    ).toThrow();
+    expect(() =>
+      parse(reportReviewRequest, {
+        expectedVersion: 1,
+        reasonCode: "not_a_reason",
+        shareReviewWithSupport: true,
+        gameId,
+      }),
+    ).toThrow();
   });
 });

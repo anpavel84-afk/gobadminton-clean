@@ -32,7 +32,28 @@ export class AdminCasesService {
   private async report(c:PoolClient,id:string) {
     const r=(await c.query("SELECT id,target_kind,target_public_player_id,reason_code,state,created_at FROM abuse_reports WHERE id=$1",[id])).rows[0];
     if(!r)throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+    // game_review queue/evidence: minimal typed metadata only — never detail/text/identities.
+    if(r.target_kind==="game_review") {
+      return {id:r.id,targetKind:"game_review" as const,reasonCode:r.reason_code,state:r.state,createdAt:r.created_at};
+    }
     return {id:r.id,targetKind:r.target_kind,targetPublicPlayerId:r.target_public_player_id,reasonCode:r.reason_code,state:r.state,createdAt:r.created_at};
+  }
+  /** Attendance-dispute COI mapped to affected users of a private peer review report. */
+  private async assertIndependentReviewer(c:PoolClient,actor:AuditActor,gameId:string,affectedUserIds:string[]) {
+    const principal=(await c.query<{user_id:string;status:string}>("SELECT user_id, status FROM admin_principals WHERE id=$1 FOR UPDATE",[actor.principalId])).rows[0];
+    if(!principal || principal.status!=="active") throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
+    const reviewerUserId=principal.user_id;
+    if(affectedUserIds.includes(reviewerUserId)) throw forbidden("REVIEWER_SUBJECT_CONFLICT","Проверяющий не может быть стороной обращения");
+    if((await c.query("SELECT 1 FROM games WHERE id=$1 AND created_by_user_id=$2 LIMIT 1",[gameId,reviewerUserId])).rows[0]) {
+      throw forbidden("REVIEWER_MANAGER_CONFLICT","Организатор игры не может быть независимым проверяющим");
+    }
+    if((await c.query(`SELECT 1 FROM game_managers WHERE game_id=$1 AND user_id=$2 AND role IN ('owner','manager') LIMIT 1`,[gameId,reviewerUserId])).rows[0]) {
+      throw forbidden("REVIEWER_MANAGER_CONFLICT","Организатор игры не может быть независимым проверяющим");
+    }
+    if((await c.query("SELECT 1 FROM participations WHERE game_id=$1 AND user_id=$2 LIMIT 1",[gameId,reviewerUserId])).rows[0]) {
+      throw forbidden("REVIEWER_PARTICIPANT_CONFLICT","Участник игры не может быть независимым проверяющим");
+    }
+    return reviewerUserId;
   }
   async reports(request:FastifyRequest,page:Page & {reportId?:string}) {
     this.enabled(); return this.admin.privilegedRead(request,"user.lookup",async(c,a)=>{
@@ -55,11 +76,74 @@ export class AdminCasesService {
   async detail(request:FastifyRequest,id:string,beforeVersion?:number) {
     this.enabled();return this.admin.privilegedRead(request,"user.lookup",async(c,a)=>{
       const r=await this.scoped(c,a,id);
-      const links=(await c.query("SELECT id,source_kind,report_id,game_id FROM support_case_links WHERE case_id=$1 ORDER BY id",[id])).rows;
+      const links=(await c.query(`SELECT l.id,l.source_kind,l.report_id,l.game_id,ar.target_kind AS report_target_kind
+        FROM support_case_links l
+        LEFT JOIN abuse_reports ar ON ar.id=l.report_id
+        WHERE l.case_id=$1 ORDER BY l.id`,[id])).rows;
       const history=(await c.query("SELECT id,case_version,action,note_code,audit_id,created_at FROM support_case_actions WHERE case_id=$1 AND ($2::integer IS NULL OR case_version<$2) ORDER BY case_version DESC LIMIT 101",[id,beforeVersion??null])).rows;
       await appendAudit(c,{actor:a,action:"admin.case_read",targetType:"case",targetId:id,permission:manages(a)?"case.manage":"case.assigned.manage",reason:"operations_read"});
-      return {...caseDto(r),links:links.map(x=>({id:x.id,sourceKind:x.source_kind,sourceId:x.report_id??x.game_id})),history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null};
+      return {...caseDto(r),links:links.map(x=>({id:x.id,sourceKind:x.source_kind,sourceId:x.report_id??x.game_id,...(x.source_kind==="report"&&x.report_target_kind?{targetKind:x.report_target_kind}:{})})),history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null};
     });
+  }
+  /**
+   * Assigned independent reviewer + evidence.assigned.read + fresh step-up may read the
+   * consented exact immutable revision. case.manage / unassigned staff is not enough.
+   * No mutation/side-effect beyond audit. Private text is never copied into case_evidence_items.
+   */
+  async readReviewReport(request:FastifyRequest,caseId:string,reportId:string) {
+    this.enabled();
+    return this.admin.privilegedRead(request,"user.lookup",async(c,a)=>{
+      if(!hasPermission(a.roles as AdminRole[],"evidence.assigned.read")) {
+        throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
+      }
+      const r=await this.scoped(c,a,caseId);
+      if(r.assigned_to!==a.principalId) throw notFound("CASE_UNAVAILABLE","Обращение недоступно");
+      const link=(await c.query("SELECT id FROM support_case_links WHERE case_id=$1 AND report_id=$2",[caseId,reportId])).rows[0];
+      if(!link) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const reportMeta=await this.report(c,reportId);
+      if(reportMeta.targetKind!=="game_review") throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const binding=(await c.query<{
+        review_id:string;game_id:string;revision_id:string;reported_version:number;reporter_user_id:string;share_consent:boolean;
+      }>(`SELECT review_id, game_id, revision_id, reported_version, reporter_user_id, share_consent
+          FROM game_review_report_bindings WHERE report_id=$1`,[reportId])).rows[0];
+      if(!binding || binding.share_consent!==true) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const review=(await c.query<{author_user_id:string;recipient_user_id:string;kind:string}>(
+        `SELECT author_user_id, recipient_user_id, kind FROM game_reviews WHERE id=$1`,[binding.review_id],
+      )).rows[0];
+      if(!review || review.kind!=="peer") throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      await this.assertIndependentReviewer(c,a,binding.game_id,[review.author_user_id,review.recipient_user_id,binding.reporter_user_id]);
+      const revision=(await c.query<{
+        id:string;resource_version:number;after_peer_rating:string|null;after_comment:string|null;after_tags:string[]|null;
+        after_organization_score:number|null;after_discrepancy_explanation:string|null;recorded_at:Date;
+      }>(`SELECT id, resource_version, after_peer_rating, after_comment, after_tags,
+                 after_organization_score, after_discrepancy_explanation, recorded_at
+          FROM game_review_revisions WHERE id=$1 AND review_id=$2 AND resource_version=$3`,
+        [binding.revision_id,binding.review_id,binding.reported_version])).rows[0];
+      if(!revision) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      await appendAudit(c,{
+        actor:a,
+        action:"admin.case.review_report_read",
+        targetType:"case",
+        targetId:caseId,
+        permission:"evidence.assigned.read",
+        reason:"operations_read",
+        after:{reportId,reviewId:binding.review_id,version:binding.reported_version,revisionId:revision.id},
+      });
+      return {
+        caseId,
+        reportId,
+        reviewId:binding.review_id,
+        gameId:binding.game_id,
+        version:binding.reported_version,
+        kind:"peer" as const,
+        peerRating:revision.after_peer_rating,
+        comment:revision.after_comment,
+        tags:revision.after_tags??[],
+        recordedAt:revision.recorded_at,
+        reasonCode:reportMeta.reasonCode,
+        reportState:reportMeta.state,
+      };
+    },true);
   }
   async create(request:FastifyRequest,key:string|undefined,input:{reportId:string;reasonCode:string}) {
     this.enabled();return this.admin.privilegedCommand(request,key,"user.lookup",false,"case.create",input,async(c,a,keyHash)=>{

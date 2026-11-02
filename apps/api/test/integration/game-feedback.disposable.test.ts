@@ -101,6 +101,9 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // 0053 bindings must roll back before 0048 can drop game_reviews (FK).
+      await client.query(await readFile(path.join(migrations, "rollback/0053_private_review_reports.sql"), "utf8"));
+      expect((await client.query("SELECT to_regclass('game_review_report_bindings') AS name")).rows[0].name).toBeNull();
       await client.query(await readFile(path.join(migrations, "rollback/0048_game_reviews_notes.sql"), "utf8"));
       expect((await client.query("SELECT to_regclass('game_reviews') AS name")).rows[0].name).toBeNull();
     } finally {
@@ -720,5 +723,208 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
         (r) => r.id === created.json().id,
       ),
     ).toBe(true);
+  });
+
+  it("recipient reports exact peer revision; duplicates/version/consent/authority negatives", async () => {
+    const { gameId, ilyaContext } = await createEndedGameWithPlayers();
+    const created = await post(anna, `/v1/games/${gameId}/reviews`, {
+      kind: "peer",
+      subjectContextId: ilyaContext,
+      peerRating: "difficulties",
+      comment: "PRIVATE_PEER_REPORT_SENTINEL_v1",
+      experienceAssertion: "i_experienced_this_game",
+    });
+    expect([200, 201]).toContain(created.statusCode);
+    const reviewId = created.json().id as string;
+    const version1 = created.json().version as number;
+
+    const received = await get(ilya, `/v1/games/${gameId}/results`);
+    expect(received.statusCode).toBe(200);
+    const receivedReview = (
+      received.json().feedback.gameReviews as Array<{
+        id: string;
+        direction: string;
+        allowedActions: { canReport?: boolean; canReply: boolean };
+      }>
+    ).find((r) => r.id === reviewId);
+    expect(receivedReview?.direction).toBe("received");
+    expect(receivedReview?.allowedActions.canReport).toBe(true);
+    expect(receivedReview?.allowedActions.canReply).toBe(true);
+
+    const noConsent = await post(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: version1,
+      reasonCode: "harassment",
+      shareReviewWithSupport: false,
+      gameId,
+    });
+    expect(noConsent.statusCode).toBe(422);
+
+    const badVersion = await post(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: version1 + 5,
+      reasonCode: "harassment",
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(badVersion.statusCode).toBe(409);
+
+    const guestish = await app.inject({
+      method: "POST",
+      url: `/v1/reviews/${reviewId}/report`,
+      payload: {
+        expectedVersion: version1,
+        reasonCode: "harassment",
+        shareReviewWithSupport: true,
+        gameId,
+      },
+      headers: { origin, "idempotency-key": key() },
+    });
+    // Existing Cookie/CSRF guard: no-cookie/no-CSRF denial is 403 (unchanged production auth).
+    expect(guestish.statusCode).toBe(403);
+
+    const authorSelf = await post(anna, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: version1,
+      reasonCode: "harassment",
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(authorSelf.statusCode).toBe(404);
+
+    const nonRecipient = await post(outsider, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: version1,
+      reasonCode: "harassment",
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(nonRecipient.statusCode).toBe(404);
+
+    const reportKey = key();
+    const reported = await post(
+      ilya,
+      `/v1/reviews/${reviewId}/report`,
+      {
+        expectedVersion: version1,
+        reasonCode: "harassment",
+        detail: "оскорбительная формулировка",
+        shareReviewWithSupport: true,
+        gameId,
+      },
+      reportKey,
+    );
+    expect(reported.statusCode).toBe(201);
+    expect(reported.json()).toMatchObject({
+      status: "submitted",
+      reviewId,
+      version: version1,
+    });
+    expect(typeof reported.json().reportId).toBe("string");
+    expect(JSON.stringify(reported.json())).not.toMatch(/PRIVATE_PEER|оскорбитель|recipient|author/i);
+
+    const sameKey = await post(
+      ilya,
+      `/v1/reviews/${reviewId}/report`,
+      {
+        expectedVersion: version1,
+        reasonCode: "harassment",
+        detail: "оскорбительная формулировка",
+        shareReviewWithSupport: true,
+        gameId,
+      },
+      reportKey,
+    );
+    expect(sameKey.statusCode).toBe(reported.statusCode);
+    expect(sameKey.json().reportId).toBe(reported.json().reportId);
+
+    const newKeyDup = await post(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: version1,
+      reasonCode: "spam",
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(newKeyDup.statusCode).toBe(200);
+    expect(newKeyDup.json().reportId).toBe(reported.json().reportId);
+    const reportCount = (
+      await pool.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM abuse_reports WHERE target_kind='game_review' AND id=$1`,
+        [reported.json().reportId],
+      )
+    ).rows[0]!.n;
+    expect(reportCount).toBe(1);
+    const bindings = (
+      await pool.query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM game_review_report_bindings
+         WHERE reporter_user_id=$1 AND review_id=$2 AND reported_version=$3`,
+        [ilya.userId, reviewId, version1],
+      )
+    ).rows[0]!.n;
+    expect(bindings).toBe(1);
+
+    // Minimal DB negatives: mismatched revision tuple rejected; binding mutation denied.
+    const mismatchReportId = (
+      await pool.query<{ id: string }>(
+        `INSERT INTO abuse_reports (
+           reporter_user_id, target_kind, target_user_id,
+           target_public_player_id, reason_code, detail, evidence_refs, state
+         ) VALUES ($1, 'game_review', $2, NULL, 'harassment', NULL, '[]'::jsonb, 'submitted')
+         RETURNING id`,
+        [ilya.userId, anna.userId],
+      )
+    ).rows[0]!.id;
+    await expect(
+      pool.query(
+        `INSERT INTO game_review_report_bindings (
+           report_id, review_id, game_id, revision_id, reported_version,
+           share_consent, reporter_user_id
+         )
+         SELECT $1, review_id, game_id, revision_id, reported_version + 999, TRUE, reporter_user_id
+         FROM game_review_report_bindings WHERE report_id = $2`,
+        [mismatchReportId, reported.json().reportId],
+      ),
+    ).rejects.toMatchObject({ code: "23503" });
+    await expect(
+      pool.query(
+        `UPDATE game_review_report_bindings SET share_consent = TRUE WHERE report_id = $1`,
+        [reported.json().reportId],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+    await expect(
+      pool.query(`DELETE FROM game_review_report_bindings WHERE report_id = $1`, [
+        reported.json().reportId,
+      ]),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    // Edit after report: evidence stays on exact old revision.
+    const patched = await patch(anna, `/v1/reviews/${reviewId}`, {
+      expectedVersion: version1,
+      comment: "PRIVATE_PEER_REPORT_SENTINEL_v2_edited",
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().version).toBe(version1 + 1);
+    const bound = (
+      await pool.query<{ after_comment: string | null; resource_version: number }>(
+        `SELECT r.after_comment, r.resource_version
+         FROM game_review_report_bindings b
+         JOIN game_review_revisions r ON r.id = b.revision_id
+         WHERE b.report_id = $1`,
+        [reported.json().reportId],
+      )
+    ).rows[0]!;
+    expect(bound.resource_version).toBe(version1);
+    expect(bound.after_comment).toBe("PRIVATE_PEER_REPORT_SENTINEL_v1");
+
+    // Reporting historical received text does not require re-confirmed attendance.
+    await put(manager, `/v1/games/${gameId}/attendance/${ilyaContext}`, {
+      expectedVersion: 1,
+      value: "absent",
+      correctionReason: "не блокирует жалобу на уже полученный текст",
+    });
+    const v2Report = await post(ilya, `/v1/reviews/${reviewId}/report`, {
+      expectedVersion: version1 + 1,
+      reasonCode: "inappropriate",
+      shareReviewWithSupport: true,
+      gameId,
+    });
+    expect(v2Report.statusCode).toBe(201);
+    expect(v2Report.json().version).toBe(version1 + 1);
+    expect(v2Report.json().reportId).not.toBe(reported.json().reportId);
   });
 });

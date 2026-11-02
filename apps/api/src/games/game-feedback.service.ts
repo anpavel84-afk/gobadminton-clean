@@ -29,6 +29,7 @@ import {
   privateMissing,
   putNoteRequest,
   putReplyRequest,
+  reportReviewRequest,
   unavailable,
   writesUnavailable,
   postGameWritesEnabled,
@@ -41,6 +42,7 @@ import {
   type PeerTag,
   type PersonalNoteView,
   type ReviewKind,
+  type ReviewReportReceipt,
   type ReviewView,
   type LockedGameRow,
 } from "./game-feedback.policy";
@@ -477,7 +479,37 @@ export class GameFeedbackService {
       allowedActions: {
         canEdit: writesEnabled && direction === "sent",
         canReply: writesEnabled && direction === "received",
+        canReport:
+          direction === "received" &&
+          row.kind === "peer" &&
+          row.recipient_user_id === viewerId,
       },
+    };
+  }
+
+  private async reportBindingsInstalled(client: PoolClient | Pool): Promise<boolean> {
+    return Boolean(
+      (await client.query("SELECT to_regclass('game_review_report_bindings') AS name")).rows[0]?.name,
+    );
+  }
+
+  private async assertActiveUser(client: PoolClient, userId: string): Promise<void> {
+    const row = (
+      await client.query<{ status: string }>(`SELECT status FROM users WHERE id = $1`, [userId])
+    ).rows[0];
+    if (!row || row.status !== "active") privateMissing();
+  }
+
+  private projectReportReceipt(
+    reportId: string,
+    reviewId: string,
+    version: number,
+  ): ReviewReportReceipt {
+    return {
+      reportId,
+      status: "submitted",
+      reviewId,
+      version,
     };
   }
 
@@ -1177,6 +1209,146 @@ export class GameFeedbackService {
           await client.query<ReviewRow>(`SELECT * FROM game_reviews WHERE id = $1`, [reviewId])
         ).rows[0]!;
         return { statusCode: 200, body: await this.projectReview(client, refreshed, userId, true) };
+      },
+    });
+  }
+
+  async reportReview(
+    userId: string,
+    sessionId: string,
+    key: string,
+    reviewIdRaw: string,
+    input: unknown,
+  ): Promise<{ statusCode: number; body: ReviewReportReceipt }> {
+    const reviewId = parseReviewId(reviewIdRaw);
+    const body = parse(reportReviewRequest, input, "REVIEW_REPORT_INPUT_INVALID");
+    const requestHash = this.idempotency.requestHash({
+      reviewId,
+      expectedVersion: body.expectedVersion,
+      reasonCode: body.reasonCode,
+      detail: body.detail ?? null,
+      shareReviewWithSupport: true,
+      gameId: body.gameId,
+    });
+    return this.mutations.runIdempotent<ReviewReportReceipt>({
+      actorId: userId,
+      sessionId,
+      operation: "games.reviews.report",
+      key,
+      requestHash,
+      authorizeReplay: async (client, existing) => {
+        if (!(await this.installed(client)) || !(await this.reportBindingsInstalled(client))) {
+          writesUnavailable();
+        }
+        await this.assertActiveUser(client, userId);
+        // Lock order matches reply: review → game; recheck recipient authority + binding.
+        const row = (
+          await client.query<ReviewRow>(`SELECT * FROM game_reviews WHERE id = $1 FOR UPDATE`, [
+            reviewId,
+          ])
+        ).rows[0];
+        if (
+          !row ||
+          row.kind !== "peer" ||
+          row.recipient_user_id !== userId ||
+          row.author_user_id === userId
+        ) {
+          privateMissing();
+        }
+        await this.lockGame(client, row.game_id);
+        await this.assertActiveUser(client, row.author_user_id);
+        if (existing.reviewId !== reviewId || existing.version !== body.expectedVersion) {
+          privateMissing();
+        }
+        if (row.game_id !== body.gameId) privateMissing();
+        const bound = (
+          await client.query<{ report_id: string }>(
+            `SELECT report_id FROM game_review_report_bindings
+             WHERE reporter_user_id = $1 AND review_id = $2 AND reported_version = $3`,
+            [userId, reviewId, body.expectedVersion],
+          )
+        ).rows[0];
+        if (!bound || bound.report_id !== existing.reportId) privateMissing();
+      },
+      execute: async (client) => {
+        if (!(await this.installed(client)) || !(await this.reportBindingsInstalled(client))) {
+          writesUnavailable();
+        }
+        await this.assertActiveUser(client, userId);
+        // Lock order: review → game (same as reply); coherent immutable revision under locks.
+        const review = (
+          await client.query<ReviewRow>(`SELECT * FROM game_reviews WHERE id = $1 FOR UPDATE`, [
+            reviewId,
+          ])
+        ).rows[0];
+        if (
+          !review ||
+          review.kind !== "peer" ||
+          review.recipient_user_id !== userId ||
+          review.author_user_id === userId
+        ) {
+          privateMissing();
+        }
+        await this.lockGame(client, review.game_id);
+        await this.assertActiveUser(client, review.author_user_id);
+        if (review.game_id !== body.gameId) {
+          throw unprocessable("REVIEW_REPORT_GAME_MISMATCH", "Игра отзыва не совпадает");
+        }
+        if (review.version !== body.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+        }
+        if (body.shareReviewWithSupport !== true) {
+          throw unprocessable("REVIEW_REPORT_CONSENT_REQUIRED", "Нужно согласие на передачу редакции");
+        }
+
+        const existingBinding = (
+          await client.query<{ report_id: string }>(
+            `SELECT report_id FROM game_review_report_bindings
+             WHERE reporter_user_id = $1 AND review_id = $2 AND reported_version = $3`,
+            [userId, reviewId, body.expectedVersion],
+          )
+        ).rows[0];
+        if (existingBinding) {
+          return {
+            statusCode: 200,
+            body: this.projectReportReceipt(
+              existingBinding.report_id,
+              reviewId,
+              body.expectedVersion,
+            ),
+          };
+        }
+
+        const revision = (
+          await client.query<{ id: string }>(
+            `SELECT id FROM game_review_revisions
+             WHERE review_id = $1 AND resource_version = $2`,
+            [reviewId, body.expectedVersion],
+          )
+        ).rows[0];
+        if (!revision) privateMissing();
+
+        // No attendance re-check: historical received private peer text may be reported as-is.
+        const inserted = await client.query<{ id: string }>(
+          `INSERT INTO abuse_reports (
+             reporter_user_id, target_kind, target_user_id,
+             target_public_player_id, reason_code, detail, evidence_refs, state
+           ) VALUES ($1, 'game_review', $2, NULL, $3, $4, '[]'::jsonb, 'submitted')
+           RETURNING id`,
+          [userId, review.author_user_id, body.reasonCode, body.detail ?? null],
+        );
+        const reportId = inserted.rows[0]!.id;
+        await client.query(
+          `INSERT INTO game_review_report_bindings (
+             report_id, review_id, game_id, revision_id, reported_version,
+             share_consent, reporter_user_id
+           ) VALUES ($1,$2,$3,$4,$5,TRUE,$6)`,
+          [reportId, reviewId, review.game_id, revision.id, body.expectedVersion, userId],
+        );
+        return {
+          statusCode: 201,
+          body: this.projectReportReceipt(reportId, reviewId, body.expectedVersion),
+        };
       },
     });
   }
