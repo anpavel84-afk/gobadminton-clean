@@ -93,6 +93,18 @@ vi.mock("react", async (importOriginal) => {
         });
       }
     },
+    useMemo<T>(factory: () => T, deps?: readonly unknown[]) {
+      if (hooks.render) return actual.useMemo(factory, (deps ?? []) as React.DependencyList);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as { deps: readonly unknown[]; value: T } | undefined;
+      const nextDeps = deps ?? [];
+      if (!previous || nextDeps.some((value, i) => !Object.is(value, previous.deps[i]))) {
+        const value = factory();
+        hooks.slots[index] = { deps: nextDeps, value };
+        return value;
+      }
+      return previous.value;
+    },
   };
 });
 vi.mock("../src/lib/api-client", () => ({
@@ -101,11 +113,20 @@ vi.mock("../src/lib/api-client", () => ({
   getGame: vi.fn(),
   getGameResults: vi.fn(),
   getAttendanceHistory: vi.fn(),
+  getAttendanceDispute: vi.fn(),
 }));
-import { apiFetch } from "../src/lib/api-client";
-import { createElement } from "react";
+import { apiFetch, getMe, getGame, getGameResults, getAttendanceDispute } from "../src/lib/api-client";
+import {
+  Children,
+  cloneElement,
+  createElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GameResultsComposition } from "../src/components/consumer/games/GameResultsComposition";
+import type { GameFeedbackSlice, GamePersonalNote } from "../src/lib/consumer-types";
 
 const gameId = "10000000-0000-4000-8000-000000000099";
 const otherGameId = "10000000-0000-4000-8000-000000000088";
@@ -664,5 +685,400 @@ describe("PG-1b game results mutation host", () => {
     expect(html).toContain("Other manager");
     expect(html).toContain('aria-label="Состав"');
     expect(html).toContain("Фактическое посещение");
+  });
+});
+
+/**
+ * Expand function components in one hook-cursor pass so Composition → MutationHost →
+ * GameFeedbackPanel share the mocked fiber (avoids remount-by-walk).
+ */
+function expandHost(node: ReactNode): ReactNode {
+  if (node == null || typeof node === "boolean") return node;
+  if (Array.isArray(node)) return node.map(expandHost);
+  if (!isValidElement(node)) return node;
+  if (typeof node.type === "function") {
+    return expandHost((node.type as (props: Record<string, unknown>) => ReactNode)(
+      node.props as Record<string, unknown>,
+    ));
+  }
+  const children = (node.props as { children?: ReactNode }).children;
+  if (children == null) return node;
+  const expanded = Children.map(children, (child) => expandHost(child));
+  return cloneElement(node, undefined, expanded);
+}
+
+function walkHost(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+  if (!isValidElement<Record<string, unknown>>(node)) return [];
+  return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(walkHost)];
+}
+
+function feedbackSlice(notes: GamePersonalNote[] = [], canCreateNote = true): GameFeedbackSlice {
+  return {
+    installed: true,
+    writesEnabled: true,
+    capabilities: {
+      installed: true,
+      writesEnabled: true,
+      canCreatePeer: false,
+      canCreateOrganization: false,
+      canCreateTraining: false,
+      canCreateNote,
+      peerSubjects: [],
+      organizationRecipientDisplay: null,
+      complaintReuse: "existing_player_report",
+      remaining: ["typed_review_safety_extension"],
+    },
+    myNotes: notes,
+    gameReviews: [],
+  };
+}
+
+function resultsWithFeedback(feedback: GameFeedbackSlice): GameResults {
+  return {
+    gameId,
+    outcome: { value: "held", version: 1, reason: null, provenance: null },
+    attendance: {
+      installed: true,
+      writesEnabled: false,
+      myAttendance: null,
+      roster: [
+        {
+          contextId,
+          value: "present",
+          version: 1,
+          late: false,
+          assertion: {
+            actorDisplay: "Mgr",
+            source: "manager_explicit",
+            at: "2026-11-01T00:00:00.000Z",
+          },
+          acknowledgedVersion: null,
+          dispute: null,
+          displayName: "Кирилл",
+          allowedActions: {
+            canSetAttendance: false,
+            canAcknowledge: false,
+            canDispute: false,
+            canWithdrawDispute: false,
+            canRespondDispute: false,
+          },
+        },
+      ],
+      rosterNextCursor: null,
+      summary: { rosterCount: 1, marked: 1, unknown: 0, underClarification: 0, agreed: 0 },
+      allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    },
+    feedback,
+    allowedActions: { canRecordOutcome: false },
+  };
+}
+
+describe("PG-3 host+panel same-context draft lifecycle", () => {
+  const storage = new Map<string, string>();
+  const noteText = "Черновик с хоста";
+  const ownNote = (): GamePersonalNote => ({
+    gameId,
+    contextId,
+    subjectDisplay: "Кирилл",
+    text: "Старая заметка",
+    version: 2,
+    updatedAt: "2026-11-01T00:00:00.000Z",
+    allowedActions: { canEdit: true, canDelete: true },
+  });
+
+  function flushEffects() {
+    const queued = hooks.effects.splice(0);
+    for (const effect of queued) effect();
+  }
+
+  function renderHost() {
+    hooks.cursor = 0;
+    const tree = expandHost(createElement(GameResultsComposition, { gameId }));
+    flushEffects();
+    return tree;
+  }
+
+  async function settle() {
+    for (let i = 0; i < 12; i += 1) {
+      renderHost();
+      await Promise.resolve();
+    }
+    return renderHost();
+  }
+
+  function nodesOf(tree: ReactNode) {
+    return walkHost(tree);
+  }
+
+  function openNotesTab(tree: ReactNode) {
+    const nodes = nodesOf(tree);
+    const tab = nodes.find(
+      (n) => n.type === "button" && n.props.role === "tab" && String(n.props.children) === "Обратная связь",
+    );
+    expect(tab).toBeTruthy();
+    (tab!.props.onClick as () => void)();
+    const after = renderHost();
+    const notes = nodesOf(after).find(
+      (n) => n.type === "button" && n.props.role === "tab" && String(n.props.children) === "Заметки",
+    );
+    expect(notes).toBeTruthy();
+    (notes!.props.onClick as () => void)();
+    return renderHost();
+  }
+
+  beforeEach(() => {
+    hooks.slots = [];
+    hooks.cursor = 0;
+    hooks.effects = [];
+    hooks.cleanups = [];
+    hooks.render = null;
+    storage.clear();
+    vi.resetAllMocks();
+    vi.stubGlobal("crypto", { randomUUID: () => "host-lifecycle-key" });
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+    vi.stubGlobal(
+      "window",
+      Object.assign(new EventTarget(), {
+        addEventListener: EventTarget.prototype.addEventListener,
+        removeEventListener: EventTarget.prototype.removeEventListener,
+      }),
+    );
+    vi.mocked(getMe).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { id: actor, csrfToken: "csrf", displayName: "Actor", locale: "ru", linkedProviders: [] },
+    });
+    vi.mocked(getGame).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        id: gameId,
+        title: "Игра",
+        startsAt: "2026-11-01T12:00:00.000Z",
+        timezone: "Europe/Moscow",
+        venue: { id: "v", name: "Зал", address: "А", cityId: "c", timezone: "Europe/Moscow" },
+      } as never,
+    });
+    vi.mocked(getGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: resultsWithFeedback(feedbackSlice()),
+    });
+    vi.mocked(getAttendanceDispute).mockResolvedValue({ ok: false, status: 404, error: "missing" });
+  });
+
+  afterEach(() => {
+    hooks.cleanups.forEach((fn) => fn?.());
+    hooks.render = null;
+    vi.unstubAllGlobals();
+  });
+
+  it("soft-reload source keeps panel across ordinary refresh (QA8 P2)", () => {
+    const composition = readFileSync(
+      path.resolve(__dirname, "../src/components/consumer/games/GameResultsComposition.tsx"),
+      "utf8",
+    );
+    expect(composition).toContain("if (me == null || results == null)");
+    expect(composition).toContain('results && (state === "ready" || state === "loading")');
+    expect(composition).toContain('state === "loading" && !results');
+    // Must not unconditionally blank the ready surface at the top of reload.
+    expect(composition).not.toMatch(
+      /async function reload\(\) \{\s*const request = \+\+epoch\.current;\s*setState\("loading"\);/,
+    );
+  });
+
+  it("confirmed note PUT then same-context reload clears matching create draft only", async () => {
+    await settle();
+    let tree = openNotesTab(renderHost());
+    let nodes = nodesOf(tree);
+    const select = nodes.find((n) => n.type === "select");
+    expect(select).toBeTruthy();
+    (select!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: contextId } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const area = nodes.find((n) => n.type === "textarea" && n.props.rows === 3);
+    expect(area).toBeTruthy();
+    (area!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: noteText } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    expect(nodes.some((n) => n.type === "textarea" && n.props.value === noteText)).toBe(true);
+
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        gameId,
+        contextId,
+        subjectDisplay: "Кирилл",
+        text: noteText.trim(),
+        version: 1,
+        updatedAt: "2026-11-01T01:00:00.000Z",
+        allowedActions: { canEdit: true, canDelete: true },
+      },
+    });
+    // Keep GET stable during post-success soft reload.
+    vi.mocked(getGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: resultsWithFeedback(
+        feedbackSlice([
+          {
+            gameId,
+            contextId,
+            subjectDisplay: "Кирилл",
+            text: noteText.trim(),
+            version: 1,
+            updatedAt: "2026-11-01T01:00:00.000Z",
+            allowedActions: { canEdit: true, canDelete: true },
+          },
+        ], false),
+      ),
+    });
+
+    const save = nodes.find((n) => String(n.props.children) === "Сохранить заметку");
+    expect(save).toBeTruthy();
+    (save!.props.onClick as () => void)();
+    tree = await settle();
+    nodes = nodesOf(tree);
+    // Matching confirmedOperation cleared the create draft; panel stayed mounted through reload.
+    expect(nodes.some((n) => n.type === "textarea" && n.props.value === noteText)).toBe(false);
+    expect(apiFetch).toHaveBeenCalled();
+    expect(vi.mocked(getGameResults).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("4xx conflict onRefresh soft-reloads without dropping current create draft", async () => {
+    await settle();
+    let tree = openNotesTab(renderHost());
+    let nodes = nodesOf(tree);
+    const select = nodes.find((n) => n.type === "select");
+    (select!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: contextId } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const area = nodes.find((n) => n.type === "textarea" && n.props.rows === 3);
+    (area!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: noteText } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const save = nodes.find((n) => String(n.props.children) === "Сохранить заметку");
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: false,
+      status: 409,
+      error: "conflict",
+    });
+    (save!.props.onClick as () => void)();
+    tree = await settle();
+    nodes = nodesOf(tree);
+    expect(nodes.some((n) => n.type === "textarea" && n.props.value === noteText)).toBe(true);
+    expect(nodes.some((n) => n.type === "select" && n.props.value === contextId)).toBe(true);
+  });
+
+  it("changed create draft after submit survives matching confirm through host reload", async () => {
+    await settle();
+    let tree = openNotesTab(renderHost());
+    let nodes = nodesOf(tree);
+    const select = nodes.find((n) => n.type === "select");
+    (select!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: contextId } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const area = nodes.find((n) => n.type === "textarea" && n.props.rows === 3);
+    (area!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: noteText } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+
+    let resolvePut: (value: unknown) => void = () => {};
+    const deferredPut = new Promise((resolve) => {
+      resolvePut = resolve;
+    });
+    vi.mocked(apiFetch).mockImplementationOnce(() => deferredPut as Promise<never>);
+
+    const save = nodes.find((n) => String(n.props.children) === "Сохранить заметку");
+    (save!.props.onClick as () => void)();
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const inflight = nodes.find((n) => n.type === "textarea" && n.props.value === noteText);
+    expect(inflight).toBeTruthy();
+    (inflight!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Уже другой черновик" },
+    });
+
+    resolvePut({
+      ok: true,
+      status: 200,
+      data: {
+        gameId,
+        contextId,
+        subjectDisplay: "Кирилл",
+        text: noteText.trim(),
+        version: 1,
+        updatedAt: "2026-11-01T01:00:00.000Z",
+        allowedActions: { canEdit: true, canDelete: true },
+      },
+    });
+    tree = await settle();
+    nodes = nodesOf(tree);
+    expect(nodes.some((n) => n.type === "textarea" && n.props.value === "Уже другой черновик")).toBe(true);
+  });
+
+  it("session boundary clears private feedback surface (no retained draft)", async () => {
+    await settle();
+    let tree = openNotesTab(renderHost());
+    let nodes = nodesOf(tree);
+    const select = nodes.find((n) => n.type === "select");
+    (select!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: contextId } });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const area = nodes.find((n) => n.type === "textarea" && n.props.rows === 3);
+    (area!.props.onChange as (e: { target: { value: string } }) => void)({ target: { value: noteText } });
+    expect(nodesOf(renderHost()).some((n) => n.type === "textarea" && n.props.value === noteText)).toBe(true);
+
+    window.dispatchEvent(new Event("gb-session-changed"));
+    tree = renderHost();
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain("Войдите, чтобы открыть итоги игры");
+    expect(nodesOf(tree).some((n) => n.type === "textarea" && n.props.value === noteText)).toBe(false);
+  });
+
+  it("confirmed DELETE through host reload closes matching editor only", async () => {
+    vi.mocked(getGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: resultsWithFeedback(feedbackSlice([ownNote()], false)),
+    });
+    await settle();
+    let tree = openNotesTab(renderHost());
+    let nodes = nodesOf(tree);
+    const changeBtn = nodes.find((n) => String(n.props.children) === "Изменить");
+    expect(changeBtn).toBeTruthy();
+    (changeBtn!.props.onClick as () => void)();
+    tree = renderHost();
+    nodes = nodesOf(tree);
+    const editArea = nodes.find((n) => n.type === "textarea" && n.props.value === "Старая заметка");
+    (editArea!.props.onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "Текст перед удалением" },
+    });
+    tree = renderHost();
+    nodes = nodesOf(tree);
+
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { gameId, contextId, version: 2, deleted: true },
+    });
+    vi.mocked(getGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: resultsWithFeedback(feedbackSlice([], false)),
+    });
+    const del = nodes.find((n) => String(n.props.children) === "Удалить");
+    expect(del).toBeTruthy();
+    (del!.props.onClick as () => void)();
+    tree = await settle();
+    nodes = nodesOf(tree);
+    expect(nodes.some((n) => n.type === "textarea" && n.props.value === "Текст перед удалением")).toBe(
+      false,
+    );
   });
 });

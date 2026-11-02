@@ -167,7 +167,13 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
   async function reload() {
     const request = ++epoch.current;
-    setState("loading");
+    // Same-context refresh: keep the ready surface mounted so GameFeedbackPanel drafts
+    // and noteCreateFlight/noteEditFlight survive until matching confirmedOperation.
+    // Initial load and cleared boundaries (no me/results) still enter loading.
+    // Auth/not-found/revocation paths below still clearSensitiveUi and unmount.
+    if (me == null || results == null) {
+      setState("loading");
+    }
     setError(null);
     // Readonly reload must not clear unresolved mutation identity / pending storage.
     const account = await getMe();
@@ -436,7 +442,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
 
     return (
       <>
-      {state === "loading" ? <p role="status">Загружаем итоги…</p> : null}
+      {state === "loading" && !results ? <p role="status">Загружаем итоги…</p> : null}
       {state === "forbidden" ? <p>Итоги этой игры недоступны.</p> : null}
       {state === "error" ? (
         <div>
@@ -445,7 +451,8 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
         </div>
       ) : null}
 
-      {state === "ready" && results ? (
+      {/* Keep feedback panel mounted across ordinary same-context results refresh. */}
+      {results && (state === "ready" || state === "loading") ? (
         <>
           <SurfacePanel tone="bordered" className="gb-postgame__context">
             <div className="gb-postgame__date" aria-hidden={!game}>

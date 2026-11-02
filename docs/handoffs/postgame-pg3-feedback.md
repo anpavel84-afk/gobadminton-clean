@@ -1,50 +1,52 @@
 # Issue #372 / PG-3 Private reviews + personal notes — Mode A author handoff
 
-From: Cursor Auto (`OWNER_CLEANUP_RESUME_PRESERVED_PG3_PRIVATE_FEEDBACK_NOTES`, attempt 8, base `f5db303776beee8ff5453f409e45659831ac5cb5`).
+From: Cursor Auto (`OWNER_APPROVED_PG3_REAL_HOST_DRAFT_LIFECYCLE_REPAIR`, attempt 9, base `67217a17819e3901b6d26b7b5b0074f1c41ba8bf`).
 To: one independent Codex Sol Medium QA → mandatory Product CI → trusted DEV release/smoke → Owner UAT.
 Status: **SOURCE CANDIDATE** / UAT=NOT_TESTED / PG-3 writes default **OFF** / **NOT READY** / no DEV ACCEPTED claim for alpha.12 / no PROD.
 Parent #372 PG-3 slice only. Full PG-3 typed Safety extension + PG-4 / comments #394 **not DONE**. Mode B binding NOT claimed. Author checks ≠ independent QA.
-Original preserved SHA `4c020d88d66e3d618f2fe8d31ae27a416eaefa41` not discarded. Current accepted DEV alpha.11 `acec520281d07f30d3fa855043be7d613ba56db1`. QAFAIL/attempts history retained. No feature expansion beyond lifecycle + release metadata.
+Prior pass8/source8 final `bc3e1759f3cfd04e0ba5abaeac7961a47ed610cd` retained (QA8 FAIL P2). Current accepted DEV alpha.11 `acec520281d07f30d3fa855043be7d613ba56db1`. QAFAIL/attempts/UNKNOWN history retained. No feature expansion beyond host draft lifecycle repair.
 
-## Pass 8 — remaining create-note / deleteNote draft lifecycle
+## Pass 9 — real host same-context draft lifecycle (QA8 P2)
 
-Allowed paths: `GameFeedbackPanel.tsx`, `game-feedback.test.tsx`, `releases.ts` (+ co-located/release tests), `docs/releases/CHANGELOG.md`, this handoff, `AGENTS.md`.
+Allowed paths: `GameResultsComposition.tsx`, `GameFeedbackPanel.tsx`, `useGameResultsMutation.ts`, `game-feedback.test.tsx`, `game-results.test.tsx`, `game-results-mutation.test.tsx`, this handoff.
 
-### Finding — premature create-note draft reset + premature editor close on delete
+### Finding (QA8 P2, verbatim intent)
 
-- `saveNote` (existing / preexisting / new) no longer calls `resetCreateNoteDraft` after `mutation.run` (run admission is not success).
-- Create draft clears only after confirmed success of the matching frozen PUT with unchanged `noteContextId` / `noteText` / game host (same fence as pass7 `submitReview` / `saveExistingNote`).
-- `deleteNote` no longer calls `resetEditNoteDraft` after DELETE admission.
-- Edit editor closes on DELETE only after matching validated success of that note/version DELETE with unchanged current editor.
-- Unrelated confirmed commands do not reset create draft or close the editor; changed current draft after submit is preserved.
-- UNKNOWN / network timeout / malformed 2xx / conflict / stale callback: text and flight identity retained; validators not weakened; success not inferred from `pending==null` / await void / GET / time.
-- Own-note edit after `canCreateNote` withdrawn remains supported (prior test retained).
+- `GameResultsComposition.reload()` set `state` to `loading` and unmounted `GameFeedbackPanel` after successful mutation (`onSuccess` → reload) and on 4xx `onRefresh`.
+- Panel-local drafts and `noteCreateFlight` / `noteEditFlight` were lost **before** matching `confirmedOperation` handling.
+- Pass8 standalone panel tests missed this real host lifecycle.
 
-### Release metadata (prospective)
+### Repair
 
-- Candidate app `0.1.0-alpha.12` / API contract note `0.23.0` (existing PG-3 wire; API/schema not rewritten).
-- Accepted alpha.11 historical seed supplied and retained in `TRUSTED_HISTORICAL_SEED`.
-- No fabricated deployed / Owner PASS for alpha.12; alpha.8 PROD unchanged.
-- Design input unchanged (Owner-approved postgame Astra v1); no PG-1a/1b/2 or public-comments redesign.
+- Same-context reload no longer forces `loading` when `me` and `results` are already present; initial/boundary loads (no me/results) still enter loading.
+- Ready surface mount gate keeps the panel for `ready` **or** `loading` while `results` remain; loading banner only when `loading && !results`.
+- Auth / not-found / session / game-boundary paths still `clearSensitiveUi` and unmount; no automatic retry, no new keys, no UNKNOWN clearing, no shared mutation-engine rewrite.
+- Matching `confirmedOperation` remains the sole form-clearing proof; changed current draft after submit is preserved.
 
 ### Targeted author checks (this pass)
 
-- Web unit: `game-feedback.test.tsx` — create-note + deleteNote retain-on-UNKNOWN / matching confirm / unrelated+changed draft.
-- Release integrity: `releases.test.ts`, `releases.test.tsx`, `releases-server.test.ts`.
-- Author ran: `vitest run test/game-feedback.test.tsx test/releases.test.tsx test/releases-server.test.ts` → **32/32 PASS**; `tsc -p tsconfig.json --noEmit` → exit 0.
-- No broad unchanged PG-1b / PG-2 / SMTP / DB / security re-matrix. Independent QA / Product CI / DEV smoke still required.
+- Web unit: `game-results-mutation.test.tsx` — real host+panel soft reload after confirmed note PUT/DELETE, 4xx conflict retain, changed draft retain, session clear; source soft-reload guard.
+- Prior panel validators reused: `game-feedback.test.tsx` (unchanged PASS).
+- Helpers: `game-results.test.tsx` PASS.
+- Author ran: `vitest run test/game-results-mutation.test.tsx test/game-feedback.test.tsx test/game-results.test.tsx` → targeted PASS; `tsc -p tsconfig.json --noEmit` when available.
+- No broad PG-1b / PG-2 / SMTP / DB / security re-matrix. Independent QA / Product CI / DEV smoke still required.
+
+### Release metadata (prospective, unchanged claim)
+
+- Candidate app `0.1.0-alpha.12` / API contract note `0.23.0` remain **prospective** — no invented DEV ACCEPTED / Owner PASS.
+- Accepted alpha.11 historical seed retained. Design input unchanged (Owner-approved postgame Astra v1 comment 6555581830); layout unchanged.
 
 ## Outstanding (honest)
 
-- Independent Sol Medium QA of create-note + delete lifecycle
+- Independent Sol Medium QA of host+panel same-context draft lifecycle
 - Product CI + security checks + trusted DEV deploy/smoke + flag activation
 - Owner UAT = NOT_TESTED
 - Full PG-3 typed Safety complaint extension = **remaining**
-- PG-4 / public comments #394 later; #445/#450 per-point verify only
+- PG-4 / public comments #394 later
 
 ## Non-goals / stops
 
 - No PROD, main promotion, C5, Mode B READY, whole-parent close
-- No Git/root/runtime/PROD/API/security/schema rewrite; no secrets
-- No new request engine / shared hook rewrite / scheduler
-- No whole-suite matrix expansion; no new paid model calls beyond this author operation
+- No Git/root/runtime/PROD/API/security/schema rewrite; no secrets; no AGENTS.md/CLAUDE.md/.cursor creation
+- No new request engine / shared hook rewrite / scheduler / UI redesign
+- No whole-suite matrix expansion; no repeated paid old call — this is a new repair on a new immutable base
