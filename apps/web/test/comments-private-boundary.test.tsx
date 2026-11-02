@@ -778,6 +778,87 @@ describe("#394 comments private boundary", () => {
     expect(renderToStaticMarkup(tree)).not.toContain("stale pre-csrf-boundary reply");
   });
 
+  it("own comment menu hides Edit/Delete when canCreate=false; allowed still shows", async () => {
+    const ownBody = "restricted own body stays readable";
+    const restrictedPage: EntityCommentPage = {
+      ...emptyPage,
+      items: [{
+        ...replyComment,
+        id: commentId,
+        parentCommentId: null,
+        body: ownBody,
+        replyCount: 0,
+        mine: true,
+      }],
+      visibleCount: 1,
+      canCreate: false,
+    };
+    const allowedPage: EntityCommentPage = {
+      ...restrictedPage,
+      canCreate: true,
+    };
+    vi.mocked(listEntityComments).mockResolvedValue({ ok: true, status: 200, data: restrictedPage });
+
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    await settle(12);
+
+    // menuFor is the 15th useState slot (0-based index 14) in CommentsSection.
+    hooks.slots[14] = commentId;
+    hooks.cursor = 0;
+    let tree = CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    let html = renderToStaticMarkup(tree);
+    expect(html).toContain(ownBody);
+    expect(html).toContain("Чтение доступно. Отправка комментариев сейчас недоступна.");
+    expect(html).not.toContain("Изменить");
+    expect(html).not.toContain("Удалить");
+    expect(html).not.toContain("Ваш комментарий");
+
+    vi.mocked(listEntityComments).mockResolvedValue({ ok: true, status: 200, data: allowedPage });
+    // Force reload under allowed canCreate (order flip triggers fetch via effect).
+    hooks.slots[1] = "desc";
+    hooks.cursor = 0;
+    CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    await settle(12);
+
+    hooks.slots[14] = commentId;
+    hooks.cursor = 0;
+    tree = CommentsSection({
+      kind: "venue",
+      entityId: venueId,
+      me,
+      parentPublic: true,
+      authReturnPath: `/venues/${venueId}`,
+      description: "Вопросы о площадке",
+    });
+    html = renderToStaticMarkup(tree);
+    expect(html).toContain(ownBody);
+    expect(html).toContain("Изменить");
+    expect(html).toContain("Удалить");
+    expect(html).toContain("Ваш комментарий");
+  });
+
   it("PUT/DELETE validateSuccess binds exact pending.path comment id", async () => {
     hooks.cursor = 0;
     CommentsSection({

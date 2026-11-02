@@ -388,7 +388,8 @@ export function CommentsSection({
     method: "POST" | "PUT" | "DELETE" = "POST",
   ): boolean {
     if (!sessionLive.current || !me) return false;
-    if (method === "POST" && !currentPage?.canCreate) return false;
+    // Bound page write capability gates create/edit/delete alike (server 403 otherwise).
+    if (!currentPage?.canCreate) return false;
     return mutation.run(path, body, method);
   }
 
@@ -407,6 +408,12 @@ export function CommentsSection({
   const pageReady = Boolean(currentPage) && state === "ready";
   const count = currentPage?.visibleCount;
   const canCreate = Boolean(currentPage?.canCreate);
+  /** Drop stale own edit/delete chrome when bound write capability is revoked. */
+  if (currentPage && !canCreate) {
+    if (editId !== null) setEditId(null);
+    if (editDraft) setEditDraft("");
+    if (deleteTarget !== null) setDeleteTarget(null);
+  }
 
   return (
     <section className="gb-comments" aria-labelledby={headingId} data-entity-kind={kind}>
@@ -507,14 +514,18 @@ export function CommentsSection({
                 }}
                 onCancelEdit={() => { setEditId(null); setEditDraft(""); }}
                 onSaveEdit={() => {
-                  if (!item.mine || !textReady(editDraft) || locked) return;
+                  if (!canCreate || !item.mine || !textReady(editDraft) || locked) return;
                   const text = editDraft.replace(/^\s+|\s+$/gu, "");
                   admitMutation(updateEntityCommentPath(item.id), {
                     text,
                     expectedVersion: item.version,
                   }, "PUT");
                 }}
-                onDelete={() => { setDeleteTarget(item); setMenuFor(null); }}
+                onDelete={() => {
+                  if (!canCreate || !item.mine) return;
+                  setDeleteTarget(item);
+                  setMenuFor(null);
+                }}
                 replyOpen={replyFor === item.id}
                 replyDraft={replyDraft}
                 onReplyDraft={setReplyDraft}
@@ -554,7 +565,7 @@ export function CommentsSection({
         </Button>
       ) : null}
 
-      {deleteTarget ? (
+      {deleteTarget && canCreate ? (
         <ProfileDialog
           title="Удалить комментарий?"
           onClose={() => { if (!mutation.busy) setDeleteTarget(null); }}
@@ -649,6 +660,8 @@ function CommentArticle({
   onExpandText: (id: string) => void;
 }) {
   const author = item.author ?? { displayName: "Игрок", publicPlayerId: null, avatar: { uploadedUrl: null, providerUrl: null }, profilePublic: false };
+  const canWriteOwn = Boolean(item.mine && canCreate);
+  const canAuthorSafety = Boolean(me && author.profilePublic && author.publicPlayerId);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menuOpen) return;
@@ -678,7 +691,7 @@ function CommentArticle({
           )}
           <time dateTime={item.createdAt}>{commentTime(item.createdAt)}{item.edited ? " · изменён" : ""}</time>
         </div>
-        {!item.deleted && (item.mine || (me && author.profilePublic && author.publicPlayerId)) ? (
+        {!item.deleted && (canWriteOwn || canAuthorSafety) ? (
           <div className="gb-comment__menu" ref={menuRef}>
             <button
               type="button"
@@ -692,7 +705,7 @@ function CommentArticle({
             </button>
             {menuOpen ? (
               <div className="gb-comment__menu-panel" role="menu">
-                {item.mine ? (
+                {canWriteOwn ? (
                   <>
                     <button type="button" role="menuitem" disabled={locked} onClick={onStartEdit}>Изменить</button>
                     <button type="button" role="menuitem" className="danger" disabled={locked} onClick={onDelete}>Удалить</button>
@@ -716,7 +729,7 @@ function CommentArticle({
 
       {item.deleted ? (
         <p className="gb-comment__tombstone">Комментарий удалён</p>
-      ) : editing ? (
+      ) : editing && canCreate ? (
         <form
           className="gb-comments__composer gb-comments__composer--inline"
           onSubmit={(e) => { e.preventDefault(); onSaveEdit(); }}
