@@ -1,45 +1,43 @@
 # Issue #372 / PG-3 Private reviews + personal notes — Mode A author handoff
 
-From: Cursor Auto (`OWNER_APPROVED_PG3_PRIVATE_ACTOR_BOUNDARY_REPAIR`, attempt 10, base `d5a0348f669bffcbcd65f68707a1e100e65e3020`).
+From: Cursor Auto (`OWNER_APPROVED_PG3_ADDITIVE_RESULTS_CI_FIXTURE_COMPATIBILITY`, attempt 11, base `70ddca0e29d199c02b018e7b4e1738c399118790`).
 To: one independent Codex Sol Medium QA → mandatory Product CI → trusted DEV release/smoke → Owner UAT.
 Status: **SOURCE CANDIDATE** / UAT=NOT_TESTED / PG-3 writes default **OFF** / **NOT READY** / no DEV ACCEPTED claim for alpha.12 / no PROD.
-Parent #372 PG-3 slice only. Full PG-3 typed Safety extension + PG-4 / comments #394 **not DONE**. Mode B binding NOT claimed. Author checks ≠ independent QA.
-Prior pass9 final `d5a0348f669bffcbcd65f68707a1e100e65e3020` retained (**QA9 FAIL P1** — actor A private results visible under host B between getMe(B) and getGameResults). Pass8/source8 `bc3e1759f3cfd04e0ba5abaeac7961a47ed610cd` and original 4c / protocol HOLD / costs retained. Current accepted DEV alpha.11 `acec520281d07f30d3fa855043be7d613ba56db1`. C5 OFF / PROD unchanged. No feature expansion beyond private actor-boundary repair.
+Parent #372 PG-3 / current PR #454. Full PG-3 typed Safety extension + PG-4 / comments #394 **not DONE**. Mode B binding NOT claimed. Author checks ≠ independent QA.
+Prior pass10 UI actor-boundary work and QA history retained. Product CI `41366669157`: 6 jobs PASS; **database FAIL only** — stale exact-keys assertion in `game-outcomes.disposable.test.ts:352` (expected 6 top-level keys, received 7 with approved additive `feedback`). Current accepted DEV alpha.11 retained historically. C5 OFF / PROD unchanged. No product/schema/contract change in this pass.
 
-## Pass 10 — private actor boundary on getMe A→B (QA9 P1)
+## Pass 11 — PG-1a disposable exact-keys fixture + PG-3 `feedback`
 
-Allowed paths: `GameResultsComposition.tsx`, `game-results-mutation.test.tsx`, this handoff.
+Allowed paths: `apps/api/test/integration/game-outcomes.disposable.test.ts`, this handoff.
 
-### Finding (QA9 P1, verbatim intent)
+### CI reason (honest)
 
-- Same-context soft reload kept the ready surface mounted (pass9).
-- When `getMe()` returned actor B, `setMe(B)` ran **before** `getGameResults()` settled, so actor A private results / feedback panel stayed visible under host B.
-- Clear paths covered 401 / session event, not actor-change via getMe nor results 403.
-- Pass9 host tests did not cover actor switch.
+- Product CI run `41366669157` / database job: `Object.keys(saved.json()).sort()` expected `Array(6)` vs received `Array(7)` with `feedback` between `attendance` and `gameId`.
+- Failure site: `apps/api/test/integration/game-outcomes.disposable.test.ts:352` — manager history vs participant projection test.
+- Root cause: legacy PG-1a exact top-level shape lagged approved PG-3 additive `GameResults.feedback` (already present in live API / PG-3 service and passed their CI). Not an auth/privacy product bug; not a gate disable.
 
 ### Repair
 
-- `reload()` captures `boundActor` before `await getMe`.
-- When returned `account.id` differs from bound actor: synchronously `clearSensitiveUi` + loading **before** exposing new me/host B (results, private forms, confirmedOperation, dispute/context drafts).
-- Same confirmed actor A refresh still keeps panel/drafts mounted until matching validated completion (no QA8 always-hide regression).
-- Prior actor pending original key/body stays under that actor’s scope; host epoch / actorRef / dispute fences reject late A.
-- `clearSensitiveUi` also clears `confirmedOperation`; loading/clear on actor change and known unauthorized results **403/404** (not only 401 / session event).
-- Initial load / game change / session logout clears unchanged. No auth weakening, fake permission, silent UNKNOWN clear, or new keys.
+- Keep **strict** `Object.keys(...).sort().toEqual([...])` (no `arrayContaining`, no filtering `feedback` away).
+- Add `"feedback"` as seventh expected top-level key; refresh comment that PG-1b attendance + PG-3 feedback are additive and this fixture does not apply 0046/0048 → empty actor-scoped slices.
+- Assert actor-scoped empty feedback shape for this seeded fixture (`installed: false`, empty `myNotes` / `gameReviews`, capabilities with no create flags / no peerSubjects) per existing GameResults / emptyFeedbackSlice contract when 0048 is absent; do **not** invent public review fields.
+- Preserve every guest/outsider/revoked-manager 404, idempotency/replay-denied, seat/lifecycle, and attendance empty-slice assertions unchanged.
+- Do **not** remove `feedback` from product response, disable tests/gates, or change schema/backend/contract.
 
 ### Targeted author checks (this pass)
 
-- Web unit: `game-results-mutation.test.tsx` — A→B delayed results GET (A panel gone before settle; B does not adopt A); A→B with results 403/404 keeps A hidden; prior same-actor PUT/DELETE/conflict/changed-draft cases retained.
-- Author runs: `vitest run test/game-results-mutation.test.tsx` (+ reused `game-feedback` / `game-results` when present); `tsc -p tsconfig.json --noEmit` when available.
-- No broad PG-1b / PG-2 / SMTP / DB / security re-matrix. Independent QA / Product CI / DEV smoke still required.
+- Scope: one disposable DB fixture file + handoff only. PMA runs **only** this disposable DB file via existing runner + required CI after final delta QA.
+- Author does **not** run live DEV DB / Docker / root from sandbox.
+- Reuse: current web/source QA10 PASS and 64 tests/typecheck unchanged — not re-run here.
 
 ### Release metadata (prospective, unchanged claim)
 
 - Candidate app `0.1.0-alpha.12` / API contract note `0.23.0` remain **prospective** — no invented DEV ACCEPTED / Owner PASS / CI green claim.
-- Accepted alpha.11 historical seed retained. Design input unchanged; layout/API/migrations/notes backend/release history/UI unchanged.
+- Previous FAILs, costs, and history preserved. Same PR #454; no new PR / task reset.
 
 ## Outstanding (honest)
 
-- Independent Sol Medium QA of private actor-boundary repair (must address QA9 P1 with real host evidence)
+- Independent Sol Medium QA of this fixture-compat delta (exact keys + empty feedback slice; no product rewrite)
 - Product CI + security checks + trusted DEV deploy/smoke + flag activation
 - Owner UAT = NOT_TESTED
 - Full PG-3 typed Safety complaint extension = **remaining**
@@ -48,6 +46,6 @@ Allowed paths: `GameResultsComposition.tsx`, `game-results-mutation.test.tsx`, t
 ## Non-goals / stops
 
 - No PROD, main promotion, C5, Mode B READY, whole-parent close
-- No Git/root/runtime/PROD/API/security/schema/migrations/release-history/UI rewrite; no secrets; no AGENTS.md/CLAUDE.md/.cursor creation
-- No new request engine / shared hook rewrite / scheduler / High / Astra
-- No whole-suite matrix expansion; this is a new immutable repair after completed pass9 + concrete QA9 FAIL, not replay of an unknown old model operation
+- No Git/root/runtime/PROD/schema/backend/contract/AGENTS/config instruction files; no secrets; no other models
+- No Astra / High / failure_diagnosis; no new matrix; no feedback removal from product response
+- Native DONE after this 1 fixture file + handoff scope

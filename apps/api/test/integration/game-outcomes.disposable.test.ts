@@ -348,10 +348,12 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     const idem = key();
     const saved = await put(manager, `/v1/games/${g.id}/outcome`, { expectedVersion: 0, outcome: "held" }, idem);
     expect(saved.statusCode).toBe(200);
-    // PG-1b additive attendance on results; this PG-1a fixture does not apply 0046 → empty slice.
+    // PG-1b attendance + PG-3 feedback are additive on results; this PG-1a fixture
+    // does not apply 0046/0048 → empty actor-scoped slices (no public review fields).
     expect(Object.keys(saved.json()).sort()).toEqual([
       "allowedActions",
       "attendance",
+      "feedback",
       "gameId",
       "outcome",
       "revisions",
@@ -377,6 +379,32 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       rosterNextCursor: null,
       summary: null,
       allowedActions: { canRecordAttendance: false, canBulkPresent: false },
+    });
+    // PG-3 additive feedback top-level key; schema 0048 not applied → empty actor-scoped slice.
+    expect(Object.keys(managerBody.feedback).sort()).toEqual([
+      "capabilities",
+      "gameReviews",
+      "installed",
+      "myNotes",
+      "writesEnabled",
+    ]);
+    expect(managerBody.feedback).toEqual({
+      installed: false,
+      writesEnabled: true,
+      capabilities: {
+        installed: false,
+        writesEnabled: true,
+        canCreatePeer: false,
+        canCreateOrganization: false,
+        canCreateTraining: false,
+        canCreateNote: false,
+        peerSubjects: [],
+        organizationRecipientDisplay: null,
+        complaintReuse: "existing_player_report",
+        remaining: ["typed_review_safety_extension"],
+      },
+      myNotes: [],
+      gameReviews: [],
     });
     expect(managerBody.allowedActions).toMatchObject({
       canRecordOutcome: expect.any(Boolean),
