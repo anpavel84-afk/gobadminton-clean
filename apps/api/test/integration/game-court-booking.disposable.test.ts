@@ -278,5 +278,92 @@ run("#386 GameCourtBooking — disposable synthetic PostGIS", () => {
     expect([403, 404]).toContain(revokedPut.statusCode);
     const revokedReplay = await put(manager, url, { expectedVersion: 0, status: "arranging" }, idem);
     expect([403, 404]).toContain(revokedReplay.statusCode);
+    // Creator remains confirmed participant → readonly GET retained, not incorrectly denied.
+    const revokedCreatorGet = await get(manager, url);
+    expect(revokedCreatorGet.statusCode).toBe(200);
+    expect(revokedCreatorGet.json()).toMatchObject({
+      status: "arranging",
+      version: 1,
+      allowedActions: { canUpdate: false },
+    });
+  });
+
+  async function waitBlockedBy(blockerPid: number) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const rows = await pool.query(
+        `SELECT pid FROM pg_stat_activity
+         WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`,
+        [blockerPid],
+      );
+      if (rows.rows.length) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error("Expected a real SQL lock waiter before releasing Game exclusive fence");
+  }
+
+  it("GET denies after non-playing manager revoke held behind Game exclusive fence", async () => {
+    const owner = await actor("Fence owner");
+    const nonPlaying = await actor("Nonplaying manager");
+    const g = await createPublishedGame(owner);
+    await pool.query(
+      `INSERT INTO game_managers (game_id, user_id, role, status)
+       VALUES ($1, $2, 'manager', 'active')`,
+      [g.id, nonPlaying.userId],
+    );
+    const url = `/v1/games/${g.id}/court-booking`;
+    expect((await get(nonPlaying, url)).statusCode).toBe(200);
+    expect((await get(nonPlaying, url)).json().allowedActions.canUpdate).toBe(true);
+
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await holder.query(`SELECT id FROM games WHERE id = $1 FOR UPDATE`, [g.id]);
+      await holder.query(
+        `UPDATE game_managers
+         SET status = 'revoked', revoked_at = now(), updated_at = now()
+         WHERE game_id = $1 AND user_id = $2`,
+        [g.id, nonPlaying.userId],
+      );
+      const mid = get(nonPlaying, url);
+      await waitBlockedBy(pid);
+      await holder.query("COMMIT");
+      expect((await mid).statusCode).toBe(404);
+      expect((await get(nonPlaying, url)).statusCode).toBe(404);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+    }
+  });
+
+  it("GET denies after participant removal held behind Game exclusive fence", async () => {
+    const owner = await actor("Remove owner");
+    const onlyParticipant = await actor("Sole participant");
+    const g = await createPublishedGame(owner);
+    await confirmParticipant(g.id, onlyParticipant.userId);
+    const url = `/v1/games/${g.id}/court-booking`;
+    expect((await get(onlyParticipant, url)).statusCode).toBe(200);
+
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      const pid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await holder.query(`SELECT id FROM games WHERE id = $1 FOR UPDATE`, [g.id]);
+      await holder.query(
+        `UPDATE participations
+         SET status = 'removed', version = version + 1, updated_at = now()
+         WHERE game_id = $1 AND user_id = $2 AND status = 'confirmed'`,
+        [g.id, onlyParticipant.userId],
+      );
+      const mid = get(onlyParticipant, url);
+      await waitBlockedBy(pid);
+      await holder.query("COMMIT");
+      expect((await mid).statusCode).toBe(404);
+      expect((await get(onlyParticipant, url)).statusCode).toBe(404);
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      holder.release();
+    }
   });
 });

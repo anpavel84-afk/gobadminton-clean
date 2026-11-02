@@ -66,14 +66,26 @@ export class GameCourtBookingService {
     const gameId = parseGameId(gameIdRaw);
     const client = await this.pool.connect();
     try {
-      const game = (
-        await client.query<{ id: string }>(`SELECT id FROM games WHERE id = $1`, [gameId])
-      ).rows[0];
-      if (!game) unavailable();
-      const role = await this.accessRole(client, gameId, userId);
-      if (role === "none") unavailable();
-      const row = await this.readRow(client, gameId);
-      return projectCourtBooking(row, gameId, role === "manager");
+      // Same Game fence as revoke/participation transitions: auth + private row
+      // share one READ COMMITTED snapshot while FOR SHARE is held.
+      await client.query("BEGIN");
+      try {
+        const game = (
+          await client.query<{ id: string }>(
+            `SELECT id FROM games WHERE id = $1 FOR SHARE`,
+            [gameId],
+          )
+        ).rows[0];
+        if (!game) unavailable();
+        const role = await this.accessRole(client, gameId, userId);
+        if (role === "none") unavailable();
+        const row = await this.readRow(client, gameId);
+        await client.query("COMMIT");
+        return projectCourtBooking(row, gameId, role === "manager");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
     } finally {
       client.release();
     }

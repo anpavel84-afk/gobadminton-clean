@@ -50,6 +50,8 @@ export function GameCourtBookingPanel({
   const epoch = useRef(0);
   const liveGame = useRef(gameId);
   liveGame.current = gameId;
+  /** Actor+game panel fence: expiry/session clear blocks late GET/PUT without deleting UNKNOWN marker. */
+  const privateLive = useRef(true);
   const scope = `${meId}:court-booking:${gameId}`;
   const path = useMemo(() => `/v1/games/${gameId}/court-booking`, [gameId]);
 
@@ -57,13 +59,14 @@ export function GameCourtBookingPanel({
     scope,
     csrfToken,
     (data) => {
-      if (liveGame.current !== gameId) return;
+      if (!privateLive.current || liveGame.current !== gameId) return;
       setBooking(data);
       setDraftStatus(data.status);
       setSavedFlash(true);
       setLocalNotice("Статус сохранён со слов организатора.");
     },
     () => {
+      if (!privateLive.current || liveGame.current !== gameId) return;
       void reload();
     },
     true,
@@ -88,6 +91,16 @@ export function GameCourtBookingPanel({
 
   const unknownOp = mutation.pending || mutation.code === "hold";
 
+  function clearPrivateSurface() {
+    epoch.current += 1;
+    privateLive.current = false;
+    setBooking(null);
+    setDraftStatus("unspecified");
+    setLocalNotice(null);
+    setSavedFlash(false);
+    setLoadState("denied");
+  }
+
   async function reload() {
     const token = ++epoch.current;
     setLoadState("loading");
@@ -95,7 +108,7 @@ export function GameCourtBookingPanel({
     setLocalNotice(null);
     setSavedFlash(false);
     const result = await getGameCourtBooking(gameId);
-    if (token !== epoch.current || liveGame.current !== gameId) return;
+    if (!privateLive.current || token !== epoch.current || liveGame.current !== gameId) return;
     if (!result.ok) {
       setLoadState(result.status === 404 || result.status === 401 ? "denied" : "error");
       return;
@@ -106,20 +119,26 @@ export function GameCourtBookingPanel({
   }
 
   useEffect(() => {
+    privateLive.current = true;
     void reload();
     return () => { epoch.current += 1; };
   }, [gameId, meId, csrfToken]);
 
   useEffect(() => {
-    const onSession = () => {
-      epoch.current += 1;
-      setBooking(null);
-      setLoadState("loading");
-      setLocalNotice(null);
-      setSavedFlash(false);
+    const onExpired = () => {
+      // Clear private UI; do not GET/reload — avoids getMe 401 → private-expired loop.
+      clearPrivateSurface();
     };
+    const onSession = () => {
+      clearPrivateSurface();
+      // New session remounts via host (meId/csrf) existing path; do not fetch under cleared fence.
+    };
+    window.addEventListener("gb-private-expired", onExpired);
     window.addEventListener("gb-session-changed", onSession);
-    return () => window.removeEventListener("gb-session-changed", onSession);
+    return () => {
+      window.removeEventListener("gb-private-expired", onExpired);
+      window.removeEventListener("gb-session-changed", onSession);
+    };
   }, []);
 
   const canUpdate = Boolean(booking?.allowedActions.canUpdate);
@@ -158,7 +177,7 @@ export function GameCourtBookingPanel({
   return (
     <section className="gb-game-section gb-court-booking" aria-label="Договорённость о корте">
       <h2>Договорённость о корте</h2>
-      <p className="gb-court-booking__source">Со слов организатора. Площадка это не подтверждает.</p>
+      <p className="gb-court-booking__source">Со слов организатора. Приложение не проверяет бронь.</p>
       {canUpdate ? (
         <label className="gb-game-field gb-game-field--wide">
           <span>Статус (со слов организатора)</span>

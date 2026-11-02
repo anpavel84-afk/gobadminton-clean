@@ -48,6 +48,10 @@ games to confirmed.
 - **GET**: active session + current active owner/manager **or** confirmed
   participation (same audience as private game venue contacts). `Cache-Control: no-store`.
   Foreign/missing → indistinguishable private 404. No anonymous/list/map projection.
+  Access check and private row read share one short transaction under Game
+  `FOR SHARE` (same fence used by revoke/participation transitions) so a revoked
+  sole-access role cannot observe a stale private projection. Revoked manager who
+  remains a confirmed participant retains readonly.
 - **PUT**: current active owner/manager via `GameAuthority` +
   `requireCookieMutation` / Origin / CSRF + `MutationRunner.runIdempotent` with
   `expectedVersion`. Lock order Game → manager. Same-key same-body recovers one

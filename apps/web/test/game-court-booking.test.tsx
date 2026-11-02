@@ -76,7 +76,7 @@ const participantBooking: GameCourtBooking = {
   allowedActions: { canUpdate: false },
 };
 
-/** Hook order in GameCourtBookingPanel: booking, loadState, draftStatus, localNotice, savedFlash, epoch, liveGame, reload-effect, session-effect. */
+/** Hook order: booking, loadState, draftStatus, localNotice, savedFlash, epoch, liveGame, privateLive, reload-effect, boundary-effect. */
 function seed(booking: GameCourtBooking | null, loadState: "loading" | "ready" | "denied" | "error", draft = booking?.status ?? "unspecified") {
   hooks.slots = [
     booking,
@@ -86,8 +86,9 @@ function seed(booking: GameCourtBooking | null, loadState: "loading" | "ready" |
     false,
     { current: 1 },
     { current: gameId },
+    { current: true },
     ["deps-reload"],
-    ["deps-session"],
+    ["deps-boundary"],
   ];
   hooks.cursor = 0;
 }
@@ -99,7 +100,8 @@ describe("#386 game court booking panel", () => {
     mutation.code = "";
     const html = renderToStaticMarkup(GameCourtBookingPanel({ gameId, meId: "actor-a", csrfToken: "csrf-a" }));
     expect(html).toContain("Договорённость о корте");
-    expect(html).toContain("Со слов организатора");
+    expect(html).toContain("Со слов организатора. Приложение не проверяет бронь.");
+    expect(html).not.toContain("Площадка это не подтверждает");
     expect(html).toContain("Сохранить статус");
     expect(html).toContain("Не указано");
   });
