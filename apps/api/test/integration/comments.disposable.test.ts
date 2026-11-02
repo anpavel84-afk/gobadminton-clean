@@ -9,7 +9,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { SessionService } from "../../src/auth/session.service";
 import { CommentsModule } from "../../src/comments/comments.module";
+import type { CommentView } from "../../src/comments/comments.policy";
 import { IdempotencyService } from "../../src/common/idempotency.service";
+import { MutationRunner } from "../../src/common/mutation-runner.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
@@ -407,7 +409,10 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     expect(venueCreateRetry.statusCode).toBe(403);
     expect(venueCreateRetry.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
 
-    // Pre-policy SUCCESS create receipt (DB fixture via IdempotencyService hashes): current authorizeReplay denies it.
+    // Pre-policy SUCCESS create: real MutationRunner+IdempotencyService transaction (test-only
+    // historical fixture, not an exposed bypass). Same actor/session/key/operation/requestHash as
+    // later HTTP POST; receipt+source write commit atomically with actual venue root + audit.
+    const mutations = app.get(MutationRunner);
     const idempotency = app.get(IdempotencyService);
     const prePolicyCreateKey = key();
     const prePolicyText = "LEGACY_PRE_POLICY_VENUE_CREATE";
@@ -417,25 +422,46 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
       parentCommentId: null,
       text: prePolicyText,
     });
-    await pool.query(
-      `INSERT INTO idempotency_records
-         (actor_id, operation, key_hash, request_hash, reservation_state,
-          status_code, response_body, expires_at)
-       VALUES ($1, 'comments.create', $2, $3, 'completed', 201, $4::jsonb, now() + interval '1 day')`,
-      [
-        peer.userId,
-        idempotency.keyHash(prePolicyCreateKey),
-        prePolicyCreateHash,
-        JSON.stringify({
-          id: randomUUID(),
+    const prePolicyCreated = await mutations.runIdempotent<CommentView>({
+      actorId: peer.userId,
+      sessionId: peer.sessionId,
+      operation: "comments.create",
+      key: prePolicyCreateKey,
+      requestHash: prePolicyCreateHash,
+      requiredCapabilities: ["account.access", "profile.public"],
+      authorizeReplay: async () => {
+        // Fixture-only historical create; live HTTP path re-authorizes under current guard.
+      },
+      execute: async (client) => {
+        const inserted = (
+          await client.query<{
+            id: string;
+            created_at: Date;
+            updated_at: Date;
+          }>(
+            `INSERT INTO entity_comments
+               (entity_kind, entity_id, parent_comment_id, author_user_id, body, version)
+             VALUES ('venue', $1, NULL, $2, $3, 1)
+             RETURNING id, created_at, updated_at`,
+            [venueId, peer.userId, prePolicyText],
+          )
+        ).rows[0]!;
+        await client.query(
+          `INSERT INTO entity_comment_revisions
+             (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
+           VALUES ($1, 'venue', $2, 1, $3, $4, false)`,
+          [inserted.id, venueId, peer.userId, prePolicyText],
+        );
+        const body: CommentView = {
+          id: inserted.id,
           entityKind: "venue",
           entityId: venueId,
           parentCommentId: null,
           body: prePolicyText,
           deleted: false,
           version: 1,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          createdAt: inserted.created_at.toISOString(),
+          updatedAt: inserted.updated_at.toISOString(),
           edited: false,
           mine: true,
           author: {
@@ -445,9 +471,71 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
             profilePublic: true,
           },
           replyCount: 0,
-        }),
-      ],
+        };
+        return { statusCode: 201, body };
+      },
+    });
+    expect(prePolicyCreated.statusCode).toBe(201);
+    expect(prePolicyCreated.body).toMatchObject({
+      entityKind: "venue",
+      entityId: venueId,
+      parentCommentId: null,
+      body: prePolicyText,
+      deleted: false,
+      version: 1,
+      mine: true,
+    });
+    const prePolicyRow = await pool.query<{
+      id: string;
+      body: string | null;
+      version: number;
+      deleted_at: Date | null;
+      author_user_id: string;
+    }>(
+      `SELECT id, body, version, deleted_at, author_user_id FROM entity_comments
+       WHERE id=$1 AND entity_kind='venue' AND entity_id=$2`,
+      [prePolicyCreated.body.id, venueId],
     );
+    expect(prePolicyRow.rows).toHaveLength(1);
+    expect(prePolicyRow.rows[0]).toMatchObject({
+      id: prePolicyCreated.body.id,
+      body: prePolicyText,
+      version: 1,
+      deleted_at: null,
+      author_user_id: peer.userId,
+    });
+    const prePolicyAudit = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM entity_comment_revisions
+       WHERE comment_id=$1 AND entity_kind='venue' AND entity_id=$2
+         AND resource_version=1 AND tombstone=false AND after_body=$3`,
+      [prePolicyCreated.body.id, venueId, prePolicyText],
+    );
+    expect(Number(prePolicyAudit.rows[0]?.n)).toBe(1);
+    const prePolicyReceipt = await pool.query<{
+      reservation_state: string;
+      status_code: number;
+      response_body: CommentView;
+      request_hash: string;
+    }>(
+      `SELECT reservation_state, status_code, response_body, request_hash
+       FROM idempotency_records
+       WHERE actor_id=$1 AND operation='comments.create' AND key_hash=$2`,
+      [peer.userId, idempotency.keyHash(prePolicyCreateKey)],
+    );
+    expect(prePolicyReceipt.rows).toHaveLength(1);
+    expect(prePolicyReceipt.rows[0]?.reservation_state).toBe("completed");
+    expect(prePolicyReceipt.rows[0]?.status_code).toBe(201);
+    expect(prePolicyReceipt.rows[0]?.request_hash).toBe(prePolicyCreateHash);
+    expect(prePolicyReceipt.rows[0]?.response_body?.id).toBe(prePolicyCreated.body.id);
+    expect(Number(
+      (await pool.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM entity_comments
+         WHERE entity_kind='venue' AND entity_id=$1 AND body=$2`,
+        [venueId, prePolicyText],
+      )).rows[0]?.n,
+    )).toBe(1);
+
+    // Same-key HTTP POST against current guard: deny replay; no second row/revision.
     const prePolicyCreateReplay = await post(
       peer,
       venueUrl,
@@ -456,6 +544,30 @@ run("#394 EntityComments — disposable synthetic PostGIS", () => {
     );
     expect(prePolicyCreateReplay.statusCode).toBe(403);
     expect(prePolicyCreateReplay.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    expect(Number(
+      (await pool.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM entity_comments
+         WHERE entity_kind='venue' AND entity_id=$1 AND body=$2`,
+        [venueId, prePolicyText],
+      )).rows[0]?.n,
+    )).toBe(1);
+    expect(Number(
+      (await pool.query<{ n: string }>(
+        `SELECT COUNT(*)::text AS n FROM entity_comment_revisions WHERE comment_id=$1`,
+        [prePolicyCreated.body.id],
+      )).rows[0]?.n,
+    )).toBe(1);
+
+    // GET hides the MutationRunner-created pre-policy venue root (and its thread).
+    const prePolicyList = await get(null, venueUrl);
+    expect(prePolicyList.statusCode).toBe(200);
+    expect(prePolicyList.json().items).toEqual([]);
+    expect(prePolicyList.json().visibleCount).toBe(0);
+    expect(JSON.stringify(prePolicyList.json())).not.toMatch(/LEGACY_PRE_POLICY_VENUE_CREATE/);
+    const prePolicyThread = await get(null, `${venueUrl}?parentCommentId=${prePolicyCreated.body.id}`);
+    expect(prePolicyThread.statusCode).toBe(200);
+    expect(prePolicyThread.json().items).toEqual([]);
+    expect(prePolicyThread.json().visibleCount).toBe(0);
 
     // Direct-seeded legacy venue rows must not appear on GET; owned withdrawal still works.
     const legacyVenueRootId = randomUUID();
