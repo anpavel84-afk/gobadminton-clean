@@ -218,7 +218,9 @@ export function GameReviewsHistory() {
                     : review.kind === "organization" && review.organizationScore != null
                       ? `Оценка ${review.organizationScore} из 5`
                       : "Без оценки"}
-                  {review.recipientDisplay ? ` · ${review.recipientDisplay}` : ""}
+                  {direction === "sent" && review.recipientDisplay
+                    ? ` · для ${review.recipientDisplay}`
+                    : ""}
                 </p>
                 {review.comment ? <p className="gb-postgame-history-entry__comment">{review.comment}</p> : null}
                 <small>

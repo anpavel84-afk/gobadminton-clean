@@ -1,23 +1,36 @@
 # GoBadminton release notes
 
-## #372 PG-3 — private note draft lifecycle (0.1.0-alpha.12 candidate)
+## #372 PG-4 — private history journey (0.1.0-alpha.13 candidate)
 
-Create-note draft and edit-note editor on delete no longer clear immediately after
-`mutation.run` admission. Clear/close only after matching validated success of the
-exact frozen PUT/DELETE with unchanged current draft/editor (same fence as pass7
-review + saveExistingNote). UNKNOWN / conflict / unrelated success keep text and
-idempotency identity. API contract note `0.23.0` (existing PG-3 wire; schema not
-rewritten here). Historical alpha.11 DEV seed retained. PROD remains accepted
-alpha.8. Owner UAT: NOT_TESTED. No fabricated DEV ACCEPTED / Owner PASS for alpha.12.
+Personal post-game history on My Games: own results when the public game card is
+missing, private sent/received reviews on history, and relation-honest managed
+history. Candidate only — source SHA unbound until trusted ACCEPTED. API contract
+note remains `0.23.0`. Owner UAT: NOT_TESTED. Alpha.13 is not installed.
 
-- Application version (candidate): `0.1.0-alpha.12`; API contract `0.23.0`.
-- Prior accepted DEV: alpha.11 `acec520281d07f30d3fa855043be7d613ba56db1`
-  (`r41361963371-a1`, `2026-11-01T23:30:16Z`).
+- Application version (candidate): `0.1.0-alpha.13`; API contract `0.23.0`.
+- Prior accepted DEV: alpha.12 `6383ef406f5944a299843939d391ab7886fdb5dd`
+  (`r41368959239-a1`, `2026-11-02T00:59:40Z`).
 - Candidate source SHA / DEV receipt: unbound until trusted ACCEPTED.
-- Independent Medium QA / Product CI / DEV acceptance: pending for this candidate.
 - Owner UAT: NOT_TESTED.
-- Full typed Safety complaint extension (PG-4) and public comments #394 not claimed done.
+- Complaint on a specific review still unavailable; public comments #394 not done.
 - C5 untouched; no PROD activation.
+
+## #372 PG-3 — private note draft lifecycle (0.1.0-alpha.12 DEV ACCEPTED)
+
+Create-note draft and edit-note editor on delete clear only after matching
+validated success of the exact frozen PUT/DELETE. UNKNOWN / conflict / unrelated
+success keep text. Accepted on DEV `r41368959239-a1` (`2026-11-02T00:59:40Z`),
+source `6383ef406f5944a299843939d391ab7886fdb5dd`. API contract `0.23.0`.
+Owner UAT: NOT_TESTED.
+
+- Application version: `0.1.0-alpha.12`; API contract `0.23.0`.
+- Accepted source: `6383ef406f5944a299843939d391ab7886fdb5dd`.
+- DEV release: `r41368959239-a1` (accepted `2026-11-02T00:59:40Z`).
+- Digests: api `sha256:82ab7826723a89ec035c1777190fcef1134441b0f9ed6ddae6952507dc63fb82`,
+  web `sha256:4be8fe110f56f05469f30ecd2961a0a98ad704f7cfb6496b7aa37caf0e128f11`.
+- Owner UAT: NOT_TESTED.
+- Complaint on a specific review and public comments #394 not claimed done.
+- PROD unchanged (remains alpha.8).
 
 ## #445/#450 residual — map empty gate + trainer fetch skip (0.1.0-alpha.11 DEV ACCEPTED)
 

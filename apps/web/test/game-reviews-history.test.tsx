@@ -198,7 +198,9 @@ describe("PG-4 review history labels and section entry", () => {
     expect(markup).toContain("Спасибо за игру");
     expect(markup).toContain("есть ответ");
     expect(markup).toContain("изменено");
-    expect(markup).not.toMatch(/автор|reviewer name|Anonymous/i);
+    // recipientDisplay is the viewer for received — do not show it as a peer/author label.
+    expect(markup).not.toContain("Илья");
+    expect(markup).not.toMatch(/автор|reviewer name|Anonymous|для Илья/i);
     expect(
       walk(tree).some(
         (el) => typeof el.props.href === "string" && String(el.props.href).includes("section=feedback"),
@@ -282,6 +284,7 @@ describe("PG-4 review history labels and section entry", () => {
     const markup = textOf(tree);
     expect(markup).toContain("Нейтрально");
     expect(markup).toContain("Были трудности");
+    expect(markup).toContain("для Ольга");
     expect(vi.mocked(listMyReviews).mock.calls[2]?.[0]).toMatchObject({
       direction: "sent",
       cursor: "next-sent",

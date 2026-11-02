@@ -24,6 +24,7 @@ import {
 } from "../../../lib/game-presentation";
 import {
   findOwnResultForGame,
+  ownResultEndsAtBucket,
   ownResultsNotCoveredByGames,
   pendingOwnNotice,
   resultsPath,
@@ -231,24 +232,29 @@ export function MyGamesPage() {
 
   const visibleRows = useMemo(() => {
     return rows.filter(({ participation, game }) => {
-      const history = isParticipatingHistoryRow(game, participation.status);
+      let history = isParticipatingHistoryRow(game, participation.status);
+      // Public 404: use authoritative own endsAt for bucket only; unknown stays non-history.
+      if (!history && !game) {
+        const own = findOwnResultForGame(ownItems, participation.gameId);
+        if (own && ownResultEndsAtBucket(own.endsAt) === "past") history = true;
+      }
       return view === "history" ? history : !history;
     });
-  }, [rows, view]);
+  }, [rows, view, ownItems]);
 
   const coveredGameIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const row of visibleRows) {
-      if (row.game) ids.add(row.game.id);
-    }
-    for (const game of visibleCreated) ids.add(game.id);
+    // Cover every participation/managed id so one game cannot also appear as an orphan duplicate.
+    for (const row of rows) ids.add(row.participation.gameId);
+    for (const game of created) ids.add(game.id);
     return ids;
-  }, [visibleRows, visibleCreated]);
+  }, [rows, created]);
 
   const orphanOwnResults = useMemo(() => {
-    if (view !== "history") return [];
+    // Own results alone do not prove manager — keep personal orphans off «Управляю».
+    if (view !== "history" || relation !== "participating") return [];
     return ownResultsNotCoveredByGames(ownItems, coveredGameIds);
-  }, [view, ownItems, coveredGameIds]);
+  }, [view, relation, ownItems, coveredGameIds]);
 
   const returnPath =
       relation === "created"

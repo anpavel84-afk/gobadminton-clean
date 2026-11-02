@@ -3,6 +3,7 @@ import type * as ReactModule from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findOwnResultForGame,
+  ownResultEndsAtBucket,
   ownResultsNotCoveredByGames,
   pendingOwnNotice,
   resultsPath,
@@ -95,6 +96,14 @@ describe("PG-4 own private history helpers", () => {
     expect(findOwnResultForGame([a], "missing")).toBeUndefined();
   });
 
+  it("buckets own endsAt for history without inventing attendance", () => {
+    const now = Date.parse("2026-11-02T12:00:00.000Z");
+    expect(ownResultEndsAtBucket("2026-10-24T17:00:00.000Z", now)).toBe("past");
+    expect(ownResultEndsAtBucket("2026-12-01T17:00:00.000Z", now)).toBe("future");
+    expect(ownResultEndsAtBucket(null, now)).toBe("unknown");
+    expect(ownResultEndsAtBucket("not-a-date", now)).toBe("unknown");
+  });
+
   it("links results feedback section without inventing attendance query", () => {
     expect(resultsPath("10000000-0000-4000-8000-000000000001")).toBe(
       "/my-games/10000000-0000-4000-8000-000000000001/results",
@@ -156,9 +165,11 @@ vi.mock("react", async (original) => {
   };
 });
 
+const nav = vi.hoisted(() => ({ search: "view=history" }));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams("view=history"),
+  useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
 vi.mock("next/link", async () => {
@@ -192,6 +203,7 @@ vi.mock("../src/lib/api-client", () => ({
 import {
   getGame,
   getMe,
+  listAllMyManagedGames,
   listAllMyParticipations,
   listMyGameResults,
 } from "../src/lib/api-client";
@@ -253,6 +265,7 @@ const participation = {
 
 beforeEach(() => {
   resetHooks();
+  nav.search = "view=history";
   vi.stubGlobal(
     "window",
     Object.assign(new EventTarget(), {
@@ -270,6 +283,11 @@ beforeEach(() => {
     ok: true,
     status: 200,
     data: [participation],
+  });
+  vi.mocked(listAllMyManagedGames).mockResolvedValue({
+    ok: true,
+    status: 200,
+    data: [],
   });
   vi.mocked(getGame).mockResolvedValue({
     ok: false,
@@ -417,5 +435,75 @@ describe("PG-4 MyGames private history on public getGame 404", () => {
       cursor: "cursor-2",
       limit: 20,
     });
+  });
+
+  it("confirmed + public 404 + past own endsAt leaves upcoming and stays once in history", async () => {
+    const pastOwn = ownItem("10000000-0000-4000-8000-000000000001", {
+      endsAt: "2026-10-24T17:00:00.000Z",
+    });
+    vi.mocked(listMyGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { items: [pastOwn], nextCursor: null },
+    });
+    vi.mocked(listAllMyParticipations).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: [{ ...participation, status: "confirmed" }],
+    });
+
+    nav.search = "";
+    renderPage();
+    flushEffects();
+    await settle();
+    const upcoming = renderPage();
+    flushEffects();
+    const upcomingMarkup = textOf(upcoming);
+    expect(walk(upcoming).filter((el) => el.type === OwnResultsHistoryCard)).toHaveLength(0);
+    expect(upcomingMarkup).toContain("Пока нет участий");
+    expect(upcomingMarkup).toContain("Ближайшие события");
+
+    nav.search = "view=history";
+    resetHooks();
+    renderPage();
+    flushEffects();
+    await settle();
+    const history = renderPage();
+    flushEffects();
+    const cards = walk(history).filter((el) => el.type === OwnResultsHistoryCard);
+    expect(cards).toHaveLength(1);
+    expect((cards[0]!.props.item as { gameId: string }).gameId).toBe(
+      "10000000-0000-4000-8000-000000000001",
+    );
+    expect(textOf(history)).toContain("История участий");
+    expect(textOf(history)).toContain("Субботний бадминтон");
+  });
+
+  it("managed history does not leak orphan participant-only own results", async () => {
+    nav.search = "tab=created&view=history";
+    vi.mocked(listMyGameResults).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        items: [ownItem("10000000-0000-4000-8000-000000000099", { gameTitle: "Чужое участие" })],
+        nextCursor: null,
+      },
+    });
+    vi.mocked(listAllMyManagedGames).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: [],
+    });
+    renderPage();
+    flushEffects();
+    await settle();
+    const tree = renderPage();
+    flushEffects();
+    const markup = textOf(tree);
+    expect(markup).toContain("История управляемых игр");
+    expect(markup).not.toContain("Ваши итоги");
+    expect(markup).not.toContain("own-results-orphan-history");
+    expect(walk(tree).filter((el) => el.type === OwnResultsHistoryCard)).toHaveLength(0);
+    expect(vi.mocked(listAllMyManagedGames)).toHaveBeenCalled();
   });
 });

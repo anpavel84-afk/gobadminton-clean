@@ -108,6 +108,20 @@ export function findOwnResultForGame(
   return items.find((item) => item.gameId === gameId);
 }
 
+/**
+ * Bucket timing from authoritative own-result endsAt only.
+ * Does not infer attendance/outcome. Invalid or missing → unknown.
+ */
+export function ownResultEndsAtBucket(
+  endsAt: string | null | undefined,
+  now = Date.now(),
+): "past" | "future" | "unknown" {
+  if (endsAt == null || endsAt === "") return "unknown";
+  const ms = Date.parse(endsAt);
+  if (!Number.isFinite(ms)) return "unknown";
+  return ms < now ? "past" : "future";
+}
+
 export function ownResultPendingNotice(item: MeGameResultsItem): boolean {
   return Boolean(item.notice && !item.notice.acknowledgedAt);
 }
