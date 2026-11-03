@@ -129,4 +129,76 @@ describe("#456 sw-push.js handlers", () => {
     expect(closed.length).toBeGreaterThanOrEqual(0);
     void vi;
   });
+
+  it("keeps newer fence when delayed clear races ahead of subsequent set", async () => {
+    const listeners = new Map<string, Array<(event: unknown) => void>>();
+    const cacheStore = new Map<string, Response>();
+    let releaseClear: (() => void) | undefined;
+    const clearHold = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+
+    const selfMock = {
+      registration: {
+        showNotification: async () => {},
+        getNotifications: async () => [],
+      },
+      clients: {
+        matchAll: async () => [],
+        openWindow: async () => null,
+      },
+      addEventListener: (type: string, handler: (event: unknown) => void) => {
+        const list = listeners.get(type) ?? [];
+        list.push(handler);
+        listeners.set(type, list);
+      },
+    };
+
+    const cachesMock = {
+      open: async () => ({
+        match: async (key: string) => cacheStore.get(key) ?? null,
+        put: async (key: string, value: Response) => {
+          cacheStore.set(key, value);
+        },
+      }),
+      delete: async () => {
+        await clearHold;
+        cacheStore.clear();
+        return true;
+      },
+    };
+
+    const source = readFileSync(
+      path.resolve(__dirname, "../public/sw-push.js"),
+      "utf8",
+    );
+    const fn = new Function("self", "caches", "clients", "Response", source);
+    fn(selfMock, cachesMock, selfMock.clients, Response);
+
+    const messageHandlers = listeners.get("message") ?? [];
+    expect(messageHandlers.length).toBe(1);
+
+    const waitUntils: Promise<unknown>[] = [];
+    messageHandlers[0]!({
+      data: { type: "gb-push-clear" },
+      waitUntil: (p: Promise<unknown>) => {
+        waitUntils.push(p);
+      },
+    });
+    messageHandlers[0]!({
+      data: { type: "gb-push-set-fence", fence: "new-account" },
+      waitUntil: (p: Promise<unknown>) => {
+        waitUntils.push(p);
+      },
+    });
+
+    expect(waitUntils).toHaveLength(2);
+    releaseClear!();
+    await Promise.all(waitUntils);
+
+    const fenceRes = cacheStore.get("/__gb_push_fence");
+    expect(fenceRes).toBeTruthy();
+    const meta = await fenceRes!.json();
+    expect(meta.fence).toBe("new-account");
+  });
 });

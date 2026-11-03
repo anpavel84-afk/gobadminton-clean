@@ -1,6 +1,15 @@
 /* GoBadminton #456 — push-only service worker. No fetch interception / cache / sync. */
 /* global self, caches, Response */
 
+/** Serializes fence/cache-clear mutations; catch keeps the chain usable. */
+let metaChain = Promise.resolve();
+
+function enqueueMeta(task) {
+  const run = metaChain.then(() => task());
+  metaChain = run.catch(() => {});
+  return run;
+}
+
 async function activeFence() {
   try {
     const cache = await caches.open("gb-push-meta");
@@ -36,6 +45,8 @@ function safePath(value) {
 self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
+      // Wait for committed fence metadata; do not join the writer chain (no deadlock).
+      await metaChain;
       let data = {};
       try {
         data = event.data ? event.data.json() : {};
@@ -105,7 +116,7 @@ self.addEventListener("message", (event) => {
   const data = event.data || {};
   if (data.type === "gb-push-set-fence" && typeof data.fence === "string") {
     event.waitUntil(
-      (async () => {
+      enqueueMeta(async () => {
         const cache = await caches.open("gb-push-meta");
         await cache.put(
           "/__gb_push_fence",
@@ -113,10 +124,10 @@ self.addEventListener("message", (event) => {
             headers: { "Content-Type": "application/json" },
           }),
         );
-      })(),
+      }),
     );
   }
   if (data.type === "gb-push-clear") {
-    event.waitUntil(clearLocalNotifications());
+    event.waitUntil(enqueueMeta(() => clearLocalNotifications()));
   }
 });
