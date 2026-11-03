@@ -19,3 +19,6 @@
 .venue-gallery-admin li{min-width:0;padding-bottom:16px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .venue-gallery-evidence{min-width:0;margin:24px 0;padding:16px;border:1px solid var(--line);border-radius:var(--radius-sm)}
 .venue-profile-fields textarea{width:100%;min-height:96px;padding:12px 16px;border:1px solid var(--line-dark);border-radius:var(--radius-sm);background:var(--white);font:inherit;color:inherit;resize:vertical}
+.role-reputation-cases{margin:32px 0;padding-top:8px;border-top:1px solid var(--line);min-width:0}
+.role-reputation-cases h4{margin:24px 0 12px;font-size:18px;overflow-wrap:anywhere}
+.role-reputation-source dd{white-space:pre-wrap;overflow-wrap:anywhere}

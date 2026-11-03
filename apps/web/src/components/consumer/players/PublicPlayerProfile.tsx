@@ -11,6 +11,7 @@ import { AuthEntry, ProfileDialog, ProfileState } from "./ProfileComposition";
 import { PlayerProfileContent } from "./PlayerProfileContent";
 import { preparedMediaFitsPublicPlayer, type PreparedBrowsePeerMedia } from "./PlayerBrowseMedia";
 import { ProfileFriendship } from "../friends/ProfileFriendship";
+import { RoleReputationPanel } from "../games/RoleReputationPanel";
 
 /** Stable viewer/peer key for Radar-held unknown-report latches across internal remounts. */
 export function reportUnknownScopeKey(viewerId: string, peerId: string): string {
@@ -158,6 +159,18 @@ export function PublicPlayerProfile({
       <div className="player-profile-body">
         <div className="player-profile-body__main">
           {me && <ProfileFriendship key={`${me.id}:${me.csrfToken}:${publicPlayerId}`} me={me} peerId={publicPlayerId} />}
+          <section className="profile-section" aria-label="Репутация ролей">
+            <RoleReputationPanel
+              role="organization"
+              publicPlayerId={publicPlayerId}
+              csrfToken={me?.csrfToken ?? null}
+            />
+            <RoleReputationPanel
+              role="training"
+              publicPlayerId={publicPlayerId}
+              csrfToken={me?.csrfToken ?? null}
+            />
+          </section>
           {nearbyGamesAction !== undefined
             ? nearbyGamesAction
             : <section className="profile-upcoming-section" data-surface="pp-02-upcoming" data-state="unavailable"><header className="profile-upcoming-header"><span><small>Публичные будущие события</small><h2>Ближайшие игры</h2></span></header><p>Ближайшие игры этого игрока пока недоступны.</p></section>}

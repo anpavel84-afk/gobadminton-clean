@@ -28,6 +28,7 @@ import { eligibleGames, normalizeDiscovery, type DiscoveryInput } from "./games-
 import { readGamesMap } from "./games-map.read";
 import type { DiscoveryFilter } from "./games-discovery.query";
 import { GameAuthorityService } from "./game-authority.service";
+import { RoleReputationService } from "./role-reputation.service";
 import { unrestrictedSql } from "../restrictions/policy";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 
@@ -250,6 +251,7 @@ export class GamesService {
     private readonly gameAuthority: GameAuthorityService,
     private readonly trainers: TrainersService,
     private readonly gamePreferences: GamePreferencesService,
+    private readonly roleReputation: RoleReputationService,
     @Inject(forwardRef(() => ParticipationsService))
     private readonly participations: ParticipationsService,
     @Inject(forwardRef(() => InvitationsService))
@@ -429,17 +431,47 @@ export class GamesService {
         }
 
         assertFutureStart(locked.starts_at);
-        const updated = await client.query<{ id: string }>(
+        const updated = await client.query<{ id: string; version: number }>(
           `UPDATE games
            SET status = 'published',
                version = version + 1,
                published_at = now(),
                updated_at = now()
            WHERE id = $1
-           RETURNING id`,
+           RETURNING id, version`,
           [gameId],
         );
-        const body = await this.loadGameDto(client, updated.rows[0]!.id);
+        const published = updated.rows[0]!;
+        const organizer = (
+          await client.query<{ user_id: string }>(
+            `SELECT user_id FROM game_managers
+             WHERE game_id = $1 AND status = 'active' AND role IN ('owner', 'manager')
+             ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, created_at ASC, user_id ASC
+             LIMIT 1`,
+            [gameId],
+          )
+        ).rows[0];
+        let trainerUserId: string | null = null;
+        if (locked.activity_kind === "trainer_led" && locked.trainer_profile_id) {
+          trainerUserId =
+            (
+              await client.query<{ user_id: string }>(
+                `SELECT user_id FROM trainer_profiles WHERE id = $1`,
+                [locked.trainer_profile_id],
+              )
+            ).rows[0]?.user_id ?? null;
+        }
+        if (organizer) {
+          await this.roleReputation.freezeRolesAtPublish(client, {
+            gameId,
+            gameVersion: published.version,
+            activityKind: locked.activity_kind as "regular" | "trainer_led",
+            actorUserId: userId,
+            organizerUserId: organizer.user_id,
+            trainerUserId,
+          });
+        }
+        const body = await this.loadGameDto(client, published.id);
         await this.outbox.enqueue(client, {
           type: "game.published",
           aggregateType: "game",

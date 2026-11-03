@@ -180,6 +180,28 @@ class FoundationExceptionsTest(unittest.TestCase):
                 self.document['paths']['/me/avatar'] = {method: self.document['paths']['/me/avatar']['delete']}
                 self.assertIn(f'{method.upper()} /me/avatar: expected explicit required command body', self.findings())
 
+    def test_consent_preview_authenticated_read_vs_mutator_escape(self):
+        route = '/me/role-reviews/consent-preview'
+        op = self.document['paths'][route]['post']
+        self.assertEqual(op.get('x-operation-kind'), 'authenticated-read')
+        self.assertFalse(any(
+            p.get('name') == 'Idempotency-Key' or p.get('$ref') == '#/components/parameters/IdempotencyKey'
+            for p in op.get('parameters', [])
+        ))
+        self.assertEqual(self.findings(), [])
+        # Exact read loses classification without the marker.
+        op.pop('x-operation-kind')
+        self.assert_idempotency(route)
+        # Real mutator cannot escape via annotation alone (path not in read allowlist).
+        self.document = copy.deepcopy(self.contract)
+        mutator = self.document['paths']['/me/role-reviews']['post']
+        mutator['x-operation-kind'] = 'authenticated-read'
+        mutator['parameters'] = [
+            p for p in mutator['parameters']
+            if p.get('$ref') != '#/components/parameters/IdempotencyKey' and p.get('name') != 'Idempotency-Key'
+        ]
+        self.assert_idempotency('/me/role-reviews')
+
 
 if __name__ == '__main__':
     unittest.main()

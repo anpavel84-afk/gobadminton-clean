@@ -39,6 +39,7 @@ import {
 } from "../games/GameDetailComposition";
 import { GameRecommendationsSection } from "../games/GameRecommendationsSection";
 import { GameReviewsHistory } from "../games/GameReviewsHistory";
+import { RoleReviewsHistory } from "../games/RoleReviewsHistory";
 import "../../../styles/postgame.css";
 
 type Relation = "participating" | "created";
@@ -555,7 +556,12 @@ export function MyGamesPage() {
           </div>
         ) : null}
 
-        {view === "history" && state === "ready" && me ? <GameReviewsHistory /> : null}
+        {view === "history" && state === "ready" && me ? (
+          <>
+            <GameReviewsHistory />
+            <RoleReviewsHistory />
+          </>
+        ) : null}
           </div>
           {state === "ready" && me && view === "upcoming" ? (
             <aside className="gb-my-games-layout__rail" aria-label="Советы и приглашения">

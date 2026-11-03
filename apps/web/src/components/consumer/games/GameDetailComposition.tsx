@@ -14,6 +14,7 @@ import {
   resultsPath,
 } from "../../../lib/game-results";
 import { Button } from "../Button";
+import { RoleReputationPanel } from "./RoleReputationPanel";
 
 type OwnResultsItem = MeGameResultsPage["items"][number];
 
@@ -92,12 +93,25 @@ export function GameHero({ game, preview = false, localPreview }: { game: Game; 
   </section>;
 }
 
-export function GameTerms({ game, showCapacity = true, onVenueClick }: { game: Game; showCapacity?: boolean; onVenueClick?: () => void }) {
+export function GameTerms({
+  game,
+  showCapacity = true,
+  onVenueClick,
+  csrfToken = null,
+  onLogin,
+}: {
+  game: Game;
+  showCapacity?: boolean;
+  onVenueClick?: () => void;
+  csrfToken?: string | null;
+  onLogin?: () => void;
+}) {
   const trainer = game.activityKind === "trainer_led";
   return <div className="gb-game-content">
     {trainer && game.trainer && <section className="gb-game-coach" aria-label="Тренер">
       <span className="gb-game-avatar" aria-hidden="true">{game.trainer.displayName.slice(0, 2)}</span>
       <div><small>Тренер · самостоятельно указано</small><h2>{game.trainer.displayName}</h2></div>
+      <RoleReputationPanel role="training" gameId={game.id} csrfToken={csrfToken} onLogin={onLogin} />
     </section>}
     <section className="gb-game-section">
       <span className="gb-game-kicker">Встречаемся на корте</span><h2>Место и организатор</h2>
@@ -106,6 +120,7 @@ export function GameTerms({ game, showCapacity = true, onVenueClick }: { game: G
         <div><dt>Организует</dt><dd><span className="gb-game-identity"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></span><small>{game.organizer.publicContact}</small></dd></div>
         {showCapacity && <div><dt>Состав</dt><dd>До {game.capacity} игроков<small>Подтверждено: {game.confirmedCount} · Занято вне сервиса: {game.externalReservedCount}</small></dd></div>}
       </dl>
+      <RoleReputationPanel role="organization" gameId={game.id} csrfToken={csrfToken} onLogin={onLogin} />
     </section>
     <section className="gb-game-section gb-game-conditions">
       <h2>Условия участия</h2>

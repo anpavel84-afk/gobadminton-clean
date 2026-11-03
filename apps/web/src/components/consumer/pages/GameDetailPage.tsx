@@ -130,7 +130,11 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
         </section>
         <div className="gb-game-detail-grid">
           <div>
-            <GameTerms game={game} />
+            <GameTerms
+              game={game}
+              csrfToken={me?.csrfToken ?? null}
+              onLogin={() => setAuthOpen(true)}
+            />
             {me && <GameVenueContacts venue={game.venue} />}
             {me && <GameCourtBookingPanel gameId={game.id} meId={me.id} csrfToken={me.csrfToken} />}
             {chatAvailable && (

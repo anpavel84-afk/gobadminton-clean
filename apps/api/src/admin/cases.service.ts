@@ -10,6 +10,7 @@ import { appendAudit, type AuditActor } from "./admin-db";
 import { hasPermission, type AdminRole } from "./rbac";
 import type { CaseCommand } from "./cases.dto";
 import { CASE_EVIDENCE_POLICY, type CaseEvidencePolicy } from "./case-evidence-policy";
+import { AdminRoleReputationService } from "./role-reputation.service";
 type CaseRow = {id:string; status:string; version:number; assigned_to:string|null; created_at:Date; updated_at:Date};
 type Page = {beforeId?:string; limit:number};
 const manages = (actor: AuditActor) => hasPermission(actor.roles as AdminRole[], "case.manage");
@@ -17,7 +18,8 @@ const caseDto = (r:CaseRow) => ({id:r.id,status:r.status,version:r.version,assig
 @Injectable()
 export class AdminCasesService {
   constructor(private readonly admin:AdminService, @Inject(APP_ENV) private readonly env:AppEnv,
-    @Inject(CASE_EVIDENCE_POLICY) private readonly policy:CaseEvidencePolicy) {}
+    @Inject(CASE_EVIDENCE_POLICY) private readonly policy:CaseEvidencePolicy,
+    private readonly roleReputation: AdminRoleReputationService) {}
   enabled() { this.admin.enabled(); if(!this.env.CASES_INTERNAL_ENABLED) throw notFound("CASES_DISABLED","Обращения недоступны"); }
   private manage(actor:AuditActor) { if(!manages(actor)) throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения"); }
   private async scoped(c:PoolClient,actor:AuditActor,id:string) {
@@ -81,8 +83,42 @@ export class AdminCasesService {
         LEFT JOIN abuse_reports ar ON ar.id=l.report_id
         WHERE l.case_id=$1 ORDER BY l.id`,[id])).rows;
       const history=(await c.query("SELECT id,case_version,action,note_code,audit_id,created_at FROM support_case_actions WHERE case_id=$1 AND ($2::integer IS NULL OR case_version<$2) ORDER BY case_version DESC LIMIT 101",[id,beforeVersion??null])).rows;
+      // Optional safe role-reputation hint — metadata only; no plaintext/private proof.
+      // Guard table absence for legacy isolated fixtures without migration 0054.
+      let roleReputation: {
+        pendingKind: string;
+        role: string;
+        slotStatus: string;
+        intakeStatus: string;
+      } | null = null;
+      const tables=(await c.query<{ok:boolean}>(
+        `SELECT to_regclass('role_reputation_case_links') IS NOT NULL AS ok`,
+      )).rows[0];
+      if(tables?.ok){
+        const hint=(await c.query<{
+          kind:string;role:string;slot_status:string;intake_status:string;
+        }>(`SELECT p.kind, p.role, s.status AS slot_status, p.status AS intake_status
+            FROM role_reputation_case_links l
+            JOIN role_reputation_pending_intakes p ON p.id=l.pending_intake_id
+            JOIN role_review_slots s ON s.id=l.slot_id
+            WHERE l.case_id=$1`,[id])).rows[0];
+        if(hint){
+          roleReputation={
+            pendingKind:hint.kind,
+            role:hint.role,
+            slotStatus:hint.slot_status,
+            intakeStatus:hint.intake_status,
+          };
+        }
+      }
       await appendAudit(c,{actor:a,action:"admin.case_read",targetType:"case",targetId:id,permission:manages(a)?"case.manage":"case.assigned.manage",reason:"operations_read"});
-      return {...caseDto(r),links:links.map(x=>({id:x.id,sourceKind:x.source_kind,sourceId:x.report_id??x.game_id,...(x.source_kind==="report"&&x.report_target_kind?{targetKind:x.report_target_kind}:{})})),history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null};
+      return {
+        ...caseDto(r),
+        links:links.map(x=>({id:x.id,sourceKind:x.source_kind,sourceId:x.report_id??x.game_id,...(x.source_kind==="report"&&x.report_target_kind?{targetKind:x.report_target_kind}:{})})),
+        history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),
+        nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null,
+        ...(roleReputation?{roleReputation}:{}),
+      };
     });
   }
   /**
@@ -160,29 +196,42 @@ export class AdminCasesService {
     if(!(await c.query("INSERT INTO support_case_links(case_id,source_kind,report_id) VALUES($1,'report',$2) ON CONFLICT(report_id) DO NOTHING RETURNING id",[id,reportId])).rowCount)throw conflict("REPORT_ALREADY_LINKED","Жалоба уже связана с обращением");
   }
   async command(request:FastifyRequest,id:string,key:string|undefined,input:CaseCommand) {
-    this.enabled();return this.admin.privilegedCommand(request,key,"user.lookup",input.action==="capture_evidence","case.command",{id,...input},async(c,a,keyHash)=>{
+    this.enabled();
+    // Explicit human role-reputation decisions — never implied by generic status=resolved.
+    if (input.action === "role_review_decide") {
+      return this.roleReputation.decide(request, id, key, input);
+    }
+    if (input.action === "role_basis_resolve") {
+      return this.roleReputation.resolveBasis(request, id, key, input);
+    }
+    type LegacyCaseCommand = Exclude<
+      CaseCommand,
+      { action: "role_review_decide" } | { action: "role_basis_resolve" }
+    >;
+    const legacy = input as LegacyCaseCommand;
+    return this.admin.privilegedCommand(request,key,"user.lookup",legacy.action==="capture_evidence","case.command",{id,...legacy},async(c,a,keyHash)=>{
       const r=await this.scoped(c,a,id);
-      if(r.version!==input.expectedVersion)throw conflict("CASE_VERSION_CONFLICT","Обращение уже изменено");
-      if(r.status==="closed" && !(input.action==="status" && input.status==="open"))throw conflict("CASE_CLOSED","Сначала откройте обращение снова");
+      if(r.version!==legacy.expectedVersion)throw conflict("CASE_VERSION_CONFLICT","Обращение уже изменено");
+      if(r.status==="closed" && !(legacy.action==="status" && legacy.status==="open"))throw conflict("CASE_CLOSED","Сначала откройте обращение снова");
       let evidenceId:string|undefined;
-      const after:Record<string,unknown>={version:r.version+1,action:input.action};
-      if(input.action==="assign") {
-        if(input.principalId && !(await c.query(`SELECT 1 FROM admin_principals p WHERE p.id=$1 AND p.status='active' AND EXISTS(SELECT 1 FROM admin_role_grants g WHERE g.principal_id=p.id AND g.active AND g.role IN ('superadmin','moderator','support'))`,[input.principalId])).rowCount)throw notFound("ASSIGNEE_UNAVAILABLE","Сотрудник недоступен");
-        await c.query("UPDATE support_cases SET assigned_to=$2 WHERE id=$1",[id,input.principalId]);after.assignedTo=input.principalId;
-      } else if(input.action==="status") {
+      const after:Record<string,unknown>={version:r.version+1,action:legacy.action};
+      if(legacy.action==="assign") {
+        if(legacy.principalId && !(await c.query(`SELECT 1 FROM admin_principals p WHERE p.id=$1 AND p.status='active' AND EXISTS(SELECT 1 FROM admin_role_grants g WHERE g.principal_id=p.id AND g.active AND g.role IN ('superadmin','moderator','support'))`,[legacy.principalId])).rowCount)throw notFound("ASSIGNEE_UNAVAILABLE","Сотрудник недоступен");
+        await c.query("UPDATE support_cases SET assigned_to=$2 WHERE id=$1",[id,legacy.principalId]);after.assignedTo=legacy.principalId;
+      } else if(legacy.action==="status") {
         const transitions:Record<string,string[]>={open:["in_review","resolved","closed"],in_review:["resolved","closed"],resolved:["closed","open"],closed:["open"]};
-        if(!transitions[r.status]!.includes(input.status))throw conflict("CASE_STATUS_CONFLICT","Переход недоступен");
-        await c.query("UPDATE support_cases SET status=$2 WHERE id=$1",[id,input.status]);after.status=input.status;
-      } else if(input.action==="link_report" || input.action==="link_game") {
+        if(!transitions[r.status]!.includes(legacy.status))throw conflict("CASE_STATUS_CONFLICT","Переход недоступен");
+        await c.query("UPDATE support_cases SET status=$2 WHERE id=$1",[id,legacy.status]);after.status=legacy.status;
+      } else if(legacy.action==="link_report" || legacy.action==="link_game") {
         if(Number((await c.query("SELECT count(*) FROM support_case_links WHERE case_id=$1",[id])).rows[0].count)>=100)throw conflict("CASE_LINK_LIMIT","Достигнут предел связей");
-        if(input.action==="link_report")await this.linkReport(c,id,input.reportId);
+        if(legacy.action==="link_report")await this.linkReport(c,id,legacy.reportId);
         else {
-          if(!(await c.query("SELECT 1 FROM games WHERE id=$1",[input.gameId])).rowCount)throw notFound("GAME_UNAVAILABLE","Игра недоступна");
-          if(!(await c.query("INSERT INTO support_case_links(case_id,source_kind,game_id) VALUES($1,'game',$2) ON CONFLICT(case_id,game_id) DO NOTHING RETURNING id",[id,input.gameId])).rowCount)throw conflict("CASE_LINK_EXISTS","Связь уже существует");
+          if(!(await c.query("SELECT 1 FROM games WHERE id=$1",[legacy.gameId])).rowCount)throw notFound("GAME_UNAVAILABLE","Игра недоступна");
+          if(!(await c.query("INSERT INTO support_case_links(case_id,source_kind,game_id) VALUES($1,'game',$2) ON CONFLICT(case_id,game_id) DO NOTHING RETURNING id",[id,legacy.gameId])).rowCount)throw conflict("CASE_LINK_EXISTS","Связь уже существует");
         }
-      } else if(input.action==="capture_evidence") {
+      } else if(legacy.action==="capture_evidence") {
         if(Number((await c.query("SELECT count(*) FROM case_evidence_items WHERE case_id=$1",[id])).rows[0].count)>=1000)throw conflict("CASE_EVIDENCE_LIMIT","Достигнут предел материалов");
-        const link=(await c.query("SELECT * FROM support_case_links WHERE id=$1 AND case_id=$2",[input.linkId,id])).rows[0];
+        const link=(await c.query("SELECT * FROM support_case_links WHERE id=$1 AND case_id=$2",[legacy.linkId,id])).rows[0];
         if(!link)throw notFound("CASE_LINK_UNAVAILABLE","Связь недоступна");
         const policy=await this.policy.capture(c,id);
         let payload:object;
@@ -193,18 +242,18 @@ export class AdminCasesService {
           payload={id:g.id,status:g.status,lifecycleVersion:g.version,moderationState:m?.state??"clear",requestsLocked:m?.requests_locked??false,moderationVersion:m?.version??1};
         }
         const raw=JSON.stringify(Object.fromEntries(Object.entries(payload).sort(([a],[b])=>a.localeCompare(b)))),hash=createHash("sha256").update(raw).digest("hex");
-        const auditId=await appendAudit(c,{actor:a,action:"admin.evidence_capture",targetType:"case",targetId:id,permission:manages(a)?"evidence.case.read":"evidence.assigned.read",reason:input.reasonCode,after:{linkId:link.id,contentHash:hash,classification:"synthetic_minimal"},keyHash});
+        const auditId=await appendAudit(c,{actor:a,action:"admin.evidence_capture",targetType:"case",targetId:id,permission:manages(a)?"evidence.case.read":"evidence.assigned.read",reason:legacy.reasonCode,after:{linkId:link.id,contentHash:hash,classification:"synthetic_minimal"},keyHash});
         evidenceId=(await c.query("INSERT INTO case_evidence_items(case_id,link_id,kind,payload,content_hash,classification,policy_id,expires_at,legal_hold,audit_id) VALUES($1,$2,$3,$4,$5,'synthetic_minimal',$6,$7,$8,$9) RETURNING id",[id,link.id,link.source_kind==="report"?"report_summary":"game_state",raw,hash,policy.policyId,policy.expiresAt,policy.legalHold,auditId])).rows[0].id;
         after.evidenceId=evidenceId;
-      } else after.noteCode=input.noteCode;
+      } else if(legacy.action==="note") after.noteCode=legacy.noteCode;
       await c.query("UPDATE support_cases SET version=version+1,updated_at=clock_timestamp() WHERE id=$1",[id]);
-      const auditId=await appendAudit(c,{actor:a,action:"admin.case."+input.action,targetType:"case",targetId:id,permission:manages(a)?"case.manage":"case.assigned.manage",reason:input.reasonCode,before:{version:r.version,status:r.status,assignedTo:r.assigned_to},after,keyHash});
-      await c.query("INSERT INTO support_case_actions(case_id,case_version,audit_id,action,note_code) VALUES($1,$2,$3,$4,$5)",[id,r.version+1,auditId,input.action,input.action==="note"?input.noteCode:null]);
+      const auditId=await appendAudit(c,{actor:a,action:"admin.case."+legacy.action,targetType:"case",targetId:id,permission:manages(a)?"case.manage":"case.assigned.manage",reason:legacy.reasonCode,before:{version:r.version,status:r.status,assignedTo:r.assigned_to},after,keyHash});
+      await c.query("INSERT INTO support_case_actions(case_id,case_version,audit_id,action,note_code) VALUES($1,$2,$3,$4,$5)",[id,r.version+1,auditId,legacy.action,legacy.action==="note"?legacy.noteCode:null]);
       return {id,version:r.version+1,auditId,...(evidenceId?{evidenceId}:{})};
     },async(c,a)=>{
       await this.scoped(c,a,id);
-      if(["assign","link_report","link_game"].includes(input.action))this.manage(a);
-      if(input.action==="capture_evidence")this.evidencePermission(a);
+      if(["assign","link_report","link_game"].includes(legacy.action))this.manage(a);
+      if(legacy.action==="capture_evidence")this.evidencePermission(a);
     });
   }
   async evidenceList(request:FastifyRequest,id:string,page:Page) {

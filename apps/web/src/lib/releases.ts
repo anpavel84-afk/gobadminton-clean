@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.19" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.20" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.27.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.28.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,11 +425,12 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Жалоба на полученный приватный отзыв",
+  title: "Публичные отзывы о роли до записи на игру",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "На полученный приватный отзыв можно подать жалобу. Перед отправкой пользователь явно разрешает назначенному специалисту прочитать выбранную редакцию отзыва только для разбора обращения",
+    "Перед выбором игры можно ознакомиться с отзывами об организаторе или тренере. Оставить отзыв могут участники с подтверждённым прошлым опытом; предусмотрены ответ, возражение и отзыв публикации",
+    "Спорные тексты разбирает человек в служебных обращениях: ожидание, чтение согласованного источника и явное решение; статус «решено» сам по себе ничего не публикует",
   ],
   fixes: [],
   known_limitations: [
@@ -437,6 +438,7 @@ export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
     "Публичная запись отзывов о площадке остаётся закрытой.",
     "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле.",
     "Жалоба сама по себе не скрывает и не удаляет отзыв и не открывает доступ всему персоналу.",
+    "Человеческий разбор отзывов о роли на тестовом сайте ещё не проверен владельцем после обычного входа.",
   ],
   feature_catalogue: "delta",
 };
@@ -1091,6 +1093,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем после обычного входа ещё не выполнена.",
       "Публичная запись отзывов о площадке остаётся закрытой.",
       "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле."
+    ]
+  },
+  {
+    "source_sha": "7f33e9da0cf7b52d260567bbfb37114a3613d479",
+    "application_version": "0.1.0-alpha.19",
+    "version_label": "0.1.0-alpha.19",
+    "title": "Жалоба на полученный приватный отзыв",
+    "api_contract_version": "0.27.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41479055286-a2",
+        "accepted_at": "2026-11-02T16:28:48Z",
+        "api_digest": "sha256:22d423424f8ca916e056ae785c7acbc3916b9a0a426105d82ef94f8630d40fb4",
+        "web_digest": "sha256:414ce175c6f81fd722159f143c0f6c42f409a7938f7e0ab6b2caf3d52d22c174",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "На полученный приватный отзыв можно подать жалобу. Перед отправкой пользователь явно разрешает назначенному специалисту прочитать выбранную редакцию отзыва только для разбора обращения"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена.",
+      "Публичная запись отзывов о площадке остаётся закрытой.",
+      "Отзывы об игроке остаются приватными и не выводятся как публичная стена в профиле.",
+      "Жалоба сама по себе не скрывает и не удаляет отзыв и не открывает доступ всему персоналу."
     ]
   },
 ] as const;

@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supportedLocation } from "../../../lib/discovery-city";
-import { getMe, listGames } from "../../../lib/api-client";
-import type { ActivityKind, GamePage } from "../../../lib/consumer-types";
+import { getMe, listGames, listRoleReputationSummaries } from "../../../lib/api-client";
+import type { ActivityKind, GamePage, GameRoleReputationCard } from "../../../lib/consumer-types";
 import { useDiscoveryCity, DiscoveryCityNotice } from "../discovery/DiscoveryCityProvider";
 import { cityDate, discoveryCityHeading, discoveryDateLabel, futureDiscoveryBounds, futureDiscoveryItems, nextCalendarDay } from "../../../lib/discovery-presentation";
 import { AuthChooser } from "../players/ProfileComposition";
@@ -31,6 +31,8 @@ export function GamesDiscoveryPage() {
   const location = useMemo(() => supportedLocation(urlCity) ?? resolvedLocation, [urlCity, resolvedLocation]);
   const [selectedDay, setSelectedDay] = useState("");
   const [activityFilter, setActivityFilter] = useState<"all" | ActivityKind>("all");
+  const [trainerRoleHandle, setTrainerRoleHandle] = useState("");
+  const [reputationByGame, setReputationByGame] = useState<Record<string, GameRoleReputationCard>>({});
   const [contextReady, setContextReady] = useState(false);
   const listScroll = useRef(0);
   const restoreListScroll = useRef(true);
@@ -43,6 +45,8 @@ export function GamesDiscoveryPage() {
     setSelectedDay(day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "");
     const activity = query.get("activity");
     setActivityFilter(activity === "regular" || activity === "trainer_led" ? activity : "all");
+    const trainer = query.get("trainer") ?? "";
+    setTrainerRoleHandle(/^[0-9a-f]{32}$/i.test(trainer) ? trainer.toLowerCase() : "");
     setContextReady(true);
     };
     readContext();
@@ -55,9 +59,11 @@ export function GamesDiscoveryPage() {
     url.searchParams.set("view", view);
     url.searchParams.set("day", selectedDay);
     url.searchParams.set("activity", activityFilter);
+    if (trainerRoleHandle) url.searchParams.set("trainer", trainerRoleHandle);
+    else url.searchParams.delete("trainer");
     if (location) url.searchParams.set("cityId", location.cityId);
     window.history.replaceState(window.history.state, "", url);
-  }, [view, selectedDay, activityFilter, contextReady, location]);
+  }, [view, selectedDay, activityFilter, trainerRoleHandle, contextReady, location]);
 
   const previousView = useRef(view);
   useEffect(() => {
@@ -100,7 +106,7 @@ export function GamesDiscoveryPage() {
   const [createError, setCreateError] = useState(false);
   const [paging, setPaging] = useState(false);
   const [pageError, setPageError] = useState(false);
-  const key = JSON.stringify([location?.cityId, location?.timezone, selectedDay, activityFilter]);
+  const key = JSON.stringify([location?.cityId, location?.timezone, selectedDay, activityFilter, trainerRoleHandle]);
   useEffect(() => {
     if (!contextReady || view !== "list") return;
     const saveListScroll = () => {
@@ -137,7 +143,7 @@ export function GamesDiscoveryPage() {
   const state = (baseState === "ready" || baseState === "filtered") && !items.length ? "empty" : baseState;
   const today = location ? cityDate(new Date(now), location.timezone) : "";
   const dates = useMemo(() => today ? Array.from({ length: 7 }, (_, i) => nextCalendarDay(today, i)) : [], [today]);
-  const filterActive = activityFilter !== "all";
+  const filterActive = activityFilter !== "all" || Boolean(trainerRoleHandle);
 
   const previousCity = useRef(location?.cityId);
   useEffect(() => {
@@ -206,7 +212,14 @@ export function GamesDiscoveryPage() {
       let page: GamePage = { items: [], nextCursor: null };
       let fetched = 0;
       do {
-        const result = await listGames({ cityId: location.cityId, ...bounds, activityKind: activityFilter === "all" ? undefined : activityFilter, cursor: page.nextCursor ?? undefined, limit: 50 });
+        const result = await listGames({
+          cityId: location.cityId,
+          ...bounds,
+          activityKind: activityFilter === "all" ? undefined : activityFilter,
+          trainerRoleHandle: trainerRoleHandle || undefined,
+          cursor: page.nextCursor ?? undefined,
+          limit: 50,
+        });
         if (cancelled || request !== generation.current) return;
         if (!result.ok) {
           const saved = cache.current.get(key);
@@ -219,10 +232,19 @@ export function GamesDiscoveryPage() {
       loadedPages.current.set(key, fetched);
       try { sessionStorage.setItem(`gb-games-list-pages:${key}`, String(fetched)); } catch { /* Optional storage. */ }
       cache.current.set(key, page);
-      setFeed({ ...page, key, state: page.items.length ? (activityFilter === "all" ? "ready" : "filtered") : "empty" });
+      setFeed({ ...page, key, state: page.items.length ? (activityFilter === "all" && !trainerRoleHandle ? "ready" : "filtered") : "empty" });
+      const summaries = await listRoleReputationSummaries(page.items.map((g) => g.id));
+      if (cancelled || request !== generation.current) return;
+      if (summaries.ok) {
+        const next: Record<string, GameRoleReputationCard> = {};
+        for (const card of summaries.data.items) next[card.gameId] = card;
+        setReputationByGame(next);
+      } else {
+        setReputationByGame({});
+      }
     })();
     return () => { cancelled = true; };
-  }, [contextReady, location, selectedDay, activityFilter, key, refresh]);
+  }, [contextReady, location, selectedDay, activityFilter, trainerRoleHandle, key, refresh]);
 
   async function loadMore() {
     if (!location || !feed.nextCursor || pagingLock.current || state === "stale") return;
@@ -230,7 +252,14 @@ export function GamesDiscoveryPage() {
     const requestKey = key;
     pagingLock.current = true;
     setPaging(true); setPageError(false);
-    const result = await listGames({ cityId: location.cityId, ...futureDiscoveryBounds(selectedDay, location.timezone), activityKind: activityFilter === "all" ? undefined : activityFilter, cursor: feed.nextCursor, limit: 50 });
+    const result = await listGames({
+      cityId: location.cityId,
+      ...futureDiscoveryBounds(selectedDay, location.timezone),
+      activityKind: activityFilter === "all" ? undefined : activityFilter,
+      trainerRoleHandle: trainerRoleHandle || undefined,
+      cursor: feed.nextCursor,
+      limit: 50,
+    });
     if (request !== generation.current || requestKey !== activeKey.current) return;
     pagingLock.current = false; setPaging(false);
     if (!result.ok) { setPageError(true); return; }
@@ -240,7 +269,16 @@ export function GamesDiscoveryPage() {
     loadedPages.current.set(key, depth);
     try { sessionStorage.setItem(`gb-games-list-pages:${key}`, String(depth)); } catch { /* Optional storage. */ }
     cache.current.set(key, page);
-    setFeed({ ...page, key, state: items.length ? (filterActive ? "filtered" : "ready") : "empty" });
+    setFeed({ ...page, key, state: items.length ? (filterActive || trainerRoleHandle ? "filtered" : "ready") : "empty" });
+    const summaries = await listRoleReputationSummaries(result.data.items.map((g) => g.id));
+    if (request !== generation.current || requestKey !== activeKey.current) return;
+    if (summaries.ok) {
+      setReputationByGame((prev) => {
+        const next = { ...prev };
+        for (const card of summaries.data.items) next[card.gameId] = card;
+        return next;
+      });
+    }
   }
 
   async function goCreate() {
@@ -273,6 +311,7 @@ export function GamesDiscoveryPage() {
       </section>}
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
       {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} onReturnToList={() => changeView("list")} /></GamesMapViewport> : null}
+      {view === "map" && trainerRoleHandle ? <p className="gb-discovery-helper" role="status" data-map-filter-honesty="trainer">Карта показывает все тренировки и игры выбранного города. Фильтр личного тренера действует в списке; при возврате к списку он сохранится.</p> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
@@ -285,12 +324,13 @@ export function GamesDiscoveryPage() {
             <div><small>Выходите на корт</small><h2>Игры {discoveryCityHeading(location.nameRu)}</h2></div>
             <div className="gb-discovery-feed-actions">{showCards && <span>Найдено: {items.length}{feed.nextCursor ? "+" : ""}</span>}<button type="button" onClick={() => setRefresh(n => n + 1)} disabled={state === "loading"} aria-label="Обновить игры">↻</button></div>
           </header>
-          {state === "filtered" && <p className="gb-discovery-helper" data-state="filtered">{activityFilter === "regular" ? "Обычные игры" : "Игры с тренером"} · {selectedDay ? discoveryDateLabel(selectedDay) : "Все ближайшие"}</p>}
+          {state === "filtered" && <p className="gb-discovery-helper" data-state="filtered">{trainerRoleHandle ? "Тренировки выбранного тренера" : activityFilter === "regular" ? "Обычные игры" : "Игры с тренером"} · {selectedDay ? discoveryDateLabel(selectedDay) : "Все ближайшие"}</p>}
+          {trainerRoleHandle ? <p className="gb-discovery-helper"><Button variant="ghost" type="button" onClick={() => setTrainerRoleHandle("")}>Все тренировки</Button></p> : null}
           {state === "loading" && <div data-state="loading" aria-busy="true"><p className="gb-discovery-helper" role="status">Ищем игры рядом…</p><DiscoverySkeleton /><DiscoverySkeleton /></div>}
           {state === "error" && <div className="gb-discovery-state" data-state="error" role="alert"><h3>Не удалось загрузить игры</h3><p>Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => setRefresh(n => n + 1)}>Попробовать снова</Button></div>}
           {state === "stale" && <div className="gb-discovery-notice" data-state="stale" role="status"><h3>Показываем сохранённый список</h3><p>Не удалось обновить игры. Дата и фильтры те же, но сведения о местах могли измениться.</p><Button variant="outline" onClick={() => setRefresh(n => n + 1)}>Обновить список</Button></div>}
-          {state === "empty" && <div className="gb-discovery-state" data-state="empty"><span aria-hidden="true">↗</span><h3>{filterActive ? "По этим условиям игр пока нет" : "Пока нет игр"}</h3><p>{selectedDay ? "Выберите другую дату или вернитесь ко всем ближайшим играм." : filterActive ? "Сбросьте фильтр активности или соберите свою игру." : "Соберите своих на площадке — создайте игру."}</p>{filterActive ? <Button variant="outline" onClick={() => setActivityFilter("all")}>Сбросить фильтр</Button> : <Button loading={creating} onClick={() => void goCreate()}>Создать игру</Button>}</div>}
-          {showCards && <div className="gb-discovery-cards" data-state={state}>{items.map(game => <DiscoveryGameCard key={game.id} game={game} />)}{state === "stale" && !items.length && <p className="gb-discovery-helper">В сохранённом списке игр нет.</p>}</div>}
+          {state === "empty" && <div className="gb-discovery-state" data-state="empty"><span aria-hidden="true">↗</span><h3>{filterActive ? "По этим условиям игр пока нет" : "Пока нет игр"}</h3><p>{selectedDay ? "Выберите другую дату или вернитесь ко всем ближайшим играм." : filterActive ? "Сбросьте фильтр активности или соберите свою игру." : "Соберите своих на площадке — создайте игру."}</p>{filterActive ? <Button variant="outline" onClick={() => { setActivityFilter("all"); setTrainerRoleHandle(""); }}>Сбросить фильтр</Button> : <Button loading={creating} onClick={() => void goCreate()}>Создать игру</Button>}</div>}
+          {showCards && <div className="gb-discovery-cards" data-state={state}>{items.map(game => <DiscoveryGameCard key={game.id} game={game} reputation={reputationByGame[game.id] ?? null} />)}{state === "stale" && !items.length && <p className="gb-discovery-helper">В сохранённом списке игр нет.</p>}</div>}
           {pageError && <p role="alert" className="gb-discovery-notice">Не удалось загрузить остальные игры. Попробуйте ещё раз.</p>}
           {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
           <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />

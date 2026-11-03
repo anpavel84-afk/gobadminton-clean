@@ -40,6 +40,30 @@ const REASON_CODES = new Set([
   "other",
 ]);
 
+/**
+ * Public organizer/trainer role-review reports (#394) use a separate domain table
+ * (`role_reputation_reports`) and never widen this player-only abuse_reports intake.
+ * Private peer `game_review` received-report guards stay in game-feedback (kind===peer).
+ */
+export const ROLE_REPUTATION_REPORT_REASON_CODES = [
+  "harassment",
+  "spam",
+  "inappropriate",
+  "pii",
+  "threat",
+  "fabrication",
+  "other",
+] as const;
+
+export type RoleReputationReportReasonCode =
+  (typeof ROLE_REPUTATION_REPORT_REASON_CODES)[number];
+
+export function isRoleReputationReportReason(
+  value: string,
+): value is RoleReputationReportReasonCode {
+  return (ROLE_REPUTATION_REPORT_REASON_CODES as readonly string[]).includes(value);
+}
+
 @Injectable()
 export class SafetyService {
   constructor(
@@ -223,6 +247,7 @@ function normalizeReport(input: CreateReportInput): {
   detail: string | null;
   evidenceRefs: string[];
 } {
+  // Retain player-only guard; do not accept game_review / role_review kinds here.
   if (input.targetKind !== "player") {
     throw unprocessable("TARGET_KIND_INVALID", "Некорректный targetKind");
   }

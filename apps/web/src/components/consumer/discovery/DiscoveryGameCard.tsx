@@ -4,8 +4,9 @@ import { GameCover } from "../games/GameCover";
 import { Avatar } from "../players/ProfileComposition";
 /* Current venue-approved derivative in the canonical media slot. */
 import { GameShare } from "../games/GameShare";
+import { RoleReputationCardActions } from "../games/RoleReputationPanel";
 import Link from "next/link";
-import type { Game } from "../../../lib/consumer-types";
+import type { Game, GameRoleReputationCard } from "../../../lib/consumer-types";
 import { formatSeats, isTrainerLed, settlementTerms } from "../../../lib/game-presentation";
 import { discoveryFormat, discoveryGameWhen } from "../../../lib/discovery-presentation";
 import { DiscoveryIcon } from "./DiscoveryComposition";
@@ -66,7 +67,14 @@ function useFeedCardLayout() {
   return { cardRef, contentRef, layout };
 }
 
-export function DiscoveryGameCard({ game }: { game: Game }) {
+export function DiscoveryGameCard({
+  game,
+  reputation,
+}: {
+  game: Game;
+  /** Batched server card summary — never client-counted. */
+  reputation?: GameRoleReputationCard | null;
+}) {
   const trainer = isTrainerLed(game);
   const host = game.organizer.displayName;
   const when = discoveryGameWhen(game);
@@ -91,11 +99,25 @@ export function DiscoveryGameCard({ game }: { game: Game }) {
       <p className="gb-discovery-address"><DiscoveryIcon name="pin" />{game.venue.address}</p>
       <div className="gb-discovery-meta"><span>Уровень: {game.levelRule.allowedLevelIds.join(", ")}</span>{format && <span>{format}</span>}</div>
       <p className="gb-discovery-terms">{settlementTerms(game.settlement)}</p>
+      {trainer && game.trainer ? (
+        <div className="gb-discovery-host">
+          <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
+          <span><small>Тренер · самостоятельно указано</small><strong>{game.trainer.displayName}</strong></span>
+        </div>
+      ) : null}
       <div className="gb-discovery-host">
         <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
         <span><small>Организатор</small><strong>{host}</strong></span>
         <div className="gb-discovery-card__actions"><Link className="gb-c23-btn gb-c23-btn--outline" href={`/games/${game.id}`} aria-label={`Подробнее: ${game.title}`}><span>Подробнее</span><DiscoveryIcon name="arrow" /></Link><GameShare gameId={game.id} /></div>
       </div>
+      {reputation ? (
+        <RoleReputationCardActions
+          gameId={game.id}
+          organization={reputation.organization}
+          training={reputation.training}
+          trainerName={game.trainer?.displayName}
+        />
+      ) : null}
     </div>
   </article>;
 }

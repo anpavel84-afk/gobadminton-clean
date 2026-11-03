@@ -8,6 +8,8 @@ import { GameFeedbackController } from "./game-feedback.controller";
 import { GameFeedbackService } from "./game-feedback.service";
 import { GameOutcomesController } from "./game-outcomes.controller";
 import { GameOutcomesService } from "./game-outcomes.service";
+import { RoleReputationController } from "./role-reputation.controller";
+import { RoleReputationService } from "./role-reputation.service";
 import { ModerationModule } from "../moderation/moderation.module";
 import { ProfilesModule } from "../profiles/profiles.module";
 import { Module, forwardRef } from "@nestjs/common";
@@ -38,6 +40,7 @@ import { MeGamesController } from "./me-games.controller";
     GameAttendanceController,
     GameCourtBookingController,
     GameFeedbackController,
+    RoleReputationController,
     GamesController,
     MeGamesController,
   ],
@@ -47,10 +50,11 @@ import { MeGamesController } from "./me-games.controller";
     GameCourtBookingService,
     GameFeedbackService,
     GameOutcomesService,
+    RoleReputationService,
     GamesService,
     GameAuthorityService,
     OutboxService,
   ],
-  exports: [GamesService, GameAuthorityService],
+  exports: [GamesService, GameAuthorityService, RoleReputationService],
 })
 export class GamesModule {}
