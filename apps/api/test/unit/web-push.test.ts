@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import webpush from "web-push";
 import { ProblemHttpException } from "../../src/auth/problem";
 import {
+  isWebPushDeliverPayload,
+  isWebPushMessageDeliverPayload,
+} from "../../src/jobs/payloads";
+import {
   buildEncryptedPushRequest,
 } from "../../src/push/push-delivery";
 import {
@@ -62,6 +66,20 @@ describe("#456 web push policy + offline library encrypt", () => {
     expect(accountFence("pepper-at-least-thirty-two-chars!!!!", "user")).toHaveLength(
       32,
     );
+  });
+
+  it("accepts recover_intents sweep payload separately from message deliver", () => {
+    expect(isWebPushDeliverPayload({ kind: "recover_intents" })).toBe(true);
+    expect(isWebPushMessageDeliverPayload({ kind: "recover_intents" })).toBe(false);
+    expect(
+      isWebPushMessageDeliverPayload({
+        kind: "dm_message",
+        messageId: "m",
+        conversationId: "c",
+        recipientUserId: "r",
+        authorUserId: "a",
+      }),
+    ).toBe(true);
   });
 
   it("builds VAPID encrypted request offline without network", () => {

@@ -216,6 +216,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.web_push_preferences')::text AS name")).rows[0]?.name).toBe("web_push_preferences");
       expect((await pool.query("SELECT to_regclass('public.web_push_subscriptions')::text AS name")).rows[0]?.name).toBe("web_push_subscriptions");
       expect((await pool.query("SELECT to_regclass('public.web_push_delivery_claims')::text AS name")).rows[0]?.name).toBe("web_push_delivery_claims");
+      expect((await pool.query("SELECT to_regclass('public.web_push_delivery_intents')::text AS name")).rows[0]?.name).toBe("web_push_delivery_intents");
       // 0048 PG-3 reviews/notes: physical tables beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.game_reviews')::text AS name")).rows[0]?.name).toBe("game_reviews");
       expect((await pool.query("SELECT to_regclass('public.game_review_revisions')::text AS name")).rows[0]?.name).toBe("game_review_revisions");

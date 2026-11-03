@@ -20,6 +20,12 @@ export const WEB_PUSH_DELIVER_QUEUE = "web.push.deliver";
 /** Dead-letter companion for terminal push delivery failures. */
 export const WEB_PUSH_DELIVER_DEAD_LETTER_QUEUE = "web.push.deliver.failed";
 
+/** Bounded recover of durable intents left pending when PgBoss enqueue failed. */
+export const WEB_PUSH_INTENT_RECOVER_SINGLETON_KEY = "web-push-intent-recover";
+
+/** Max pending intents claimed per recover tick (existing worker schedule). */
+export const WEB_PUSH_INTENT_RECOVER_BATCH_LIMIT = 50;
+
 /**
  * Legacy `outbox_events` backlog classification (LS-02):
  * KEEP_AS_EVIDENCE — business audit/evidence rows remain; do not replay into

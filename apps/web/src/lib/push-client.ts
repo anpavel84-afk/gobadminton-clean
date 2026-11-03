@@ -28,11 +28,13 @@ export type PushCapability =
 const SW_PATH = "/sw-push.js";
 const SW_SCOPE = "/";
 
-export function urlBase64ToUint8Array(base64String: string): Uint8Array {
+/** Pure base64url → ArrayBuffer-backed bytes (PushManager BufferSource compatible). */
+export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const output = new Uint8Array(rawData.length);
+  const rawData = globalThis.atob(base64);
+  const buffer = new ArrayBuffer(rawData.length);
+  const output = new Uint8Array(buffer);
   for (let i = 0; i < rawData.length; ++i) output[i] = rawData.charCodeAt(i);
   return output;
 }
@@ -121,9 +123,26 @@ export async function ensurePushServiceWorker(): Promise<ServiceWorkerRegistrati
 }
 
 export async function setServiceWorkerFence(fence: string | null): Promise<void> {
-  const reg = await navigator.serviceWorker.getRegistration(SW_SCOPE);
-  const worker = reg?.active ?? reg?.waiting ?? reg?.installing;
+  const reg = (await ensurePushServiceWorker()) ?? (await navigator.serviceWorker.getRegistration(SW_SCOPE));
+  if (!reg) return;
+  let worker = reg.active ?? reg.waiting ?? reg.installing;
   if (!worker) return;
+  if (!reg.active && worker.state !== "activated") {
+    await new Promise<void>((resolve) => {
+      const onChange = () => {
+        if (worker!.state === "activated" || worker!.state === "redundant") {
+          worker!.removeEventListener("statechange", onChange);
+          resolve();
+        }
+      };
+      worker!.addEventListener("statechange", onChange);
+      if (worker!.state === "activated" || worker!.state === "redundant") {
+        worker!.removeEventListener("statechange", onChange);
+        resolve();
+      }
+    });
+    worker = reg.active ?? worker;
+  }
   if (fence) worker.postMessage({ type: "gb-push-set-fence", fence });
   else worker.postMessage({ type: "gb-push-clear" });
 }
@@ -149,19 +168,18 @@ export async function clearPushLocalBinding(): Promise<void> {
  */
 export async function prefetchPushEnablement(vapidPublicKey: string | null): Promise<{
   registration: ServiceWorkerRegistration | null;
-  applicationServerKey: Uint8Array | null;
+  applicationServerKey: Uint8Array<ArrayBuffer> | null;
 }> {
   const registration = await ensurePushServiceWorker();
-  const applicationServerKey =
-    vapidPublicKey && typeof window !== "undefined"
-      ? urlBase64ToUint8Array(vapidPublicKey)
-      : null;
+  const applicationServerKey = vapidPublicKey
+    ? urlBase64ToUint8Array(vapidPublicKey)
+    : null;
   return { registration, applicationServerKey };
 }
 
 export async function subscribeFromGesture(input: {
   registration: ServiceWorkerRegistration;
-  applicationServerKey: Uint8Array;
+  applicationServerKey: Uint8Array<ArrayBuffer>;
 }): Promise<PushSubscription> {
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {

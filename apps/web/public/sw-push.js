@@ -1,28 +1,7 @@
 /* GoBadminton #456 — push-only service worker. No fetch interception / cache / sync. */
-/* global self, clients */
-
-const FENCE_KEY = "gb-push-account-fence";
-const INSTALL_KEY = "gb-push-installation-id";
-
-function readFence() {
-  try {
-    return self.registration && typeof self.cookieStore === "undefined"
-      ? null
-      : null;
-  } catch {
-    return null;
-  }
-}
+/* global self, caches, Response */
 
 async function activeFence() {
-  try {
-    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    for (const client of all) {
-      // Fence is mirrored via postMessage into SW registration; prefer Cache Storage opaque slot.
-    }
-  } catch {
-    /* ignore */
-  }
   try {
     const cache = await caches.open("gb-push-meta");
     const res = await cache.match("/__gb_push_fence");
@@ -48,6 +27,12 @@ async function clearLocalNotifications() {
   }
 }
 
+function safePath(value) {
+  return typeof value === "string" && value.startsWith("/messages")
+    ? value
+    : "/messages";
+}
+
 self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
@@ -61,10 +46,7 @@ self.addEventListener("push", (event) => {
         typeof data.title === "string" && data.title.length > 0
           ? data.title
           : "Новое сообщение";
-      const path =
-        typeof data.path === "string" && data.path.startsWith("/messages")
-          ? data.path
-          : "/messages";
+      const path = safePath(data.path);
       const tag =
         typeof data.tag === "string" && data.tag.startsWith("gb-msg-")
           ? data.tag
@@ -87,15 +69,20 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const path =
-    event.notification &&
-    event.notification.data &&
-    typeof event.notification.data.path === "string" &&
-    event.notification.data.path.startsWith("/messages")
-      ? event.notification.data.path
-      : "/messages";
+  const data = event.notification && event.notification.data
+    ? event.notification.data
+    : {};
+  const path = safePath(data.path);
+  const noteFence = typeof data.fence === "string" ? data.fence : null;
   event.waitUntil(
     (async () => {
+      const local = await activeFence();
+      // Old-account notification: suppress navigation into the wrong fence.
+      if (noteFence && local && noteFence !== local) {
+        return;
+      }
+      // No local fence (logged out / cleared): auth fallback to messages root.
+      const target = local ? path : "/messages";
       const all = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
@@ -103,12 +90,12 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of all) {
         if ("focus" in client) {
           await client.focus();
-          client.postMessage({ type: "gb-push-navigate", path });
+          client.postMessage({ type: "gb-push-navigate", path: target });
           return;
         }
       }
       if (self.clients.openWindow) {
-        await self.clients.openWindow(path);
+        await self.clients.openWindow(target);
       }
     })(),
   );
@@ -133,7 +120,3 @@ self.addEventListener("message", (event) => {
     event.waitUntil(clearLocalNotifications());
   }
 });
-
-void FENCE_KEY;
-void INSTALL_KEY;
-void readFence;

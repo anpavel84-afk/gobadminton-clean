@@ -14,7 +14,15 @@ import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { MessagingModule } from "../../src/messaging/messaging.module";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
-import { deliverWebPushJob, type WebPushTransport } from "../../src/push/push-delivery";
+import {
+  JobEnqueueService,
+  persistWebPushDeliveryIntent,
+} from "../../src/jobs/job-enqueue.service";
+import {
+  deliverWebPushJob,
+  recoverPendingWebPushIntents,
+  type WebPushTransport,
+} from "../../src/push/push-delivery";
 import { hashPushEndpoint } from "../../src/push/push.policy";
 import { PushModule } from "../../src/push/push.module";
 import { SafetyModule } from "../../src/safety/safety.module";
@@ -429,5 +437,234 @@ run("#456 web push — disposable", () => {
     expect(failed.failedTransient).toBeGreaterThan(0);
     const still = await pool.query(`SELECT body_text FROM messages WHERE id = $1`, [failMsg]);
     expect(still.rows[0]?.body_text).toBe("keep");
+  });
+
+  it("mixedSuccessRetry: transient on one device retries; sent device is not re-sent", async () => {
+    const pairId = await ensurePair(author.userId, recipient.userId);
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    await pool.query(
+      `INSERT INTO conversations (
+         id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
+         next_message_seq, last_message_seq, last_message_at, version, created_at, updated_at
+       ) VALUES (
+         $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
+       )`,
+      [conversationId, pairId, author.userId, recipient.userId],
+    );
+    await pool.query(
+      `INSERT INTO conversation_members (
+         conversation_id, user_id, read_through_seq, hidden_through_seq, muted
+       ) VALUES
+         ($1, $2, 1, 0, false),
+         ($1, $3, 0, 0, false)`,
+      [conversationId, author.userId, recipient.userId],
+    );
+    await pool.query(
+      `INSERT INTO messages (
+         id, conversation_id, seq, author_user_id, client_message_id,
+         kind, body_text, content_state, purge_eligible_at, created_at
+       ) VALUES (
+         $1, $2, 1, $3, $4, 'text', 'mixed', 'live', now() + interval '90 days', now()
+       )`,
+      [messageId, conversationId, author.userId, randomUUID()],
+    );
+
+    const okSub = await seedSubscription(recipient, "mixed-ok-device");
+    const failSub = await seedSubscription(recipient, "mixed-fail-device");
+    const calls: string[] = [];
+    const mixedTransport: WebPushTransport = {
+      async send(input) {
+        calls.push(input.endpoint);
+        if (input.endpoint === failSub.endpoint) {
+          return { statusCode: 503, permanent: false };
+        }
+        return { statusCode: 201, permanent: false };
+      },
+    };
+
+    const first = await deliverWebPushJob({
+      pool,
+      env,
+      transport: mixedTransport,
+      payload: {
+        kind: "dm_message",
+        messageId,
+        conversationId,
+        recipientUserId: recipient.userId,
+        authorUserId: author.userId,
+      },
+    });
+    expect(first.delivered).toBe(1);
+    expect(first.failedTransient).toBe(1);
+    // Worker must throw on any transient (simulated here by assertion).
+    expect(first.failedTransient > 0).toBe(true);
+
+    const secondCallsBefore = calls.length;
+    const retry = await deliverWebPushJob({
+      pool,
+      env,
+      transport: mixedTransport,
+      payload: {
+        kind: "dm_message",
+        messageId,
+        conversationId,
+        recipientUserId: recipient.userId,
+        authorUserId: author.userId,
+      },
+    });
+    expect(retry.delivered).toBe(0);
+    expect(retry.failedTransient).toBe(1);
+    expect(retry.skipped).toBeGreaterThanOrEqual(1);
+    const newEndpoints = calls.slice(secondCallsBefore);
+    expect(newEndpoints).not.toContain(okSub.endpoint);
+    expect(newEndpoints).toContain(failSub.endpoint);
+  });
+
+  it("accessRestriction: inactive recipient skips delivery", async () => {
+    const pairId = await ensurePair(author.userId, recipient.userId);
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    await pool.query(
+      `INSERT INTO conversations (
+         id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
+         next_message_seq, last_message_seq, last_message_at, version, created_at, updated_at
+       ) VALUES (
+         $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
+       )`,
+      [conversationId, pairId, author.userId, recipient.userId],
+    );
+    await pool.query(
+      `INSERT INTO conversation_members (
+         conversation_id, user_id, read_through_seq, hidden_through_seq, muted
+       ) VALUES
+         ($1, $2, 1, 0, false),
+         ($1, $3, 0, 0, false)`,
+      [conversationId, author.userId, recipient.userId],
+    );
+    await pool.query(
+      `INSERT INTO messages (
+         id, conversation_id, seq, author_user_id, client_message_id,
+         kind, body_text, content_state, purge_eligible_at, created_at
+       ) VALUES (
+         $1, $2, 1, $3, $4, 'text', 'inactive', 'live', now() + interval '90 days', now()
+       )`,
+      [messageId, conversationId, author.userId, randomUUID()],
+    );
+    await seedSubscription(recipient, "inactive-device");
+    await pool.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [
+      recipient.userId,
+    ]);
+    sent.length = 0;
+    const skipped = await deliverWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "dm_message",
+        messageId,
+        conversationId,
+        recipientUserId: recipient.userId,
+        authorUserId: author.userId,
+      },
+    });
+    expect(skipped.delivered).toBe(0);
+    expect(skipped.skipped).toBeGreaterThan(0);
+    expect(sent).toHaveLength(0);
+    await pool.query(`UPDATE users SET status = 'active' WHERE id = $1`, [
+      recipient.userId,
+    ]);
+  });
+
+  it("queueFailureIsolated: intent survives enqueue failure; recover dispatches delivery", async () => {
+    const pairId = await ensurePair(author.userId, recipient.userId);
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    const payload = {
+      kind: "dm_message" as const,
+      messageId,
+      conversationId,
+      recipientUserId: recipient.userId,
+      authorUserId: author.userId,
+    };
+    const jobs = new JobEnqueueService(env);
+    // Injected queue/boss unavailability (not a core DB failure).
+    jobs.ensureStarted = async () => {
+      throw new Error("injected_pgboss_unavailable");
+    };
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO conversations (
+           id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
+           next_message_seq, last_message_seq, last_message_at, version, created_at, updated_at
+         ) VALUES (
+           $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
+         )`,
+        [conversationId, pairId, author.userId, recipient.userId],
+      );
+      await client.query(
+        `INSERT INTO conversation_members (
+           conversation_id, user_id, read_through_seq, hidden_through_seq, muted
+         ) VALUES
+           ($1, $2, 1, 0, false),
+           ($1, $3, 0, 0, false)`,
+        [conversationId, author.userId, recipient.userId],
+      );
+      await client.query(
+        `INSERT INTO messages (
+           id, conversation_id, seq, author_user_id, client_message_id,
+           kind, body_text, content_state, purge_eligible_at, created_at
+         ) VALUES (
+           $1, $2, 1, $3, $4, 'text', 'intent-keep', 'live', now() + interval '90 days', now()
+         )`,
+        [messageId, conversationId, author.userId, randomUUID()],
+      );
+      await persistWebPushDeliveryIntent(client, payload);
+      const jobId = await jobs.tryEnqueueWebPushJob(client, payload);
+      expect(jobId).toBeNull();
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const msg = await pool.query(`SELECT body_text FROM messages WHERE id = $1`, [
+      messageId,
+    ]);
+    expect(msg.rows[0]?.body_text).toBe("intent-keep");
+    const intent = await pool.query<{ status: string }>(
+      `SELECT status FROM web_push_delivery_intents
+       WHERE message_id = $1 AND recipient_user_id = $2`,
+      [messageId, recipient.userId],
+    );
+    expect(intent.rows[0]?.status).toBe("pending");
+
+    await seedSubscription(recipient, "recover-device");
+    sent.length = 0;
+    const recovered = await recoverPendingWebPushIntents({
+      pool,
+      dispatch: async (deliverPayload) => {
+        const outcome = await deliverWebPushJob({
+          pool,
+          env,
+          transport,
+          payload: deliverPayload,
+        });
+        return outcome.delivered > 0 || outcome.skipped > 0 || outcome.cleaned > 0;
+      },
+    });
+    expect(recovered.recovered).toBeGreaterThanOrEqual(1);
+    expect(sent.length).toBeGreaterThanOrEqual(1);
+    const after = await pool.query<{ status: string }>(
+      `SELECT status FROM web_push_delivery_intents
+       WHERE message_id = $1 AND recipient_user_id = $2`,
+      [messageId, recipient.userId],
+    );
+    expect(after.rows[0]?.status).toBe("consumed");
   });
 });

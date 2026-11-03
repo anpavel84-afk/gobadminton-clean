@@ -38,7 +38,16 @@ export type WebPushDeliverPayload =
       gameId: string;
       recipientUserId: string;
       authorUserId: string;
+    }
+  | {
+      kind: "recover_intents";
     };
+
+/** Deliverable message push (excludes recover sweep). */
+export type WebPushMessageDeliverPayload = Exclude<
+  WebPushDeliverPayload,
+  { kind: "recover_intents" }
+>;
 
 export function isSocialExpiryCleanupPayload(
   value: unknown,
@@ -69,6 +78,7 @@ export function isWebPushDeliverPayload(
 ): value is WebPushDeliverPayload {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
+  if (v.kind === "recover_intents") return true;
   if (typeof v.messageId !== "string" || typeof v.conversationId !== "string") {
     return false;
   }
@@ -78,6 +88,15 @@ export function isWebPushDeliverPayload(
   if (v.kind === "dm_message") return true;
   if (v.kind === "game_chat_message") return typeof v.gameId === "string";
   return false;
+}
+
+export function isWebPushMessageDeliverPayload(
+  value: unknown,
+): value is WebPushMessageDeliverPayload {
+  return (
+    isWebPushDeliverPayload(value) &&
+    value.kind !== "recover_intents"
+  );
 }
 
 /** Safe structured log fields — never dump full job data blobs. */

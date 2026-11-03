@@ -7,16 +7,19 @@ import type { Db, Job, PgBoss } from "pg-boss";
 import {
   createLibraryWebPushTransport,
   deliverWebPushJob,
+  recoverPendingWebPushIntents,
   type WebPushTransport,
 } from "../push/push-delivery";
 import {
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
   SOCIAL_EXPIRY_SWEEP_SINGLETON_KEY,
   WEB_PUSH_DELIVER_QUEUE,
+  WEB_PUSH_INTENT_RECOVER_SINGLETON_KEY,
 } from "./constants";
 import {
   isSocialExpiryCleanupPayload,
   isWebPushDeliverPayload,
+  isWebPushMessageDeliverPayload,
   sanitizeJobLogFields,
   type SocialExpiryCleanupPayload,
   type WebPushDeliverPayload,
@@ -184,6 +187,35 @@ export async function startWorkerRuntime(input: {
             );
             throw new Error("INVALID_JOB_PAYLOAD");
           }
+          if (job.data.kind === "recover_intents") {
+            const recovered = await recoverPendingWebPushIntents({
+              pool: input.pool,
+              dispatch: async (payload) => {
+                const jobId = await boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+                  singletonKey: `push:${payload.messageId}:${payload.recipientUserId}`,
+                  retryLimit: 5,
+                  retryDelay: 5,
+                  retryBackoff: true,
+                  expireInSeconds: 600,
+                });
+                return jobId != null;
+              },
+            });
+            console.info(
+              JSON.stringify({
+                event: "job_completed",
+                queue: WEB_PUSH_DELIVER_QUEUE,
+                jobId: job.id,
+                kind: "recover_intents",
+                recovered: recovered.recovered,
+                failed: recovered.failed,
+              }),
+            );
+            continue;
+          }
+          if (!isWebPushMessageDeliverPayload(job.data)) {
+            throw new Error("INVALID_JOB_PAYLOAD");
+          }
           console.info(
             JSON.stringify(
               sanitizeJobLogFields({
@@ -214,11 +246,27 @@ export async function startWorkerRuntime(input: {
               failedTransient: result.failedTransient,
             }),
           );
-          // Transient transport failures: retry via pg-boss without rolling back message.
-          if (result.failedTransient > 0 && result.delivered === 0) {
+          // Any known transient device failure must retry; sent claims skip on reclaim.
+          if (result.failedTransient > 0) {
             throw new Error("PUSH_TRANSPORT_TRANSIENT");
           }
         }
+      },
+    );
+
+    // Bounded recover of durable intents left pending when same-TX enqueue failed.
+    await boss.schedule(
+      WEB_PUSH_DELIVER_QUEUE,
+      "* * * * *",
+      { kind: "recover_intents" } satisfies WebPushDeliverPayload,
+      {
+        tz: "UTC",
+        singletonKey: WEB_PUSH_INTENT_RECOVER_SINGLETON_KEY,
+        missed: "once",
+        retryLimit: 2,
+        retryDelay: 5,
+        retryBackoff: true,
+        expireInSeconds: 120,
       },
     );
   }

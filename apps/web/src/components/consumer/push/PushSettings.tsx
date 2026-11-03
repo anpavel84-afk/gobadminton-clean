@@ -34,7 +34,7 @@ export function PushSettings({ me }: Props) {
   const mutation = useRef(false);
   const warm = useRef<{
     registration: ServiceWorkerRegistration | null;
-    applicationServerKey: Uint8Array | null;
+    applicationServerKey: Uint8Array<ArrayBuffer> | null;
   }>({ registration: null, applicationServerKey: null });
 
   const retire = useCallback(() => {
@@ -112,8 +112,8 @@ export function PushSettings({ me }: Props) {
     }
 
     // Prefer warm SW/key from mount prefetch — do not await network before prompt.
-    let registration = warm.current.registration;
-    let applicationServerKey = warm.current.applicationServerKey;
+    const registration = warm.current.registration;
+    const applicationServerKey = warm.current.applicationServerKey;
     if (!registration || !applicationServerKey) {
       setNotice("Подготовка уведомлений ещё не завершена. Подождите секунду и нажмите снова.");
       void prefetchPushEnablement(push.vapidPublicKey).then((prefetched) => {

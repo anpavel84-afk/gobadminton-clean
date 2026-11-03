@@ -18,6 +18,7 @@ export function PushLifecycle() {
 
   useEffect(() => {
     let live = true;
+    let fenceGeneration = 0;
 
     const onNavigate = (event: MessageEvent) => {
       const data = event.data;
@@ -27,17 +28,24 @@ export function PushLifecycle() {
     };
 
     const clearLocal = () => {
+      ++fenceGeneration;
       void clearPushLocalBinding();
     };
 
     const syncFence = () => {
-      void getPushState().then((result) => {
-        if (!live) return;
+      const generation = ++fenceGeneration;
+      // Invalidate before async so a delayed prior response cannot restore an old fence.
+      void clearPushLocalBinding().then(async () => {
+        if (!live || generation !== fenceGeneration) return;
+        await ensurePushServiceWorker().catch(() => undefined);
+        if (!live || generation !== fenceGeneration) return;
+        const result = await getPushState();
+        if (!live || generation !== fenceGeneration) return;
         if (result.ok && result.data.accountFence) {
-          void setServiceWorkerFence(result.data.accountFence);
+          await setServiceWorkerFence(result.data.accountFence);
           return;
         }
-        void clearPushLocalBinding();
+        await clearPushLocalBinding();
       });
     };
 
@@ -51,6 +59,7 @@ export function PushLifecycle() {
 
     return () => {
       live = false;
+      ++fenceGeneration;
       if (navigator.serviceWorker) {
         navigator.serviceWorker.removeEventListener("message", onNavigate);
       }

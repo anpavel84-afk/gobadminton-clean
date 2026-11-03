@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import type * as PushClientModule from "../src/lib/push-client";
 import { PushSettings } from "../src/components/consumer/push/PushSettings";
 import {
   detectPushCapability,
@@ -17,7 +18,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("../src/lib/push-client", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/push-client")>(
+  const actual = await vi.importActual<typeof PushClientModule>(
     "../src/lib/push-client",
   );
   return {
@@ -61,6 +62,7 @@ describe("#456 web push settings surface", () => {
   it("exposes base64url helper and capability helper", () => {
     const bytes = urlBase64ToUint8Array("AQID");
     expect(bytes.length).toBeGreaterThan(0);
+    expect(bytes.buffer).toBeInstanceOf(ArrayBuffer);
     // Without browser APIs in node, detect may be unsupported.
     expect(["unsupported", "needs_homescreen", "ready", "denied", "offline"]).toContain(
       detectPushCapability(),

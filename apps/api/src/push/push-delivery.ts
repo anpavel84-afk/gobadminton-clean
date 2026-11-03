@@ -2,7 +2,11 @@ import type { Pool, PoolClient } from "pg";
 import webpush from "web-push";
 import { openSecret } from "../auth/crypto";
 import type { AppEnv } from "../config/env";
-import type { WebPushDeliverPayload } from "../jobs/payloads";
+import {
+  WEB_PUSH_INTENT_RECOVER_BATCH_LIMIT,
+} from "../jobs/constants";
+import type { WebPushMessageDeliverPayload } from "../jobs/payloads";
+import { unrestrictedSql } from "../restrictions/policy";
 import {
   PUSH_COPY,
   accountFence,
@@ -12,6 +16,8 @@ import {
 export type WebPushSendResult = {
   statusCode: number;
   permanent: boolean;
+  /** Provider outcome unknown — do not blind-retry (may already have delivered). */
+  unknown?: boolean;
 };
 
 export type WebPushTransport = {
@@ -55,9 +61,13 @@ export function createLibraryWebPushTransport(env: {
           typeof (error as { statusCode: unknown }).statusCode === "number"
             ? (error as { statusCode: number }).statusCode
             : 0;
+        if (!statusCode) {
+          // Ambiguous transport effect — preserve rather than blind-retry.
+          return { statusCode: 0, permanent: false, unknown: true };
+        }
         const permanent = statusCode === 404 || statusCode === 410 || statusCode === 400;
         // Never rethrow provider body/URL/token text.
-        return { statusCode: statusCode || 502, permanent };
+        return { statusCode, permanent };
       }
     },
   };
@@ -106,6 +116,40 @@ async function sessionStillOwns(
     [sessionId, userId],
   );
   return Boolean(row.rows[0]?.ok);
+}
+
+/**
+ * Current account fence before external delivery: active user + account.access
+ * when restrictions are enabled (same expressions as session/auth policy).
+ */
+async function recipientAccountAllowsPush(
+  exec: SqlExec,
+  userId: string,
+  restrictionsEnabled: boolean,
+): Promise<boolean> {
+  const row = await exec.query<{ ok: boolean }>(
+    `SELECT true AS ok FROM users u
+     WHERE u.id = $1
+       AND u.status = 'active'
+       AND ${unrestrictedSql(restrictionsEnabled, "$1", ["account.access"])}`,
+    [userId],
+  );
+  return Boolean(row.rows[0]?.ok);
+}
+
+async function markIntentConsumed(
+  exec: SqlExec,
+  messageId: string,
+  recipientUserId: string,
+): Promise<void> {
+  await exec.query(
+    `UPDATE web_push_delivery_intents
+     SET status = 'consumed', updated_at = now()
+     WHERE message_id = $1
+       AND recipient_user_id = $2
+       AND status IN ('pending', 'queued')`,
+    [messageId, recipientUserId],
+  );
 }
 
 async function dmEligible(
@@ -253,7 +297,7 @@ async function loadMessageMeta(
 export async function deliverWebPushJob(input: {
   pool: Pool;
   env: AppEnv;
-  payload: WebPushDeliverPayload;
+  payload: WebPushMessageDeliverPayload;
   transport: WebPushTransport;
 }): Promise<DeliveryOutcome> {
   const outcome: DeliveryOutcome = {
@@ -271,15 +315,46 @@ export async function deliverWebPushJob(input: {
     const exec = asExec(client);
     const meta = await loadMessageMeta(exec, input.payload.messageId);
     if (!meta) {
+      await markIntentConsumed(
+        exec,
+        input.payload.messageId,
+        input.payload.recipientUserId,
+      );
       outcome.skipped += 1;
       return outcome;
     }
     if (meta.conversationId !== input.payload.conversationId) {
+      await markIntentConsumed(
+        exec,
+        input.payload.messageId,
+        input.payload.recipientUserId,
+      );
       outcome.skipped += 1;
       return outcome;
     }
+
+    const accountOk = await recipientAccountAllowsPush(
+      exec,
+      input.payload.recipientUserId,
+      input.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+    );
+    if (!accountOk) {
+      await markIntentConsumed(
+        exec,
+        input.payload.messageId,
+        input.payload.recipientUserId,
+      );
+      outcome.skipped += 1;
+      return outcome;
+    }
+
     const prefOn = await preferenceEnabled(exec, input.payload.recipientUserId);
     if (!prefOn) {
+      await markIntentConsumed(
+        exec,
+        input.payload.messageId,
+        input.payload.recipientUserId,
+      );
       outcome.skipped += 1;
       return outcome;
     }
@@ -295,6 +370,11 @@ export async function deliverWebPushJob(input: {
       });
     } else {
       if (!input.payload.gameId) {
+        await markIntentConsumed(
+          exec,
+          input.payload.messageId,
+          input.payload.recipientUserId,
+        );
         outcome.skipped += 1;
         return outcome;
       }
@@ -308,6 +388,11 @@ export async function deliverWebPushJob(input: {
       });
     }
     if (!eligible) {
+      await markIntentConsumed(
+        exec,
+        input.payload.messageId,
+        input.payload.recipientUserId,
+      );
       outcome.skipped += 1;
       return outcome;
     }
@@ -366,15 +451,22 @@ export async function deliverWebPushJob(input: {
         continue;
       }
 
-      const claimed = await exec.query<{ id: string; status: string }>(
+      // Claim only failed rows, or stale claimed (crash). Recent claimed =
+      // concurrent in-flight — skip to avoid double send. Sent/gone/skipped stay skipped.
+      const claimed = await exec.query<{ id: string; status: string; attempt_count: number }>(
         `INSERT INTO web_push_delivery_claims (
            message_id, subscription_id, recipient_user_id, kind, status, attempt_count
          ) VALUES ($1, $2, $3, $4, 'claimed', 1)
          ON CONFLICT (message_id, subscription_id) DO UPDATE
-           SET attempt_count = web_push_delivery_claims.attempt_count + 1,
+           SET status = 'claimed',
+               attempt_count = web_push_delivery_claims.attempt_count + 1,
                updated_at = now()
-           WHERE web_push_delivery_claims.status IN ('claimed', 'failed')
-         RETURNING id, status`,
+           WHERE web_push_delivery_claims.status = 'failed'
+              OR (
+                   web_push_delivery_claims.status = 'claimed'
+                   AND web_push_delivery_claims.updated_at < now() - interval '120 seconds'
+                 )
+         RETURNING id, status, attempt_count`,
         [
           input.payload.messageId,
           sub.id,
@@ -383,7 +475,15 @@ export async function deliverWebPushJob(input: {
         ],
       );
       if (!claimed.rows[0]) {
-        // Already sent/skipped/gone — duplicate job is harmless.
+        outcome.skipped += 1;
+        continue;
+      }
+      if (claimed.rows[0].attempt_count > 8) {
+        await exec.query(
+          `UPDATE web_push_delivery_claims
+           SET status = 'skipped', updated_at = now() WHERE id = $1`,
+          [claimed.rows[0].id],
+        );
         outcome.skipped += 1;
         continue;
       }
@@ -428,6 +528,16 @@ export async function deliverWebPushJob(input: {
         outcome.delivered += 1;
         continue;
       }
+      if (result.unknown || result.statusCode === 0) {
+        // Preserve ambiguous provider effect — do not blind-retry (may already delivered).
+        await exec.query(
+          `UPDATE web_push_delivery_claims
+           SET status = 'skipped', updated_at = now() WHERE id = $1`,
+          [claimed.rows[0].id],
+        );
+        outcome.skipped += 1;
+        continue;
+      }
       if (result.permanent || result.statusCode === 404 || result.statusCode === 410) {
         await exec.query(
           `UPDATE web_push_delivery_claims
@@ -450,10 +560,101 @@ export async function deliverWebPushJob(input: {
       );
       outcome.failedTransient += 1;
     }
+
+    if (outcome.failedTransient === 0) {
+      await markIntentConsumed(
+        exec,
+        input.payload.messageId,
+        input.payload.recipientUserId,
+      );
+    }
     return outcome;
   } finally {
     client.release();
   }
+}
+
+/**
+ * Bounded recover of pending durable intents after PgBoss enqueue outage.
+ * Reuses the existing deliver queue via caller-provided dispatch (no new scheduler).
+ */
+export async function recoverPendingWebPushIntents(input: {
+  pool: Pool;
+  dispatch: (payload: WebPushMessageDeliverPayload) => Promise<boolean>;
+  limit?: number;
+}): Promise<{ recovered: number; failed: number }> {
+  const limit = input.limit ?? WEB_PUSH_INTENT_RECOVER_BATCH_LIMIT;
+  const pending = await input.pool.query<{
+    id: string;
+    message_id: string;
+    conversation_id: string;
+    recipient_user_id: string;
+    author_user_id: string;
+    kind: "dm_message" | "game_chat_message";
+    game_id: string | null;
+  }>(
+    `SELECT id, message_id, conversation_id, recipient_user_id, author_user_id, kind, game_id
+     FROM web_push_delivery_intents
+     WHERE status = 'pending'
+       AND created_at > now() - interval '7 days'
+     ORDER BY created_at ASC
+     LIMIT $1`,
+    [limit],
+  );
+
+  let recovered = 0;
+  let failed = 0;
+  for (const row of pending.rows) {
+    const claimed = await input.pool.query<{ id: string }>(
+      `UPDATE web_push_delivery_intents
+       SET status = 'queued', updated_at = now()
+       WHERE id = $1 AND status = 'pending'
+       RETURNING id`,
+      [row.id],
+    );
+    if (!claimed.rows[0]) continue;
+
+    const payload: WebPushMessageDeliverPayload =
+      row.kind === "dm_message"
+        ? {
+            kind: "dm_message",
+            messageId: row.message_id,
+            conversationId: row.conversation_id,
+            recipientUserId: row.recipient_user_id,
+            authorUserId: row.author_user_id,
+          }
+        : {
+            kind: "game_chat_message",
+            messageId: row.message_id,
+            conversationId: row.conversation_id,
+            gameId: row.game_id!,
+            recipientUserId: row.recipient_user_id,
+            authorUserId: row.author_user_id,
+          };
+
+    try {
+      const ok = await input.dispatch(payload);
+      if (ok) recovered += 1;
+      else {
+        await input.pool.query(
+          `UPDATE web_push_delivery_intents
+           SET status = 'pending', updated_at = now()
+           WHERE id = $1 AND status = 'queued'`,
+          [row.id],
+        );
+        failed += 1;
+      }
+    } catch {
+      await input.pool.query(
+        `UPDATE web_push_delivery_intents
+         SET status = 'pending', updated_at = now()
+         WHERE id = $1 AND status = 'queued'`,
+        [row.id],
+      );
+      failed += 1;
+    }
+  }
+  return { recovered, failed };
 }
 
 /** Decode library request for offline unit tests (no network). */
