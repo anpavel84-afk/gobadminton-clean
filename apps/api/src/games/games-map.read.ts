@@ -28,7 +28,8 @@ export type GameMapItem = {
 };
 export type GameMapDto = {
   schemaVersion: 1; scope: "city"; cityId: string;
-  filters: Omit<DiscoveryFilter, "cityId">;
+  /** Canonical GameMap.filters wire — list-only trainerRoleHandle is omitted. */
+  filters: Omit<DiscoveryFilter, "cityId" | "trainerRoleHandle">;
   generatedAt: string; validUntil: string; refreshAfterSeconds: 30;
   complete: true; coverage: "all_mappable_matching_venues";
   counts: { matchingGames: number; mappableGames: number; unmappedGames: number; venues: number };
@@ -46,7 +47,9 @@ const tooBroad = () => unprocessable("GAME_MAP_QUERY_TOO_BROAD", "Слишком
 export function serializeMap(row: MapRow, filter: DiscoveryFilter): GameMapDto {
   if (row.matching_games > 20000 || row.venues > 200) throw tooBroad();
   if (row.integrity_failure) throw unavailable();
-  const { cityId, ...filters } = filter;
+  // Canonical GameMap.filters only — list-only trainerRoleHandle must not enter the wire schema.
+  const { cityId, trainerRoleHandle, ...filters } = filter;
+  void trainerRoleHandle;
   const generatedAt = row.generated_at;
   const validUntil = new Date(Math.min(generatedAt.getTime() + 30000, row.earliest_start?.getTime() ?? Infinity));
   const items: GameMapItem[] = row.items.map(item => ({

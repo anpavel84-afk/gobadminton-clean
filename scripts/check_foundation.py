@@ -255,8 +255,16 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                     and headers.get("x-gb-email-auth", {}).get("required") is True
                 )
                 if method in MUTATIONS:
-                    # Deliberately admitted private read POSTs cannot persist geo receipts.
-                    read_post = method == "post" and route in {"/players/query", "/players/query/map"} and operation.get("x-operation-kind") == "authenticated-read"
+                    # Deliberately admitted private read POSTs cannot persist geo/receipt mutations.
+                    read_post = (
+                        method == "post"
+                        and route in {
+                            "/players/query",
+                            "/players/query/map",
+                            "/me/role-reviews/consent-preview",
+                        }
+                        and operation.get("x-operation-kind") == "authenticated-read"
+                    )
                     if read_post and "idempotency-key" in headers:
                         errors.append(f"{label}: private read must not require a durable command receipt")
                     if (not read_post and not email_proof

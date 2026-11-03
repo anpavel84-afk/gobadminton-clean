@@ -21219,7 +21219,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "x-operation-kind": "authenticated-read"
       }
     },
     "/me/role-reviews": {

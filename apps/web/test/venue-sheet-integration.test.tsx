@@ -43,6 +43,11 @@ vi.mock("../src/components/consumer/games/VenueGameActions", () => ({
 vi.mock("../src/components/consumer/venues/VenueGallery", () => ({
   VenueGallery: ({ coverSlot }: { coverSlot?: React.ReactNode }) => coverSlot ?? null,
 }));
+// GameTerms now nests RoleReputationPanel; its client hooks would consume the parent
+// hook-array during SSR of the sheet tree. Real panel behavior is covered separately.
+vi.mock("../src/components/consumer/games/RoleReputationPanel", () => ({
+  RoleReputationPanel: ({ role }: { role: string }) => <section data-role-reputation-for={role} />,
+}));
 vi.mock("../src/components/consumer/NavIcon", () => ({ shuttlecockElement: () => ({ setAttribute() {} }) }));
 vi.mock("pmtiles", () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock("maplibre-gl", () => ({
