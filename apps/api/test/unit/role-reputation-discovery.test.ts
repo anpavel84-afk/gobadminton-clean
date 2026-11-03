@@ -20,8 +20,15 @@ describe("#394 role reputation discovery filter", () => {
     expect(where).toContain("game_moderation_state");
     expect(where).toContain("role_reputation_subjects");
     expect(where).toContain("grp.role = 'training'");
+    // Same read-only identity fallback as public card: proof first, else trainer_led+profile owner.
+    expect(where).toContain("trainer_profiles");
+    expect(where).toContain("g.activity_kind = 'trainer_led'");
+    expect(where).toContain("g.trainer_profile_id IS NOT NULL");
+    expect(where).toContain("p.role = 'training'");
     expect(params).toContain(cityId);
     expect(params).toContain(handle);
+    // Single bound parameter for both proof and fallback arms — no write/eligibility side effects.
+    expect(params.filter((p) => p === handle)).toHaveLength(1);
   });
 
   it("rejects malformed trainerRoleHandle", () => {
@@ -35,5 +42,6 @@ describe("#394 role reputation discovery filter", () => {
     expect(filter.trainerRoleHandle).toBeNull();
     const { where } = eligibleGames(filter);
     expect(where).not.toContain("role_reputation_subjects");
+    expect(where).not.toContain("trainer_profiles");
   });
 });

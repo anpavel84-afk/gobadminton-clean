@@ -381,7 +381,10 @@ run("#394 role reputation — disposable", () => {
       headers: { origin: adminOrigin },
     });
     expect(source.statusCode).toBe(200);
-    const revision = source.json().reviewRevision;
+    const pendingKind = source.json().pendingKind as string;
+    const targetKind = pendingKind === "reply_submit" ? "reply" : "review";
+    const revision =
+      targetKind === "reply" ? source.json().replyRevision : source.json().reviewRevision;
     expect(revision?.id).toBeTruthy();
     const decide = await app.inject({
       method: "POST",
@@ -396,7 +399,7 @@ run("#394 role reputation — disposable", () => {
         action: "role_review_decide",
         expectedCaseVersion: intake.json().caseVersion,
         expectedResourceVersion: revision.resourceVersion,
-        targetKind: "review",
+        targetKind,
         exactRevisionId: revision.id,
         decision: "approve",
         rationale: "Synthetic approve for disposable roundtrip",
@@ -404,7 +407,7 @@ run("#394 role reputation — disposable", () => {
       },
     });
     expect(decide.statusCode).toBe(200);
-    return { caseId, revision };
+    return { caseId, revision, targetKind };
   }
 
   it("outsider can read but not write; own past role can submit pending; self denied; public handle roundtrip", async () => {
@@ -783,5 +786,280 @@ run("#394 role reputation — disposable", () => {
       url: `/v1/role-reputations/${seeded.roleHandle}`,
     });
     expect(countRead.json().heldGamesCount).toBe(1);
+  });
+
+  it("public reply stays bound to approved review revision across v2 approve", async () => {
+    const past = new Date("2026-10-02T18:00:00.000Z");
+    const seeded = await seedHeldGame({
+      organizerId: organizer.userId,
+      participantId: participant.userId,
+      endsAt: past,
+      outcome: "held",
+    });
+
+    const v1Text = "Первая редакция\nДоговорённости нарушены";
+    const v1Hash = projectionHash({
+      subjectUserId: organizer.userId,
+      role: "organization",
+      audience: "public",
+      text: v1Text,
+      topics: ["agreements"],
+    });
+    const submitV1 = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        gameId: seeded.gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: v1Text,
+        topics: ["agreements"],
+        consentProjectionHash: v1Hash,
+      },
+    });
+    expect(submitV1.statusCode).toBe(200);
+    const slotId = submitV1.json().id as string;
+    const reviewHandle = submitV1.json().reviewHandle as string;
+    const pendingV1 = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    await humanApprovePending(pendingV1.id, pendingV1.version);
+
+    const publicV1 = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: organizer.cookie },
+    });
+    expect(publicV1.statusCode).toBe(200);
+    const itemV1 = publicV1.json().items[0];
+    expect(itemV1.text).toBe(v1Text);
+    expect(itemV1.publishedRevision).toBe(1);
+    expect(itemV1.reply).toBeNull();
+
+    const replyV1Text = "Ответ на первую редакцию\nПринято";
+    const replyV1Preview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "content-type": "application/json",
+      },
+      payload: { targetKind: "reply", reviewHandle, text: replyV1Text },
+    });
+    expect(replyV1Preview.statusCode).toBe(200);
+    const replyV1 = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: itemV1.replyAggregateVersion,
+        expectedReviewRevision: itemV1.publishedRevision,
+        text: replyV1Text,
+        consentProjectionHash: replyV1Preview.json().consentProjectionHash,
+      },
+    });
+    expect(replyV1.statusCode).toBe(200);
+    const replyPending = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND kind='reply_submit' AND status='waiting_intake'
+         ORDER BY created_at DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    await humanApprovePending(replyPending.id, replyPending.version);
+
+    const withReply = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: organizer.cookie },
+    });
+    expect(withReply.json().items[0].reply?.text).toBe(replyV1Text);
+    expect(withReply.json().items[0].subjectOwnReply?.status).toBe("published");
+
+    const v2Text = "Вторая редакция\nУточнение после ответа";
+    const v2Hash = projectionHash({
+      subjectUserId: organizer.userId,
+      role: "organization",
+      audience: "public",
+      text: v2Text,
+      topics: ["agreements"],
+    });
+    const mine = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { cookie: participant.cookie },
+    });
+    const own = mine.json().items.find((i: { id: string }) => i.id === slotId);
+    const submitV2 = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${slotId}/commands`,
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: own.version,
+        gameId: seeded.gameId,
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text: v2Text,
+        topics: ["agreements"],
+        consentProjectionHash: v2Hash,
+      },
+    });
+    expect(submitV2.statusCode).toBe(200);
+
+    // Pending v2 must keep published v1 text + approved reply until human approves v2.
+    const whilePending = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: organizer.cookie },
+    });
+    expect(whilePending.json().items[0].text).toBe(v1Text);
+    expect(whilePending.json().items[0].publishedRevision).toBe(1);
+    expect(whilePending.json().items[0].reply?.text).toBe(replyV1Text);
+
+    const pendingV2 = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND kind='review_submit' AND status='waiting_intake'
+         ORDER BY created_at DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    await humanApprovePending(pendingV2.id, pendingV2.version);
+
+    const afterV2 = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: organizer.cookie },
+    });
+    expect(afterV2.json().items[0].text).toBe(v2Text);
+    expect(afterV2.json().items[0].publishedRevision).toBe(2);
+    expect(afterV2.json().items[0].reply).toBeNull();
+    // Do not pretend the v1-bound reply is still the subject's current published answer.
+    expect(afterV2.json().items[0].subjectOwnReply).toBeNull();
+    expect(afterV2.json().items[0].allowedActions.canReply).toBe(true);
+
+    // Negative: stale expectedReviewRevision (v1) cannot submit a reply against approved v2.
+    const staleReply = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: afterV2.json().items[0].replyAggregateVersion,
+        expectedReviewRevision: 1,
+        text: "Устаревший ответ\nНельзя",
+        consentProjectionHash: projectionHash({
+          subjectUserId: organizer.userId,
+          role: "organization",
+          audience: "public",
+          text: "Устаревший ответ\nНельзя",
+          topics: [],
+          reviewRevision: 1,
+        }),
+      },
+    });
+    expect(staleReply.statusCode).toBeGreaterThanOrEqual(400);
+
+    const replyV2Text = "Свежий ответ на вторую редакцию\nСогласен";
+    const replyV2Preview = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews/consent-preview",
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "content-type": "application/json",
+      },
+      payload: { targetKind: "reply", reviewHandle, text: replyV2Text },
+    });
+    expect(replyV2Preview.statusCode).toBe(200);
+    const replyV2 = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
+      headers: {
+        cookie: organizer.cookie,
+        "x-csrf-token": organizer.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: afterV2.json().items[0].replyAggregateVersion,
+        expectedReviewRevision: 2,
+        text: replyV2Text,
+        consentProjectionHash: replyV2Preview.json().consentProjectionHash,
+      },
+    });
+    expect(replyV2.statusCode).toBe(200);
+
+    const pendingOnly = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: organizer.cookie },
+    });
+    expect(pendingOnly.json().items[0].reply).toBeNull();
+    expect(pendingOnly.json().items[0].subjectOwnReply?.status).toMatch(
+      /submitted|revision_waiting/,
+    );
+
+    const replyV2Pending = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND kind='reply_submit' AND status='waiting_intake'
+         ORDER BY created_at DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    await humanApprovePending(replyV2Pending.id, replyV2Pending.version);
+
+    const publishedV2Reply = await app.inject({
+      method: "GET",
+      url: `/v1/role-reputations/${seeded.roleHandle}`,
+      headers: { cookie: organizer.cookie },
+    });
+    expect(publishedV2Reply.json().items[0].reply?.text).toBe(replyV2Text);
+    expect(publishedV2Reply.json().items[0].subjectOwnReply?.status).toBe("published");
   });
 });

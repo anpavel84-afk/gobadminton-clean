@@ -63,15 +63,34 @@ export function eligibleGames(filter: DiscoveryFilter, moderationEnabled = false
   add(filter.activityKind, p => `g.activity_kind = ${p}`);
   add(filter.venueId, p => `v.id = (SELECT id FROM effective_venues WHERE source_id = ${p}::uuid)`);
   // Opaque training roleHandle narrows public trainer_led cards; never opens private games.
+  // Prefer proof tip when present; otherwise read-only CLEAN fallback for pre-0054
+  // trainer_led + immutable trainer_profile owner matching the same role handle.
   add(
     filter.trainerRoleHandle,
-    (p) => `EXISTS (
-      SELECT 1 FROM game_role_proofs grp
-      JOIN role_reputation_subjects rrs
-        ON rrs.subject_user_id = grp.subject_user_id AND rrs.role = grp.role
-      WHERE grp.game_id = g.id
-        AND grp.role = 'training'
-        AND rrs.public_handle = ${p}
+    (p) => `(
+      EXISTS (
+        SELECT 1 FROM game_role_proofs grp
+        JOIN role_reputation_subjects rrs
+          ON rrs.subject_user_id = grp.subject_user_id AND rrs.role = grp.role
+        WHERE grp.game_id = g.id
+          AND grp.role = 'training'
+          AND rrs.public_handle = ${p}
+      )
+      OR (
+        g.activity_kind = 'trainer_led'
+        AND g.trainer_profile_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM game_role_proofs p
+          WHERE p.game_id = g.id AND p.role = 'training'
+        )
+        AND EXISTS (
+          SELECT 1 FROM trainer_profiles tp
+          JOIN role_reputation_subjects rrs
+            ON rrs.subject_user_id = tp.user_id AND rrs.role = 'training'
+          WHERE tp.id = g.trainer_profile_id
+            AND rrs.public_handle = ${p}
+        )
+      )
     )`,
   );
   if (filter.temporalScope === "upcoming") where.push("g.starts_at > statement_timestamp()");

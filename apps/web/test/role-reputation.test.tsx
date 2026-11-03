@@ -185,9 +185,10 @@ describe("#394 role reputation consumer UI — behavioral", () => {
 
   it("card actions bind exact role handle when opening reviews", () => {
     const handle = "b".repeat(32);
+    const gameId = "g0000000-0000-4000-8000-000000000001";
     hooks.index = 0;
     const tree = RoleReputationCardActions({
-      gameId: "g0000000-0000-4000-8000-000000000001",
+      gameId,
       organization: card({
         role: "organization",
         roleHandle: handle,
@@ -203,7 +204,7 @@ describe("#394 role reputation consumer UI — behavioral", () => {
     (open!.props.onClick as () => void)();
     hooks.index = 0;
     const again = RoleReputationCardActions({
-      gameId: "g0000000-0000-4000-8000-000000000001",
+      gameId,
       organization: card({
         role: "organization",
         roleHandle: handle,
@@ -211,11 +212,29 @@ describe("#394 role reputation consumer UI — behavioral", () => {
         publishedReviewCount: 1,
       }),
     });
-    const dialog = nodes(again).find(
-      (n) => n.props["data-testid"] === "role-reviews-dialog",
+    // Harness walks elements without mounting children — assert real dialog props, then invoke mock.
+    const dialogEl = nodes(again).find(
+      (n) =>
+        n.props.roleHandle === handle &&
+        n.props.role === "organization" &&
+        n.props.gameId === gameId &&
+        typeof n.props.onClose === "function",
     );
-    expect(dialog?.props["data-handle"]).toBe(handle);
-    expect(dialog?.props["data-role"]).toBe("organization");
+    expect(dialogEl).toBeTruthy();
+    expect(dialogEl!.props.roleHandle).toBe(handle);
+    expect(dialogEl!.props.role).toBe("organization");
+    expect(dialogEl!.props.gameId).toBe(gameId);
+    const rendered =
+      typeof dialogEl!.type === "function"
+        ? (dialogEl!.type as (props: Props) => unknown)(dialogEl!.props)
+        : null;
+    expect(isValidElement(rendered)).toBe(true);
+    if (isValidElement<Props>(rendered)) {
+      expect(rendered.props["data-testid"]).toBe("role-reviews-dialog");
+      expect(rendered.props["data-handle"]).toBe(handle);
+      expect(rendered.props["data-role"]).toBe("organization");
+    }
+    (dialogEl!.props.onClose as () => void)();
     expect(textOf(again)).toContain("1 проведённая игра");
   });
 });

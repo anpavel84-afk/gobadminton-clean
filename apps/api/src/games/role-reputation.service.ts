@@ -555,6 +555,7 @@ export class RoleReputationService {
       reply_aggregate_version: number | null;
       reply_approved_resource_version: number | null;
       reply_pending_resource_version: number | null;
+      tip_bound_review_revision_id: string | null;
       subject_user_id: string;
       author_user_id: string;
     }>(
@@ -563,13 +564,18 @@ export class RoleReputationService {
               r.resource_version AS approved_resource_version,
               rr.body_text AS reply_text, rp.status AS reply_status,
               rp.version AS reply_aggregate_version,
+              rp.bound_review_revision_id AS tip_bound_review_revision_id,
               rr.resource_version AS reply_approved_resource_version,
               pr.resource_version AS reply_pending_resource_version
        FROM role_review_slots s
        JOIN role_review_revisions r ON r.id = s.approved_revision_id
        LEFT JOIN role_review_replies rp ON rp.slot_id = s.id
-       LEFT JOIN role_review_reply_revisions rr ON rr.id = rp.approved_revision_id
-       LEFT JOIN role_review_reply_revisions pr ON pr.id = rp.pending_revision_id
+       LEFT JOIN role_review_reply_revisions rr
+         ON rr.id = rp.approved_revision_id
+        AND rr.bound_review_revision_id = s.approved_revision_id
+       LEFT JOIN role_review_reply_revisions pr
+         ON pr.id = rp.pending_revision_id
+        AND pr.bound_review_revision_id = s.approved_revision_id
        WHERE s.subject_user_id = $1
          AND s.role = $2
          AND s.status = 'published'
@@ -588,6 +594,15 @@ export class RoleReputationService {
     const slice = rows.rows.slice(0, args.limit);
     const items: PublicRoleReviewItemDto[] = slice.map((row) => {
       const isSubject = args.viewerId === row.subject_user_id;
+      // Public reply and subject tip only for the exact approved review revision.
+      const replyBoundToCurrent =
+        row.tip_bound_review_revision_id != null &&
+        row.tip_bound_review_revision_id === row.approved_revision_id;
+      const publishedReplyForCurrent =
+        replyBoundToCurrent &&
+        row.reply_status === "published" &&
+        row.reply_text &&
+        row.reply_approved_resource_version != null;
       return {
         reviewHandle: row.public_handle,
         role: row.role,
@@ -597,19 +612,16 @@ export class RoleReputationService {
         experienceState: row.basis_under_review ? "basis_under_review" : "published",
         publishedRevision: row.approved_resource_version,
         replyAggregateVersion: row.reply_aggregate_version ?? 0,
-        reply:
-          row.reply_status === "published" &&
-          row.reply_text &&
-          row.reply_approved_resource_version != null
-            ? {
-                text: row.reply_text,
-                experienceState: "published" as const,
-                publishedRevision: row.reply_approved_resource_version,
-              }
-            : null,
-        // Subject-only tip for edit/withdraw — never leak pending reply body.
+        reply: publishedReplyForCurrent
+          ? {
+              text: row.reply_text!,
+              experienceState: "published" as const,
+              publishedRevision: row.reply_approved_resource_version!,
+            }
+          : null,
+        // Subject-only tip for current revision — never claim a prior-revision published reply.
         subjectOwnReply:
-          isSubject && row.reply_status
+          isSubject && row.reply_status && replyBoundToCurrent
             ? {
                 status: row.reply_status,
                 version: row.reply_aggregate_version ?? 0,
