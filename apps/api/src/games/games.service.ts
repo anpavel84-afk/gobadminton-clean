@@ -608,17 +608,27 @@ export class GamesService {
         throw notFound("GAME_NOT_FOUND", "Игра не найдена");
       }
 
-      const membership = await client.query(
+      // Non-discovery Game read: active manager always; own Participation for
+      // non-draft rows (PERMISSIONS.md unlisted via своя Participation). Draft
+      // stays manager-only (API_POLICY). Share-token anonymous unlisted remains
+      // intentionally out of scope.
+      const authorized = await client.query(
         `SELECT 1
-         FROM game_managers
-         WHERE game_id = $1
-           AND user_id = $2
-           AND status = 'active'
+         WHERE EXISTS (
+           SELECT 1 FROM game_managers
+           WHERE game_id = $1 AND user_id = $2 AND status = 'active'
+         )
+         OR (
+           $3::text <> 'draft'
+           AND EXISTS (
+             SELECT 1 FROM participations
+             WHERE game_id = $1 AND user_id = $2
+           )
+         )
          LIMIT 1`,
-        [gameId, viewerUserId],
+        [gameId, viewerUserId, dto.status],
       );
-      if (!membership.rows[0]) {
-        // Unlisted share-token access remains intentionally out of scope.
+      if (!authorized.rows[0]) {
         throw notFound("GAME_NOT_FOUND", "Игра не найдена");
       }
       return dto;

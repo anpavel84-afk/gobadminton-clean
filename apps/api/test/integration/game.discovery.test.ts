@@ -435,6 +435,7 @@ describeIntegration("F-03 organizer/venue/game discovery", () => {
     });
     expect(unlistedDraft.statusCode).toBe(201);
     const unlistedId = unlistedDraft.json().id as string;
+    const unlistedVersion = unlistedDraft.json().version as number;
     const anonymousUnlisted = await app.inject({
       method: "GET",
       url: `/v1/games/${unlistedId}`,
@@ -446,6 +447,41 @@ describeIntegration("F-03 organizer/venue/game discovery", () => {
       cookies: owner.cookies,
     });
     expect(ownerUnlisted.statusCode).toBe(200);
+
+    // #455: own Participation (not only managers) may read published unlisted Games.
+    const publishUnlisted = await app.inject({
+      method: "POST",
+      url: `/v1/games/${unlistedId}/publish`,
+      headers: mutationHeaders(owner, `idem-ul-pub-${Date.now()}-abcdefgh`),
+      payload: { expectedVersion: unlistedVersion },
+    });
+    expect(publishUnlisted.statusCode).toBe(200);
+    expect(publishUnlisted.json().status).toBe("published");
+    expect(publishUnlisted.json().visibility).toBe("unlisted");
+    const strangerBeforeJoin = await app.inject({
+      method: "GET",
+      url: `/v1/games/${unlistedId}`,
+      cookies: other.cookies,
+    });
+    expect(strangerBeforeJoin.statusCode).toBe(404);
+    await pool.query(
+      `INSERT INTO participations (game_id, user_id, status, attempt_number, version)
+       VALUES ($1, $2, 'pending', 1, 1)`,
+      [unlistedId, other.userId],
+    );
+    const participantUnlisted = await app.inject({
+      method: "GET",
+      url: `/v1/games/${unlistedId}`,
+      cookies: other.cookies,
+    });
+    expect(participantUnlisted.statusCode).toBe(200);
+    expect(participantUnlisted.json().id).toBe(unlistedId);
+    expect(participantUnlisted.json().visibility).toBe("unlisted");
+    const anonymousAfterJoin = await app.inject({
+      method: "GET",
+      url: `/v1/games/${unlistedId}`,
+    });
+    expect(anonymousAfterJoin.statusCode).toBe(404);
 
     await gameAuthority.revokeForTests(published.id, owner.userId);
     const revokedCancel = await app.inject({
