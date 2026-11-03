@@ -22,15 +22,54 @@ function roleTitle(role: RoleKind): string {
   return role === "organization" ? "Как организатор" : "Как тренер";
 }
 
+/** Russian 1 / 2–4 / 5+ (and 11–14 many). */
+function ruForm(count: number, one: string, few: string, many: string): string {
+  const n10 = count % 10;
+  const n100 = count % 100;
+  if (n100 >= 11 && n100 <= 14) return many;
+  if (n10 === 1) return one;
+  if (n10 >= 2 && n10 <= 4) return few;
+  return many;
+}
+
+function heldGamesForm(count: number): string {
+  return ruForm(count, "проведённая игра", "проведённые игры", "проведённых игр");
+}
+
+function publishedReviewsForm(count: number): string {
+  return ruForm(count, "опубликованный отзыв", "опубликованных отзыва", "опубликованных отзывов");
+}
+
+/** Full phrase with count once — for card footers without a separate strong. */
 function heldLabel(count: number | null, incomplete: boolean): string | null {
   if (count == null) return null;
   const base =
     count === 0
       ? "По подтверждённой истории проведённых игр пока нет"
-      : count === 1
-        ? "1 проведённая игра по подтверждённой истории"
-        : `${count} проведённых игр по подтверждённой истории`;
+      : `${count} ${heldGamesForm(count)} по подтверждённой истории`;
   return incomplete ? `${base}. История может быть неполной` : base;
+}
+
+/** Panel/dialog body: numeric value once in strong + case form without repeating the digit. */
+function heldCountBody(count: number | null, incomplete: boolean) {
+  if (count == null) return null;
+  if (count === 0) {
+    return (
+      <p className="gb-role-rep__held">
+        {incomplete
+          ? "По подтверждённой истории проведённых игр пока нет. История может быть неполной"
+          : "По подтверждённой истории проведённых игр пока нет"}
+      </p>
+    );
+  }
+  const suffix = `${heldGamesForm(count)} по подтверждённой истории${
+    incomplete ? ". История может быть неполной" : ""
+  }`;
+  return (
+    <p className="gb-role-rep__held">
+      <strong>{count}</strong> {suffix}
+    </p>
+  );
 }
 
 function reviewsButtonLabel(count: number, role: RoleKind): string {
@@ -156,20 +195,13 @@ export function RoleReputationPanel({
     );
   }
 
-  const heldText = role === "organization" ? heldLabel(held, incomplete) : null;
-
   return (
     <div className="gb-role-rep" data-role={role} data-state="ready">
       <p className="gb-role-rep__eyebrow">{roleTitle(role)}</p>
-      {heldText ? (
-        <p className="gb-role-rep__held">
-          {held != null && held > 0 ? <strong>{held}</strong> : null}
-          {heldText}
-        </p>
-      ) : null}
+      {role === "organization" ? heldCountBody(held, incomplete) : null}
       <p className="gb-role-rep__hint">
         {published > 0
-          ? `${published} опубликованных отзывов. Приватные сообщения и ожидающие тексты сюда не входят.`
+          ? `${published} ${publishedReviewsForm(published)}. Приватные сообщения и ожидающие тексты сюда не входят.`
           : "Пока нет опубликованных отзывов по этой роли."}
       </p>
       <div className="gb-role-rep__actions">

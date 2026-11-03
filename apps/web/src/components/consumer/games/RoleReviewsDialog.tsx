@@ -42,6 +42,15 @@ function roleHeading(role: RoleKind, count: number): string {
   return count > 0 ? `${base} · ${count}` : base;
 }
 
+function heldGamesForm(count: number): string {
+  const n10 = count % 10;
+  const n100 = count % 100;
+  if (n100 >= 11 && n100 <= 14) return "проведённых игр";
+  if (n10 === 1) return "проведённая игра";
+  if (n10 >= 2 && n10 <= 4) return "проведённые игры";
+  return "проведённых игр";
+}
+
 /**
  * Public role reviews drawer. Uses ProfileDialog (Escape / focus return / body lock).
  * CAS errors keep server text and require explicit recheck — no auto-retry.
@@ -281,9 +290,18 @@ export function RoleReviewsDialog({
         <>
           {summary.heldGamesCount != null ? (
             <p className="gb-role-rep__held">
-              <strong>{summary.heldGamesCount}</strong>
-              проведённых игр по подтверждённой истории
-              {summary.historyMayBeIncomplete ? ". История может быть неполной" : ""}
+              {summary.heldGamesCount > 0 ? (
+                <>
+                  <strong>{summary.heldGamesCount}</strong>{" "}
+                  {`${heldGamesForm(summary.heldGamesCount)} по подтверждённой истории`}
+                  {summary.historyMayBeIncomplete ? ". История может быть неполной" : ""}
+                </>
+              ) : (
+                <>
+                  По подтверждённой истории проведённых игр пока нет
+                  {summary.historyMayBeIncomplete ? ". История может быть неполной" : ""}
+                </>
+              )}
             </p>
           ) : null}
           {!summary.items.length ? (

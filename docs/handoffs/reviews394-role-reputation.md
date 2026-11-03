@@ -1,75 +1,57 @@
-# Handoff · #394 role reputation Admin UI + QA repairs + alpha.20 (attempt 25)
+# Handoff · #394 role reputation exact regression repair (attempt 26)
 
-Assignment: `OWNER394_ROLE_REPUTATION_ADMIN_UI_RELEASE_AND_EXACT_QA_REPAIR`
-Base: `9a5f8d204e792098754696f6d1907b5c0ee6f553`
-Attempt: **25** · continues preserved #394 history (same coordinated PR with #372)
-Parent: #372 · C5 OFF · PROD forbidden · no Git commit/push/deploy / no dependency install in this author pass
+Assignment: `OWNER394_EXACT_REGRESSION_REPAIR_AFTER_COMBINED_SOURCE`
+Base: `8c811dcfbd2eab27c00bfde058cefe400695b3cb`
+Attempt: **26** · continues preserved #394 history (same coordinated release with #372)
+Parent: #372 · C5 OFF · PROD forbidden · no Git commit/push/deploy · no new architecture/deps
+Author: cursor:auto · progress OD016 · prior source implementation retained
 
-## Inputs viewed (bytes / sha256 verified)
+## Inputs viewed (bytes / sha256 as delivered)
 
-| Material | delivered_path | Notes |
-|---|---|---|
-| human-review-desktop.png | design-inputs | Concept tab 08 «Разбор»; criticism remains opinion; report does not auto-hide |
-| human-review-mobile.png | design-inputs | Same concept, mobile |
-| final.txt (Sol Medium Admin QA) | design-inputs | FAIL @ `2bb9…`; 4 findings immutable |
-| alpha20-role-reviews-brief.md | design-inputs | Prospective alpha.20 wording; UAT NOT_TESTED |
-| alpha19-history-seed-for-alpha20.json | design-inputs | Exact alpha.19 seed prepended to history |
-| addressed-checks.json / disposable-db.json | design-inputs | Pass5 consumer+HTTP both PASS at base |
+| Material | Notes |
+|---|---|
+| admin-ui.log | decide form absent @ line 318 — source cleared by flushEffects lifecycle |
+| disposable-role-reputation.disposable.log | humanApprovePending 403 — pure moderator denied evidence.read |
+| disposable-admin-role-reputation.disposable.log | intake 403 @ line 948 — reviewer step_up aged by prior test |
+| findings.txt | held count duplicate strong+text; web test is source-string mirror |
 
-## Source completed this pass
+## Source completed this pass (allowed paths only)
 
-### 1. Exact Sol Medium Admin QA repairs (`role-reputation.service` admin)
-1. **approve REVIEW** targets **current `pending_revision_id` only** — reports about approved text use **retain** (does not clear newer pending).
-2. **approve REPLY** requires exact current `role_review_replies.pending_revision_id`.
-3. **readSource** requires `evidence.assigned.read` even for `case.manage` holders (removed manages bypass). Approve/restore/basis also require read qualification (no ID guessing). UI affordance: support/superadmin; moderator triage assigns via ordinary Cases assign.
-4. **`role_basis_resolve`** only when intake `kind === basis_dispute` + exact bound proof target; text/report Cases denied (`BASIS_KIND_DENIED`).
+1. **Consumer HTTP** `role-reputation.disposable.test.ts` — `humanApprovePending` uses existing qualified **superadmin** synthetic reviewer (evidence.assigned.read). Production permission not weakened. Pure moderator 403 remains in admin suite.
+2. **Admin HTTP** `admin-role-reputation.disposable.test.ts` — QA findings test restores fresh `step_up_at` via established fixture UPDATE before intake; stale/approve/reply/readonly/basis negatives unchanged (no skip / no assertGreaterThanEqual hide).
+3. **Admin UI** `role-reputation-cases.test.tsx` — decide-binding test uses explicit source-read flow (open button → await → set decision fields → submit). Asserts exact case/resource/revision command. Late-source/fresh/case expiry + pure moderator tests retained.
+4. **Web panel/dialog** — held count shown once (`<strong>N</strong>` + form without repeating digit); Russian 1/2/5 cases for held games and published review count; same panels + dialog; no layout rewrite.
+5. **Web test** `role-reputation.test.tsx` — replaced source-string mirror with 3 behavioral checks (render counts/roles/unavailable; card-action exact handle bind). No new deps; HTTP auth tests untouched.
 
-Targeted HTTP negatives added in `admin-role-reputation.disposable.test.ts` (stale approve / moderator source 403 / wrong-kind basis). Positive fixture uses **superadmin** reviewer.
+## Paths touched
 
-### 2. Admin Cases UI — `RoleReputationCases` child
-- Pending queue + human intake + case metadata + explicit source read + decide (approve/retain/correction/remove/restore).
-- Session/fresh/run/stepup + original idempotency key + UNKNOWN retry; clears protected payload on session/fresh/case/version/assignment change and unmount (incl. late success).
-- Scoped CSS; UI tests for late-async privacy + decide binding + moderator affordance.
-- Optional `roleReputation` metadata on Case detail (OpenAPI optional; table-absence guarded).
+- `apps/api/test/integration/role-reputation.disposable.test.ts`
+- `apps/api/test/integration/admin-role-reputation.disposable.test.ts`
+- `apps/admin/test/role-reputation-cases.test.tsx`
+- `apps/web/src/components/consumer/games/RoleReputationPanel.tsx`
+- `apps/web/src/components/consumer/games/RoleReviewsDialog.tsx`
+- `apps/web/test/role-reputation.test.tsx`
+- `docs/handoffs/reviews394-role-reputation.md`
 
-### 3. Consumer companions (small)
-- **A** READ IDENTITY ONLY fallback for future games without tip: `organizer_id IS NULL` → `created_by`; `trainer_led` + trainer profile owner. Same gates; no write/proof grant.
-- **B** Batch `viewerBlocked` + `heldGamesCount` set-oriented for all bounded subjects (no N+1).
-- **C** Map honesty copy when personal trainer filter active — map shows all city games; filter applies to list; preserved on return.
-
-### 4. Release alpha.20
-- `CURRENT_APPLICATION_VERSION` = `0.1.0-alpha.20`, `API_CONTRACT_VERSION_NOTE` = `0.28.0` (matches OpenAPI `info.version`).
-- Prepended exact alpha.19 historical seed; preserved alpha.18 and all prior / alpha.1 baseline.
-- Russian delta: public role reviews before join + human Cases review; no fake 15/20; UAT **NOT_TESTED**; PROD not promoted.
-
-## Paths touched (allowed)
-
-Admin: `RoleReputationCases.tsx`, `Cases.tsx`, `admin-client.ts`, `admin.css`, `role-reputation-cases.test.tsx`, `cases.test.tsx`
-API admin: `role-reputation.service.ts`, `cases.service.ts`, `admin-role-reputation.disposable.test.ts`
-API consumer: `games/role-reputation.service.ts`
-Web: `releases.ts`, release tests, `GamesDiscoveryPage.tsx`, `role-reputation.test.tsx`
-Contracts: `openapi.json` (optional Case metadata only)
-Docs: this handoff
-
-## Author checks
+## Author checks (exact; no full QA/CI/DEV claim)
 
 | Check | Result |
 |---|---|
-| Design images / QA JSON / release seed | viewed |
-| Targeted unit/UI/HTTP | **notrun** in author slot (no node_modules / no DB / network forbidden) |
+| Findings logs read | yes |
+| Targeted unit/UI/HTTP in author slot | **pending** (no node_modules / disposable DB in this slot) |
 | Product CI / security / DEV smoke | not claimed |
 | Independent repair QA | pending (PMA) |
 | Owner UAT | **NOT_TESTED** |
 
 ## Remaining gates (same coordinated PR — NOT READY / NOT DONE / NOT DEV)
 
-1. Trusted PMA: targeted typecheck/contracts + Admin/consumer disposable HTTP + Admin UI test + Product CI
-2. Independent Codex Sol Medium repair/UI/history QA
-3. Merge `dev` → server DEV ACCEPTED; human Admin UAT remains NOT_TESTED until authorized session
-4. Do **not** claim source finished = DEV / READY / PROD
+1. PMA: Admin UI vitest + consumer/admin disposable HTTP + web role-reputation behavioral test
+2. Independent Codex Sol Medium repair QA
+3. Merge `dev` → server DEV ACCEPTED; human Admin UAT remains NOT_TESTED
+4. Do **not** treat author pass as DEV / READY / PROD
 
 ## Notes
 
-- No new Astra/architecture/C5; one writer; AdminRoleService RBAC grants unchanged.
-- Private peer Cases regression mock preserved; RoleReputationCases mocked in peer source race test.
+- No authority/migrations/old-tests changes; negatives kept.
+- Existing Admin reviewer + consumer roundtrip paths usable after fixture repair.
 - Mode B / AGY READY not claimed.

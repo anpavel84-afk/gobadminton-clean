@@ -70,7 +70,8 @@ run("#394 role reputation — disposable", () => {
   let organizer: Actor;
   let participant: Actor;
   let outsider: Actor;
-  let moderator: AdminActor;
+  /** Qualified reader+manager: evidence.assigned.read (superadmin). Pure moderator stays denied. */
+  let reviewer: AdminActor;
   const migrations = path.resolve(__dirname, "../../migrations");
 
   beforeAll(async () => {
@@ -140,7 +141,7 @@ run("#394 role reputation — disposable", () => {
     organizer = await actor("org");
     participant = await actor("part");
     outsider = await actor("out");
-    moderator = await adminActor("moderator");
+    reviewer = await adminActor("superadmin");
   }, 180000);
 
   afterAll(async () => {
@@ -358,10 +359,10 @@ run("#394 role reputation — disposable", () => {
     const intake = await app.inject({
       method: "POST",
       url: "/v1/admin/cases/role-reputation-intake",
-      cookies: { [ADMIN_COOKIE]: moderator.token },
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
       headers: {
         origin: adminOrigin,
-        "x-csrf-token": moderator.csrf,
+        "x-csrf-token": reviewer.csrf,
         "idempotency-key": randomUUID(),
       },
       payload: {
@@ -376,7 +377,7 @@ run("#394 role reputation — disposable", () => {
     const source = await app.inject({
       method: "GET",
       url: `/v1/admin/cases/${caseId}/role-review-source`,
-      cookies: { [ADMIN_COOKIE]: moderator.token },
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
       headers: { origin: adminOrigin },
     });
     expect(source.statusCode).toBe(200);
@@ -385,10 +386,10 @@ run("#394 role reputation — disposable", () => {
     const decide = await app.inject({
       method: "POST",
       url: `/v1/admin/cases/${caseId}/commands`,
-      cookies: { [ADMIN_COOKIE]: moderator.token },
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
       headers: {
         origin: adminOrigin,
-        "x-csrf-token": moderator.csrf,
+        "x-csrf-token": reviewer.csrf,
         "idempotency-key": randomUUID(),
       },
       payload: {

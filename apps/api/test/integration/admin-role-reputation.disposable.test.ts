@@ -894,6 +894,12 @@ run("#394 admin role reputation — disposable", () => {
   });
 
   it("QA findings: stale approve keeps pending; pure moderator source 403; wrong-kind basis denied", async () => {
+    // Prior lifecycle test deliberately aged reviewer step_up_at; restore fresh step-up
+    // for this independent suite without relaxing COI/admission/fresh gates.
+    await pool.query("UPDATE admin_sessions SET step_up_at=clock_timestamp() WHERE id=$1", [
+      reviewer.sessionId,
+    ]);
+
     const organizer = await consumer("Org QA");
     const participant = await consumer("Part QA");
     const { gameId, roleHandle } = await seedHeldGame(organizer.userId, participant.userId);

@@ -285,15 +285,16 @@ describe("Admin RoleReputationCases source privacy + decision binding", () => {
   });
 
   it("binds decide command to exact current revision and case version", async () => {
+    // Explicit source-read flow: seeding source then flushEffects re-runs caseHint
+    // lifecycle and drops protected payload — do not short-circuit that path.
     renderTree();
     hooks.slots[SLOT.caseHint]!.value = caseA;
-    hooks.slots[SLOT.source]!.value = { ...sourcePayload, boundCaseId: CASE_A };
-    hooks.slots[SLOT.decision]!.value = "approve";
-    hooks.slots[SLOT.rationale]!.value = "Публикуем текущую ожидающую редакцию";
-    hooks.slots[SLOT.confirmed]!.value = true;
+    flushEffects();
+    renderTree();
     flushEffects();
 
     transport.handler = (path, body) => {
+      if (path === SOURCE_PATH_A) return sourcePayload;
       if (path === `cases/${CASE_A}/commands`) {
         expect(body).toMatchObject({
           action: "role_review_decide",
@@ -308,6 +309,14 @@ describe("Admin RoleReputationCases source privacy + decision binding", () => {
       if (path === `cases/${CASE_A}`) return { ...caseA, version: 3 };
       throw new Error(`unexpected path ${path}`);
     };
+
+    (openSourceButton().props.onClick as () => void)();
+    await work;
+    expect(treeText()).toContain(PRIVATE);
+
+    hooks.slots[SLOT.decision]!.value = "approve";
+    hooks.slots[SLOT.rationale]!.value = "Публикуем текущую ожидающую редакцию";
+    hooks.slots[SLOT.confirmed]!.value = true;
 
     const decideForm = nodes(renderTree()).find(
       (n) =>

@@ -1,78 +1,221 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { createElement, isValidElement } from "react";
+import type * as ReactModule from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RoleReputationCardSummary } from "../src/lib/consumer-types";
 
-const root = path.resolve(__dirname, "..");
+const api = vi.hoisted(() => ({
+  getRoleReputation: vi.fn(),
+  getGameRoleReputation: vi.fn(),
+  getPlayerRoleReputation: vi.fn(),
+}));
 
-function read(rel: string): string {
-  return readFileSync(path.join(root, rel), "utf8");
+vi.mock("../src/lib/api-client", () => api);
+
+vi.mock("../src/components/consumer/games/RoleReviewsDialog", () => ({
+  RoleReviewsDialog: (props: { roleHandle: string; role: string }) =>
+    createElement("div", {
+      "data-testid": "role-reviews-dialog",
+      "data-handle": props.roleHandle,
+      "data-role": props.role,
+    }),
+}));
+
+vi.mock("../src/components/consumer/games/RoleReviewComposer", () => ({
+  RoleReviewComposer: () => null,
+}));
+
+const hooks = vi.hoisted(() => ({
+  index: 0,
+  slots: [] as { value: unknown; deps?: readonly unknown[] }[],
+  effects: [] as (() => unknown)[],
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof ReactModule>();
+  function cell() {
+    const index = hooks.index++;
+    return hooks.slots[index] ?? (hooks.slots[index] = { value: undefined });
+  }
+  function changed(previous: readonly unknown[] | undefined, next: readonly unknown[]) {
+    return (
+      !previous ||
+      previous.length !== next.length ||
+      next.some((value, index) => !Object.is(previous[index], value))
+    );
+  }
+  return {
+    ...actual,
+    useState(initial: unknown) {
+      const index = hooks.index;
+      const existed = index in hooks.slots;
+      const slot = cell();
+      if (!existed) slot.value = typeof initial === "function" ? (initial as () => unknown)() : initial;
+      return [
+        slot.value,
+        (next: unknown) => {
+          slot.value =
+            typeof next === "function" ? (next as (previous: unknown) => unknown)(slot.value) : next;
+        },
+      ];
+    },
+    useRef(initial: unknown) {
+      const slot = cell();
+      if (!slot.value) slot.value = { current: initial };
+      return slot.value as { current: unknown };
+    },
+    useEffect(effect: () => unknown, deps: readonly unknown[]) {
+      const slot = cell();
+      if (changed(slot.deps, deps)) {
+        hooks.effects.push(effect);
+        slot.deps = deps;
+      }
+    },
+  };
+});
+
+import {
+  RoleReputationCardActions,
+  RoleReputationPanel,
+} from "../src/components/consumer/games/RoleReputationPanel";
+
+type Props = Record<string, unknown>;
+type Node = { type: unknown; props: Props };
+
+function nodes(value: unknown, out: Node[] = []): Node[] {
+  if (!value || typeof value !== "object") return out;
+  if (Array.isArray(value)) {
+    value.forEach((child) => nodes(child, out));
+    return out;
+  }
+  if (isValidElement<Props>(value)) {
+    out.push({ type: value.type, props: value.props });
+    nodes(value.props.children, out);
+  }
+  return out;
 }
 
-describe("#394 role reputation consumer UI — targeted source checks", () => {
-  it("panel/dialog/composer use server handles and never hardcode DEMO 15/20 counts", () => {
-    const panel = read("src/components/consumer/games/RoleReputationPanel.tsx");
-    const dialog = read("src/components/consumer/games/RoleReviewsDialog.tsx");
-    const composer = read("src/components/consumer/games/RoleReviewComposer.tsx");
-    const css = read("src/styles/role-reputation.css");
-    expect(panel).toContain("getRoleReputation");
-    expect(panel).toContain("getGameRoleReputation");
-    expect(panel).toContain("publishedReviewCount");
-    expect(panel).toContain("heldGamesCount");
-    expect(panel).not.toContain("DEMO");
-    expect(panel).not.toMatch(/=\s*15\b/);
-    expect(panel).not.toMatch(/=\s*20\b/);
-    expect(dialog).toContain("publishedRevision");
-    expect(dialog).toContain("reportRoleReview");
-    expect(dialog).toContain("unknownKeys");
-    expect(dialog).toContain("gb-private-expired");
-    expect(dialog).toContain("ожидает разбора");
-    expect(composer).toContain("getOwnRoleReviewEligibility");
-    expect(composer).toContain("consentProjectionHash");
-    expect(composer).toContain("setConsent(false)");
-    expect(composer).toContain("Организатору лично");
-    expect(composer).toContain("audience === \"personal\"");
-    expect(composer).not.toContain("компании");
-    expect(css).toContain("min-height: 44px");
+function textOf(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(textOf).join("");
+  if (isValidElement<Props>(value)) return textOf(value.props.children);
+  return "";
+}
+
+function flushEffects() {
+  const queued = hooks.effects.splice(0);
+  for (const effect of queued) effect();
+}
+
+function card(partial: Partial<RoleReputationCardSummary> & Pick<RoleReputationCardSummary, "role">): RoleReputationCardSummary {
+  return {
+    roleHandle: partial.roleHandle ?? "a".repeat(32),
+    role: partial.role,
+    subjectDisplayName: partial.subjectDisplayName ?? "Игрок",
+    heldGamesCount: partial.heldGamesCount ?? null,
+    countScope: "confirmed_history",
+    historyMayBeIncomplete: true,
+    publishedReviewCount: partial.publishedReviewCount ?? 0,
+    projectionVersion: partial.projectionVersion ?? "v1",
+    availability: partial.availability ?? "available",
+  };
+}
+
+describe("#394 role reputation consumer UI — behavioral", () => {
+  beforeEach(() => {
+    hooks.slots = [];
+    hooks.index = 0;
+    hooks.effects = [];
+    api.getRoleReputation.mockReset();
+    api.getGameRoleReputation.mockReset();
+    api.getPlayerRoleReputation.mockReset();
   });
 
-  it("discovery batches summaries and binds trainer filter without nested link controls", () => {
-    const discovery = read("src/components/consumer/pages/GamesDiscoveryPage.tsx");
-    const card = read("src/components/consumer/discovery/DiscoveryGameCard.tsx");
-    const client = read("src/lib/api-client.ts");
-    expect(discovery).toContain("listRoleReputationSummaries");
-    expect(discovery).toContain("trainerRoleHandle");
-    expect(discovery).toContain("trainer");
-    // Map honesty: personal trainer filter is list-only; do not claim map is filtered.
-    expect(discovery).toContain("data-map-filter-honesty");
-    expect(discovery).toContain("Фильтр личного тренера действует в списке");
-    expect(card).toContain("RoleReputationCardActions");
-    expect(card).toContain("reputation");
-    expect(client).toContain("/v1/role-reputation-summaries");
-    expect(client).toContain("trainerRoleHandle");
+  it("renders separate role labels, single held count with Russian cases, and review count forms", () => {
+    const orgHtml = renderToStaticMarkup(
+      createElement(RoleReputationPanel, {
+        role: "organization",
+        card: card({ role: "organization", heldGamesCount: 2, publishedReviewCount: 1 }),
+      }),
+    );
+    expect(orgHtml).toContain("Как организатор");
+    expect(orgHtml).toContain("<strong>2</strong>");
+    expect(orgHtml).toContain("проведённые игры по подтверждённой истории");
+    expect(orgHtml).not.toMatch(/<strong>2<\/strong>\s*2\s/);
+    expect(orgHtml).toContain("1 опубликованный отзыв");
+
+    const five = renderToStaticMarkup(
+      createElement(RoleReputationPanel, {
+        role: "organization",
+        card: card({ role: "organization", heldGamesCount: 5, publishedReviewCount: 5 }),
+      }),
+    );
+    expect(five).toContain("<strong>5</strong>");
+    expect(five).toContain("проведённых игр по подтверждённой истории");
+    expect(five).toContain("5 опубликованных отзывов");
+    expect(five).not.toMatch(/<strong>5<\/strong>\s*5\s/);
+
+    const train = renderToStaticMarkup(
+      createElement(RoleReputationPanel, {
+        role: "training",
+        card: card({ role: "training", heldGamesCount: 2, publishedReviewCount: 2 }),
+      }),
+    );
+    expect(train).toContain("Как тренер");
+    expect(train).not.toContain("проведённые игры");
+    expect(train).toContain("2 опубликованных отзыва");
   });
 
-  it("game detail and public profile expose role panels before join / without inventing skill rating", () => {
-    const terms = read("src/components/consumer/games/GameDetailComposition.tsx");
-    const profile = read("src/components/consumer/players/PublicPlayerProfile.tsx");
-    const feedback = read("src/components/consumer/games/GameFeedbackPanel.tsx");
-    expect(terms).toContain("RoleReputationPanel");
-    expect(terms).toContain('role="organization"');
-    expect(terms).toContain('role="training"');
-    expect(profile).toContain("RoleReputationPanel");
-    expect(profile).toContain("publicPlayerId");
-    expect(feedback).toContain("Организатору лично");
-    expect(feedback).toContain("Отправить организатору лично");
-    expect(feedback).toContain("не отзыв организации-компании");
+  it("shows public unavailable copy without inventing held/review counts", () => {
+    const html = renderToStaticMarkup(
+      createElement(RoleReputationPanel, {
+        role: "organization",
+        card: card({
+          role: "organization",
+          availability: "unavailable",
+          heldGamesCount: 9,
+          publishedReviewCount: 9,
+        }),
+      }),
+    );
+    expect(html).toContain("Публичная история этой роли сейчас недоступна");
+    expect(html).not.toContain("<strong>9</strong>");
+    expect(html).not.toContain("9 опубликованных");
   });
 
-  it("own history and UNKNOWN latches stay scope-bound without localStorage credentials", () => {
-    const history = read("src/components/consumer/games/RoleReviewsHistory.tsx");
-    const composer = read("src/components/consumer/games/RoleReviewComposer.tsx");
-    expect(history).toContain("listOwnRoleReviews");
-    expect(history).toContain("receiptToken");
-    expect(history).toContain("gb-private-expired");
-    expect(history).not.toContain("localStorage");
-    expect(composer).not.toContain("localStorage");
-    expect(composer).not.toContain("document.cookie");
+  it("card actions bind exact role handle when opening reviews", () => {
+    const handle = "b".repeat(32);
+    hooks.index = 0;
+    const tree = RoleReputationCardActions({
+      gameId: "g0000000-0000-4000-8000-000000000001",
+      organization: card({
+        role: "organization",
+        roleHandle: handle,
+        heldGamesCount: 1,
+        publishedReviewCount: 1,
+      }),
+    });
+    flushEffects();
+    const open = nodes(tree).find(
+      (n) => n.type === "button" && textOf(n.props.children).includes("Отзывы об организации"),
+    );
+    expect(open).toBeTruthy();
+    (open!.props.onClick as () => void)();
+    hooks.index = 0;
+    const again = RoleReputationCardActions({
+      gameId: "g0000000-0000-4000-8000-000000000001",
+      organization: card({
+        role: "organization",
+        roleHandle: handle,
+        heldGamesCount: 1,
+        publishedReviewCount: 1,
+      }),
+    });
+    const dialog = nodes(again).find(
+      (n) => n.props["data-testid"] === "role-reviews-dialog",
+    );
+    expect(dialog?.props["data-handle"]).toBe(handle);
+    expect(dialog?.props["data-role"]).toBe("organization");
+    expect(textOf(again)).toContain("1 проведённая игра");
   });
 });
