@@ -453,25 +453,21 @@ export class PushService {
     sessionIds: string[],
   ): Promise<void> {
     if (sessionIds.length === 0) return;
-    try {
-      await client.query(
-        `UPDATE web_push_subscriptions
-         SET unbound_at = COALESCE(unbound_at, now()), updated_at = now()
-         WHERE session_id = ANY($1::uuid[]) AND unbound_at IS NULL`,
-        [sessionIds],
-      );
-    } catch (error: unknown) {
-      // Pre-0055 fixtures may lack the relation; never block logout.
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code: string }).code === "42P01"
-      ) {
-        return;
-      }
-      throw error;
+    // Probe first: UPDATE on a missing relation aborts the TX (42P01), so a
+    // catch-and-return leaves revoke COMMIT as a silent rollback. Skip only when
+    // the table is genuinely absent (pre-0055 partial fixtures); real errors propagate.
+    const installed = await client.query<{ name: string | null }>(
+      `SELECT to_regclass('public.web_push_subscriptions')::text AS name`,
+    );
+    if (!installed.rows[0]?.name) {
+      return;
     }
+    await client.query(
+      `UPDATE web_push_subscriptions
+       SET unbound_at = COALESCE(unbound_at, now()), updated_at = now()
+       WHERE session_id = ANY($1::uuid[]) AND unbound_at IS NULL`,
+      [sessionIds],
+    );
   }
 
   private async activeDeviceCount(

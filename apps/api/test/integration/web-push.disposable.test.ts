@@ -315,10 +315,18 @@ run("#456 web push — disposable", () => {
     expect([200, 201]).toContain(reg.statusCode);
     const subId = reg.json().id as string;
 
+    // Omit Content-Type so Fastify does not reject an empty JSON body before the
+    // controller guard; cookie/CSRF/Origin/idempotency-key still apply.
+    const missingBodyKey = randomUUID().replace(/-/g, "").slice(0, 24);
     const missingBody = await app.inject({
       method: "DELETE",
       url: `/v1/me/push/subscriptions/${subId}`,
-      headers: headers(actor, randomUUID().replace(/-/g, "").slice(0, 24)),
+      headers: {
+        cookie: actor.cookie,
+        origin,
+        "x-csrf-token": actor.csrfToken,
+        "idempotency-key": missingBodyKey,
+      },
     });
     expect(missingBody.statusCode).toBe(400);
     expect(missingBody.json().code).toBe("INVALID_PUSH_UNSUBSCRIBE_COMMAND");
