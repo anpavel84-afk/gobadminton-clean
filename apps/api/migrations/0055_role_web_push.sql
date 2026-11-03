@@ -48,7 +48,7 @@ CREATE TABLE web_push_delivery_claims (
   kind text NOT NULL
     CHECK (kind IN ('dm_message', 'game_chat_message')),
   status text NOT NULL
-    CHECK (status IN ('claimed', 'sent', 'skipped', 'gone', 'failed')),
+    CHECK (status IN ('claimed', 'sent', 'skipped', 'gone', 'failed', 'unknown')),
   attempt_count integer NOT NULL DEFAULT 0
     CHECK (attempt_count BETWEEN 0 AND 100),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),

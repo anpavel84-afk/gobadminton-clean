@@ -7,6 +7,7 @@ import {
 } from "../../src/jobs/payloads";
 import {
   buildEncryptedPushRequest,
+  classifyWebPushTransportError,
 } from "../../src/push/push-delivery";
 import {
   PUSH_COPY,
@@ -106,5 +107,25 @@ describe("#456 web push policy + offline library encrypt", () => {
     expect(details.headers).toBeTruthy();
     const headerBlob = JSON.stringify(details.headers);
     expect(headerBlob).not.toMatch(/PRIVATE_KEY|endpoint_sealed/);
+  });
+
+  it("classifies known HTTP failure vs ambiguous claim/transport", () => {
+    const known503 = classifyWebPushTransportError({ statusCode: 503 });
+    expect(known503).toEqual({ statusCode: 503, permanent: false });
+    expect(known503.unknown).toBeUndefined();
+
+    const gone = classifyWebPushTransportError({ statusCode: 410 });
+    expect(gone).toEqual({ statusCode: 410, permanent: true });
+
+    const ambiguousNetwork = classifyWebPushTransportError(new Error("socket hang up"));
+    expect(ambiguousNetwork).toEqual({
+      statusCode: 0,
+      permanent: false,
+      unknown: true,
+    });
+
+    const ambiguousTimeout = classifyWebPushTransportError({ code: "ETIMEDOUT" });
+    expect(ambiguousTimeout.unknown).toBe(true);
+    expect(ambiguousTimeout.statusCode).toBe(0);
   });
 });

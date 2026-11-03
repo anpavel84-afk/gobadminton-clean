@@ -3,8 +3,10 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
+  bumpPushFenceGeneration,
   clearPushLocalBinding,
   ensurePushServiceWorker,
+  getPushFenceGeneration,
   getPushState,
   setServiceWorkerFence,
 } from "../../../lib/push-client";
@@ -12,13 +14,13 @@ import {
 /**
  * Narrow global push lifecycle via ConsumerShell / auth session events.
  * Does not prompt for permission on page load. Settings mount is not required.
+ * Fence writes/clears share push-client's serialized generation chain.
  */
 export function PushLifecycle() {
   const router = useRouter();
 
   useEffect(() => {
     let live = true;
-    let fenceGeneration = 0;
 
     const onNavigate = (event: MessageEvent) => {
       const data = event.data;
@@ -28,25 +30,26 @@ export function PushLifecycle() {
     };
 
     const clearLocal = () => {
-      ++fenceGeneration;
       void clearPushLocalBinding();
     };
 
     const syncFence = () => {
-      const generation = ++fenceGeneration;
-      // Invalidate before async so a delayed prior response cannot restore an old fence.
-      void clearPushLocalBinding().then(async () => {
-        if (!live || generation !== fenceGeneration) return;
+      const generation = bumpPushFenceGeneration();
+      // One generation for clear→fetch→set so a delayed prior SW update cannot
+      // restore an old fence or clear a newer one after this sync starts.
+      void (async () => {
+        await clearPushLocalBinding(generation);
+        if (!live || generation !== getPushFenceGeneration()) return;
         await ensurePushServiceWorker().catch(() => undefined);
-        if (!live || generation !== fenceGeneration) return;
+        if (!live || generation !== getPushFenceGeneration()) return;
         const result = await getPushState();
-        if (!live || generation !== fenceGeneration) return;
+        if (!live || generation !== getPushFenceGeneration()) return;
         if (result.ok && result.data.accountFence) {
-          await setServiceWorkerFence(result.data.accountFence);
+          await setServiceWorkerFence(result.data.accountFence, generation);
           return;
         }
-        await clearPushLocalBinding();
-      });
+        await clearPushLocalBinding(generation);
+      })();
     };
 
     void ensurePushServiceWorker().catch(() => undefined);
@@ -59,7 +62,7 @@ export function PushLifecycle() {
 
     return () => {
       live = false;
-      ++fenceGeneration;
+      bumpPushFenceGeneration();
       if (navigator.serviceWorker) {
         navigator.serviceWorker.removeEventListener("message", onNavigate);
       }

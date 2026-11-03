@@ -290,10 +290,12 @@ run("#456 web push — disposable", () => {
     expect(after.rows[0]?.unbound_at).toBeTruthy();
   });
 
-  it("delivers to recipient, skips muted/read, cleans 410, preserves message on transport fail", async () => {
-    const pairId = await ensurePair(author.userId, recipient.userId);
+  /** Distinct direct pair per scenario — conversations_pair_direct_uidx is real. */
+  async function mintDirectConversation(label: string) {
+    const from = await mintActor(`${label}-From`);
+    const to = await mintActor(`${label}-To`);
+    const pairId = await ensurePair(from.userId, to.userId);
     const conversationId = randomUUID();
-    const messageId = randomUUID();
     await pool.query(
       `INSERT INTO conversations (
          id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
@@ -301,7 +303,7 @@ run("#456 web push — disposable", () => {
        ) VALUES (
          $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
        )`,
-      [conversationId, pairId, author.userId, recipient.userId],
+      [conversationId, pairId, from.userId, to.userId],
     );
     await pool.query(
       `INSERT INTO conversation_members (
@@ -309,8 +311,14 @@ run("#456 web push — disposable", () => {
        ) VALUES
          ($1, $2, 1, 0, false),
          ($1, $3, 0, 0, false)`,
-      [conversationId, author.userId, recipient.userId],
+      [conversationId, from.userId, to.userId],
     );
+    return { from, to, conversationId };
+  }
+
+  it("delivers to recipient, skips muted/read, cleans 410, preserves message on transport fail", async () => {
+    const { from, to, conversationId } = await mintDirectConversation("deliver");
+    const messageId = randomUUID();
     await pool.query(
       `INSERT INTO messages (
          id, conversation_id, seq, author_user_id, client_message_id,
@@ -318,10 +326,10 @@ run("#456 web push — disposable", () => {
        ) VALUES (
          $1, $2, 1, $3, $4, 'text', 'secret private body', 'live', now() + interval '90 days', now()
        )`,
-      [messageId, conversationId, author.userId, randomUUID()],
+      [messageId, conversationId, from.userId, randomUUID()],
     );
 
-    const sub = await seedSubscription(recipient, "recipient-device-bbbb");
+    const sub = await seedSubscription(to, "recipient-device-bbbb");
     sent.length = 0;
     const delivered = await deliverWebPushJob({
       pool,
@@ -331,8 +339,8 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(delivered.delivered).toBe(1);
@@ -343,7 +351,7 @@ run("#456 web push — disposable", () => {
     await pool.query(
       `UPDATE conversation_members SET read_through_seq = 1
        WHERE conversation_id = $1 AND user_id = $2`,
-      [conversationId, recipient.userId],
+      [conversationId, to.userId],
     );
     const skippedRead = await deliverWebPushJob({
       pool,
@@ -353,8 +361,8 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(skippedRead.skipped).toBeGreaterThan(0);
@@ -363,14 +371,14 @@ run("#456 web push — disposable", () => {
     await pool.query(
       `UPDATE conversation_members SET read_through_seq = 0, muted = true
        WHERE conversation_id = $1 AND user_id = $2`,
-      [conversationId, recipient.userId],
+      [conversationId, to.userId],
     );
     await pool.query(
       `INSERT INTO messages (
          id, conversation_id, seq, author_user_id, client_message_id,
          kind, body_text, content_state, purge_eligible_at, created_at
        ) VALUES ($1,$2,2,$3,$4,'text','muted','live', now() + interval '90 days', now())`,
-      [mutedMsg, conversationId, author.userId, randomUUID()],
+      [mutedMsg, conversationId, from.userId, randomUUID()],
     );
     const muted = await deliverWebPushJob({
       pool,
@@ -380,8 +388,8 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId: mutedMsg,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(muted.skipped).toBeGreaterThan(0);
@@ -389,7 +397,7 @@ run("#456 web push — disposable", () => {
     await pool.query(
       `UPDATE conversation_members SET muted = false, read_through_seq = 0
        WHERE conversation_id = $1 AND user_id = $2`,
-      [conversationId, recipient.userId],
+      [conversationId, to.userId],
     );
     const goneMsg = randomUUID();
     await pool.query(
@@ -397,7 +405,7 @@ run("#456 web push — disposable", () => {
          id, conversation_id, seq, author_user_id, client_message_id,
          kind, body_text, content_state, purge_eligible_at, created_at
        ) VALUES ($1,$2,3,$3,$4,'text','gone','live', now() + interval '90 days', now())`,
-      [goneMsg, conversationId, author.userId, randomUUID()],
+      [goneMsg, conversationId, from.userId, randomUUID()],
     );
     const cleaned = await deliverWebPushJob({
       pool,
@@ -407,20 +415,20 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId: goneMsg,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(cleaned.cleaned).toBeGreaterThan(0);
 
-    await seedSubscription(recipient, "recipient-device-cccc");
+    await seedSubscription(to, "recipient-device-cccc");
     const failMsg = randomUUID();
     await pool.query(
       `INSERT INTO messages (
          id, conversation_id, seq, author_user_id, client_message_id,
          kind, body_text, content_state, purge_eligible_at, created_at
        ) VALUES ($1,$2,4,$3,$4,'text','keep','live', now() + interval '90 days', now())`,
-      [failMsg, conversationId, author.userId, randomUUID()],
+      [failMsg, conversationId, from.userId, randomUUID()],
     );
     const failed = await deliverWebPushJob({
       pool,
@@ -430,8 +438,8 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId: failMsg,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(failed.failedTransient).toBeGreaterThan(0);
@@ -440,26 +448,8 @@ run("#456 web push — disposable", () => {
   });
 
   it("mixedSuccessRetry: transient on one device retries; sent device is not re-sent", async () => {
-    const pairId = await ensurePair(author.userId, recipient.userId);
-    const conversationId = randomUUID();
+    const { from, to, conversationId } = await mintDirectConversation("mixed");
     const messageId = randomUUID();
-    await pool.query(
-      `INSERT INTO conversations (
-         id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
-         next_message_seq, last_message_seq, last_message_at, version, created_at, updated_at
-       ) VALUES (
-         $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
-       )`,
-      [conversationId, pairId, author.userId, recipient.userId],
-    );
-    await pool.query(
-      `INSERT INTO conversation_members (
-         conversation_id, user_id, read_through_seq, hidden_through_seq, muted
-       ) VALUES
-         ($1, $2, 1, 0, false),
-         ($1, $3, 0, 0, false)`,
-      [conversationId, author.userId, recipient.userId],
-    );
     await pool.query(
       `INSERT INTO messages (
          id, conversation_id, seq, author_user_id, client_message_id,
@@ -467,11 +457,11 @@ run("#456 web push — disposable", () => {
        ) VALUES (
          $1, $2, 1, $3, $4, 'text', 'mixed', 'live', now() + interval '90 days', now()
        )`,
-      [messageId, conversationId, author.userId, randomUUID()],
+      [messageId, conversationId, from.userId, randomUUID()],
     );
 
-    const okSub = await seedSubscription(recipient, "mixed-ok-device");
-    const failSub = await seedSubscription(recipient, "mixed-fail-device");
+    const okSub = await seedSubscription(to, "mixed-ok-device");
+    const failSub = await seedSubscription(to, "mixed-fail-device");
     const calls: string[] = [];
     const mixedTransport: WebPushTransport = {
       async send(input) {
@@ -491,8 +481,8 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(first.delivered).toBe(1);
@@ -509,8 +499,8 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(retry.delivered).toBe(0);
@@ -522,26 +512,8 @@ run("#456 web push — disposable", () => {
   });
 
   it("accessRestriction: inactive recipient skips delivery", async () => {
-    const pairId = await ensurePair(author.userId, recipient.userId);
-    const conversationId = randomUUID();
+    const { from, to, conversationId } = await mintDirectConversation("access");
     const messageId = randomUUID();
-    await pool.query(
-      `INSERT INTO conversations (
-         id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
-         next_message_seq, last_message_seq, last_message_at, version, created_at, updated_at
-       ) VALUES (
-         $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
-       )`,
-      [conversationId, pairId, author.userId, recipient.userId],
-    );
-    await pool.query(
-      `INSERT INTO conversation_members (
-         conversation_id, user_id, read_through_seq, hidden_through_seq, muted
-       ) VALUES
-         ($1, $2, 1, 0, false),
-         ($1, $3, 0, 0, false)`,
-      [conversationId, author.userId, recipient.userId],
-    );
     await pool.query(
       `INSERT INTO messages (
          id, conversation_id, seq, author_user_id, client_message_id,
@@ -549,12 +521,10 @@ run("#456 web push — disposable", () => {
        ) VALUES (
          $1, $2, 1, $3, $4, 'text', 'inactive', 'live', now() + interval '90 days', now()
        )`,
-      [messageId, conversationId, author.userId, randomUUID()],
+      [messageId, conversationId, from.userId, randomUUID()],
     );
-    await seedSubscription(recipient, "inactive-device");
-    await pool.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [
-      recipient.userId,
-    ]);
+    await seedSubscription(to, "inactive-device");
+    await pool.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [to.userId]);
     sent.length = 0;
     const skipped = await deliverWebPushJob({
       pool,
@@ -564,28 +534,24 @@ run("#456 web push — disposable", () => {
         kind: "dm_message",
         messageId,
         conversationId,
-        recipientUserId: recipient.userId,
-        authorUserId: author.userId,
+        recipientUserId: to.userId,
+        authorUserId: from.userId,
       },
     });
     expect(skipped.delivered).toBe(0);
     expect(skipped.skipped).toBeGreaterThan(0);
     expect(sent).toHaveLength(0);
-    await pool.query(`UPDATE users SET status = 'active' WHERE id = $1`, [
-      recipient.userId,
-    ]);
   });
 
   it("queueFailureIsolated: intent survives enqueue failure; recover dispatches delivery", async () => {
-    const pairId = await ensurePair(author.userId, recipient.userId);
-    const conversationId = randomUUID();
+    const { from, to, conversationId } = await mintDirectConversation("queue");
     const messageId = randomUUID();
     const payload = {
       kind: "dm_message" as const,
       messageId,
       conversationId,
-      recipientUserId: recipient.userId,
-      authorUserId: author.userId,
+      recipientUserId: to.userId,
+      authorUserId: from.userId,
     };
     const jobs = new JobEnqueueService(env);
     // Injected queue/boss unavailability (not a core DB failure).
@@ -597,30 +563,13 @@ run("#456 web push — disposable", () => {
     try {
       await client.query("BEGIN");
       await client.query(
-        `INSERT INTO conversations (
-           id, pair_id, kind, request_state, initiator_user_id, recipient_user_id,
-           next_message_seq, last_message_seq, last_message_at, version, created_at, updated_at
-         ) VALUES (
-           $1, $2, 'direct', 'accepted', $3, $4, 2, 1, now(), 1, now(), now()
-         )`,
-        [conversationId, pairId, author.userId, recipient.userId],
-      );
-      await client.query(
-        `INSERT INTO conversation_members (
-           conversation_id, user_id, read_through_seq, hidden_through_seq, muted
-         ) VALUES
-           ($1, $2, 1, 0, false),
-           ($1, $3, 0, 0, false)`,
-        [conversationId, author.userId, recipient.userId],
-      );
-      await client.query(
         `INSERT INTO messages (
            id, conversation_id, seq, author_user_id, client_message_id,
            kind, body_text, content_state, purge_eligible_at, created_at
          ) VALUES (
            $1, $2, 1, $3, $4, 'text', 'intent-keep', 'live', now() + interval '90 days', now()
          )`,
-        [messageId, conversationId, author.userId, randomUUID()],
+        [messageId, conversationId, from.userId, randomUUID()],
       );
       await persistWebPushDeliveryIntent(client, payload);
       const jobId = await jobs.tryEnqueueWebPushJob(client, payload);
@@ -640,30 +589,42 @@ run("#456 web push — disposable", () => {
     const intent = await pool.query<{ status: string }>(
       `SELECT status FROM web_push_delivery_intents
        WHERE message_id = $1 AND recipient_user_id = $2`,
-      [messageId, recipient.userId],
+      [messageId, to.userId],
     );
     expect(intent.rows[0]?.status).toBe("pending");
 
-    await seedSubscription(recipient, "recover-device");
+    await seedSubscription(to, "recover-device");
     sent.length = 0;
+    const enqueued: typeof payload[] = [];
     const recovered = await recoverPendingWebPushIntents({
       pool,
-      dispatch: async (deliverPayload) => {
-        const outcome = await deliverWebPushJob({
-          pool,
-          env,
-          transport,
-          payload: deliverPayload,
-        });
-        return outcome.delivered > 0 || outcome.skipped > 0 || outcome.cleaned > 0;
+      enqueueInTx: async (_client, deliverPayload) => {
+        // Same-TX enqueue success simulated; deliver after recover commits.
+        enqueued.push(deliverPayload as typeof payload);
+        return true;
       },
     });
     expect(recovered.recovered).toBeGreaterThanOrEqual(1);
+    const queued = await pool.query<{ status: string }>(
+      `SELECT status FROM web_push_delivery_intents
+       WHERE message_id = $1 AND recipient_user_id = $2`,
+      [messageId, to.userId],
+    );
+    expect(queued.rows[0]?.status).toBe("queued");
+    expect(enqueued.length).toBeGreaterThanOrEqual(1);
+
+    const outcome = await deliverWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: enqueued[0]!,
+    });
+    expect(outcome.delivered).toBeGreaterThanOrEqual(1);
     expect(sent.length).toBeGreaterThanOrEqual(1);
     const after = await pool.query<{ status: string }>(
       `SELECT status FROM web_push_delivery_intents
        WHERE message_id = $1 AND recipient_user_id = $2`,
-      [messageId, recipient.userId],
+      [messageId, to.userId],
     );
     expect(after.rows[0]?.status).toBe("consumed");
   });

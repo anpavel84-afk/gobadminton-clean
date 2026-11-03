@@ -1,44 +1,40 @@
-# #456 PWA Web Push — author handoff (attempt2 / repair pass2)
+# #456 PWA Web Push — author handoff (attempt3 / repair pass3)
 
 ## Scope delivered (source only)
 
 End-to-end DEV source for standards Web Push on **new** Direct Messages (including first incoming) and Game Chat. Preference default **OFF**. No invitations, offline cache, background sync, PROD, or historical outbox replay.
 
-Pass2 repairs PUSH-01..07 from Sol Medium QA + deterministic findings against candidate `0ecd95b0039b6f14f308232930442c67361df222`.
+Pass3 repairs remaining PUSH-01/08/09/10 from Sol Medium QA pass2 + DB findings against candidate `515a83ee5ec389c1f6f38ef48360020919d718a6`. Closed PUSH-02..07 preserved unchanged.
 
-## Pass2 repairs
+## Pass3 repairs
 
 | ID | Fix |
 |----|-----|
-| PUSH-01 | Durable `web_push_delivery_intents` in message TX; PgBoss enqueue isolated by SAVEPOINT; existing worker schedule recovers pending intents (no new service) |
-| PUSH-02 | Retry on **any** known transient device failure; sent claims skipped; concurrent recent `claimed` not re-sent; unknown transport preserved (no blind retry) |
-| PUSH-03 | Before delivery: `users.status = active` + `account.access` via existing `unrestrictedSql` / session policy |
-| PUSH-04 | `urlBase64ToUint8Array` returns ArrayBuffer-backed `Uint8Array` for PushManager BufferSource |
-| PUSH-05 | `releases-server.test.ts` allowlist + seed assertions include confirmed alpha.20; alpha.21 current preserved |
-| PUSH-06 | SW dead placeholders removed; worker globals scoped; PushSettings prefer-const; type import in web-push test |
-| PUSH-07 | Decoder uses `globalThis.atob` (node-safe pure decode) |
-| Account-switch | PushLifecycle generation invalidation + clear-before-async; SW activation before set-fence; click checks fence / auth fallback |
+| PUSH-01 | Recover: pending→queued + pg-boss enqueue share one atomic TX via `fromPoolClient` on the same client; enqueue failure rolls back (intent stays pending). No mark-queued-then-nontransactional-send. Message-TX durable intent + SAVEPOINT enqueue preserved. |
+| PUSH-08 | No 120s auto-reclaim of `claimed`. Ambiguous transport → durable `unknown` claim (skipped on duplicates). Known HTTP 503 → `failed`/retry. Library classifies known status vs ambiguous exception. |
+| PUSH-09 | Disposable DB: each scenario mints a distinct direct conversation pair (real `conversations_pair_direct_uidx`); no shared-pair re-INSERT; preference/status isolation via separate actors. |
+| PUSH-10 | `push-client` single promise chain + generation token checked after awaits and immediately before SW `postMessage`; PushLifecycle clear→fetch→set shares one generation. No permission prompt on mount. |
+
+## Pass2 repairs (closed — do not reopen)
+
+PUSH-02..07 as previously accepted (mixed-device retry, account fence, ArrayBuffer keys, alpha.20/21 release tests, SW cleanup, atob decoder).
 
 ## Platform refs read
 
-- `PUSH_PLATFORM_CHECK.md` (WebKit/Apple/MDN/web-push 3.6.7)
-- `NEXT16_PWA_GUIDE.md` (framework reference only; Nest REST used, not demo Server Actions)
-- Owner decision `docs/decisions/OWNER_DECISION_PWA_WEB_PUSH_MESSAGING_V001.md`
-- Issue snapshot #456; alpha.21 brief + alpha.20 seed
-- QA JSON + deterministic findings (pass1)
+- Owner short Mode A rules; Issue #456 assignment Exact515a83ee…
+- Independent QA pass2 `final.txt` + DB findings `push456-pass2-db-findings.txt`
+- Existing `fromPoolClient` / SAVEPOINT enqueue primitives
 
 ## Key paths
 
 | Area | Paths |
 |------|--------|
-| Migration | `apps/api/migrations/0055_role_web_push.sql` + rollback (intents in-place; no 0056) |
-| API | `apps/api/src/push/*`, env `WEB_PUSH_*` / VAPID, OpenAPI **0.29.0** |
-| Jobs/worker | `job-enqueue.service` intent+SAVEPOINT enqueue; `worker-runtime` deliver + recover_intents schedule |
-| Emit | `messaging.service` (createRequest + sendMessage), `game-chat.service` sendMessage |
-| Session unbind | `session.service` → `PushService.unbindSessions` |
-| Web | `PushSettings`, `PushLifecycle` (ConsumerShell), `public/sw-push.js`, `push-client.ts` |
-| Release | alpha.**21** / API **0.29.0**; alpha.20 seed preserved |
-| DEV overlay | `scripts/push/dev-push-compose.yml` (env **names** only) |
+| Migration | `apps/api/migrations/0055_role_web_push.sql` (+ `unknown` claim status; not deployed — in-place) |
+| Delivery | `push-delivery.ts` recover TX + claim reclaim + transport classify |
+| Worker | `worker-runtime.ts` recover uses `fromPoolClient` enqueue |
+| Web fence | `push-client.ts`, `PushLifecycle.tsx` |
+| Tests | unit classify; disposable isolated pairs + recover TX; web fence out-of-order |
+| Release | alpha.**21** / API **0.29.0** unchanged |
 
 ## Runtime activation (PMA — not done in author lane)
 
@@ -56,18 +52,19 @@ Pass2 repairs PUSH-01..07 from Sol Medium QA + deterministic findings against ca
 - Preference independent of OS permission; no permission prompt on page load
 - External transport / PgBoss enqueue failure must not roll back committed messages
 - Default `WEB_PUSH_ENABLED=0` preserves existing queues/tests
+- UNKNOWN external effect is not blind-retried
 
 ## Checks not run in author lane
 
 - No `pnpm install` / network / Git / PR / live DB / host configs
-- Unit/integration/disposable suites not executed here (no `node_modules` in export)
+- Unit/integration/disposable suites not executed here when deps absent
 - No fake DEV ACCEPTED / READY / physical-device PASS
 
 ## Suggested PMA targeted checks
 
-- `apps/api/test/unit/web-push.test.ts`
-- `apps/api/test/integration/web-push.disposable.test.ts` (`RUN_DB_INTEGRATION=1`, DB `gobadminton_web_push_disposable`) — includes mixedSuccessRetry, accessRestriction, queueFailureIsolated+recover
-- `apps/api/test/integration/migration.smoke.test.ts` (expects `0055_role_web_push` + intents table)
-- `apps/web/test/web-push.test.tsx`, `apps/web/test/push-worker.test.ts`
+- `apps/api/test/unit/web-push.test.ts` (incl. known vs ambiguous transport)
+- `apps/api/test/integration/web-push.disposable.test.ts` (`RUN_DB_INTEGRATION=1`, DB `gobadminton_web_push_disposable`) — full 5-test suite in one run
+- `apps/api/test/integration/migration.smoke.test.ts` (expects `0055_role_web_push` + intents + unknown status)
+- `apps/web/test/web-push.test.tsx` (fence out-of-order), `apps/web/test/push-worker.test.ts`
 - Existing release tests (alpha.20 seed + alpha.21 current)
 - Contract/package pin checks; then CI → DEV → #457 without Owner GO

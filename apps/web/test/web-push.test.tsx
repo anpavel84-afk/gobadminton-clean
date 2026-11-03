@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import type * as PushClientModule from "../src/lib/push-client";
 import { PushSettings } from "../src/components/consumer/push/PushSettings";
 import {
+  bumpPushFenceGeneration,
   detectPushCapability,
+  enqueuePushFenceMutation,
+  getPushFenceGeneration,
   urlBase64ToUint8Array,
 } from "../src/lib/push-client";
 
@@ -67,5 +70,31 @@ describe("#456 web push settings surface", () => {
     expect(["unsupported", "needs_homescreen", "ready", "denied", "offline"]).toContain(
       detectPushCapability(),
     );
+  });
+
+  it("serializes fence writes and drops stale out-of-order resolve before post", async () => {
+    const posts: string[] = [];
+    let releaseStale!: () => void;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+
+    const staleGen = bumpPushFenceGeneration();
+    const stale = enqueuePushFenceMutation(staleGen, async (isCurrent) => {
+      await staleGate;
+      if (!isCurrent()) return;
+      posts.push("stale");
+    });
+
+    const freshGen = bumpPushFenceGeneration();
+    expect(freshGen).toBe(getPushFenceGeneration());
+    await enqueuePushFenceMutation(freshGen, async (isCurrent) => {
+      if (!isCurrent()) return;
+      posts.push("fresh");
+    });
+
+    releaseStale();
+    await stale;
+    expect(posts).toEqual(["fresh"]);
   });
 });

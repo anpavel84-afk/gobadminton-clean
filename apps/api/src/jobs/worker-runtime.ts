@@ -16,6 +16,7 @@ import {
   WEB_PUSH_DELIVER_QUEUE,
   WEB_PUSH_INTENT_RECOVER_SINGLETON_KEY,
 } from "./constants";
+import { fromPoolClient } from "./from-pool-client";
 import {
   isSocialExpiryCleanupPayload,
   isWebPushDeliverPayload,
@@ -190,8 +191,9 @@ export async function startWorkerRuntime(input: {
           if (job.data.kind === "recover_intents") {
             const recovered = await recoverPendingWebPushIntents({
               pool: input.pool,
-              dispatch: async (payload) => {
+              enqueueInTx: async (client, payload) => {
                 const jobId = await boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+                  db: fromPoolClient(client),
                   singletonKey: `push:${payload.messageId}:${payload.recipientUserId}`,
                   retryLimit: 5,
                   retryDelay: 5,

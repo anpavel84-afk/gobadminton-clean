@@ -30,6 +30,27 @@ export type WebPushTransport = {
   }): Promise<WebPushSendResult>;
 };
 
+/**
+ * Classify library/provider outcomes: known HTTP status may fail/retry;
+ * ambiguous exceptions (network/timeout, no status) are UNKNOWN — may have
+ * reached the provider, so callers must not blind-retry.
+ */
+export function classifyWebPushTransportError(error: unknown): WebPushSendResult {
+  const statusCode =
+    error &&
+    typeof error === "object" &&
+    "statusCode" in error &&
+    typeof (error as { statusCode: unknown }).statusCode === "number"
+      ? (error as { statusCode: number }).statusCode
+      : 0;
+  if (!statusCode) {
+    return { statusCode: 0, permanent: false, unknown: true };
+  }
+  const permanent = statusCode === 404 || statusCode === 410 || statusCode === 400;
+  // Never rethrow provider body/URL/token text.
+  return { statusCode, permanent };
+}
+
 /** Library transport — encrypts offline; never logs endpoint/keys. */
 export function createLibraryWebPushTransport(env: {
   VAPID_PUBLIC_KEY: string;
@@ -54,20 +75,7 @@ export function createLibraryWebPushTransport(env: {
         );
         return { statusCode: result.statusCode, permanent: false };
       } catch (error: unknown) {
-        const statusCode =
-          error &&
-          typeof error === "object" &&
-          "statusCode" in error &&
-          typeof (error as { statusCode: unknown }).statusCode === "number"
-            ? (error as { statusCode: number }).statusCode
-            : 0;
-        if (!statusCode) {
-          // Ambiguous transport effect — preserve rather than blind-retry.
-          return { statusCode: 0, permanent: false, unknown: true };
-        }
-        const permanent = statusCode === 404 || statusCode === 410 || statusCode === 400;
-        // Never rethrow provider body/URL/token text.
-        return { statusCode, permanent };
+        return classifyWebPushTransportError(error);
       }
     },
   };
@@ -451,8 +459,8 @@ export async function deliverWebPushJob(input: {
         continue;
       }
 
-      // Claim only failed rows, or stale claimed (crash). Recent claimed =
-      // concurrent in-flight — skip to avoid double send. Sent/gone/skipped stay skipped.
+      // Reclaim only known failed (e.g. HTTP 503). Never auto-reclaim claimed/
+      // unknown — provider may have accepted before crash/sent write (UNKNOWN).
       const claimed = await exec.query<{ id: string; status: string; attempt_count: number }>(
         `INSERT INTO web_push_delivery_claims (
            message_id, subscription_id, recipient_user_id, kind, status, attempt_count
@@ -462,10 +470,6 @@ export async function deliverWebPushJob(input: {
                attempt_count = web_push_delivery_claims.attempt_count + 1,
                updated_at = now()
            WHERE web_push_delivery_claims.status = 'failed'
-              OR (
-                   web_push_delivery_claims.status = 'claimed'
-                   AND web_push_delivery_claims.updated_at < now() - interval '120 seconds'
-                 )
          RETURNING id, status, attempt_count`,
         [
           input.payload.messageId,
@@ -529,10 +533,10 @@ export async function deliverWebPushJob(input: {
         continue;
       }
       if (result.unknown || result.statusCode === 0) {
-        // Preserve ambiguous provider effect — do not blind-retry (may already delivered).
+        // Durable UNKNOWN evidence — duplicate jobs skip; no blind retry.
         await exec.query(
           `UPDATE web_push_delivery_claims
-           SET status = 'skipped', updated_at = now() WHERE id = $1`,
+           SET status = 'unknown', updated_at = now() WHERE id = $1`,
           [claimed.rows[0].id],
         );
         outcome.skipped += 1;
@@ -576,11 +580,16 @@ export async function deliverWebPushJob(input: {
 
 /**
  * Bounded recover of pending durable intents after PgBoss enqueue outage.
- * Reuses the existing deliver queue via caller-provided dispatch (no new scheduler).
+ * Pending→queued and pg-boss enqueue share one atomic DB transaction (caller
+ * supplies enqueue via fromPoolClient on the same client). Enqueue failure
+ * rolls back — intent stays pending; no queued-without-job gap.
  */
 export async function recoverPendingWebPushIntents(input: {
   pool: Pool;
-  dispatch: (payload: WebPushMessageDeliverPayload) => Promise<boolean>;
+  enqueueInTx: (
+    client: PoolClient,
+    payload: WebPushMessageDeliverPayload,
+  ) => Promise<boolean>;
   limit?: number;
 }): Promise<{ recovered: number; failed: number }> {
   const limit = input.limit ?? WEB_PUSH_INTENT_RECOVER_BATCH_LIMIT;
@@ -605,15 +614,6 @@ export async function recoverPendingWebPushIntents(input: {
   let recovered = 0;
   let failed = 0;
   for (const row of pending.rows) {
-    const claimed = await input.pool.query<{ id: string }>(
-      `UPDATE web_push_delivery_intents
-       SET status = 'queued', updated_at = now()
-       WHERE id = $1 AND status = 'pending'
-       RETURNING id`,
-      [row.id],
-    );
-    if (!claimed.rows[0]) continue;
-
     const payload: WebPushMessageDeliverPayload =
       row.kind === "dm_message"
         ? {
@@ -632,26 +632,42 @@ export async function recoverPendingWebPushIntents(input: {
             authorUserId: row.author_user_id,
           };
 
+    const client = await input.pool.connect();
     try {
-      const ok = await input.dispatch(payload);
-      if (ok) recovered += 1;
-      else {
-        await input.pool.query(
-          `UPDATE web_push_delivery_intents
-           SET status = 'pending', updated_at = now()
-           WHERE id = $1 AND status = 'queued'`,
-          [row.id],
-        );
-        failed += 1;
-      }
-    } catch {
-      await input.pool.query(
+      await client.query("BEGIN");
+      const claimed = await client.query<{ id: string }>(
         `UPDATE web_push_delivery_intents
-         SET status = 'pending', updated_at = now()
-         WHERE id = $1 AND status = 'queued'`,
+         SET status = 'queued', updated_at = now()
+         WHERE id = $1 AND status = 'pending'
+         RETURNING id`,
         [row.id],
       );
+      if (!claimed.rows[0]) {
+        await client.query("ROLLBACK");
+        continue;
+      }
+      let ok = false;
+      try {
+        ok = await input.enqueueInTx(client, payload);
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        await client.query("ROLLBACK");
+        failed += 1;
+        continue;
+      }
+      await client.query("COMMIT");
+      recovered += 1;
+    } catch {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
       failed += 1;
+    } finally {
+      client.release();
     }
   }
   return { recovered, failed };
