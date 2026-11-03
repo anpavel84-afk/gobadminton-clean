@@ -22,6 +22,24 @@ export type SocialExpiryCleanupPayload =
       kind: "sweep";
     };
 
+/** #456 push deliver — message/conversation refs only; no body / endpoint / keys. */
+export type WebPushDeliverPayload =
+  | {
+      kind: "dm_message";
+      messageId: string;
+      conversationId: string;
+      recipientUserId: string;
+      authorUserId: string;
+    }
+  | {
+      kind: "game_chat_message";
+      messageId: string;
+      conversationId: string;
+      gameId: string;
+      recipientUserId: string;
+      authorUserId: string;
+    };
+
 export function isSocialExpiryCleanupPayload(
   value: unknown,
 ): value is SocialExpiryCleanupPayload {
@@ -46,6 +64,22 @@ export function isSocialExpiryCleanupPayload(
   return false;
 }
 
+export function isWebPushDeliverPayload(
+  value: unknown,
+): value is WebPushDeliverPayload {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.messageId !== "string" || typeof v.conversationId !== "string") {
+    return false;
+  }
+  if (typeof v.recipientUserId !== "string" || typeof v.authorUserId !== "string") {
+    return false;
+  }
+  if (v.kind === "dm_message") return true;
+  if (v.kind === "game_chat_message") return typeof v.gameId === "string";
+  return false;
+}
+
 /** Safe structured log fields — never dump full job data blobs. */
 export function sanitizeJobLogFields(input: {
   queue: string;
@@ -54,15 +88,19 @@ export function sanitizeJobLogFields(input: {
   userId?: string;
   conversationId?: string;
   invitationId?: string;
+  messageId?: string;
+  recipientUserId?: string;
 }): Record<string, string | undefined> {
   return {
     event: "job",
     queue: input.queue,
     jobId: input.jobId,
     kind: input.kind,
-    // Opaque id only; never lat/lon/cell/message/PII.
+    // Opaque id only; never lat/lon/cell/message/PII/endpoint.
     userId: input.userId,
     conversationId: input.conversationId,
     invitationId: input.invitationId,
+    messageId: input.messageId,
+    recipientUserId: input.recipientUserId,
   };
 }

@@ -121,8 +121,6 @@ export class MessagingService {
     private readonly jobs: JobEnqueueService,
   ) {
     void this.pool;
-    // New chats are accepted immediately; legacy pending expiry jobs remain for pre-0044 rows.
-    void this.jobs;
   }
 
   /** A snapshot lookup only: never creates a pair, accepts, expires or unarchives. */
@@ -318,6 +316,13 @@ export class MessagingService {
           ],
         );
         const msg = message.rows[0]!;
+        await this.jobs.enqueueWebPushDeliver(client, {
+          kind: "dm_message",
+          messageId: msg.id,
+          conversationId: conversation.id,
+          recipientUserId: targetUserId,
+          authorUserId: actorId,
+        });
 
         const dto = await this.toConversationDto(client, actorId, conversation);
         await this.proofHook.assertFinalProof(client,{actorId,sessionId,targetUserId,discoveryProof:normalized.discoveryProof});
@@ -872,6 +877,13 @@ export class MessagingService {
           [conversationId, actorId, seq, now],
         );
         const msg = inserted.rows[0]!;
+        await this.jobs.enqueueWebPushDeliver(client, {
+          kind: "dm_message",
+          messageId: msg.id,
+          conversationId,
+          recipientUserId: receiverUserId,
+          authorUserId: actorId,
+        });
         return {
           statusCode: 201,
           body: {

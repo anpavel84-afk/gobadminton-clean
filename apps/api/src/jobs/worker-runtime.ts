@@ -5,15 +5,27 @@ import type { MailTransport } from "../auth/mail-transport";
 import type { Pool } from "pg";
 import type { Db, Job, PgBoss } from "pg-boss";
 import {
+  createLibraryWebPushTransport,
+  deliverWebPushJob,
+  type WebPushTransport,
+} from "../push/push-delivery";
+import {
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
   SOCIAL_EXPIRY_SWEEP_SINGLETON_KEY,
+  WEB_PUSH_DELIVER_QUEUE,
 } from "./constants";
 import {
   isSocialExpiryCleanupPayload,
+  isWebPushDeliverPayload,
   sanitizeJobLogFields,
   type SocialExpiryCleanupPayload,
+  type WebPushDeliverPayload,
 } from "./payloads";
-import { createPgBoss, ensureSocialExpiryQueues } from "./pg-boss.factory";
+import {
+  createPgBoss,
+  ensureSocialExpiryQueues,
+  ensureWebPushQueues,
+} from "./pg-boss.factory";
 import {
   SocialExpiryCleanupCommand,
   type SqlExecutor,
@@ -34,6 +46,10 @@ export async function startWorkerRuntime(input: {
   gitSha: string;
   maxPool?: number;
   email?: {env: AppEnv; transport: MailTransport};
+  /** Optional env for feature gates (WEB_PUSH_ENABLED / VAPID). */
+  env?: AppEnv;
+  /** Injectable push transport for disposable tests; library default when omitted. */
+  pushTransport?: WebPushTransport;
 }): Promise<WorkerRuntime> {
   const boss = createPgBoss({
     connectionString: input.connectionString,
@@ -137,6 +153,74 @@ export async function startWorkerRuntime(input: {
     });
     await boss.work(EMAIL_CLEANUP_QUEUE, {batchSize: 1, pollingIntervalSeconds: 1}, async () => cleanupEmail(input.pool));
     await boss.schedule(EMAIL_CLEANUP_QUEUE, "* * * * *", {}, {tz:"UTC",singletonKey:"email-cleanup"});
+  }
+
+  const pushEnv = input.env ?? input.email?.env;
+  if (pushEnv?.WEB_PUSH_ENABLED) {
+    await ensureWebPushQueues(boss);
+    const transport =
+      input.pushTransport ??
+      createLibraryWebPushTransport({
+        VAPID_PUBLIC_KEY: pushEnv.VAPID_PUBLIC_KEY!,
+        VAPID_PRIVATE_KEY: pushEnv.VAPID_PRIVATE_KEY!,
+        VAPID_SUBJECT: pushEnv.VAPID_SUBJECT!,
+      });
+    await boss.work(
+      WEB_PUSH_DELIVER_QUEUE,
+      {
+        batchSize: 1,
+        localConcurrency: 1,
+        pollingIntervalSeconds: 1,
+      },
+      async (jobs: Job<WebPushDeliverPayload>[]) => {
+        for (const job of jobs) {
+          if (!isWebPushDeliverPayload(job.data)) {
+            console.error(
+              JSON.stringify({
+                event: "worker_invalid_payload",
+                queue: WEB_PUSH_DELIVER_QUEUE,
+                jobId: job.id,
+              }),
+            );
+            throw new Error("INVALID_JOB_PAYLOAD");
+          }
+          console.info(
+            JSON.stringify(
+              sanitizeJobLogFields({
+                queue: WEB_PUSH_DELIVER_QUEUE,
+                jobId: job.id,
+                kind: job.data.kind,
+                messageId: job.data.messageId,
+                conversationId: job.data.conversationId,
+                recipientUserId: job.data.recipientUserId,
+              }),
+            ),
+          );
+          const result = await deliverWebPushJob({
+            pool: input.pool,
+            env: pushEnv,
+            payload: job.data,
+            transport,
+          });
+          console.info(
+            JSON.stringify({
+              event: "job_completed",
+              queue: WEB_PUSH_DELIVER_QUEUE,
+              jobId: job.id,
+              kind: job.data.kind,
+              delivered: result.delivered,
+              skipped: result.skipped,
+              cleaned: result.cleaned,
+              failedTransient: result.failedTransient,
+            }),
+          );
+          // Transient transport failures: retry via pg-boss without rolling back message.
+          if (result.failedTransient > 0 && result.delivered === 0) {
+            throw new Error("PUSH_TRANSPORT_TRANSIENT");
+          }
+        }
+      },
+    );
   }
 
   // Recurring bounded sweep (~every minute). Correctness does not depend on it.

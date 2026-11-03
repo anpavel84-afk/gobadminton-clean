@@ -6,10 +6,15 @@ import { APP_ENV } from "../tokens";
 import {
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
   SOCIAL_EXPIRY_SWEEP_SINGLETON_KEY,
+  WEB_PUSH_DELIVER_QUEUE,
 } from "./constants";
 import { fromPoolClient } from "./from-pool-client";
-import type { SocialExpiryCleanupPayload } from "./payloads";
-import { createPgBoss, ensureSocialExpiryQueues } from "./pg-boss.factory";
+import type { SocialExpiryCleanupPayload, WebPushDeliverPayload } from "./payloads";
+import {
+  createPgBoss,
+  ensureSocialExpiryQueues,
+  ensureWebPushQueues,
+} from "./pg-boss.factory";
 
 @Injectable()
 export class JobEnqueueService implements OnModuleDestroy {
@@ -45,6 +50,9 @@ export class JobEnqueueService implements OnModuleDestroy {
       });
       await boss.start();
       await ensureSocialExpiryQueues(boss);
+      if (this.env.WEB_PUSH_ENABLED) {
+        await ensureWebPushQueues(boss);
+      }
       this.boss = boss;
       this.started = true;
       return boss;
@@ -167,6 +175,27 @@ export class JobEnqueueService implements OnModuleDestroy {
       retryDelay: 2,
       retryBackoff: true,
       expireInSeconds: 120,
+    });
+  }
+
+  /**
+   * Same physical TX as message commit. No-op when WEB_PUSH_ENABLED is off so
+   * existing queues/tests stay undisturbed. Never carries message text/secrets.
+   */
+  async enqueueWebPushDeliver(
+    client: PoolClient,
+    payload: WebPushDeliverPayload,
+  ): Promise<string | null> {
+    if (!this.env.WEB_PUSH_ENABLED) return null;
+    if (payload.recipientUserId === payload.authorUserId) return null;
+    const boss = await this.ensureStarted();
+    return boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+      db: fromPoolClient(client),
+      singletonKey: `push:${payload.messageId}:${payload.recipientUserId}`,
+      retryLimit: 5,
+      retryDelay: 5,
+      retryBackoff: true,
+      expireInSeconds: 600,
     });
   }
 }

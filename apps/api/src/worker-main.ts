@@ -15,6 +15,7 @@ async function bootstrap(): Promise<void> {
     connectionString: env.DATABASE_URL,
     pool: database.pool,
     gitSha: env.GIT_SHA,
+    env,
     ...(emailAuthEnabled(env) ? {email: {env, transport: createMailTransport(env)}} : {}),
     maxPool: Number.parseInt(process.env.DATABASE_POOL_MAX ?? "4", 10) || 4,
   });

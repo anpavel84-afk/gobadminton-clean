@@ -11,6 +11,7 @@ import {
   sealSecret,
   secretsEqual,
 } from "./crypto";
+import { PushService } from "../push/push.service";
 import { conflict, notFound } from "./problem";
 
 export type SessionRecord = {
@@ -154,6 +155,7 @@ export class SessionService {
         `DELETE FROM radar_presences WHERE owner_session_id=$1`,
         [sessionId],
       );
+      await PushService.unbindSessions(client, [sessionId]);
     });
   }
 
@@ -233,6 +235,7 @@ export class SessionService {
       [row.id],
     );
     await client.query("DELETE FROM radar_presences WHERE owner_session_id = $1", [row.id]);
+    await PushService.unbindSessions(client, [row.id]);
     return "revoked";
   }
 
@@ -254,6 +257,7 @@ export class SessionService {
         "DELETE FROM radar_presences WHERE owner_session_id=ANY($1::uuid[])",
         [ids],
       );
+      await PushService.unbindSessions(client, ids);
       return { revokedCount: ids.length };
     });
   }
