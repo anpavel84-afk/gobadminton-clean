@@ -125,7 +125,6 @@ export function RoleReviewsDialog({
       epoch.current += 1;
     };
     // Intentionally bind to handle/game only — identity change clears via remount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roleHandle, gameId]);
 
   useEffect(() => {
