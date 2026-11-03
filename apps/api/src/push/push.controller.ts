@@ -10,10 +10,28 @@ import {
   Res,
 } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { badRequest } from "../auth/problem";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
 import { IdempotencyService } from "../common/idempotency.service";
 import type { PushPreferenceBody, PushRegisterBody } from "./push.dto";
 import { PushService } from "./push.service";
+
+/** DELETE /me/push/subscriptions/{id} requires exact JSON command {confirm:true}. */
+function requirePushUnsubscribeConfirm(body: unknown): void {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw badRequest(
+      "INVALID_PUSH_UNSUBSCRIBE_COMMAND",
+      "Требуется подтверждение отписки",
+    );
+  }
+  const command = body as Record<string, unknown>;
+  if (Object.keys(command).length !== 1 || command.confirm !== true) {
+    throw badRequest(
+      "INVALID_PUSH_UNSUBSCRIBE_COMMAND",
+      "Требуется подтверждение отписки",
+    );
+  }
+}
 
 @Controller()
 export class PushController {
@@ -77,6 +95,7 @@ export class PushController {
   ) {
     const consumer = await this.auth.requireCookieMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
+    requirePushUnsubscribeConfirm(request.body);
     const result = await this.push.unsubscribeDevice(
       consumer.userId,
       consumer.sessionId,

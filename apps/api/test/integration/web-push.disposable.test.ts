@@ -288,6 +288,71 @@ run("#456 web push — disposable", () => {
     expect(after.rows[0]?.unbound_at).toBeTruthy();
   });
 
+  it("unsubscribe by id requires confirm:true command body", async () => {
+    // Dedicated actor — first case revokes shared `author` session.
+    const actor = await mintActor("UnsubConfirm");
+    const endpoint = "https://fcm.googleapis.com/fcm/send/unsub-confirm-device-eeee";
+    const pref = await app.inject({
+      method: "PUT",
+      url: "/v1/me/push/preference",
+      headers: headers(actor, randomUUID().replace(/-/g, "").slice(0, 24)),
+      payload: { enabled: true, expectedVersion: 0 },
+    });
+    expect(pref.statusCode).toBe(200);
+
+    const reg = await app.inject({
+      method: "POST",
+      url: "/v1/me/push/subscriptions",
+      headers: headers(actor, randomUUID().replace(/-/g, "").slice(0, 24)),
+      payload: {
+        endpoint,
+        keys: {
+          p256dh: vapid.publicKey,
+          auth: Buffer.from("unsub-auth").toString("base64url"),
+        },
+      },
+    });
+    expect([200, 201]).toContain(reg.statusCode);
+    const subId = reg.json().id as string;
+
+    const missingBody = await app.inject({
+      method: "DELETE",
+      url: `/v1/me/push/subscriptions/${subId}`,
+      headers: headers(actor, randomUUID().replace(/-/g, "").slice(0, 24)),
+    });
+    expect(missingBody.statusCode).toBe(400);
+    expect(missingBody.json().code).toBe("INVALID_PUSH_UNSUBSCRIBE_COMMAND");
+
+    const falseConfirm = await app.inject({
+      method: "DELETE",
+      url: `/v1/me/push/subscriptions/${subId}`,
+      headers: headers(actor, randomUUID().replace(/-/g, "").slice(0, 24)),
+      payload: { confirm: false },
+    });
+    expect(falseConfirm.statusCode).toBe(400);
+    expect(falseConfirm.json().code).toBe("INVALID_PUSH_UNSUBSCRIBE_COMMAND");
+
+    const stillBound = await pool.query<{ unbound_at: Date | null }>(
+      `SELECT unbound_at FROM web_push_subscriptions WHERE id = $1`,
+      [subId],
+    );
+    expect(stillBound.rows[0]?.unbound_at).toBeNull();
+
+    const ok = await app.inject({
+      method: "DELETE",
+      url: `/v1/me/push/subscriptions/${subId}`,
+      headers: headers(actor, randomUUID().replace(/-/g, "").slice(0, 24)),
+      payload: { confirm: true },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ unbound: true });
+    const unbound = await pool.query<{ unbound_at: Date | null }>(
+      `SELECT unbound_at FROM web_push_subscriptions WHERE id = $1`,
+      [subId],
+    );
+    expect(unbound.rows[0]?.unbound_at).toBeTruthy();
+  });
+
   /** Distinct direct pair per scenario — conversations_pair_direct_uidx is real. */
   async function mintDirectConversation(label: string) {
     const from = await mintActor(`${label}-From`);

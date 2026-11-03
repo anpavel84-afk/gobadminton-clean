@@ -2,22 +2,20 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type * as PushClientModule from "../src/lib/push-client";
+import { PushLifecycle } from "../src/components/consumer/push/PushLifecycle";
 import { PushSettings } from "../src/components/consumer/push/PushSettings";
 import {
   bumpPushFenceGeneration,
   detectPushCapability,
   enqueuePushFenceMutation,
   getPushFenceGeneration,
+  unsubscribePushDevice,
   urlBase64ToUint8Array,
 } from "../src/lib/push-client";
 
 vi.mock("next/link", () => ({
   default: (props: { href: string; children?: unknown }) =>
     createElement("a", { href: props.href }, props.children as never),
-}));
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
 }));
 
 vi.mock("../src/lib/push-client", async () => {
@@ -60,6 +58,17 @@ describe("#456 web push settings surface", () => {
     );
     expect(html).toMatch(/Уведомления о сообщениях/);
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
+  });
+
+  it("PushLifecycle SSR renders without AppRouter / useRouter", () => {
+    const html = renderToStaticMarkup(createElement(PushLifecycle));
+    expect(html).toBe("");
+  });
+
+  it("unsubscribePushDevice sends required confirm:true JSON body", () => {
+    const source = unsubscribePushDevice.toString();
+    expect(source).toMatch(/confirm:\s*true/);
+    expect(source).toMatch(/DELETE/);
   });
 
   it("exposes base64url helper and capability helper", () => {

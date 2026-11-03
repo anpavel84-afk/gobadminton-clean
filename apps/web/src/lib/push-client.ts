@@ -130,6 +130,7 @@ export function registerPushSubscription(
 export function unsubscribePushDevice(subscriptionId: string, csrfToken: string) {
   return apiFetch<{ unbound: true }>(`/v1/me/push/subscriptions/${subscriptionId}`, {
     method: "DELETE",
+    body: JSON.stringify({ confirm: true }),
     csrfToken,
     idempotent: true,
   });

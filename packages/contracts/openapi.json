@@ -22251,6 +22251,26 @@
             "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "confirm"
+                ],
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Unbound",
@@ -22271,6 +22291,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           },
           "401": {
             "$ref": "#/components/responses/Problem"

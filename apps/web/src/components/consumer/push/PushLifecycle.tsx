@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import {
   bumpPushFenceGeneration,
   clearPushLocalBinding,
@@ -11,22 +10,37 @@ import {
   setServiceWorkerFence,
 } from "../../../lib/push-client";
 
+/** Same-origin /messages* only — never protocol-relative or absolute URLs. */
+function sanitizePushNavigatePath(raw: unknown): string {
+  if (typeof raw !== "string") return "/messages";
+  if (
+    !raw.startsWith("/messages") ||
+    raw.startsWith("//") ||
+    raw.includes("://") ||
+    raw.includes("\\") ||
+    raw.includes("#")
+  ) {
+    return "/messages";
+  }
+  return raw;
+}
+
 /**
  * Narrow global push lifecycle via ConsumerShell / auth session events.
  * Does not prompt for permission on page load. Settings mount is not required.
  * Fence writes/clears share push-client's serialized generation chain.
+ * Navigation uses window.location.assign (no App Router hook) so SSR/unit
+ * shells outside NextAppRouter remain valid; effects do not run during SSR.
  */
 export function PushLifecycle() {
-  const router = useRouter();
-
   useEffect(() => {
     let live = true;
 
     const onNavigate = (event: MessageEvent) => {
       const data = event.data;
       if (!data || data.type !== "gb-push-navigate") return;
-      const path = typeof data.path === "string" ? data.path : "/messages";
-      router.push(path.startsWith("/messages") ? path : "/messages");
+      const path = sanitizePushNavigatePath(data.path);
+      window.location.assign(path);
     };
 
     const clearLocal = () => {
@@ -69,7 +83,7 @@ export function PushLifecycle() {
       window.removeEventListener("gb-session-changed", syncFence);
       window.removeEventListener("gb-private-expired", clearLocal);
     };
-  }, [router]);
+  }, []);
 
   return null;
 }
