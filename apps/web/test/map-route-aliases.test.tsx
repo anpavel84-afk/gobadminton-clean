@@ -15,7 +15,7 @@ import { gamesMapReturnPath } from "../src/lib/games-venue-map";
 
 beforeEach(() => vi.clearAllMocks());
 describe("map entrances and invalid game routes (#445/#455)", () => {
-  it("redirects both compatibility entrances to the existing map", () => {
+  it("redirects /games/map, /venues, and /map aliases to /games?view=map", () => {
     for (const route of [MapAlias, VenuesAlias, RootMapAlias]) {
       expect(() => route()).toThrow("redirect:/games?view=map");
     }

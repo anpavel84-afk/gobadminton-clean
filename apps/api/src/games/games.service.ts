@@ -599,8 +599,17 @@ export class GamesService {
         throw notFound("GAME_NOT_FOUND", "Игра не найдена");
       }
 
-      if (dto.status === "published" && dto.visibility === "public" &&
-          (!this.env.GAME_MODERATION_INTERNAL_ENABLED || (await readModeration(client, gameId)).state !== "taken_down")) {
+      // Moderation taken_down (when GAME_MODERATION is on): not publicly readable;
+      // managers may still load details, plain participants may not.
+      const moderationTakenDown =
+        this.env.GAME_MODERATION_INTERNAL_ENABLED &&
+        (await readModeration(client, gameId)).state === "taken_down";
+
+      if (
+        dto.status === "published" &&
+        dto.visibility === "public" &&
+        !moderationTakenDown
+      ) {
         return dto;
       }
 
@@ -612,6 +621,16 @@ export class GamesService {
       // non-draft rows (PERMISSIONS.md unlisted via своя Participation). Draft
       // stays manager-only (API_POLICY). Share-token anonymous unlisted remains
       // intentionally out of scope.
+      //
+      // Participant visibility (ParticipationStatus / migration 0004):
+      // ALLOW current/active: pending (requested), confirmed; plus withdrawn
+      // (player self-left via participations.withdraw). No waitlist status
+      // exists in schema.
+      // DENY organizer-side / terminal exclusions: rejected, removed (kick),
+      // cancelled_by_game, expired.
+      // Self-left vs organizer-removed are distinct statuses (withdrawn vs
+      // removed); participation_transitions history is not required.
+      // taken_down: participant OR is suppressed ($4); managers still pass.
       const authorized = await client.query(
         `SELECT 1
          WHERE EXISTS (
@@ -619,14 +638,16 @@ export class GamesService {
            WHERE game_id = $1 AND user_id = $2 AND status = 'active'
          )
          OR (
-           $3::text <> 'draft'
+           NOT $4::boolean
+           AND $3::text <> 'draft'
            AND EXISTS (
              SELECT 1 FROM participations
              WHERE game_id = $1 AND user_id = $2
+               AND status IN ('pending', 'confirmed', 'withdrawn')
            )
          )
          LIMIT 1`,
-        [gameId, viewerUserId, dto.status],
+        [gameId, viewerUserId, dto.status, moderationTakenDown],
       );
       if (!authorized.rows[0]) {
         throw notFound("GAME_NOT_FOUND", "Игра не найдена");

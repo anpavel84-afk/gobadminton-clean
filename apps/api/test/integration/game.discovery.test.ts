@@ -16,7 +16,7 @@ import type {
   AuthProviderAdapter,
   VerifiedIdentity,
 } from "../../src/auth/providers/types";
-import { loadEnv } from "../../src/config/env";
+import { loadEnv, type AppEnv } from "../../src/config/env";
 import { createDatabase } from "../../src/database/client";
 import { GameAuthorityService } from "../../src/games/game-authority.service";
 import { GamesModule } from "../../src/games/games.module";
@@ -73,6 +73,7 @@ describeIntegration("F-03 organizer/venue/game discovery", () => {
   const apiRoot = path.resolve(__dirname, "../..");
   let app: NestFastifyApplication;
   let pool: ReturnType<typeof createDatabase>["pool"];
+  let env: AppEnv;
   let gameAuthority: GameAuthorityService;
   let gamesService: GamesService;
 
@@ -116,7 +117,7 @@ describeIntegration("F-03 organizer/venue/game discovery", () => {
       shell: process.platform === "win32",
     });
 
-    const env = loadEnv(process.env);
+    env = loadEnv(process.env);
     const database = createDatabase(env.DATABASE_URL);
     pool = database.pool;
 
@@ -482,6 +483,92 @@ describeIntegration("F-03 organizer/venue/game discovery", () => {
       url: `/v1/games/${unlistedId}`,
     });
     expect(anonymousAfterJoin.statusCode).toBe(404);
+
+    // #455 P2: participant status filter + taken_down vs managers.
+    const draftForParticipant = await app.inject({
+      method: "POST",
+      url: "/v1/games",
+      headers: mutationHeaders(owner, `idem-draft-p-${Date.now()}-abcdefgh`),
+      payload: baseGamePayload(venue.id, {
+        capacity: 4,
+        externalReservedCount: 0,
+        visibility: "unlisted",
+        title: "Draft participant deny",
+      }),
+    });
+    expect(draftForParticipant.statusCode).toBe(201);
+    const draftParticipantId = draftForParticipant.json().id as string;
+    await pool.query(
+      `INSERT INTO participations (game_id, user_id, status, attempt_number, version)
+       VALUES ($1, $2, 'confirmed', 1, 1)`,
+      [draftParticipantId, other.userId],
+    );
+    const participantDraft = await app.inject({
+      method: "GET",
+      url: `/v1/games/${draftParticipantId}`,
+      cookies: other.cookies,
+    });
+    expect(participantDraft.statusCode).toBe(404);
+
+    for (const deniedStatus of ["rejected", "removed"] as const) {
+      await pool.query(
+        `UPDATE participations SET status = $3, updated_at = now()
+         WHERE game_id = $1 AND user_id = $2`,
+        [unlistedId, other.userId, deniedStatus],
+      );
+      const denied = await app.inject({
+        method: "GET",
+        url: `/v1/games/${unlistedId}`,
+        cookies: other.cookies,
+      });
+      expect(denied.statusCode).toBe(404);
+    }
+
+    await pool.query(
+      `UPDATE participations SET status = 'withdrawn', updated_at = now()
+       WHERE game_id = $1 AND user_id = $2`,
+      [unlistedId, other.userId],
+    );
+    const selfLeft = await app.inject({
+      method: "GET",
+      url: `/v1/games/${unlistedId}`,
+      cookies: other.cookies,
+    });
+    expect(selfLeft.statusCode).toBe(200);
+    expect(selfLeft.json().id).toBe(unlistedId);
+
+    await pool.query(
+      `UPDATE participations SET status = 'confirmed', updated_at = now()
+       WHERE game_id = $1 AND user_id = $2`,
+      [unlistedId, other.userId],
+    );
+    const previousModeration = env.GAME_MODERATION_INTERNAL_ENABLED;
+    env.GAME_MODERATION_INTERNAL_ENABLED = true;
+    try {
+      await pool.query(
+        `INSERT INTO game_moderation_state (game_id, state)
+         VALUES ($1, 'taken_down')
+         ON CONFLICT (game_id) DO UPDATE SET state = 'taken_down', updated_at = now()`,
+        [unlistedId],
+      );
+      const takenDownParticipant = await app.inject({
+        method: "GET",
+        url: `/v1/games/${unlistedId}`,
+        cookies: other.cookies,
+      });
+      expect(takenDownParticipant.statusCode).toBe(404);
+      const takenDownManager = await app.inject({
+        method: "GET",
+        url: `/v1/games/${unlistedId}`,
+        cookies: owner.cookies,
+      });
+      expect(takenDownManager.statusCode).toBe(200);
+      await pool.query(`DELETE FROM game_moderation_state WHERE game_id = $1`, [
+        unlistedId,
+      ]);
+    } finally {
+      env.GAME_MODERATION_INTERNAL_ENABLED = previousModeration;
+    }
 
     await gameAuthority.revokeForTests(published.id, owner.userId);
     const revokedCancel = await app.inject({
