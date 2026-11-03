@@ -49,6 +49,7 @@ for file in "${files[@]}"; do
   case $(basename "$file") in
     friends-s1.disposable.test.ts) db=gobadminton_friends_s1_disposable ;;
     formal-invitation-privacy-authority-boundary.test.ts) db=formal_invite_ci ;;
+    web-push.disposable.test.ts) db=gobadminton_web_push_disposable ;;
   esac
   docker exec "$NAME" dropdb -U gobadminton --if-exists --force "$db"
   docker exec "$NAME" createdb -U gobadminton "$db"
