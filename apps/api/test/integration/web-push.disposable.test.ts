@@ -61,7 +61,6 @@ run("#456 web push — disposable", () => {
   let env: AppEnv;
   let sessions: SessionService;
   let author: Actor;
-  let recipient: Actor;
   let foreign: Actor;
   const vapid = webpush.generateVAPIDKeys();
   const sent: Array<{ endpoint: string; payload: string }> = [];
@@ -149,7 +148,6 @@ run("#456 web push — disposable", () => {
     await app.getHttpAdapter().getInstance().ready();
     sessions = app.get(SessionService);
     author = await mintActor("Author");
-    recipient = await mintActor("Recipient");
     foreign = await mintActor("Foreign");
   }, 180_000);
 
