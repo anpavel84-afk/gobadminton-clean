@@ -838,7 +838,8 @@ run("#394 role reputation — disposable", () => {
         [slotId],
       )
     ).rows[0]!;
-    await humanApprovePending(pendingV1.id, pendingV1.version);
+    const approvedV1 = await humanApprovePending(pendingV1.id, pendingV1.version);
+    const actualV1 = approvedV1.revision.resourceVersion as number;
 
     const publicV1 = await app.inject({
       method: "GET",
@@ -848,7 +849,7 @@ run("#394 role reputation — disposable", () => {
     expect(publicV1.statusCode).toBe(200);
     const itemV1 = publicV1.json().items[0];
     expect(itemV1.text).toBe(v1Text);
-    expect(itemV1.publishedRevision).toBe(1);
+    expect(itemV1.publishedRevision).toBe(actualV1);
     expect(itemV1.reply).toBeNull();
 
     const replyV1Text = "Ответ на первую редакцию\nПринято";
@@ -948,7 +949,7 @@ run("#394 role reputation — disposable", () => {
       headers: { cookie: organizer.cookie },
     });
     expect(whilePending.json().items[0].text).toBe(v1Text);
-    expect(whilePending.json().items[0].publishedRevision).toBe(1);
+    expect(whilePending.json().items[0].publishedRevision).toBe(actualV1);
     expect(whilePending.json().items[0].reply?.text).toBe(replyV1Text);
 
     const pendingV2 = (
@@ -959,7 +960,9 @@ run("#394 role reputation — disposable", () => {
         [slotId],
       )
     ).rows[0]!;
-    await humanApprovePending(pendingV2.id, pendingV2.version);
+    const approvedV2 = await humanApprovePending(pendingV2.id, pendingV2.version);
+    const actualV2 = approvedV2.revision.resourceVersion as number;
+    expect(actualV2).toBeGreaterThan(actualV1);
 
     const afterV2 = await app.inject({
       method: "GET",
@@ -967,13 +970,13 @@ run("#394 role reputation — disposable", () => {
       headers: { cookie: organizer.cookie },
     });
     expect(afterV2.json().items[0].text).toBe(v2Text);
-    expect(afterV2.json().items[0].publishedRevision).toBe(2);
+    expect(afterV2.json().items[0].publishedRevision).toBe(actualV2);
     expect(afterV2.json().items[0].reply).toBeNull();
     // Do not pretend the v1-bound reply is still the subject's current published answer.
     expect(afterV2.json().items[0].subjectOwnReply).toBeNull();
     expect(afterV2.json().items[0].allowedActions.canReply).toBe(true);
 
-    // Negative: stale expectedReviewRevision (v1) cannot submit a reply against approved v2.
+    // Negative: stale expectedReviewRevision (actual v1) cannot submit a reply against approved v2.
     const staleReply = await app.inject({
       method: "POST",
       url: `/v1/role-reviews/${reviewHandle}/reply-commands`,
@@ -987,7 +990,7 @@ run("#394 role reputation — disposable", () => {
       payload: {
         action: "submit_revision",
         expectedVersion: afterV2.json().items[0].replyAggregateVersion,
-        expectedReviewRevision: 1,
+        expectedReviewRevision: actualV1,
         text: "Устаревший ответ\nНельзя",
         consentProjectionHash: projectionHash({
           subjectUserId: organizer.userId,
@@ -995,7 +998,7 @@ run("#394 role reputation — disposable", () => {
           audience: "public",
           text: "Устаревший ответ\nНельзя",
           topics: [],
-          reviewRevision: 1,
+          reviewRevision: actualV1,
         }),
       },
     });
@@ -1027,7 +1030,7 @@ run("#394 role reputation — disposable", () => {
       payload: {
         action: "submit_revision",
         expectedVersion: afterV2.json().items[0].replyAggregateVersion,
-        expectedReviewRevision: 2,
+        expectedReviewRevision: actualV2,
         text: replyV2Text,
         consentProjectionHash: replyV2Preview.json().consentProjectionHash,
       },
