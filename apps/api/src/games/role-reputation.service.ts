@@ -490,6 +490,7 @@ export class RoleReputationService {
       reply_status: string | null;
       reply_aggregate_version: number | null;
       reply_approved_resource_version: number | null;
+      reply_pending_resource_version: number | null;
       subject_user_id: string;
       author_user_id: string;
     }>(
@@ -498,11 +499,13 @@ export class RoleReputationService {
               r.resource_version AS approved_resource_version,
               rr.body_text AS reply_text, rp.status AS reply_status,
               rp.version AS reply_aggregate_version,
-              rr.resource_version AS reply_approved_resource_version
+              rr.resource_version AS reply_approved_resource_version,
+              pr.resource_version AS reply_pending_resource_version
        FROM role_review_slots s
        JOIN role_review_revisions r ON r.id = s.approved_revision_id
        LEFT JOIN role_review_replies rp ON rp.slot_id = s.id
        LEFT JOIN role_review_reply_revisions rr ON rr.id = rp.approved_revision_id
+       LEFT JOIN role_review_reply_revisions pr ON pr.id = rp.pending_revision_id
        WHERE s.subject_user_id = $1
          AND s.role = $2
          AND s.status = 'published'
@@ -519,30 +522,42 @@ export class RoleReputationService {
       ],
     );
     const slice = rows.rows.slice(0, args.limit);
-    const items: PublicRoleReviewItemDto[] = slice.map((row) => ({
-      reviewHandle: row.public_handle,
-      role: row.role,
-      text: row.body_text,
-      topics: row.topics ?? [],
-      authorLabel: publicAuthorLabel(row.role),
-      experienceState: row.basis_under_review ? "basis_under_review" : "published",
-      publishedRevision: row.approved_resource_version,
-      replyAggregateVersion: row.reply_aggregate_version ?? 0,
-      reply:
-        row.reply_status === "published" &&
-        row.reply_text &&
-        row.reply_approved_resource_version != null
-          ? {
-              text: row.reply_text,
-              experienceState: "published" as const,
-              publishedRevision: row.reply_approved_resource_version,
-            }
-          : null,
-      allowedActions: {
-        canReport: Boolean(args.viewerId),
-        canReply: args.viewerId === row.subject_user_id,
-      },
-    }));
+    const items: PublicRoleReviewItemDto[] = slice.map((row) => {
+      const isSubject = args.viewerId === row.subject_user_id;
+      return {
+        reviewHandle: row.public_handle,
+        role: row.role,
+        text: row.body_text,
+        topics: row.topics ?? [],
+        authorLabel: publicAuthorLabel(row.role),
+        experienceState: row.basis_under_review ? "basis_under_review" : "published",
+        publishedRevision: row.approved_resource_version,
+        replyAggregateVersion: row.reply_aggregate_version ?? 0,
+        reply:
+          row.reply_status === "published" &&
+          row.reply_text &&
+          row.reply_approved_resource_version != null
+            ? {
+                text: row.reply_text,
+                experienceState: "published" as const,
+                publishedRevision: row.reply_approved_resource_version,
+              }
+            : null,
+        // Subject-only tip for edit/withdraw — never leak pending reply body.
+        subjectOwnReply:
+          isSubject && row.reply_status
+            ? {
+                status: row.reply_status,
+                version: row.reply_aggregate_version ?? 0,
+                pendingRevision: row.reply_pending_resource_version,
+              }
+            : null,
+        allowedActions: {
+          canReport: Boolean(args.viewerId),
+          canReply: isSubject,
+        },
+      };
+    });
     const last = slice[slice.length - 1];
     return {
       items,
@@ -990,6 +1005,7 @@ export class RoleReputationService {
       submittedBy: string;
       subjectUserId: string;
       role: RoleKind;
+      priorDecisionId?: string | null;
     },
   ): Promise<{ id: string; receiptToken: string }> {
     const receiptToken = opaqueHandle();
@@ -997,8 +1013,8 @@ export class RoleReputationService {
       await client.query<{ id: string; receipt_token: string }>(
         `INSERT INTO role_reputation_pending_intakes
            (kind, slot_id, revision_id, reply_revision_id, receipt_token, status,
-            submitted_by_user_id, subject_user_id, role, version)
-         VALUES ($1,$2,$3,$4,$5,'waiting_intake',$6,$7,$8,1)
+            submitted_by_user_id, subject_user_id, role, version, prior_decision_id)
+         VALUES ($1,$2,$3,$4,$5,'waiting_intake',$6,$7,$8,1,$9)
          RETURNING id, receipt_token`,
         [
           args.kind,
@@ -1009,10 +1025,151 @@ export class RoleReputationService {
           args.submittedBy,
           args.subjectUserId,
           args.role,
+          args.priorDecisionId ?? null,
         ],
       )
     ).rows[0]!;
     return { id: row.id, receiptToken: row.receipt_token };
+  }
+
+  /**
+   * Narrow publish/restore gate for admin decide — rechecks current admission,
+   * immutable consent vs projection, and current proof tip against revision refs.
+   * Does not delete already-published criticism; only blocks NEW approve/restore.
+   */
+  async assertCurrentPublishGates(
+    client: PoolClient,
+    args: {
+      decision: "approve" | "restore";
+      targetKind: "review" | "reply";
+      revisionId: string;
+      slot: SlotRow;
+    },
+  ): Promise<void> {
+    if (args.targetKind === "review") {
+      const rev = (
+        await client.query<{
+          id: string;
+          slot_id: string;
+          body_text: string;
+          topics: string[];
+          projection_hash: string;
+          proof_game_id: string;
+          proof_role: RoleKind;
+          proof_version: number;
+          actor_user_id: string;
+          lifecycle: string;
+        }>(`SELECT * FROM role_review_revisions WHERE id = $1`, [args.revisionId])
+      ).rows[0];
+      if (!rev || rev.slot_id !== args.slot.id) {
+        throw unprocessable("REVISION_UNAVAILABLE", "Редакция недоступна");
+      }
+      if (args.slot.status === "withdrawn") {
+        throw conflict("WITHDRAWN_NOT_APPROVABLE", "Отозванный отзыв нельзя опубликовать");
+      }
+      if (args.decision === "restore") {
+        if (args.slot.status !== "removed") {
+          throw conflict("RESTORE_DENIED", "Восстановление недоступно");
+        }
+        if (args.slot.approved_revision_id !== rev.id) {
+          throw conflict("RESTORE_DENIED", "Восстановление только текущей одобренной редакции");
+        }
+      }
+      const expectedHash = projectionHash({
+        subjectUserId: args.slot.subject_user_id,
+        role: args.slot.role,
+        audience: "public",
+        text: rev.body_text,
+        topics: rev.topics ?? [],
+      });
+      if (expectedHash !== rev.projection_hash) {
+        throw unprocessable("ROLE_CONSENT_MISMATCH", "Согласие не соответствует тексту");
+      }
+      const ctx = await this.loadAdmissionContext(
+        client,
+        rev.actor_user_id,
+        rev.proof_game_id,
+        rev.proof_role,
+      );
+      if (ctx.verdict.status !== "may_submit" || !ctx.proof) {
+        if (ctx.verdict.status === "hold") {
+          throw unprocessable("ROLE_REPUTATION_HOLD", "Основание уточняется");
+        }
+        throw unprocessable("ROLE_REPUTATION_DENIED", "Нет допуска к публикации");
+      }
+      if (
+        ctx.proof.subject_user_id !== args.slot.subject_user_id ||
+        ctx.proof.game_id !== rev.proof_game_id ||
+        ctx.proof.role !== rev.proof_role
+      ) {
+        throw unprocessable("ROLE_REPUTATION_DENIED", "Основание роли изменилось");
+      }
+      // Stale basis: tip moved past the revision's recorded proof version without remaining eligible.
+      if (ctx.proof.version < rev.proof_version) {
+        throw conflict("VERSION_CONFLICT", "Версия основания устарела");
+      }
+      return;
+    }
+    const replyRev = (
+      await client.query<{
+        id: string;
+        slot_id: string;
+        body_text: string;
+        projection_hash: string;
+        bound_review_revision_id: string;
+        lifecycle: string;
+        resource_version: number;
+      }>(`SELECT * FROM role_review_reply_revisions WHERE id = $1`, [args.revisionId])
+    ).rows[0];
+    if (!replyRev || replyRev.slot_id !== args.slot.id) {
+      throw unprocessable("REVISION_UNAVAILABLE", "Редакция недоступна");
+    }
+    if (args.slot.status === "withdrawn" || args.slot.status !== "published") {
+      throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
+    }
+    const replyTip = (
+      await client.query<{
+        status: string;
+        approved_revision_id: string | null;
+        pending_revision_id: string | null;
+      }>(`SELECT status, approved_revision_id, pending_revision_id FROM role_review_replies WHERE slot_id = $1`, [
+        args.slot.id,
+      ])
+    ).rows[0];
+    if (!replyTip) {
+      throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
+    }
+    if (replyTip.status === "withdrawn") {
+      throw conflict("WITHDRAWN_NOT_APPROVABLE", "Отозванный ответ нельзя опубликовать");
+    }
+    if (args.decision === "restore") {
+      if (replyTip.status !== "removed" || replyTip.approved_revision_id !== replyRev.id) {
+        throw conflict("RESTORE_DENIED", "Восстановление только текущей одобренной редакции");
+      }
+    }
+    if (!args.slot.approved_revision_id) {
+      throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
+    }
+    const boundReview = (
+      await client.query<{ id: string; resource_version: number }>(
+        `SELECT id, resource_version FROM role_review_revisions WHERE id = $1`,
+        [args.slot.approved_revision_id],
+      )
+    ).rows[0];
+    if (!boundReview || boundReview.id !== replyRev.bound_review_revision_id) {
+      throw conflict("REVISION_NOT_CURRENT", "Ответ привязан к неактуальной редакции отзыва");
+    }
+    const expectedHash = projectionHash({
+      subjectUserId: args.slot.subject_user_id,
+      role: args.slot.role,
+      audience: "public",
+      text: replyRev.body_text,
+      topics: [],
+      reviewRevision: boundReview.resource_version,
+    });
+    if (expectedHash !== replyRev.projection_hash) {
+      throw unprocessable("ROLE_CONSENT_MISMATCH", "Согласие не соответствует тексту");
+    }
   }
 
   private async createOrResubmitReview(
@@ -1217,6 +1374,9 @@ export class RoleReputationService {
       intake_status: string | null;
       approved_version: number | null;
       pending_version: number | null;
+      role_handle: string | null;
+      subject_profile_user_id: string | null;
+      subject_display_name: string | null;
     }>(
       `SELECT s.id, s.public_handle, s.role, s.status, s.version,
               s.approved_revision_id, s.pending_revision_id,
@@ -1224,13 +1384,21 @@ export class RoleReputationService {
               COALESCE(pr.topics, ar.topics, '{}') AS topics,
               pi.receipt_token, pi.status AS intake_status,
               ar.resource_version AS approved_version,
-              pr.resource_version AS pending_version
+              pr.resource_version AS pending_version,
+              sub.public_handle AS role_handle,
+              psp.user_id AS subject_profile_user_id,
+              psp.display_name AS subject_display_name
        FROM role_review_slots s
        LEFT JOIN role_review_revisions ar ON ar.id = s.approved_revision_id
        LEFT JOIN role_review_revisions pr ON pr.id = s.pending_revision_id
+       LEFT JOIN role_reputation_subjects sub
+         ON sub.subject_user_id = s.subject_user_id AND sub.role = s.role
+       LEFT JOIN player_social_profiles psp ON psp.user_id = s.subject_user_id
        LEFT JOIN LATERAL (
          SELECT receipt_token, status FROM role_reputation_pending_intakes
          WHERE slot_id = s.id
+           AND submitted_by_user_id = s.author_user_id
+           AND kind IN ('review_submit', 'appeal')
          ORDER BY
            CASE status
              WHEN 'waiting_intake' THEN 0
@@ -1257,6 +1425,10 @@ export class RoleReputationService {
           id: r.id,
           reviewHandle: r.public_handle,
           role: r.role,
+          roleHandle: r.role_handle ?? "",
+          subjectDisplayName: r.subject_profile_user_id
+            ? safePublicDisplayName(r.subject_display_name)
+            : null,
           status: r.status,
           version: r.version,
           text: r.body_text,
@@ -1343,6 +1515,15 @@ export class RoleReputationService {
           };
         }
         if (body.action === "appeal") {
+          const prior = (
+            await client.query<{ id: string }>(
+              `SELECT id FROM role_reputation_decisions
+               WHERE slot_id = $1
+               ORDER BY recorded_at DESC, id DESC
+               LIMIT 1`,
+              [slot.id],
+            )
+          ).rows[0];
           const pending = await this.insertPendingIntake(client, {
             kind: "appeal",
             slotId: slot.id,
@@ -1351,6 +1532,7 @@ export class RoleReputationService {
             submittedBy: userId,
             subjectUserId: slot.subject_user_id,
             role: slot.role,
+            priorDecisionId: prior?.id ?? null,
           });
           await client.query(
             `UPDATE role_review_slots SET version = version + 1, updated_at = clock_timestamp()

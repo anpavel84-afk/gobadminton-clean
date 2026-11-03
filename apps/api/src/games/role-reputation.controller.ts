@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param, Post, Query, Req, Res } from "@nestjs/common";
+import { Controller, Get, Header, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { notFound } from "../auth/problem";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
@@ -83,6 +83,7 @@ export class RoleReputationController {
   }
 
   @Post("me/role-reviews/consent-preview")
+  @HttpCode(200)
   @Header("Cache-Control", "no-store")
   async consentPreview(@Req() request: FastifyRequest) {
     const actor = await this.auth.requireCookieMutation(request);

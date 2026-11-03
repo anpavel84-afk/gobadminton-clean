@@ -636,6 +636,18 @@ run("#394 role reputation — disposable", () => {
     expect(report.statusCode).toBe(200);
     expect(report.json().status).toBe("submitted");
 
+    // Foreign reporter waiting_intake must not overwrite author's linked own receipt.
+    const mineAfterReport = await app.inject({
+      method: "GET",
+      url: "/v1/me/role-reviews",
+      headers: { cookie: participant.cookie },
+    });
+    const ownAfterReport = mineAfterReport.json().items.find((i: { id: string }) => i.id === ownId);
+    expect(ownAfterReport.pendingIntakeStatus).toBe("linked");
+    expect(ownAfterReport.receiptToken).toBeTruthy();
+    expect(ownAfterReport.receiptToken).not.toBe(report.json().receiptToken);
+    expect(ownAfterReport.roleHandle).toBe(seeded.roleHandle);
+
     const replyText = "Спасибо за отзыв\nУчтём";
     const replyPreview = await app.inject({
       method: "POST",

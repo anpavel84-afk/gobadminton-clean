@@ -394,6 +394,14 @@ CREATE TRIGGER role_reputation_decisions_immutable
   BEFORE UPDATE OR DELETE OR TRUNCATE ON role_reputation_decisions
   FOR EACH STATEMENT EXECUTE FUNCTION support_immutable();
 
+-- Appeal / re-decision COI: bind prior human decision when intake is created (unapplied additive).
+ALTER TABLE role_reputation_pending_intakes
+  ADD COLUMN prior_decision_id uuid NULL
+    REFERENCES role_reputation_decisions (id);
+
+COMMENT ON COLUMN role_reputation_pending_intakes.prior_decision_id IS
+  '#394 optional FK to prior role_reputation_decisions for appeal COI; no applied-history rewrite.';
+
 COMMENT ON TABLE role_reputation_subjects IS
   '#394 public opaque role handles; re-check surface visibility on every read.';
 COMMENT ON TABLE game_role_proof_revisions IS

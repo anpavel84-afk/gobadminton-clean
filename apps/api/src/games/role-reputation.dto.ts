@@ -182,6 +182,13 @@ export type PublicRoleReplyDto = {
   publishedRevision: number;
 };
 
+/** Subject-only reply tip metadata — no pending body text in public projection. */
+export type SubjectOwnReplyContextDto = {
+  status: string;
+  version: number;
+  pendingRevision: number | null;
+};
+
 export type PublicRoleReviewItemDto = {
   reviewHandle: string;
   role: RoleKind;
@@ -194,6 +201,8 @@ export type PublicRoleReviewItemDto = {
   /** Reply tip aggregate version; 0 when no reply row yet (first submit expectedVersion). */
   replyAggregateVersion: number;
   reply: PublicRoleReplyDto | null;
+  /** Populated only for the role subject viewer; null for other readers. */
+  subjectOwnReply: SubjectOwnReplyContextDto | null;
   allowedActions: {
     canReport: boolean;
     canReply: boolean;
@@ -236,6 +245,9 @@ export type OwnRoleReviewDto = {
   id: string;
   reviewHandle: string;
   role: RoleKind;
+  /** Opaque public subject handle — UI recipient without private subject user id. */
+  roleHandle: string;
+  subjectDisplayName: string | null;
   status: string;
   version: number;
   text: string | null;

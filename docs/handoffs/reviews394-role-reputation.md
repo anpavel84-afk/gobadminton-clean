@@ -1,57 +1,56 @@
-# Handoff · #394 role reputation usable public roundtrips (attempt 22)
+# Handoff · #394 role reputation bound case decisions + own receipt (attempt 23)
 
-Assignment: `OWNER394_ROLE_REPUTATION_USABLE_PUBLIC_ROUNDTRIPS_AND_REAL_HUMAN_HTTP_REPAIR`
-Base: `0501f20c55142305e2ea5446751d7dd10327ee9e`
-Attempt: **22** · continues preserved #394 history (not UNKNOWN replay)
-Parent: #372 · coordinated with same branch next UI pass
+Assignment: `OWNER394_ROLE_REPUTATION_BOUND_CASE_DECISIONS_AND_OWN_RECEIPT_REPAIR`
+Base: `ec781d44971e1ce34629e012a3ddb01792a957d0`
+Attempt: **23** · continues preserved #394 history (not UNKNOWN replay)
+Parent: #372 · same coordinated delivery; UI still next sequential pass
 C5 OFF · PROD forbidden · no Git commit/push/deploy in this author pass
 
 ## Scope of this pass
 
-Backend API integration readiness repair **before** frontend.
-Repairs public reply/report addressing, revision/version DTO fields, reply consent preview,
-listMine intake progress, multiline plain text, safe public displayName, and real HTTP fixtures.
-**UI + changelog + release notes follow on the SAME source branch / SAME PR** after actual HTTP proof.
-This pass does **not** claim QA/CI/DEV/human UAT or whole usecase DONE.
+Backend integration / privileged-decision defects **before UI**.
+Repairs: consent-preview HTTP 200, own-list LATERAL foreign-report bleed, admin
+approve/restore current admission+consent gates, exact case↔intake↔revision binding,
+COI with bound pending/report submitter (+ appeal prior decision FK), small own/subject
+DTO fields for stable next UI. No Astra / no architecture / no PROD.
 
 ## Exact changes (this pass)
 
-### Consumer API (`role-reputation.*`)
-1. **Public handle addressing** — `POST /role-reviews/{reviewHandle}/reply-commands` and
-   `POST /role-reviews/{reviewHandle}/reports` resolve `reviewHandle` (32-hex) server-side.
-   Own commands remain UUID from `/me/role-reviews`. Optional `gameId` on report for
-   game-context surface re-check (handle alone is not authorization).
-2. **Public revision fields** — items expose `publishedRevision` (approved review
-   `resource_version`) and `replyAggregateVersion`; published reply exposes
-   `publishedRevision`. Queried from approved revision rows, not pending.
-3. **Consent preview** — discriminated `targetKind: "reply"` (reviewHandle + text) for
-   historical subject reply hash including server-derived reviewRevision; existing review
-   preview remains backwards-compatible; self-review still forbidden; no client subjectUserId.
-4. **listMine** — latest intake progress returns `waiting_intake` / `linked` with receipt
-   (no longer filters only `waiting_intake`).
-5. **plainBounded** — CRLF→LF, allow newlines, reject NUL/other controls, keep 500 bound.
-6. **displayName** — `safePublicDisplayName` on public projection (same as ProfilesService).
+### Consumer (`role-reputation.*`)
+1. **`POST …/consent-preview` → 200** — `@HttpCode(200)` (documented non-create POST; Nest default was 201).
+2. **`listMine` LATERAL** — only actor's own `review_submit`/`appeal` intakes
+   (`submitted_by_user_id = author`); foreign report/reply waiting_intake no longer
+   overwrites linked own receipt/status.
+3. **Own DTO** — `roleHandle` + `subjectDisplayName` (safeDisplayName) for recipient without private IDs.
+4. **Public item** — `subjectOwnReply: { status, version, pendingRevision } | null`
+   only for subject viewer (no pending body text leak).
+5. **`assertCurrentPublishGates`** — exported narrow validator for admin approve/restore
+   (current admission, immutable consent hash, proof tip vs revision refs; withdrawn/non-current restore denied).
 
-### Contracts
-- OpenAPI path params for reply/report → `reviewHandle` 32-hex pattern
-- `PublicRoleReviewItem` / reply DTO revision fields
-- Consent-preview `oneOf` review|reply
+### Admin (`admin/role-reputation.*`)
+1. **decide/readSource** bind `role_reputation_case_links.pending_intake_id` → exact
+   review/reply revision; reject foreign/new revision under old case.
+2. **approve/restore** call consumer `assertCurrentPublishGates` inside transaction;
+   remove/retain unchanged (no silent delete of published criticism).
+3. **assertIndependent** includes bound pending/report submitter even after reassignment;
+   appeal excludes prior decision principal (`prior_decision_id`).
+4. **resolveBasis** only corrects bound case game/role (not arbitrary unrelated targets).
+5. Same guards on privileged command execute **and** authorizeReplay.
 
-### Tests
-- Consumer disposable: complete games SQL fixture (deadline + required fields + attendance user_id
-  + transitions versions); public read → handle/revision → pending not public → human HTTP
-  approve → report/reply via handle + server preview; multiline text.
-- Admin disposable: one real HTTP e2e submit → intake → source → approve → public → report →
-  remove/restore → own withdraw; COI/subject cannot intake; unassigned source denied; stale
-  revision + generic status≠publish; stale step-up; AJV against current OpenAPI where used.
-- Unit: reply hash binds `reviewRevision`.
+### Migration 0054 (unapplied additive)
+- `role_reputation_pending_intakes.prior_decision_id` → `role_reputation_decisions(id)` for appeal COI.
+- No applied-history rewrite.
+
+### Contracts / tests
+- OpenAPI `PublicRoleReviewItem.subjectOwnReply`
+- Admin disposable: basis-changed approve denied → legitimate approve; own linked after foreign report;
+  reporter-after-reassign COI; oldCase/newRevision deny; withdrawn restore deny; retained e2e path.
+- Consumer disposable: consent-preview 200 assertion unchanged (fix was correct).
 
 ## Remaining (same branch / same PR — next UI pass)
 
-1. Consumer UI: discovery trainer filter, game detail, public profile sections, own composer/consent,
-   review drawer — use public `reviewHandle` + `publishedRevision` / `replyAggregateVersion`,
-   consent-preview `targetKind: "reply"`, multiline text; never private slot/account/game IDs
-   for reply/report.
+1. Consumer UI: discovery/game/profile/composer using `roleHandle`, `reviewHandle`,
+   `publishedRevision` / `replyAggregateVersion`, `subjectOwnReply`, consent-preview reply shape.
 2. Admin Cases UI buttons for pending kind + decide/basis
 3. Alpha changelog / release-agent description (not this pass)
 4. Trusted PMA: real DB migrate, types, contracts check, disposable HTTP with PostGIS
@@ -62,7 +61,7 @@ This pass does **not** claim QA/CI/DEV/human UAT or whole usecase DONE.
 
 | Check | Result |
 |---|---|
-| Unit policy test | source updated; not executed in author slot (no node_modules / no DB) |
+| Unit policy test | source untouched for policy; not executed (no node_modules / no DB) |
 | Disposable DB HTTP | **notrun** (no dedicated disposable DB in author slot; PMA runs after import) |
 | Product CI / security / DEV smoke | not claimed |
 | Independent QA | not started |
@@ -70,7 +69,6 @@ This pass does **not** claim QA/CI/DEV/human UAT or whole usecase DONE.
 
 ## Known issues / notes
 
-- Missing historical proof for pre-0054 games remains honest `missing_history`.
-- Venue writer CLOSED unchanged; private PG-3 never published via this path.
-- Knowing opaque `roleHandle` / `reviewHandle` alone cannot bypass profile/game surface gates.
-- Pending submissions wait for human intake; offline reviewer does not block consumer POST receipt.
+- Source PASS ≠ DEV claim. UI not in this pass.
+- Private PG-3 never published via this path; venue writer CLOSED unchanged.
+- Mode B / AGY READY not claimed.

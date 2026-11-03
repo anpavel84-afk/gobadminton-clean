@@ -35421,6 +35421,7 @@
           "publishedRevision",
           "replyAggregateVersion",
           "reply",
+          "subjectOwnReply",
           "allowedActions"
         ],
         "properties": {
@@ -35490,6 +35491,43 @@
                   "publishedRevision": {
                     "type": "integer",
                     "minimum": 1
+                  }
+                }
+              }
+            ]
+          },
+          "subjectOwnReply": {
+            "description": "Subject-only reply tip metadata for edit/withdraw. Null for other readers; never includes pending body text.",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "version",
+                  "pendingRevision"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "pendingRevision": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    ]
                   }
                 }
               }

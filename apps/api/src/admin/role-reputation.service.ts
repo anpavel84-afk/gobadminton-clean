@@ -3,6 +3,7 @@ import type { FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import { conflict, forbidden, notFound, serviceUnavailable } from "../auth/problem";
 import type { AppEnv } from "../config/env";
+import { RoleReputationService } from "../games/role-reputation.service";
 import { APP_ENV } from "../tokens";
 import { appendAudit, type AuditActor } from "./admin-db";
 import { AdminService } from "./admin.service";
@@ -34,6 +35,7 @@ type PendingRow = {
   role: string;
   version: number;
   created_at: Date;
+  prior_decision_id: string | null;
 };
 
 type SlotRow = {
@@ -48,12 +50,18 @@ type SlotRow = {
   public_handle: string;
 };
 
+type CaseLinkRow = {
+  slot_id: string;
+  pending_intake_id: string;
+};
+
 const manages = (actor: AuditActor) => hasPermission(actor.roles as AdminRole[], "case.manage");
 
 @Injectable()
 export class AdminRoleReputationService {
   constructor(
     private readonly admin: AdminService,
+    private readonly consumerReputation: RoleReputationService,
     @Inject(APP_ENV) private readonly env: AppEnv,
   ) {}
 
@@ -86,6 +94,82 @@ export class AdminRoleReputationService {
       throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
     }
     return row;
+  }
+
+  private async loadBoundLink(client: PoolClient, caseId: string): Promise<CaseLinkRow & { pending: PendingRow }> {
+    const link = (
+      await client.query<CaseLinkRow>(
+        `SELECT slot_id, pending_intake_id FROM role_reputation_case_links WHERE case_id=$1`,
+        [caseId],
+      )
+    ).rows[0];
+    if (!link) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+    const pending = (
+      await client.query<PendingRow>(
+        `SELECT * FROM role_reputation_pending_intakes WHERE id=$1`,
+        [link.pending_intake_id],
+      )
+    ).rows[0];
+    if (!pending || pending.slot_id !== link.slot_id) {
+      throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+    }
+    return { ...link, pending };
+  }
+
+  /** Bound pending/report submitter + appeal prior decision reviewer (exact linked rows only). */
+  private async independenceForBound(
+    client: PoolClient,
+    slot: SlotRow,
+    pending: PendingRow,
+    gameIds: string[],
+  ): Promise<{
+    authorUserId: string;
+    subjectUserId: string;
+    reporterUserIds: string[];
+    gameIds: string[];
+    excludePrincipalIds?: string[];
+  }> {
+    const reporterUserIds = new Set<string>([pending.submitted_by_user_id]);
+    if (pending.kind === "report") {
+      const reporters = (
+        await client.query<{ reporter_user_id: string }>(
+          `SELECT reporter_user_id FROM role_reputation_reports
+           WHERE pending_intake_id=$1`,
+          [pending.id],
+        )
+      ).rows;
+      for (const r of reporters) reporterUserIds.add(r.reporter_user_id);
+    }
+    let excludePrincipalIds: string[] | undefined;
+    if (
+      (pending.kind === "appeal" || pending.kind === "review_submit") &&
+      pending.prior_decision_id
+    ) {
+      const prior = (
+        await client.query<{ actor_principal_id: string }>(
+          `SELECT actor_principal_id FROM role_reputation_decisions WHERE id=$1`,
+          [pending.prior_decision_id],
+        )
+      ).rows[0];
+      if (prior) excludePrincipalIds = [prior.actor_principal_id];
+    } else if (pending.kind === "appeal") {
+      // Appeal without stored priorDecisionId: still exclude latest decision reviewer on slot.
+      const prior = (
+        await client.query<{ actor_principal_id: string }>(
+          `SELECT actor_principal_id FROM role_reputation_decisions
+           WHERE slot_id=$1 ORDER BY recorded_at DESC, id DESC LIMIT 1`,
+          [slot.id],
+        )
+      ).rows[0];
+      if (prior) excludePrincipalIds = [prior.actor_principal_id];
+    }
+    return {
+      authorUserId: slot.author_user_id,
+      subjectUserId: slot.subject_user_id,
+      reporterUserIds: [...reporterUserIds],
+      gameIds,
+      excludePrincipalIds,
+    };
   }
 
   private async assertIndependent(
@@ -170,6 +254,27 @@ export class AdminRoleReputationService {
     return reviewerUserId;
   }
 
+  private assertBoundRevision(pending: PendingRow, input: RoleReviewDecide) {
+    if (input.targetKind === "review") {
+      if (pending.revision_id !== input.exactRevisionId) {
+        throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+      }
+    } else if (pending.reply_revision_id !== input.exactRevisionId) {
+      throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+    }
+  }
+
+  private async gameIdsForSlot(client: PoolClient, slotId: string): Promise<string[]> {
+    return (
+      await client.query<{ game_id: string }>(
+        `SELECT DISTINCT game_id FROM role_review_revisions WHERE slot_id=$1
+         UNION
+         SELECT game_id FROM role_review_event_fences WHERE slot_id=$1`,
+        [slotId],
+      )
+    ).rows.map((r) => r.game_id);
+  }
+
   async listPending(
     request: FastifyRequest,
     page: { beforeId?: string; limit: number; kind?: string },
@@ -182,7 +287,7 @@ export class AdminRoleReputationService {
         await client.query<PendingRow>(
           `SELECT id, kind, slot_id, receipt_token, status, case_id,
                   submitted_by_user_id, subject_user_id, role, version, created_at,
-                  revision_id, reply_revision_id
+                  revision_id, reply_revision_id, prior_decision_id
            FROM role_reputation_pending_intakes
            WHERE status = 'waiting_intake'
              AND ($1::text IS NULL OR kind = $1)
@@ -251,26 +356,12 @@ export class AdminRoleReputationService {
           )
         ).rows[0];
         if (!slot) throw notFound("PENDING_UNAVAILABLE", "Ожидание недоступно");
-        const gameIds = (
-          await client.query<{ game_id: string }>(
-            `SELECT DISTINCT game_id FROM role_review_revisions WHERE slot_id=$1
-             UNION
-             SELECT game_id FROM role_review_event_fences WHERE slot_id=$1`,
-            [slot.id],
-          )
-        ).rows.map((r) => r.game_id);
-        const reporters = (
-          await client.query<{ reporter_user_id: string }>(
-            `SELECT reporter_user_id FROM role_reputation_reports WHERE slot_id=$1`,
-            [slot.id],
-          )
-        ).rows.map((r) => r.reporter_user_id);
-        await this.assertIndependent(client, actor, {
-          authorUserId: slot.author_user_id,
-          subjectUserId: slot.subject_user_id,
-          reporterUserIds: reporters,
-          gameIds,
-        });
+        const gameIds = await this.gameIdsForSlot(client, slot.id);
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, pending, gameIds),
+        );
         // Genuine admin principal creates Case — never fake created_by.
         const created = (
           await client.query<CaseRow>(
@@ -325,6 +416,23 @@ export class AdminRoleReputationService {
       async (client, actor) => {
         await this.requireInstalled(client);
         if (!manages(actor)) throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        const pending = (
+          await client.query<PendingRow>(
+            `SELECT * FROM role_reputation_pending_intakes WHERE id=$1`,
+            [input.pendingIntakeId],
+          )
+        ).rows[0];
+        if (!pending) return;
+        const slot = (
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [pending.slot_id])
+        ).rows[0];
+        if (!slot) return;
+        const gameIds = await this.gameIdsForSlot(client, slot.id);
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, pending, gameIds),
+        );
       },
     );
   }
@@ -346,36 +454,20 @@ export class AdminRoleReputationService {
         ) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
         }
-        const link = (
-          await client.query<{ pending_intake_id: string; slot_id: string }>(
-            `SELECT pending_intake_id, slot_id FROM role_reputation_case_links WHERE case_id=$1`,
-            [caseId],
-          )
-        ).rows[0];
-        if (!link) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+        const bound = await this.loadBoundLink(client, caseId);
         const slot = (
-          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [link.slot_id])
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
         ).rows[0];
         if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
-        const pending = (
-          await client.query<PendingRow>(
-            `SELECT * FROM role_reputation_pending_intakes WHERE id=$1`,
-            [link.pending_intake_id],
-          )
-        ).rows[0]!;
-        const gameIds = (
-          await client.query<{ game_id: string }>(
-            `SELECT DISTINCT game_id FROM role_review_revisions WHERE slot_id=$1`,
-            [slot.id],
-          )
-        ).rows.map((r) => r.game_id);
-        await this.assertIndependent(client, actor, {
-          authorUserId: slot.author_user_id,
-          subjectUserId: slot.subject_user_id,
-          reporterUserIds: [],
-          gameIds,
-        });
-        const revisionId = pending.revision_id ?? slot.pending_revision_id ?? slot.approved_revision_id;
+        const pending = bound.pending;
+        const gameIds = await this.gameIdsForSlot(client, slot.id);
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, pending, gameIds),
+        );
+        // Exact bound intake revision — not any revision on the same slot.
+        const revisionId = pending.revision_id;
         const revision = revisionId
           ? (
               await client.query<{
@@ -388,14 +480,18 @@ export class AdminRoleReputationService {
                 proof_role: string;
                 proof_version: number;
                 lifecycle: string;
+                slot_id: string;
               }>(
                 `SELECT id, resource_version, body_text, topics, projection_hash,
-                        proof_game_id, proof_role, proof_version, lifecycle
+                        proof_game_id, proof_role, proof_version, lifecycle, slot_id
                  FROM role_review_revisions WHERE id=$1`,
                 [revisionId],
               )
             ).rows[0]
           : null;
+        if (revision && revision.slot_id !== slot.id) {
+          throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+        }
         const reply = pending.reply_revision_id
           ? (
               await client.query<{
@@ -404,13 +500,17 @@ export class AdminRoleReputationService {
                 body_text: string;
                 projection_hash: string;
                 lifecycle: string;
+                slot_id: string;
               }>(
-                `SELECT id, resource_version, body_text, projection_hash, lifecycle
+                `SELECT id, resource_version, body_text, projection_hash, lifecycle, slot_id
                  FROM role_review_reply_revisions WHERE id=$1`,
                 [pending.reply_revision_id],
               )
             ).rows[0]
           : null;
+        if (reply && reply.slot_id !== slot.id) {
+          throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+        }
         await appendAudit(client, {
           actor,
           action: "admin.role_reputation.source_read",
@@ -485,32 +585,21 @@ export class AdminRoleReputationService {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
         // Generic case status=resolved alone never publishes.
-        const link = (
-          await client.query<{ slot_id: string }>(
-            `SELECT slot_id FROM role_reputation_case_links WHERE case_id=$1`,
-            [caseId],
-          )
-        ).rows[0];
-        if (!link) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+        const bound = await this.loadBoundLink(client, caseId);
+        this.assertBoundRevision(bound.pending, input);
         const slot = (
           await client.query<SlotRow>(
             `SELECT * FROM role_review_slots WHERE id=$1 FOR UPDATE`,
-            [link.slot_id],
+            [bound.slot_id],
           )
         ).rows[0];
         if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
-        const gameIds = (
-          await client.query<{ game_id: string }>(
-            `SELECT DISTINCT game_id FROM role_review_revisions WHERE slot_id=$1`,
-            [slot.id],
-          )
-        ).rows.map((r) => r.game_id);
-        await this.assertIndependent(client, actor, {
-          authorUserId: slot.author_user_id,
-          subjectUserId: slot.subject_user_id,
-          reporterUserIds: [],
-          gameIds,
-        });
+        const gameIds = await this.gameIdsForSlot(client, slot.id);
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, bound.pending, gameIds),
+        );
         if (input.targetKind === "review") {
           const rev = (
             await client.query<{
@@ -529,6 +618,25 @@ export class AdminRoleReputationService {
           }
           if (slot.status === "withdrawn" && input.decision === "approve") {
             throw unprocessableWithdrawn();
+          }
+          if (input.decision === "approve" || input.decision === "restore") {
+            await this.consumerReputation.assertCurrentPublishGates(client, {
+              decision: input.decision,
+              targetKind: "review",
+              revisionId: rev.id,
+              slot: {
+                id: slot.id,
+                author_user_id: slot.author_user_id,
+                subject_user_id: slot.subject_user_id,
+                role: slot.role as "organization" | "training",
+                public_handle: slot.public_handle,
+                status: slot.status,
+                version: slot.version,
+                approved_revision_id: slot.approved_revision_id,
+                pending_revision_id: slot.pending_revision_id,
+                basis_under_review: false,
+              },
+            });
           }
           if (input.decision === "approve") {
             if (slot.pending_revision_id !== rev.id && slot.approved_revision_id !== rev.id) {
@@ -590,6 +698,25 @@ export class AdminRoleReputationService {
           }
           if (rev.resource_version !== input.expectedResourceVersion) {
             throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+          }
+          if (input.decision === "approve" || input.decision === "restore") {
+            await this.consumerReputation.assertCurrentPublishGates(client, {
+              decision: input.decision,
+              targetKind: "reply",
+              revisionId: rev.id,
+              slot: {
+                id: slot.id,
+                author_user_id: slot.author_user_id,
+                subject_user_id: slot.subject_user_id,
+                role: slot.role as "organization" | "training",
+                public_handle: slot.public_handle,
+                status: slot.status,
+                version: slot.version,
+                approved_revision_id: slot.approved_revision_id,
+                pending_revision_id: slot.pending_revision_id,
+                basis_under_review: false,
+              },
+            });
           }
           if (input.decision === "approve") {
             await client.query(
@@ -671,7 +798,22 @@ export class AdminRoleReputationService {
       },
       async (client, actor) => {
         await this.requireInstalled(client);
-        await this.scopedCase(client, actor, caseId);
+        const caze = await this.scopedCase(client, actor, caseId);
+        if (caze.assigned_to !== actor.principalId) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
+        }
+        const bound = await this.loadBoundLink(client, caseId);
+        this.assertBoundRevision(bound.pending, input);
+        const slot = (
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
+        ).rows[0];
+        if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+        const gameIds = await this.gameIdsForSlot(client, slot.id);
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, bound.pending, gameIds),
+        );
       },
     );
   }
@@ -699,6 +841,16 @@ export class AdminRoleReputationService {
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
+        const bound = await this.loadBoundLink(client, caseId);
+        const slot = (
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
+        ).rows[0];
+        if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+        // Only correct the bound case game/role — reject arbitrary unrelated targets.
+        const boundProof = await this.boundProofTarget(client, bound.pending, slot);
+        if (boundProof.gameId !== input.gameId || boundProof.role !== input.role) {
+          throw forbidden("BASIS_TARGET_MISMATCH", "Основание не связано с этим обращением");
+        }
         const tip = (
           await client.query<{
             version: number;
@@ -713,12 +865,12 @@ export class AdminRoleReputationService {
         if (!tip || tip.version !== input.expectedProofVersion) {
           throw conflict("VERSION_CONFLICT", "Версия основания устарела");
         }
-        await this.assertIndependent(client, actor, {
-          authorUserId: "00000000-0000-4000-8000-000000000000",
-          subjectUserId: input.subjectUserId,
-          reporterUserIds: [],
-          gameIds: [input.gameId],
-        });
+        const gameIds = [input.gameId];
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, bound.pending, gameIds),
+        );
         const nextVersion = tip.version + 1;
         const rev = (
           await client.query<{ id: string }>(
@@ -761,10 +913,10 @@ export class AdminRoleReputationService {
           `INSERT INTO role_reputation_decisions
              (case_id, slot_id, decision, target_kind, exact_revision_id,
               expected_case_version, expected_resource_version, rationale, actor_principal_id)
-           SELECT $1, slot_id, $2, $3, NULL, $4, $5, $6, $7
-           FROM role_reputation_case_links WHERE case_id=$1`,
+           VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8)`,
           [
             caseId,
+            slot.id,
             input.decision,
             input.decision === "resolve_held" ? "held_basis" : "role_basis",
             input.expectedCaseVersion,
@@ -797,9 +949,63 @@ export class AdminRoleReputationService {
       },
       async (client, actor) => {
         await this.requireInstalled(client);
-        await this.scopedCase(client, actor, caseId);
+        const caze = await this.scopedCase(client, actor, caseId);
+        if (caze.assigned_to !== actor.principalId) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
+        }
+        const bound = await this.loadBoundLink(client, caseId);
+        const slot = (
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
+        ).rows[0];
+        if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+        const boundProof = await this.boundProofTarget(client, bound.pending, slot);
+        if (boundProof.gameId !== input.gameId || boundProof.role !== input.role) {
+          throw forbidden("BASIS_TARGET_MISMATCH", "Основание не связано с этим обращением");
+        }
+        await this.assertIndependent(
+          client,
+          actor,
+          await this.independenceForBound(client, slot, bound.pending, [input.gameId]),
+        );
       },
     );
+  }
+
+  private async boundProofTarget(
+    client: PoolClient,
+    pending: PendingRow,
+    slot: SlotRow,
+  ): Promise<{ gameId: string; role: string; subjectUserId: string }> {
+    if (pending.revision_id) {
+      const rev = (
+        await client.query<{
+          proof_game_id: string;
+          proof_role: string;
+          slot_id: string;
+        }>(`SELECT proof_game_id, proof_role, slot_id FROM role_review_revisions WHERE id=$1`, [
+          pending.revision_id,
+        ])
+      ).rows[0];
+      if (rev && rev.slot_id === slot.id) {
+        return {
+          gameId: rev.proof_game_id,
+          role: rev.proof_role,
+          subjectUserId: slot.subject_user_id,
+        };
+      }
+    }
+    const fence = (
+      await client.query<{ game_id: string; role: string }>(
+        `SELECT game_id, role FROM role_review_event_fences WHERE slot_id=$1 LIMIT 1`,
+        [slot.id],
+      )
+    ).rows[0];
+    if (!fence) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+    return {
+      gameId: fence.game_id,
+      role: fence.role,
+      subjectUserId: slot.subject_user_id,
+    };
   }
 }
 
