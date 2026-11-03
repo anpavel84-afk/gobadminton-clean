@@ -789,6 +789,8 @@ run("#394 role reputation — disposable", () => {
   });
 
   it("public reply stays bound to approved review revision across v2 approve", async () => {
+    const organizer = await actor(`org-reply-v2-${randomUUID()}`);
+    const participant = await actor(`part-reply-v2-${randomUUID()}`);
     const past = new Date("2026-10-02T18:00:00.000Z");
     const seeded = await seedHeldGame({
       organizerId: organizer.userId,

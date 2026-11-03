@@ -235,6 +235,23 @@ describe("#394 role reputation consumer UI — behavioral", () => {
       expect(rendered.props["data-role"]).toBe("organization");
     }
     (dialogEl!.props.onClose as () => void)();
-    expect(textOf(again)).toContain("1 проведённая игра");
+    hooks.index = 0;
+    const closed = RoleReputationCardActions({
+      gameId,
+      organization: card({
+        role: "organization",
+        roleHandle: handle,
+        heldGamesCount: 1,
+        publishedReviewCount: 1,
+      }),
+    });
+    const dialogAfterClose = nodes(closed).find(
+      (n) =>
+        n.props.roleHandle === handle &&
+        n.props.role === "organization" &&
+        n.props.gameId === gameId &&
+        typeof n.props.onClose === "function",
+    );
+    expect(dialogAfterClose).toBeFalsy();
   });
 });
