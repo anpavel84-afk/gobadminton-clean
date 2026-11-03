@@ -192,6 +192,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0051_entity_comments",
         "0052_attendance_missing_disputes",
         "0053_private_review_reports",
+        "0054_role_reputation",
       ]);
       expect((await pool.query("SELECT to_regclass('public.game_court_booking')::text AS name")).rows[0]?.name).toBe("game_court_booking");
       expect((await pool.query("SELECT to_regclass('public.entity_comments')::text AS name")).rows[0]?.name).toBe("entity_comments");
