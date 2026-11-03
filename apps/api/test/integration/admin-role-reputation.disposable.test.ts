@@ -90,6 +90,7 @@ run("#394 admin role reputation — disposable", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
+  let reviewer: Actor;
   let moderator: Actor;
   let otherModerator: Actor;
 
@@ -145,6 +146,8 @@ run("#394 admin role reputation — disposable", () => {
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     sessions = mod.get(SessionService);
+    // Qualified reader+manager: evidence.assigned.read required for source/approve.
+    reviewer = await actor("superadmin");
     moderator = await actor("moderator");
     otherModerator = await actor("moderator");
   }, 180000);
@@ -214,7 +217,7 @@ run("#394 admin role reputation — disposable", () => {
     };
   }
 
-  function adminGet(route: string, a = moderator) {
+  function adminGet(route: string, a = reviewer) {
     return app.inject({
       method: "GET",
       url: "/v1/admin/" + route,
@@ -222,7 +225,7 @@ run("#394 admin role reputation — disposable", () => {
       headers: { origin },
     });
   }
-  function adminPost(route: string, body: object, a = moderator, key: string = randomUUID()) {
+  function adminPost(route: string, body: object, a = reviewer, key: string = randomUUID()) {
     return app.inject({
       method: "POST",
       url: "/v1/admin/" + route,
@@ -871,7 +874,7 @@ run("#394 admin role reputation — disposable", () => {
     // Stale step-up cannot decide.
     await pool.query(
       `UPDATE admin_sessions SET step_up_at = clock_timestamp() - interval '2 days' WHERE id=$1`,
-      [moderator.sessionId],
+      [reviewer.sessionId],
     );
     const staleStepUp = await adminPost(`cases/${caseId}/commands`, {
       action: "role_review_decide",
@@ -888,5 +891,253 @@ run("#394 admin role reputation — disposable", () => {
       reasonCode: "synthetic_review",
     });
     expect(staleStepUp.statusCode).toBeGreaterThanOrEqual(400);
+  });
+
+  it("QA findings: stale approve keeps pending; pure moderator source 403; wrong-kind basis denied", async () => {
+    const organizer = await consumer("Org QA");
+    const participant = await consumer("Part QA");
+    const { gameId, roleHandle } = await seedHeldGame(organizer.userId, participant.userId);
+    void roleHandle;
+    const text = "Слабая организация\nНужна ожидающая редакция";
+    const hash = projectionHash({
+      subjectUserId: organizer.userId,
+      role: "organization",
+      audience: "public",
+      text,
+      topics: ["agreements"],
+    });
+    const create = await app.inject({
+      method: "POST",
+      url: "/v1/me/role-reviews",
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin: webOrigin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        gameId,
+        role: "organization",
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: 1,
+          attendanceVersion: 1,
+        },
+        text,
+        topics: ["agreements"],
+        consentProjectionHash: hash,
+      },
+    });
+    expect(create.statusCode).toBe(200);
+    const slotId = create.json().id as string;
+    const reviewHandle = create.json().reviewHandle as string;
+    const pendingRow = (
+      await pool.query<{ id: string; version: number }>(
+        `SELECT id, version FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY id DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    const intake = await adminPost("cases/role-reputation-intake", {
+      pendingIntakeId: pendingRow.id,
+      expectedIntakeVersion: pendingRow.version,
+      reasonCode: "synthetic_review",
+      assignToSelf: true,
+    });
+    expect(intake.statusCode).toBe(200);
+    const caseId = intake.json().caseId as string;
+    const source = await adminGet(`cases/${caseId}/role-review-source`);
+    expect(source.statusCode).toBe(200);
+    const revisionId = source.json().reviewRevision.id as string;
+    const resourceVersion = source.json().reviewRevision.resourceVersion as number;
+    const approve = await adminPost(`cases/${caseId}/commands`, {
+      action: "role_review_decide",
+      expectedCaseVersion: intake.json().caseVersion,
+      expectedResourceVersion: resourceVersion,
+      targetKind: "review",
+      exactRevisionId: revisionId,
+      decision: "approve",
+      rationale: "Publish first revision",
+      reasonCode: "synthetic_review",
+    });
+    expect(approve.statusCode).toBe(200);
+
+    // Report while still published — binds the approved revision (exact QA path).
+    const outsider = await consumer("Outsider QA");
+    const report = await app.inject({
+      method: "POST",
+      url: `/v1/role-reviews/${reviewHandle}/reports`,
+      headers: {
+        cookie: outsider.cookie,
+        "x-csrf-token": outsider.csrfToken,
+        origin: webOrigin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        targetKind: "review",
+        expectedRevision: resourceVersion,
+        reasonCode: "spam",
+      },
+    });
+    expect(report.statusCode).toBe(200);
+    const reportPending = (
+      await pool.query<{ id: string; version: number; revision_id: string }>(
+        `SELECT id, version, revision_id FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND kind='report' AND status='waiting_intake'
+         ORDER BY id DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    expect(reportPending.revision_id).toBe(revisionId);
+    const reportIntake = await adminPost("cases/role-reputation-intake", {
+      pendingIntakeId: reportPending.id,
+      expectedIntakeVersion: reportPending.version,
+      reasonCode: "synthetic_review",
+      assignToSelf: true,
+    });
+    expect(reportIntake.statusCode).toBe(200);
+    const reportCaseId = reportIntake.json().caseId as string;
+
+    // Author then submits a newer pending revision — report Case still points at old approved id.
+    const slotVersionAfterApprove = (
+      await pool.query<{ version: number }>(`SELECT version FROM role_review_slots WHERE id=$1`, [
+        slotId,
+      ])
+    ).rows[0]!.version;
+    const newText = "Слабая организация\nНовая ожидающая редакция";
+    const newHash = projectionHash({
+      subjectUserId: organizer.userId,
+      role: "organization",
+      audience: "public",
+      text: newText,
+      topics: ["agreements"],
+    });
+    const resubmit = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${slotId}/commands`,
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin: webOrigin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: slotVersionAfterApprove,
+        gameId,
+        expectedBasisVersions: {
+          proofVersion: 2,
+          outcomeVersion: (
+            await pool.query<{ version: number }>(
+              `SELECT version FROM game_outcomes WHERE game_id=$1`,
+              [gameId],
+            )
+          ).rows[0]!.version,
+          attendanceVersion: 1,
+        },
+        text: newText,
+        topics: ["agreements"],
+        consentProjectionHash: newHash,
+      },
+    });
+    expect(resubmit.statusCode).toBe(200);
+    const pendingAfter = (
+      await pool.query<{ pending_revision_id: string; approved_revision_id: string }>(
+        `SELECT pending_revision_id, approved_revision_id FROM role_review_slots WHERE id=$1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    expect(pendingAfter.pending_revision_id).toBeTruthy();
+    expect(pendingAfter.approved_revision_id).toBe(revisionId);
+    expect(pendingAfter.pending_revision_id).not.toBe(revisionId);
+
+    const staleApprove = await adminPost(`cases/${reportCaseId}/commands`, {
+      action: "role_review_decide",
+      expectedCaseVersion: reportIntake.json().caseVersion,
+      expectedResourceVersion: resourceVersion,
+      targetKind: "review",
+      exactRevisionId: revisionId,
+      decision: "approve",
+      rationale: "Must deny — would clear newer pending",
+      reasonCode: "synthetic_review",
+    });
+    expect(staleApprove.statusCode).toBeGreaterThanOrEqual(400);
+    const pendingPreserved = (
+      await pool.query<{ pending_revision_id: string | null }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [slotId],
+      )
+    ).rows[0]!;
+    expect(pendingPreserved.pending_revision_id).toBe(pendingAfter.pending_revision_id);
+    const retain = await adminPost(`cases/${reportCaseId}/commands`, {
+      action: "role_review_decide",
+      expectedCaseVersion: (
+        await pool.query<{ version: number }>(`SELECT version FROM support_cases WHERE id=$1`, [
+          reportCaseId,
+        ])
+      ).rows[0]!.version,
+      expectedResourceVersion: resourceVersion,
+      targetKind: "review",
+      exactRevisionId: revisionId,
+      decision: "retain",
+      rationale: "Report about approved text uses retain",
+      reasonCode: "synthetic_review",
+    });
+    expect(retain.statusCode).toBe(200);
+    expect(
+      (
+        await pool.query<{ pending_revision_id: string | null }>(
+          `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+          [slotId],
+        )
+      ).rows[0]!.pending_revision_id,
+    ).toBe(pendingAfter.pending_revision_id);
+
+    // Pure moderator (case.manage, no evidence.assigned.read) assigned → source 403.
+    await adminPost(`cases/${reportCaseId}/commands`, {
+      action: "assign",
+      expectedVersion: (
+        await pool.query<{ version: number }>(`SELECT version FROM support_cases WHERE id=$1`, [
+          reportCaseId,
+        ])
+      ).rows[0]!.version,
+      reasonCode: "synthetic_review",
+      principalId: moderator.id,
+    });
+    const modSource = await adminGet(`cases/${reportCaseId}/role-review-source`, moderator);
+    expect(modSource.statusCode).toBe(403);
+
+    // Wrong-kind basis: content/report Case cannot execute role_basis_resolve.
+    await adminPost(`cases/${reportCaseId}/commands`, {
+      action: "assign",
+      expectedVersion: (
+        await pool.query<{ version: number }>(`SELECT version FROM support_cases WHERE id=$1`, [
+          reportCaseId,
+        ])
+      ).rows[0]!.version,
+      reasonCode: "synthetic_review",
+      principalId: reviewer.id,
+    });
+    const wrongBasis = await adminPost(`cases/${reportCaseId}/commands`, {
+      action: "role_basis_resolve",
+      expectedCaseVersion: (
+        await pool.query<{ version: number }>(`SELECT version FROM support_cases WHERE id=$1`, [
+          reportCaseId,
+        ])
+      ).rows[0]!.version,
+      expectedProofVersion: 2,
+      gameId,
+      role: "organization",
+      decision: "resolve_held",
+      subjectUserId: organizer.userId,
+      acceptedForCount: true,
+      rationale: "Must deny on report case",
+      reasonCode: "synthetic_review",
+    });
+    expect(wrongBasis.statusCode).toBeGreaterThanOrEqual(400);
+    expect(wrongBasis.json().code).toBe("BASIS_KIND_DENIED");
   });
 });

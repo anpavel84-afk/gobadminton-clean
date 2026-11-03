@@ -342,9 +342,22 @@ export class RoleReputationService {
   }
 
   async heldGamesCount(client: PoolClient | Pool, subjectUserId: string): Promise<number> {
-    if (!(await this.installed(client))) return 0;
+    const map = await this.heldGamesCounts(client, [subjectUserId]);
+    return map.get(subjectUserId) ?? 0;
+  }
+
+  /** Set-oriented held count for a bounded subject set — same predicate as heldGamesCount. */
+  private async heldGamesCounts(
+    client: PoolClient | Pool,
+    subjectUserIds: string[],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const unique = [...new Set(subjectUserIds.filter(Boolean))];
+    for (const id of unique) out.set(id, 0);
+    if (!unique.length || !(await this.installed(client))) return out;
     const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
     const rows = await client.query<{
+      subject_user_id: string;
       ends_at: Date;
       status: "draft" | "published" | "cancelled" | "completed";
       outcome: "held" | "not_held" | null;
@@ -352,19 +365,18 @@ export class RoleReputationService {
       phase: ProofTip["phase"];
       open_dispute: boolean;
     }>(
-      `SELECT g.ends_at, g.status, o.value AS outcome,
+      `SELECT p.subject_user_id, g.ends_at, g.status, o.value AS outcome,
               p.accepted_for_count, p.phase, p.open_dispute
        FROM game_role_proofs p
        JOIN games g ON g.id = p.game_id
        LEFT JOIN game_outcomes o ON o.game_id = g.id
-       WHERE p.subject_user_id = $1
+       WHERE p.subject_user_id = ANY($1::uuid[])
          AND p.role = 'organization'
          AND p.accepted_for_count = true
          AND p.open_dispute = false
          AND p.phase = 'performed'`,
-      [subjectUserId],
+      [unique],
     );
-    let count = 0;
     for (const row of rows.rows) {
       if (
         countsTowardHeldGames({
@@ -377,10 +389,10 @@ export class RoleReputationService {
           openRoleOrHeldDispute: row.open_dispute,
         })
       ) {
-        count += 1;
+        out.set(row.subject_user_id, (out.get(row.subject_user_id) ?? 0) + 1);
       }
     }
-    return count;
+    return out;
   }
 
   private async viewerBlocked(
@@ -389,17 +401,29 @@ export class RoleReputationService {
     subjectUserId: string,
   ): Promise<boolean> {
     if (!viewerId || viewerId === subjectUserId) return false;
-    return Boolean(
-      (
-        await client.query(
-          `SELECT 1 FROM user_blocks
-           WHERE (blocker_user_id = $1 AND blocked_user_id = $2)
-              OR (blocker_user_id = $2 AND blocked_user_id = $1)
-           LIMIT 1`,
-          [viewerId, subjectUserId],
-        )
-      ).rows[0],
+    const set = await this.viewerBlockedSubjects(client, viewerId, [subjectUserId]);
+    return set.has(subjectUserId);
+  }
+
+  /** Set-oriented block check for one viewer against a bounded subject set. */
+  private async viewerBlockedSubjects(
+    client: PoolClient | Pool,
+    viewerId: string | null,
+    subjectUserIds: string[],
+  ): Promise<Set<string>> {
+    const blocked = new Set<string>();
+    if (!viewerId) return blocked;
+    const unique = [...new Set(subjectUserIds.filter((id) => id && id !== viewerId))];
+    if (!unique.length) return blocked;
+    const rows = await client.query<{ other_id: string }>(
+      `SELECT CASE WHEN blocker_user_id = $1 THEN blocked_user_id ELSE blocker_user_id END AS other_id
+       FROM user_blocks
+       WHERE (blocker_user_id = $1 AND blocked_user_id = ANY($2::uuid[]))
+          OR (blocked_user_id = $1 AND blocker_user_id = ANY($2::uuid[]))`,
+      [viewerId, unique],
     );
+    for (const row of rows.rows) blocked.add(row.other_id);
+    return blocked;
   }
 
   /**
@@ -432,6 +456,28 @@ export class RoleReputationService {
     return true;
   }
 
+  /**
+   * READ IDENTITY ONLY for public role summaries when a tip is absent (e.g. future PRE-0054 games).
+   * CLEAN: organizer_id IS NULL → created_by_user_id; trainer_led + trainer_profile → profile owner.
+   * Does not invent performed proof, write eligibility, or legacy ambiguous organizer_id roles.
+   */
+  private readIdentitySubject(row: {
+    proof_subject_user_id: string | null;
+    organizer_id: string | null;
+    created_by_user_id: string;
+    activity_kind: string | null;
+    trainer_user_id: string | null;
+  }, role: RoleKind): string | null {
+    if (row.proof_subject_user_id) return row.proof_subject_user_id;
+    if (role === "organization" && row.organizer_id === null) {
+      return row.created_by_user_id;
+    }
+    if (role === "training" && row.activity_kind === "trainer_led" && row.trainer_user_id) {
+      return row.trainer_user_id;
+    }
+    return null;
+  }
+
   private async gameSurfaceOpen(
     client: PoolClient | Pool,
     viewerId: string | null,
@@ -442,38 +488,46 @@ export class RoleReputationService {
       await client.query<{
         status: string;
         visibility: string;
-        subject_user_id: string | null;
+        proof_subject_user_id: string | null;
+        organizer_id: string | null;
+        created_by_user_id: string;
+        activity_kind: string | null;
+        trainer_user_id: string | null;
       }>(
-        `SELECT g.status, g.visibility, p.subject_user_id
+        `SELECT g.status, g.visibility, p.subject_user_id AS proof_subject_user_id,
+                g.organizer_id, g.created_by_user_id, g.activity_kind,
+                tp.user_id AS trainer_user_id
          FROM games g
          LEFT JOIN game_role_proofs p ON p.game_id = g.id AND p.role = $2
+         LEFT JOIN trainer_profiles tp ON tp.id = g.trainer_profile_id
          WHERE g.id = $1
            AND ${publicModerationSql(this.env.GAME_MODERATION_INTERNAL_ENABLED, "g")}`,
         [gameId, role],
       )
     ).rows[0];
     if (!game) return { open: false, subjectUserId: null };
+    const subjectUserId = this.readIdentitySubject(game, role);
     if (game.status !== "published" && game.status !== "completed") {
-      return { open: false, subjectUserId: game.subject_user_id };
+      return { open: false, subjectUserId };
     }
     if (game.visibility === "public") {
-      if (game.subject_user_id && (await this.viewerBlocked(client, viewerId, game.subject_user_id))) {
-        return { open: false, subjectUserId: game.subject_user_id };
+      if (subjectUserId && (await this.viewerBlocked(client, viewerId, subjectUserId))) {
+        return { open: false, subjectUserId };
       }
       // Ordinary public role reading does not require attendance or login.
-      return { open: true, subjectUserId: game.subject_user_id };
+      return { open: true, subjectUserId };
     }
     // Unlisted/private: historical own access / active managers — not mere membership status.
     // Withdrawal before start or opaque handle alone must not open the private surface.
-    if (!viewerId) return { open: false, subjectUserId: game.subject_user_id };
+    if (!viewerId) return { open: false, subjectUserId };
     const access = await this.attendance.resolveAccessRole(client, gameId, viewerId);
     if (access === "none") {
-      return { open: false, subjectUserId: game.subject_user_id };
+      return { open: false, subjectUserId };
     }
-    if (game.subject_user_id && (await this.viewerBlocked(client, viewerId, game.subject_user_id))) {
-      return { open: false, subjectUserId: game.subject_user_id };
+    if (subjectUserId && (await this.viewerBlocked(client, viewerId, subjectUserId))) {
+      return { open: false, subjectUserId };
     }
-    return { open: true, subjectUserId: game.subject_user_id };
+    return { open: true, subjectUserId };
   }
 
   private async projectItems(
@@ -738,38 +792,67 @@ export class RoleReputationService {
       [unique],
     );
     const visibleSet = new Set(visible.rows.map((r) => r.id));
-    const tips = await this.pool.query<{
+    type TipRow = {
       game_id: string;
       role: RoleKind;
       subject_user_id: string;
       public_handle: string;
       published_count: string;
-    }>(
-      `SELECT p.game_id, p.role, p.subject_user_id, s.public_handle,
+    };
+    // Proof tips plus CLEAN identity fallback for future games without a tip yet.
+    const tips = await this.pool.query<TipRow>(
+      `WITH candidates AS (
+         SELECT p.game_id, p.role, p.subject_user_id
+         FROM game_role_proofs p
+         WHERE p.game_id = ANY($1::uuid[])
+         UNION ALL
+         SELECT g.id, 'organization'::text, g.created_by_user_id
+         FROM games g
+         WHERE g.id = ANY($1::uuid[])
+           AND g.organizer_id IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM game_role_proofs p
+             WHERE p.game_id = g.id AND p.role = 'organization'
+           )
+         UNION ALL
+         SELECT g.id, 'training'::text, tp.user_id
+         FROM games g
+         JOIN trainer_profiles tp ON tp.id = g.trainer_profile_id
+         WHERE g.id = ANY($1::uuid[])
+           AND g.activity_kind = 'trainer_led'
+           AND g.trainer_profile_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM game_role_proofs p
+             WHERE p.game_id = g.id AND p.role = 'training'
+           )
+       )
+       SELECT c.game_id, c.role, c.subject_user_id, s.public_handle,
               (
                 SELECT COUNT(*)::text FROM role_review_slots r
-                WHERE r.subject_user_id = p.subject_user_id
-                  AND r.role = p.role
+                WHERE r.subject_user_id = c.subject_user_id
+                  AND r.role = c.role
                   AND r.status = 'published'
                   AND r.approved_revision_id IS NOT NULL
               ) AS published_count
-       FROM game_role_proofs p
+       FROM candidates c
        JOIN role_reputation_subjects s
-         ON s.subject_user_id = p.subject_user_id AND s.role = p.role
-       WHERE p.game_id = ANY($1::uuid[])`,
+         ON s.subject_user_id = c.subject_user_id AND s.role = c.role`,
       [[...visibleSet]],
     );
-    const byGame = new Map<string, { organization?: typeof tips.rows[0]; training?: typeof tips.rows[0] }>();
+    const subjectIds = [...new Set(tips.rows.map((t) => t.subject_user_id))];
+    const blocked = await this.viewerBlockedSubjects(this.pool, viewerId, subjectIds);
+    const orgSubjects = [
+      ...new Set(tips.rows.filter((t) => t.role === "organization").map((t) => t.subject_user_id)),
+    ];
+    const heldCounts = await this.heldGamesCounts(this.pool, orgSubjects);
+    const byGame = new Map<string, { organization?: TipRow; training?: TipRow }>();
     for (const tip of tips.rows) {
       if (!visibleSet.has(tip.game_id)) continue;
-      if (tip.subject_user_id && (await this.viewerBlocked(this.pool, viewerId, tip.subject_user_id))) {
-        continue;
-      }
+      if (blocked.has(tip.subject_user_id)) continue;
       const entry = byGame.get(tip.game_id) ?? {};
       entry[tip.role] = tip;
       byGame.set(tip.game_id, entry);
     }
-    const heldCache = new Map<string, number>();
     const items: GameRoleReputationCardDto[] = [];
     for (const gameId of unique) {
       if (!visibleSet.has(gameId)) {
@@ -777,17 +860,9 @@ export class RoleReputationService {
         continue;
       }
       const entry = byGame.get(gameId) ?? {};
-      const toCard = async (
-        tip: (typeof tips.rows)[0] | undefined,
-      ): Promise<RoleReputationCardSummaryDto | null> => {
+      const toCard = (tip: TipRow | undefined): RoleReputationCardSummaryDto | null => {
         if (!tip) return null;
-        let held: number | null = null;
-        if (tip.role === "organization") {
-          if (!heldCache.has(tip.subject_user_id)) {
-            heldCache.set(tip.subject_user_id, await this.heldGamesCount(this.pool, tip.subject_user_id));
-          }
-          held = heldCache.get(tip.subject_user_id) ?? 0;
-        }
+        const held = tip.role === "organization" ? (heldCounts.get(tip.subject_user_id) ?? 0) : null;
         const published = Number(tip.published_count);
         return {
           roleHandle: tip.public_handle,
@@ -803,8 +878,8 @@ export class RoleReputationService {
       };
       items.push({
         gameId,
-        organization: await toCard(entry.organization),
-        training: await toCard(entry.training),
+        organization: toCard(entry.organization),
+        training: toCard(entry.training),
       });
     }
     return { items };

@@ -1,63 +1,75 @@
-# Handoff · #394 role reputation consumer UI + safe contract projection (attempt 24)
+# Handoff · #394 role reputation Admin UI + QA repairs + alpha.20 (attempt 25)
 
-Assignment: `OWNER394_ROLE_REPUTATION_CONSUMER_UI_AND_SAFE_EXISTING_CONTRACT_PROJECTION`
-Base: `2bb9fc8df60894ac3b0449720b1620e721655731`
-Attempt: **24** · continues preserved #394 history (not UNKNOWN replay)
-Parent: #372 · same coordinated PR; Admin UI + alpha20 release are **next** sequential pass (not this scope)
-C5 OFF · PROD forbidden · no Git commit/push/deploy / no dependency install in this author pass
+Assignment: `OWNER394_ROLE_REPUTATION_ADMIN_UI_RELEASE_AND_EXACT_QA_REPAIR`
+Base: `9a5f8d204e792098754696f6d1907b5c0ee6f553`
+Attempt: **25** · continues preserved #394 history (same coordinated PR with #372)
+Parent: #372 · C5 OFF · PROD forbidden · no Git commit/push/deploy / no dependency install in this author pass
 
-## Inputs viewed
+## Inputs viewed (bytes / sha256 verified)
 
-| Material | Path | Notes |
+| Material | delivered_path | Notes |
 |---|---|---|
-| training-list desktop/mobile | design-inputs `training-list-*.png` | Trainer identity + reviews before join; card footer actions |
-| organizer profile desktop/mobile | design-inputs `organizer-profile-*.png` | Held count + reviews; both roles; no skill rating |
-| public composer desktop/mobile | design-inputs `public-composer-*.png` | Personal-to-organizer default; public consent separate |
-| CURSOR_BRIEF.md | design-inputs | v2 usecase / seams |
-| disposable-admin log | design-inputs | `not_held` fixture failed `game_outcomes_check` (reason required) |
+| human-review-desktop.png | design-inputs | Concept tab 08 «Разбор»; criticism remains opinion; report does not auto-hide |
+| human-review-mobile.png | design-inputs | Same concept, mobile |
+| final.txt (Sol Medium Admin QA) | design-inputs | FAIL @ `2bb9…`; 4 findings immutable |
+| alpha20-role-reviews-brief.md | design-inputs | Prospective alpha.20 wording; UAT NOT_TESTED |
+| alpha19-history-seed-for-alpha20.json | design-inputs | Exact alpha.19 seed prepended to history |
+| addressed-checks.json / disposable-db.json | design-inputs | Pass5 consumer+HTTP both PASS at base |
 
-## Scope of this pass
+## Source completed this pass
 
-Consumer UI + necessary API companions. Sections 4 (Admin UI) and 7 (alpha20) deferred to next pass on same coordinated PR — **not** partial DONE of the full delivery.
+### 1. Exact Sol Medium Admin QA repairs (`role-reputation.service` admin)
+1. **approve REVIEW** targets **current `pending_revision_id` only** — reports about approved text use **retain** (does not clear newer pending).
+2. **approve REPLY** requires exact current `role_review_replies.pending_revision_id`.
+3. **readSource** requires `evidence.assigned.read` even for `case.manage` holders (removed manages bypass). Approve/restore/basis also require read qualification (no ID guessing). UI affordance: support/superadmin; moderator triage assigns via ordinary Cases assign.
+4. **`role_basis_resolve`** only when intake `kind === basis_dispute` + exact bound proof target; text/report Cases denied (`BASIS_KIND_DENIED`).
 
-### Backend companions
-1. **`profileSurfaceOpen`** — full directory gate: `SOCIAL_DIRECTORY_ENABLED` + `directory_visible`/`social_eligible`/`active` + `unrestrictedSql(... account.access, profile.public, social.directory)` + blocks (aligned with `ProfilesService.getDirectoryPlayer`). Opaque handle alone cannot bypass restrictions.
-2. **`gameSurfaceOpen`** — `publicModerationSql` / taken_down fence; private/unlisted uses `GameAttendanceService.resolveAccessRole` (historical own access), not blind `withdrawn|removed` membership. Public surface still readable without attendance/login.
-3. **Legacy CLEAN held derivation** in unapplied `0054_role_reputation.sql`: provenance `legacy_game_contract` from immutable `organizer_id IS NULL` + `created_by_user_id` / `trainer_profile_id`→`trainer_profiles.user_id` + explicit `held`. Excludes legacy `organizer_id` nonnull, cancelled, not_held. No current-manager guess.
-4. **Batched** `GET /v1/role-reputation-summaries?gameIds=` + discovery `trainerRoleHandle` filter (opaque handle ≠ authorization).
-5. Admin disposable fixture: `not_held` UPDATE supplies `reason`; restore to `held` clears reason (0042 constraint). **Do not** alter production authorization.
+Targeted HTTP negatives added in `admin-role-reputation.disposable.test.ts` (stale approve / moderator source 403 / wrong-kind basis). Positive fixture uses **superadmin** reviewer.
 
-### Consumer UI
-- `RoleReputationPanel` / `RoleReputationCardActions`, `RoleReviewsDialog`, `RoleReviewComposer`, `RoleReviewsHistory`
-- Wired: discovery cards (batched), `GameTerms` before join, public player profile both roles, My Games history `RoleReviewsHistory`, private org labels → «Организатору лично»
-- Typed api-client + consumer-types; public handle/revision from responses; UNKNOWN latch on report/reply/create; consent unchecked + reset on edit/role/subject/session
-- CSS: `role-reputation.css` (Spacious40 / Onest / forest / lime; ≥44px)
+### 2. Admin Cases UI — `RoleReputationCases` child
+- Pending queue + human intake + case metadata + explicit source read + decide (approve/retain/correction/remove/restore).
+- Session/fresh/run/stepup + original idempotency key + UNKNOWN retry; clears protected payload on session/fresh/case/version/assignment change and unmount (incl. late success).
+- Scoped CSS; UI tests for late-async privacy + decide binding + moderator affordance.
+- Optional `roleReputation` metadata on Case detail (OpenAPI optional; table-absence guarded).
+
+### 3. Consumer companions (small)
+- **A** READ IDENTITY ONLY fallback for future games without tip: `organizer_id IS NULL` → `created_by`; `trainer_led` + trainer profile owner. Same gates; no write/proof grant.
+- **B** Batch `viewerBlocked` + `heldGamesCount` set-oriented for all bounded subjects (no N+1).
+- **C** Map honesty copy when personal trainer filter active — map shows all city games; filter applies to list; preserved on return.
+
+### 4. Release alpha.20
+- `CURRENT_APPLICATION_VERSION` = `0.1.0-alpha.20`, `API_CONTRACT_VERSION_NOTE` = `0.28.0` (matches OpenAPI `info.version`).
+- Prepended exact alpha.19 historical seed; preserved alpha.18 and all prior / alpha.1 baseline.
+- Russian delta: public role reviews before join + human Cases review; no fake 15/20; UAT **NOT_TESTED**; PROD not promoted.
 
 ## Paths touched (allowed)
 
-`apps/api/src/games/role-reputation.{service,dto,controller,policy}.ts`, `games-discovery.query.ts`, `games.controller.ts`, `migrations/0054_role_reputation.sql`, OpenAPI, web api-client/consumer-types, discovery/detail/profile/feedback components, new Role* components + CSS + tests, handoff.
+Admin: `RoleReputationCases.tsx`, `Cases.tsx`, `admin-client.ts`, `admin.css`, `role-reputation-cases.test.tsx`, `cases.test.tsx`
+API admin: `role-reputation.service.ts`, `cases.service.ts`, `admin-role-reputation.disposable.test.ts`
+API consumer: `games/role-reputation.service.ts`
+Web: `releases.ts`, release tests, `GamesDiscoveryPage.tsx`, `role-reputation.test.tsx`
+Contracts: `openapi.json` (optional Case metadata only)
+Docs: this handoff
 
-## Author checks run / not run
+## Author checks
 
 | Check | Result |
 |---|---|
-| Unit discovery + policy | source written; **notrun** (no node_modules in author slot) |
-| UI role-reputation.test.tsx | source written; **notrun** |
-| Disposable admin/consumer HTTP | **notrun** — PMA after import; fixture reason fix included |
+| Design images / QA JSON / release seed | viewed |
+| Targeted unit/UI/HTTP | **notrun** in author slot (no node_modules / no DB / network forbidden) |
 | Product CI / security / DEV smoke | not claimed |
-| Independent QA | not started |
-| Owner UAT | NOT_TESTED |
+| Independent repair QA | pending (PMA) |
+| Owner UAT | **NOT_TESTED** |
 
-## Remaining gates (same coordinated PR)
+## Remaining gates (same coordinated PR — NOT READY / NOT DONE / NOT DEV)
 
-1. **Next pass:** Admin Cases RoleReputation child UI; alpha20 / API note / release history seed
-2. Trusted PMA: migrate 0054, types/contracts, disposable HTTP (PostGIS), targeted UI tests, Product CI, DEV smoke
-3. Independent Codex Sol Medium QA
-4. Merge `dev` → DEV ACCEPTED; human moderation UAT = NOT_TESTED until authorized Admin session observes decide path
-5. Do not claim source finished = DEV / human UAT
+1. Trusted PMA: targeted typecheck/contracts + Admin/consumer disposable HTTP + Admin UI test + Product CI
+2. Independent Codex Sol Medium repair/UI/history QA
+3. Merge `dev` → server DEV ACCEPTED; human Admin UAT remains NOT_TESTED until authorized session
+4. Do **not** claim source finished = DEV / READY / PROD
 
 ## Notes
 
-- Private PG-3 never published via this path; venue writer CLOSED; Mode B / AGY READY not claimed.
-- Missing legacy history stays unavailable / incomplete — not «never hosted», not invented 15/20.
-- Source PASS ≠ DEV claim.
+- No new Astra/architecture/C5; one writer; AdminRoleService RBAC grants unchanged.
+- Private peer Cases regression mock preserved; RoleReputationCases mocked in peer source race test.
+- Mode B / AGY READY not claimed.

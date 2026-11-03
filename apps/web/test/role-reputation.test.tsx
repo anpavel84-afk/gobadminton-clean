@@ -42,6 +42,9 @@ describe("#394 role reputation consumer UI — targeted source checks", () => {
     expect(discovery).toContain("listRoleReputationSummaries");
     expect(discovery).toContain("trainerRoleHandle");
     expect(discovery).toContain("trainer");
+    // Map honesty: personal trainer filter is list-only; do not claim map is filtered.
+    expect(discovery).toContain("data-map-filter-honesty");
+    expect(discovery).toContain("Фильтр личного тренера действует в списке");
     expect(card).toContain("RoleReputationCardActions");
     expect(card).toContain("reputation");
     expect(client).toContain("/v1/role-reputation-summaries");

@@ -51,6 +51,7 @@ vi.mock("react", async (importOriginal) => {
 });
 
 vi.mock("../src/components/AttendanceDisputes", () => ({ AttendanceDisputes: () => null }));
+vi.mock("../src/components/RoleReputationCases", () => ({ RoleReputationCases: () => null }));
 
 const transport = vi.hoisted(() => ({
   calls: [] as { path: string }[],

@@ -311,6 +311,7 @@ export function GamesDiscoveryPage() {
       </section>}
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
       {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} onReturnToList={() => changeView("list")} /></GamesMapViewport> : null}
+      {view === "map" && trainerRoleHandle ? <p className="gb-discovery-helper" role="status" data-map-filter-honesty="trainer">Карта показывает все тренировки и игры выбранного города. Фильтр личного тренера действует в списке; при возврате к списку он сохранится.</p> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">

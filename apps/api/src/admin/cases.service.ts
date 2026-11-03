@@ -83,8 +83,42 @@ export class AdminCasesService {
         LEFT JOIN abuse_reports ar ON ar.id=l.report_id
         WHERE l.case_id=$1 ORDER BY l.id`,[id])).rows;
       const history=(await c.query("SELECT id,case_version,action,note_code,audit_id,created_at FROM support_case_actions WHERE case_id=$1 AND ($2::integer IS NULL OR case_version<$2) ORDER BY case_version DESC LIMIT 101",[id,beforeVersion??null])).rows;
+      // Optional safe role-reputation hint — metadata only; no plaintext/private proof.
+      // Guard table absence for legacy isolated fixtures without migration 0054.
+      let roleReputation: {
+        pendingKind: string;
+        role: string;
+        slotStatus: string;
+        intakeStatus: string;
+      } | null = null;
+      const tables=(await c.query<{ok:boolean}>(
+        `SELECT to_regclass('role_reputation_case_links') IS NOT NULL AS ok`,
+      )).rows[0];
+      if(tables?.ok){
+        const hint=(await c.query<{
+          kind:string;role:string;slot_status:string;intake_status:string;
+        }>(`SELECT p.kind, p.role, s.status AS slot_status, p.status AS intake_status
+            FROM role_reputation_case_links l
+            JOIN role_reputation_pending_intakes p ON p.id=l.pending_intake_id
+            JOIN role_review_slots s ON s.id=l.slot_id
+            WHERE l.case_id=$1`,[id])).rows[0];
+        if(hint){
+          roleReputation={
+            pendingKind:hint.kind,
+            role:hint.role,
+            slotStatus:hint.slot_status,
+            intakeStatus:hint.intake_status,
+          };
+        }
+      }
       await appendAudit(c,{actor:a,action:"admin.case_read",targetType:"case",targetId:id,permission:manages(a)?"case.manage":"case.assigned.manage",reason:"operations_read"});
-      return {...caseDto(r),links:links.map(x=>({id:x.id,sourceKind:x.source_kind,sourceId:x.report_id??x.game_id,...(x.source_kind==="report"&&x.report_target_kind?{targetKind:x.report_target_kind}:{})})),history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null};
+      return {
+        ...caseDto(r),
+        links:links.map(x=>({id:x.id,sourceKind:x.source_kind,sourceId:x.report_id??x.game_id,...(x.source_kind==="report"&&x.report_target_kind?{targetKind:x.report_target_kind}:{})})),
+        history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),
+        nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null,
+        ...(roleReputation?{roleReputation}:{}),
+      };
     });
   }
   /**

@@ -47,8 +47,12 @@ export function errorMessage(error: unknown) {
     if (error.code === "CASE_VERSION_CONFLICT") return "Обращение уже изменено. Проверьте новое состояние и подтвердите действие заново.";
     if (error.code === "CASE_CLOSED") return "Сначала откройте обращение снова.";
     if (error.code === "CASE_EVIDENCE_POLICY_DISABLED") return "Сохранение материалов сейчас недоступно.";
-    if (["CASE_UNAVAILABLE", "EVIDENCE_UNAVAILABLE", "REPORT_UNAVAILABLE", "ASSIGNEE_UNAVAILABLE", "CASE_LINK_UNAVAILABLE", "DISPUTE_UNAVAILABLE"].includes(error.code)) return "Запись недоступна. Проверьте идентификатор и текущий доступ.";
-    if (["REVIEWER_SUBJECT_CONFLICT", "REVIEWER_MANAGER_CONFLICT", "REVIEWER_PARTICIPANT_CONFLICT"].includes(error.code)) return "Независимый проверяющий не может быть участником или организатором этой игры.";
+    if (["CASE_UNAVAILABLE", "EVIDENCE_UNAVAILABLE", "REPORT_UNAVAILABLE", "ASSIGNEE_UNAVAILABLE", "CASE_LINK_UNAVAILABLE", "DISPUTE_UNAVAILABLE", "PENDING_UNAVAILABLE", "REVISION_UNAVAILABLE"].includes(error.code)) return "Запись недоступна. Проверьте идентификатор и текущий доступ.";
+    if (["REVIEWER_SUBJECT_CONFLICT", "REVIEWER_MANAGER_CONFLICT", "REVIEWER_PARTICIPANT_CONFLICT", "REVIEWER_APPEAL_CONFLICT", "REVIEWER_ROLE_CONFLICT"].includes(error.code)) return "Независимый проверяющий не может быть участником или организатором этой игры.";
+    if (error.code === "REVISION_NOT_CURRENT") return "Нужна текущая ожидающая редакция. Для жалобы на уже опубликованный текст используйте «оставить без изменений».";
+    if (error.code === "BASIS_KIND_DENIED" || error.code === "BASIS_TARGET_MISMATCH") return "Исправление основания доступно только для спора об основании с точной привязкой.";
+    if (error.code === "WITHDRAWN_NOT_APPROVABLE") return "Отозванный отзыв нельзя опубликовать.";
+    if (error.code === "RESTORE_DENIED") return "Восстановление недоступно для этого состояния.";
     if (error.code === "DISPUTE_CASE_EXISTS") return "Обращение по этому возражению уже создано.";
     if (error.code === "ATTENDANCE_UNKNOWN_NO_UPHOLD") return "Нельзя утвердить неизвестную отметку.";
     if (error.code === "REPORT_ALREADY_LINKED") return "Жалоба уже связана с обращением. Обновите очередь.";

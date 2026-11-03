@@ -30427,6 +30427,42 @@
                 "type": "null"
               }
             ]
+          },
+          "roleReputation": {
+            "description": "Optional safe metadata when Case is linked to role-reputation intake. No plaintext or private proof.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pendingKind": {
+                "type": "string",
+                "enum": [
+                  "review_submit",
+                  "reply_submit",
+                  "report",
+                  "appeal",
+                  "basis_dispute"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "organization",
+                  "training"
+                ]
+              },
+              "slotStatus": {
+                "type": "string"
+              },
+              "intakeStatus": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pendingKind",
+              "role",
+              "slotStatus",
+              "intakeStatus"
+            ]
           }
         },
         "required": [

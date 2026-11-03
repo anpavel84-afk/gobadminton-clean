@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AdminError, adminRequest, type Session } from "../lib/admin-client";
 import { AttendanceDisputes } from "./AttendanceDisputes";
-type Case = {id:string;status:keyof typeof statuses;version:number;assignedTo:string|null};
+import { RoleReputationCases } from "./RoleReputationCases";
+type Case = {id:string;status:keyof typeof statuses;version:number;assignedTo:string|null;roleReputation?:{pendingKind:string;role:string;slotStatus:string;intakeStatus:string}};
 type Link = {id:string;sourceKind:"report"|"game";sourceId:string;targetKind?:string};
 type Detail = Case & {links:Link[];history:{id:string;version:number;action:string;noteCode:string|null;createdAt:string}[];nextHistoryBeforeVersion:number|null};
 type Report = {id:string;targetKind?:string;reasonCode:string;state:string;caseId:string|null};
@@ -109,6 +110,7 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
  return <>
   <h2>Обращения</h2><p>{manager?"Проверяйте жалобы и ведите обращения.":"Здесь доступны назначенные вам обращения."}</p>
   <AttendanceDisputes session={session} busy={busy} fresh={fresh} run={run} stepup={stepup} />
+  <RoleReputationCases session={session} busy={busy} fresh={fresh} run={run} stepup={stepup} />
   <div className="actions"><button className="button outline" disabled={locked} onClick={()=>void list()}>Обновить обращения</button>{manager&&<button className="button outline" disabled={locked} onClick={()=>void queue()}>Очередь жалоб</button>}</div>
   {cases&&(cases.items.length?<ul className="events">{cases.items.map(item=><li key={item.id}><button className="game-row" disabled={locked} onClick={()=>void run(()=>open(item.id))}><strong>{statuses[item.status]}</strong><small>{item.id}</small></button></li>)}</ul>:<div className="notice">Обращений пока нет.</div>)}
   {cases?.nextBeforeId&&<button className="button outline" disabled={locked} onClick={()=>void list(true)}>Ещё обращения</button>}
@@ -118,7 +120,9 @@ export function Cases({session,busy,fresh,run,stepup}:{session:Session;busy:bool
   {notice&&<div className="notice" role="status">{notice}</div>}
   {uncertain&&<div className="notice danger"><p>Ответ не получен. Проверим результат того же действия.</p><button className="button outline" disabled={busy} onClick={()=>void submit(false,true)}>Повторить проверку действия</button></div>}
   {detail&&<>
-   <h3>Текущее состояние</h3><dl><dt>Обращение</dt><dd>{detail.id}</dd><dt>Статус</dt><dd>{statuses[detail.status]}</dd><dt>Версия</dt><dd>{detail.version}</dd><dt>Ответственный</dt><dd>{detail.assignedTo??"Не назначен"}</dd></dl>
+   <h3>Текущее состояние</h3><dl><dt>Обращение</dt><dd>{detail.id}</dd><dt>Статус</dt><dd>{statuses[detail.status]}</dd><dt>Версия</dt><dd>{detail.version}</dd><dt>Ответственный</dt><dd>{detail.assignedTo??"Не назначен"}</dd>{detail.roleReputation?<>
+    <dt>Отзыв о роли</dt><dd>{detail.roleReputation.pendingKind} · {detail.roleReputation.role} · {detail.roleReputation.slotStatus}</dd>
+   </>:null}</dl>
    <h3>Действие</h3><form onSubmit={e=>{e.preventDefault();void submit();}}>
     <label className="form-field"><span>Действие по обращению</span><select aria-label="Действие по обращению" value={action} disabled={locked} onChange={e=>{setAction(e.target.value as keyof typeof actions);setConfirmed(false);setValue("");}}>{Object.entries(actions).filter(([id])=>manager||["status","note","capture_evidence"].includes(id)).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
     {action==="status"&&<label className="form-field"><span>Новый статус</span><select aria-label="Новый статус" value={status} disabled={locked} onChange={e=>{setStatus(e.target.value as keyof typeof statuses);setConfirmed(false);}}>{Object.entries(statuses).map(([id,label])=><option key={id} value={id} disabled={!transitions?.includes(id)}>{label}</option>)}</select></label>}

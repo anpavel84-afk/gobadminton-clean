@@ -56,6 +56,8 @@ type CaseLinkRow = {
 };
 
 const manages = (actor: AuditActor) => hasPermission(actor.roles as AdminRole[], "case.manage");
+const canReadAssignedEvidence = (actor: AuditActor) =>
+  hasPermission(actor.roles as AdminRole[], "evidence.assigned.read");
 
 @Injectable()
 export class AdminRoleReputationService {
@@ -448,10 +450,8 @@ export class AdminRoleReputationService {
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
-        if (
-          !hasPermission(actor.roles as AdminRole[], "evidence.assigned.read") &&
-          !manages(actor)
-        ) {
+        // evidence.assigned.read is mandatory — case.manage alone never opens source text.
+        if (!canReadAssignedEvidence(actor)) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
         }
         const bound = await this.loadBoundLink(client, caseId);
@@ -584,6 +584,13 @@ export class AdminRoleReputationService {
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
+        // Approve/restore need evidence.assigned.read — IDs alone must not bypass qualification.
+        if (
+          (input.decision === "approve" || input.decision === "restore") &&
+          !canReadAssignedEvidence(actor)
+        ) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        }
         // Generic case status=resolved alone never publishes.
         const bound = await this.loadBoundLink(client, caseId);
         this.assertBoundRevision(bound.pending, input);
@@ -639,7 +646,9 @@ export class AdminRoleReputationService {
             });
           }
           if (input.decision === "approve") {
-            if (slot.pending_revision_id !== rev.id && slot.approved_revision_id !== rev.id) {
+            // Only the current pending revision may be approved. Reports about already
+            // approved text must use retain — never clear a newer pending via old id.
+            if (slot.pending_revision_id !== rev.id) {
               throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
             }
             await client.query(
@@ -677,7 +686,7 @@ export class AdminRoleReputationService {
               [slot.id],
             );
           } else if (input.decision === "retain") {
-            // keep published visible after report
+            // keep published visible after report — does not clear pending_revision_id
             await client.query(
               `UPDATE role_review_slots
                SET version=version+1, updated_at=clock_timestamp()
@@ -699,6 +708,16 @@ export class AdminRoleReputationService {
           if (rev.resource_version !== input.expectedResourceVersion) {
             throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
           }
+          const reply = (
+            await client.query<{
+              pending_revision_id: string | null;
+              approved_revision_id: string | null;
+              status: string;
+            }>(`SELECT pending_revision_id, approved_revision_id, status FROM role_review_replies WHERE slot_id=$1 FOR UPDATE`, [
+              slot.id,
+            ])
+          ).rows[0];
+          if (!reply) throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
           if (input.decision === "approve" || input.decision === "restore") {
             await this.consumerReputation.assertCurrentPublishGates(client, {
               decision: input.decision,
@@ -719,6 +738,9 @@ export class AdminRoleReputationService {
             });
           }
           if (input.decision === "approve") {
+            if (reply.pending_revision_id !== rev.id) {
+              throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
+            }
             await client.query(
               `UPDATE role_review_replies
                SET status='published',
@@ -747,6 +769,13 @@ export class AdminRoleReputationService {
             await client.query(
               `UPDATE role_review_replies
                SET status='needs_correction', version=version+1, updated_at=clock_timestamp()
+               WHERE slot_id=$1`,
+              [slot.id],
+            );
+          } else if (input.decision === "retain") {
+            await client.query(
+              `UPDATE role_review_replies
+               SET version=version+1, updated_at=clock_timestamp()
                WHERE slot_id=$1`,
               [slot.id],
             );
@@ -798,6 +827,12 @@ export class AdminRoleReputationService {
       },
       async (client, actor) => {
         await this.requireInstalled(client);
+        if (
+          (input.decision === "approve" || input.decision === "restore") &&
+          !canReadAssignedEvidence(actor)
+        ) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        }
         const caze = await this.scopedCase(client, actor, caseId);
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
@@ -841,7 +876,14 @@ export class AdminRoleReputationService {
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
+        if (!canReadAssignedEvidence(actor)) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        }
         const bound = await this.loadBoundLink(client, caseId);
+        // Basis correction only for real BASIS_DISPUTE intake — never content/report Cases.
+        if (bound.pending.kind !== "basis_dispute") {
+          throw forbidden("BASIS_KIND_DENIED", "Исправление основания доступно только для спора об основании");
+        }
         const slot = (
           await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
         ).rows[0];
@@ -949,11 +991,17 @@ export class AdminRoleReputationService {
       },
       async (client, actor) => {
         await this.requireInstalled(client);
+        if (!canReadAssignedEvidence(actor)) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        }
         const caze = await this.scopedCase(client, actor, caseId);
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
         const bound = await this.loadBoundLink(client, caseId);
+        if (bound.pending.kind !== "basis_dispute") {
+          throw forbidden("BASIS_KIND_DENIED", "Исправление основания доступно только для спора об основании");
+        }
         const slot = (
           await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
         ).rows[0];
