@@ -950,9 +950,15 @@ run("#394 role reputation — disposable", () => {
       url: `/v1/role-reputations/${seeded.roleHandle}`,
       headers: { cookie: organizer.cookie },
     });
+    expect(whilePending.statusCode).toBe(200);
+    expect(whilePending.json().publishedReviewCount).toBe(1);
+    expect(whilePending.json().items).toHaveLength(1);
     expect(whilePending.json().items[0].text).toBe(v1Text);
     expect(whilePending.json().items[0].publishedRevision).toBe(actualV1);
     expect(whilePending.json().items[0].reply?.text).toBe(replyV1Text);
+    // Existing report/reply gates stay on status=published — do not advertise while revision_waiting.
+    expect(whilePending.json().items[0].allowedActions.canReply).toBe(false);
+    expect(whilePending.json().items[0].allowedActions.canReport).toBe(false);
 
     const pendingV2 = (
       await pool.query<{ id: string; version: number }>(

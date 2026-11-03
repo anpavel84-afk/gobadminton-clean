@@ -548,6 +548,7 @@ export class RoleReputationService {
       topics: string[];
       basis_under_review: boolean;
       updated_at: Date;
+      status: string;
       approved_revision_id: string | null;
       approved_resource_version: number;
       reply_text: string | null;
@@ -559,8 +560,11 @@ export class RoleReputationService {
       subject_user_id: string;
       author_user_id: string;
     }>(
+      // Public approved surface: keep immutable approved revision (+ bound reply) while a
+      // pending resubmit sits in revision_waiting. Never project pending body/consent.
+      // submitted / held_basis / needs_correction / withdrawn / removed stay hidden.
       `SELECT s.public_handle, s.role, r.body_text, r.topics, s.basis_under_review,
-              s.updated_at, s.approved_revision_id, s.subject_user_id, s.author_user_id,
+              s.updated_at, s.status, s.approved_revision_id, s.subject_user_id, s.author_user_id,
               r.resource_version AS approved_resource_version,
               rr.body_text AS reply_text, rp.status AS reply_status,
               rp.version AS reply_aggregate_version,
@@ -578,7 +582,7 @@ export class RoleReputationService {
         AND pr.bound_review_revision_id = s.approved_revision_id
        WHERE s.subject_user_id = $1
          AND s.role = $2
-         AND s.status = 'published'
+         AND s.status IN ('published', 'revision_waiting')
          AND s.approved_revision_id IS NOT NULL
          AND ($3::timestamptz IS NULL OR (s.updated_at, s.public_handle) < ($3::timestamptz, $4))
        ORDER BY s.updated_at DESC, s.public_handle DESC
@@ -594,6 +598,8 @@ export class RoleReputationService {
     const slice = rows.rows.slice(0, args.limit);
     const items: PublicRoleReviewItemDto[] = slice.map((row) => {
       const isSubject = args.viewerId === row.subject_user_id;
+      // Mutations (report / reply preview) still require status=published — do not advertise them while waiting.
+      const mutationsOpen = row.status === "published";
       // Public reply and subject tip only for the exact approved review revision.
       const replyBoundToCurrent =
         row.tip_bound_review_revision_id != null &&
@@ -629,8 +635,8 @@ export class RoleReputationService {
               }
             : null,
         allowedActions: {
-          canReport: Boolean(args.viewerId),
-          canReply: isSubject,
+          canReport: Boolean(args.viewerId) && mutationsOpen,
+          canReply: isSubject && mutationsOpen,
         },
       };
     });
@@ -684,7 +690,8 @@ export class RoleReputationService {
     const publishedReviewCount = (
       await client.query<{ n: string }>(
         `SELECT COUNT(*)::text AS n FROM role_review_slots
-         WHERE subject_user_id = $1 AND role = $2 AND status = 'published'
+         WHERE subject_user_id = $1 AND role = $2
+           AND status IN ('published', 'revision_waiting')
            AND approved_revision_id IS NOT NULL`,
         [args.subject.subject_user_id, args.subject.role],
       )
@@ -843,7 +850,7 @@ export class RoleReputationService {
                 SELECT COUNT(*)::text FROM role_review_slots r
                 WHERE r.subject_user_id = c.subject_user_id
                   AND r.role = c.role
-                  AND r.status = 'published'
+                  AND r.status IN ('published', 'revision_waiting')
                   AND r.approved_revision_id IS NOT NULL
               ) AS published_count
        FROM candidates c
