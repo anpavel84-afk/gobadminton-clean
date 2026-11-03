@@ -223,6 +223,25 @@ export type RoleReputationSummaryDto = {
   availability: "available" | "unavailable";
 };
 
+/** Compact card footer projection — no review bodies; server-computed counts only. */
+export type RoleReputationCardSummaryDto = {
+  roleHandle: string;
+  role: RoleKind;
+  subjectDisplayName: string | null;
+  heldGamesCount: number | null;
+  countScope: "confirmed_history";
+  historyMayBeIncomplete: true;
+  publishedReviewCount: number;
+  projectionVersion: string;
+  availability: "available" | "unavailable";
+};
+
+export type GameRoleReputationCardDto = {
+  gameId: string;
+  organization: RoleReputationCardSummaryDto | null;
+  training: RoleReputationCardSummaryDto | null;
+};
+
 export type OwnEligibilityBasisDto = {
   gameId: string;
   role: RoleKind;

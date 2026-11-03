@@ -6,21 +6,26 @@ import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { conflict, forbidden, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
+import { publicModerationSql } from "../game-moderation/projection";
 import { safePublicDisplayName } from "../profiles/social-profile-defaults";
+import { unrestrictedSql } from "../restrictions/policy";
 import {
   isPermittedPresentAssertion,
   type AttendanceSource,
   type AttendanceValue,
 } from "./game-attendance.policy";
+import { GameAttendanceService } from "./game-attendance.service";
 import {
   consentPreviewRequest,
   createRoleReviewRequest,
   roleReplyCommandRequest,
   roleReviewCommandRequest,
   roleReviewReportRequest,
+  type GameRoleReputationCardDto,
   type OwnEligibilityDto,
   type OwnRoleReviewDto,
   type PublicRoleReviewItemDto,
+  type RoleReputationCardSummaryDto,
   type RoleReputationSummaryDto,
   type RoleReviewMutationReceiptDto,
 } from "./role-reputation.dto";
@@ -79,6 +84,7 @@ export class RoleReputationService {
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
+    private readonly attendance: GameAttendanceService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -396,11 +402,17 @@ export class RoleReputationService {
     );
   }
 
+  /**
+   * Same public-directory fence as ProfilesService.getDirectoryPlayer:
+   * SOCIAL_DIRECTORY_ENABLED + directory/social/active + restriction capabilities + blocks.
+   * Knowing a roleHandle alone must not bypass user restrictions.
+   */
   private async profileSurfaceOpen(
     client: PoolClient | Pool,
     viewerId: string | null,
     subjectUserId: string,
   ): Promise<boolean> {
+    if (!this.env.SOCIAL_DIRECTORY_ENABLED) return false;
     const row = (
       await client.query<{ ok: boolean }>(
         `SELECT EXISTS (
@@ -410,6 +422,7 @@ export class RoleReputationService {
              AND p.directory_visible = true
              AND p.social_eligible = true
              AND u.status = 'active'
+             AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])}
          ) AS ok`,
         [subjectUserId],
       )
@@ -434,7 +447,8 @@ export class RoleReputationService {
         `SELECT g.status, g.visibility, p.subject_user_id
          FROM games g
          LEFT JOIN game_role_proofs p ON p.game_id = g.id AND p.role = $2
-         WHERE g.id = $1`,
+         WHERE g.id = $1
+           AND ${publicModerationSql(this.env.GAME_MODERATION_INTERNAL_ENABLED, "g")}`,
         [gameId, role],
       )
     ).rows[0];
@@ -446,24 +460,20 @@ export class RoleReputationService {
       if (game.subject_user_id && (await this.viewerBlocked(client, viewerId, game.subject_user_id))) {
         return { open: false, subjectUserId: game.subject_user_id };
       }
+      // Ordinary public role reading does not require attendance or login.
       return { open: true, subjectUserId: game.subject_user_id };
     }
-    // Unlisted/private: only managers/participants may see game-role projection.
+    // Unlisted/private: historical own access / active managers — not mere membership status.
+    // Withdrawal before start or opaque handle alone must not open the private surface.
     if (!viewerId) return { open: false, subjectUserId: game.subject_user_id };
-    const member = (
-      await client.query(
-        `SELECT 1 WHERE EXISTS (
-           SELECT 1 FROM game_managers
-           WHERE game_id = $1 AND user_id = $2 AND status = 'active'
-         ) OR EXISTS (
-           SELECT 1 FROM participations
-           WHERE game_id = $1 AND user_id = $2
-             AND status IN ('confirmed', 'withdrawn', 'removed')
-         )`,
-        [gameId, viewerId],
-      )
-    ).rows[0];
-    return { open: Boolean(member), subjectUserId: game.subject_user_id };
+    const access = await this.attendance.resolveAccessRole(client, gameId, viewerId);
+    if (access === "none") {
+      return { open: false, subjectUserId: game.subject_user_id };
+    }
+    if (game.subject_user_id && (await this.viewerBlocked(client, viewerId, game.subject_user_id))) {
+      return { open: false, subjectUserId: game.subject_user_id };
+    }
+    return { open: true, subjectUserId: game.subject_user_id };
   }
 
   private async projectItems(
@@ -702,6 +712,102 @@ export class RoleReputationService {
       includeDisplayName: false,
       surfaceOpen: true,
     });
+  }
+
+  /**
+   * Batched card summaries for already-public discovery game IDs.
+   * One round-trip for a feed page — avoids per-card N+1. Opaque handle is not authorization:
+   * each game re-checks public discovery/moderation gates.
+   */
+  async summarizeGamesForCards(
+    viewerId: string | null,
+    gameIds: string[],
+  ): Promise<{ items: GameRoleReputationCardDto[] }> {
+    const unique = [...new Set(gameIds.filter((id) => /^[0-9a-f-]{36}$/i.test(id)))].slice(0, 50);
+    if (!unique.length || !(await this.installed(this.pool))) {
+      return { items: unique.map((gameId) => ({ gameId, organization: null, training: null })) };
+    }
+    const visible = await this.pool.query<{ id: string }>(
+      `SELECT g.id
+       FROM games g
+       WHERE g.id = ANY($1::uuid[])
+         AND g.status = 'published'
+         AND g.visibility = 'public'
+         AND g.activity_kind IS NOT NULL
+         AND ${publicModerationSql(this.env.GAME_MODERATION_INTERNAL_ENABLED, "g")}`,
+      [unique],
+    );
+    const visibleSet = new Set(visible.rows.map((r) => r.id));
+    const tips = await this.pool.query<{
+      game_id: string;
+      role: RoleKind;
+      subject_user_id: string;
+      public_handle: string;
+      published_count: string;
+    }>(
+      `SELECT p.game_id, p.role, p.subject_user_id, s.public_handle,
+              (
+                SELECT COUNT(*)::text FROM role_review_slots r
+                WHERE r.subject_user_id = p.subject_user_id
+                  AND r.role = p.role
+                  AND r.status = 'published'
+                  AND r.approved_revision_id IS NOT NULL
+              ) AS published_count
+       FROM game_role_proofs p
+       JOIN role_reputation_subjects s
+         ON s.subject_user_id = p.subject_user_id AND s.role = p.role
+       WHERE p.game_id = ANY($1::uuid[])`,
+      [[...visibleSet]],
+    );
+    const byGame = new Map<string, { organization?: typeof tips.rows[0]; training?: typeof tips.rows[0] }>();
+    for (const tip of tips.rows) {
+      if (!visibleSet.has(tip.game_id)) continue;
+      if (tip.subject_user_id && (await this.viewerBlocked(this.pool, viewerId, tip.subject_user_id))) {
+        continue;
+      }
+      const entry = byGame.get(tip.game_id) ?? {};
+      entry[tip.role] = tip;
+      byGame.set(tip.game_id, entry);
+    }
+    const heldCache = new Map<string, number>();
+    const items: GameRoleReputationCardDto[] = [];
+    for (const gameId of unique) {
+      if (!visibleSet.has(gameId)) {
+        items.push({ gameId, organization: null, training: null });
+        continue;
+      }
+      const entry = byGame.get(gameId) ?? {};
+      const toCard = async (
+        tip: (typeof tips.rows)[0] | undefined,
+      ): Promise<RoleReputationCardSummaryDto | null> => {
+        if (!tip) return null;
+        let held: number | null = null;
+        if (tip.role === "organization") {
+          if (!heldCache.has(tip.subject_user_id)) {
+            heldCache.set(tip.subject_user_id, await this.heldGamesCount(this.pool, tip.subject_user_id));
+          }
+          held = heldCache.get(tip.subject_user_id) ?? 0;
+        }
+        const published = Number(tip.published_count);
+        return {
+          roleHandle: tip.public_handle,
+          role: tip.role,
+          subjectDisplayName: null,
+          heldGamesCount: held,
+          countScope: "confirmed_history",
+          historyMayBeIncomplete: true,
+          publishedReviewCount: published,
+          projectionVersion: createProjectionVersion(tip.public_handle, published, held, 0),
+          availability: "available",
+        };
+      };
+      items.push({
+        gameId,
+        organization: await toCard(entry.organization),
+        training: await toCard(entry.training),
+      });
+    }
+    return { items };
   }
 
   async getForPublicPlayer(

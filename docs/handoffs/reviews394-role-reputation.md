@@ -1,74 +1,63 @@
-# Handoff · #394 role reputation bound case decisions + own receipt (attempt 23)
+# Handoff · #394 role reputation consumer UI + safe contract projection (attempt 24)
 
-Assignment: `OWNER394_ROLE_REPUTATION_BOUND_CASE_DECISIONS_AND_OWN_RECEIPT_REPAIR`
-Base: `ec781d44971e1ce34629e012a3ddb01792a957d0`
-Attempt: **23** · continues preserved #394 history (not UNKNOWN replay)
-Parent: #372 · same coordinated delivery; UI still next sequential pass
-C5 OFF · PROD forbidden · no Git commit/push/deploy in this author pass
+Assignment: `OWNER394_ROLE_REPUTATION_CONSUMER_UI_AND_SAFE_EXISTING_CONTRACT_PROJECTION`
+Base: `2bb9fc8df60894ac3b0449720b1620e721655731`
+Attempt: **24** · continues preserved #394 history (not UNKNOWN replay)
+Parent: #372 · same coordinated PR; Admin UI + alpha20 release are **next** sequential pass (not this scope)
+C5 OFF · PROD forbidden · no Git commit/push/deploy / no dependency install in this author pass
+
+## Inputs viewed
+
+| Material | Path | Notes |
+|---|---|---|
+| training-list desktop/mobile | design-inputs `training-list-*.png` | Trainer identity + reviews before join; card footer actions |
+| organizer profile desktop/mobile | design-inputs `organizer-profile-*.png` | Held count + reviews; both roles; no skill rating |
+| public composer desktop/mobile | design-inputs `public-composer-*.png` | Personal-to-organizer default; public consent separate |
+| CURSOR_BRIEF.md | design-inputs | v2 usecase / seams |
+| disposable-admin log | design-inputs | `not_held` fixture failed `game_outcomes_check` (reason required) |
 
 ## Scope of this pass
 
-Backend integration / privileged-decision defects **before UI**.
-Repairs: consent-preview HTTP 200, own-list LATERAL foreign-report bleed, admin
-approve/restore current admission+consent gates, exact case↔intake↔revision binding,
-COI with bound pending/report submitter (+ appeal prior decision FK), small own/subject
-DTO fields for stable next UI. No Astra / no architecture / no PROD.
+Consumer UI + necessary API companions. Sections 4 (Admin UI) and 7 (alpha20) deferred to next pass on same coordinated PR — **not** partial DONE of the full delivery.
 
-## Exact changes (this pass)
+### Backend companions
+1. **`profileSurfaceOpen`** — full directory gate: `SOCIAL_DIRECTORY_ENABLED` + `directory_visible`/`social_eligible`/`active` + `unrestrictedSql(... account.access, profile.public, social.directory)` + blocks (aligned with `ProfilesService.getDirectoryPlayer`). Opaque handle alone cannot bypass restrictions.
+2. **`gameSurfaceOpen`** — `publicModerationSql` / taken_down fence; private/unlisted uses `GameAttendanceService.resolveAccessRole` (historical own access), not blind `withdrawn|removed` membership. Public surface still readable without attendance/login.
+3. **Legacy CLEAN held derivation** in unapplied `0054_role_reputation.sql`: provenance `legacy_game_contract` from immutable `organizer_id IS NULL` + `created_by_user_id` / `trainer_profile_id`→`trainer_profiles.user_id` + explicit `held`. Excludes legacy `organizer_id` nonnull, cancelled, not_held. No current-manager guess.
+4. **Batched** `GET /v1/role-reputation-summaries?gameIds=` + discovery `trainerRoleHandle` filter (opaque handle ≠ authorization).
+5. Admin disposable fixture: `not_held` UPDATE supplies `reason`; restore to `held` clears reason (0042 constraint). **Do not** alter production authorization.
 
-### Consumer (`role-reputation.*`)
-1. **`POST …/consent-preview` → 200** — `@HttpCode(200)` (documented non-create POST; Nest default was 201).
-2. **`listMine` LATERAL** — only actor's own `review_submit`/`appeal` intakes
-   (`submitted_by_user_id = author`); foreign report/reply waiting_intake no longer
-   overwrites linked own receipt/status.
-3. **Own DTO** — `roleHandle` + `subjectDisplayName` (safeDisplayName) for recipient without private IDs.
-4. **Public item** — `subjectOwnReply: { status, version, pendingRevision } | null`
-   only for subject viewer (no pending body text leak).
-5. **`assertCurrentPublishGates`** — exported narrow validator for admin approve/restore
-   (current admission, immutable consent hash, proof tip vs revision refs; withdrawn/non-current restore denied).
+### Consumer UI
+- `RoleReputationPanel` / `RoleReputationCardActions`, `RoleReviewsDialog`, `RoleReviewComposer`, `RoleReviewsHistory`
+- Wired: discovery cards (batched), `GameTerms` before join, public player profile both roles, My Games history `RoleReviewsHistory`, private org labels → «Организатору лично»
+- Typed api-client + consumer-types; public handle/revision from responses; UNKNOWN latch on report/reply/create; consent unchecked + reset on edit/role/subject/session
+- CSS: `role-reputation.css` (Spacious40 / Onest / forest / lime; ≥44px)
 
-### Admin (`admin/role-reputation.*`)
-1. **decide/readSource** bind `role_reputation_case_links.pending_intake_id` → exact
-   review/reply revision; reject foreign/new revision under old case.
-2. **approve/restore** call consumer `assertCurrentPublishGates` inside transaction;
-   remove/retain unchanged (no silent delete of published criticism).
-3. **assertIndependent** includes bound pending/report submitter even after reassignment;
-   appeal excludes prior decision principal (`prior_decision_id`).
-4. **resolveBasis** only corrects bound case game/role (not arbitrary unrelated targets).
-5. Same guards on privileged command execute **and** authorizeReplay.
+## Paths touched (allowed)
 
-### Migration 0054 (unapplied additive)
-- `role_reputation_pending_intakes.prior_decision_id` → `role_reputation_decisions(id)` for appeal COI.
-- No applied-history rewrite.
-
-### Contracts / tests
-- OpenAPI `PublicRoleReviewItem.subjectOwnReply`
-- Admin disposable: basis-changed approve denied → legitimate approve; own linked after foreign report;
-  reporter-after-reassign COI; oldCase/newRevision deny; withdrawn restore deny; retained e2e path.
-- Consumer disposable: consent-preview 200 assertion unchanged (fix was correct).
-
-## Remaining (same branch / same PR — next UI pass)
-
-1. Consumer UI: discovery/game/profile/composer using `roleHandle`, `reviewHandle`,
-   `publishedRevision` / `replyAggregateVersion`, `subjectOwnReply`, consent-preview reply shape.
-2. Admin Cases UI buttons for pending kind + decide/basis
-3. Alpha changelog / release-agent description (not this pass)
-4. Trusted PMA: real DB migrate, types, contracts check, disposable HTTP with PostGIS
-5. Independent Codex Sol Medium QA → Product CI/security → merge `dev` → DEV ACCEPTED smoke
-6. Human moderation UAT = **NOT_TESTED** until authorized Admin session observes approve/remove/restore
+`apps/api/src/games/role-reputation.{service,dto,controller,policy}.ts`, `games-discovery.query.ts`, `games.controller.ts`, `migrations/0054_role_reputation.sql`, OpenAPI, web api-client/consumer-types, discovery/detail/profile/feedback components, new Role* components + CSS + tests, handoff.
 
 ## Author checks run / not run
 
 | Check | Result |
 |---|---|
-| Unit policy test | source untouched for policy; not executed (no node_modules / no DB) |
-| Disposable DB HTTP | **notrun** (no dedicated disposable DB in author slot; PMA runs after import) |
+| Unit discovery + policy | source written; **notrun** (no node_modules in author slot) |
+| UI role-reputation.test.tsx | source written; **notrun** |
+| Disposable admin/consumer HTTP | **notrun** — PMA after import; fixture reason fix included |
 | Product CI / security / DEV smoke | not claimed |
 | Independent QA | not started |
 | Owner UAT | NOT_TESTED |
 
-## Known issues / notes
+## Remaining gates (same coordinated PR)
 
-- Source PASS ≠ DEV claim. UI not in this pass.
-- Private PG-3 never published via this path; venue writer CLOSED unchanged.
-- Mode B / AGY READY not claimed.
+1. **Next pass:** Admin Cases RoleReputation child UI; alpha20 / API note / release history seed
+2. Trusted PMA: migrate 0054, types/contracts, disposable HTTP (PostGIS), targeted UI tests, Product CI, DEV smoke
+3. Independent Codex Sol Medium QA
+4. Merge `dev` → DEV ACCEPTED; human moderation UAT = NOT_TESTED until authorized Admin session observes decide path
+5. Do not claim source finished = DEV / human UAT
+
+## Notes
+
+- Private PG-3 never published via this path; venue writer CLOSED; Mode B / AGY READY not claimed.
+- Missing legacy history stays unavailable / incomplete — not «never hosted», not invented 15/20.
+- Source PASS ≠ DEV claim.

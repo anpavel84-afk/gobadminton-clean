@@ -11,6 +11,33 @@ const author = "10000000-0000-4000-8000-000000000001";
 const subject = "10000000-0000-4000-8000-000000000002";
 
 describe("role reputation policy", () => {
+  it("keeps held count honest: zero confirmed history is not 'never hosted'", () => {
+    const now = new Date("2026-11-02T12:00:00.000Z");
+    // Future / cancelled / missing proof stay out of the count without inventing hosts.
+    expect(
+      countsTowardHeldGames({
+        endsAt: new Date("2026-11-03T12:00:00.000Z"),
+        now,
+        lifecycle: "published",
+        outcome: "held",
+        proofAccepted: true,
+        proofPhase: "performed",
+        openRoleOrHeldDispute: false,
+      }),
+    ).toBe(false);
+    expect(
+      countsTowardHeldGames({
+        endsAt: new Date("2026-11-01T12:00:00.000Z"),
+        now,
+        lifecycle: "completed",
+        outcome: "held",
+        proofAccepted: false,
+        proofPhase: null,
+        openRoleOrHeldDispute: false,
+      }),
+    ).toBe(false);
+  });
+
   it("counts only distinct confirmed historical held past games", () => {
     const now = new Date("2026-11-02T12:00:00.000Z");
     expect(

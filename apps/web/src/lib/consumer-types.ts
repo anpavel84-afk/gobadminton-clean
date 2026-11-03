@@ -700,3 +700,116 @@ export type MeGameResultsPage = {
   }>;
   nextCursor: string | null;
 };
+
+/** #394 public organizer/trainer reputation (pre-join). */
+export type RoleKind = "organization" | "training";
+
+export type RoleReputationCardSummary = {
+  roleHandle: string;
+  role: RoleKind;
+  subjectDisplayName: string | null;
+  heldGamesCount: number | null;
+  countScope: "confirmed_history";
+  historyMayBeIncomplete: true;
+  publishedReviewCount: number;
+  projectionVersion: string;
+  availability: "available" | "unavailable";
+};
+
+export type GameRoleReputationCard = {
+  gameId: string;
+  organization: RoleReputationCardSummary | null;
+  training: RoleReputationCardSummary | null;
+};
+
+export type PublicRoleReply = {
+  text: string;
+  experienceState: "published";
+  publishedRevision: number;
+};
+
+export type SubjectOwnReplyContext = {
+  status: string;
+  version: number;
+  pendingRevision: number | null;
+};
+
+export type PublicRoleReviewItem = {
+  reviewHandle: string;
+  role: RoleKind;
+  text: string;
+  topics: string[];
+  authorLabel: "Участник игры" | "Участник тренировки";
+  experienceState: "published" | "basis_under_review";
+  publishedRevision: number;
+  replyAggregateVersion: number;
+  reply: PublicRoleReply | null;
+  subjectOwnReply: SubjectOwnReplyContext | null;
+  allowedActions: { canReport: boolean; canReply: boolean };
+};
+
+export type RoleReputationSummary = {
+  roleHandle: string;
+  role: RoleKind;
+  subjectDisplayName: string | null;
+  heldGamesCount: number | null;
+  countScope: "confirmed_history";
+  historyMayBeIncomplete: true;
+  publishedReviewCount: number;
+  projectionVersion: string;
+  items: PublicRoleReviewItem[];
+  nextCursor: string | null;
+  availability: "available" | "unavailable";
+};
+
+export type OwnRoleEligibilityBasis = {
+  gameId: string;
+  role: RoleKind;
+  endsAt: string;
+  proofVersion: number;
+  outcomeVersion: number;
+  attendanceVersion: number;
+  projectionHashPreview: string | null;
+  admission: "may_submit" | "deny" | "hold";
+  reason: string | null;
+};
+
+export type OwnRoleEligibility = {
+  roleHandle: string;
+  role: RoleKind;
+  bases: OwnRoleEligibilityBasis[];
+};
+
+export type OwnRoleReview = {
+  id: string;
+  reviewHandle: string;
+  role: RoleKind;
+  roleHandle: string;
+  subjectDisplayName: string | null;
+  status: string;
+  version: number;
+  text: string | null;
+  topics: string[];
+  receiptToken: string | null;
+  pendingIntakeStatus: "waiting_intake" | "linked" | "none";
+  approvedRevision: number | null;
+  pendingRevision: number | null;
+};
+
+export type RoleReviewMutationReceipt = {
+  id: string;
+  reviewHandle: string;
+  version: number;
+  status: string;
+  receiptToken: string;
+  pendingIntakeStatus: "waiting_intake" | "linked";
+};
+
+export type RoleReviewReportReason =
+  | "harassment"
+  | "spam"
+  | "inappropriate"
+  | "pii"
+  | "threat"
+  | "fabrication"
+  | "other";

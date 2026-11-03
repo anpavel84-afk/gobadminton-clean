@@ -36,6 +36,7 @@ export class GamesController {
     @Query("activityKind") activityKind?: string,
     @Query("temporalScope") temporalScope?: string,
     @Query("venueId") venueId?: string,
+    @Query("trainerRoleHandle") trainerRoleHandle?: string,
   ) {
     const limit =
       limitRaw === undefined || limitRaw === ""
@@ -53,6 +54,7 @@ export class GamesController {
       activityKind,
       temporalScope,
       venueId,
+      trainerRoleHandle,
     }, consumer?.userId ?? null);
   }
 

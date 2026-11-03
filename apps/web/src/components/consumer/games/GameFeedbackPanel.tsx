@@ -454,7 +454,7 @@ export function GameFeedbackPanel({
       // Keep visible so own peerCreateReason is not silently hidden.
       show: Boolean(caps?.canCreatePeer || subjects.length || caps?.peerCreateReason),
     },
-    { id: "organization", label: "Организации", show: Boolean(caps?.canCreateOrganization || caps?.organizationRecipientDisplay) },
+    { id: "organization", label: "Организатору лично", show: Boolean(caps?.canCreateOrganization || caps?.organizationRecipientDisplay) },
     { id: "training", label: "Тренировка", show: Boolean(caps?.canCreateTraining) },
     { id: "received", label: "Полученные", show: true },
     { id: "notes", label: "Заметки", show: Boolean(caps?.canCreateNote || notes.length) },
@@ -570,8 +570,8 @@ export function GameFeedbackPanel({
           {mode === "organization" ? (
             <div className="gb-postgame__dialog-form">
               <p>
-                Адресат: {caps?.organizationRecipientDisplay ?? "ответственный организатор"}. Видно только вам и
-                организатору.
+                Адресат: {caps?.organizationRecipientDisplay ?? "организатор этой встречи"} лично. Видно только вам и
+                адресату — это не отзыв организации-компании.
               </p>
               <label className="profile-field">
                 Оценка организации (1–5, необязательно если есть комментарий)
@@ -618,7 +618,7 @@ export function GameFeedbackPanel({
                 }
                 onClick={() => submitReview("organization")}
               >
-                Отправить организации
+                Отправить организатору лично
               </Button>
             </div>
           ) : null}

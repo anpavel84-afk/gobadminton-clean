@@ -1451,6 +1451,17 @@
             }
           },
           {
+            "name": "trainerRoleHandle",
+            "in": "query",
+            "description": "#394 opaque public training role handle. Narrows public discovery only; not authorization for private games.",
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
+          {
             "name": "temporalScope",
             "in": "query",
             "description": "Omitted/all preserves legacy explicit-window behavior. upcoming adds server statement-time cutoff.",
@@ -20889,6 +20900,52 @@
         "x-client-surface": "admin-only"
       }
     },
+    "/role-reputation-summaries": {
+      "get": {
+        "operationId": "listRoleReputationGameSummaries",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Batched public role-reputation card summaries for discovery game IDs",
+        "description": "#394. Compact organization/training footers for up to 50 already-public game IDs. Re-checks discovery/moderation gates. No review bodies. Opaque handle is not authorization. No-store.",
+        "parameters": [
+          {
+            "name": "gameIds",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated UUIDs, max 50"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Card summaries",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleReputationGameSummariesPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/role-reputations/{roleHandle}": {
       "get": {
         "operationId": "getRoleReputation",
@@ -35325,6 +35382,122 @@
           },
           "reportState": {
             "type": "string"
+          }
+        }
+      },
+      "RoleReputationCardSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roleHandle",
+          "role",
+          "countScope",
+          "historyMayBeIncomplete",
+          "publishedReviewCount",
+          "projectionVersion",
+          "availability"
+        ],
+        "properties": {
+          "roleHandle": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "organization",
+              "training"
+            ]
+          },
+          "subjectDisplayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "heldGamesCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "countScope": {
+            "type": "string",
+            "enum": [
+              "confirmed_history"
+            ]
+          },
+          "historyMayBeIncomplete": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "publishedReviewCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectionVersion": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "RoleReputationGameCard": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "organization",
+          "training"
+        ],
+        "properties": {
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RoleReputationCardSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "training": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RoleReputationCardSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RoleReputationGameSummariesPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleReputationGameCard"
+            }
           }
         }
       },

@@ -565,9 +565,13 @@ run("#394 admin role reputation — disposable", () => {
     ).rows[0]!.version;
 
     // Pending created while eligible must not publish after basis/admission reversed.
-    await pool.query(`UPDATE game_outcomes SET value='not_held', version=version+1 WHERE game_id=$1`, [
-      gameId,
-    ]);
+    // 0042 game_outcomes_check: not_held requires reason; held clears reason.
+    await pool.query(
+      `UPDATE game_outcomes
+       SET value='not_held', reason='fixture basis reversed for approve gate', version=version+1
+       WHERE game_id=$1`,
+      [gameId],
+    );
     const deniedBasis = await adminPost(`cases/${caseId}/commands`, {
       action: "role_review_decide",
       expectedCaseVersion: decideCaseVersion,
@@ -579,9 +583,12 @@ run("#394 admin role reputation — disposable", () => {
       reasonCode: "synthetic_review",
     });
     expect(deniedBasis.statusCode).toBeGreaterThanOrEqual(400);
-    await pool.query(`UPDATE game_outcomes SET value='held', version=version+1 WHERE game_id=$1`, [
-      gameId,
-    ]);
+    await pool.query(
+      `UPDATE game_outcomes
+       SET value='held', reason=NULL, version=version+1
+       WHERE game_id=$1`,
+      [gameId],
+    );
 
     const approve = await adminPost(`cases/${caseId}/commands`, {
       action: "role_review_decide",

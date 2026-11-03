@@ -408,3 +408,111 @@ COMMENT ON TABLE game_role_proof_revisions IS
   '#394 append-only historical organizer/trainer identity; no current-manager backfill.';
 COMMENT ON TABLE role_reputation_pending_intakes IS
   '#394 durable pending intake/receipt without fabricating admin_principal Case creators.';
+
+-- Provenance for one-shot CLEAN held derivation (immutable contract fields only).
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'game_role_proof_revisions'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) LIKE '%provenance_source%'
+  LOOP
+    EXECUTE format('ALTER TABLE game_role_proof_revisions DROP CONSTRAINT %I', r.conname);
+  END LOOP;
+END $$;
+ALTER TABLE game_role_proof_revisions
+  ADD CONSTRAINT game_role_proof_revisions_provenance_source_check
+    CHECK (provenance_source IN (
+      'publish_manager',
+      'manager_explicit',
+      'case_reviewer',
+      'system_derived',
+      'legacy_game_contract'
+    ));
+
+-- Bounded historical bindings from EXISTING immutable CLEAN fields only.
+-- CLEAN: organizer_id IS NULL → responsible creator = games.created_by_user_id.
+-- trainer_profile_id + trainer_profiles.user_id (never transferred) → designated trainer.
+-- Explicit held confirms conducted context. Exclude legacy organizer_id nonnull,
+-- cancelled, not_held, and games that already have a tip (future freeze continues).
+-- Ambiguous/substituted/disputed remain missing_history — do not invent.
+WITH clean_held AS (
+  SELECT g.id AS game_id,
+         g.created_by_user_id AS organizer_user_id,
+         g.activity_kind,
+         g.trainer_profile_id,
+         g.version AS game_version,
+         o.version AS outcome_version
+  FROM games g
+  INNER JOIN game_outcomes o ON o.game_id = g.id AND o.value = 'held'
+  WHERE g.organizer_id IS NULL
+    AND g.status IN ('published', 'completed')
+    AND g.activity_kind IS NOT NULL
+    AND g.ends_at <= clock_timestamp()
+),
+org_candidates AS (
+  SELECT c.game_id, c.organizer_user_id AS subject_user_id, c.game_version, c.outcome_version
+  FROM clean_held c
+  WHERE NOT EXISTS (
+    SELECT 1 FROM game_role_proofs p WHERE p.game_id = c.game_id AND p.role = 'organization'
+  )
+),
+train_candidates AS (
+  SELECT c.game_id, tp.user_id AS subject_user_id, c.game_version, c.outcome_version
+  FROM clean_held c
+  INNER JOIN trainer_profiles tp ON tp.id = c.trainer_profile_id
+  WHERE c.activity_kind = 'trainer_led'
+    AND c.trainer_profile_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM game_role_proofs p WHERE p.game_id = c.game_id AND p.role = 'training'
+    )
+),
+all_candidates AS (
+  SELECT game_id, 'organization'::text AS role, subject_user_id, game_version, outcome_version
+  FROM org_candidates
+  UNION ALL
+  SELECT game_id, 'training'::text AS role, subject_user_id, game_version, outcome_version
+  FROM train_candidates
+),
+ensured_subjects AS (
+  INSERT INTO role_reputation_subjects (subject_user_id, role, public_handle, version)
+  SELECT DISTINCT c.subject_user_id, c.role, encode(gen_random_bytes(16), 'hex'), 1
+  FROM all_candidates c
+  WHERE NOT EXISTS (
+    SELECT 1 FROM role_reputation_subjects s
+    WHERE s.subject_user_id = c.subject_user_id AND s.role = c.role
+  )
+  ON CONFLICT (subject_user_id, role) DO NOTHING
+  RETURNING subject_user_id, role
+),
+inserted_revs AS (
+  INSERT INTO game_role_proof_revisions
+    (game_id, role, resource_version, subject_user_id, phase, binding_kind,
+     provenance_source, accepted_for_count, actor_user_id, game_version, outcome_version,
+     rationale)
+  SELECT c.game_id, c.role, 1, c.subject_user_id, 'performed', 'held_confirm',
+         'legacy_game_contract', true, NULL, c.game_version, c.outcome_version,
+         'legacy_game_contract: CLEAN held + immutable creator/trainer fields'
+  FROM all_candidates c
+  RETURNING id, game_id, role, resource_version, subject_user_id, accepted_for_count
+)
+INSERT INTO game_role_proofs
+  (game_id, role, version, subject_user_id, phase, accepted_for_count, open_dispute,
+   latest_revision_id, updated_at)
+SELECT r.game_id, r.role, r.resource_version, r.subject_user_id, 'performed',
+       r.accepted_for_count, false, r.id, clock_timestamp()
+FROM inserted_revs r
+WHERE NOT EXISTS (
+  SELECT 1 FROM game_role_proofs p WHERE p.game_id = r.game_id AND p.role = r.role
+);
+
+COMMENT ON CONSTRAINT game_role_proof_revisions_provenance_source_check
+  ON game_role_proof_revisions IS
+  '#394 includes legacy_game_contract for one-shot CLEAN held derivation; no current-manager guess.';

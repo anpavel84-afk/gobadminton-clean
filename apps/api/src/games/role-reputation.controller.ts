@@ -13,6 +13,22 @@ export class RoleReputationController {
     private readonly reputation: RoleReputationService,
   ) {}
 
+  /** Batched card footers for discovery — register before :roleHandle. */
+  @Get("role-reputation-summaries")
+  @Header("Cache-Control", "no-store")
+  async summarizeGames(
+    @Req() request: FastifyRequest,
+    @Query("gameIds") gameIds?: string,
+  ) {
+    const consumer = await this.auth.optionalSession(request);
+    const ids = (gameIds ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .slice(0, 50);
+    return this.reputation.summarizeGamesForCards(consumer?.userId ?? null, ids);
+  }
+
   @Get("role-reputations/:roleHandle")
   @Header("Cache-Control", "no-store")
   async getByHandle(

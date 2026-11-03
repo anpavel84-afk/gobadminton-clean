@@ -28,6 +28,8 @@ import type {
   Me,
   MeGameResultsPage,
   MeReviewsPage,
+  OwnRoleEligibility,
+  OwnRoleReview,
   OwnSocialProfile,
   Participation,
   ParticipationPage,
@@ -37,11 +39,16 @@ import type {
   PublicPlayer,
   PublicPlayerPage,
   RevokeOtherSessionsResponse,
+  RoleKind,
+  RoleReputationSummary,
+  RoleReviewMutationReceipt,
+  RoleReviewReportReason,
   SessionsResponse,
   SocialProfileVisibilityInput,
   TrainerProfile,
   Venue,
   VenueSummary,
+  GameRoleReputationCard,
 } from "./consumer-types";
 import { resolveApiBaseUrl } from "./api";
 import { avatarAbortable } from "./avatar-preprocess";
@@ -144,6 +151,7 @@ export function listGames(query: {
   startsFrom?: string;
   startsBefore?: string;
   activityKind?: "regular" | "trainer_led";
+  trainerRoleHandle?: string;
   cursor?: string;
   limit?: number;
 }, signal?: AbortSignal) {
@@ -152,6 +160,7 @@ export function listGames(query: {
   if (query.startsFrom) params.set("startsFrom", query.startsFrom);
   if (query.startsBefore) params.set("startsBefore", query.startsBefore);
   if (query.activityKind) params.set("activityKind", query.activityKind);
+  if (query.trainerRoleHandle) params.set("trainerRoleHandle", query.trainerRoleHandle);
   if (query.cursor) params.set("cursor", query.cursor);
   if (query.limit) params.set("limit", String(query.limit));
   const qs = params.toString();
@@ -968,6 +977,170 @@ export function getGamePreferences() {
 
 export function patchGamePreferences(input: PatchGamePreferences, csrfToken: string) {
   return apiFetch<GamePreferences>("/v1/me/game-preferences", { method: "PATCH", body: JSON.stringify(input), csrfToken, idempotent: true });
+}
+
+/** #394 batched discovery card footers — one request for a page of game IDs. */
+export function listRoleReputationSummaries(gameIds: string[], signal?: AbortSignal) {
+  const ids = gameIds.filter(Boolean).slice(0, 50);
+  if (!ids.length) {
+    return Promise.resolve({
+      ok: true as const,
+      status: 200,
+      data: { items: [] as GameRoleReputationCard[] },
+    });
+  }
+  const params = new URLSearchParams({ gameIds: ids.join(",") });
+  return apiFetch<{ items: GameRoleReputationCard[] }>(
+    `/v1/role-reputation-summaries?${params.toString()}`,
+    { signal },
+  );
+}
+
+export function getRoleReputation(
+  roleHandle: string,
+  query: { cursor?: string; limit?: number; gameId?: string } = {},
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.limit) params.set("limit", String(query.limit));
+  if (query.gameId) params.set("gameId", query.gameId);
+  const qs = params.toString();
+  return apiFetch<RoleReputationSummary>(
+    `/v1/role-reputations/${encodeURIComponent(roleHandle)}${qs ? `?${qs}` : ""}`,
+    { signal },
+  );
+}
+
+export function getGameRoleReputation(gameId: string, role: RoleKind, signal?: AbortSignal) {
+  return apiFetch<RoleReputationSummary | null>(
+    `/v1/games/${encodeURIComponent(gameId)}/role-reputations/${role}`,
+    { signal },
+  );
+}
+
+export function getPlayerRoleReputation(
+  publicPlayerId: string,
+  role: RoleKind,
+  query: { cursor?: string; limit?: number } = {},
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams();
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.limit) params.set("limit", String(query.limit));
+  const qs = params.toString();
+  return apiFetch<RoleReputationSummary | null>(
+    `/v1/players/${encodeURIComponent(publicPlayerId)}/role-reputations/${role}${qs ? `?${qs}` : ""}`,
+    { signal },
+  );
+}
+
+export function getOwnRoleReviewEligibility(roleHandle: string, signal?: AbortSignal) {
+  const params = new URLSearchParams({ roleHandle });
+  return apiFetch<OwnRoleEligibility>(
+    `/v1/me/role-reviews/eligibility?${params.toString()}`,
+    { signal },
+  );
+}
+
+export function previewRoleReviewConsent(
+  body:
+    | { role: RoleKind; subjectRoleHandle: string; text: string; topics?: string[] }
+    | { targetKind: "reply"; reviewHandle: string; text: string },
+  csrfToken: string,
+) {
+  return apiFetch<{ consentProjectionHash: string }>("/v1/me/role-reviews/consent-preview", {
+    method: "POST",
+    body: JSON.stringify(body),
+    csrfToken,
+  });
+}
+
+export function createRoleReview(
+  body: {
+    gameId: string;
+    role: RoleKind;
+    expectedBasisVersions: {
+      proofVersion: number;
+      outcomeVersion: number;
+      attendanceVersion: number;
+    };
+    text: string;
+    topics?: string[];
+    consentProjectionHash: string;
+  },
+  csrfToken: string,
+  idempotencyKey?: string,
+) {
+  return apiFetch<RoleReviewMutationReceipt>("/v1/me/role-reviews", {
+    method: "POST",
+    body: JSON.stringify(body),
+    csrfToken,
+    idempotent: true,
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  });
+}
+
+export function listOwnRoleReviews(signal?: AbortSignal) {
+  return apiFetch<{ items: OwnRoleReview[] }>("/v1/me/role-reviews", { signal });
+}
+
+export function commandOwnRoleReview(
+  id: string,
+  body: Record<string, unknown>,
+  csrfToken: string,
+  idempotencyKey?: string,
+) {
+  return apiFetch<RoleReviewMutationReceipt>(`/v1/me/role-reviews/${encodeURIComponent(id)}/commands`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    csrfToken,
+    idempotent: true,
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  });
+}
+
+export function commandRoleReviewReply(
+  reviewHandle: string,
+  body: Record<string, unknown>,
+  csrfToken: string,
+  idempotencyKey?: string,
+) {
+  return apiFetch<RoleReviewMutationReceipt>(
+    `/v1/role-reviews/${encodeURIComponent(reviewHandle)}/reply-commands`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      csrfToken,
+      idempotent: true,
+      headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+    },
+  );
+}
+
+export function reportRoleReview(
+  reviewHandle: string,
+  body: {
+    targetKind: "review" | "reply";
+    expectedRevision: number;
+    reasonCode: RoleReviewReportReason;
+    explanation?: string;
+  },
+  csrfToken: string,
+  gameId?: string,
+  idempotencyKey?: string,
+) {
+  const qs = gameId ? `?gameId=${encodeURIComponent(gameId)}` : "";
+  return apiFetch<{ reportId: string; receiptToken: string; status: "submitted" }>(
+    `/v1/role-reviews/${encodeURIComponent(reviewHandle)}/reports${qs}`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      csrfToken,
+      idempotent: true,
+      headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+    },
+  );
 }
 
 export type { CoverReceipt } from "@gobadminton/contracts";

@@ -1,0 +1,232 @@
+/* #394 public organizer/trainer reputation — Spacious40 / Onest / forest / lime. */
+.gb-role-rep {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--gb-ink);
+}
+
+.gb-role-rep__eyebrow {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gb-ink-soft);
+}
+
+.gb-role-rep__held {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.gb-role-rep__held strong {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 700;
+  display: block;
+  color: var(--gb-ink);
+}
+
+.gb-role-rep__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gb-ink-soft);
+}
+
+.gb-role-rep__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.gb-role-rep__actions > :is(button, a) {
+  min-height: 44px;
+}
+
+.gb-role-rep-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.gb-role-rep-card-actions > :is(button, a) {
+  min-height: 44px;
+}
+
+.gb-role-rep-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--gb-line);
+  font-size: 13px;
+  color: var(--gb-ink-soft);
+}
+
+.gb-role-rep-footer button {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--gb-line);
+  background: var(--gb-white);
+  color: var(--gb-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.gb-role-rep-footer button:hover {
+  border-color: var(--gb-ink);
+}
+
+.gb-role-rep-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--gb-line);
+}
+
+.gb-role-rep-item:last-child {
+  border-bottom: 0;
+}
+
+.gb-role-rep-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--gb-ink-soft);
+}
+
+.gb-role-rep-item__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gb-lime, #c6f35a) 35%, white);
+  color: var(--gb-ink);
+  font-size: 12px;
+}
+
+.gb-role-rep-item__text {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.gb-role-rep-item__topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gb-role-rep-item__topics span {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--gb-surface-soft, #f3f5f2);
+  font-size: 12px;
+}
+
+.gb-role-rep-reply {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--gb-line);
+  color: var(--gb-ink-soft);
+}
+
+.gb-role-rep-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.gb-role-rep-composer .profile-field :is(input, select, textarea) {
+  min-height: 44px;
+  width: 100%;
+  font: inherit;
+}
+
+.gb-role-rep-composer textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.gb-role-rep-consent {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--gb-line);
+  border-radius: 14px;
+}
+
+.gb-role-rep-consent input {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  flex: none;
+}
+
+.gb-role-rep-privacy {
+  display: grid;
+  gap: 8px;
+}
+
+.gb-role-rep-privacy__option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border: 1px solid var(--gb-line);
+  border-radius: 14px;
+  background: var(--gb-white);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.gb-role-rep-privacy__option[data-active="true"] {
+  border-color: color-mix(in srgb, var(--gb-purple, #6b4eff) 55%, white);
+  background: color-mix(in srgb, var(--gb-purple, #6b4eff) 10%, white);
+}
+
+.gb-role-rep-privacy__option small {
+  color: var(--gb-ink-soft);
+}
+
+.gb-role-rep-pending {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--gb-surface-soft, #f3f5f2);
+  font-size: 14px;
+}
+
+@media (max-width: 720px) {
+  .gb-role-rep__held strong {
+    font-size: 24px;
+  }
+
+  .gb-role-rep-card-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .gb-role-rep-card-actions > :is(button, a) {
+    width: 100%;
+  }
+}
