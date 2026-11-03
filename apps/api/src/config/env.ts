@@ -182,6 +182,22 @@ export const envSchema = z
       .enum(["0", "1", "true", "false"])
       .optional()
       .transform((value) => value === "1" || value === "true"),
+    /** #456 Web Push; default off. PROD not enabled by this source alone. */
+    WEB_PUSH_ENABLED: z.enum(["0", "1"]).default("0"),
+    VAPID_PUBLIC_KEY: z.string().min(16).max(256).optional(),
+    VAPID_PRIVATE_KEY: z.string().min(16).max(256).optional(),
+    VAPID_SUBJECT: z
+      .string()
+      .min(8)
+      .max(256)
+      .optional()
+      .refine(
+        (value) =>
+          value === undefined ||
+          value.startsWith("mailto:") ||
+          value.startsWith("https://"),
+        { message: "VAPID_SUBJECT must be mailto: or https: URL" },
+      ),
   })
   .superRefine((raw, ctx) => {
     if (raw.FRIENDS_INTERNAL_ENABLED === "1" && (raw.NODE_ENV === "production" || raw.APP_ENV === "prod")) {
@@ -291,6 +307,22 @@ export const envSchema = z
     if (raw.CONTENT_MODERATION_PROVIDER === "openai" && !raw.OPENAI_MODERATION_API_KEY) {
       ctx.addIssue({code: "custom", path: ["OPENAI_MODERATION_API_KEY"], message: "Moderation API key is required"});
     }
+    if (raw.WEB_PUSH_ENABLED === "1") {
+      if (!raw.VAPID_PUBLIC_KEY || !raw.VAPID_PRIVATE_KEY || !raw.VAPID_SUBJECT) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["WEB_PUSH_ENABLED"],
+          message: "WEB_PUSH_ENABLED requires VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT",
+        });
+      }
+      if (raw.APP_ENV === "prod") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["WEB_PUSH_ENABLED"],
+          message: "WEB_PUSH_ENABLED is not permitted for APP_ENV=prod in this cycle",
+        });
+      }
+    }
   })
   .transform((raw) => {
     const allowedFromCsv = splitCsv(raw.ALLOWED_WEB_ORIGINS);
@@ -383,6 +415,10 @@ export const envSchema = z
       SOCIAL_GAME_CHAT_MESSAGE_RETENTION_SECONDS:
         raw.SOCIAL_GAME_CHAT_MESSAGE_RETENTION_SECONDS,
       SOCIAL_INBOX_ENABLED: raw.SOCIAL_INBOX_ENABLED ?? false,
+      WEB_PUSH_ENABLED: raw.WEB_PUSH_ENABLED === "1",
+      VAPID_PUBLIC_KEY: optionalNonEmpty(raw.VAPID_PUBLIC_KEY),
+      VAPID_PRIVATE_KEY: optionalNonEmpty(raw.VAPID_PRIVATE_KEY),
+      VAPID_SUBJECT: optionalNonEmpty(raw.VAPID_SUBJECT),
     };
   });
 

@@ -7,8 +7,10 @@ import { getMe, logout } from "../../../lib/api-client";
 import type { Me } from "../../../lib/consumer-types";
 import { privateViews } from "../../../lib/private-view";
 import { GameContactPreference } from "../players/GameContactPreference";
+import { PushSettings } from "../push/PushSettings";
 import { ConsumerShell } from "../ConsumerShell";
 import { AuthEntry, ProfileState } from "../players/ProfileComposition";
+import { clearPushLocalBinding } from "../../../lib/push-client";
 
 /** Grouped settings as separate panels; unsupported commands stay gated. */
 export function SettingsPage() {
@@ -63,6 +65,8 @@ export function SettingsPage() {
     const request = epoch.current, controller = new AbortController();
     logoutRequest.current = controller;
     setBusy(true); setNotice(null);
+    // Local push cleanup must not block ordinary logout.
+    void clearPushLocalBinding();
     // Publish the session event only after this page verifies the response owner.
     const result = await logout(me.csrfToken, { signal: controller.signal, notifySession: false });
     if (request !== epoch.current || controller.signal.aborted) return;
@@ -87,6 +91,7 @@ export function SettingsPage() {
         {state === "error" && <ProfileState title="Не удалось загрузить аккаунт" state="error" retry={() => setReload(n => n + 1)}>Попробуйте ещё раз.</ProfileState>}
         {state === "auth" && <section className="profile-section"><p>Войдите, чтобы управлять своим аккаунтом.</p><AuthEntry returnPath="/profile/settings" /></section>}
         {state === "ready" && me && <GameContactPreference key={`${me.id}:${me.csrfToken}:${epoch.current}`} me={me} />}
+        {state === "ready" && me && <PushSettings key={`push:${me.id}:${me.csrfToken}:${epoch.current}`} me={me} />}
         <section className="settings-panel" aria-label="Вход и безопасность">
           <h2>Вход и безопасность</h2>
           <Link className="settings-panel__row" href="/profile/settings/login-methods">

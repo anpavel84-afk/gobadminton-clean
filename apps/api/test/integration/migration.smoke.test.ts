@@ -193,6 +193,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0052_attendance_missing_disputes",
         "0053_private_review_reports",
         "0054_role_reputation",
+        "0055_role_web_push",
       ]);
       expect((await pool.query("SELECT to_regclass('public.game_court_booking')::text AS name")).rows[0]?.name).toBe("game_court_booking");
       expect((await pool.query("SELECT to_regclass('public.entity_comments')::text AS name")).rows[0]?.name).toBe("entity_comments");
@@ -211,6 +212,11 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_responses')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_responses");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_case_links')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_case_links");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_dispute_resolutions')::text AS name")).rows[0]?.name).toBe("game_attendance_dispute_resolutions");
+      // 0055 #456 web push tables.
+      expect((await pool.query("SELECT to_regclass('public.web_push_preferences')::text AS name")).rows[0]?.name).toBe("web_push_preferences");
+      expect((await pool.query("SELECT to_regclass('public.web_push_subscriptions')::text AS name")).rows[0]?.name).toBe("web_push_subscriptions");
+      expect((await pool.query("SELECT to_regclass('public.web_push_delivery_claims')::text AS name")).rows[0]?.name).toBe("web_push_delivery_claims");
+      expect((await pool.query("SELECT to_regclass('public.web_push_delivery_intents')::text AS name")).rows[0]?.name).toBe("web_push_delivery_intents");
       // 0048 PG-3 reviews/notes: physical tables beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.game_reviews')::text AS name")).rows[0]?.name).toBe("game_reviews");
       expect((await pool.query("SELECT to_regclass('public.game_review_revisions')::text AS name")).rows[0]?.name).toBe("game_review_revisions");

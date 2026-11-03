@@ -19,6 +19,7 @@ import { MessagingModule } from "./messaging/messaging.module";
 import { OrganizersModule } from "./organizers/organizers.module";
 import { ParticipationsModule } from "./participations/participations.module";
 import { ProfilesModule } from "./profiles/profiles.module";
+import { PushModule } from "./push/push.module";
 import { RadarModule } from "./radar/radar.module";
 import { SafetyModule } from "./safety/safety.module";
 import { TrainersModule } from "./trainers/trainers.module";
@@ -46,6 +47,7 @@ import { VenuesModule } from "./venues/venues.module";
     MessagingModule,
     GameChatModule,
     InboxModule,
+    PushModule,
   ],
   controllers: [HealthController, CityHintController],
   providers: [{ provide: APP_FILTER, useClass: ProblemExceptionFilter }],

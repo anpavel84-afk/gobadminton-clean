@@ -1,4 +1,4 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
   badRequest,
@@ -8,6 +8,7 @@ import {
 } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
+import { JobEnqueueService } from "../jobs/job-enqueue.service";
 import { DATABASE_POOL } from "../tokens";
 import {
   GAME_CHAT_CLIENT_MESSAGE_ID_MAX,
@@ -94,6 +95,7 @@ export class GameChatService {
     private readonly idempotency: IdempotencyService,
     private readonly mutations: MutationRunner,
     private readonly feature: GameChatFeatureService,
+    @Optional() private readonly jobs?: JobEnqueueService,
   ) {
     void this.pool;
   }
@@ -433,6 +435,27 @@ export class GameChatService {
           [conversation.id, seq + 1, seq, now],
         );
         const row = inserted.rows[0]!;
+        if (this.jobs) {
+          const recipients = await client.query<{ user_id: string }>(
+            `SELECT user_id FROM game_managers
+             WHERE game_id = $1 AND status = 'active' AND user_id <> $2
+             UNION
+             SELECT user_id FROM participations
+             WHERE game_id = $1 AND status = 'confirmed' AND user_id <> $2
+             LIMIT 64`,
+            [gameId, actorId],
+          );
+          for (const recipient of recipients.rows) {
+            await this.jobs.enqueueWebPushDeliver(client, {
+              kind: "game_chat_message",
+              messageId: row.id,
+              conversationId: conversation.id,
+              gameId,
+              recipientUserId: recipient.user_id,
+              authorUserId: actorId,
+            });
+          }
+        }
         return {
           statusCode: 201,
           body: {

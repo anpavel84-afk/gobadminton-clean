@@ -6,10 +6,39 @@ import { APP_ENV } from "../tokens";
 import {
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
   SOCIAL_EXPIRY_SWEEP_SINGLETON_KEY,
+  WEB_PUSH_DELIVER_QUEUE,
 } from "./constants";
 import { fromPoolClient } from "./from-pool-client";
-import type { SocialExpiryCleanupPayload } from "./payloads";
-import { createPgBoss, ensureSocialExpiryQueues } from "./pg-boss.factory";
+import type {
+  SocialExpiryCleanupPayload,
+  WebPushMessageDeliverPayload,
+} from "./payloads";
+import {
+  createPgBoss,
+  ensureSocialExpiryQueues,
+  ensureWebPushQueues,
+} from "./pg-boss.factory";
+
+/** Persist durable push intent in the caller's message transaction. */
+export async function persistWebPushDeliveryIntent(
+  client: PoolClient,
+  payload: WebPushMessageDeliverPayload,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO web_push_delivery_intents (
+       message_id, conversation_id, recipient_user_id, author_user_id, kind, game_id, status
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+     ON CONFLICT (message_id, recipient_user_id) DO NOTHING`,
+    [
+      payload.messageId,
+      payload.conversationId,
+      payload.recipientUserId,
+      payload.authorUserId,
+      payload.kind,
+      payload.kind === "game_chat_message" ? payload.gameId : null,
+    ],
+  );
+}
 
 @Injectable()
 export class JobEnqueueService implements OnModuleDestroy {
@@ -45,6 +74,9 @@ export class JobEnqueueService implements OnModuleDestroy {
       });
       await boss.start();
       await ensureSocialExpiryQueues(boss);
+      if (this.env.WEB_PUSH_ENABLED) {
+        await ensureWebPushQueues(boss);
+      }
       this.boss = boss;
       this.started = true;
       return boss;
@@ -167,6 +199,80 @@ export class JobEnqueueService implements OnModuleDestroy {
       retryDelay: 2,
       retryBackoff: true,
       expireInSeconds: 120,
+    });
+  }
+
+  /**
+   * Same physical TX as message commit: durable intent always lands with the
+   * message. PgBoss enqueue is isolated via SAVEPOINT — queue/provider outage
+   * must not roll back a valid message. Pending intents are recovered by the
+   * existing worker schedule (not a new service). Never carries message text/secrets.
+   */
+  async enqueueWebPushDeliver(
+    client: PoolClient,
+    payload: WebPushMessageDeliverPayload,
+  ): Promise<string | null> {
+    if (!this.env.WEB_PUSH_ENABLED) return null;
+    if (payload.recipientUserId === payload.authorUserId) return null;
+    await persistWebPushDeliveryIntent(client, payload);
+    return this.tryEnqueueWebPushJob(client, payload);
+  }
+
+  /**
+   * Attempt same-TX pg-boss send. On queue SQL / boss failure, rolls back only
+   * the savepoint and leaves the durable intent pending for worker recovery.
+   */
+  async tryEnqueueWebPushJob(
+    client: PoolClient,
+    payload: WebPushMessageDeliverPayload,
+  ): Promise<string | null> {
+    if (!this.env.WEB_PUSH_ENABLED) return null;
+    if (payload.recipientUserId === payload.authorUserId) return null;
+    let boss: PgBoss;
+    try {
+      boss = await this.ensureStarted();
+    } catch {
+      return null;
+    }
+    await client.query("SAVEPOINT web_push_enqueue");
+    try {
+      const jobId = await boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+        db: fromPoolClient(client),
+        singletonKey: `push:${payload.messageId}:${payload.recipientUserId}`,
+        retryLimit: 5,
+        retryDelay: 5,
+        retryBackoff: true,
+        expireInSeconds: 600,
+      });
+      await client.query(
+        `UPDATE web_push_delivery_intents
+         SET status = 'queued', updated_at = now()
+         WHERE message_id = $1
+           AND recipient_user_id = $2
+           AND status = 'pending'`,
+        [payload.messageId, payload.recipientUserId],
+      );
+      await client.query("RELEASE SAVEPOINT web_push_enqueue");
+      return jobId;
+    } catch {
+      await client.query("ROLLBACK TO SAVEPOINT web_push_enqueue");
+      return null;
+    }
+  }
+
+  /** Enqueue outside a message TX (worker intent recovery). */
+  async enqueueWebPushDeliverOutsideTx(
+    payload: WebPushMessageDeliverPayload,
+  ): Promise<string | null> {
+    if (!this.env.WEB_PUSH_ENABLED) return null;
+    if (payload.recipientUserId === payload.authorUserId) return null;
+    const boss = await this.ensureStarted();
+    return boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+      singletonKey: `push:${payload.messageId}:${payload.recipientUserId}`,
+      retryLimit: 5,
+      retryDelay: 5,
+      retryBackoff: true,
+      expireInSeconds: 600,
     });
   }
 }

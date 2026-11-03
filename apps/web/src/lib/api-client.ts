@@ -494,6 +494,13 @@ export function startAuth(provider: "vk" | "yandex", returnPath: string) {
 
 export async function logout(csrfToken: string, options: { signal?: AbortSignal; notifySession?: boolean } = {}) {
   const generation = foregroundUpdates.currentGeneration;
+  // Best-effort local push cleanup; never blocks or fails logout.
+  try {
+    const { clearPushLocalBinding } = await import("./push-client");
+    void clearPushLocalBinding();
+  } catch {
+    /* ignore */
+  }
   const result = await apiFetch<null>("/v1/auth/logout", {
     method: "POST",
     body: JSON.stringify({}),

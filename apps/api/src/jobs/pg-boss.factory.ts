@@ -2,6 +2,8 @@ import { PgBoss } from "pg-boss";
 import {
   SOCIAL_EXPIRY_CLEANUP_DEAD_LETTER_QUEUE,
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
+  WEB_PUSH_DELIVER_DEAD_LETTER_QUEUE,
+  WEB_PUSH_DELIVER_QUEUE,
 } from "./constants";
 
 export type PgBossRole = "api" | "worker";
@@ -47,5 +49,25 @@ export async function ensureSocialExpiryQueues(boss: PgBoss): Promise<void> {
     retentionSeconds: 7 * 24 * 3600,
     deleteAfterSeconds: 7 * 24 * 3600,
     deadLetter: SOCIAL_EXPIRY_CLEANUP_DEAD_LETTER_QUEUE,
+  });
+}
+
+/** Create push delivery queues. Safe when feature flag is off (idle). */
+export async function ensureWebPushQueues(boss: PgBoss): Promise<void> {
+  await boss.createQueue(WEB_PUSH_DELIVER_DEAD_LETTER_QUEUE, {
+    retryLimit: 0,
+    expireInSeconds: 300,
+    retentionSeconds: 14 * 24 * 3600,
+    deleteAfterSeconds: 14 * 24 * 3600,
+  });
+  await boss.createQueue(WEB_PUSH_DELIVER_QUEUE, {
+    retryLimit: 5,
+    retryDelay: 5,
+    retryBackoff: true,
+    retryDelayMax: 300,
+    expireInSeconds: 600,
+    retentionSeconds: 7 * 24 * 3600,
+    deleteAfterSeconds: 7 * 24 * 3600,
+    deadLetter: WEB_PUSH_DELIVER_DEAD_LETTER_QUEUE,
   });
 }

@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 import { DesktopNav, InboxCountProvider, RootNav, type ConsumerNavActive } from "./RootNav";
 import { DesktopFooter } from "./DesktopFooter";
-
-
+import { PushLifecycle } from "./push/PushLifecycle";
 
 export type ConsumerShellMode = "page" | "root" | "local" | "focused" | "document";
 
@@ -27,6 +26,7 @@ export function ConsumerShell({ active, title, children, mode = "page", headerAc
   const showHeading = surface === "page" || surface === "document";
   return (
     <InboxCountProvider><div className={`gb-consumer gb-app-shell gb-app-shell--${surface}${reading ? " gb-app-shell--reading" : ""}`} data-shell-mode={surface}>
+      <PushLifecycle />
       {!fullscreenMap && <a className="gb-skip-link" href="#gb-main">К содержимому</a>}
       {!fullscreenMap && <DesktopNav active={active} />}
       <main id="gb-main" tabIndex={-1} className={`gb-shell-content gb-shell-content--${surface}`} aria-label={title}>

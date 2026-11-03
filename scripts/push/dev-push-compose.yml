@@ -1,0 +1,10 @@
+# #456 DEV overlay — variable references only, never secret values.
+# PMA applies after reviewed source+CI with backup/CAS/readback/rollback.
+# Existing API + mail worker launcher copy API env; no new daemon.
+services:
+  api:
+    environment:
+      WEB_PUSH_ENABLED: "${WEB_PUSH_ENABLED}"
+      VAPID_PUBLIC_KEY: "${VAPID_PUBLIC_KEY}"
+      VAPID_PRIVATE_KEY: "${VAPID_PRIVATE_KEY}"
+      VAPID_SUBJECT: "${VAPID_SUBJECT}"
