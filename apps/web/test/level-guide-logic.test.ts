@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LevelRule, SocialLevel } from "./consumer-types";
+import type { LevelRule, SocialLevel } from "../src/lib/consumer-types";
 import {
   filterGamesBySelectedNtrpLevel,
   gameAllowsSelectedNtrpLevel,
@@ -10,7 +10,7 @@ import {
   ntrpHalfstepIds,
   ntrpSelfDeclaredLevel,
   resolveProfileLevelForSave,
-} from "./level-guide";
+} from "../src/lib/level-guide";
 
 const ntrpRule = (ids: string[]): LevelRule => ({
   scaleId: "ntrp",

@@ -1,6 +1,6 @@
-import { createElement, type ReactElement } from "react";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { LevelGuide } from "../src/components/consumer/LevelGuide";
 import {
   LEVEL_GUIDE_DISCLAIMER,
@@ -69,47 +69,5 @@ describe("LevelGuide control", () => {
     expect(html).toContain("<details");
     expect(html).toContain("disabled");
     expect(html).not.toMatch(/modal|quiz|обязательн/i);
-  });
-});
-
-describe("LevelGuide controlled updates (no network)", () => {
-  it("Не знаю clears controlled value via onChange only", () => {
-    const spy = vi.fn();
-    // Direct prop invocation path used by SSR markup tests elsewhere in the suite.
-    const tree = createElement(LevelGuide, {
-      surface: "profile",
-      value: "3.0",
-      onChange: spy,
-    }) as ReactElement<{ onChange: (v: string) => void; value: string }>;
-    tree.props.onChange(LEVEL_GUIDE_DONT_KNOW);
-    expect(spy).toHaveBeenCalledWith("");
-    expect(spy).toHaveBeenCalledTimes(1);
-  });
-
-  it("actor switch is reflected by controlled value prop", () => {
-    const first = renderToStaticMarkup(
-      createElement(LevelGuide, {
-        surface: "profile",
-        value: "beginner",
-        onChange: () => undefined,
-      }),
-    );
-    expect(first).toContain("Краткий уровень");
-    const second = renderToStaticMarkup(
-      createElement(LevelGuide, {
-        surface: "profile",
-        value: "",
-        onChange: () => undefined,
-      }),
-    );
-    expect(second).toContain("Можно пропустить");
-    const numeric = renderToStaticMarkup(
-      createElement(LevelGuide, {
-        surface: "profile",
-        value: "4.0",
-        onChange: () => undefined,
-      }),
-    );
-    expect(numeric).toContain("Выбрано:");
   });
 });

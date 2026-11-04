@@ -1,8 +1,18 @@
-# #458 LevelGuide — beginner level help (pass1)
+# #458 LevelGuide — beginner level help (pass2 test-quality)
 
-From: Cursor Auto (`OWNER_NIGHT_BEGINNER458_LEVEL_GUIDANCE_DEV`, attempt 1, base `e637e937d7fa780983daaac92cbe22e26c82ef1b`).
-To: PMA deterministic checks → independent Codex Sol Medium QA → Product CI → DEV accept/smoke → Owner UAT.
-Status: **SOURCE CANDIDATE**. UAT = **NOT_TESTED**. No fake PASS. DEV/PROD publication by trusted process only.
+From: Cursor Auto (`OWNER_NIGHT_BEGINNER458_LEVEL_GUIDANCE_DEV`, attempt 2, base `b7ae4c175fe8e9eb3e065e3abd60d79ef3ca09dd`).
+To: PMA changed tests/types/lint → independent Codex Sol Medium full-feature QA → Product CI → DEV accept/smoke → Owner UAT.
+Status: **SOURCE CANDIDATE** (narrow test-path repair only). UAT = **NOT_TESTED**. No fake PASS. DEV/PROD publication by trusted process only.
+
+## Pass2 correction (test quality only)
+
+No app/UI/lib/version/API/schema changes. Only listed test/handoff paths.
+
+1. Critical pure helper tests moved from `apps/web/src/lib/level-guide.test.ts` (outside vitest `include`) to `apps/web/test/level-guide-logic.test.ts` so Product CI discovers them. Old colocated file deleted (not duplicated). Existing `releases.test.ts` baseline untouched.
+2. `test/level-guide.test.tsx`: removed tautological direct `tree.props.onChange(spy)` block and unused `ReactElement`/`vi` imports; removed separate-render actor-switch pretend interaction. Retained SSR markup checks: accessibility/options/disabled/known+unknown rendering.
+3. Deleted `test/level-guide-integration.test.tsx` (source-string `toContain` mirrors, HTML-without-fetch ≠ network proof, duplicated helper asserts). Parent wiring / current actor / explicit Save remain for independent content QA and PMA installed/local browser with synthetic transport — not claimed as interaction proof from raw source strings.
+
+Honest limits: pure invariants now under actual CI include; SSR proves markup only, not actor/interaction/network UAT.
 
 ## Product result
 
@@ -19,13 +29,13 @@ No new API/schema/rating/worker/auth. No auto-write on open/help. No auto-filter
 
 | Area | Path |
 | --- | --- |
-| Lib | `apps/web/src/lib/level-guide.ts` (+ colocated unit test) |
+| Lib | `apps/web/src/lib/level-guide.ts` |
 | UI | `apps/web/src/components/consumer/LevelGuide.tsx` |
 | CSS | `apps/web/src/styles/level-guide.css` |
 | Profile | `apps/web/src/components/consumer/pages/ProfilePage.tsx` |
 | Discovery | `apps/web/src/components/consumer/pages/GamesDiscoveryPage.tsx` |
 | Release | `apps/web/src/lib/releases.ts` → **alpha.23** / API **0.30.0** unchanged; historical **alpha.22** seed from #457 receipt |
-| Tests | `level-guide*.test.*`, fr01/fr03/owner-a discovery, releases* |
+| Tests (CI include) | `apps/web/test/level-guide-logic.test.ts`, `apps/web/test/level-guide.test.tsx`; plus fr01/fr03/owner-a discovery, releases* |
 | Handoff | `docs/handoffs/levelguide458.md` |
 
 ## Invariants
@@ -50,7 +60,7 @@ Tokens: Onest / lime / ink from consumer scope. Compact details+select — no wh
 
 ## Author checks
 
-Source-only in worktree. No Git / network / install / live / root. Node modules absent here — PMA runs vitest for allowed suites. Native status is not PASS.
+Source-only in worktree. No Git / network / install / live / root. Node modules absent here — PMA runs changed vitest suites + types/lint. Native status is not PASS. Pass2 does not claim interaction/network UAT.
 
 ## UAT
 
