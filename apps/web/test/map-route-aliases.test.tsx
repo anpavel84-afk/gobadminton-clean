@@ -8,17 +8,18 @@ vi.mock("../src/components/consumer/pages/GameDetailPage", () => ({
 }));
 import { redirect, notFound } from "next/navigation";
 import MapAlias from "../src/app/games/map/page";
+import RootMapAlias from "../src/app/map/page";
 import VenuesAlias from "../src/app/venues/page";
 import GamePage from "../src/app/games/[gameId]/page";
 import { gamesMapReturnPath } from "../src/lib/games-venue-map";
 
 beforeEach(() => vi.clearAllMocks());
-describe("map entrances and invalid game routes (#445)", () => {
-  it("redirects both compatibility entrances to the existing map", () => {
-    for (const route of [MapAlias, VenuesAlias]) {
+describe("map entrances and invalid game routes (#445/#455)", () => {
+  it("redirects /games/map, /venues, and /map aliases to /games?view=map", () => {
+    for (const route of [MapAlias, VenuesAlias, RootMapAlias]) {
       expect(() => route()).toThrow("redirect:/games?view=map");
     }
-    expect(redirect).toHaveBeenCalledTimes(2);
+    expect(redirect).toHaveBeenCalledTimes(3);
   });
   it("terminates invalid game routes before rendering game detail", async () => {
     for (const gameId of ["map", "not-a-game", "https://evil.example"]) {
