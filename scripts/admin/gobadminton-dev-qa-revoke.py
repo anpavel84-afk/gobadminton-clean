@@ -17,13 +17,14 @@ def main():
         raise RuntimeError('DEV_VPS_REQUIRED')
     if len(sys.argv) != 1:
         raise RuntimeError('NO_ARGUMENTS_ALLOWED')
+    process_env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8'}
     with open('/var/lib/gobadminton-deploy/dev/lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         root = Path('/var/lib/gobadminton-deploy/dev')
         accepted = json.loads((root / 'accepted.json').read_text())
         if accepted['status'] != 'ACCEPTED' or (root / 'pending.json').exists():
             raise RuntimeError('ACCEPTED_DEV_REQUIRED')
-        data = json.loads(subprocess.check_output(['/usr/bin/docker', 'inspect', 'gobadminton-dev-preview-api'], stderr=subprocess.PIPE))[0]
+        data = json.loads(subprocess.check_output(['/usr/bin/docker', 'inspect', 'gobadminton-dev-preview-api'], stderr=subprocess.PIPE, env=process_env))[0]
         env = dict(value.split('=', 1) for value in data['Config']['Env'])
         if (not data['State']['Running'] or env.get('GIT_SHA') != accepted['source_sha']
                 or env.get('PUBLIC_WEB_ORIGIN') != 'https://dev.gobadminton.ru'
@@ -31,7 +32,7 @@ def main():
                 or env.get('APP_ENV') not in ('mvp', 'stage')):
             raise RuntimeError('DEV_TARGET_MISMATCH')
         result = json.loads(subprocess.check_output(['/usr/bin/docker', 'exec', 'gobadminton-dev-preview-api',
-            'node', 'dist/admin/dev-qa-ops.js', 'revoke'], stderr=subprocess.PIPE, timeout=30))
+            'node', 'dist/admin/dev-qa-ops.js', 'revoke'], stderr=subprocess.PIPE, timeout=30, env=process_env))
         if result.get('remaining') != {'credentials': 0, 'sessions': 0}:
             raise RuntimeError('REVOCATION_READBACK_FAILED')
         # Anchor unlink to an actual directory fd; never follow a grokops-controlled symlink.

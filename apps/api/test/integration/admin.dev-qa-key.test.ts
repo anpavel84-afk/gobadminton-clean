@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { hashSecret, sealSecret } from "../../src/auth/crypto";
 import { SyntheticAuthenticator } from "./admin-webauthn.fixture";
 import { AdminModule } from "../../src/admin/admin.module";
+import { AdminProviders } from "../../src/admin/admin-providers";
 import { AdminService } from "../../src/admin/admin.service";
 import { ADMIN_COOKIE } from "../../src/admin/rbac";
 import { devQaKeyAllowed, DEV_QA_USER_ID } from "../../src/admin/dev-qa-policy";
@@ -24,10 +25,10 @@ run("DEV QA key real isolated DB authentication",()=>{
  beforeAll(async()=>{
   Object.assign(process.env,{NODE_ENV:"test",APP_ENV:"local",AUTH_PEPPER:"qa480-consumer-pepper-only-test-000000",PUBLIC_API_ORIGIN:"http://127.0.0.1:18641",PUBLIC_WEB_ORIGIN:"http://127.0.0.1:18642",ALLOWED_WEB_ORIGINS:"http://127.0.0.1:18642"});
   execFileSync("pnpm",["exec","tsx","src/database/migrate.ts"],{cwd:path.resolve(__dirname,"../.."),env:process.env,stdio:"inherit"});
-  const base=loadEnv({...process.env,ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:"http://localhost:18640",ADMIN_AUTH_PEPPER:"qa480-admin-dedicated-pepper-000000000"});
+  const base=loadEnv({...process.env,ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:"http://localhost:18640",ADMIN_AUTH_PEPPER:"qa480-admin-dedicated-pepper-000000000",CASES_INTERNAL_ENABLED:"1",USER_RESTRICTIONS_INTERNAL_ENABLED:"1",GAME_MODERATION_INTERNAL_ENABLED:"1"});
   env={...base,NODE_ENV:"production",APP_ENV:"mvp",ADMIN_DEV_ENABLED:true,ADMIN_DEV_PATH_ENABLED:true,ADMIN_DEV_QA_KEY_ENABLED:true,ADMIN_DEV_QA_VPS_VERIFIED:true,ADMIN_ORIGIN:origin,PUBLIC_WEB_ORIGIN:origin,PUBLIC_API_ORIGIN:origin,COOKIE_SECURE:true};
   pool=new Pool({connectionString:env.DATABASE_URL,max:5});
-  const mod=await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),AdminModule]}).compile();
+  const mod=await Test.createTestingModule({imports:[buildTestCoreModule(base,pool),AdminModule]}).overrideProvider(AdminService).useFactory({factory:(providers:AdminProviders)=>new AdminService(pool,env,providers),inject:[AdminProviders]}).compile();
   app=mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter({logger:false}),{logger:false});await app.register(cookie);app.setGlobalPrefix("v1");app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
  },120000);
  beforeEach(async()=>{
