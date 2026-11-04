@@ -89,6 +89,25 @@ run("DEV QA key real isolated DB authentication",()=>{
   await pool.query("UPDATE admin_sessions SET created_at=clock_timestamp()-interval '16 minutes',expires_at=clock_timestamp()-interval '2 minutes' WHERE qa_credential_id=$1",[credentialId]);
   expect((await get("/v1/admin/pilot-metrics",cookie)).statusCode).toBe(401);
  });
+ it("serializes concurrent read, login and revoke through the existing authority fence",async()=>{
+  const cookie=cookies(await login()),fence=await pool.connect();
+  await fence.query("BEGIN");
+  await fence.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_admin_authority'))");
+  const operations=[Promise.resolve(get("/v1/admin/pilot-metrics",cookie)),Promise.resolve(login()),revokeDevQa(pool)];
+  try {
+   let waiting=false;
+   for(let i=0;i<100;i++){
+    const count=(await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%' AND pid<>pg_backend_pid()")).rows[0].n;
+    if(count>=3){waiting=true;break;}
+    await new Promise(resolve=>setTimeout(resolve,10));
+   }
+   expect(waiting).toBe(true);
+  } finally {await fence.query("ROLLBACK");fence.release();}
+  const results=await Promise.allSettled(operations);
+  expect(results.every(r=>r.status==='fulfilled')).toBe(true);
+  expect((results[2] as PromiseFulfilledResult<Awaited<ReturnType<typeof revokeDevQa>>>).value.remaining).toEqual({credentials:0,sessions:0});
+  expect((await get("/v1/admin/pilot-metrics",cookie)).statusCode).toBe(401);
+ },10000);
  it("revokes all QA sessions atomically, preserves unrelated WebAuthn rows, idempotent; revoked key never reissues",async()=>{
   const first=cookies(await login()),second=cookies(await login());
   const user=randomUUID();await pool.query("INSERT INTO users(id) VALUES($1)",[user]);
