@@ -39,6 +39,7 @@ import {
 } from "../games/GameDetailComposition";
 import { GameRecommendationsSection } from "../games/GameRecommendationsSection";
 import { GameReviewsHistory } from "../games/GameReviewsHistory";
+import { PostgameReminders } from "../games/PostgameReminders";
 import { RoleReviewsHistory } from "../games/RoleReviewsHistory";
 import "../../../styles/postgame.css";
 
@@ -340,6 +341,7 @@ export function MyGamesPage() {
             подтверждает присутствие на площадке и не означает оплату.
           </p>
         ) : null}
+        {state === "ready" ? <PostgameReminders me={me} /> : null}
         {state === "ready" && ownResultsPage && pendingOwnNotice(ownResultsPage) > 0 ? (
           <section className="gb-game-feedback" data-surface="postgame-notices" aria-label="Уведомления об итогах">
             <h2>Есть отметки посещения, которые ждут ответа</h2>

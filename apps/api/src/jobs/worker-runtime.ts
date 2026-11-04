@@ -10,7 +10,11 @@ import {
   recoverPendingWebPushIntents,
   type WebPushTransport,
 } from "../push/push-delivery";
+import { GameRemindersCommand } from "../games/game-reminders.command";
+import { postGameWritesEnabled } from "../games/game-outcomes.policy";
 import {
+  POSTGAME_REMINDERS_SWEEP_QUEUE,
+  POSTGAME_REMINDERS_SWEEP_SINGLETON_KEY,
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
   SOCIAL_EXPIRY_SWEEP_SINGLETON_KEY,
   WEB_PUSH_DELIVER_QUEUE,
@@ -18,15 +22,18 @@ import {
 } from "./constants";
 import { fromPoolClient } from "./from-pool-client";
 import {
+  isPostgameRemindersSweepPayload,
   isSocialExpiryCleanupPayload,
   isWebPushDeliverPayload,
   isWebPushMessageDeliverPayload,
   sanitizeJobLogFields,
+  type PostgameRemindersSweepPayload,
   type SocialExpiryCleanupPayload,
   type WebPushDeliverPayload,
 } from "./payloads";
 import {
   createPgBoss,
+  ensurePostgameRemindersQueues,
   ensureSocialExpiryQueues,
   ensureWebPushQueues,
 } from "./pg-boss.factory";
@@ -288,6 +295,86 @@ export async function startWorkerRuntime(input: {
       expireInSeconds: 120,
     },
   );
+
+  // #457 internal post-game reminders — only when POST_GAME_INTERNAL_ENABLED admits writes.
+  const remindersEnv = input.env ?? input.email?.env;
+  if (remindersEnv && postGameWritesEnabled(remindersEnv)) {
+    await ensurePostgameRemindersQueues(boss);
+    const reminders = new GameRemindersCommand(remindersEnv);
+    await boss.work(
+      POSTGAME_REMINDERS_SWEEP_QUEUE,
+      {
+        batchSize: 1,
+        localConcurrency: 1,
+        pollingIntervalSeconds: 1,
+        transactional: true as const,
+        transactionTimeoutSeconds: 60,
+      },
+      async (jobs: Job<PostgameRemindersSweepPayload>[], tx: Db) => {
+        const [job] = jobs;
+        if (!job) return;
+        if (!isPostgameRemindersSweepPayload(job.data)) {
+          console.error(
+            JSON.stringify({
+              event: "worker_invalid_payload",
+              queue: POSTGAME_REMINDERS_SWEEP_QUEUE,
+              jobId: job.id,
+            }),
+          );
+          throw new Error("INVALID_JOB_PAYLOAD");
+        }
+        console.info(
+          JSON.stringify(
+            sanitizeJobLogFields({
+              queue: POSTGAME_REMINDERS_SWEEP_QUEUE,
+              jobId: job.id,
+              kind: job.data.kind,
+            }),
+          ),
+        );
+        const exec: SqlExecutor = {
+          query: async <T = Record<string, unknown>>(
+            text: string,
+            values?: unknown[],
+          ) => {
+            const result = await tx.executeSql(text, values);
+            return { rows: result.rows as T[] };
+          },
+        };
+        // Probe uses same exec; command probes to_regclass before domain work.
+        const result = await reminders.execute(exec, job.data);
+        console.info(
+          JSON.stringify({
+            event: "job_completed",
+            queue: POSTGAME_REMINDERS_SWEEP_QUEUE,
+            jobId: job.id,
+            kind: job.data.kind,
+            scanned: result.scanned,
+            ensured: result.ensured,
+            activated: result.activated,
+            stopped: result.stopped,
+            skipped: result.skipped,
+            skipReason: result.skipReason,
+          }),
+        );
+        return result;
+      },
+    );
+    await boss.schedule(
+      POSTGAME_REMINDERS_SWEEP_QUEUE,
+      "* * * * *",
+      { kind: "sweep" } satisfies PostgameRemindersSweepPayload,
+      {
+        tz: "UTC",
+        singletonKey: POSTGAME_REMINDERS_SWEEP_SINGLETON_KEY,
+        missed: "once",
+        retryLimit: 3,
+        retryDelay: 2,
+        retryBackoff: true,
+        expireInSeconds: 120,
+      },
+    );
+  }
 
   console.log(
     JSON.stringify({

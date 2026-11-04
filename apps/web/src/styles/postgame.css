@@ -534,3 +534,53 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* #457 compact in-app organizer reminders — same tokens as postgame notices. */
+.gb-postgame-reminders {
+  display: grid;
+  gap: 12px;
+  padding: 16px 20px;
+  margin: 0 0 16px;
+  border: 1px solid var(--gb-line);
+  border-radius: 16px;
+  background: var(--gb-white);
+  color: var(--gb-ink);
+}
+
+.gb-postgame-reminders h2,
+.gb-postgame-reminders p {
+  margin: 0;
+}
+
+.gb-postgame-reminders h2 {
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.gb-postgame-reminders p {
+  color: var(--gb-ink-soft);
+  font-size: 0.95rem;
+}
+
+.gb-postgame-reminders ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.gb-postgame-reminders li {
+  display: grid;
+  gap: 8px;
+}
+
+.gb-postgame-reminders__title {
+  font-weight: 600;
+}
+
+.gb-postgame-reminders__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

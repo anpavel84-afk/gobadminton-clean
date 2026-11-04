@@ -49,6 +49,11 @@ export type WebPushMessageDeliverPayload = Exclude<
   { kind: "recover_intents" }
 >;
 
+/** #457 internal post-game reminder sweep (no PII / game title in payload). */
+export type PostgameRemindersSweepPayload = {
+  kind: "sweep";
+};
+
 export function isSocialExpiryCleanupPayload(
   value: unknown,
 ): value is SocialExpiryCleanupPayload {
@@ -97,6 +102,13 @@ export function isWebPushMessageDeliverPayload(
     isWebPushDeliverPayload(value) &&
     value.kind !== "recover_intents"
   );
+}
+
+export function isPostgameRemindersSweepPayload(
+  value: unknown,
+): value is PostgameRemindersSweepPayload {
+  if (!value || typeof value !== "object") return false;
+  return (value as { kind?: unknown }).kind === "sweep";
 }
 
 /** Safe structured log fields — never dump full job data blobs. */

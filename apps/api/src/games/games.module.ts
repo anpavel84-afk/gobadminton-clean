@@ -8,6 +8,8 @@ import { GameFeedbackController } from "./game-feedback.controller";
 import { GameFeedbackService } from "./game-feedback.service";
 import { GameOutcomesController } from "./game-outcomes.controller";
 import { GameOutcomesService } from "./game-outcomes.service";
+import { GameRemindersController } from "./game-reminders.controller";
+import { GameRemindersService } from "./game-reminders.service";
 import { RoleReputationController } from "./role-reputation.controller";
 import { RoleReputationService } from "./role-reputation.service";
 import { ModerationModule } from "../moderation/moderation.module";
@@ -37,6 +39,7 @@ import { MeGamesController } from "./me-games.controller";
   controllers: [
     GameCoverController,
     GameOutcomesController,
+    GameRemindersController,
     GameAttendanceController,
     GameCourtBookingController,
     GameFeedbackController,
@@ -50,6 +53,7 @@ import { MeGamesController } from "./me-games.controller";
     GameCourtBookingService,
     GameFeedbackService,
     GameOutcomesService,
+    GameRemindersService,
     RoleReputationService,
     GamesService,
     GameAuthorityService,
