@@ -49,7 +49,7 @@ const base = {
 const actor: AdminActor = {
   principalId: id, roles: ["content_manager"], sessionId: id,
   principal: { id, user_id: id, status: "active", version: 1 },
-  session: { id, principal_id: id, credential_id: id, audience: "gobadminton-admin", csrf_ciphertext: "synthetic",
+  session: { id, principal_id: id, credential_id: id, auth_method: "webauthn", qa_credential_id: null, audience: "gobadminton-admin", csrf_ciphertext: "synthetic",
     expires_at: new Date("2030-01-01T00:00:00Z"), last_seen_at: new Date(date), step_up_at: new Date(date), revoked_at: null },
 };
 const request = {} as FastifyRequest;

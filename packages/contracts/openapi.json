@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.32.0",
+    "version": "0.33.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -22724,6 +22724,140 @@
           }
         }
       }
+    },
+    "/admin/auth/dev-qa-key": {
+      "post": {
+        "operationId": "adminDevQaKeyLogin",
+        "tags": [
+          "Admin A0a"
+        ],
+        "x-client-surface": "admin-only",
+        "summary": "DEV-only QA key login for PilotMetrics",
+        "description": "Owner #480. Exact verified Germany DEV path only; OFF/PROD returns404. JSON body only, no query secret. Dedicated disabled consumer service user and pilot_viewer role only. Keyed key hash, durable rate limits, one-use hashed requestNonce; 15min secure HttpOnly same-site session, explicit dev_qa_key method and DEV audience. Revoke invalidates credential and ALL associated sessions. No fake WebAuthn credentials. No-store; never log body/cookies/key.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact DEV ADMIN_ORIGIN; POST JSON only."
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "description": "One-use requestNonce must match JSON body, not a reusable business-command receipt."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (Cache-Control: no-store)",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminVerificationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin identity/session/MFA invalid or expired",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, CSRF, permission or step-up denied",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Internal surface disabled or resource missing",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version/idempotency/lifecycle conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admin attempt budget exhausted",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Admin provider not configured",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminDevQaKeyRequest"
+              }
+            }
+          }
+        },
+        "x-auth-challenge-protocol": "admin-dev-qa-key-nonce-v1"
+      }
     }
   },
   "components": {
@@ -29547,7 +29681,8 @@
                   "superadmin",
                   "content_manager",
                   "moderator",
-                  "support"
+                  "support",
+                  "pilot_viewer"
                 ]
               },
               "active": {
@@ -29817,7 +29952,8 @@
                 "superadmin",
                 "content_manager",
                 "moderator",
-                "support"
+                "support",
+                "pilot_viewer"
               ]
             }
           },
@@ -29967,7 +30103,8 @@
                       "superadmin",
                       "content_manager",
                       "moderator",
-                      "support"
+                      "support",
+                      "pilot_viewer"
                     ]
                   }
                 }
@@ -30070,7 +30207,8 @@
                       "superadmin",
                       "content_manager",
                       "moderator",
-                      "support"
+                      "support",
+                      "pilot_viewer"
                     ]
                   }
                 },
@@ -37250,6 +37388,25 @@
                 }
               }
             }
+          }
+        }
+      },
+      "AdminDevQaKeyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "requestNonce"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{64}$",
+            "writeOnly": true
+          },
+          "requestNonce": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
           }
         }
       }

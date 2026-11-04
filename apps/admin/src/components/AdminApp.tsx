@@ -2,15 +2,16 @@
 import { adminPath } from "../lib/admin-path";
 import { Venues } from "./Venues";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AdminError, adminRequest, errorMessage, freshStepUp, visibleNavigation, type Session, type Ticket } from "../lib/admin-client";
+import { AdminError, adminRequest, errorMessage, freshStepUp, canReadPilot, visibleNavigation, type Session, type Ticket } from "../lib/admin-client";
 import { Cases } from "./Cases";
 import { UserRestrictions } from "./UserRestrictions";
 import { GameModeration } from "./GameModeration";
 import { PilotMetricsPanel } from "./PilotMetrics";
 import { webauthn, type OptionsJSON } from "../lib/webauthn";
 
-const roleLabels: Record<string, string> = { superadmin: "Суперадминистратор", content_manager: "Контент-менеджер", moderator: "Модератор", support: "Поддержка" };
-export function AdminApp() {
+const roleLabels: Record<string, string> = { superadmin: "Суперадминистратор", content_manager: "Контент-менеджер", moderator: "Модератор", support: "Поддержка", pilot_viewer: "Просмотр аналитики" };
+export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
+  const [qaKey, setQaKey] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,8 +45,8 @@ export function AdminApp() {
         setSession(current);
         if (!current.roles.includes("superadmin")) {
           setAudit(null);
-          setPilotEpoch((value) => value + 1);
         }
+        if (!canReadPilot(current.roles)) setPilotEpoch((value) => value + 1);
         setSection(old => visibleNavigation(current.roles).some(item => item.id === old) ? old : "overview");
       }
       return current;
@@ -112,6 +113,15 @@ export function AdminApp() {
       }
     } finally { action.current = false; if (mounted.current) setBusy(false); }
   }
+  async function qaLogin() {
+    const key = qaKey; setQaKey("");
+    await run(async () => {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const requestNonce = btoa(String.fromCharCode(...bytes)).replaceAll("+","-").replaceAll("/","_").replaceAll("=","");
+      await adminRequest("auth/dev-qa-key", {key,requestNonce}, requestNonce);
+      await refresh(); setSection("pilot");
+    });
+  }
   async function start(provider: string) {
     await run(async () => {
       clear();
@@ -177,7 +187,7 @@ export function AdminApp() {
       {loading ? <section className="panel" aria-busy="true"><p role="status">Проверяем вход…</p><div className="skeleton" /></section> : session ? <div className="shell">
         <nav className="panel navigation" aria-label="Разделы администрирования">{nav.map(item => <button key={item.id} className={section === item.id ? "selected" : ""} aria-current={section === item.id ? "page" : undefined} disabled={busy} onClick={() => void navigate(item.id)}>{item.label}</button>)}</nav>
         <section className="panel content">
-          {section === "overview" ? <><h2>Ваш доступ</h2><div className="roles">{session.roles.length ? session.roles.map(role => <span className="badge" key={role}>{roleLabels[role] ?? "Неизвестная роль"}</span>) : <p>Активных ролей нет. Обратитесь к ответственному за доступ.</p>}</div><dl><dt>Учётная запись</dt><dd>{session.principalId}</dd><dt>Вход действует до</dt><dd>{new Date(session.expiresAt).toLocaleString("ru-RU")}</dd></dl><div className="notice"><strong>{fresh ? "Подтверждение входа актуально" : "Требуется повторное подтверждение"}</strong><p>Для чувствительных действий понадобится ключ доступа.</p><button className="button outline" disabled={busy} onClick={() => void prove("step_up")}>{busy ? "Подтверждение…" : "Подтвердить вход"}</button></div></>
+          {section === "overview" ? <><h2>Ваш доступ</h2><div className="roles">{session.roles.length ? session.roles.map(role => <span className="badge" key={role}>{roleLabels[role] ?? "Неизвестная роль"}</span>) : <p>Активных ролей нет. Обратитесь к ответственному за доступ.</p>}</div><dl><dt>Учётная запись</dt><dd>{session.principalId}</dd><dt>Вход действует до</dt><dd>{new Date(session.expiresAt).toLocaleString("ru-RU")}</dd></dl><div className="notice" hidden={session.roles.length === 1 && session.roles[0] === "pilot_viewer"}><strong>{fresh ? "Подтверждение входа актуально" : "Требуется повторное подтверждение"}</strong><p>Для чувствительных действий понадобится ключ доступа.</p><button className="button outline" disabled={busy} onClick={() => void prove("step_up")}>{busy ? "Подтверждение…" : "Подтвердить вход"}</button></div></>
           : section === "pilot" ? <PilotMetricsPanel key={session.principalId + String(pilotEpoch)} session={session} busy={busy} run={run} onAuthorityLoss={clear} />
           : section === "cases" ? <Cases key={session.principalId+session.roles.join(",")} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "users" ? <UserRestrictions key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
@@ -190,7 +200,7 @@ export function AdminApp() {
         <h2>{ticket.status === "pending_mfa" ? "Добавьте ключ доступа" : "Используйте ключ доступа"}</h2><p>{ticket.status === "pending_mfa" ? "Введите полученный код активации и зарегистрируйте ключ на этом устройстве." : "Подтвердите вход с помощью зарегистрированного ключа или passkey."}</p>
         {ticket.status === "pending_mfa" && <label className="form-field"><span>Код активации</span><input type="password" autoComplete="off" value={activation} maxLength={256} onChange={event => setActivation(event.target.value)} disabled={busy} /></label>}
         <div className="actions"><button className="button" disabled={busy || (ticket.status === "pending_mfa" && activation.trim().length < 32)} onClick={() => void prove(ticket.status === "pending_mfa" ? "enroll" : "login")}>{busy ? "Ожидаем подтверждение…" : ticket.status === "pending_mfa" ? "Добавить ключ" : "Подтвердить ключом"}</button><button className="button outline" disabled={busy} onClick={() => { clear(); setError(""); setNotice(""); }}>Начать вход заново</button></div>
-      </section> : <section className="panel"><h2>Выберите способ входа</h2><p>После подтверждения учётной записи потребуется ключ доступа.</p><div className="actions"><button className="button" disabled={busy || logoutPending} onClick={() => void start("vk")}>Войти через VK</button><button className="button outline" disabled={busy || logoutPending} onClick={() => void start("yandex")}>Войти через Яндекс</button></div></section>}
+      </section> : <section className="panel">{qaKeyEnabled && <form onSubmit={event => { event.preventDefault(); void qaLogin(); }}><h2>Вход для QA</h2><p>Только просмотр сводки пилота. Доступ действует ограниченное время.</p><label className="form-field"><span>Ключ QA</span><input type="password" autoComplete="off" aria-label="Ключ QA" value={qaKey} maxLength={64} disabled={busy} onChange={event => setQaKey(event.target.value)} /></label><button className="button" disabled={busy || qaKey.length !== 64}>Войти для QA</button></form>}<h2>Выберите способ входа</h2><p>После подтверждения учётной записи потребуется ключ доступа.</p><div className="actions"><button className="button" disabled={busy || logoutPending} onClick={() => void start("vk")}>Войти через VK</button><button className="button outline" disabled={busy || logoutPending} onClick={() => void start("yandex")}>Войти через Яндекс</button></div></section>}
     </main>
   </>;
 }

@@ -12,6 +12,7 @@ import {
   Res,
 } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { AdminService } from "./admin.service";
 import {
   commandSchema,
@@ -23,6 +24,14 @@ import {
 @Controller("admin")
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
+  @Post("auth/dev-qa-key")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  devQaKey(@Body() body:unknown, @Req() request:FastifyRequest, @Res({passthrough:true}) reply:FastifyReply) {
+    this.admin.assertDevQaEnabled();
+    const input = parse(z.object({key:z.string().regex(/^[A-Za-z0-9_-]{64}$/),requestNonce:z.string().regex(/^[A-Za-z0-9_-]{43}$/)}).strict(), body);
+    return this.admin.devQaLogin(request,reply,input);
+  }
   @Post("auth/:provider/start")
   @HttpCode(200)
   @Header("Cache-Control", "no-store")

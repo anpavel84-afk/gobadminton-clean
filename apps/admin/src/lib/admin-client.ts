@@ -1,6 +1,6 @@
 import { adminPath } from "./admin-path";
 export type Ticket = { principalId: string; status: "active" | "pending_mfa"; csrfToken: string };
-export type Session = { principalId: string; userId: string; status: string; version: number; roles: string[]; sessionId: string; expiresAt: string; stepUpAt: string; csrfToken: string };
+export type Session = { principalId: string; userId: string; status: string; version: number; roles: string[]; sessionId: string; expiresAt: string; stepUpAt: string; csrfToken: string; authMethod?: "webauthn" | "dev_qa_key" };
 export class AdminError extends Error {
   constructor(public readonly code: string, public readonly status: number) { super(code); }
 }
@@ -73,7 +73,7 @@ export function errorMessage(error: unknown) {
 
 export const NAV_ITEMS = [
   { id: "overview", label: "Обзор", roles: null },
-  { id: "pilot", label: "Сводка пилота", roles: ["superadmin"] },
+  { id: "pilot", label: "Сводка пилота", roles: ["superadmin", "pilot_viewer"] },
   { id: "security", label: "Безопасность", roles: ["superadmin"] },
   { id: "venues", label: "Площадки", roles: ["superadmin", "content_manager"] },
   { id: "games", label: "Модерация игр", roles: ["superadmin", "moderator"] },
@@ -88,3 +88,5 @@ export function freshStepUp(session: Session, now = Date.now()) {
   const at = Date.parse(session.stepUpAt);
   return Number.isFinite(at) && at <= now && at > now - 10 * 60 * 1000;
 }
+
+export function canReadPilot(roles: readonly string[]) { return roles.includes("superadmin") || roles.includes("pilot_viewer"); }

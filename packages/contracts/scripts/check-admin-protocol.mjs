@@ -14,7 +14,12 @@ for(const [path,item] of Object.entries(api.paths)) {
   const headers=Object.fromEntries(parameters.filter(p=>p.in==='header').map(p=>[p.name.toLowerCase(),p]));
   assert.equal(op['x-client-surface'],'admin-only',path);
   assert(!JSON.stringify(op.security??[]).includes('Consumer'),path);
-  if(method==='post' && proofs.has(path)) {
+  if(method==='post' && path==='/admin/auth/dev-qa-key') {
+   assert.equal(op['x-auth-challenge-protocol'],'admin-dev-qa-key-nonce-v1');
+   assert.deepEqual(op.security,[]);assert.equal(headers.origin?.required,true);
+   assert.equal(headers['x-csrf-token']?.required,true);
+   assert.equal(headers['x-csrf-token']?.schema.pattern,'^[A-Za-z0-9_-]{43}$');
+  } else if(method==='post' && proofs.has(path)) {
    assert.equal(op['x-auth-challenge-protocol'],'admin-bound-single-use-v1',path);
    assert.equal(headers.origin?.required,true,path);
    assert.notEqual(headers['idempotency-key']?.required,true,path);
@@ -28,7 +33,7 @@ for(const [path,item] of Object.entries(api.paths)) {
 }
 // Venue covers + ordered gallery add/replace/delete/reorder/set-main and gallery read
 // + pilot metrics summary GET (#460).
-assert.equal(operations,46,"Update this inventory deliberately when adding an Admin operation");
+assert.equal(operations,47,"Update this inventory deliberately when adding an Admin operation");
 for(const path of proofs) assert(api.paths[path]?.post, `Missing proof ceremony ${path}`);
 const pilotGet=api.paths["/admin/pilot-metrics"]?.get;
 assert.ok(pilotGet,"Missing GET /admin/pilot-metrics");

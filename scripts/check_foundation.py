@@ -106,6 +106,24 @@ BODYLESS_DELETES = {
 
 def admin_proof_exemption(document: dict, route: str, method: str,
                           operation: dict, headers: dict) -> bool:
+    # Owner #480: one closed DEV key ceremony, nonce header/body and no cookie authority.
+    if method == "post" and route == "/admin/auth/dev-qa-key":
+        body = operation.get("requestBody", {})
+        schema = document.get("components", {}).get("schemas", {}).get("AdminDevQaKeyRequest", {})
+        props = schema.get("properties", {})
+        return (operation.get("x-auth-challenge-protocol") == "admin-dev-qa-key-nonce-v1"
+                and operation.get("security") == [] and operation.get("x-client-surface") == "admin-only"
+                and headers.get("origin", {}).get("required") is True
+                and headers.get("x-csrf-token", {}).get("required") is True
+                and headers.get("x-csrf-token", {}).get("schema", {}).get("pattern") == "^[A-Za-z0-9_-]{43}$"
+                and body.get("required") is True
+                and body.get("content", {}).get("application/json", {}).get("schema", {}).get("$ref") == "#/components/schemas/AdminDevQaKeyRequest"
+                and schema.get("additionalProperties") is False
+                and set(schema.get("required", [])) == {"key", "requestNonce"}
+                and set(props) == {"key", "requestNonce"}
+                and props.get("key", {}).get("pattern") == "^[A-Za-z0-9_-]{64}$"
+                and props.get("key", {}).get("writeOnly") is True
+                and props.get("requestNonce", {}).get("pattern") == "^[A-Za-z0-9_-]{43}$")
     if (method != "post" or route not in ADMIN_PROOF_ROUTES
             or operation.get("x-auth-challenge-protocol") != "admin-bound-single-use-v1"):
         return False
