@@ -132,7 +132,8 @@ it("offers list navigation when the failed module has no return callback", async
 
 it.each([
   { label: "Moscow map", cityId: MOSCOW_BUNDLE.cityId, venueId: undefined, modulePending: true },
-  { label: "another city", cityId: "another-city", venueId: undefined, modulePending: false },
+  { label: "Saint Petersburg map", cityId: "a0000000-0000-4000-8000-000000000002", venueId: undefined, modulePending: true },
+  { label: "unknown city", cityId: "another-city", venueId: undefined, modulePending: false },
   { label: "venue schedule", cityId: MOSCOW_BUNDLE.cityId, venueId: "venue-id", modulePending: false },
 ])("limits the pending module UI to the $label branch", async ({ cityId, venueId, modulePending }) => {
   const { GamesMapView } = await importView();

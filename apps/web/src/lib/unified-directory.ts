@@ -316,6 +316,8 @@ export class UnifiedDirectoryController {
   }
   async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {
     if (!this.me || !this.visible || this.view.capabilityUnavailable || this.view.authenticationRequired) return;
+    const cityChanged = this.filters != null && this.filters.cityId !== filters.cityId;
+    if (cityChanged) this.camera = null;
     const changed = JSON.stringify(this.filters) !== JSON.stringify(filters) ||
       this.activationOriginKey !== activationKey;
     // A filter/activation change aborts and fences the old in-flight response.

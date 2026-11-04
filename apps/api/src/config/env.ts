@@ -121,6 +121,10 @@ export const envSchema = z
     RADAR_DEV_MAP_PREVIEW_ENABLED: z.enum(["0", "1"]).default("0"),
     RADAR_DEV_MAP_PREVIEW_VERSION: z.string().optional(),
     RADAR_DEV_MAP_PREVIEW_STYLE_SHA256: z.string().optional(),
+    /** Separate Saint Petersburg DEV map registration; default off until static pack is published. */
+    RADAR_DEV_SPB_MAP_PREVIEW_ENABLED: z.enum(["0", "1"]).default("0"),
+    RADAR_DEV_SPB_MAP_PREVIEW_VERSION: z.string().optional(),
+    RADAR_DEV_SPB_MAP_PREVIEW_STYLE_SHA256: z.string().optional(),
     RADAR_DEV_TEST_OWNER_USER_ID: z.uuid().optional(),
     RADAR_DEV_TEST_SECOND_USER_ID: z.uuid().optional(),
     /** Source-staged geographic cutover; default off, separate from legacy mode flags. */
@@ -394,6 +398,9 @@ export const envSchema = z
       RADAR_DEV_MAP_PREVIEW_ENABLED: raw.RADAR_DEV_MAP_PREVIEW_ENABLED === "1",
       RADAR_DEV_MAP_PREVIEW_VERSION: raw.RADAR_DEV_MAP_PREVIEW_VERSION,
       RADAR_DEV_MAP_PREVIEW_STYLE_SHA256: raw.RADAR_DEV_MAP_PREVIEW_STYLE_SHA256,
+      RADAR_DEV_SPB_MAP_PREVIEW_ENABLED: raw.RADAR_DEV_SPB_MAP_PREVIEW_ENABLED === "1",
+      RADAR_DEV_SPB_MAP_PREVIEW_VERSION: raw.RADAR_DEV_SPB_MAP_PREVIEW_VERSION,
+      RADAR_DEV_SPB_MAP_PREVIEW_STYLE_SHA256: raw.RADAR_DEV_SPB_MAP_PREVIEW_STYLE_SHA256,
       RADAR_DEV_TEST_OWNER_USER_ID: raw.RADAR_DEV_TEST_OWNER_USER_ID,
       RADAR_DEV_TEST_SECOND_USER_ID: raw.RADAR_DEV_TEST_SECOND_USER_ID,
       RADAR_GEOGRAPHIC_TOKEN_EPOCH: raw.RADAR_GEOGRAPHIC_TOKEN_EPOCH,

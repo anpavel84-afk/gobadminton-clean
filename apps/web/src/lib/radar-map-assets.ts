@@ -8,31 +8,60 @@ export const MOSCOW_BUNDLE = {
   center: [37.6176, 55.7517] as [number, number],
   bounds: [[36, 54.5], [39.5, 56.5]] as [[number, number], [number, number]],
 };
+/** Fixed Saint Petersburg pack — closed second city only; not a provider registry. */
+export const SAINT_PETERSBURG_BUNDLE = {
+  version: "saint-petersburg-20261104-p4-b7d3b1a8-v001",
+  cityId: "a0000000-0000-4000-8000-000000000002",
+  mapId: "saint-petersburg" as const,
+  prefix: "https://dev.gobadminton.ru/map-assets/releases/saint-petersburg-20261104-p4-b7d3b1a8-v001/",
+  styleHash: "d87e1b4a28944babc70133ce9bb89dce2ccbd6ac7d5594f4691c79ccf54cb6ea",
+  center: [30.3158, 59.9391] as [number, number],
+  bounds: [[27.25, 58.35], [36.05, 62.25]] as [[number, number], [number, number]],
+  defaultZoom: 10.5,
+};
+export type FixedMapBundle = typeof MOSCOW_BUNDLE | typeof SAINT_PETERSBURG_BUNDLE;
 export const DEV_APP_ORIGIN = "https://dev.gobadminton.ru";
 export const PROD_APP_ORIGIN = "https://gobadminton.ru";
 /** Exact browser app origin: registered DEV or canonical PROD only. */
 export function isApprovedAppOrigin(origin: string): boolean {
   return origin === DEV_APP_ORIGIN || origin === PROD_APP_ORIGIN;
 }
+/** Closed lookup of the two known city packs; unknown city → null (honest unavailable). */
+export function mapBundleForCity(cityId: string | null | undefined): FixedMapBundle | null {
+  if (cityId === MOSCOW_BUNDLE.cityId) return MOSCOW_BUNDLE;
+  if (cityId === SAINT_PETERSBURG_BUNDLE.cityId) return SAINT_PETERSBURG_BUNDLE;
+  return null;
+}
+export function mapIdForBundle(bundle: FixedMapBundle): "moscow" | "saint-petersburg" {
+  return bundle === SAINT_PETERSBURG_BUNDLE ? "saint-petersburg" : "moscow";
+}
+export function pointInBundleBounds(lon: number, lat: number, bundle: FixedMapBundle): boolean {
+  const [[west, south], [east, north]] = bundle.bounds;
+  return lon >= west && lon <= east && lat >= south && lat <= north;
+}
 /** Server registration and exact browser origin are both required. */
 export function candidateMapAllowed(snapshot: UnifiedSnapshot, origin: string): boolean {
-  return isApprovedAppOrigin(origin) && snapshot.map.availability === "dev_preview" &&
-    snapshot.map.mapId === "moscow" && snapshot.map.version === MOSCOW_BUNDLE.version &&
-    ["authenticated_live", "synthetic_demo"].includes(snapshot.exposureMode) && snapshot.cityId === MOSCOW_BUNDLE.cityId;
+  if (!isApprovedAppOrigin(origin) || snapshot.map.availability !== "dev_preview") return false;
+  if (!["authenticated_live", "synthetic_demo"].includes(snapshot.exposureMode)) return false;
+  const bundle = mapBundleForCity(snapshot.cityId);
+  if (!bundle) return false;
+  return snapshot.map.mapId === mapIdForBundle(bundle) && snapshot.map.version === bundle.version;
 }
 /** Public basemap may remain visible while a short-lived signed people query
  * expires. No participant/pin is allowed without that separate live query. */
 export function candidateMapConfigAllowed(config: RadarConfig | null, cityId: string | undefined, origin: string): boolean {
-  if (!isApprovedAppOrigin(origin) || cityId !== MOSCOW_BUNDLE.cityId ||
+  const bundle = mapBundleForCity(cityId);
+  if (!isApprovedAppOrigin(origin) || !bundle ||
       config?.unifiedDirectory.enabled !== true ||
       !["live", "synthetic_demo"].includes(config.exposureMode)) return false;
   const map = config.cities.find(c => c.cityId === cityId)?.map;
-  return map?.availability === "dev_preview" && map.mapId === "moscow" && map.version === MOSCOW_BUNDLE.version;
+  return map?.availability === "dev_preview" && map.mapId === mapIdForBundle(bundle) && map.version === bundle.version;
 }
-export function allowedMapResource(url: string): boolean {
+/** Credential/query/hash rejected; URL must stay under the selected pack prefix. */
+export function allowedMapResource(url: string, bundle: FixedMapBundle = MOSCOW_BUNDLE): boolean {
   const resource = url.replace(/^pmtiles:\/\//, "");
   try {
     const parsed = new URL(resource);
-    return !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.href.startsWith(MOSCOW_BUNDLE.prefix);
+    return !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.href.startsWith(bundle.prefix);
   } catch { return false; }
 }

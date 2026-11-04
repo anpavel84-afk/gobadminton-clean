@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.23" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.24" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.30.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.31.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,19 +425,19 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Помощь с выбором игрового уровня",
+  title: "Карта Санкт-Петербурга",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "Короткая справка о существующих уровнях ntrp v1 и возможность не выбирать уровень",
-    "Переиспользуемая помощь в профиле и фильтре подходящих игр в поиске",
-    "Уровень указан самим игроком; изменение в профиле сохраняется только явным действием «Сохранить»",
+    "Выбор города Санкт-Петербург и географическая карта с заведёнными площадками и играми",
+    "Подходящие границы и центр города; при недоступности набора — честное состояние и список",
   ],
   fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена",
-    "Справка и фильтр не обещают квалификацию, совместимость или место в игре",
-    "Фильтр уровня в поиске действует только по уже загруженному списку и точной шкале ntrp v1; карта этот фильтр не применяет",
+    "Полнота Ленинградской области и метрополитена этим выпуском не утверждается",
+    "Физическая Safari-приёмка и проверка на реальном устройстве ещё не выполнены",
+    "Публикация статического набора карты на DEV выполняется отдельно доверенным процессом",
   ],
   feature_catalogue: "delta",
 };
@@ -1241,6 +1241,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем после обычного входа ещё не выполнена",
       "Интервалы напоминаний — локальная реализация (1 час / 24 часа / 72 часа после окончания), не отдельный SLA владельца",
       "Внешняя доставка напоминаний в этой поставке не предусмотрена"
+    ]
+  },
+  {
+    "source_sha": "cc771c3700accae431e7bff9131433cd7be694ae",
+    "application_version": "0.1.0-alpha.23",
+    "version_label": "0.1.0-alpha.23",
+    "title": "Помощь с выбором игрового уровня",
+    "api_contract_version": "0.30.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41825585671-a1",
+        "accepted_at": "2026-11-04T12:06:05Z",
+        "api_digest": "sha256:5f53f6d607df355366ea555c94bc3cd094a35706119637c83f8adc5b4fc3c1ef",
+        "web_digest": "sha256:8993a62acac4239f74d7469ff01d00b3b84730006f1ff944f47cf075c8c0d1cc",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Короткая справка о существующих уровнях ntrp v1 и возможность не выбирать уровень",
+      "Переиспользуемая помощь в профиле и фильтре подходящих игр в поиске",
+      "Уровень указан самим игроком; изменение в профиле сохраняется только явным действием «Сохранить»"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена",
+      "Справка и фильтр не обещают квалификацию, совместимость или место в игре",
+      "Фильтр уровня в поиске действует только по уже загруженному списку и точной шкале ntrp v1; карта этот фильтр не применяет"
     ]
   },
 ] as const;

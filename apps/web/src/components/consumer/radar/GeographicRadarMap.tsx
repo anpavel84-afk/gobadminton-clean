@@ -7,7 +7,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { apiFetch, listAllCityVenues } from "../../../lib/api-client";
 import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import type { UnifiedRow } from "@gobadminton/contracts";
-import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
+import { allowedMapResource, mapBundleForCity, mapIdForBundle, pointInBundleBounds } from "../../../lib/radar-map-assets";
 import { createRadarEntryCamera, radarNeighborhood } from "../../../lib/radar-camera";
 import { useRadarSession } from "./RadarSessionProvider";
 import { shuttlecockElement } from "../NavIcon";
@@ -24,7 +24,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GeographicRadarMap({ controller, rows, selected, onSelect, onUnavailable, sharedMap, resumeCamera = false, playersVisible = true }: { resumeCamera?: boolean; sharedMap?: LibreMap; controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void; playersVisible?: boolean }) {
+export function GeographicRadarMap({ cityId, controller, rows, selected, onSelect, onUnavailable, sharedMap, resumeCamera = false, playersVisible = true }: { cityId: string; resumeCamera?: boolean; sharedMap?: LibreMap; controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void; playersVisible?: boolean }) {
   const { view: session } = useRadarSession();
   const center = session.phase === "active" && session.confirmedOn && !session.pendingStop && session.status?.state === "active" && playersVisible ? session.status.coarseCenter : undefined;
   const centerLatitude = center?.latitude, centerLongitude = center?.longitude;
@@ -34,6 +34,8 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   const callbacks = useRef({ onSelect, onUnavailable, selected }); callbacks.current = { onSelect, onUnavailable, selected };
   const entryCamera = useRef(createRadarEntryCamera(resumeCamera));
   const [ownProfile, setOwnProfile] = useState<OwnSocialProfile | null>(null);
+  // Stable closed pack — lookup constants, never allocate a fresh descriptor each render.
+  const bundle = mapBundleForCity(cityId);
   useEffect(() => {
     const abort = new AbortController(); setOwnProfile(null);
     if (session.me) void apiFetch<OwnSocialProfile>("/v1/me/social-profile", { signal: abort.signal }).then(result => { if (!abort.signal.aborted && result.ok) setOwnProfile(result.data); });
@@ -43,38 +45,43 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   const [venuesFailed, setVenuesFailed] = useState(false);
   const [ready, setReady] = useState(false); const [status, setStatus] = useState("Загружаем карту города…");
   useEffect(() => {
+    if (!bundle) { callbacks.current.onUnavailable(); return; }
     if (sharedMap) { map.current = sharedMap; setReady(true); setStatus(""); return () => { markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = []; map.current = null; }; }
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
     const timeout = setTimeout(() => { if (alive && !instance?.loaded()) callbacks.current.onUnavailable(); }, 20000);
     async function start() {
       try {
-        const response = await fetch(MOSCOW_BUNDLE.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
+        const response = await fetch(bundle!.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
         if (!response.ok) throw new Error("style");
         const bytes = await response.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
-        if (hash !== MOSCOW_BUNDLE.styleHash) throw new Error("style identity");
+        if (hash !== bundle!.styleHash) throw new Error("style identity");
         const style = JSON.parse(new TextDecoder().decode(bytes)) as StyleSpecification;
         // PMTiles fetches its archive internally: validate style URLs before installing it.
         const resources = [style.glyphs, ...(typeof style.sprite === "string" ? [style.sprite] : (style.sprite ?? []).map(sprite => sprite.url)), ...Object.values(style.sources).flatMap(source => ["url" in source ? source.url : undefined, ...("tiles" in source ? source.tiles ?? [] : [])])];
-        if (resources.some(url => typeof url === "string" && !allowedMapResource(url))) throw new Error("Unapproved style resource");
+        if (resources.some(url => typeof url === "string" && !allowedMapResource(url, bundle!))) throw new Error("Unapproved style resource");
         if (!alive || !container.current) return;
         installProtocol();
-        instance = new maplibregl.Map({ container: container.current, style, center: controller.camera?.center ?? MOSCOW_BUNDLE.center, zoom: controller.camera?.zoom ?? 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
-          transformRequest: url => { if (!allowedMapResource(url)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
+        const zoom = "defaultZoom" in bundle! ? bundle!.defaultZoom : 10.5;
+        instance = new maplibregl.Map({ container: container.current, style, center: controller.camera?.center ?? bundle!.center, zoom: controller.camera?.zoom ?? zoom, maxBounds: bundle!.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
+          transformRequest: url => { if (!allowedMapResource(url, bundle!)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
         });
         instance.touchZoomRotate.disableRotation(); map.current = instance;
         instance.on("load", () => { if (alive) { setReady(true); setStatus(""); clearTimeout(timeout); } });
         instance.on("error", () => { if (alive) callbacks.current.onUnavailable(); });
         instance.on("moveend", () => { if (instance) { const center = instance.getCenter(); controller.camera = { center: [center.lng, center.lat], zoom: instance.getZoom() }; } });
-        instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
+        const label = mapIdForBundle(bundle!) === "saint-petersburg"
+          ? "Карта Санкт-Петербурга: стрелки перемещают карту, плюс и минус меняют масштаб"
+          : "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб";
+        instance.getCanvas().setAttribute("aria-label", label);
       } catch { if (alive) callbacks.current.onUnavailable(); }
     }
     void start();
     const resize = new ResizeObserver(() => instance?.resize()); if (container.current) resize.observe(container.current);
     return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = []; instance?.remove(); map.current = null; };
-  }, [controller, sharedMap]);
+  }, [controller, sharedMap, cityId, bundle]);
   useEffect(() => {
-    if (!ready || !map.current) return;
+    if (!ready || !map.current || !bundle) return;
     if (!playersVisible) {
       markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); });
       markers.current = [];
@@ -88,7 +95,7 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
     for (const row of rows) {
       if (row.publicPlayerId === ownProfile?.publicPlayerId) continue;
       const geo = row.radar?.geo;
-      if (!geo || geo.crs !== "EPSG:4326" || !Number.isFinite(geo.latitude) || !Number.isFinite(geo.longitude) || geo.longitude < 36 || geo.longitude > 39.5 || geo.latitude < 54.5 || geo.latitude > 56.5) {
+      if (!geo || geo.crs !== "EPSG:4326" || !Number.isFinite(geo.latitude) || !Number.isFinite(geo.longitude) || !pointInBundleBounds(geo.longitude, geo.latitude, bundle)) {
         previous.forEach(entry => { entry.marker.remove(); entry.dispose?.(); });
         markers.current = [];
         callbacks.current.onUnavailable();
@@ -143,16 +150,16 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
     }
     markers.current = next;
     // Same-key soft refresh reuses markers; only identity/media/TTL changes remount.
-  }, [rows, ready, ownProfile?.publicPlayerId, playersVisible, selected]);
+  }, [rows, ready, ownProfile?.publicPlayerId, playersVisible, selected, bundle]);
   useEffect(() => {
-    if (sharedMap || !ready || !map.current) return;
+    if (sharedMap || !ready || !map.current || !bundle) return;
     let alive = true; const venueMarkers: maplibregl.Marker[] = [];
-    void listAllCityVenues(MOSCOW_BUNDLE.cityId).then(result => {
+    void listAllCityVenues(bundle.cityId).then(result => {
       if (!alive || !map.current) return;
       if (!result.ok) { setVenuesFailed(true); return; }
       for (const venue of result.data) {
         const { latitude: lat, longitude: lon } = venue;
-        if (venue.cityId !== MOSCOW_BUNDLE.cityId || typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
+        if (venue.cityId !== bundle.cityId || typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || !pointInBundleBounds(lon, lat, bundle)) continue;
         const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-venue-marker"; button.append(shuttlecockElement()); button.setAttribute("aria-label", `Площадка: ${venue.name}`);
         const content = document.createElement("div"); const title = document.createElement("strong"); title.textContent = venue.name; const address = document.createElement("p"); address.textContent = venue.address; content.append(title, address);
         const marker = new maplibregl.Marker({ element: button }).setLngLat([lon, lat]).setPopup(new maplibregl.Popup().setDOMContent(content)).addTo(map.current);
@@ -161,17 +168,18 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
       setVenueCount(venueMarkers.length);
     }).catch(() => { if (alive) setVenuesFailed(true); });
     return () => { alive = false; venueMarkers.forEach(marker => marker.remove()); };
-  }, [ready, sharedMap]);
+  }, [ready, sharedMap, bundle]);
   useEffect(() => { for (const marker of markers.current) marker.button.setAttribute("aria-pressed", String(marker.id === selected)); }, [selected]);
   const fit = useCallback(() => {
-    if (!map.current) return;
+    if (!map.current || !bundle) return;
     const bounds = radarNeighborhood(centerLatitude === undefined || centerLongitude === undefined ? undefined : { latitude: centerLatitude, longitude: centerLongitude });
     if (!bounds) {
-      map.current.easeTo({ center: MOSCOW_BUNDLE.center, zoom: 10.5, duration: 0 }); return;
+      const zoom = "defaultZoom" in bundle ? bundle.defaultZoom : 10.5;
+      map.current.easeTo({ center: bundle.center, zoom, duration: 0 }); return;
     }
     // Only the server-published coarse center; never the acquired browser fix.
     map.current.fitBounds(bounds, { padding: 48, duration: 0 });
-  }, [centerLatitude, centerLongitude]);
+  }, [centerLatitude, centerLongitude, bundle]);
   useEffect(() => {
     if (!ready || !map.current || centerLatitude === undefined || centerLongitude === undefined || !radarNeighborhood(center)) return;
     const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-marker g2-person-marker g2-own-marker";
