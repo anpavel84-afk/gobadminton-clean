@@ -6,6 +6,7 @@ import { AdminError, adminRequest, errorMessage, freshStepUp, visibleNavigation,
 import { Cases } from "./Cases";
 import { UserRestrictions } from "./UserRestrictions";
 import { GameModeration } from "./GameModeration";
+import { PilotMetricsPanel } from "./PilotMetrics";
 import { webauthn, type OptionsJSON } from "../lib/webauthn";
 
 const roleLabels: Record<string, string> = { superadmin: "Суперадминистратор", content_manager: "Контент-менеджер", moderator: "Модератор", support: "Поддержка" };
@@ -19,6 +20,7 @@ export function AdminApp() {
   const [activation, setActivation] = useState("");
   const [section, setSection] = useState("overview");
   const [audit, setAudit] = useState<{ items: { id: string; action_key: string; created_at: string }[] } | null>(null);
+  const [pilotEpoch, setPilotEpoch] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [logoutPending, setLogoutPending] = useState(false);
   const action = useRef(false);
@@ -31,6 +33,7 @@ export function AdminApp() {
   const clear = useCallback(() => {
     generation.current++;
     setSession(null); setTicket(null); setAudit(null); setActivation(""); setSection("overview");
+    setPilotEpoch((value) => value + 1);
     authenticator.current?.abort();
   }, []);
   const refresh = useCallback(async () => {
@@ -39,14 +42,17 @@ export function AdminApp() {
       const current = await adminRequest<Session>("auth/me");
       if (mounted.current && version === generation.current) {
         setSession(current);
-        if (!current.roles.includes("superadmin")) setAudit(null);
+        if (!current.roles.includes("superadmin")) {
+          setAudit(null);
+          setPilotEpoch((value) => value + 1);
+        }
         setSection(old => visibleNavigation(current.roles).some(item => item.id === old) ? old : "overview");
       }
       return current;
     } catch (cause) {
       if (mounted.current && version === generation.current) {
         // A failed authority refresh must hide privileged content even on a network outage.
-        setSession(null); setAudit(null); setSection("overview");
+        setSession(null); setAudit(null); setSection("overview"); setPilotEpoch((value) => value + 1);
       }
       throw cause;
     }
@@ -100,6 +106,7 @@ export function AdminApp() {
         else if (cause instanceof AdminError && cause.code === "ADMIN_STEP_UP_REQUIRED") { setAudit(null); setSection("overview"); setNow(Date.now()); }
         else if (cause instanceof AdminError && cause.code === "ADMIN_PERMISSION_DENIED") {
           setAudit(null);
+          setPilotEpoch((value) => value + 1);
           try { await refresh(); } catch { clear(); }
         }
       }
@@ -171,6 +178,7 @@ export function AdminApp() {
         <nav className="panel navigation" aria-label="Разделы администрирования">{nav.map(item => <button key={item.id} className={section === item.id ? "selected" : ""} aria-current={section === item.id ? "page" : undefined} disabled={busy} onClick={() => void navigate(item.id)}>{item.label}</button>)}</nav>
         <section className="panel content">
           {section === "overview" ? <><h2>Ваш доступ</h2><div className="roles">{session.roles.length ? session.roles.map(role => <span className="badge" key={role}>{roleLabels[role] ?? "Неизвестная роль"}</span>) : <p>Активных ролей нет. Обратитесь к ответственному за доступ.</p>}</div><dl><dt>Учётная запись</dt><dd>{session.principalId}</dd><dt>Вход действует до</dt><dd>{new Date(session.expiresAt).toLocaleString("ru-RU")}</dd></dl><div className="notice"><strong>{fresh ? "Подтверждение входа актуально" : "Требуется повторное подтверждение"}</strong><p>Для чувствительных действий понадобится ключ доступа.</p><button className="button outline" disabled={busy} onClick={() => void prove("step_up")}>{busy ? "Подтверждение…" : "Подтвердить вход"}</button></div></>
+          : section === "pilot" ? <PilotMetricsPanel key={session.principalId + String(pilotEpoch)} session={session} busy={busy} run={run} onAuthorityLoss={clear} />
           : section === "cases" ? <Cases key={session.principalId+session.roles.join(",")} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "users" ? <UserRestrictions key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "games" ? <GameModeration key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />

@@ -22,3 +22,10 @@
 .role-reputation-cases{margin:32px 0;padding-top:8px;border-top:1px solid var(--line);min-width:0}
 .role-reputation-cases h4{margin:24px 0 12px;font-size:18px;overflow-wrap:anywhere}
 .role-reputation-source dd{white-space:pre-wrap;overflow-wrap:anywhere}
+.pilot-metrics{min-width:0;overflow-wrap:anywhere}
+.pilot-metrics-grid{display:grid;grid-template-columns:minmax(140px,220px) 1fr;gap:8px 16px;margin:16px 0 24px}
+.pilot-metrics-grid dt{margin:0;font-size:14px}
+.pilot-metrics-grid dd{margin:0;overflow-wrap:anywhere}
+.pilot-formulas{list-style:none;padding:0;margin:0 0 24px;display:grid;gap:12px}
+.pilot-formulas li{display:grid;gap:4px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.pilot-formulas span{color:var(--ink-soft);font-size:14px}

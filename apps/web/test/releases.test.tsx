@@ -21,9 +21,9 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.24 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.24");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.31.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.25 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.25");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.32.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -38,8 +38,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/Санкт-Петербург|карт/i);
-    expect(currentProse).toMatch(/границ|центр|недоступн/i);
+    expect(currentProse).toMatch(/сводк|пилот|администратор/i);
+    expect(currentProse).toMatch(/заявк|подтвержд|посещен/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -190,10 +190,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(27);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(28);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(32);
+    ).toBe(33);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.20"
       && row.source_sha === "9db516ce96499d440a49e7e35029137c33a11429"
@@ -240,6 +240,17 @@ describe("releases catalogue integrity", () => {
       && row.deployments.length === 1
       && row.api_contract_version === "0.30.0"
       && row.title === "Помощь с выбором игрового уровня",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.24"
+      && row.source_sha === "002d09c981c7f899db15beb90618a11b53b973b1"
+      && row.deployments[0]?.release_id === "r41839403532-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-04T13:45:22Z"
+      && row.deployments[0]?.api_digest === "sha256:f962f5429792f13a440aeb9ecd7afe8971da386de3f052a44eb1ad96d3fcc699"
+      && row.deployments[0]?.web_digest === "sha256:48a881b728829c8404b8490f8c13870c29decd5a75da077a678e32956e86dbeb"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.31.0"
+      && row.title === "Карта Санкт-Петербурга",
     )).toBe(true);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");

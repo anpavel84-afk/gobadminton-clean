@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.24" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.25" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.31.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.32.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,19 +425,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Карта Санкт-Петербурга",
+  title: "Сводка пилота для администратора",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "Выбор города Санкт-Петербург и географическая карта с заведёнными площадками и играми",
-    "Подходящие границы и центр города; при недоступности набора — честное состояние и список",
+    "В Admin для суперадминистратора доступна агрегированная сводка пилота по городу и периоду: заявки, подтверждения, явные исходы и отмеченные посещения",
+    "Повторное участие и активность организаторов в реализованном объёме; неизвестные результаты и нехватка данных показываются отдельно; тестовые DEMO не считаются реальным пилотом",
   ],
   fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена",
-    "Полнота Ленинградской области и метрополитена этим выпуском не утверждается",
-    "Физическая Safari-приёмка и проверка на реальном устройстве ещё не выполнены",
-    "Публикация статического набора карты на DEV выполняется отдельно доверенным процессом",
+    "Аутентифицированная проверка Admin и физическая приёмка на устройстве ещё не выполнены",
+    "Сводка не запускает реальный пилот и не обещает коммерческие KPI или новый сбор персональных данных",
   ],
   feature_catalogue: "delta",
 };
@@ -1271,6 +1270,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем после обычного входа ещё не выполнена",
       "Справка и фильтр не обещают квалификацию, совместимость или место в игре",
       "Фильтр уровня в поиске действует только по уже загруженному списку и точной шкале ntrp v1; карта этот фильтр не применяет"
+    ]
+  },
+  {
+    "source_sha": "002d09c981c7f899db15beb90618a11b53b973b1",
+    "application_version": "0.1.0-alpha.24",
+    "version_label": "0.1.0-alpha.24",
+    "title": "Карта Санкт-Петербурга",
+    "api_contract_version": "0.31.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41839403532-a1",
+        "accepted_at": "2026-11-04T13:45:22Z",
+        "api_digest": "sha256:f962f5429792f13a440aeb9ecd7afe8971da386de3f052a44eb1ad96d3fcc699",
+        "web_digest": "sha256:48a881b728829c8404b8490f8c13870c29decd5a75da077a678e32956e86dbeb",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Выбор города Санкт-Петербург и географическая карта с заведёнными площадками и играми",
+      "Подходящие границы и центр города; при недоступности набора — честное состояние и список"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена",
+      "Полнота Ленинградской области и метрополитена этим выпуском не утверждается",
+      "Физическая Safari-приёмка и проверка на реальном устройстве ещё не выполнены",
+      "Публикация статического набора карты на DEV выполняется отдельно доверенным процессом"
     ]
   },
 ] as const;
