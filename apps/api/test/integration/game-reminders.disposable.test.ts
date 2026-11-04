@@ -274,18 +274,23 @@ run("#457 postgame reminders — disposable", () => {
     const g2 = await createEndedGame(organizer);
     const g3 = await createEndedGame(organizer);
     const base = Date.now();
-    await pool.query(`UPDATE games SET ends_at = $2 WHERE id = $1`, [
-      g1.id,
-      new Date(base - 5 * 3600_000),
-    ]);
-    await pool.query(`UPDATE games SET ends_at = $2 WHERE id = $1`, [
-      g2.id,
-      new Date(base - 4 * 3600_000),
-    ]);
-    await pool.query(`UPDATE games SET ends_at = $2 WHERE id = $1`, [
-      g3.id,
-      new Date(base - 3 * 3600_000),
-    ]);
+    // Coherent start < end and deadline <= start when shifting ends_at (games_time_order_chk).
+    async function setEndedAt(gameId: string, endsMs: number) {
+      const endsAt = new Date(endsMs);
+      const startsAt = new Date(endsMs - 2 * 3600_000);
+      const deadlineAt = new Date(startsAt.getTime() - 3600_000);
+      await pool.query(
+        `UPDATE games
+         SET starts_at = $2,
+             application_deadline_at = $3,
+             ends_at = $4
+         WHERE id = $1`,
+        [gameId, startsAt, deadlineAt, endsAt],
+      );
+    }
+    await setEndedAt(g1.id, base - 5 * 3600_000);
+    await setEndedAt(g2.id, base - 4 * 3600_000);
+    await setEndedAt(g3.id, base - 3 * 3600_000);
     const now = new Date(base);
     const command = new GameRemindersCommand(env);
     const first = await command.execute(
@@ -313,13 +318,17 @@ run("#457 postgame reminders — disposable", () => {
 
   it("Later advances ordinal under cap; does not unbounded re-show the same card", async () => {
     const game = await createEndedGame(organizer);
+    // One fixed instant — separate clock_timestamp() calls can make deadline > start (games_deadline_chk).
+    const fixed = Date.now();
+    const startsAt = new Date(fixed - 5 * 86400000);
+    const endsAt = new Date(fixed - 4 * 86400000);
     await pool.query(
       `UPDATE games
-       SET starts_at = clock_timestamp() - interval '5 days',
-           application_deadline_at = clock_timestamp() - interval '5 days',
-           ends_at = clock_timestamp() - interval '4 days'
+       SET starts_at = $2,
+           application_deadline_at = $2,
+           ends_at = $3
        WHERE id = $1`,
-      [game.id],
+      [game.id, startsAt, endsAt],
     );
     const ends = (
       await pool.query<{ ends_at: Date }>(`SELECT ends_at FROM games WHERE id = $1`, [game.id])
