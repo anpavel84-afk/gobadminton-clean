@@ -31,6 +31,7 @@ run("DEV QA key real isolated DB authentication",()=>{
   app=mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter({logger:false}),{logger:false});await app.register(cookie);app.setGlobalPrefix("v1");app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
  },120000);
  beforeEach(async()=>{
+  env.APP_ENV="mvp";env.ADMIN_DEV_QA_KEY_ENABLED=true;
   await revokeDevQa(pool);await pool.query("DELETE FROM admin_rate_windows");
   key=randomBytes(48).toString("base64url");credentialId=(await provisionDevQa(pool,env,key)).credentialId;
  });

@@ -31,8 +31,8 @@ export async function provisionDevQa(pool: Pool, env: AppEnv, key: string) {
     if ((await c.query("SELECT 1 FROM admin_webauthn_credentials WHERE principal_id=$1",[principal.id])).rowCount) throw new Error("DEV_QA_WEBAUTHN_COLLISION");
     await c.query(`INSERT INTO admin_role_grants(principal_id,role,reason_code) VALUES($1,'pilot_viewer','owner_dev_qa_480')
       ON CONFLICT(principal_id,role) DO UPDATE SET active=true,reason_code='owner_dev_qa_480',updated_at=clock_timestamp()`,[principal.id]);
-    const qa=(await c.query<{id:string}>(`INSERT INTO admin_dev_qa_credentials(principal_id,label,key_hash,expires_at)
-      VALUES($1,$2,$3,clock_timestamp()+interval '7 days') RETURNING id`,[principal.id,DEV_QA_LABEL,hash])).rows[0]!;
+    const qa=(await c.query<{id:string}>(`WITH stamp AS (SELECT clock_timestamp() AS at) INSERT INTO admin_dev_qa_credentials(principal_id,label,key_hash,created_at,expires_at)
+      SELECT $1,$2,$3,at,at+interval '7 days' FROM stamp RETURNING id`,[principal.id,DEV_QA_LABEL,hash])).rows[0]!;
     await appendAudit(c,{action:"admin.dev_qa_provision",targetType:"admin_dev_qa_credential",targetId:qa.id,permission:"pilot.read",reason:"owner_dev_qa_480",after:{principalId:principal.id,role:"pilot_viewer",consumerLogin:false}});
     return {credentialId:qa.id,principalId:principal.id,created:true};
   });

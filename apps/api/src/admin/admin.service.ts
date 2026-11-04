@@ -41,7 +41,7 @@ import {
 } from "./rbac";
 import type { AdminCommand } from "./dto";
 
-import { devQaKeyAllowed, DEV_QA_AUDIENCE, DEV_QA_LABEL, DEV_QA_SESSION_SECONDS, qaSessionRouteAllowed } from "./dev-qa-policy";
+import { devQaKeyAllowed, DEV_QA_AUDIENCE, DEV_QA_LABEL, qaSessionRouteAllowed } from "./dev-qa-policy";
 
 type Principal = {
   id: string;
@@ -809,12 +809,12 @@ export class AdminService {
         [qa.id, this.hash("admin-dev-qa-nonce:" + input.requestNonce), qa.expires_at]);
       if (!nonce.rowCount) return null;
       const token = randomToken(32), csrf = randomToken(32);
-      const expires = new Date(Math.min(Date.now() + DEV_QA_SESSION_SECONDS * 1000, qa.expires_at.getTime()));
-      const session = (await c.query<{id:string}>(`INSERT INTO admin_sessions(principal_id,credential_id,auth_method,qa_credential_id,audience,token_hash,csrf_ciphertext,expires_at)
-        VALUES($1,NULL,'dev_qa_key',$2,$3,$4,$5,$6) RETURNING id`,
-        [principal.id,qa.id,DEV_QA_AUDIENCE,this.hash(token),sealSecret(this.pepper,csrf),expires])).rows[0]!;
+      const session = (await c.query<{id:string;expires_at:Date}>(`WITH stamp AS (SELECT clock_timestamp() AS at)
+        INSERT INTO admin_sessions(principal_id,credential_id,auth_method,qa_credential_id,audience,token_hash,csrf_ciphertext,created_at,expires_at)
+        SELECT $1,NULL,'dev_qa_key',$2,$3,$4,$5,at,LEAST(at+interval '15 minutes',$6::timestamptz) FROM stamp RETURNING id,expires_at`,
+        [principal.id,qa.id,DEV_QA_AUDIENCE,this.hash(token),sealSecret(this.pepper,csrf),qa.expires_at])).rows[0]!;
       await appendAudit(c,{actor:{principalId:principal.id,sessionId:session.id,roles},action:"admin.dev_qa_login",targetType:"admin_dev_qa_credential",targetId:qa.id,permission:"pilot.read",reason:"dev_qa_key"});
-      return {token,csrf,principalId:principal.id,maxAge:Math.max(1,Math.floor((expires.getTime()-Date.now())/1000))};
+      return {token,csrf,principalId:principal.id,maxAge:Math.max(1,Math.floor((session.expires_at.getTime()-Date.now())/1000))};
     });
     if (!result) throw unauthorized("ADMIN_QA_KEY_INVALID", "QA login rejected");
     this.cookie(reply, ADMIN_COOKIE, result.token, result.maxAge);
