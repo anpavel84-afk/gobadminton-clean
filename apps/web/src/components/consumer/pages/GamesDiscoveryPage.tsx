@@ -7,9 +7,16 @@ import { getMe, listGames, listRoleReputationSummaries } from "../../../lib/api-
 import type { ActivityKind, GamePage, GameRoleReputationCard } from "../../../lib/consumer-types";
 import { useDiscoveryCity, DiscoveryCityNotice } from "../discovery/DiscoveryCityProvider";
 import { cityDate, discoveryCityHeading, discoveryDateLabel, futureDiscoveryBounds, futureDiscoveryItems, nextCalendarDay } from "../../../lib/discovery-presentation";
+import {
+  LEVEL_GUIDE_DISCOVERY_SCOPE_NOTE,
+  LEVEL_GUIDE_MAP_HONESTY,
+  filterGamesBySelectedNtrpLevel,
+  levelGuideSkillFor,
+} from "../../../lib/level-guide";
 import { AuthChooser } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
+import { LevelGuide } from "../LevelGuide";
 import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, DiscoverySkeleton } from "../discovery/DiscoveryComposition";
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
@@ -32,6 +39,8 @@ export function GamesDiscoveryPage() {
   const [selectedDay, setSelectedDay] = useState("");
   const [activityFilter, setActivityFilter] = useState<"all" | ActivityKind>("all");
   const [trainerRoleHandle, setTrainerRoleHandle] = useState("");
+  /** Client-only ntrp/v1 list filter; never auto-filled from profile. */
+  const [levelFilter, setLevelFilter] = useState("");
   const [reputationByGame, setReputationByGame] = useState<Record<string, GameRoleReputationCard>>({});
   const [contextReady, setContextReady] = useState(false);
   const listScroll = useRef(0);
@@ -139,11 +148,18 @@ export function GamesDiscoveryPage() {
   const activeKey = useRef(key);
   activeKey.current = key;
   const items = feed.key === key ? futureDiscoveryItems(feed.items, Math.max(now, Date.now())) : [];
+  const displayedItems = useMemo(
+    () => filterGamesBySelectedNtrpLevel(items, levelFilter || null),
+    [items, levelFilter],
+  );
+  const levelFilterActive = Boolean(levelFilter);
+  const levelFilterLabel = levelFilterActive ? (levelGuideSkillFor(levelFilter)?.label ?? levelFilter) : "";
   const baseState = feed.key === key ? feed.state : "loading";
   const state = (baseState === "ready" || baseState === "filtered") && !items.length ? "empty" : baseState;
   const today = location ? cityDate(new Date(now), location.timezone) : "";
   const dates = useMemo(() => today ? Array.from({ length: 7 }, (_, i) => nextCalendarDay(today, i)) : [], [today]);
   const filterActive = activityFilter !== "all" || Boolean(trainerRoleHandle);
+  const listMatchCount = levelFilterActive ? displayedItems.length : items.length;
 
   const previousCity = useRef(location?.cityId);
   useEffect(() => {
@@ -312,6 +328,7 @@ export function GamesDiscoveryPage() {
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
       {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} onReturnToList={() => changeView("list")} /></GamesMapViewport> : null}
       {view === "map" && trainerRoleHandle ? <p className="gb-discovery-helper" role="status" data-map-filter-honesty="trainer">Карта показывает все тренировки и игры выбранного города. Фильтр личного тренера действует в списке; при возврате к списку он сохранится.</p> : null}
+      {view === "map" && levelFilterActive ? <p className="gb-discovery-helper" role="status" data-map-filter-honesty="level">{LEVEL_GUIDE_MAP_HONESTY}</p> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
@@ -320,19 +337,22 @@ export function GamesDiscoveryPage() {
             </div>
             <span className="gb-discovery-sort"><DiscoveryIcon name="filter" />По времени</span>
           </div>
+          <LevelGuide surface="discovery" value={levelFilter} onChange={setLevelFilter} />
           <header className="gb-discovery-feed-heading">
             <div><small>Выходите на корт</small><h2>Игры {discoveryCityHeading(location.nameRu)}</h2></div>
-            <div className="gb-discovery-feed-actions">{showCards && <span>Найдено: {items.length}{feed.nextCursor ? "+" : ""}</span>}<button type="button" onClick={() => setRefresh(n => n + 1)} disabled={state === "loading"} aria-label="Обновить игры">↻</button></div>
+            <div className="gb-discovery-feed-actions">{showCards && <span>Найдено: {listMatchCount}{feed.nextCursor ? "+" : ""}{levelFilterActive ? ` · из ${items.length} загруженных` : ""}</span>}<button type="button" onClick={() => setRefresh(n => n + 1)} disabled={state === "loading"} aria-label="Обновить игры">↻</button></div>
           </header>
           {state === "filtered" && <p className="gb-discovery-helper" data-state="filtered">{trainerRoleHandle ? "Тренировки выбранного тренера" : activityFilter === "regular" ? "Обычные игры" : "Игры с тренером"} · {selectedDay ? discoveryDateLabel(selectedDay) : "Все ближайшие"}</p>}
+          {levelFilterActive ? <p className="gb-discovery-helper" data-level-filter="active" role="status">Уровень {levelFilterLabel} · {LEVEL_GUIDE_DISCOVERY_SCOPE_NOTE}</p> : null}
           {trainerRoleHandle ? <p className="gb-discovery-helper"><Button variant="ghost" type="button" onClick={() => setTrainerRoleHandle("")}>Все тренировки</Button></p> : null}
           {state === "loading" && <div data-state="loading" aria-busy="true"><p className="gb-discovery-helper" role="status">Ищем игры рядом…</p><DiscoverySkeleton /><DiscoverySkeleton /></div>}
           {state === "error" && <div className="gb-discovery-state" data-state="error" role="alert"><h3>Не удалось загрузить игры</h3><p>Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => setRefresh(n => n + 1)}>Попробовать снова</Button></div>}
           {state === "stale" && <div className="gb-discovery-notice" data-state="stale" role="status"><h3>Показываем сохранённый список</h3><p>Не удалось обновить игры. Дата и фильтры те же, но сведения о местах могли измениться.</p><Button variant="outline" onClick={() => setRefresh(n => n + 1)}>Обновить список</Button></div>}
           {state === "empty" && <div className="gb-discovery-state" data-state="empty"><span aria-hidden="true">↗</span><h3>{filterActive ? "По этим условиям игр пока нет" : "Пока нет игр"}</h3><p>{selectedDay ? "Выберите другую дату или вернитесь ко всем ближайшим играм." : filterActive ? "Сбросьте фильтр активности или соберите свою игру." : "Соберите своих на площадке — создайте игру."}</p>{filterActive ? <Button variant="outline" onClick={() => { setActivityFilter("all"); setTrainerRoleHandle(""); }}>Сбросить фильтр</Button> : <Button loading={creating} onClick={() => void goCreate()}>Создать игру</Button>}</div>}
-          {showCards && <div className="gb-discovery-cards" data-state={state}>{items.map(game => <DiscoveryGameCard key={game.id} game={game} reputation={reputationByGame[game.id] ?? null} />)}{state === "stale" && !items.length && <p className="gb-discovery-helper">В сохранённом списке игр нет.</p>}</div>}
+          {showCards && levelFilterActive && items.length > 0 && displayedItems.length === 0 ? <div className="gb-discovery-state" data-state="level-empty" role="status"><h3>Среди загруженных игр нет подходящих</h3><p>Фильтр уровня {levelFilterLabel} смотрит только уже загруженный список (ntrp v1). Загрузите ещё или сбросьте фильтр — другие шкалы не считаются совместимыми.</p><Button variant="outline" type="button" onClick={() => setLevelFilter("")}>Сбросить фильтр уровня</Button></div> : null}
+          {showCards && <div className="gb-discovery-cards" data-state={state}>{displayedItems.map(game => <DiscoveryGameCard key={game.id} game={game} reputation={reputationByGame[game.id] ?? null} />)}{state === "stale" && !items.length && <p className="gb-discovery-helper">В сохранённом списке игр нет.</p>}</div>}
           {pageError && <p role="alert" className="gb-discovery-notice">Не удалось загрузить остальные игры. Попробуйте ещё раз.</p>}
-          {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
+          {(showCards || state === "empty" || (levelFilterActive && items.length > 0 && displayedItems.length === 0)) && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
           <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
         </div>
         <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />

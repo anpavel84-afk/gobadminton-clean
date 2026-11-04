@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PlayerCard, Toggle, VisibilityRow } from "../src/components/consumer/players/ProfileComposition";
+import { LevelGuide } from "../src/components/consumer/LevelGuide";
 import { getPlayer, listPlayers, putMySocialProfileVisibility } from "../src/lib/api-client";
-import type { PublicPlayer } from "../src/lib/consumer-types";
+import { resolveProfileLevelForSave } from "../src/lib/level-guide";
+import type { PublicPlayer, SocialLevel } from "../src/lib/consumer-types";
 const player: PublicPlayer = { publicPlayerId: "public-id", displayName: "Мария Л.", cityId: "city-id", areaKey: "Сокол", level: null, bio: "Люблю парную игру", trainer: false, lookingForGame: false };
 afterEach(() => vi.unstubAllGlobals());
 describe("FR-03 public projection and controls", () => {
@@ -29,5 +32,23 @@ describe("FR-03 public projection and controls", () => {
     const result = await putMySocialProfileVisibility({ directoryVisible: true, expectedVersion: 7, consentPolicyVersion: "directory-mvp-v1" }, "csrf-test");
     expect(result.ok).toBe(false); expect(fetch).toHaveBeenCalledTimes(1);
     const init = fetch.mock.calls[0]![1]; expect(JSON.parse(init.body)).toEqual({ directoryVisible: true, expectedVersion: 7, consentPolicyVersion: "directory-mvp-v1" }); expect(init.headers.get("X-CSRF-Token")).toBe("csrf-test");
+  });
+});
+
+describe("FR-03 level guide (#458) draft vs Save", () => {
+  it("Не знаю clears draft helper result without inventing a write", () => {
+    const existing: SocialLevel = { scaleId: "gb-social-pilot", scaleVersion: 1, levelId: "intermediate", provenance: "self_declared" };
+    expect(resolveProfileLevelForSave("", existing)).toBeNull();
+    const html = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: "", onChange: () => undefined }));
+    expect(html).toContain("Не знаю");
+    expect(html).toContain("только после «Сохранить»");
+  });
+
+  it("absent and long-description states stay readable", () => {
+    const absent = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: "", onChange: () => undefined }));
+    expect(absent).toContain("Можно пропустить");
+    const long = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: "6.5", onChange: () => undefined }));
+    expect(long).toContain("Выбрано:");
+    expect(long).toMatch(/самооценка|аттестат|квалификац/i);
   });
 });

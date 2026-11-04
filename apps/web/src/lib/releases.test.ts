@@ -10,8 +10,8 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.22 with API 0.30.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.22");
+  it("bumps current descriptor to alpha.23 with API 0.30.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.23");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.30.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -25,8 +25,8 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/итог|напомина/i);
-    expect(prose).toMatch(/Подвести итоги|Позже/i);
+    expect(prose).toMatch(/уровн|помощь/i);
+    expect(prose).toMatch(/самим игроком|явным действием|Сохранить/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE/i);
   });
 
@@ -60,6 +60,14 @@ describe("releases current descriptor literals", () => {
           row.application_version === "0.1.0-alpha.21" &&
           row.source_sha === "98f765c39d4f9cd4c6ef7005884f84b1af197d45" &&
           row.deployments[0]?.release_id === "r41747908212-a1",
+      ),
+    ).toBe(true);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.22" &&
+          row.source_sha === "e637e937d7fa780983daaac92cbe22e26c82ef1b" &&
+          row.deployments[0]?.release_id === "r41818484518-a1",
       ),
     ).toBe(true);
     expect(
