@@ -10,8 +10,6 @@ export async function provisionDevQa(pool: Pool, env: AppEnv, key: string) {
   if (!devQaKeyAllowed(env) || !/^[A-Za-z0-9_-]{64}$/.test(key)) throw new Error("DEV_QA_PROVISION_REFUSED");
   return adminTransaction(pool, async c => {
     const hash = hashSecret(env.ADMIN_AUTH_PEPPER!, "admin-dev-qa-key:" + key);
-    // Same principal-first authority fence as QA session reads/login and revoke.
-    await c.query("SELECT id FROM admin_principals WHERE user_id=$1 FOR UPDATE", [DEV_QA_USER_ID]);
     const existing = (await c.query<{id:string;principal_id:string;key_hash:string;expires_at:Date}>(
       "SELECT * FROM admin_dev_qa_credentials WHERE label=$1 AND revoked_at IS NULL FOR UPDATE", [DEV_QA_LABEL])).rows[0];
     if (existing) {
@@ -42,7 +40,6 @@ export async function provisionDevQa(pool: Pool, env: AppEnv, key: string) {
 }
 export async function revokeDevQa(pool: Pool) {
   return adminTransaction(pool, async c => {
-    await c.query("SELECT id FROM admin_principals WHERE user_id=$1 FOR UPDATE", [DEV_QA_USER_ID]);
     const creds=(await c.query<{id:string;principal_id:string}>("SELECT id,principal_id FROM admin_dev_qa_credentials WHERE label=$1 FOR UPDATE",[DEV_QA_LABEL])).rows;
     const ids=creds.map(q=>q.id);
     const credential=await c.query("UPDATE admin_dev_qa_credentials SET revoked_at=clock_timestamp() WHERE id=ANY($1::uuid[]) AND revoked_at IS NULL",[ids]);

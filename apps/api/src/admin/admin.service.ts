@@ -197,13 +197,6 @@ export class AdminService {
     const token = request.cookies[ADMIN_COOKIE];
     if (!token || token.length < 32 || token.length > 256)
       throw unauthorized("ADMIN_UNAUTHENTICATED", "Admin session required");
-    // QA authority lock order is principal -> credential -> session, shared with login/revoke.
-    // This unlocked lookup is routing only; all state is re-read under locks below.
-    const hint = (await client.query<Session>("SELECT * FROM admin_sessions WHERE token_hash=$1", [this.hash(token)])).rows[0];
-    if (hint?.auth_method === "dev_qa_key") {
-      await this.principal(client, hint.principal_id);
-      await client.query("SELECT id FROM admin_dev_qa_credentials WHERE id=$1 FOR UPDATE", [hint.qa_credential_id]);
-    }
     const s = (
       await client.query<Session>(
         "SELECT * FROM admin_sessions WHERE token_hash=$1 FOR UPDATE",
@@ -804,8 +797,6 @@ export class AdminService {
     });
     if (!allowed) throw problem(429, "ADMIN_RATE_LIMIT", "Admin rate limit", undefined, 60);
     const result = await adminTransaction(this.pool, async c => {
-      const hint = (await c.query<{principal_id:string}>("SELECT principal_id FROM admin_dev_qa_credentials WHERE label=$1 AND revoked_at IS NULL", [DEV_QA_LABEL])).rows[0];
-      if (hint) await this.principal(c, hint.principal_id);
       const qa = (await c.query<{id:string;principal_id:string;key_hash:string;expires_at:Date}>(
         "SELECT * FROM admin_dev_qa_credentials WHERE label=$1 AND revoked_at IS NULL FOR UPDATE", [DEV_QA_LABEL])).rows[0];
       const valid = secretsEqual(this.hash("admin-dev-qa-key:" + input.key), qa?.key_hash ?? this.hash("admin-dev-qa-key:missing"));
