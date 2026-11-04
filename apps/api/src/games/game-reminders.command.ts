@@ -3,6 +3,7 @@ import type { AppEnv } from "../config/env";
 import { unrestrictedSql } from "../restrictions/policy";
 import {
   REMINDER_MAX_ORDINAL,
+  REMINDER_MIN_ACTIVATION_GAP_MS,
   REMINDER_SWEEP_BATCH,
   canActivateAnother,
   dueAtForOrdinal,
@@ -105,54 +106,88 @@ export class GameRemindersCommand {
     );
     const now = nowRow.rows[0]!.now;
 
-    // Actionable only: due work, ensure gaps, or current stop conditions.
-    // Idle games with a single waiting visible card do not monopolize the batch.
+    // Actionable only: due work that can actually activate, ensure gaps, or current
+    // stop authorities. Stop work is independent of ends_at so future-rescheduled
+    // cancel/held/role-lost/restriction still drains open history. Cooling-down
+    // overdue scheduled rows (min gap / cap) do not monopolize LIMIT.
+    const accountAccessOkSql = unrestrictedSql(
+      this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+      "r.organizer_user_id",
+      ["account.access"],
+    );
     const candidates = await readExec.query<{ id: string }>(
       `SELECT g.id
        FROM games g
-       WHERE g.ends_at <= $1
-         AND g.status IN ('published', 'completed', 'cancelled')
+       WHERE g.status IN ('published', 'completed', 'cancelled')
          AND (
-           EXISTS (
-             SELECT 1
-             FROM game_outcome_reminders r
-             WHERE r.game_id = g.id
-               AND (
-                 (
-                   r.state = 'snoozed'
-                   AND r.snoozed_until IS NOT NULL
-                   AND r.snoozed_until <= $1
-                 )
-                 OR (
-                   r.state = 'scheduled'
-                   AND r.due_at <= $1
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM game_outcome_reminders s
-                     WHERE s.game_id = r.game_id
-                       AND s.organizer_user_id = r.organizer_user_id
-                       AND s.state = 'snoozed'
-                       AND s.snoozed_until IS NOT NULL
-                       AND s.snoozed_until > $1
+           (
+             g.ends_at <= $1
+             AND (
+               EXISTS (
+                 SELECT 1
+                 FROM game_outcome_reminders r
+                 WHERE r.game_id = g.id
+                   AND (
+                     (
+                       r.state = 'snoozed'
+                       AND r.snoozed_until IS NOT NULL
+                       AND r.snoozed_until <= $1
+                     )
+                     OR (
+                       r.state = 'scheduled'
+                       AND r.due_at <= $1
+                       AND NOT EXISTS (
+                         SELECT 1
+                         FROM game_outcome_reminders s
+                         WHERE s.game_id = r.game_id
+                           AND s.organizer_user_id = r.organizer_user_id
+                           AND s.state = 'snoozed'
+                           AND s.snoozed_until IS NOT NULL
+                           AND s.snoozed_until > $1
+                       )
+                       AND (
+                         SELECT count(*)::int
+                         FROM game_outcome_reminder_events e
+                         WHERE e.game_id = r.game_id
+                           AND e.organizer_user_id = r.organizer_user_id
+                           AND e.event_kind = 'activated'
+                       ) < $2
+                       AND (
+                         NOT EXISTS (
+                           SELECT 1
+                           FROM game_outcome_reminder_events e
+                           WHERE e.game_id = r.game_id
+                             AND e.organizer_user_id = r.organizer_user_id
+                             AND e.event_kind = 'activated'
+                         )
+                         OR (
+                           SELECT max(e.recorded_at)
+                           FROM game_outcome_reminder_events e
+                           WHERE e.game_id = r.game_id
+                             AND e.organizer_user_id = r.organizer_user_id
+                             AND e.event_kind = 'activated'
+                         ) <= $1::timestamptz - (interval '1 millisecond' * $4::bigint)
+                       )
+                     )
                    )
+               )
+               OR (
+                 g.status IN ('published', 'completed')
+                 AND NOT EXISTS (SELECT 1 FROM game_outcomes go WHERE go.game_id = g.id)
+                 AND EXISTS (
+                   SELECT 1
+                   FROM game_managers gm
+                   WHERE gm.game_id = g.id
+                     AND gm.status = 'active'
+                     AND gm.role IN ('owner', 'manager')
+                     AND (
+                       SELECT count(*)::int
+                       FROM game_outcome_reminders r
+                       WHERE r.game_id = g.id
+                         AND r.organizer_user_id = gm.user_id
+                     ) < $2
                  )
                )
-           )
-           OR (
-             g.status IN ('published', 'completed')
-             AND NOT EXISTS (SELECT 1 FROM game_outcomes go WHERE go.game_id = g.id)
-             AND EXISTS (
-               SELECT 1
-               FROM game_managers gm
-               WHERE gm.game_id = g.id
-                 AND gm.status = 'active'
-                 AND gm.role IN ('owner', 'manager')
-                 AND (
-                   SELECT count(*)::int
-                   FROM game_outcome_reminders r
-                   WHERE r.game_id = g.id
-                     AND r.organizer_user_id = gm.user_id
-                 ) < $2
              )
            )
            OR (
@@ -187,12 +222,19 @@ export class GameRemindersCommand {
                        AND gm.role IN ('owner', 'manager')
                    )
                )
+               OR EXISTS (
+                 SELECT 1
+                 FROM game_outcome_reminders r
+                 WHERE r.game_id = g.id
+                   AND r.state IN ('scheduled', 'visible', 'snoozed')
+                   AND NOT (${accountAccessOkSql})
+               )
              )
            )
          )
        ORDER BY g.ends_at ASC, g.id ASC
        LIMIT $3`,
-      [now, REMINDER_MAX_ORDINAL, batch],
+      [now, REMINDER_MAX_ORDINAL, batch, REMINDER_MIN_ACTIVATION_GAP_MS],
     );
 
     const gameIds = candidates.rows.map((r) => r.id);
@@ -296,14 +338,10 @@ export class GameRemindersCommand {
       return { ensured, activated, stopped };
     }
 
-    // Future / ineligible without stop reason: wait; do not mint or activate.
-    if (!life.ok) {
-      return { ensured, activated, stopped };
-    }
-
     const activeIds = new Set(managers.rows.map((m) => m.user_id));
 
-    // Stop reminders for organizers who lost the role.
+    // Current stop authorities apply even when ends_at is still in the future
+    // (rescheduled then cancelled/held/role-lost/restricted) — not gated on due-end.
     const openRows = await db.query<{
       id: string;
       organizer_user_id: string;
@@ -328,6 +366,12 @@ export class GameRemindersCommand {
         await this.stopReminder(db, row.id, account.reason, now);
         stopped += 1;
       }
+    }
+
+    // Future / ineligible without product stop: authorities above may have stopped
+    // rows; do not mint or activate until ends_at is due.
+    if (!life.ok) {
+      return { ensured, activated, stopped };
     }
 
     for (const manager of managers.rows) {

@@ -11,6 +11,7 @@ import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { GameRemindersCommand } from "../../src/games/game-reminders.command";
+import { REMINDER_MIN_ACTIVATION_GAP_MS } from "../../src/games/game-reminders.policy";
 import { GamesModule } from "../../src/games/games.module";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
 import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
@@ -273,7 +274,7 @@ run("#457 postgame reminders — disposable", () => {
     const g1 = await createEndedGame(organizer);
     const g2 = await createEndedGame(organizer);
     const g3 = await createEndedGame(organizer);
-    const base = Date.now();
+    const fixed = Date.now();
     // Coherent start < end and deadline <= start when shifting ends_at (games_time_order_chk).
     async function setEndedAt(gameId: string, endsMs: number) {
       const endsAt = new Date(endsMs);
@@ -288,10 +289,12 @@ run("#457 postgame reminders — disposable", () => {
         [gameId, startsAt, deadlineAt, endsAt],
       );
     }
-    await setEndedAt(g1.id, base - 5 * 3600_000);
-    await setEndedAt(g2.id, base - 4 * 3600_000);
-    await setEndedAt(g3.id, base - 3 * 3600_000);
-    const now = new Date(base);
+    // Older 4-day-ended games: ordinals 2/3 are already due, but min gap blocks
+    // re-activation — cooling games must not starve the third under batchLimit 2.
+    await setEndedAt(g1.id, fixed - 4 * 86400000 - 2 * 3600_000);
+    await setEndedAt(g2.id, fixed - 4 * 86400000 - 1 * 3600_000);
+    await setEndedAt(g3.id, fixed - 4 * 86400000);
+    const now = new Date(fixed);
     const command = new GameRemindersCommand(env);
     const first = await command.execute(
       pool,
@@ -300,40 +303,48 @@ run("#457 postgame reminders — disposable", () => {
     );
     expect(first.scanned).toBe(2);
     expect(first.ensured).toBe(6);
+    expect(first.activated).toBe(2);
     const second = await command.execute(
       pool,
       { kind: "sweep" },
-      { now, batchLimit: 2, manageTransactions: true },
+      { now: new Date(fixed + 60_000), batchLimit: 2, manageTransactions: true },
     );
     expect(second.scanned).toBeGreaterThanOrEqual(1);
     expect(second.ensured).toBeGreaterThanOrEqual(3);
+    expect(second.activated).toBe(1);
     for (const gameId of [g1.id, g2.id, g3.id]) {
       const rows = await pool.query(
         `SELECT count(*)::int AS n FROM game_outcome_reminders WHERE game_id = $1`,
         [gameId],
       );
       expect(rows.rows[0].n).toBe(3);
+      const visible = await pool.query(
+        `SELECT count(*)::int AS n FROM game_outcome_reminders
+         WHERE game_id = $1 AND state = 'visible'`,
+        [gameId],
+      );
+      expect(visible.rows[0].n).toBe(1);
     }
   });
 
   it("Later advances ordinal under cap; does not unbounded re-show the same card", async () => {
     const game = await createEndedGame(organizer);
-    // One fixed instant — separate clock_timestamp() calls can make deadline > start (games_deadline_chk).
-    const fixed = Date.now();
-    const startsAt = new Date(fixed - 5 * 86400000);
-    const endsAt = new Date(fixed - 4 * 86400000);
+    // One fixed clock: t0 = current fixed now; ends 4d ago so ordinals are due.
+    // HTTP Later uses real clock_timestamp for snoozeUntil — next fake sweep must
+    // read persisted snoozed_until (not t0+24h, which can still be inside the window).
+    const fixedNow = Date.now();
+    const endsAt = new Date(fixedNow - 4 * 86400000);
+    const startsAt = new Date(endsAt.getTime() - 2 * 3600_000);
+    const deadlineAt = new Date(startsAt.getTime() - 3600_000);
     await pool.query(
       `UPDATE games
        SET starts_at = $2,
-           application_deadline_at = $2,
-           ends_at = $3
+           application_deadline_at = $3,
+           ends_at = $4
        WHERE id = $1`,
-      [game.id, startsAt, endsAt],
+      [game.id, startsAt, deadlineAt, endsAt],
     );
-    const ends = (
-      await pool.query<{ ends_at: Date }>(`SELECT ends_at FROM games WHERE id = $1`, [game.id])
-    ).rows[0]!.ends_at;
-    const t0 = new Date(ends.getTime() + 80 * 3600_000);
+    const t0 = new Date(fixedNow);
     const first = await sweep(t0);
     expect(first.activated).toBe(1);
     const listed = await get(organizer, "/v1/me/postgame-reminders");
@@ -346,7 +357,21 @@ run("#457 postgame reminders — disposable", () => {
     });
     expect(later.statusCode).toBe(200);
 
-    const t1 = new Date(t0.getTime() + 24 * 3600_000);
+    async function nextSweepAfterLater(
+      reminderId: string,
+      previousActivationAt: Date,
+    ): Promise<Date> {
+      const row = await pool.query<{ snoozed_until: Date }>(
+        `SELECT snoozed_until FROM game_outcome_reminders WHERE id = $1`,
+        [reminderId],
+      );
+      const until = new Date(row.rows[0]!.snoozed_until).getTime();
+      return new Date(
+        Math.max(until, previousActivationAt.getTime() + REMINDER_MIN_ACTIVATION_GAP_MS) + 1,
+      );
+    }
+
+    const t1 = await nextSweepAfterLater(reminder.id, t0);
     const advance = await sweep(t1);
     expect(advance.activated).toBe(1);
     const after = await pool.query(
@@ -368,7 +393,7 @@ run("#457 postgame reminders — disposable", () => {
       command: "later",
       expectedVersion: rem2.version,
     });
-    const t2 = new Date(t1.getTime() + 24 * 3600_000);
+    const t2 = await nextSweepAfterLater(rem2.id, t1);
     expect((await sweep(t2)).activated).toBe(1);
     const listed3 = await get(organizer, "/v1/me/postgame-reminders");
     const rem3 = listed3.json().items.find((i: { gameId: string }) => i.gameId === game.id);
@@ -377,7 +402,7 @@ run("#457 postgame reminders — disposable", () => {
       command: "later",
       expectedVersion: rem3.version,
     });
-    const t3 = new Date(t2.getTime() + 24 * 3600_000);
+    const t3 = await nextSweepAfterLater(rem3.id, t2);
     expect((await sweep(t3)).activated).toBe(0);
     const finalList = await get(organizer, "/v1/me/postgame-reminders");
     expect(
@@ -526,6 +551,76 @@ run("#457 postgame reminders — disposable", () => {
         true,
       );
     }
+
+    // Already-reminded game rescheduled into the future then cancelled must stop now
+    // (stop authorities independent of ends_at due-end gate).
+    const futureCancel = await createEndedGame(organizer);
+    const activateAt = new Date(futureCancel.endsAt.getTime() + 2 * 3600_000);
+    expect((await sweep(activateAt)).activated).toBe(1);
+    const far = Date.now() + 7 * 86400000;
+    const futureEnds = new Date(far);
+    const futureStarts = new Date(far - 2 * 3600_000);
+    const futureDeadline = new Date(futureStarts.getTime() - 3600_000);
+    await pool.query(
+      `UPDATE games
+       SET starts_at = $2,
+           application_deadline_at = $3,
+           ends_at = $4,
+           status = 'cancelled'
+       WHERE id = $1`,
+      [futureCancel.id, futureStarts, futureDeadline, futureEnds],
+    );
+    const cancelNow = new Date(Date.now());
+    const afterFutureCancel = await sweep(cancelNow);
+    expect(afterFutureCancel.stopped).toBeGreaterThan(0);
+    const futureCancelRows = await pool.query(
+      `SELECT state, stop_reason FROM game_outcome_reminders WHERE game_id = $1`,
+      [futureCancel.id],
+    );
+    expect(futureCancelRows.rows.length).toBeGreaterThan(0);
+    expect(
+      futureCancelRows.rows.every((r) => r.state === "stopped" && r.stop_reason === "game_cancelled"),
+    ).toBe(true);
+
+    // Active account.access restriction (local test overlay only) stops open history
+    // even when ends_at is still in the future — mirrors accountGate unrestrictedSql.
+    const restrictActor = await actor("Reminders restrict future");
+    const futureRestrict = await createEndedGame(restrictActor);
+    expect(
+      (await sweep(new Date(futureRestrict.endsAt.getTime() + 2 * 3600_000))).activated,
+    ).toBe(1);
+    const far2 = Date.now() + 8 * 86400000;
+    await pool.query(
+      `UPDATE games
+       SET starts_at = $2,
+           application_deadline_at = $3,
+           ends_at = $4
+       WHERE id = $1`,
+      [
+        futureRestrict.id,
+        new Date(far2 - 2 * 3600_000),
+        new Date(far2 - 3 * 3600_000),
+        new Date(far2),
+      ],
+    );
+    await pool.query(
+      `INSERT INTO user_restrictions(user_id, capability, reason_code, expires_at, created_by)
+       VALUES ($1, 'account.access', 'synthetic_fixture', clock_timestamp() + interval '1 hour', $1)`,
+      [restrictActor.userId],
+    );
+    const afterRestrict = await sweep(new Date(Date.now()));
+    expect(afterRestrict.stopped).toBeGreaterThan(0);
+    const restrictRows = await pool.query(
+      `SELECT state, stop_reason FROM game_outcome_reminders
+       WHERE game_id = $1 AND organizer_user_id = $2`,
+      [futureRestrict.id, restrictActor.userId],
+    );
+    expect(restrictRows.rows.length).toBeGreaterThan(0);
+    expect(
+      restrictRows.rows.every(
+        (r) => r.state === "stopped" && r.stop_reason === "account_restricted",
+      ),
+    ).toBe(true);
   });
 
   it("inactive account stops reminders; disputes/attendance independent of Later", async () => {

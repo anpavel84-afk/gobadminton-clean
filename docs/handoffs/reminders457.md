@@ -1,19 +1,16 @@
-# #457 Internal post-game organizer reminders — author handoff (pass2)
+# #457 Internal post-game organizer reminders — author handoff (pass4)
 
 ## Scope delivered (source only)
 
 Bounded durable **in-app** reminders for the current organizer to record game outcome after `endsAt`, max **3** activation rounds / ordinals, «Подвести итоги» / «Позже». No auto `held`/`absent`/sanctions. No SMS/email/Web Push delivery. Existing PgBoss worker + `POST_GAME_INTERNAL_ENABLED` (default off).
 
-## Repair pass2 (exact findings)
+## Repair pass4 (exact findings from pass3 DB FAIL + R1/stop)
 
 | Finding | Fix |
 |---------|-----|
-| Policy `dueAtForOrdinal` offset possibly undefined | `Record<1\|2\|3, number>` offsets map |
-| Web test inline `typeof import(...)` | Normal `import type * as GameRemindersLib` |
-| Disposable `loadEnv(... USER_RESTRICTIONS=1)` | loadEnv without flag; test-only `env.USER_RESTRICTIONS_INTERNAL_ENABLED=true` overlay |
-| R1 batch starvation | Actionable candidate SQL (due / ensure / stop); idle visible cards drop out of batch |
-| R2 burst + unbounded Later resurfacing | One visible card; max 3 `activated` events; min 24h gap; Later advances next ordinal / stops at cap (`superseded`) |
-| R3 lock inversion | HTTP Later: unlocked tip → Game → manager → Reminder (matches worker Game→Reminder) |
+| Later cap expects activated=1 got 0 | Fixture clock axis: `t0` = fixed now; after HTTP Later read persisted `snoozed_until`; next fake sweep = `max(until, prevActivation+MIN_GAP)+1ms` (HTTP uses real `clock_timestamp`) |
+| R1 overdue cooling starvation | Candidate SQL for scheduled-due mirrors `canActivateAnother` (count&lt;3 + min 24h gap) **before** `LIMIT`; cooling 4d-ended games drop out so batchLimit 2 reaches the third |
+| Stop gated on `ends_at<=now`; no `account.access` | Stop authorities independent of due-end gate; candidate + `processGame` apply cancel/outcome/role/inactive/`unrestrictedSql(account.access)` when enabled; future-rescheduled cancel + restriction subcases |
 
 ## Design choices (local, not Owner SLA)
 
@@ -27,29 +24,24 @@ Bounded durable **in-app** reminders for the current organizer to record game ou
 | Batch | 50 actionable games per sweep |
 | Probe | `to_regclass` before domain work; never catch `42P01` as success |
 
-## Key paths
+## Key paths (this pass)
 
 | Area | Paths |
 |------|--------|
-| Migration | `0056_postgame_reminders.sql` (+ `superseded` stop reason) + rollback guard |
-| Policy/service/API | `game-reminders.*` + `GamesModule` |
-| Worker | `POSTGAME_REMINDERS_SWEEP_QUEUE` when post-game writes admitted |
-| Web | `PostgameReminders` on My Games + Results; `game-reminders.ts` |
-| Contract | OpenAPI **0.30.0** — `GET/POST /me/postgame-reminders` |
-| Release | current **alpha.22**; historical alpha.21 seeds unchanged |
+| Command | `apps/api/src/games/game-reminders.command.ts` only |
+| Disposable | `apps/api/test/integration/game-reminders.disposable.test.ts` |
+| Handoff | `docs/handoffs/reminders457.md` |
 
-## Invariants
+## Invariants preserved
 
-- Lock order HTTP: Actor → Game → manager → Reminder (MutationRunner + tip read)
-- Worker: Game → managers → reminders (no Actor-before-Game inversion)
-- Later keeps idempotency receipt; blind new-key retry not used for unknown writes
-- Cross-account → private 404
-- Attendance / disputes / outcomes unchanged by Later
-- PR475 access fix preserved in alpha.21 history seed (98f765)
+- R2: max 3 activations / one visible card / min spacing
+- R3: consistent locks (HTTP Actor→Game→manager→Reminder; worker Game→managers→reminders)
+- No schema/gates/versions/root/live/network/models rewrite
+- Cross-account → private 404; Later does not touch attendance/disputes/outcomes
 
 ## Checks not run in author lane
 
-No install / network / Git / live DB / runtime / PROD. Native status is not PASS. PMA: unit + disposable `gobadminton_reminders_disposable` + migration.smoke + release tests + independent QA + CI + DEV.
+No install / network / Git / live DB / runtime / PROD. Native status is not PASS. PMA: prior 7/8 + type/lint/foundation/unit/web/migration PASS reused; run all 8 disposable + new assertions together, then first independent Sol Medium content QA.
 
 ## UAT
 
