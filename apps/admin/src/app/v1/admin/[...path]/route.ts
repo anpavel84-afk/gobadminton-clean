@@ -1,8 +1,8 @@
-import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, adminRequestOrigin, adminRequestPath } from "../../../../lib/server-config";
+import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, adminRequestOrigin, adminRequestPath, devQaKeyUiEnabled } from "../../../../lib/server-config";
 
 export const dynamic = "force-dynamic";
 const allowedGet = new Set(["auth/me", "audit/security", "games", "reports", "cases", "pilot-metrics"]);
-const allowedPost = new Set(["auth/vk/start", "auth/yandex/start", "auth/webauthn/options", "auth/webauthn/verify", "auth/logout", "cases"]);
+const allowedPost = new Set(["auth/dev-qa-key", "auth/vk/start", "auth/yandex/start", "auth/webauthn/options", "auth/webauthn/verify", "auth/logout", "cases"]);
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const galleryMeta = [
   "x-gallery-credit-kind",
@@ -40,6 +40,10 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const path = (await context.params).path.join("/");
   if (!adminRequestPath(request, config, "/v1/admin/" + path))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
+  if (path === "auth/dev-qa-key") {
+    if (!devQaKeyUiEnabled()) return new Response(null,{status:404,headers:{"Cache-Control":"no-store"}});
+    if (request.method !== "POST" || new URL(request.url).search) return new Response(null,{status:400,headers:{"Cache-Control":"no-store"}});
+  }
   const cover = new RegExp("^venues/" + uuid + "/cover$").test(path);
   const coverAccess = new RegExp("^venues/" + uuid + "/cover/access$").test(path);
   const coverRoute = (request.method === "GET" && (cover || coverAccess)) || (cover && ["PUT", "DELETE"].includes(request.method));

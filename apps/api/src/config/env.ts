@@ -67,6 +67,8 @@ export const envSchema = z
     GAME_MODERATION_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_DEV_ENABLED: z.enum(["0", "1"]).default("0"),
+    ADMIN_DEV_QA_KEY_ENABLED: z.enum(["0", "1"]).default("0"),
+    ADMIN_DEV_QA_VPS_VERIFIED: z.enum(["0", "1"]).default("0"),
     ADMIN_DEV_PATH_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_ORIGIN: z.string().url().default("http://localhost:18540"),
     ADMIN_AUTH_PEPPER: z.string().min(32).optional(),
@@ -257,6 +259,13 @@ export const envSchema = z
     if (raw.ADMIN_DEV_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
       ctx.addIssue({code:"custom",path:["ADMIN_DEV_ENABLED"],message:"DEV opt-in requires Admin enabled"});
     }
+    if (raw.ADMIN_DEV_QA_KEY_ENABLED === "1" && !(raw.ADMIN_INTERNAL_ENABLED === "1" && raw.ADMIN_DEV_ENABLED === "1"
+      && raw.ADMIN_DEV_PATH_ENABLED === "1" && raw.ADMIN_DEV_QA_VPS_VERIFIED === "1"
+      && raw.NODE_ENV === "production" && ["mvp", "stage"].includes(raw.APP_ENV)
+      && raw.ADMIN_ORIGIN === "https://dev.gobadminton.ru" && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
+      && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru" && raw.COOKIE_SECURE !== false)) {
+      ctx.addIssue({code:"custom",path:["ADMIN_DEV_QA_KEY_ENABLED"],message:"QA key requires verified exact DEV path/origins; never PROD/local"});
+    }
     if (raw.ADMIN_INTERNAL_ENABLED === "1") {
       const origin = new URL(raw.ADMIN_ORIGIN);
       const db = new URL(raw.DATABASE_URL);
@@ -356,6 +365,9 @@ export const envSchema = z
       GAME_MODERATION_INTERNAL_ENABLED: raw.GAME_MODERATION_INTERNAL_ENABLED === "1",
       ADMIN_INTERNAL_ENABLED: raw.ADMIN_INTERNAL_ENABLED === "1",
       ADMIN_DEV_ENABLED: raw.ADMIN_DEV_ENABLED === "1",
+      ADMIN_DEV_PATH_ENABLED: raw.ADMIN_DEV_PATH_ENABLED === "1",
+      ADMIN_DEV_QA_KEY_ENABLED: raw.ADMIN_DEV_QA_KEY_ENABLED === "1",
+      ADMIN_DEV_QA_VPS_VERIFIED: raw.ADMIN_DEV_QA_VPS_VERIFIED === "1",
       ADMIN_ORIGIN: raw.ADMIN_ORIGIN,
       ADMIN_AUTH_PEPPER: raw.ADMIN_AUTH_PEPPER,
       ADMIN_VK_REDIRECT_URI: raw.ADMIN_VK_REDIRECT_URI,

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { AdminError, adminRequest, type Session } from "../lib/admin-client";
+import { AdminError, adminRequest, canReadPilot, type Session } from "../lib/admin-client";
 import {
   PILOT_FILTER_LABELS,
   buildPilotMetricsPath,
@@ -69,7 +69,7 @@ export function PilotMetricsPanel({
         ) {
           return;
         }
-        if (!session.roles.includes("superadmin")) {
+        if (!canReadPilot(session.roles)) {
           setData(null);
           setCities([]);
           onAuthorityLoss();
@@ -121,7 +121,7 @@ export function PilotMetricsPanel({
         ) {
           return;
         }
-        if (!session.roles.includes("superadmin")) {
+        if (!canReadPilot(session.roles)) {
           setData(null);
           onAuthorityLoss();
           throw new AdminError("ADMIN_PERMISSION_DENIED", 403);

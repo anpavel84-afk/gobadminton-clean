@@ -311,7 +311,7 @@ describe("public contacts service projections and SQL binds without DB",()=>{
     principalId: 'actor', roles: ['content_manager'], sessionId: 'session',
     principal: { id: 'actor', user_id: id, status: 'active', version: 1 },
     session: {
-     id: 'session', principal_id: 'actor', credential_id: 'credential',
+     id: 'session', principal_id: 'actor', credential_id: 'credential', auth_method: 'webauthn', qa_credential_id: null,
      audience: 'gobadminton-admin', csrf_ciphertext: 'synthetic-csrf',
      expires_at: new Date("2026-10-22T00:00:00Z"), last_seen_at: timestamp,
      step_up_at: timestamp, revoked_at: null,

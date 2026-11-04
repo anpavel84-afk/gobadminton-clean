@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.25" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.26" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.32.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.33.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,24 +424,24 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  application_version: CURRENT_APPLICATION_VERSION,
-  title: "Сводка пилота для администратора",
-  source_sha: null,
-  owner_uat: "NOT_TESTED",
-  additions: [
-    "В Admin для суперадминистратора доступна агрегированная сводка пилота по городу и периоду: заявки, подтверждения, явные исходы и отмеченные посещения",
-    "Повторное участие и активность организаторов в реализованном объёме; неизвестные результаты и нехватка данных показываются отдельно; тестовые DEMO не считаются реальным пилотом",
+  "application_version": "0.1.0-alpha.26",
+  "title": "Отдельный доступ для проверки сводки пилота",
+  "source_sha": null,
+  "owner_uat": "NOT_TESTED",
+  "additions": [
+    "Отдельный вход для разрешённого проверяющего без VK и Яндекса",
+    "Просмотр сводки пилота без разрешения изменять данные или открывать другие разделы",
+    "Отзыв доступа прекращает все связанные сеансы проверяющего"
   ],
-  fixes: [],
-  known_limitations: [
-    "Приёмка владельцем после обычного входа ещё не выполнена",
-    "Аутентифицированная проверка Admin и физическая приёмка на устройстве ещё не выполнены",
-    "Сводка не запускает реальный пилот и не обещает коммерческие KPI или новый сбор персональных данных",
+  "fixes": [],
+  "known_limitations": [
+    "Приёмка владельцем ещё не выполнена",
+    "Ключевой вход по умолчанию выключен и доступен только в проверенной среде разработки после отдельной настройки",
+    "Готовность отдельной учётной записи подтверждается настоящей проверкой входа"
   ],
-  feature_catalogue: "delta",
+  "feature_catalogue": "delta"
 };
 
-/** Confirmed historical deployments only; application versions remain unnumbered. */
 export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
   {
     "source_sha": "85513c719826a91bebd14a16b807ced8e17133fd",
@@ -1302,6 +1302,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Публикация статического набора карты на DEV выполняется отдельно доверенным процессом"
     ]
   },
+  {
+    "source_sha": "29b6e278a571d541e47b8d4f04e98258dd55df05",
+    "application_version": "0.1.0-alpha.25",
+    "version_label": "0.1.0-alpha.25",
+    "title": "Сводка пилота для администратора",
+    "api_contract_version": "0.32.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41849645320-a1",
+        "accepted_at": "2026-11-04T14:53:12Z",
+        "api_digest": "sha256:b39a225da8df5e836262ee036f9a850b7aa60980c29734b0c470ce0ef3166959",
+        "web_digest": "sha256:11f04f0211acd50b905d6c07ff4094fd6b610d587c19d4440d892f516edf9b26",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "В Admin для суперадминистратора доступна агрегированная сводка пилота по городу и периоду: заявки, подтверждения, явные исходы и отмеченные посещения",
+      "Повторное участие и активность организаторов в реализованном объёме; неизвестные результаты и нехватка данных показываются отдельно; тестовые DEMO не считаются реальным пилотом"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена",
+      "Аутентифицированная проверка Admin и физическая приёмка на устройстве ещё не выполнены",
+      "Сводка не запускает реальный пилот и не обещает коммерческие KPI или новый сбор персональных данных"
+    ]
+  },
+
 ] as const;
 
 /** Full 40-char repository SHA; comparison uses lowercase. */

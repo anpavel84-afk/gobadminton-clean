@@ -10,7 +10,7 @@ describe("production API logger pipeline", () => {
     const stream = new Writable({ write(chunk, _encoding, done) { output += chunk.toString(); done(); } });
     if (!apiLogger || typeof apiLogger !== "object") throw new Error("Logger must be enabled");
     const app = Fastify({ logger: { ...apiLogger, stream } });
-    const secrets = ["CODE_CANARY", "STATE_CANARY", "COOKIE_CANARY", "BEARER_CANARY", "CSRF_CANARY", "ACTIVATION_CANARY", "TICKET_CANARY", "SESSION_CANARY"];
+    const secrets = ["CODE_CANARY", "STATE_CANARY", "COOKIE_CANARY", "BEARER_CANARY", "CSRF_CANARY", "ACTIVATION_CANARY", "TICKET_CANARY", "SESSION_CANARY", "QA_KEY_CANARY"];
     const query = new URLSearchParams({ code: secrets[0]!, state: secrets[1]!, activation: secrets[5]!, ticket: secrets[6]!, session: secrets[7]! }).toString();
     const headers = { cookie: `session=${secrets[2]}`, authorization: `Bearer ${secrets[3]}`, "x-csrf-token": secrets[4]! };
     let callbacks = 0;
@@ -26,7 +26,12 @@ describe("production API logger pipeline", () => {
       req.log.error({ req, err: new Error(secrets.join(" ")), body: req.body }, secrets.join(" "));
       return { ok: true };
     });
+    app.post("/v1/admin/auth/dev-qa-key", async (req) => {
+      req.log.error({req,body:req.body,err:new Error(secrets.join(" "))},secrets.join(" "));
+      return {ok:true};
+    });
     try {
+      await app.inject({method:"POST",url:"/v1/admin/auth/dev-qa-key?key="+secrets[8],headers,payload:{key:secrets[8],requestNonce:secrets[4]}});
       for (const path of ["/v1/admin/auth/yandex/callback", "/v1/auth/yandex/callback"]) {
         expect((await app.inject({ url: `${path}?${query}`, headers })).statusCode).toBe(200);
         expect((await app.inject({ url: `${path}/error?${query}`, headers })).statusCode).toBe(500);

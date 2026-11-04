@@ -3,6 +3,7 @@ export const ADMIN_ROLES = [
   "content_manager",
   "moderator",
   "support",
+  "pilot_viewer",
 ] as const;
 export type AdminRole = (typeof ADMIN_ROLES)[number];
 // Scoped capabilities deliberately have distinct keys; they never imply global authority.
@@ -52,6 +53,7 @@ export const ROLE_PERMISSIONS = {
     "evidence.assigned.read",
     "audit.assigned.read",
   ],
+  pilot_viewer: ["pilot.read"],
 } as const satisfies Record<AdminRole, readonly string[]>;
 export type AdminPermission = (typeof ROLE_PERMISSIONS)[AdminRole][number];
 export function hasPermission(

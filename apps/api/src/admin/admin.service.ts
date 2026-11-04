@@ -41,6 +41,8 @@ import {
 } from "./rbac";
 import type { AdminCommand } from "./dto";
 
+import { devQaKeyAllowed, DEV_QA_AUDIENCE, DEV_QA_LABEL, qaSessionRouteAllowed } from "./dev-qa-policy";
+
 type Principal = {
   id: string;
   user_id: string;
@@ -50,7 +52,9 @@ type Principal = {
 type Session = {
   id: string;
   principal_id: string;
-  credential_id: string;
+  credential_id: string | null;
+  auth_method: "webauthn" | "dev_qa_key";
+  qa_credential_id: string | null;
   audience: string;
   csrf_ciphertext: string;
   expires_at: Date;
@@ -148,6 +152,12 @@ export class AdminService {
   // Rate consumption is durable even when a following auth/command fails.
   private async limited(request: FastifyRequest) {
     this.enabled();
+    const token = request.cookies[ADMIN_COOKIE];
+    if (token && token.length >= 32 && token.length <= 256) {
+      const method = (await this.pool.query<{auth_method:string}>("SELECT auth_method FROM admin_sessions WHERE token_hash=$1",[this.hash(token)])).rows[0]?.auth_method;
+      if (method === "dev_qa_key" && !qaSessionRouteAllowed(request.method,request.url) && request.url !== "/v1/admin/auth/dev-qa-key")
+        throw forbidden("ADMIN_PERMISSION_DENIED", "QA session is read-only PilotMetrics");
+    }
     const ok = await adminTransaction(this.pool, (c) =>
       this.rate(c, "ip:" + request.ip, 120),
     );
@@ -196,23 +206,24 @@ export class AdminService {
     if (!s)
       throw unauthorized("ADMIN_UNAUTHENTICATED", "Admin session required");
     const p = await this.principal(client, s.principal_id);
-    const credential = (
-      await client.query<Credential>(
-        "SELECT * FROM admin_webauthn_credentials WHERE credential_id=$1 FOR UPDATE",
-        [s.credential_id],
-      )
-    ).rows[0];
+    const roles = await this.roles(client, p.id);
     const now = Date.now();
-    if (
-      p.status !== "active" ||
-      s.audience !== ADMIN_AUDIENCE ||
-      s.revoked_at ||
-      s.expires_at.getTime() <= now ||
-      s.last_seen_at.getTime() <= now - 30 * 60_000 ||
-      credential?.status !== "active" ||
-      credential.principal_id !== p.id
-    )
+    if (p.status !== "active" || s.revoked_at || s.expires_at.getTime() <= now || s.last_seen_at.getTime() <= now - 30 * 60_000)
       throw unauthorized("ADMIN_UNAUTHENTICATED", "Admin session inactive");
+    if (s.auth_method === "dev_qa_key") {
+      if (!devQaKeyAllowed(this.env)) throw unauthorized("ADMIN_UNAUTHENTICATED", "Admin session inactive");
+      const qa = (await client.query<{principal_id:string;expires_at:Date;revoked_at:Date|null}>(
+        "SELECT principal_id,expires_at,revoked_at FROM admin_dev_qa_credentials WHERE id=$1 FOR UPDATE", [s.qa_credential_id])).rows[0];
+      const user = (await client.query<{status:string}>("SELECT status FROM users WHERE id=$1", [p.user_id])).rows[0];
+      if (s.audience !== DEV_QA_AUDIENCE || !qa || qa.revoked_at || qa.expires_at.getTime() <= now || qa.principal_id !== p.id || user?.status !== "disabled")
+        throw unauthorized("ADMIN_UNAUTHENTICATED", "Admin session inactive");
+      if (roles.length !== 1 || roles[0] !== "pilot_viewer" || stepup || !qaSessionRouteAllowed(request.method, request.url))
+        throw forbidden("ADMIN_PERMISSION_DENIED", "QA session is read-only PilotMetrics");
+    } else {
+      const credential = (await client.query<Credential>("SELECT * FROM admin_webauthn_credentials WHERE credential_id=$1 FOR UPDATE", [s.credential_id])).rows[0];
+      if (s.auth_method !== "webauthn" || s.audience !== ADMIN_AUDIENCE || credential?.status !== "active" || credential.principal_id !== p.id)
+        throw unauthorized("ADMIN_UNAUTHENTICATED", "Admin session inactive");
+    }
     if (
       mutation &&
       !secretsEqual(
@@ -221,7 +232,6 @@ export class AdminService {
       )
     )
       throw forbidden("ADMIN_CSRF_REJECTED", "Admin CSRF required");
-    const roles = await this.roles(client, p.id);
     if (permission && !hasPermission(roles, permission))
       throw forbidden("ADMIN_PERMISSION_DENIED", "Admin permission denied");
     if (
@@ -769,6 +779,47 @@ export class AdminService {
     }
     return result;
   }
+  assertDevQaEnabled() {
+    if (!devQaKeyAllowed(this.env)) throw notFound("ADMIN_QA_DISABLED", "QA login unavailable");
+  }
+  async devQaLogin(request: FastifyRequest, reply: FastifyReply, input: {key:string;requestNonce:string}) {
+    this.assertDevQaEnabled();
+    this.origin(request);
+    if (request.url.includes("?") || !String(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json"))
+      throw badRequest("ADMIN_INVALID_REQUEST", "JSON body required");
+    if (!secretsEqual(String(request.headers["x-csrf-token"] ?? ""), input.requestNonce))
+      throw forbidden("ADMIN_CSRF_REJECTED", "QA request nonce header required");
+    await this.limited(request);
+    const allowed = await adminTransaction(this.pool, async c => {
+      const ip = await this.rate(c, "dev-qa-ip:" + request.ip, 5);
+      const global = await this.rate(c, "dev-qa-global", 60);
+      return ip && global;
+    });
+    if (!allowed) throw problem(429, "ADMIN_RATE_LIMIT", "Admin rate limit", undefined, 60);
+    const result = await adminTransaction(this.pool, async c => {
+      const qa = (await c.query<{id:string;principal_id:string;key_hash:string;expires_at:Date}>(
+        "SELECT * FROM admin_dev_qa_credentials WHERE label=$1 AND revoked_at IS NULL FOR UPDATE", [DEV_QA_LABEL])).rows[0];
+      const valid = secretsEqual(this.hash("admin-dev-qa-key:" + input.key), qa?.key_hash ?? this.hash("admin-dev-qa-key:missing"));
+      if (!valid || !qa || qa.expires_at.getTime() <= Date.now()) return null;
+      const principal = await this.principal(c, qa.principal_id);
+      const roles = await this.roles(c, principal.id);
+      const user = (await c.query<{status:string}>("SELECT status FROM users WHERE id=$1", [principal.user_id])).rows[0];
+      if (principal.status !== "active" || roles.length !== 1 || roles[0] !== "pilot_viewer" || user?.status !== "disabled") return null;
+      const nonce = await c.query("INSERT INTO admin_dev_qa_nonces(credential_id,nonce_hash,expires_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING nonce_hash",
+        [qa.id, this.hash("admin-dev-qa-nonce:" + input.requestNonce), qa.expires_at]);
+      if (!nonce.rowCount) return null;
+      const token = randomToken(32), csrf = randomToken(32);
+      const session = (await c.query<{id:string;expires_at:Date}>(`WITH stamp AS (SELECT clock_timestamp() AS at)
+        INSERT INTO admin_sessions(principal_id,credential_id,auth_method,qa_credential_id,audience,token_hash,csrf_ciphertext,created_at,expires_at)
+        SELECT $1,NULL,'dev_qa_key',$2,$3,$4,$5,at,LEAST(at+interval '15 minutes',$6::timestamptz) FROM stamp RETURNING id,expires_at`,
+        [principal.id,qa.id,DEV_QA_AUDIENCE,this.hash(token),sealSecret(this.pepper,csrf),qa.expires_at])).rows[0]!;
+      await appendAudit(c,{actor:{principalId:principal.id,sessionId:session.id,roles},action:"admin.dev_qa_login",targetType:"admin_dev_qa_credential",targetId:qa.id,permission:"pilot.read",reason:"dev_qa_key"});
+      return {token,csrf,principalId:principal.id,maxAge:Math.max(1,Math.floor((session.expires_at.getTime()-Date.now())/1000))};
+    });
+    if (!result) throw unauthorized("ADMIN_QA_KEY_INVALID", "QA login rejected");
+    this.cookie(reply, ADMIN_COOKIE, result.token, result.maxAge);
+    return {principalId:result.principalId,csrfToken:result.csrf};
+  }
   async me(request: FastifyRequest) {
     await this.limited(request);
     return adminTransaction(this.pool, async (c) => {
@@ -780,6 +831,7 @@ export class AdminService {
         version: a.principal.version,
         roles: a.roles,
         sessionId: a.sessionId,
+        authMethod: a.session.auth_method,
         expiresAt: a.session.expires_at.toISOString(),
         stepUpAt: a.session.step_up_at.toISOString(),
         csrfToken: openSecret(this.pepper, a.session.csrf_ciphertext),

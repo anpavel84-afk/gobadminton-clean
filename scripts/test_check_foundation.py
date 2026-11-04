@@ -27,6 +27,26 @@ class FoundationExceptionsTest(unittest.TestCase):
         self.assertEqual(self.findings(), [])
         self.assertEqual(sum(len(markdown_errors(p)) for p in repository_files() if p.suffix == '.md'), 0)
 
+    def test_dev_qa_key_closed_protocol(self):
+        route = '/admin/auth/dev-qa-key'
+        for change in ['marker', 'origin', 'csrf', 'security', 'body', 'extra', 'key', 'moved']:
+            with self.subTest(change=change):
+                self.document = copy.deepcopy(self.contract)
+                op = self.document['paths'][route]['post']
+                schema = self.document['components']['schemas']['AdminDevQaKeyRequest']
+                target = route
+                if change == 'marker': op['x-auth-challenge-protocol'] = 'anything'
+                elif change == 'origin': op['parameters'][0]['required'] = False
+                elif change == 'csrf': op['parameters'][1]['required'] = False
+                elif change == 'security': op['security'] = [{'cookieSession': []}]
+                elif change == 'body': op['requestBody']['required'] = False
+                elif change == 'extra': schema['additionalProperties'] = True
+                elif change == 'key': schema['properties']['key']['writeOnly'] = False
+                elif change == 'moved':
+                    target = route + '/unknown'
+                    self.document['paths'][target] = self.document['paths'].pop(route)
+                self.assert_idempotency(target)
+
     def test_admin_exemption_fail_closed(self):
         routes = ['/admin/auth/{provider}/start', '/admin/auth/webauthn/options', '/admin/auth/webauthn/verify']
         for route in routes:

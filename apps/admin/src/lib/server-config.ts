@@ -69,3 +69,11 @@ export const ADMIN_COOKIES = ["__Host-gb_admin_binding", "__Host-gb_admin_mfa", 
 export function adminCookies(raw: string) {
   return raw.split(";").map(x => x.trim()).filter(x => ADMIN_COOKIES.includes(x.split("=")[0] ?? "")).join("; ");
 }
+
+/** Server-only, no secret or key hash reaches the browser. */
+export function devQaKeyUiEnabled(env: Record<string,string|undefined> = process.env): boolean {
+  return Boolean(internalConfig(env)) && env.ADMIN_DEV_QA_KEY_ENABLED === "1" && env.ADMIN_DEV_QA_VPS_VERIFIED === "1"
+    && env.ADMIN_DEV_ENABLED === "1" && env.ADMIN_DEV_PATH_ENABLED === "1" && env.NODE_ENV === "production"
+    && ["mvp","stage"].includes(env.APP_ENV ?? "") && env.ADMIN_ORIGIN === "https://dev.gobadminton.ru"
+    && env.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru" && env.ADMIN_API_URL === "https://dev.gobadminton.ru";
+}
