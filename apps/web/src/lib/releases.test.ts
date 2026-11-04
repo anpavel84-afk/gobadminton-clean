@@ -10,9 +10,9 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.24 with API 0.31.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.24");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.31.0");
+  it("bumps current descriptor to alpha.25 with API 0.32.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.25");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.32.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(CURRENT_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
@@ -25,8 +25,8 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/Санкт-Петербург|карт/i);
-    expect(prose).toMatch(/границ|центр|недоступн/i);
+    expect(prose).toMatch(/сводк|пилот|администратор/i);
+    expect(prose).toMatch(/заявк|подтвержд|посещен/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE/i);
   });
 
@@ -76,6 +76,14 @@ describe("releases current descriptor literals", () => {
           row.application_version === "0.1.0-alpha.23" &&
           row.source_sha === "cc771c3700accae431e7bff9131433cd7be694ae" &&
           row.deployments[0]?.release_id === "r41825585671-a1",
+      ),
+    ).toBe(true);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.24" &&
+          row.source_sha === "002d09c981c7f899db15beb90618a11b53b973b1" &&
+          row.deployments[0]?.release_id === "r41839403532-a1",
       ),
     ).toBe(true);
     expect(

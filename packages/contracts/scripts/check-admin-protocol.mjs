@@ -26,7 +26,13 @@ for(const [path,item] of Object.entries(api.paths)) {
   }
  }
 }
-// Venue covers + ordered gallery add/replace/delete/reorder/set-main and gallery read.
-assert.equal(operations,45,"Update this inventory deliberately when adding an Admin operation");
+// Venue covers + ordered gallery add/replace/delete/reorder/set-main and gallery read
+// + pilot metrics summary GET (#460).
+assert.equal(operations,46,"Update this inventory deliberately when adding an Admin operation");
 for(const path of proofs) assert(api.paths[path]?.post, `Missing proof ceremony ${path}`);
+const pilotGet=api.paths["/admin/pilot-metrics"]?.get;
+assert.ok(pilotGet,"Missing GET /admin/pilot-metrics");
+assert.equal(pilotGet["x-client-surface"],"admin-only");
+assert.deepEqual(pilotGet.security,[{AdminSessionCookie:[]}]);
+assert(!JSON.stringify(pilotGet.security??[]).includes("Consumer"));
 console.log(`ADMIN PROTOCOL CHECK: PASS (${operations} operations; three bound single-use proof ceremonies)`);

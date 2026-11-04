@@ -16,6 +16,8 @@ import { AdminGameModerationController } from "./game-moderation.controller";
 import { AdminGameModerationService } from "./game-moderation.service";
 import { AdminRoleReputationController } from "./role-reputation.controller";
 import { AdminRoleReputationService } from "./role-reputation.service";
+import { PilotMetricsController } from "./pilot-metrics.controller";
+import { PilotMetricsService } from "./pilot-metrics.service";
 import { Module } from "@nestjs/common";
 import { AdminController } from "./admin.controller";
 import { AdminService } from "./admin.service";
@@ -30,6 +32,7 @@ import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
     AdminController,
     AdminGameModerationController,
     AdminUserRestrictionsController,
+    PilotMetricsController,
   ],
   providers: [
     AdminCasesService,
@@ -42,6 +45,7 @@ import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
     VenueCoverService,
     AdminUserRestrictionsService,
     AdminGameModerationService,
+    PilotMetricsService,
     AdminProviders,
     { provide: ADMIN_PROVIDER_OVERRIDES, useValue: null },
   ],

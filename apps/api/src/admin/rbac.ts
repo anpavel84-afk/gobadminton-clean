@@ -27,6 +27,7 @@ export const ROLE_PERMISSIONS = {
     "consumer_session.case.revoke",
     "case.assigned.manage",
     "evidence.assigned.read",
+    "pilot.read",
   ],
   content_manager: [
     "venue.manage",

@@ -73,6 +73,7 @@ export function errorMessage(error: unknown) {
 
 export const NAV_ITEMS = [
   { id: "overview", label: "Обзор", roles: null },
+  { id: "pilot", label: "Сводка пилота", roles: ["superadmin"] },
   { id: "security", label: "Безопасность", roles: ["superadmin"] },
   { id: "venues", label: "Площадки", roles: ["superadmin", "content_manager"] },
   { id: "games", label: "Модерация игр", roles: ["superadmin", "moderator"] },

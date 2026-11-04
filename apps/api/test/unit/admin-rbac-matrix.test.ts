@@ -28,6 +28,7 @@ const permissions = [
   "consumer_session.case.revoke",
   "case.assigned.manage",
   "evidence.assigned.read",
+  "pilot.read",
 ] as const satisfies readonly AdminPermission[];
 const lesserRoleAllowlists = {
   content_manager: [
@@ -50,10 +51,10 @@ const expected: Record<AdminRole, readonly AdminPermission[]> = {
 };
 
 describe("A0A-QA-001 exhaustive fixed RBAC matrix", () => {
-  it("pins four roles and the 19 defined permissions without duplicates or wildcards", () => {
+  it("pins four roles and the 20 defined permissions without duplicates or wildcards", () => {
     expect(ADMIN_ROLES).toEqual(["superadmin", "content_manager", "moderator", "support"]);
     expect(Object.keys(ROLE_PERMISSIONS)).toEqual([...ADMIN_ROLES]);
-    expect(permissions).toHaveLength(19);
+    expect(permissions).toHaveLength(20);
     expect([...new Set(Object.values(ROLE_PERMISSIONS).flat())].sort()).toEqual([...permissions].sort());
     for (const role of ADMIN_ROLES) {
       const actual = [...ROLE_PERMISSIONS[role]];

@@ -67,7 +67,9 @@ describe("navigation and passkey transport", () => {
     expect(visibleNavigation(["support"]).map(x => x.id)).toEqual(["overview", "cases"]);
     expect(visibleNavigation(["content_manager", "moderator"]).map(x => x.id)).toEqual(["overview", "venues", "games", "users", "cases"]);
     expect(visibleNavigation(["unknown"]).map(x => x.id)).toEqual(["overview"]);
-    expect(visibleNavigation(["superadmin"])).toHaveLength(6);
+    expect(visibleNavigation(["superadmin"])).toHaveLength(7);
+    expect(visibleNavigation(["superadmin"]).map(x => x.id)).toContain("pilot");
+    expect(visibleNavigation(["moderator"]).map(x => x.id)).not.toContain("pilot");
   });
   it("marks exact ten-minute, future and invalid stepup stale", () => {
     const now = Date.now();
