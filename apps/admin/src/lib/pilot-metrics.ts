@@ -88,9 +88,41 @@ export function buildPilotMetricsPath(input: {
   return query ? `pilot-metrics?${query}` : "pilot-metrics";
 }
 
+/** Stable identity of the city/window filter currently driving the UI. */
+export function pilotFilterKey(input: {
+  cityId: string;
+  from: string;
+  to: string;
+}): string {
+  return `${input.cityId}|${input.from}|${input.to}`;
+}
+
+/**
+ * Apply a pilot-metrics response only when the panel is still mounted and the
+ * request still matches the live filter generation + filter key (incl. after
+ * catalogue/load or authority transitions).
+ */
+export function shouldApplyPilotResult(input: {
+  mounted: boolean;
+  requestGeneration: number;
+  currentGeneration: number;
+  requestedKey: string;
+  currentKey: string;
+}): boolean {
+  return (
+    input.mounted &&
+    input.requestGeneration === input.currentGeneration &&
+    input.requestedKey === input.currentKey
+  );
+}
+
 export const PILOT_FILTER_LABELS = {
   city: "Город",
   from: "Начало окна (UTC)",
   to: "Конец окна (UTC, не включая)",
   submit: "Показать сводку",
+  dueInWindow: "Due-игры (ends_at ≤ asOf)",
+  publishedEligible: "Опубликованные в окне (starts_at)",
+  dueEmpty:
+    "В выбранном окне пока нет завершённых due-игр (ends_at ≤ asOf). Опубликованные игры и заявки окна starts_at показаны ниже отдельно.",
 } as const;

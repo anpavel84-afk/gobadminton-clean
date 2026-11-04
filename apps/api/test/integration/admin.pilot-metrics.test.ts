@@ -529,6 +529,10 @@ run("Admin pilot metrics isolated aggregates", () => {
     expect(body.attendance.eligibleOnHeldGames).toBe(before.attendance.eligibleOnHeldGames + 1);
     expect(body.attendance.unknown).toBe(before.attendance.unknown + 1);
     expect(body.attendance.present).toBe(before.attendance.present);
+    expect(body.coverage.sufficient).toBe(false);
+    expect(
+      body.coverage.notes.some((n: string) => /посещаем|unknown|отметк/i.test(n)),
+    ).toBe(true);
   });
 
   it("P460-B cancelled games disclosed but applications/statuses excluded from working cohort", async () => {
@@ -595,6 +599,40 @@ run("Admin pilot metrics isolated aggregates", () => {
     expect(body.games.held + body.games.notHeld + body.games.unknownOutcome).toBe(
       body.games.dueInWindow,
     );
+    expect(body.coverage.sufficient).toBe(false);
+    expect(body.coverage.notes.some((n: string) => /исход|unknown|held\/not_held/i.test(n))).toBe(
+      true,
+    );
+  });
+
+  it("P460-F future-only publishes/apps keep counts; due=0 note is honest; sufficient false", async () => {
+    const from = hoursAhead(1 * 24);
+    const to = hoursAhead(30 * 24);
+    const qs = `cityId=${cityId}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    const before = (await get(qs)).json();
+    expect(before.games.dueInWindow).toBe(0);
+
+    const owner = await user("pilot460 future-only owner");
+    const player = await user("pilot460 future-only player");
+    const venueId = await venue(owner);
+    const futurePub = await game({
+      ownerId: owner,
+      venueId,
+      startsAt: hoursAhead(5 * 24),
+      durationMs: 3_600_000,
+    });
+    await applyAttempt({ gameId: futurePub, userId: player });
+
+    const res = await get(qs);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.games.dueInWindow).toBe(0);
+    expect(body.games.publishedEligible).toBe(before.games.publishedEligible + 1);
+    expect(body.applications.count).toBe(before.applications.count + 1);
+    expect(body.coverage.sufficient).toBe(false);
+    expect(body.coverage.notes.some((n: string) => /завершённых due|ends_at/i.test(n))).toBe(true);
+    expect(body.coverage.notes.some((n: string) => /нет подходящих игр/i.test(n))).toBe(false);
+    expect(body.coverage.notes.some((n: string) => /опубликованн|заявок/i.test(n))).toBe(true);
   });
 
   it("P460-D orphan confirm without pending-origin is coverage unknown, not manufactured rate>1", async () => {

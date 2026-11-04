@@ -6,6 +6,8 @@ import {
   buildPilotMetricsPath,
   defaultPilotWindow,
   formatRate,
+  pilotFilterKey,
+  shouldApplyPilotResult,
   type PilotCity,
   type PilotMetrics,
 } from "../lib/pilot-metrics";
@@ -29,13 +31,44 @@ export function PilotMetricsPanel({
   const [data, setData] = useState<PilotMetrics | null>(null);
   const [empty, setEmpty] = useState(false);
   const booted = useRef(false);
+  const mounted = useRef(true);
+  const requestGeneration = useRef(0);
+  const filtersRef = useRef({ cityId: "", from: initial.from, to: initial.to });
+  filtersRef.current = { cityId, from, to };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestGeneration.current += 1;
+    };
+  }, []);
+
+  function invalidateSnapshot() {
+    requestGeneration.current += 1;
+    setData(null);
+    setEmpty(false);
+  }
 
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
     void run(async () => {
+      const gen = ++requestGeneration.current;
+      const requestedKey = pilotFilterKey(filtersRef.current);
       try {
         const catalogue = await adminRequest<PilotMetrics>("pilot-metrics");
+        if (
+          !shouldApplyPilotResult({
+            mounted: mounted.current,
+            requestGeneration: gen,
+            currentGeneration: requestGeneration.current,
+            requestedKey,
+            currentKey: pilotFilterKey(filtersRef.current),
+          })
+        ) {
+          return;
+        }
         if (!session.roles.includes("superadmin")) {
           setData(null);
           setCities([]);
@@ -45,6 +78,17 @@ export function PilotMetricsPanel({
         setCities(catalogue.cities);
         if (catalogue.cities[0]) setCityId(catalogue.cities[0].id);
       } catch (cause) {
+        if (
+          !shouldApplyPilotResult({
+            mounted: mounted.current,
+            requestGeneration: gen,
+            currentGeneration: requestGeneration.current,
+            requestedKey,
+            currentKey: pilotFilterKey(filtersRef.current),
+          })
+        ) {
+          return;
+        }
         setData(null);
         setCities([]);
         if (
@@ -60,10 +104,23 @@ export function PilotMetricsPanel({
 
   async function load() {
     await run(async () => {
+      const gen = ++requestGeneration.current;
+      const requestedKey = pilotFilterKey({ cityId, from, to });
       setEmpty(false);
       try {
         const path = buildPilotMetricsPath({ cityId, from, to });
         const next = await adminRequest<PilotMetrics>(path);
+        if (
+          !shouldApplyPilotResult({
+            mounted: mounted.current,
+            requestGeneration: gen,
+            currentGeneration: requestGeneration.current,
+            requestedKey,
+            currentKey: pilotFilterKey(filtersRef.current),
+          })
+        ) {
+          return;
+        }
         if (!session.roles.includes("superadmin")) {
           setData(null);
           onAuthorityLoss();
@@ -73,6 +130,17 @@ export function PilotMetricsPanel({
         setData(next);
         setEmpty(next.games.dueInWindow === 0);
       } catch (cause) {
+        if (
+          !shouldApplyPilotResult({
+            mounted: mounted.current,
+            requestGeneration: gen,
+            currentGeneration: requestGeneration.current,
+            requestedKey,
+            currentKey: pilotFilterKey(filtersRef.current),
+          })
+        ) {
+          return;
+        }
         setData(null);
         if (
           cause instanceof AdminError &&
@@ -105,8 +173,8 @@ export function PilotMetricsPanel({
             value={cityId}
             disabled={busy || cities.length === 0}
             onChange={(event) => {
+              invalidateSnapshot();
               setCityId(event.target.value);
-              setData(null);
             }}
           >
             <option value="">Выберите город</option>
@@ -124,7 +192,10 @@ export function PilotMetricsPanel({
             aria-label={PILOT_FILTER_LABELS.from}
             value={from}
             disabled={busy}
-            onChange={(event) => setFrom(event.target.value)}
+            onChange={(event) => {
+              invalidateSnapshot();
+              setFrom(event.target.value);
+            }}
           />
         </label>
         <label className="form-field">
@@ -134,7 +205,10 @@ export function PilotMetricsPanel({
             aria-label={PILOT_FILTER_LABELS.to}
             value={to}
             disabled={busy}
-            onChange={(event) => setTo(event.target.value)}
+            onChange={(event) => {
+              invalidateSnapshot();
+              setTo(event.target.value);
+            }}
           />
         </label>
         <button className="button" disabled={busy || !cityId}>
@@ -150,12 +224,12 @@ export function PilotMetricsPanel({
         <>
           {empty && (
             <div className="notice" role="status">
-              В выбранном окне нет подходящих игр для сводки.
+              {PILOT_FILTER_LABELS.dueEmpty}
             </div>
           )}
           {!data.coverage.sufficient && (
             <div className="notice" role="status">
-              <strong>Недостаточно данных или неполное покрытие</strong>
+              <strong>Недостаточно данных или неполное покрытие фактов</strong>
               <ul>
                 {data.coverage.notes.map((note) => (
                   <li key={note}>{note}</li>
@@ -176,9 +250,9 @@ export function PilotMetricsPanel({
           </dl>
           <h3>Игры</h3>
           <dl className="pilot-metrics-grid">
-            <dt>Подходящие в окне</dt>
+            <dt>{PILOT_FILTER_LABELS.dueInWindow}</dt>
             <dd>{data.games.dueInWindow}</dd>
-            <dt>Опубликованные</dt>
+            <dt>{PILOT_FILTER_LABELS.publishedEligible}</dt>
             <dd>{data.games.publishedEligible}</dd>
             <dt>Held / not_held / unknown</dt>
             <dd>
@@ -226,7 +300,7 @@ export function PilotMetricsPanel({
           </dl>
           <h3>Организаторы (только агрегаты)</h3>
           <dl className="pilot-metrics-grid">
-            <dt>С подходящими играми</dt>
+            <dt>С опубликованными в окне</dt>
             <dd>{data.organizers.withEligiblePublishedGames}</dd>
             <dt>С held</dt>
             <dd>{data.organizers.withHeldGames}</dd>

@@ -111,17 +111,17 @@ export class PilotMetricsService {
       }
       if (agg.games_due === 0) {
         notes.push(
-          "В выбранном окне нет due-игр (не demo/draft/cancelled, ends_at ≤ asOf) — данных недостаточно для пилотной сводки исходов/посещаемости.",
+          "В выбранном окне пока нет завершённых due-игр (ends_at ≤ asOf; не demo/draft/cancelled). Это не означает отсутствие опубликованных игр или заявок в окне starts_at — они считаются отдельно; сводка исходов/посещаемости по due ещё недоступна.",
         );
       }
       if (agg.unknown_outcome > 0) {
         notes.push(
-          `У ${agg.unknown_outcome} due-игр нет явного исхода held/not_held; они не входят в held rate.`,
+          `У ${agg.unknown_outcome} due-игр нет явного исхода held/not_held; они не входят в held rate. Покрытие фактов неполное, пока исход неизвестен.`,
         );
       }
       if (agg.attendance_unknown > 0) {
         notes.push(
-          `У ${agg.attendance_unknown} подтверждённых участий на held due-играх нет явной отметки посещаемости (отсутствие строки = unknown).`,
+          `У ${agg.attendance_unknown} подтверждённых участий на held due-играх посещаемость неизвестна (нет явной отметки present/absent; отсутствие строки = unknown). Такие факты не восполняются; покрытие остаётся неполным.`,
         );
       }
       notes.push(
@@ -135,6 +135,13 @@ export class PilotMetricsService {
         agg.legacy_without_proof > 0 && agg.applications === 0
           ? null
           : rateOrNull(agg.confirmations, agg.applications);
+
+      // Completeness of known facts — not a statistical KPI threshold or "complete pilot" signal.
+      const factsComplete =
+        agg.games_due > 0 &&
+        agg.legacy_without_proof === 0 &&
+        agg.unknown_outcome === 0 &&
+        agg.attendance_unknown === 0;
 
       const response: PilotMetricsResponse = {
         city: { id: city.id, nameRu: city.name_ru },
@@ -153,7 +160,7 @@ export class PilotMetricsService {
             "Записи без зарезервированного demo UUID/issuer не исключаются угадыванием по имени, bio или домену почты.",
         },
         coverage: {
-          sufficient: agg.games_due > 0 && agg.legacy_without_proof === 0,
+          sufficient: factsComplete,
           notes,
           participationsWithoutAttemptProof: agg.legacy_without_proof,
           gamesDueInWindow: agg.games_due,

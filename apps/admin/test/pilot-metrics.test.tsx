@@ -2,7 +2,12 @@ import { isValidElement } from "react";
 import type * as ReactModule from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PilotMetricsPanel } from "../src/components/PilotMetrics";
-import { PILOT_FILTER_LABELS, formatRate } from "../src/lib/pilot-metrics";
+import {
+  PILOT_FILTER_LABELS,
+  formatRate,
+  pilotFilterKey,
+  shouldApplyPilotResult,
+} from "../src/lib/pilot-metrics";
 import { visibleNavigation, type Session } from "../src/lib/admin-client";
 import type * as AdminClientModule from "../src/lib/admin-client";
 
@@ -104,6 +109,58 @@ const session: Session = {
   csrfToken: "csrf",
 };
 
+describe("pilot metrics filter identity helper", () => {
+  it("matches only when generation and filter key stay current on the same mount", () => {
+    const keyA = pilotFilterKey({
+      cityId: "a0000000-0000-4000-8000-000000000001",
+      from: "2026-10-01",
+      to: "2026-11-01",
+    });
+    const keyB = pilotFilterKey({
+      cityId: "a0000000-0000-4000-8000-000000000001",
+      from: "2026-10-15",
+      to: "2026-11-01",
+    });
+    expect(keyA).not.toBe(keyB);
+    expect(
+      shouldApplyPilotResult({
+        mounted: true,
+        requestGeneration: 3,
+        currentGeneration: 3,
+        requestedKey: keyA,
+        currentKey: keyA,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyPilotResult({
+        mounted: true,
+        requestGeneration: 3,
+        currentGeneration: 4,
+        requestedKey: keyA,
+        currentKey: keyA,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyPilotResult({
+        mounted: true,
+        requestGeneration: 3,
+        currentGeneration: 3,
+        requestedKey: keyA,
+        currentKey: keyB,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyPilotResult({
+        mounted: false,
+        requestGeneration: 3,
+        currentGeneration: 3,
+        requestedKey: keyA,
+        currentKey: keyA,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("pilot metrics UI markup", () => {
   beforeEach(() => {
     hooks.index = 0;
@@ -127,7 +184,7 @@ describe("pilot metrics UI markup", () => {
           coverage: { sufficient: false, notes: ["мало данных"], participationsWithoutAttemptProof: 0, gamesDueInWindow: 0 },
           games: {
             dueInWindow: 0,
-            publishedEligible: 0,
+            publishedEligible: 2,
             cancelledDisclosed: 0,
             draftExcluded: 0,
             demoExcluded: 0,
@@ -137,10 +194,10 @@ describe("pilot metrics UI markup", () => {
             heldRate: null,
           },
           applications: {
-            count: 0,
+            count: 1,
             confirmations: 0,
             confirmationRate: null,
-            currentStatus: { pending: 0, confirmed: 0, withdrawn: 0, rejected: 0, removed: 0, expired: 0 },
+            currentStatus: { pending: 1, confirmed: 0, withdrawn: 0, rejected: 0, removed: 0, expired: 0 },
             withdrawnAttempts: 0,
             rejectedAttempts: 0,
             removedAttempts: 0,
@@ -148,7 +205,7 @@ describe("pilot metrics UI markup", () => {
           },
           attendance: { present: 0, absent: 0, unknown: 0, eligibleOnHeldGames: 0 },
           repeatAttendance: { usersWithAtLeastOnePresent: 0, usersWithRepeatPresent: 0, rate: null },
-          organizers: { withEligiblePublishedGames: 0, withHeldGames: 0, withRepeatEligibleGames: 0 },
+          organizers: { withEligiblePublishedGames: 1, withHeldGames: 0, withRepeatEligibleGames: 0 },
           cities: [{ id: "a0000000-0000-4000-8000-000000000001", nameRu: "Москва" }],
         };
       }
@@ -158,6 +215,10 @@ describe("pilot metrics UI markup", () => {
 
   it("exposes filter labels, empty coverage, formulas and superadmin-only navigation", () => {
     expect(formatRate(null)).toMatch(/н\/д/);
+    expect(PILOT_FILTER_LABELS.dueInWindow).toMatch(/ends_at/);
+    expect(PILOT_FILTER_LABELS.publishedEligible).toMatch(/starts_at/);
+    expect(PILOT_FILTER_LABELS.dueEmpty).toMatch(/завершённых due/);
+    expect(PILOT_FILTER_LABELS.dueEmpty).not.toMatch(/подходящих игр/);
     expect(visibleNavigation(["superadmin"]).some((item) => item.id === "pilot")).toBe(true);
     expect(visibleNavigation(["moderator"]).some((item) => item.id === "pilot")).toBe(false);
     const tree = PilotMetricsPanel({

@@ -13,9 +13,10 @@ Pilot/Growth готовит предложение и каналы паралл�
 | Applications | Число различных committed-попыток с явной границей → pending (первая или после withdrawn/rejected/removed/expired) в рабочей когорте (не draft/не cancelled/не demo) | Click на кнопку, HTTP retry, участие на cancelled |
 | Confirmations | pending→confirmed, сопоставленное ровно одной валидной заявке попытки; сиротский confirmed → coverage unknown | Подтверждение не равно посещению; частичная история не выдумывает rate |
 | Confirmation rate | Валидные confirm / валидные заявки той же когорты; `null` при нулевом знаменателе | Нельзя получить rate>1 за счёт confirm без pending-origin |
-| publishedEligible / due | published/completed в окне `starts_at` (может включать upcoming); due = `ends_at ≤ asOf` | Upcoming не становится due/unknown от времени |
+| publishedEligible / due | published/completed в окне `starts_at` (может включать upcoming); due = `ends_at ≤ asOf` | Upcoming не становится due/unknown от времени; due=0 ≠ «нет подходящих» при наличии published/apps |
 | Held rate | held / (held + not_held) для due-игр с явным outcome; отдельно unknown только у due | Прошедшее время не считается held |
 | Attendance | Confirmed на held due: явные present/absent; отсутствие строки отметки = unknown | Статус confirmed сам по себе не present |
+| coverage.sufficient | true только при наличии due и полной известности фактов: нет unknown outcome, нет unknown attendance на held due, нет участий без proof попытки | Не KPI-порог и не сигнал «полный пилот»; notes об unknown остаются видимыми при неполных фактах |
 | Repeat attendance | Игроки с ≥2 distinct held+present / игроки с ≥1 в окне | Повторный просмотр и повторная заявка |
 | New client | Технический candidate + подтверждение отсутствия прежних посещений у данного организатора | `first seen in DB` или UTM недостаточно |
 | Acquisition cost | Документированные затраты канала / измеримый agreed outcome | Не приписывать неизвестные расходы нулю |

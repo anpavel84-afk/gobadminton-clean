@@ -36994,13 +36994,15 @@
             ],
             "properties": {
               "sufficient": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "True only when due games exist and facts are complete: no unknown due outcomes, no unknown eligible attendance on held due, and no participations without attempt proof. Completeness of known facts — not a statistical KPI threshold or complete-pilot signal."
               },
               "notes": {
                 "type": "array",
                 "items": {
                   "type": "string"
-                }
+                },
+                "description": "Human-readable coverage notes, including unknown outcome/attendance and due=0 vs published/application cohort. Shown when coverage is insufficient; unknowns remain visible with partial facts."
               },
               "participationsWithoutAttemptProof": {
                 "type": "integer",
@@ -37029,11 +37031,13 @@
             "properties": {
               "dueInWindow": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "description": "Published/completed non-demo non-cancelled games in the window whose ends_at ≤ asOf (completed due cohort)."
               },
               "publishedEligible": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "description": "Published/completed non-demo non-cancelled games with starts_at in the window (may include upcoming not yet due)."
               },
               "cancelledDisclosed": {
                 "type": "integer",
