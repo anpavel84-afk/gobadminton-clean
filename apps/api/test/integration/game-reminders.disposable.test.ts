@@ -332,6 +332,8 @@ run("#457 postgame reminders — disposable", () => {
     // One fixed clock: t0 = current fixed now; ends 4d ago so ordinals are due.
     // HTTP Later uses real clock_timestamp for snoozeUntil — next fake sweep must
     // read persisted snoozed_until (not t0+24h, which can still be inside the window).
+    // Prior cases (e.g. batch fairness) leave other ended games; +24h fake sweeps can
+    // schedule-advance those too — assert only this game/organizer, not global activated.
     const fixedNow = Date.now();
     const endsAt = new Date(fixedNow - 4 * 86400000);
     const startsAt = new Date(endsAt.getTime() - 2 * 3600_000);
@@ -344,9 +346,26 @@ run("#457 postgame reminders — disposable", () => {
        WHERE id = $1`,
       [game.id, startsAt, deadlineAt, endsAt],
     );
+    async function targetActivated(): Promise<number> {
+      const r = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM game_outcome_reminder_events
+         WHERE game_id = $1 AND organizer_user_id = $2 AND event_kind = 'activated'`,
+        [game.id, organizer.userId],
+      );
+      return r.rows[0]!.n;
+    }
+    async function targetVisibleOrdinal(): Promise<number | null> {
+      const r = await pool.query<{ ordinal: number }>(
+        `SELECT ordinal FROM game_outcome_reminders
+         WHERE game_id = $1 AND organizer_user_id = $2 AND state = 'visible'`,
+        [game.id, organizer.userId],
+      );
+      return r.rows[0]?.ordinal ?? null;
+    }
     const t0 = new Date(fixedNow);
-    const first = await sweep(t0);
-    expect(first.activated).toBe(1);
+    await sweep(t0);
+    expect(await targetActivated()).toBe(1);
+    expect(await targetVisibleOrdinal()).toBe(1);
     const listed = await get(organizer, "/v1/me/postgame-reminders");
     const reminder = listed.json().items.find((i: { gameId: string }) => i.gameId === game.id);
     expect(reminder.ordinal).toBe(1);
@@ -372,8 +391,9 @@ run("#457 postgame reminders — disposable", () => {
     }
 
     const t1 = await nextSweepAfterLater(reminder.id, t0);
-    const advance = await sweep(t1);
-    expect(advance.activated).toBe(1);
+    await sweep(t1);
+    expect(await targetActivated()).toBe(2);
+    expect(await targetVisibleOrdinal()).toBe(2);
     const after = await pool.query(
       `SELECT ordinal, state, stop_reason FROM game_outcome_reminders
        WHERE game_id = $1 AND organizer_user_id = $2
@@ -394,7 +414,9 @@ run("#457 postgame reminders — disposable", () => {
       expectedVersion: rem2.version,
     });
     const t2 = await nextSweepAfterLater(rem2.id, t1);
-    expect((await sweep(t2)).activated).toBe(1);
+    await sweep(t2);
+    expect(await targetActivated()).toBe(3);
+    expect(await targetVisibleOrdinal()).toBe(3);
     const listed3 = await get(organizer, "/v1/me/postgame-reminders");
     const rem3 = listed3.json().items.find((i: { gameId: string }) => i.gameId === game.id);
     expect(rem3.ordinal).toBe(3);
@@ -403,17 +425,23 @@ run("#457 postgame reminders — disposable", () => {
       expectedVersion: rem3.version,
     });
     const t3 = await nextSweepAfterLater(rem3.id, t2);
-    expect((await sweep(t3)).activated).toBe(0);
+    await sweep(t3);
+    // Cap-3 for this game only — global activated may still move unrelated leftovers.
+    expect(await targetActivated()).toBe(3);
+    expect(await targetVisibleOrdinal()).toBe(null);
     const finalList = await get(organizer, "/v1/me/postgame-reminders");
     expect(
       finalList.json().items.every((i: { gameId: string }) => i.gameId !== game.id),
     ).toBe(true);
-    const activations = await pool.query(
-      `SELECT count(*)::int AS n FROM game_outcome_reminder_events
-       WHERE game_id = $1 AND organizer_user_id = $2 AND event_kind = 'activated'`,
+    const finalRows = await pool.query(
+      `SELECT ordinal, state, stop_reason FROM game_outcome_reminders
+       WHERE game_id = $1 AND organizer_user_id = $2
+       ORDER BY ordinal`,
       [game.id, organizer.userId],
     );
-    expect(activations.rows[0].n).toBe(3);
+    expect(finalRows.rows).toHaveLength(3);
+    expect(finalRows.rows.every((r) => r.state === "stopped")).toBe(true);
+    expect(finalRows.rows.find((r) => r.ordinal === 3)?.stop_reason).toBe("superseded");
   });
 
   it("GET own visible; Later snoozes without outcome/attendance side effects; idempotent", async () => {
@@ -603,10 +631,16 @@ run("#457 postgame reminders — disposable", () => {
         new Date(far2),
       ],
     );
+    const restrictPrincipalId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",
+        [restrictActor.userId],
+      )
+    ).rows[0]!.id;
     await pool.query(
       `INSERT INTO user_restrictions(user_id, capability, reason_code, expires_at, created_by)
-       VALUES ($1, 'account.access', 'synthetic_fixture', clock_timestamp() + interval '1 hour', $1)`,
-      [restrictActor.userId],
+       VALUES ($1, 'account.access', 'synthetic_fixture', clock_timestamp() + interval '1 hour', $2)`,
+      [restrictActor.userId, restrictPrincipalId],
     );
     const afterRestrict = await sweep(new Date(Date.now()));
     expect(afterRestrict.stopped).toBeGreaterThan(0);
