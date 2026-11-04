@@ -1,5 +1,7 @@
 import { PgBoss } from "pg-boss";
 import {
+  POSTGAME_REMINDERS_SWEEP_DEAD_LETTER_QUEUE,
+  POSTGAME_REMINDERS_SWEEP_QUEUE,
   SOCIAL_EXPIRY_CLEANUP_DEAD_LETTER_QUEUE,
   SOCIAL_EXPIRY_CLEANUP_QUEUE,
   WEB_PUSH_DELIVER_DEAD_LETTER_QUEUE,
@@ -69,5 +71,25 @@ export async function ensureWebPushQueues(boss: PgBoss): Promise<void> {
     retentionSeconds: 7 * 24 * 3600,
     deleteAfterSeconds: 7 * 24 * 3600,
     deadLetter: WEB_PUSH_DELIVER_DEAD_LETTER_QUEUE,
+  });
+}
+
+/** Create post-game reminder sweep queues. Idle when POST_GAME_INTERNAL_ENABLED off. */
+export async function ensurePostgameRemindersQueues(boss: PgBoss): Promise<void> {
+  await boss.createQueue(POSTGAME_REMINDERS_SWEEP_DEAD_LETTER_QUEUE, {
+    retryLimit: 0,
+    expireInSeconds: 300,
+    retentionSeconds: 14 * 24 * 3600,
+    deleteAfterSeconds: 14 * 24 * 3600,
+  });
+  await boss.createQueue(POSTGAME_REMINDERS_SWEEP_QUEUE, {
+    retryLimit: 3,
+    retryDelay: 2,
+    retryBackoff: true,
+    retryDelayMax: 60,
+    expireInSeconds: 120,
+    retentionSeconds: 7 * 24 * 3600,
+    deleteAfterSeconds: 7 * 24 * 3600,
+    deadLetter: POSTGAME_REMINDERS_SWEEP_DEAD_LETTER_QUEUE,
   });
 }

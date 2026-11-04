@@ -194,6 +194,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0053_private_review_reports",
         "0054_role_reputation",
         "0055_role_web_push",
+        "0056_postgame_reminders",
       ]);
       expect((await pool.query("SELECT to_regclass('public.game_court_booking')::text AS name")).rows[0]?.name).toBe("game_court_booking");
       expect((await pool.query("SELECT to_regclass('public.entity_comments')::text AS name")).rows[0]?.name).toBe("entity_comments");
@@ -217,6 +218,19 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.web_push_subscriptions')::text AS name")).rows[0]?.name).toBe("web_push_subscriptions");
       expect((await pool.query("SELECT to_regclass('public.web_push_delivery_claims')::text AS name")).rows[0]?.name).toBe("web_push_delivery_claims");
       expect((await pool.query("SELECT to_regclass('public.web_push_delivery_intents')::text AS name")).rows[0]?.name).toBe("web_push_delivery_intents");
+      // 0056 #457 postgame organizer reminders.
+      expect((await pool.query("SELECT to_regclass('public.game_outcome_reminders')::text AS name")).rows[0]?.name).toBe("game_outcome_reminders");
+      expect((await pool.query("SELECT to_regclass('public.game_outcome_reminder_events')::text AS name")).rows[0]?.name).toBe("game_outcome_reminder_events");
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.game_outcome_reminders'::regclass
+               AND conname = 'game_outcome_reminders_game_org_ordinal_uidx'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/UNIQUE/i);
       // 0048 PG-3 reviews/notes: physical tables beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.game_reviews')::text AS name")).rows[0]?.name).toBe("game_reviews");
       expect((await pool.query("SELECT to_regclass('public.game_review_revisions')::text AS name")).rows[0]?.name).toBe("game_review_revisions");

@@ -26,11 +26,22 @@ export const WEB_PUSH_INTENT_RECOVER_SINGLETON_KEY = "web-push-intent-recover";
 /** Max pending intents claimed per recover tick (existing worker schedule). */
 export const WEB_PUSH_INTENT_RECOVER_BATCH_LIMIT = 50;
 
+/** #457 bounded internal post-game organizer reminder sweep queue. */
+export const POSTGAME_REMINDERS_SWEEP_QUEUE = "postgame.reminders.sweep";
+
+/** Dead-letter companion for terminal reminder sweep failures. */
+export const POSTGAME_REMINDERS_SWEEP_DEAD_LETTER_QUEUE =
+  "postgame.reminders.sweep.failed";
+
+/** Recurring reminder sweep singleton key (one in-flight schedule slot). */
+export const POSTGAME_REMINDERS_SWEEP_SINGLETON_KEY = "postgame-reminders-sweep";
+
 /**
  * Legacy `outbox_events` backlog classification (LS-02):
  * KEEP_AS_EVIDENCE — business audit/evidence rows remain; do not replay into
  * pg-boss or user notifications. New required async work uses pg-boss same-TX
  * enqueue. LS-04 extends payload kinds with invitation expiry + sweep.
  * #456 does not deliver historical outbox KEEP_AS_EVIDENCE rows.
+ * #457 does not replay historical outbox; only new durable reminder rows.
  */
 export const OUTBOX_BACKLOG_CLASSIFICATION = "KEEP_AS_EVIDENCE" as const;

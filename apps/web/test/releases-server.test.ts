@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps twenty-eight confirmed seed deployments including accepted alpha.1–alpha.20 and dedupes identical live rows", () => {
+  it("keeps thirty confirmed seed deployments including accepted alpha.1–alpha.21 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(28);
+    expect(seedCount).toBe(30);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -294,6 +294,7 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.18"
       || row.application_version === "0.1.0-alpha.19"
       || row.application_version === "0.1.0-alpha.20"
+      || row.application_version === "0.1.0-alpha.21"
       || row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(true);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
@@ -468,6 +469,20 @@ describe("history seed integrity", () => {
       && row.deployments.length === 1
       && row.api_contract_version === "0.28.0",
     )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.21"
+      && row.source_sha === "faa236ab8b52716d6e0fbed0d7fefa87334ee02f"
+      && row.deployments[0]?.release_id === "r41574322192-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-03T04:02:27Z"
+      && row.api_contract_version === "0.29.0",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.21"
+      && row.source_sha === "98f765c39d4f9cd4c6ef7005884f84b1af197d45"
+      && row.deployments[0]?.release_id === "r41747908212-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-04T00:49:07Z"
+      && row.api_contract_version === "0.29.0",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.flatMap((row) => row.deployments).map((d) => d.accepted_at)).toEqual([
       "2026-10-31T20:28:18Z",
       "2026-10-31T23:22:12.477839Z",
@@ -497,6 +512,8 @@ describe("history seed integrity", () => {
       "2026-11-02T13:55:41Z",
       "2026-11-02T16:28:48Z",
       "2026-11-03T02:01:14Z",
+      "2026-11-03T04:02:27Z",
+      "2026-11-04T00:49:07Z",
     ]);
   });
 

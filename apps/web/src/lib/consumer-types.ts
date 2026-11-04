@@ -813,3 +813,27 @@ export type RoleReviewReportReason =
   | "threat"
   | "fabrication"
   | "other";
+
+/** #457 durable in-app organizer reminders to record post-game outcome. */
+export type PostgameReminder = {
+  id: string;
+  gameId: string;
+  gameTitle: string | null;
+  endsAt: string;
+  ordinal: 1 | 2 | 3;
+  version: number;
+  state: "visible";
+  dueAt: string;
+  visibleAt: string;
+  resultsPath: string;
+  allowedActions: {
+    canOpenResults: boolean;
+    canLater: boolean;
+  };
+};
+
+export type PostgameRemindersPage = {
+  items: PostgameReminder[];
+  writesEnabled: boolean;
+  installed: boolean;
+};
