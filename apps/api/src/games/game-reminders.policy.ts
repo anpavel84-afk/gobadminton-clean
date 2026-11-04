@@ -3,14 +3,19 @@ import type { AppEnv } from "../config/env";
 import { badRequest, notFound, serviceUnavailable, unprocessable } from "../auth/problem";
 import { postGameWritesEnabled } from "./game-outcomes.policy";
 
-/** Local implementation choice (not Owner SLA): 1h / 24h / 72h after endsAt. */
-export const REMINDER_OFFSETS_MS = [
-  1 * 60 * 60 * 1000,
-  24 * 60 * 60 * 1000,
-  72 * 60 * 60 * 1000,
-] as const;
+export type ReminderOrdinal = 1 | 2 | 3;
 
-/** Local «Позже» snooze — 24h; does not consume or reset ordinal budget. */
+/** Local implementation choice (not Owner SLA): 1h / 24h / 72h after endsAt. */
+export const REMINDER_OFFSETS_MS: Record<ReminderOrdinal, number> = {
+  1: 1 * 60 * 60 * 1000,
+  2: 24 * 60 * 60 * 1000,
+  3: 72 * 60 * 60 * 1000,
+};
+
+/** Min gap between actual activations (no burst catch-up of all ordinals). */
+export const REMINDER_MIN_ACTIVATION_GAP_MS = 24 * 60 * 60 * 1000;
+
+/** Local «Позже» snooze — 24h; does not reset the activation-round cap. */
 export const REMINDER_SNOOZE_MS = 24 * 60 * 60 * 1000;
 
 export const REMINDER_MAX_ORDINAL = 3;
@@ -24,9 +29,8 @@ export type ReminderStopReason =
   | "game_cancelled"
   | "role_lost"
   | "account_restricted"
-  | "account_inactive";
-
-export type ReminderOrdinal = 1 | 2 | 3;
+  | "account_inactive"
+  | "superseded";
 
 export const laterReminderRequest = z
   .object({
@@ -87,8 +91,7 @@ export function reminderWritesEnabled(env: AppEnv): boolean {
 }
 
 export function dueAtForOrdinal(endsAt: Date, ordinal: ReminderOrdinal): Date {
-  const offset = REMINDER_OFFSETS_MS[ordinal - 1];
-  return new Date(endsAt.getTime() + offset);
+  return new Date(endsAt.getTime() + REMINDER_OFFSETS_MS[ordinal]);
 }
 
 export function isOrdinal(value: number): value is ReminderOrdinal {
@@ -107,7 +110,7 @@ export function isReminderDue(input: {
   );
 }
 
-/** Snooze expired → eligible to re-show same ordinal (does not mint a new one). */
+/** Snooze window elapsed — command advances or stops; does not re-show the same ordinal. */
 export function isSnoozeExpired(input: {
   now: Date;
   state: ReminderState;
@@ -115,6 +118,22 @@ export function isSnoozeExpired(input: {
 }): boolean {
   if (input.state !== "snoozed" || !input.snoozedUntil) return false;
   return input.now.getTime() >= input.snoozedUntil.getTime();
+}
+
+/**
+ * Max 3 actual activation rounds (incl. post-Later advance). Spacing blocks burst catch-up.
+ */
+export function canActivateAnother(input: {
+  activationCount: number;
+  lastActivatedAt: Date | null;
+  now: Date;
+}): boolean {
+  if (input.activationCount >= REMINDER_MAX_ORDINAL) return false;
+  if (!input.lastActivatedAt) return true;
+  return (
+    input.now.getTime() >=
+    input.lastActivatedAt.getTime() + REMINDER_MIN_ACTIVATION_GAP_MS
+  );
 }
 
 export function snoozeUntil(now: Date): Date {

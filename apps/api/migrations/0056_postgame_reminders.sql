@@ -23,7 +23,8 @@ CREATE TABLE game_outcome_reminders (
         'game_cancelled',
         'role_lost',
         'account_restricted',
-        'account_inactive'
+        'account_inactive',
+        'superseded'
       )
     ),
   stopped_at timestamptz NULL,

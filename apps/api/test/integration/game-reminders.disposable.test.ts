@@ -93,8 +93,9 @@ run("#457 postgame reminders — disposable", () => {
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "reminders-synthetic-fingerprint!!!!",
       POST_GAME_INTERNAL_ENABLED: "1",
-      USER_RESTRICTIONS_INTERNAL_ENABLED: "1",
     });
+    // Test-only overlay (preserve public rollout guard in loadEnv).
+    env.USER_RESTRICTIONS_INTERNAL_ENABLED = true;
     const moduleRef = await Test.createTestingModule({
       imports: [buildTestCoreModule(env, pool), GamesModule, VenuesModule, ProfilesModule],
     }).compile();
@@ -245,13 +246,13 @@ run("#457 postgame reminders — disposable", () => {
     return command.execute(pool, { kind: "sweep" }, { now, manageTransactions: true });
   }
 
-  it("repeated job ensures max 3 durable ordinals; restart does not reset or exceed", async () => {
+  it("repeated job ensures max 3 durable ordinals; overdue catch-up activates one card", async () => {
     const game = await createEndedGame(organizer);
     const now = new Date(game.endsAt.getTime() + 80 * 3600_000); // past 72h
     const first = await sweep(now);
     expect(first.skipped).toBe(false);
     expect(first.ensured).toBe(3);
-    expect(first.activated).toBe(3);
+    expect(first.activated).toBe(1);
     const second = await sweep(now);
     expect(second.ensured).toBe(0);
     expect(second.activated).toBe(0);
@@ -263,7 +264,122 @@ run("#457 postgame reminders — disposable", () => {
     );
     expect(count.rows).toHaveLength(3);
     expect(count.rows.map((r) => r.ordinal)).toEqual([1, 2, 3]);
-    expect(count.rows.every((r) => r.state === "visible")).toBe(true);
+    expect(count.rows.filter((r) => r.state === "visible")).toHaveLength(1);
+    expect(count.rows.filter((r) => r.state === "scheduled")).toHaveLength(2);
+    expect(count.rows.find((r) => r.state === "visible")?.ordinal).toBe(1);
+  });
+
+  it("batchLimit 2 with 3 ended games eventually processes the third (no oldest starvation)", async () => {
+    const g1 = await createEndedGame(organizer);
+    const g2 = await createEndedGame(organizer);
+    const g3 = await createEndedGame(organizer);
+    const base = Date.now();
+    await pool.query(`UPDATE games SET ends_at = $2 WHERE id = $1`, [
+      g1.id,
+      new Date(base - 5 * 3600_000),
+    ]);
+    await pool.query(`UPDATE games SET ends_at = $2 WHERE id = $1`, [
+      g2.id,
+      new Date(base - 4 * 3600_000),
+    ]);
+    await pool.query(`UPDATE games SET ends_at = $2 WHERE id = $1`, [
+      g3.id,
+      new Date(base - 3 * 3600_000),
+    ]);
+    const now = new Date(base);
+    const command = new GameRemindersCommand(env);
+    const first = await command.execute(
+      pool,
+      { kind: "sweep" },
+      { now, batchLimit: 2, manageTransactions: true },
+    );
+    expect(first.scanned).toBe(2);
+    expect(first.ensured).toBe(6);
+    const second = await command.execute(
+      pool,
+      { kind: "sweep" },
+      { now, batchLimit: 2, manageTransactions: true },
+    );
+    expect(second.scanned).toBeGreaterThanOrEqual(1);
+    expect(second.ensured).toBeGreaterThanOrEqual(3);
+    for (const gameId of [g1.id, g2.id, g3.id]) {
+      const rows = await pool.query(
+        `SELECT count(*)::int AS n FROM game_outcome_reminders WHERE game_id = $1`,
+        [gameId],
+      );
+      expect(rows.rows[0].n).toBe(3);
+    }
+  });
+
+  it("Later advances ordinal under cap; does not unbounded re-show the same card", async () => {
+    const game = await createEndedGame(organizer);
+    await pool.query(
+      `UPDATE games
+       SET starts_at = clock_timestamp() - interval '5 days',
+           application_deadline_at = clock_timestamp() - interval '5 days',
+           ends_at = clock_timestamp() - interval '4 days'
+       WHERE id = $1`,
+      [game.id],
+    );
+    const ends = (
+      await pool.query<{ ends_at: Date }>(`SELECT ends_at FROM games WHERE id = $1`, [game.id])
+    ).rows[0]!.ends_at;
+    const t0 = new Date(ends.getTime() + 80 * 3600_000);
+    const first = await sweep(t0);
+    expect(first.activated).toBe(1);
+    const listed = await get(organizer, "/v1/me/postgame-reminders");
+    const reminder = listed.json().items.find((i: { gameId: string }) => i.gameId === game.id);
+    expect(reminder.ordinal).toBe(1);
+
+    const later = await post(organizer, `/v1/me/postgame-reminders/${reminder.id}`, {
+      command: "later",
+      expectedVersion: reminder.version,
+    });
+    expect(later.statusCode).toBe(200);
+
+    const t1 = new Date(t0.getTime() + 24 * 3600_000);
+    const advance = await sweep(t1);
+    expect(advance.activated).toBe(1);
+    const after = await pool.query(
+      `SELECT ordinal, state, stop_reason FROM game_outcome_reminders
+       WHERE game_id = $1 AND organizer_user_id = $2
+       ORDER BY ordinal`,
+      [game.id, organizer.userId],
+    );
+    expect(after.rows.find((r) => r.ordinal === 1)).toMatchObject({
+      state: "stopped",
+      stop_reason: "superseded",
+    });
+    expect(after.rows.find((r) => r.ordinal === 2)?.state).toBe("visible");
+
+    const listed2 = await get(organizer, "/v1/me/postgame-reminders");
+    const rem2 = listed2.json().items.find((i: { gameId: string }) => i.gameId === game.id);
+    expect(rem2.ordinal).toBe(2);
+    await post(organizer, `/v1/me/postgame-reminders/${rem2.id}`, {
+      command: "later",
+      expectedVersion: rem2.version,
+    });
+    const t2 = new Date(t1.getTime() + 24 * 3600_000);
+    expect((await sweep(t2)).activated).toBe(1);
+    const listed3 = await get(organizer, "/v1/me/postgame-reminders");
+    const rem3 = listed3.json().items.find((i: { gameId: string }) => i.gameId === game.id);
+    expect(rem3.ordinal).toBe(3);
+    await post(organizer, `/v1/me/postgame-reminders/${rem3.id}`, {
+      command: "later",
+      expectedVersion: rem3.version,
+    });
+    const t3 = new Date(t2.getTime() + 24 * 3600_000);
+    expect((await sweep(t3)).activated).toBe(0);
+    const finalList = await get(organizer, "/v1/me/postgame-reminders");
+    expect(
+      finalList.json().items.every((i: { gameId: string }) => i.gameId !== game.id),
+    ).toBe(true);
+    const activations = await pool.query(
+      `SELECT count(*)::int AS n FROM game_outcome_reminder_events
+       WHERE game_id = $1 AND organizer_user_id = $2 AND event_kind = 'activated'`,
+      [game.id, organizer.userId],
+    );
+    expect(activations.rows[0].n).toBe(3);
   });
 
   it("GET own visible; Later snoozes without outcome/attendance side effects; idempotent", async () => {

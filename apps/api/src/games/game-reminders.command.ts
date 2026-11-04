@@ -4,6 +4,7 @@ import { unrestrictedSql } from "../restrictions/policy";
 import {
   REMINDER_MAX_ORDINAL,
   REMINDER_SWEEP_BATCH,
+  canActivateAnother,
   dueAtForOrdinal,
   gameEligibleForReminders,
   isOrdinal,
@@ -62,8 +63,8 @@ export async function probeRemindersInstalled(
 
 /**
  * Bounded recurring sweep for #457 internal organizer reminders.
- * Lock order per game: Game → managers (no Actor fence; worker path).
- * Does not invert locks with MutationRunner Actor→Game paths.
+ * Lock order per game: Game → managers → reminders (no Actor fence; worker path).
+ * HTTP Later uses Actor → Game → manager → Reminder (see GameRemindersService).
  */
 export class GameRemindersCommand {
   constructor(private readonly env: AppEnv) {}
@@ -104,35 +105,97 @@ export class GameRemindersCommand {
     );
     const now = nowRow.rows[0]!.now;
 
+    // Actionable only: due work, ensure gaps, or current stop conditions.
+    // Idle games with a single waiting visible card do not monopolize the batch.
     const candidates = await readExec.query<{ id: string }>(
       `SELECT g.id
        FROM games g
        WHERE g.ends_at <= $1
          AND g.status IN ('published', 'completed', 'cancelled')
-         AND NOT EXISTS (
-           SELECT 1 FROM game_outcomes go WHERE go.game_id = g.id
+         AND (
+           EXISTS (
+             SELECT 1
+             FROM game_outcome_reminders r
+             WHERE r.game_id = g.id
+               AND (
+                 (
+                   r.state = 'snoozed'
+                   AND r.snoozed_until IS NOT NULL
+                   AND r.snoozed_until <= $1
+                 )
+                 OR (
+                   r.state = 'scheduled'
+                   AND r.due_at <= $1
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM game_outcome_reminders s
+                     WHERE s.game_id = r.game_id
+                       AND s.organizer_user_id = r.organizer_user_id
+                       AND s.state = 'snoozed'
+                       AND s.snoozed_until IS NOT NULL
+                       AND s.snoozed_until > $1
+                   )
+                 )
+               )
+           )
+           OR (
+             g.status IN ('published', 'completed')
+             AND NOT EXISTS (SELECT 1 FROM game_outcomes go WHERE go.game_id = g.id)
+             AND EXISTS (
+               SELECT 1
+               FROM game_managers gm
+               WHERE gm.game_id = g.id
+                 AND gm.status = 'active'
+                 AND gm.role IN ('owner', 'manager')
+                 AND (
+                   SELECT count(*)::int
+                   FROM game_outcome_reminders r
+                   WHERE r.game_id = g.id
+                     AND r.organizer_user_id = gm.user_id
+                 ) < $2
+             )
+           )
+           OR (
+             EXISTS (
+               SELECT 1
+               FROM game_outcome_reminders r
+               WHERE r.game_id = g.id
+                 AND r.state IN ('scheduled', 'visible', 'snoozed')
+             )
+             AND (
+               g.status = 'cancelled'
+               OR EXISTS (SELECT 1 FROM game_outcomes go WHERE go.game_id = g.id)
+               OR EXISTS (
+                 SELECT 1
+                 FROM game_outcome_reminders r
+                 INNER JOIN users u ON u.id = r.organizer_user_id
+                 WHERE r.game_id = g.id
+                   AND r.state IN ('scheduled', 'visible', 'snoozed')
+                   AND u.status <> 'active'
+               )
+               OR EXISTS (
+                 SELECT 1
+                 FROM game_outcome_reminders r
+                 WHERE r.game_id = g.id
+                   AND r.state IN ('scheduled', 'visible', 'snoozed')
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM game_managers gm
+                     WHERE gm.game_id = r.game_id
+                       AND gm.user_id = r.organizer_user_id
+                       AND gm.status = 'active'
+                       AND gm.role IN ('owner', 'manager')
+                   )
+               )
+             )
+           )
          )
        ORDER BY g.ends_at ASC, g.id ASC
-       LIMIT $2`,
-      [now, batch],
+       LIMIT $3`,
+      [now, REMINDER_MAX_ORDINAL, batch],
     );
 
-    // Also re-check games that already have open reminder rows (role/outcome/cancel).
-    const openGames = await readExec.query<{ game_id: string }>(
-      `SELECT DISTINCT game_id
-       FROM game_outcome_reminders
-       WHERE state IN ('scheduled', 'visible', 'snoozed')
-       ORDER BY game_id ASC
-       LIMIT $1`,
-      [batch],
-    );
-
-    const gameIds = [
-      ...new Set([
-        ...candidates.rows.map((r) => r.id),
-        ...openGames.rows.map((r) => r.game_id),
-      ]),
-    ].slice(0, batch);
+    const gameIds = candidates.rows.map((r) => r.id);
 
     let ensured = 0;
     let activated = 0;
@@ -297,60 +360,273 @@ export class GameRemindersCommand {
         }
       }
 
-      const slots = await db.query<{
+      const budget = await this.activationBudget(db, gameId, manager.user_id);
+      const result = await this.activateAtMostOne(db, {
+        gameId,
+        organizerUserId: manager.user_id,
+        endsAt: game.ends_at,
+        now,
+        budget,
+      });
+      activated += result.activated;
+      stopped += result.stopped;
+    }
+
+    return { ensured, activated, stopped };
+  }
+
+  private async activationBudget(
+    db: SqlExecutor,
+    gameId: string,
+    organizerUserId: string,
+  ): Promise<{ activationCount: number; lastActivatedAt: Date | null }> {
+    const row = (
+      await db.query<{ activation_count: number; last_activated_at: Date | null }>(
+        `SELECT count(*)::int AS activation_count,
+                max(recorded_at) AS last_activated_at
+         FROM game_outcome_reminder_events
+         WHERE game_id = $1
+           AND organizer_user_id = $2
+           AND event_kind = 'activated'`,
+        [gameId, organizerUserId],
+      )
+    ).rows[0];
+    return {
+      activationCount: row?.activation_count ?? 0,
+      lastActivatedAt: row?.last_activated_at ?? null,
+    };
+  }
+
+  /**
+   * One visible card per game/organizer; max 3 activation rounds; min gap between rounds.
+   * Later expiry advances to the next ordinal (or stops at cap) — never unbounded same-ordinal resurfacing.
+   */
+  private async activateAtMostOne(
+    db: SqlExecutor,
+    input: {
+      gameId: string;
+      organizerUserId: string;
+      endsAt: Date;
+      now: Date;
+      budget: { activationCount: number; lastActivatedAt: Date | null };
+    },
+  ): Promise<{ activated: number; stopped: number }> {
+    const slots = await db.query<{
+      id: string;
+      ordinal: number;
+      state: string;
+      due_at: Date;
+      snoozed_until: Date | null;
+      version: number;
+    }>(
+      `SELECT id, ordinal, state, due_at, snoozed_until, version
+       FROM game_outcome_reminders
+       WHERE game_id = $1
+         AND organizer_user_id = $2
+         AND state IN ('scheduled', 'visible', 'snoozed')
+       ORDER BY ordinal ASC
+       FOR UPDATE`,
+      [input.gameId, input.organizerUserId],
+    );
+
+    const expiredSnooze = slots.rows.find(
+      (slot) =>
+        slot.state === "snoozed" &&
+        isOrdinal(slot.ordinal) &&
+        isSnoozeExpired({
+          now: input.now,
+          state: "snoozed",
+          snoozedUntil: slot.snoozed_until,
+        }),
+    );
+
+    if (expiredSnooze && isOrdinal(expiredSnooze.ordinal)) {
+      const expiredOrdinal = expiredSnooze.ordinal;
+      return this.advanceAfterLater(db, {
+        gameId: input.gameId,
+        organizerUserId: input.organizerUserId,
+        now: input.now,
+        budget: input.budget,
+        expired: {
+          id: expiredSnooze.id,
+          ordinal: expiredOrdinal,
+          state: expiredSnooze.state,
+          due_at: expiredSnooze.due_at,
+          snoozed_until: expiredSnooze.snoozed_until,
+          version: expiredSnooze.version,
+        },
+        slots: slots.rows,
+      });
+    }
+
+    // Active Later window postpones any further card until snooze expiry.
+    if (
+      slots.rows.some(
+        (slot) =>
+          slot.state === "snoozed" &&
+          !isSnoozeExpired({
+            now: input.now,
+            state: "snoozed",
+            snoozedUntil: slot.snoozed_until,
+          }),
+      )
+    ) {
+      return { activated: 0, stopped: 0 };
+    }
+
+    if (
+      !canActivateAnother({
+        activationCount: input.budget.activationCount,
+        lastActivatedAt: input.budget.lastActivatedAt,
+        now: input.now,
+      })
+    ) {
+      return { activated: 0, stopped: 0 };
+    }
+
+    const dueScheduled = slots.rows.find(
+      (slot) =>
+        slot.state === "scheduled" &&
+        isOrdinal(slot.ordinal) &&
+        isReminderDue({
+          now: input.now,
+          endsAt: input.endsAt,
+          dueAt: slot.due_at,
+        }),
+    );
+    if (!dueScheduled || !isOrdinal(dueScheduled.ordinal)) {
+      return { activated: 0, stopped: 0 };
+    }
+
+    const visible = slots.rows.find((slot) => slot.state === "visible");
+    // Keep the current card until the next ordinal is due (or Later advances).
+    if (visible && isOrdinal(visible.ordinal) && dueScheduled.ordinal <= visible.ordinal) {
+      return { activated: 0, stopped: 0 };
+    }
+
+    // Supersede older visible/snoozed so only one card is shown.
+    let stopped = 0;
+    for (const slot of slots.rows) {
+      if (slot.id === dueScheduled.id) continue;
+      if (slot.state === "visible" || slot.state === "snoozed") {
+        await this.stopReminder(db, slot.id, "superseded", input.now, "schedule_advance");
+        stopped += 1;
+      }
+    }
+
+    await this.markVisible(db, {
+      reminderId: dueScheduled.id,
+      gameId: input.gameId,
+      organizerUserId: input.organizerUserId,
+      ordinal: dueScheduled.ordinal,
+      now: input.now,
+      detail: "due",
+    });
+    return { activated: 1, stopped };
+  }
+
+  private async advanceAfterLater(
+    db: SqlExecutor,
+    input: {
+      gameId: string;
+      organizerUserId: string;
+      now: Date;
+      budget: { activationCount: number; lastActivatedAt: Date | null };
+      expired: {
+        id: string;
+        ordinal: ReminderOrdinal;
+        state: string;
+        due_at: Date;
+        snoozed_until: Date | null;
+        version: number;
+      };
+      slots: Array<{
         id: string;
         ordinal: number;
         state: string;
         due_at: Date;
         snoozed_until: Date | null;
         version: number;
-      }>(
-        `SELECT id, ordinal, state, due_at, snoozed_until, version
-         FROM game_outcome_reminders
-         WHERE game_id = $1
-           AND organizer_user_id = $2
-           AND state IN ('scheduled', 'snoozed')
-         ORDER BY ordinal ASC
-         FOR UPDATE`,
-        [gameId, manager.user_id],
-      );
+      }>;
+    },
+  ): Promise<{ activated: number; stopped: number }> {
+    // Never re-show the same ordinal after Later.
+    await this.stopReminder(db, input.expired.id, "superseded", input.now, "later_expired");
+    let stopped = 1;
 
-      for (const slot of slots.rows) {
-        if (!isOrdinal(slot.ordinal)) continue;
-        const due =
-          slot.state === "scheduled"
-            ? isReminderDue({ now, endsAt: game.ends_at, dueAt: slot.due_at })
-            : isSnoozeExpired({
-                now,
-                state: "snoozed",
-                snoozedUntil: slot.snoozed_until,
-              }) && game.ends_at.getTime() <= now.getTime();
-        if (!due) continue;
-        await db.query(
-          `UPDATE game_outcome_reminders
-           SET state = 'visible',
-               visible_at = COALESCE(visible_at, $2),
-               snoozed_until = NULL,
-               version = version + 1,
-               updated_at = $2
-           WHERE id = $1
-             AND state IN ('scheduled', 'snoozed')`,
-          [slot.id, now],
-        );
-        await this.appendEvent(db, {
-          reminderId: slot.id,
-          gameId,
-          organizerUserId: manager.user_id,
-          ordinal: slot.ordinal,
-          eventKind: "activated",
-          detail: slot.state === "snoozed" ? "snooze_expired" : "due",
-          at: now,
-        });
-        activated += 1;
+    if (
+      !canActivateAnother({
+        activationCount: input.budget.activationCount,
+        lastActivatedAt: input.budget.lastActivatedAt,
+        now: input.now,
+      })
+    ) {
+      // Cap exhausted — leave remaining scheduled rows in place but do not activate.
+      return { activated: 0, stopped };
+    }
+
+    const next = input.slots.find(
+      (slot) =>
+        slot.id !== input.expired.id &&
+        slot.state === "scheduled" &&
+        isOrdinal(slot.ordinal) &&
+        slot.ordinal > input.expired.ordinal,
+    );
+    if (!next || !isOrdinal(next.ordinal)) {
+      return { activated: 0, stopped };
+    }
+
+    // Also clear any other visible/snoozed stragglers before showing next.
+    for (const slot of input.slots) {
+      if (slot.id === input.expired.id || slot.id === next.id) continue;
+      if (slot.state === "visible" || slot.state === "snoozed") {
+        await this.stopReminder(db, slot.id, "superseded", input.now, "later_advance");
+        stopped += 1;
       }
     }
 
-    return { ensured, activated, stopped };
+    await this.markVisible(db, {
+      reminderId: next.id,
+      gameId: input.gameId,
+      organizerUserId: input.organizerUserId,
+      ordinal: next.ordinal,
+      now: input.now,
+      detail: "later_advance",
+    });
+    return { activated: 1, stopped };
+  }
+
+  private async markVisible(
+    db: SqlExecutor,
+    input: {
+      reminderId: string;
+      gameId: string;
+      organizerUserId: string;
+      ordinal: ReminderOrdinal;
+      now: Date;
+      detail: string;
+    },
+  ): Promise<void> {
+    await db.query(
+      `UPDATE game_outcome_reminders
+       SET state = 'visible',
+           visible_at = COALESCE(visible_at, $2),
+           snoozed_until = NULL,
+           version = version + 1,
+           updated_at = $2
+       WHERE id = $1
+         AND state IN ('scheduled', 'snoozed')`,
+      [input.reminderId, input.now],
+    );
+    await this.appendEvent(db, {
+      reminderId: input.reminderId,
+      gameId: input.gameId,
+      organizerUserId: input.organizerUserId,
+      ordinal: input.ordinal,
+      eventKind: "activated",
+      detail: input.detail,
+      at: input.now,
+    });
   }
 
   private async accountGate(
@@ -403,6 +679,7 @@ export class GameRemindersCommand {
     reminderId: string,
     reason: ReminderStopReason,
     now: Date,
+    detail?: string,
   ): Promise<void> {
     const row = (
       await db.query<{
@@ -432,7 +709,7 @@ export class GameRemindersCommand {
       organizerUserId: row.organizer_user_id,
       ordinal: row.ordinal,
       eventKind: "stopped",
-      detail: reason,
+      detail: detail ?? reason,
       at: now,
     });
   }

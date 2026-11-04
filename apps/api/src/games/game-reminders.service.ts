@@ -138,17 +138,20 @@ export class GameRemindersService {
       authorizeReplay: async (client) => {
         if (!reminderWritesEnabled(this.env)) writesUnavailable();
         if (!(await probeRemindersInstalled(client))) writesUnavailable();
-        // Lock order: Actor (MutationRunner) → reminder → Game → manager.
-        const locked = await this.lockOwnReminder(client, reminderId, userId);
-        await this.lockGame(client, locked.game_id);
-        await this.assertCurrentManager(client, locked.game_id, userId);
+        // Lock order: Actor (MutationRunner) → Game → manager → Reminder
+        // (matches worker Game→Reminder; identity read is unlocked tip only).
+        const tip = await this.readOwnReminderIdentity(client, reminderId, userId);
+        await this.lockGame(client, tip.game_id);
+        await this.assertCurrentManager(client, tip.game_id, userId);
+        await this.lockOwnReminder(client, reminderId, userId, tip.game_id);
       },
       execute: async (client) => {
         if (!reminderWritesEnabled(this.env)) writesUnavailable();
         if (!(await probeRemindersInstalled(client))) writesUnavailable();
-        const locked = await this.lockOwnReminder(client, reminderId, userId);
-        const game = await this.lockGame(client, locked.game_id);
-        await this.assertCurrentManager(client, locked.game_id, userId);
+        const tip = await this.readOwnReminderIdentity(client, reminderId, userId);
+        const game = await this.lockGame(client, tip.game_id);
+        await this.assertCurrentManager(client, tip.game_id, userId);
+        const locked = await this.lockOwnReminder(client, reminderId, userId, tip.game_id);
         const now = (
           await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")
         ).rows[0]!.now;
@@ -271,10 +274,30 @@ export class GameRemindersService {
     };
   }
 
+  /** Unlocked identity tip — find game_id without taking the reminder row lock. */
+  private async readOwnReminderIdentity(
+    client: PoolClient,
+    reminderId: string,
+    userId: string,
+  ): Promise<{ id: string; game_id: string }> {
+    const row = (
+      await client.query<{ id: string; game_id: string; organizer_user_id: string }>(
+        `SELECT id, game_id, organizer_user_id
+         FROM game_outcome_reminders
+         WHERE id = $1`,
+        [reminderId],
+      )
+    ).rows[0];
+    // Cross-account → private 404 (no existence leak).
+    if (!row || row.organizer_user_id !== userId) unavailable();
+    return row;
+  }
+
   private async lockOwnReminder(
     client: PoolClient,
     reminderId: string,
     userId: string,
+    expectedGameId: string,
   ): Promise<{
     id: string;
     game_id: string;
@@ -299,8 +322,14 @@ export class GameRemindersService {
         [reminderId],
       )
     ).rows[0];
-    // Cross-account → private 404 (no existence leak).
-    if (!row || row.organizer_user_id !== userId) unavailable();
+    // Cross-account / moved → private 404 (no existence leak).
+    if (
+      !row ||
+      row.organizer_user_id !== userId ||
+      row.game_id !== expectedGameId
+    ) {
+      unavailable();
+    }
     return row;
   }
 

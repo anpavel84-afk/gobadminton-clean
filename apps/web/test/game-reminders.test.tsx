@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PostgameReminders } from "../src/components/consumer/games/PostgameReminders";
+import type * as GameRemindersLib from "../src/lib/game-reminders";
 import { reminderResultsHref } from "../src/lib/game-reminders";
 import type { Me, PostgameReminder } from "../src/lib/consumer-types";
 
@@ -11,9 +12,7 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("../src/lib/game-reminders", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/game-reminders")>(
-    "../src/lib/game-reminders",
-  );
+  const actual = await vi.importActual<typeof GameRemindersLib>("../src/lib/game-reminders");
   return {
     ...actual,
     listPostgameReminders: vi.fn(async () => ({

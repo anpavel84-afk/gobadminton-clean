@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { GameRemindersController } from "../../src/games/game-reminders.controller";
 import {
   REMINDER_MAX_ORDINAL,
+  REMINDER_MIN_ACTIVATION_GAP_MS,
   REMINDER_OFFSETS_MS,
   REMINDER_SNOOZE_MS,
+  canActivateAnother,
   canShowReminder,
   dueAtForOrdinal,
   gameEligibleForReminders,
@@ -23,11 +25,11 @@ const ends = new Date("2026-11-01T12:00:00.000Z");
 describe("#457 reminder policy (fake clock)", () => {
   it("uses local 1h/24h/72h offsets and caps at 3 ordinals", () => {
     expect(REMINDER_MAX_ORDINAL).toBe(3);
-    expect(REMINDER_OFFSETS_MS).toEqual([
-      3_600_000,
-      86_400_000,
-      259_200_000,
-    ]);
+    expect(REMINDER_OFFSETS_MS).toEqual({
+      1: 3_600_000,
+      2: 86_400_000,
+      3: 259_200_000,
+    });
     expect(dueAtForOrdinal(ends, 1).toISOString()).toBe("2026-11-01T13:00:00.000Z");
     expect(dueAtForOrdinal(ends, 2).toISOString()).toBe("2026-11-02T12:00:00.000Z");
     expect(dueAtForOrdinal(ends, 3).toISOString()).toBe("2026-11-04T12:00:00.000Z");
@@ -59,7 +61,7 @@ describe("#457 reminder policy (fake clock)", () => {
     ).toBe(false);
   });
 
-  it("snooze postpones same ordinal without minting beyond max3", () => {
+  it("snooze postpones without resetting the activation-round cap", () => {
     const now = new Date("2026-11-01T14:00:00.000Z");
     expect(REMINDER_SNOOZE_MS).toBe(86_400_000);
     const until = snoozeUntil(now);
@@ -85,6 +87,39 @@ describe("#457 reminder policy (fake clock)", () => {
         snoozedUntil: until,
       }),
     ).toBe(false);
+  });
+
+  it("activation budget caps at 3 and spaces rounds by 24h", () => {
+    expect(REMINDER_MIN_ACTIVATION_GAP_MS).toBe(86_400_000);
+    const now = new Date("2026-11-03T12:00:00.000Z");
+    expect(
+      canActivateAnother({
+        activationCount: 0,
+        lastActivatedAt: null,
+        now,
+      }),
+    ).toBe(true);
+    expect(
+      canActivateAnother({
+        activationCount: 3,
+        lastActivatedAt: new Date("2026-11-01T13:00:00.000Z"),
+        now,
+      }),
+    ).toBe(false);
+    expect(
+      canActivateAnother({
+        activationCount: 1,
+        lastActivatedAt: new Date("2026-11-02T13:00:00.000Z"),
+        now,
+      }),
+    ).toBe(false);
+    expect(
+      canActivateAnother({
+        activationCount: 1,
+        lastActivatedAt: new Date("2026-11-02T12:00:00.000Z"),
+        now,
+      }),
+    ).toBe(true);
   });
 
   it("stops eligibility on held/not_held/cancelled; waits for future games", () => {
