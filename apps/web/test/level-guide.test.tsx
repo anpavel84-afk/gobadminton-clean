@@ -2,9 +2,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LevelGuide } from "../src/components/consumer/LevelGuide";
+import type { SocialLevel } from "../src/lib/consumer-types";
 import {
   LEVEL_GUIDE_DISCLAIMER,
   LEVEL_GUIDE_DONT_KNOW,
+  LEVEL_GUIDE_KEEP_CONTROL,
+  formatPreservedLevelChoiceLabel,
+  levelGuideControlValue,
   ntrpHalfstepIds,
 } from "../src/lib/level-guide";
 
@@ -13,7 +17,7 @@ describe("LevelGuide control", () => {
     const html = renderToStaticMarkup(
       createElement(LevelGuide, {
         surface: "profile",
-        value: "",
+        value: { kind: "none" },
         onChange: () => undefined,
       }),
     );
@@ -32,7 +36,7 @@ describe("LevelGuide control", () => {
     const html = renderToStaticMarkup(
       createElement(LevelGuide, {
         surface: "discovery",
-        value: "3.0",
+        value: { kind: "ntrp", levelId: "3.0" },
         onChange: () => undefined,
       }),
     );
@@ -44,23 +48,56 @@ describe("LevelGuide control", () => {
   });
 
   it("preserves unknown custom option without forcing ntrp wrap in the control", () => {
+    const existing: SocialLevel = {
+      scaleId: "custom-club",
+      scaleVersion: 1,
+      levelId: "gold",
+      provenance: "self_declared",
+    };
     const html = renderToStaticMarkup(
       createElement(LevelGuide, {
         surface: "profile",
-        value: "gold",
-        preservedOption: { levelId: "gold", label: "Клубный gold" },
+        value: { kind: "keep", level: existing },
+        preservedLevel: existing,
         onChange: () => undefined,
       }),
     );
-    expect(html).toContain("Клубный gold");
+    expect(html).toContain(formatPreservedLevelChoiceLabel(existing));
     expect(html).toContain("другая шкала");
+    expect(html).toContain(LEVEL_GUIDE_KEEP_CONTROL);
+  });
+
+  it("LG458-01: shows distinct preserved option vs NTRP option for same numeric id", () => {
+    const existing: SocialLevel = {
+      scaleId: "custom-club",
+      scaleVersion: 9,
+      levelId: "3.0",
+      provenance: "self_declared",
+    };
+    const html = renderToStaticMarkup(
+      createElement(LevelGuide, {
+        surface: "profile",
+        value: { kind: "keep", level: existing },
+        preservedLevel: existing,
+        onChange: () => undefined,
+      }),
+    );
+    const keepLabel = formatPreservedLevelChoiceLabel(existing);
+    expect(html).toContain(keepLabel);
+    expect(html).toContain(`value="${LEVEL_GUIDE_KEEP_CONTROL}"`);
+    expect(html).toContain('value="3.0"');
+    expect(levelGuideControlValue({ kind: "keep", level: existing })).toBe(LEVEL_GUIDE_KEEP_CONTROL);
+    expect(html).toContain("другая шкала");
+    expect(html).not.toContain("Выбрано:");
+    // Catalog ntrp optgroup still lists 3.0 as a separate explicit choice.
+    expect(html).toContain("Числовая шкала ntrp v1");
   });
 
   it("exposes accessible select + details without requiring a modal", () => {
     const html = renderToStaticMarkup(
       createElement(LevelGuide, {
         surface: "profile",
-        value: LEVEL_GUIDE_DONT_KNOW,
+        value: { kind: "none" },
         onChange: () => undefined,
         disabled: true,
       }),
@@ -69,5 +106,6 @@ describe("LevelGuide control", () => {
     expect(html).toContain("<details");
     expect(html).toContain("disabled");
     expect(html).not.toMatch(/modal|quiz|обязательн/i);
+    expect(LEVEL_GUIDE_DONT_KNOW).toBe("");
   });
 });

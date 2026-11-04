@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { LevelRule, SocialLevel } from "../src/lib/consumer-types";
 import {
+  LEVEL_GUIDE_KEEP_CONTROL,
   filterGamesBySelectedNtrpLevel,
   gameAllowsSelectedNtrpLevel,
   isExactNtrpV1Rule,
+  isExactNtrpV1Level,
+  isExactPilotV1Level,
   isKnownProfileLevelChoice,
   isNtrpHalfstepId,
+  levelGuideChoiceFromControlValue,
+  levelGuideChoiceFromProfile,
+  levelGuideControlValue,
   normalizeNtrpLevelId,
   ntrpHalfstepIds,
   ntrpSelfDeclaredLevel,
   resolveProfileLevelForSave,
+  shouldOfferPreservedLevel,
 } from "../src/lib/level-guide";
 
 const ntrpRule = (ids: string[]): LevelRule => ({
@@ -79,19 +86,20 @@ describe("level-guide membership against levelRule", () => {
 });
 
 describe("level-guide profile save resolution", () => {
-  it("preserves existing SocialLevel object on no-op same levelId", () => {
+  it("preserves existing SocialLevel object on keep / no-op", () => {
     const existing: SocialLevel = {
       scaleId: "custom-club",
       scaleVersion: 9,
       levelId: "gold",
       provenance: "self_declared",
     };
-    expect(resolveProfileLevelForSave("gold", existing)).toBe(existing);
-    expect(isKnownProfileLevelChoice("gold")).toBe(false);
+    expect(resolveProfileLevelForSave({ kind: "keep", level: existing }, existing)).toBe(existing);
+    expect(isKnownProfileLevelChoice(existing)).toBe(false);
+    expect(shouldOfferPreservedLevel(existing)).toBe(true);
   });
 
   it("stores ntrp/v1/self_declared for numeric choice, not gb-social-pilot", () => {
-    const next = resolveProfileLevelForSave("3.5", null);
+    const next = resolveProfileLevelForSave({ kind: "ntrp", levelId: "3.5" }, null);
     expect(next).toEqual({
       scaleId: "ntrp",
       scaleVersion: 1,
@@ -106,15 +114,87 @@ describe("level-guide profile save resolution", () => {
     });
   });
 
-  it("keeps pilot symbols and clears only on empty / Не знаю", () => {
-    expect(resolveProfileLevelForSave("beginner", null)).toEqual({
+  it("keeps pilot symbols and clears only on none / Не знаю", () => {
+    expect(resolveProfileLevelForSave({ kind: "pilot", levelId: "beginner" }, null)).toEqual({
       scaleId: "gb-social-pilot",
       scaleVersion: 1,
       levelId: "beginner",
       provenance: "self_declared",
     });
-    expect(resolveProfileLevelForSave("", { scaleId: "ntrp", scaleVersion: 1, levelId: "3.0", provenance: "self_declared" })).toBeNull();
+    expect(resolveProfileLevelForSave(
+      { kind: "none" },
+      { scaleId: "ntrp", scaleVersion: 1, levelId: "3.0", provenance: "self_declared" },
+    )).toBeNull();
     expect(isNtrpHalfstepId("3.0")).toBe(true);
     expect(isNtrpHalfstepId("beginner")).toBe(false);
+  });
+
+  it("LG458-01: no-op keeps custom scale; explicit same-id ntrp changes full scale", () => {
+    const existing: SocialLevel = {
+      scaleId: "custom-club",
+      scaleVersion: 9,
+      levelId: "3.0",
+      provenance: "self_declared",
+    };
+    const keep = levelGuideChoiceFromProfile(existing);
+    expect(keep).toEqual({ kind: "keep", level: existing });
+    expect(shouldOfferPreservedLevel(existing)).toBe(true);
+    expect(isExactNtrpV1Level(existing)).toBe(false);
+    expect(resolveProfileLevelForSave(keep, existing)).toBe(existing);
+
+    const explicitNtrp = levelGuideChoiceFromControlValue("3.0", existing);
+    expect(explicitNtrp).toEqual({ kind: "ntrp", levelId: "3.0" });
+    expect(resolveProfileLevelForSave(explicitNtrp, existing)).toEqual({
+      scaleId: "ntrp",
+      scaleVersion: 1,
+      levelId: "3.0",
+      provenance: "self_declared",
+    });
+
+    // Control keep token must never become a persisted levelId.
+    expect(LEVEL_GUIDE_KEEP_CONTROL).not.toBe("3.0");
+    expect(resolveProfileLevelForSave(
+      levelGuideChoiceFromControlValue(LEVEL_GUIDE_KEEP_CONTROL, existing),
+      existing,
+    )).toBe(existing);
+    expect(levelGuideControlValue(keep)).toBe(LEVEL_GUIDE_KEEP_CONTROL);
+  });
+
+  it("distinguishes exact gb-social-pilot/v1 from foreign scale reusing beginner", () => {
+    const pilot: SocialLevel = {
+      scaleId: "gb-social-pilot",
+      scaleVersion: 1,
+      levelId: "beginner",
+      provenance: "self_declared",
+    };
+    const foreign: SocialLevel = {
+      scaleId: "custom-club",
+      scaleVersion: 2,
+      levelId: "beginner",
+      provenance: "self_declared",
+    };
+    expect(isExactPilotV1Level(pilot)).toBe(true);
+    expect(isExactPilotV1Level(foreign)).toBe(false);
+    expect(levelGuideChoiceFromProfile(pilot)).toEqual({ kind: "pilot", levelId: "beginner" });
+    expect(levelGuideChoiceFromProfile(foreign)).toEqual({ kind: "keep", level: foreign });
+    expect(resolveProfileLevelForSave({ kind: "keep", level: foreign }, foreign)).toBe(foreign);
+    expect(resolveProfileLevelForSave({ kind: "pilot", levelId: "beginner" }, foreign)).toEqual({
+      scaleId: "gb-social-pilot",
+      scaleVersion: 1,
+      levelId: "beginner",
+      provenance: "self_declared",
+    });
+  });
+
+  it("does not coerce unknown ntrp scale versions into catalog ntrp/v1", () => {
+    const otherVersion: SocialLevel = {
+      scaleId: "ntrp",
+      scaleVersion: 2,
+      levelId: "3.0",
+      provenance: "self_declared",
+    };
+    expect(isExactNtrpV1Level(otherVersion)).toBe(false);
+    expect(levelGuideChoiceFromProfile(otherVersion)).toEqual({ kind: "keep", level: otherVersion });
+    expect(resolveProfileLevelForSave({ kind: "keep", level: otherVersion }, otherVersion)).toBe(otherVersion);
   });
 });

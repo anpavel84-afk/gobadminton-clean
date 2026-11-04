@@ -38,16 +38,16 @@ describe("FR-03 public projection and controls", () => {
 describe("FR-03 level guide (#458) draft vs Save", () => {
   it("Не знаю clears draft helper result without inventing a write", () => {
     const existing: SocialLevel = { scaleId: "gb-social-pilot", scaleVersion: 1, levelId: "intermediate", provenance: "self_declared" };
-    expect(resolveProfileLevelForSave("", existing)).toBeNull();
-    const html = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: "", onChange: () => undefined }));
+    expect(resolveProfileLevelForSave({ kind: "none" }, existing)).toBeNull();
+    const html = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: { kind: "none" }, onChange: () => undefined }));
     expect(html).toContain("Не знаю");
     expect(html).toContain("только после «Сохранить»");
   });
 
   it("absent and long-description states stay readable", () => {
-    const absent = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: "", onChange: () => undefined }));
+    const absent = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: { kind: "none" }, onChange: () => undefined }));
     expect(absent).toContain("Можно пропустить");
-    const long = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: "6.5", onChange: () => undefined }));
+    const long = renderToStaticMarkup(createElement(LevelGuide, { surface: "profile", value: { kind: "ntrp", levelId: "6.5" }, onChange: () => undefined }));
     expect(long).toContain("Выбрано:");
     expect(long).toMatch(/самооценка|аттестат|квалификац/i);
   });

@@ -7,7 +7,11 @@ import { deactivateTrainerProfile, deleteMyLookingForGame, getMe, getMySocialPro
 import type { ApiResult } from "../../../lib/api-client";
 import type { City, Me, OwnSocialProfile, TrainerProfile } from "../../../lib/consumer-types";
 import { formatSocialLevel, isSocialDirectoryDisabled, lookingIntentActive, lookingIntentExpired } from "../../../lib/player-presentation";
-import { isKnownProfileLevelChoice, resolveProfileLevelForSave } from "../../../lib/level-guide";
+import {
+  type LevelGuideChoice,
+  levelGuideChoiceFromProfile,
+  resolveProfileLevelForSave,
+} from "../../../lib/level-guide";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { LevelGuide } from "../LevelGuide";
@@ -40,12 +44,12 @@ export function ProfilePage() {
   const [cityId, setCityId] = useState("");
   const [areaKey, setAreaKey] = useState("");
   const [bio, setBio] = useState("");
-  const [levelId, setLevelId] = useState("");
+  const [levelChoice, setLevelChoice] = useState<LevelGuideChoice>({ kind: "none" });
   const [lookingArea, setLookingArea] = useState("");
   const [ttl, setTtl] = useState(180);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer); }, []);
-  function hydrate(s: OwnSocialProfile) { setSocial(s); setDisplayName(s.displayName); setCityId(s.cityId ?? ""); setAreaKey(s.areaKey ?? ""); setBio(s.bio ?? ""); setLevelId(s.level?.levelId ?? ""); setLookingArea(s.lookingForGame?.areaKey ?? s.areaKey ?? ""); }
+  function hydrate(s: OwnSocialProfile) { setSocial(s); setDisplayName(s.displayName); setCityId(s.cityId ?? ""); setAreaKey(s.areaKey ?? ""); setBio(s.bio ?? ""); setLevelChoice(levelGuideChoiceFromProfile(s.level)); setLookingArea(s.lookingForGame?.areaKey ?? s.areaKey ?? ""); }
   const contactMutation = useSocialMutation<OwnSocialProfile>(`${me?.id ?? "guest"}:contact-preference`, me?.csrfToken ?? "", data => {
     hydrate(data); setNotice(data.contactPolicy === "requests" ? "Личные сообщения разрешены." : "Личные сообщения выключены. Новые входящие не принимаются; история переписок сохраняется.");
   }, () => { setNeedsRefresh(true); });
@@ -90,7 +94,7 @@ export function ProfilePage() {
   async function saveProfile() {
     if (!me || !social || busy || needsRefresh) return;
     setBusy(true); setNotice("");
-    const result = await patchMySocialProfile({ expectedVersion: social.version, displayName: displayName.trim(), cityId: cityId || null, areaKey: areaKey.trim() || null, bio: bio.trim() || null, level: resolveProfileLevelForSave(levelId, social.level), socialEligible: true }, me.csrfToken);
+    const result = await patchMySocialProfile({ expectedVersion: social.version, displayName: displayName.trim(), cityId: cityId || null, areaKey: areaKey.trim() || null, bio: bio.trim() || null, level: resolveProfileLevelForSave(levelChoice, social.level), socialEligible: true }, me.csrfToken);
     setBusy(false);
     if (!result.ok) { failed(result); return; }
     hydrate(result.data); window.dispatchEvent(new Event("gb-profile-changed")); setEditing(false); setNotice("Профиль сохранён.");
@@ -210,7 +214,7 @@ export function ProfilePage() {
         {!editing && !lookingEdit && feedback}
       </div><aside className="account-panel" data-surface="op-08"><small>Личный аккаунт</small><h2>Аккаунт</h2><Link href="/friends">Друзья <span>→</span></Link><Link href="/profile/settings/login-methods">Способы входа <span>→</span></Link><Link href="/profile/settings/sessions">Активные сессии <span>→</span></Link><Link href="/profile/settings">Настройки <span>→</span></Link><Link href="/help">Помощь и документы <span>→</span></Link><button type="button" className="account-panel__logout" disabled={!me || logoutBusy} onClick={() => void onLogout()}>{logoutBusy ? "Выходим…" : "Выйти"}</button><button type="button" className="account-panel__danger" disabled>Удалить аккаунт <small>Пока недоступно</small></button></aside></div>
     </>}
-    {editing && social && <ProfileDialog title="Игровой профиль" onClose={() => { if (!busy) setEditing(false); }}><form onSubmit={e => { e.preventDefault(); void saveProfile(); }}>{me && <AvatarEditor name={social.displayName || me.displayName} avatar={social.avatar} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onChange={value => setSocial(current => current ? { ...current, ...value } : current)} onFailure={result => { failed(result); if (!result.ok && (result.status === 0 || result.status >= 500)) setNeedsRefresh(true); }} />}<label className="profile-field">Имя<input required maxLength={80} value={displayName} onChange={e => setDisplayName(e.target.value)} /></label><label className="profile-field">Город<select value={cityId} onChange={e => setCityId(e.target.value)}><option value="">Не указан</option>{cities.map(c => <option key={c.id} value={c.id}>{c.nameRu}</option>)}</select></label><LevelGuide surface="profile" value={levelId} onChange={setLevelId} disabled={locked} preservedOption={social.level && !isKnownProfileLevelChoice(social.level.levelId) ? { levelId: social.level.levelId, label: formatSocialLevel(social.level) } : null} /><label className="profile-field">Район / метро<input maxLength={64} value={areaKey} onChange={e => setAreaKey(e.target.value)} /></label><label className="profile-field">О себе<textarea maxLength={500} rows={4} value={bio} onChange={e => setBio(e.target.value)} /></label>{feedback}<Button type="submit" disabled={locked}>Сохранить</Button></form></ProfileDialog>}
+    {editing && social && <ProfileDialog title="Игровой профиль" onClose={() => { if (!busy) setEditing(false); }}><form onSubmit={e => { e.preventDefault(); void saveProfile(); }}>{me && <AvatarEditor name={social.displayName || me.displayName} avatar={social.avatar} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onChange={value => setSocial(current => current ? { ...current, ...value } : current)} onFailure={result => { failed(result); if (!result.ok && (result.status === 0 || result.status >= 500)) setNeedsRefresh(true); }} />}<label className="profile-field">Имя<input required maxLength={80} value={displayName} onChange={e => setDisplayName(e.target.value)} /></label><label className="profile-field">Город<select value={cityId} onChange={e => setCityId(e.target.value)}><option value="">Не указан</option>{cities.map(c => <option key={c.id} value={c.id}>{c.nameRu}</option>)}</select></label><LevelGuide surface="profile" value={levelChoice} onChange={setLevelChoice} disabled={locked} preservedLevel={social.level} /><label className="profile-field">Район / метро<input maxLength={64} value={areaKey} onChange={e => setAreaKey(e.target.value)} /></label><label className="profile-field">О себе<textarea maxLength={500} rows={4} value={bio} onChange={e => setBio(e.target.value)} /></label>{feedback}<Button type="submit" disabled={locked}>Сохранить</Button></form></ProfileDialog>}
     {lookingEdit && <ProfileDialog title="Ищу игру" onClose={() => { if (!busy) setLookingEdit(false); }}><form onSubmit={e => { e.preventDefault(); void changeLooking(false); }}><p>{city || "Сначала выберите город в игровом профиле."}</p><label className="profile-field">Район<input maxLength={64} value={lookingArea} onChange={e => setLookingArea(e.target.value)} /></label><label className="profile-field">Как долго искать<select value={ttl} onChange={e => setTtl(Number(e.target.value))}><option value={60}>1 час</option><option value={180}>3 часа</option></select></label>{feedback}<Button type="submit" disabled={locked || !social?.cityId}>Сохранить и включить</Button></form></ProfileDialog>}
   </div></ConsumerShell>;
 }

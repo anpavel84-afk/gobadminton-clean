@@ -1,14 +1,19 @@
 "use client";
 
 import { useId } from "react";
+import type { SocialLevel } from "../../lib/consumer-types";
 import {
   LEVEL_GUIDE_DISCLAIMER,
   LEVEL_GUIDE_DISCOVERY_SCOPE_NOTE,
   LEVEL_GUIDE_DONT_KNOW,
-  isNtrpHalfstepId,
-  isPilotLevelId,
+  LEVEL_GUIDE_KEEP_CONTROL,
+  type LevelGuideChoice,
+  formatPreservedLevelChoiceLabel,
+  levelGuideChoiceFromControlValue,
+  levelGuideControlValue,
   levelGuideSkillFor,
   levelGuideSkills,
+  shouldOfferPreservedLevel,
 } from "../../lib/level-guide";
 import { PILOT_LEVEL_OPTIONS } from "../../lib/player-presentation";
 import "../../styles/level-guide.css";
@@ -17,12 +22,12 @@ export type LevelGuideSurface = "profile" | "discovery";
 
 export type LevelGuideProps = {
   surface: LevelGuideSurface;
-  /** Controlled levelId; empty string = none / «Не знаю». */
-  value: string;
-  onChange: (levelId: string) => void;
+  /** Typed draft choice; empty/none = «Не знаю» / no filter. */
+  value: LevelGuideChoice;
+  onChange: (choice: LevelGuideChoice) => void;
   disabled?: boolean;
-  /** Profile: keep unknown/custom existing scale value visible until user changes it. */
-  preservedOption?: { levelId: string; label: string } | null;
+  /** Profile: full stored SocialLevel offered as a distinct keep option when not catalog ntrp/pilot. */
+  preservedLevel?: SocialLevel | null;
   /** Optional accessible name override. */
   labelledBy?: string;
 };
@@ -36,22 +41,21 @@ export function LevelGuide({
   value,
   onChange,
   disabled = false,
-  preservedOption = null,
+  preservedLevel = null,
   labelledBy,
 }: LevelGuideProps) {
   const uid = useId();
   const selectId = `${uid}-select`;
   const helpId = `${uid}-help`;
   const skills = levelGuideSkills();
-  const selectedSkill = value ? levelGuideSkillFor(value) : null;
-  const showPreserved =
-    Boolean(preservedOption?.levelId)
-    && !isPilotLevelId(preservedOption!.levelId)
-    && !isNtrpHalfstepId(preservedOption!.levelId);
+  const controlValue = levelGuideControlValue(value);
+  const selectedSkill = value.kind === "ntrp" ? levelGuideSkillFor(value.levelId) : null;
+  const showPreserved = shouldOfferPreservedLevel(preservedLevel);
+  const preservedLabel = preservedLevel ? formatPreservedLevelChoiceLabel(preservedLevel) : "";
 
-  function pick(next: string) {
+  function pick(nextControl: string) {
     if (disabled) return;
-    onChange(next);
+    onChange(levelGuideChoiceFromControlValue(nextControl, showPreserved ? preservedLevel : null));
   }
 
   return (
@@ -76,7 +80,7 @@ export function LevelGuide({
         <span>{surface === "profile" ? "Ориентировочный уровень" : "Уровень для фильтра списка"}</span>
         <select
           id={selectId}
-          value={value}
+          value={controlValue}
           disabled={disabled}
           aria-describedby={helpId}
           onChange={(event) => pick(event.target.value)}
@@ -84,8 +88,8 @@ export function LevelGuide({
           <option value={LEVEL_GUIDE_DONT_KNOW}>
             {surface === "profile" ? "Не знаю / не указывать" : "Без фильтра по уровню"}
           </option>
-          {showPreserved && preservedOption ? (
-            <option value={preservedOption.levelId}>{preservedOption.label}</option>
+          {showPreserved && preservedLevel ? (
+            <option value={LEVEL_GUIDE_KEEP_CONTROL}>{preservedLabel}</option>
           ) : null}
           {surface === "profile" ? (
             <optgroup label="Кратко (как раньше)">
@@ -107,7 +111,7 @@ export function LevelGuide({
       <div className="gb-level-guide__actions">
         <button
           type="button"
-          data-active={value === LEVEL_GUIDE_DONT_KNOW ? "true" : undefined}
+          data-active={value.kind === "none" ? "true" : undefined}
           disabled={disabled}
           onClick={() => pick(LEVEL_GUIDE_DONT_KNOW)}
         >
@@ -119,13 +123,13 @@ export function LevelGuide({
         <p className="gb-level-guide__selected" role="status">
           Выбрано: <strong>{selectedSkill.label}</strong> — {selectedSkill.summary}
         </p>
-      ) : value && showPreserved && preservedOption && preservedOption.levelId === value ? (
+      ) : value.kind === "keep" && showPreserved && preservedLevel ? (
         <p className="gb-level-guide__selected" role="status">
-          Сохранённый уровень: <strong>{preservedOption.label}</strong> (другая шкала — без автозамены)
+          Сохранённый уровень: <strong>{preservedLabel}</strong> (другая шкала — без автозамены)
         </p>
-      ) : value && isPilotLevelId(value) ? (
+      ) : value.kind === "pilot" ? (
         <p className="gb-level-guide__selected" role="status">
-          Краткий уровень: <strong>{PILOT_LEVEL_OPTIONS.find((o) => o.levelId === value)?.label ?? value}</strong>
+          Краткий уровень: <strong>{PILOT_LEVEL_OPTIONS.find((o) => o.levelId === value.levelId)?.label ?? value.levelId}</strong>
         </p>
       ) : (
         <p className="gb-level-guide__hint" role="status">
@@ -144,12 +148,12 @@ export function LevelGuide({
           ) : null}
           <ul className="gb-level-guide__list">
             {skills.map((skill) => (
-              <li key={skill.levelId} data-current={value === skill.levelId ? "true" : undefined}>
+              <li key={skill.levelId} data-current={value.kind === "ntrp" && value.levelId === skill.levelId ? "true" : undefined}>
                 <button
                   type="button"
                   disabled={disabled}
                   onClick={() => pick(skill.levelId)}
-                  aria-pressed={value === skill.levelId}
+                  aria-pressed={value.kind === "ntrp" && value.levelId === skill.levelId}
                 >
                   <strong>{skill.label}</strong>
                   <span>{skill.summary}</span>

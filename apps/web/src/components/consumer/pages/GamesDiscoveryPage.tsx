@@ -337,7 +337,11 @@ export function GamesDiscoveryPage() {
             </div>
             <span className="gb-discovery-sort"><DiscoveryIcon name="filter" />По времени</span>
           </div>
-          <LevelGuide surface="discovery" value={levelFilter} onChange={setLevelFilter} />
+          <LevelGuide
+            surface="discovery"
+            value={levelFilter ? { kind: "ntrp", levelId: levelFilter } : { kind: "none" }}
+            onChange={(choice) => setLevelFilter(choice.kind === "ntrp" ? choice.levelId : "")}
+          />
           <header className="gb-discovery-feed-heading">
             <div><small>Выходите на корт</small><h2>Игры {discoveryCityHeading(location.nameRu)}</h2></div>
             <div className="gb-discovery-feed-actions">{showCards && <span>Найдено: {listMatchCount}{feed.nextCursor ? "+" : ""}{levelFilterActive ? ` · из ${items.length} загруженных` : ""}</span>}<button type="button" onClick={() => setRefresh(n => n + 1)} disabled={state === "loading"} aria-label="Обновить игры">↻</button></div>
