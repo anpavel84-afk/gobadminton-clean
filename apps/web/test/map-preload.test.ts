@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { DEV_APP_ORIGIN, MOSCOW_BUNDLE, PROD_APP_ORIGIN } from "../src/lib/radar-map-assets";
+import { DEV_APP_ORIGIN, MOSCOW_BUNDLE, PROD_APP_ORIGIN, SAINT_PETERSBURG_BUNDLE } from "../src/lib/radar-map-assets";
 import {
   mapPreloadEligible,
   preloadGamesMapAssets,
@@ -25,8 +25,13 @@ it("admits exact canonical PROD origin for Moscow preload eligibility", () => {
   expect(mapPreloadEligible({ ...eligible, origin: DEV_APP_ORIGIN })).toBe(true);
 });
 
+it("admits Saint Petersburg preload eligibility on approved origins", () => {
+  expect(mapPreloadEligible({ ...eligible, cityId: SAINT_PETERSBURG_BUNDLE.cityId })).toBe(true);
+  expect(mapPreloadEligible({ ...eligible, cityId: SAINT_PETERSBURG_BUNDLE.cityId, origin: PROD_APP_ORIGIN })).toBe(true);
+});
+
 it.each([
-  { label: "unsupported city", env: { ...eligible, cityId: "a0000000-0000-4000-8000-000000000002" } },
+  { label: "unknown city", env: { ...eligible, cityId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" } },
   { label: "wrong origin", env: { ...eligible, origin: "https://example.test" } },
   { label: "mixed lookalike host", env: { ...eligible, origin: "https://www.gobadminton.ru" } },
   { label: "unknown host", env: { ...eligible, origin: "https://unknown.host" } },

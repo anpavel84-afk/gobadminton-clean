@@ -12,11 +12,23 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { filterVenuesForMapLayer } from "../../../lib/map-layer-filters";
-import { MOSCOW_BUNDLE, allowedMapResource, isApprovedAppOrigin } from "../../../lib/radar-map-assets";
+import { MOSCOW_BUNDLE, allowedMapResource, isApprovedAppOrigin, mapBundleForCity, mapIdForBundle, pointInBundleBounds, type FixedMapBundle } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 import { useMapLayerFilters } from "./MapLayerFilters";
-function sessionStorageVenue() {
-  try { return sessionStorage.getItem("gb-games-map-selected"); } catch { return null; }
+/** Moscow keeps the legacy unscoped key; other supported cities are scoped. */
+function cameraStorageKey(cityId: string) {
+  return cityId === MOSCOW_BUNDLE.cityId ? "gb-games-map-camera" : `gb-games-map-camera:${cityId}`;
+}
+function selectedStorageKey(cityId: string) {
+  return cityId === MOSCOW_BUNDLE.cityId ? "gb-games-map-selected" : `gb-games-map-selected:${cityId}`;
+}
+function sessionStorageVenue(cityId: string) {
+  try { return sessionStorage.getItem(selectedStorageKey(cityId)); } catch { return null; }
+}
+function mapAriaLabel(bundle: FixedMapBundle) {
+  return mapIdForBundle(bundle) === "saint-petersburg"
+    ? "Карта Санкт-Петербурга: стрелки перемещают карту, плюс и минус меняют масштаб"
+    : "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб";
 }
 interface VenueMarkerEntry {
   marker: maplibregl.Marker;
@@ -32,12 +44,14 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onSelect, onAvailability, onErrorCardChange, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; selectedVenueId?: string | null; onDeselect?: () => void; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
+export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDeselect, onSelect, onAvailability, onErrorCardChange, onReturnToList }: { cityId: string; venues: VenueSummary[]; counts: Map<string, number> | null; selectedVenueId?: string | null; onDeselect?: () => void; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
   const markers = useRef(new Map<string, VenueMarkerEntry>());
   const { applied } = useMapLayerFilters();
+  // Stable city pack reference — never allocate a fresh descriptor object per render.
+  const bundle = mapBundleForCity(cityId);
   // Marker filter only: selection still resolves against the canonical venue list above.
   const markerVenues = useMemo(
     () => applied.venueMode === "all" ? venues : filterVenuesForMapLayer(venues, counts, applied.venueMode),
@@ -58,10 +72,20 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
   const [warnings, setWarnings] = useState(0);
   useEffect(() => {
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
+    const selectedPack = mapBundleForCity(cityId);
+    if (!selectedPack) {
+      setFailure({ kind: "style", fatal: true });
+      setStatus("");
+      callbacks.current.onAvailability?.(false);
+      return () => { alive = false; };
+    }
+    // Non-null capture for the whole effect lifecycle, including nested async start().
+    const pack: FixedMapBundle = selectedPack;
+    const cameraKey = cameraStorageKey(cityId);
     const saveCamera = () => {
       if (!instance) return;
       const center = instance.getCenter();
-      try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ }
+      try { sessionStorage.setItem(cameraKey, JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ }
     };
     window.addEventListener("gb-map-return", saveCamera); window.addEventListener("pagehide", saveCamera);
     let loadedAt: number | undefined; let loadedTiles = 0; let firstRender = false;
@@ -99,28 +123,29 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
       timeout = setTimeout(() => report({ kind: "timeout" }), 20000);
       try {
         if (!isApprovedAppOrigin(window.location.origin)) throw new Error("Map origin unsupported");
-        const response = await fetch(MOSCOW_BUNDLE.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
+        const response = await fetch(pack.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
         if (!response.ok) throw { kind: "style", url: response.url, status: response.status };
         const bytes = await response.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
-        if (hash !== MOSCOW_BUNDLE.styleHash) throw new Error("style identity");
+        if (hash !== pack.styleHash) throw new Error("style identity");
         const style = JSON.parse(new TextDecoder().decode(bytes)) as StyleSpecification;
         // PMTiles fetches its archive internally: validate style URLs before installing it.
         const resources = [style.glyphs, ...(typeof style.sprite === "string" ? [style.sprite] : (style.sprite ?? []).map(sprite => sprite.url)), ...Object.values(style.sources).flatMap(source => ["url" in source ? source.url : undefined, ...("tiles" in source ? source.tiles ?? [] : [])])];
-        if (resources.some(url => typeof url === "string" && !allowedMapResource(url))) throw new Error("Unapproved style resource");
+        if (resources.some(url => typeof url === "string" && !allowedMapResource(url, pack))) throw new Error("Unapproved style resource");
         if (!alive || !container.current) return;
         phase = "init";
         installProtocol();
-        instance = new maplibregl.Map({ container: container.current, style, center: MOSCOW_BUNDLE.center, zoom: 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
-          transformRequest: url => { if (!allowedMapResource(url)) throw Object.assign(new Error("Unapproved map resource"), { url }); return { url, credentials: "same-origin" }; },
+        const zoom = "defaultZoom" in pack ? pack.defaultZoom : 10.5;
+        instance = new maplibregl.Map({ container: container.current, style, center: pack.center, zoom, maxBounds: pack.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
+          transformRequest: url => { if (!allowedMapResource(url, pack)) throw Object.assign(new Error("Unapproved map resource"), { url }); return { url, credentials: "same-origin" }; },
         });
         // Pan, pinch and keyboard remain native; fullscreen has no zoom overlay.
         instance.touchZoomRotate.disableRotation(); map.current = instance;
         try {
           setResumeCamera(sessionStorage.getItem("gb-games-map-returning") === "venue");
           sessionStorage.removeItem("gb-games-map-returning");
-          const camera = JSON.parse(sessionStorage.getItem("gb-games-map-camera") ?? "null");
-          if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
+          const camera = JSON.parse(sessionStorage.getItem(cameraKey) ?? "null");
+          if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && pointInBundleBounds(camera.lng, camera.lat, pack))
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
         const moving = () => { if (alive) setSettled(false); };
@@ -150,7 +175,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
         removeMapListeners.push(() => instance?.off("error", report));
         instance.getCanvas().addEventListener("webglcontextlost", lost);
         instance.getCanvas().addEventListener("webglcontextrestored", restore);
-        instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
+        instance.getCanvas().setAttribute("aria-label", mapAriaLabel(pack));
       } catch (error) { if (alive) report({ error, kind: classifyMapError(error, { phase, loadedTiles }).kind }); }
     }
     let frame = 0;
@@ -175,11 +200,11 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
       document.removeEventListener("visibilitychange", visible);
       instance?.getCanvas().removeEventListener("webglcontextlost", lost);
       instance?.getCanvas().removeEventListener("webglcontextrestored", restore); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
-      if (instance) { const center = instance.getCenter(); try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ } }
+      if (instance) { const center = instance.getCenter(); try { sessionStorage.setItem(cameraKey, JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ } }
       markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
-  }, [attempt]);
+  }, [attempt, cityId]);
   useEffect(() => {
-    if (!ready || !map.current) return;
+    if (!ready || !map.current || !bundle) return;
     reconcileVenueMarkers<VenueMarkerEntry>(markers.current, markerVenues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
@@ -197,7 +222,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
       },
       update: (entry, venue) => {
         const presentation = venueMarkerPresentation(venue, counts);
-        const pressed = String((selectedVenueId === undefined ? sessionStorageVenue() : selectedVenueId) === venue.id);
+        const pressed = String((selectedVenueId === undefined ? sessionStorageVenue(cityId) : selectedVenueId) === venue.id);
         const previous = entry.presentation ? JSON.parse(entry.presentation) as string[] : [];
         if (previous[0] !== presentation.className) entry.button.className = `maplibregl-marker ${presentation.className}`;
         if (previous[1] !== presentation.text) {
@@ -218,8 +243,8 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
         }
       },
       remove: entry => entry.marker.remove(),
-    });
-  }, [ready, markerVenues, counts, selectedVenueId]);
+    }, bundle);
+  }, [ready, markerVenues, counts, selectedVenueId, bundle, cityId]);
   useEffect(() => {
     if (!ready || !map.current) return;
     const canvas = map.current.getCanvas();

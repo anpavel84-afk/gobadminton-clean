@@ -1,5 +1,6 @@
 import type { Game, VenueSummary } from "./consumer-types";
 import { cityDate } from "./discovery-presentation";
+import { MOSCOW_BUNDLE, pointInBundleBounds, type FixedMapBundle } from "./radar-map-assets";
 
 /** Counts are discovery hints; detail/join always revalidate server authority. */
 export function venueSchedules(venues: VenueSummary[], games: Game[], day: string, now = Date.now()) {
@@ -36,11 +37,11 @@ export function reconcileVenueMarkers<Entry>(entries: Map<string, Entry>, venues
   create: (venue: VenueSummary) => Entry;
   update: (entry: Entry, venue: VenueSummary) => void;
   remove: (entry: Entry) => void;
-}) {
+}, bundle: FixedMapBundle = MOSCOW_BUNDLE) {
   const visible = new Set<string>();
   for (const venue of venues) {
     const { latitude: lat, longitude: lon } = venue;
-    if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
+    if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || !pointInBundleBounds(lon, lat, bundle)) continue;
     visible.add(venue.id);
     let entry = entries.get(venue.id);
     if (!entry) { entry = adapter.create(venue); entries.set(venue.id, entry); }

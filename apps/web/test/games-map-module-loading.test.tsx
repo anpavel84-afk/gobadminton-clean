@@ -88,6 +88,7 @@ it("registers the real loading component with ssr:false and resolves to the exac
   expect(html).toContain("Загружаем все площадки и расписание…");
   expect(html).not.toContain("В каталоге города пока нет площадок");
   expect(mapExport.mock.calls.at(-1)?.[0]).toEqual({
+    cityId: MOSCOW_BUNDLE.cityId,
     venues: [], counts: null, selectedVenueId: null,
     onSelect: expect.any(Function), onDeselect: expect.any(Function),
     onAvailability: expect.any(Function), onErrorCardChange: expect.any(Function), onReturnToList,
@@ -102,7 +103,7 @@ it("resolves a rejected import to a stable alert and keeps the existing return a
 
   const ErrorComponent = await resolveMap(captured);
   expect(await resolveMap(captured)).toBe(ErrorComponent);
-  const alert = renderToStaticMarkup(<ErrorComponent venues={[]} counts={null} onSelect={() => {}} onReturnToList={onReturnToList} />);
+  const alert = renderToStaticMarkup(<ErrorComponent cityId={MOSCOW_BUNDLE.cityId} venues={[]} counts={null} onSelect={() => {}} onReturnToList={onReturnToList} />);
   expect(alert.match(/role="alert"/g)).toHaveLength(1);
   expect(alert).toContain("<h2>Карта не загрузилась</h2>");
   expect(alert).toContain("Не удалось загрузить модуль карты. Площадки доступны списком.");
@@ -132,7 +133,8 @@ it("offers list navigation when the failed module has no return callback", async
 
 it.each([
   { label: "Moscow map", cityId: MOSCOW_BUNDLE.cityId, venueId: undefined, modulePending: true },
-  { label: "another city", cityId: "another-city", venueId: undefined, modulePending: false },
+  { label: "Saint Petersburg map", cityId: "a0000000-0000-4000-8000-000000000002", venueId: undefined, modulePending: true },
+  { label: "unknown city", cityId: "another-city", venueId: undefined, modulePending: false },
   { label: "venue schedule", cityId: MOSCOW_BUNDLE.cityId, venueId: "venue-id", modulePending: false },
 ])("limits the pending module UI to the $label branch", async ({ cityId, venueId, modulePending }) => {
   const { GamesMapView } = await importView();

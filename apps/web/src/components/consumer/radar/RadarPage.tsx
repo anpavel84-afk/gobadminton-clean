@@ -249,7 +249,7 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   };
   const layerPins = showPlayersLayer && session.phase === "active" && session.confirmedOn && !session.pendingStop ? safeMapPins : [];
   const mapped = candidate && !failed && controller && session.me;
-  const mapLayer = mapped && sharedMap ? <GeographicRadarMap resumeCamera={resumeCamera} sharedMap={sharedMap} controller={controller} rows={layerPins} playersVisible={showPlayersLayer} selected={view.selected} onSelect={selectPlayer} onUnavailable={() => setFailed(true)} /> : null;
+  const mapLayer = mapped && sharedMap && cityId ? <GeographicRadarMap cityId={cityId} resumeCamera={resumeCamera} sharedMap={sharedMap} controller={controller} rows={layerPins} playersVisible={showPlayersLayer} selected={view.selected} onSelect={selectPlayer} onUnavailable={() => setFailed(true)} /> : null;
   if (!sharedMap) return <main id="gb-main" className="gb-consumer g2-radar-map gb-shared-fullscreen" aria-label="Карта игр, площадок и Radar"><GamesMapViewport fullscreen><GamesMapView cityId={cityId ?? MOSCOW_BUNDLE.cityId} day="" /></GamesMapViewport><Link className="gb-map-return" href="/players" onClick={() => window.dispatchEvent(new Event("gb-map-return"))}><span aria-hidden="true">←</span>К списку</Link><div className="gb-map-radar"><RadarStatusAffordance mapControls /></div></main>;
   return <div className="gb-consumer gb-radar-layer fr3" aria-label="Карта участников Radar">
     {mapLayer}

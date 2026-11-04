@@ -1,4 +1,4 @@
-import { MOSCOW_BUNDLE, isApprovedAppOrigin } from "./radar-map-assets";
+import { mapBundleForCity, isApprovedAppOrigin } from "./radar-map-assets";
 
 /** Browser signals that gate the optional Games map warm. */
 export type MapPreloadEnv = {
@@ -8,8 +8,6 @@ export type MapPreloadEnv = {
   saveData?: boolean;
   hidden?: boolean;
 };
-
-const STYLE_URL = `${MOSCOW_BUNDLE.prefix}style-dev.json`;
 
 type WarmOutcome = "ok" | "fail";
 
@@ -28,9 +26,9 @@ export function resetMapPreloadStateForTests() {
   styleInflight = null;
 }
 
-/** Moscow + exact DEV or canonical PROD origin; skip saveData, offline, and hidden tabs. */
+/** Closed Moscow/SPb packs + exact DEV or canonical PROD origin; skip saveData, offline, and hidden tabs. */
 export function mapPreloadEligible(env: MapPreloadEnv): boolean {
-  return env.cityId === MOSCOW_BUNDLE.cityId
+  return mapBundleForCity(env.cityId) !== null
     && isApprovedAppOrigin(env.origin)
     && env.online !== false
     && env.saveData !== true
@@ -78,14 +76,17 @@ export async function preloadGamesMapAssets(options: {
   const { env, warmModule, signal } = options;
   if (!mapPreloadEligible(env)) return "skipped";
   if (signal?.aborted) return "aborted";
+  const bundle = mapBundleForCity(env.cityId);
+  if (!bundle) return "skipped";
 
   const fetchImpl = options.fetchStyle ?? fetch;
-  const styleKey = `${env.cityId}:${STYLE_URL}`;
+  const styleUrl = `${bundle.prefix}style-dev.json`;
+  const styleKey = `${env.cityId}:${styleUrl}`;
 
   const moduleOutcome = await warmModuleOnce(warmModule, signal);
   if (moduleOutcome === "aborted") return "aborted";
 
-  const styleOutcome = await warmStyleOnce(styleKey, fetchImpl, signal);
+  const styleOutcome = await warmStyleOnce(styleKey, styleUrl, fetchImpl, signal);
   if (styleOutcome === "aborted") return "aborted";
 
   if (moduleOutcome === "fail" || styleOutcome === "fail") return "failed";
@@ -117,6 +118,7 @@ async function warmModuleOnce(
 
 async function warmStyleOnce(
   styleKey: string,
+  styleUrl: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<WarmOutcome | "aborted"> {
@@ -133,7 +135,7 @@ async function warmStyleOnce(
     }
     styleInflight = (async (): Promise<WarmOutcome> => {
       try {
-        const response = await fetchImpl(STYLE_URL, { credentials: "omit", signal: controller.signal });
+        const response = await fetchImpl(styleUrl, { credentials: "omit", signal: controller.signal });
         if (!response.ok) throw new Error(`style preload ${response.status}`);
         // Drain the body so the normal HTTP cache can serve the live map fetch.
         await response.arrayBuffer();

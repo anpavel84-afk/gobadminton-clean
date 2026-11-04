@@ -65,7 +65,7 @@ const errorCard = vi.fn();
 const availability = vi.fn(); const back = vi.fn();
 function render(overrides: Partial<React.ComponentProps<typeof GamesVenueMap>> = {}) {
   h.cursor = 0;
-  const tree = GamesVenueMap({ venues: [venue], counts: new Map([["v", 1]]), onSelect: vi.fn(), onAvailability: availability, onErrorCardChange: errorCard, onReturnToList: back, ...overrides });
+  const tree = GamesVenueMap({ cityId: MOSCOW_BUNDLE.cityId, venues: [venue], counts: new Map([["v", 1]]), onSelect: vi.fn(), onAvailability: availability, onErrorCardChange: errorCard, onReturnToList: back, ...overrides });
   const attach = (node: React.ReactNode): void => {
     if (!isValidElement<{ ref?: { current: unknown }; children?: React.ReactNode }>(node)) return;
     if (node.props.ref) node.props.ref.current = { getBoundingClientRect: () => ({ width: h.width, height: 400 }) };
