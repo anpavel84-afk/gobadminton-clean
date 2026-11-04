@@ -58,8 +58,8 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     adminPool = new Pool({ connectionString: url.href });
     await adminPool.query(`CREATE DATABASE "${name}"`); url.pathname = "/" + name;
     pool = new Pool({ connectionString: url.href, max: 10 });
-    // Exclusive lexical until 0046 → migrate current API DB through 0045_venue_gallery.
-    await apply(pool, "0046");
+    // Current AdminService requires 0057 auth_method; historical upgrade DBs below keep their bounds.
+    await apply(pool, "0058");
     const env = loadEnv({ ...process.env, DATABASE_URL: url.href, PUBLIC_API_ORIGIN: "http://127.0.0.1:19441",
       PUBLIC_WEB_ORIGIN: "http://127.0.0.1:19442", ALLOWED_WEB_ORIGINS: "http://127.0.0.1:19442",
       ADMIN_INTERNAL_ENABLED: "1", ADMIN_ORIGIN: origin, ADMIN_AUTH_PEPPER: pepper });
