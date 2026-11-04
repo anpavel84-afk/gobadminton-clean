@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { cityDate, futureDiscoveryBounds, futureDiscoveryItems, nextCalendarDay } from "../src/lib/discovery-presentation";
+import { filterGamesBySelectedNtrpLevel } from "../src/lib/level-guide";
 
 describe("Owner A future-only city feed", () => {
   const now = Date.parse("2030-06-01T21:05:00Z");
@@ -16,5 +17,16 @@ describe("Owner A future-only city feed", () => {
     expect(futureDiscoveryItems(items, now + 60000).map(x => x.id)).toEqual(["later"]);
     expect(futureDiscoveryItems(items, now + 120000)).toEqual([]);
     expect(futureDiscoveryBounds("2030-06-02", "Europe/Moscow", now + 60000).startsFrom).toBe("2030-06-01T21:06:00.000Z");
+  });
+
+  it("keeps raw loaded page intact when level filter yields zero matches (#458)", () => {
+    const raw = [
+      { id: "soon", startsAt: "2030-06-01T21:06:00Z", levelRule: { scaleId: "ntrp", scaleVersion: 1, allowedLevelIds: ["7.0"] } },
+      { id: "later", startsAt: "2030-06-01T21:07:00Z", levelRule: { scaleId: "ntrp", scaleVersion: 1, allowedLevelIds: ["6.5"] } },
+    ];
+    const future = futureDiscoveryItems(raw, now);
+    expect(future).toHaveLength(2);
+    expect(filterGamesBySelectedNtrpLevel(future, "3.0")).toEqual([]);
+    expect(future.map((g) => g.id)).toEqual(["soon", "later"]);
   });
 });

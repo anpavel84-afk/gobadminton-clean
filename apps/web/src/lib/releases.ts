@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.22" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.23" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.30.0" as const;
@@ -425,19 +425,19 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   application_version: CURRENT_APPLICATION_VERSION,
-  title: "Напоминания организатору подвести итоги",
+  title: "Помощь с выбором игрового уровня",
   source_sha: null,
   owner_uat: "NOT_TESTED",
   additions: [
-    "После окончания игры организатор получает до трёх внутренних напоминаний подвести итоги, если исход ещё не указан",
-    "В «Моих играх» и на экране итогов доступны действия «Подвести итоги» и «Позже»; напоминание сохраняется на сервере и не пропадает при переустановке клиента",
-    "Напоминания не выставляют исход или посещаемость сами и не рассылаются по SMS, email или push",
+    "Короткая справка о существующих уровнях ntrp v1 и возможность не выбирать уровень",
+    "Переиспользуемая помощь в профиле и фильтре подходящих игр в поиске",
+    "Уровень указан самим игроком; изменение в профиле сохраняется только явным действием «Сохранить»",
   ],
   fixes: [],
   known_limitations: [
     "Приёмка владельцем после обычного входа ещё не выполнена",
-    "Интервалы напоминаний — локальная реализация (1 час / 24 часа / 72 часа после окончания), не отдельный SLA владельца",
-    "Внешняя доставка напоминаний в этой поставке не предусмотрена",
+    "Справка и фильтр не обещают квалификацию, совместимость или место в игре",
+    "Фильтр уровня в поиске действует только по уже загруженному списку и точной шкале ntrp v1; карта этот фильтр не применяет",
   ],
   feature_catalogue: "delta",
 };
@@ -1211,6 +1211,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем на физическом iPhone ещё не выполнена",
       "Доступность зависит от браузера, установки приложения и разрешения устройства; отказ в разрешении не включает подписку",
       "Первый выпуск относится к сообщениям. Приглашения в игру и изменения участия в эту поставку не входят"
+    ]
+  },
+  {
+    "source_sha": "e637e937d7fa780983daaac92cbe22e26c82ef1b",
+    "application_version": "0.1.0-alpha.22",
+    "version_label": "0.1.0-alpha.22",
+    "title": "Напоминания организатору подвести итоги",
+    "api_contract_version": "0.30.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41818484518-a1",
+        "accepted_at": "2026-11-04T11:17:16Z",
+        "api_digest": "sha256:ffa1c8e8447ee2c0b5c99ddce7a8b490780b41aade215c8493122ecf95476cbf",
+        "web_digest": "sha256:a28d441946607160b4967abb72f78f6a09ac5b2c374b596bac6e4bb5a3c30314",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "После окончания игры организатор получает до трёх внутренних напоминаний подвести итоги, если исход ещё не указан",
+      "В «Моих играх» и на экране итогов доступны действия «Подвести итоги» и «Позже»; напоминание сохраняется на сервере и не пропадает при переустановке клиента",
+      "Напоминания не выставляют исход или посещаемость сами и не рассылаются по SMS, email или push"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем после обычного входа ещё не выполнена",
+      "Интервалы напоминаний — локальная реализация (1 час / 24 часа / 72 часа после окончания), не отдельный SLA владельца",
+      "Внешняя доставка напоминаний в этой поставке не предусмотрена"
     ]
   },
 ] as const;

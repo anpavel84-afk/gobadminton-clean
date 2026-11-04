@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { cityDate, futureDiscoveryBounds, futureDiscoveryItems, discoveryDayBounds, discoveryFormat, discoveryGameWhen, nextCalendarDay } from "../src/lib/discovery-presentation";
 import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
+import { filterGamesBySelectedNtrpLevel, gameAllowsSelectedNtrpLevel } from "../src/lib/level-guide";
 import type { Game } from "../src/lib/consumer-types";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
@@ -77,6 +78,17 @@ describe("FR-01 API-backed card semantics", () => {
   });
 });
 
+
+describe("FR-01 level filter membership (#458)", () => {
+  it("does not treat pilot/legacy scale games as ntrp-compatible", () => {
+    expect(gameAllowsSelectedNtrpLevel(game.levelRule, "3.0")).toBe(false);
+    const ntrpGame = {
+      ...game,
+      levelRule: { scaleId: "ntrp", scaleVersion: 1, allowedLevelIds: ["2.5", "3.0", "3.5"] },
+    };
+    expect(filterGamesBySelectedNtrpLevel([game, ntrpGame], "3.0").map((g) => g.id)).toEqual([ntrpGame.id]);
+  });
+});
 
 describe("Owner all-upcoming discovery", () => {
   it("keeps the unset date lower-bounded only, and restores it after date selection", () => {

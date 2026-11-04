@@ -21,8 +21,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.22 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.22");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.23 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.23");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.30.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -38,8 +38,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/итог|напомина/i);
-    expect(currentProse).toMatch(/Подвести итоги|Позже/i);
+    expect(currentProse).toMatch(/уровн|помощь/i);
+    expect(currentProse).toMatch(/самим игроком|явным действием|Сохранить/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -190,10 +190,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(25);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(26);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(30);
+    ).toBe(31);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.20"
       && row.source_sha === "9db516ce96499d440a49e7e35029137c33a11429"
@@ -218,6 +218,17 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.accepted_at === "2026-11-04T00:49:07Z"
       && row.deployments.length === 1
       && row.api_contract_version === "0.29.0",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.22"
+      && row.source_sha === "e637e937d7fa780983daaac92cbe22e26c82ef1b"
+      && row.deployments[0]?.release_id === "r41818484518-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-04T11:17:16Z"
+      && row.deployments[0]?.api_digest === "sha256:ffa1c8e8447ee2c0b5c99ddce7a8b490780b41aade215c8493122ecf95476cbf"
+      && row.deployments[0]?.web_digest === "sha256:a28d441946607160b4967abb72f78f6a09ac5b2c374b596bac6e4bb5a3c30314"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.30.0"
+      && row.title === "Напоминания организатору подвести итоги",
     )).toBe(true);
     expect(SWITCHED_OFF_INTERNAL.some((row) => row.id === "f36")).toBe(true);
     expect(shortSha("11558239cf284a2f20e3c1c6906ae217c703325f")).toBe("11558239cf28");
