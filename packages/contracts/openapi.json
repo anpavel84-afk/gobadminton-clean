@@ -29973,6 +29973,14 @@
             "type": "string",
             "minLength": 32,
             "maxLength": 256
+          },
+          "authMethod": {
+            "type": "string",
+            "enum": [
+              "webauthn",
+              "dev_qa_key"
+            ],
+            "description": "Explicit authentication branch; DEV QA credentials never impersonate WebAuthn."
           }
         },
         "required": [

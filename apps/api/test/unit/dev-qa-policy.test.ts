@@ -7,7 +7,7 @@ describe("exact DEV QA isolation",()=>{
   expect(devQaKeyAllowed(allowed)).toBe(true);
   for(const patch of [{APP_ENV:"prod"},{NODE_ENV:"test"},{ADMIN_DEV_QA_KEY_ENABLED:false},{ADMIN_DEV_QA_VPS_VERIFIED:false},{ADMIN_DEV_PATH_ENABLED:false},{ADMIN_DEV_ENABLED:false},{ADMIN_INTERNAL_ENABLED:false},{ADMIN_ORIGIN:"https://gobadminton.ru"},{PUBLIC_WEB_ORIGIN:"https://gobadminton.ru"},{PUBLIC_API_ORIGIN:"https://gobadminton.ru"},{COOKIE_SECURE:false}])
    expect(devQaKeyAllowed({...allowed,...patch} as AppEnv)).toBe(false);
-  expect(()=>loadEnv({NODE_ENV:"test",APP_ENV:"local",DATABASE_URL:"postgres://test:test@127.0.0.1:5432/test",AUTH_PEPPER:"qa-local-test-not-a-live-pepper-0000",PUBLIC_WEB_ORIGIN:"http://localhost:3000",PUBLIC_API_ORIGIN:"http://localhost:3001",ADMIN_DEV_QA_KEY_ENABLED:"1"})).toThrow();
+  expect(()=>loadEnv({NODE_ENV:"test",APP_ENV:"local",DATABASE_URL:"postgres://test:test@127.0.0.1:5432/test",AUTH_PEPPER:"qa-local-test-not-a-live-pepper-0000",PUBLIC_WEB_ORIGIN:"http://localhost:3000",PUBLIC_API_ORIGIN:"http://localhost:3001",ADMIN_DEV_QA_KEY_ENABLED:"1"})).toThrow(/ADMIN_DEV_QA_KEY_ENABLED/);
  });
  it("permits only pilot, own authority and logout",()=>{
   expect(qaSessionRouteAllowed("GET","/v1/admin/pilot-metrics?cityId=x")).toBe(true);

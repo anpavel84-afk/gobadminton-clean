@@ -22,7 +22,8 @@ export async function provisionDevQa(pool: Pool, env: AppEnv, key: string) {
     if (!before) await c.query("INSERT INTO users(id,status,display_name) VALUES($1,'disabled',$2)",[DEV_QA_USER_ID,DEV_QA_LABEL]);
     const identities=(await c.query(`SELECT 1 FROM external_identities WHERE user_id=$1
       UNION ALL SELECT 1 FROM app_sessions WHERE user_id=$1
-      UNION ALL SELECT 1 FROM email_auth_methods WHERE user_id=$1`,[DEV_QA_USER_ID])).rowCount;
+      UNION ALL SELECT 1 FROM email_auth_methods WHERE user_id=$1
+      UNION ALL SELECT 1 FROM player_social_profiles WHERE user_id=$1`,[DEV_QA_USER_ID])).rowCount;
     if (identities) throw new Error("DEV_QA_CONSUMER_IDENTITY_COLLISION");
     let principal = (await c.query<{id:string;status:string}>("SELECT id,status FROM admin_principals WHERE user_id=$1 FOR UPDATE",[DEV_QA_USER_ID])).rows[0];
     if (!principal) principal=(await c.query<{id:string;status:string}>("INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id,status",[DEV_QA_USER_ID])).rows[0]!;

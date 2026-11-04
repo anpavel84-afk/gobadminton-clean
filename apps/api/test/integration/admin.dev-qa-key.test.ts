@@ -79,7 +79,15 @@ run("DEV QA key real isolated DB authentication",()=>{
   env.ADMIN_DEV_QA_KEY_ENABLED=true;env.APP_ENV="prod";expect(devQaKeyAllowed(env)).toBe(false);expect((await login()).statusCode).toBe(404);env.APP_ENV="mvp";
   await pool.query("UPDATE admin_role_grants SET active=false WHERE principal_id=(SELECT principal_id FROM admin_dev_qa_credentials WHERE id=$1)",[credentialId]);expect((await get("/v1/admin/pilot-metrics",cookie)).statusCode).toBe(403);
   await pool.query("UPDATE admin_role_grants SET active=true WHERE role='pilot_viewer'");
+  await pool.query("INSERT INTO admin_role_grants(principal_id,role,reason_code) SELECT principal_id,'superadmin','isolated_test' FROM admin_dev_qa_credentials WHERE id=$1",[credentialId]);
+  expect((await get("/v1/admin/pilot-metrics",cookie)).statusCode).toBe(403);
+  await pool.query("DELETE FROM admin_role_grants WHERE role='superadmin' AND principal_id=(SELECT principal_id FROM admin_dev_qa_credentials WHERE id=$1)",[credentialId]);
   await pool.query("UPDATE admin_dev_qa_credentials SET expires_at=clock_timestamp()-interval '1 second',created_at=clock_timestamp()-interval '1 hour' WHERE id=$1",[credentialId]);expect((await get("/v1/admin/pilot-metrics",cookie)).statusCode).toBe(401);
+ });
+ it("session deadline is enforced independently of still-valid credential",async()=>{
+  const cookie=cookies(await login());
+  await pool.query("UPDATE admin_sessions SET created_at=clock_timestamp()-interval '16 minutes',expires_at=clock_timestamp()-interval '2 minutes' WHERE qa_credential_id=$1",[credentialId]);
+  expect((await get("/v1/admin/pilot-metrics",cookie)).statusCode).toBe(401);
  });
  it("revokes all QA sessions atomically, preserves unrelated WebAuthn rows, idempotent; revoked key never reissues",async()=>{
   const first=cookies(await login()),second=cookies(await login());
