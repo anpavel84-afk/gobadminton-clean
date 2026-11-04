@@ -8,6 +8,7 @@ import {
   rateOrNull,
 } from "../../src/admin/pilot-metrics.policy";
 import {
+  parsePilotInstant,
   pilotMetricsQueryInputSchema,
   resolvePilotMetricsQuery,
 } from "../../src/admin/pilot-metrics.query";
@@ -53,9 +54,38 @@ describe("admin pilot metrics unit", () => {
     ).toThrow();
   });
 
+  it("accepts RFC3339 Z/offset and normalizes to UTC; rejects bare/rollover/no-tz", () => {
+    expect(parsePilotInstant("2026-10-15T12:00:00.000Z", "from").toISOString()).toBe(
+      "2026-10-15T12:00:00.000Z",
+    );
+    expect(parsePilotInstant("2026-10-15T12:00:00Z", "from").toISOString()).toBe(
+      "2026-10-15T12:00:00.000Z",
+    );
+    expect(parsePilotInstant("2026-10-15T15:00:00+03:00", "from").toISOString()).toBe(
+      "2026-10-15T12:00:00.000Z",
+    );
+    expect(parsePilotInstant("2026-10-15T09:00:00-03:00", "to").toISOString()).toBe(
+      "2026-10-15T12:00:00.000Z",
+    );
+    for (const bad of [
+      "2026-10-15",
+      "2026-10-15T12:00:00",
+      "2026-10-15 12:00:00",
+      "2026-11-31T00:00:00.000Z",
+      "2026-13-01T00:00:00.000Z",
+      "2026-10-15T24:00:00.000Z",
+      "not-a-date",
+    ]) {
+      expect(() => parsePilotInstant(bad, "from"), bad).toThrow();
+    }
+  });
+
   it("keeps Russian formulas and null rates for zero denominators", () => {
     expect(PILOT_FORMULAS_RU.confirmationRate).toMatch(/null/i);
     expect(PILOT_FORMULAS_RU.heldRate).toMatch(/held/);
+    expect(PILOT_FORMULAS_RU.heldRate).toMatch(/due|ends_at|asOf/i);
+    expect(PILOT_FORMULAS_RU.attendance).toMatch(/unknown/i);
+    expect(PILOT_FORMULAS_RU.exclusions).toMatch(/[Cc]ancel/);
     expect(PILOT_FORMULAS_RU.repeatAttendance).toMatch(/≥2|>=2/);
     expect(rateOrNull(2, 0)).toBeNull();
     expect(rateOrNull(1, 4)).toBe(0.25);

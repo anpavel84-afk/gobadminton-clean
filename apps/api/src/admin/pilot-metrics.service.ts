@@ -106,20 +106,35 @@ export class PilotMetricsService {
       const notes: string[] = [];
       if (agg.legacy_without_proof > 0) {
         notes.push(
-          `Есть ${agg.legacy_without_proof} участий без доказуемых границ попытки в transitions — показаны как coverage/unknown, факты прошлого не выдуманы.`,
+          `Есть ${agg.legacy_without_proof} участий без доказуемых границ попытки (нет transitions или частичная/несогласованная история confirmed без pending-origin) — показаны как coverage/unknown, факты прошлого не выдуманы.`,
         );
       }
       if (agg.games_due === 0) {
-        notes.push("В выбранном окне нет подходящих игр (не demo/draft) — данных недостаточно для пилотной сводки.");
+        notes.push(
+          "В выбранном окне нет due-игр (не demo/draft/cancelled, ends_at ≤ asOf) — данных недостаточно для пилотной сводки исходов/посещаемости.",
+        );
       }
       if (agg.unknown_outcome > 0) {
         notes.push(
-          `У ${agg.unknown_outcome} игр нет явного исхода held/not_held; они не входят в held rate.`,
+          `У ${agg.unknown_outcome} due-игр нет явного исхода held/not_held; они не входят в held rate.`,
+        );
+      }
+      if (agg.attendance_unknown > 0) {
+        notes.push(
+          `У ${agg.attendance_unknown} подтверждённых участий на held due-играх нет явной отметки посещаемости (отсутствие строки = unknown).`,
         );
       }
       notes.push(
         "Неразмеченные ручные тестовые записи без provenance нельзя автоматически классифицировать как demo или реальные.",
       );
+      notes.push(
+        "publishedEligible включает опубликованные/completed в окне starts_at (в т.ч. ещё не due); dueInWindow/исходы/посещаемость — только ends_at ≤ asOf. Cancelled раскрыты отдельно и не входят в рабочие когорты.",
+      );
+
+      const confirmationRate =
+        agg.legacy_without_proof > 0 && agg.applications === 0
+          ? null
+          : rateOrNull(agg.confirmations, agg.applications);
 
       const response: PilotMetricsResponse = {
         city: { id: city.id, nameRu: city.name_ru },
@@ -157,7 +172,7 @@ export class PilotMetricsService {
         applications: {
           count: agg.applications,
           confirmations: agg.confirmations,
-          confirmationRate: rateOrNull(agg.confirmations, agg.applications),
+          confirmationRate,
           currentStatus: {
             pending: agg.status_pending,
             confirmed: agg.status_confirmed,
@@ -228,7 +243,7 @@ export class PilotMetricsService {
            )
       ),
       window_games_all AS (
-        SELECT g.id, g.status, g.created_by_user_id, g.starts_at, v.id AS venue_id
+        SELECT g.id, g.status, g.created_by_user_id, g.starts_at, g.ends_at, v.id AS venue_id
         FROM games g
         JOIN venues v ON v.id = g.venue_id
         CROSS JOIN snap
@@ -243,25 +258,38 @@ export class PilotMetricsService {
            OR g.created_by_user_id::text ~* $4
            OR g.created_by_user_id IN (SELECT id FROM demo_user)
       ),
+      cancelled_disclosed AS (
+        SELECT g.*
+        FROM window_games_all g
+        WHERE g.id NOT IN (SELECT id FROM demo_games)
+          AND g.status = 'cancelled'
+      ),
+      -- Working cohort: non-demo, non-draft, non-cancelled (applications window may include upcoming).
       cohort AS (
         SELECT g.*
         FROM window_games_all g
         WHERE g.id NOT IN (SELECT id FROM demo_games)
           AND g.status <> 'draft'
+          AND g.status <> 'cancelled'
       ),
       eligible AS (
         SELECT * FROM cohort WHERE status IN ('published', 'completed')
       ),
+      due_games AS (
+        SELECT e.*
+        FROM eligible e
+        CROSS JOIN snap
+        WHERE e.ends_at <= snap.as_of
+      ),
       outcomes AS (
-        SELECT c.id,
+        SELECT d.id,
                CASE
                  WHEN o.value = 'held' THEN 'held'
                  WHEN o.value = 'not_held' THEN 'not_held'
                  ELSE 'unknown'
                END AS outcome
-        FROM cohort c
-        LEFT JOIN game_outcomes o ON o.game_id = c.id
-        WHERE c.status <> 'cancelled'
+        FROM due_games d
+        LEFT JOIN game_outcomes o ON o.game_id = d.id
       ),
       real_parts AS (
         SELECT p.id, p.game_id, p.user_id, p.status, p.attempt_number, p.version
@@ -272,18 +300,63 @@ export class PilotMetricsService {
           AND p.id::text !~* $4
       ),
       attempt_apps AS (
-        SELECT pt.id AS transition_id
+        SELECT pt.id AS attempt_id,
+               pt.participation_id,
+               pt.at AS attempt_at,
+               pt.aggregate_version AS attempt_version
         FROM participation_transitions pt
         JOIN real_parts p ON p.id = pt.participation_id
         WHERE pt.to_status = 'pending'
           AND (pt.from_status IS NULL OR pt.from_status IN ('withdrawn', 'rejected', 'removed', 'expired'))
       ),
+      -- Each confirm pairs to at most one prior pending-origin attempt; each attempt confirmed once.
+      confirm_candidates AS (
+        SELECT c.id AS confirm_id,
+               c.participation_id,
+               c.at AS confirm_at,
+               a.attempt_id,
+               row_number() OVER (
+                 PARTITION BY c.id
+                 ORDER BY a.attempt_at DESC, a.attempt_version DESC, a.attempt_id DESC
+               ) AS attempt_rank
+        FROM participation_transitions c
+        JOIN real_parts p ON p.id = c.participation_id
+        JOIN attempt_apps a
+          ON a.participation_id = c.participation_id
+         AND (
+               a.attempt_at < c.at
+               OR (a.attempt_at = c.at AND a.attempt_id < c.id)
+             )
+        WHERE c.to_status = 'confirmed'
+          AND c.from_status = 'pending'
+      ),
+      confirm_paired AS (
+        SELECT confirm_id, participation_id, attempt_id, confirm_at
+        FROM confirm_candidates
+        WHERE attempt_rank = 1
+      ),
       attempt_confirms AS (
-        SELECT pt.id AS transition_id
-        FROM participation_transitions pt
-        JOIN real_parts p ON p.id = pt.participation_id
-        WHERE pt.to_status = 'confirmed'
-          AND pt.from_status = 'pending'
+        SELECT attempt_id, confirm_id,
+               row_number() OVER (
+                 PARTITION BY attempt_id
+                 ORDER BY confirm_at ASC, confirm_id ASC
+               ) AS confirm_rank
+        FROM confirm_paired
+      ),
+      valid_confirms AS (
+        SELECT attempt_id, confirm_id
+        FROM attempt_confirms
+        WHERE confirm_rank = 1
+      ),
+      orphan_confirms AS (
+        SELECT c.id AS confirm_id, c.participation_id
+        FROM participation_transitions c
+        JOIN real_parts p ON p.id = c.participation_id
+        WHERE c.to_status = 'confirmed'
+          AND c.from_status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM valid_confirms v WHERE v.confirm_id = c.id
+          )
       ),
       attempt_terminal AS (
         SELECT pt.id AS transition_id, pt.to_status,
@@ -301,17 +374,36 @@ export class PilotMetricsService {
         WHERE NOT EXISTS (
           SELECT 1 FROM participation_transitions pt WHERE pt.participation_id = p.id
         )
+        UNION
+        SELECT DISTINCT oc.participation_id
+        FROM orphan_confirms oc
+        UNION
+        SELECT p.id
+        FROM real_parts p
+        WHERE p.status IN ('pending', 'confirmed')
+          AND EXISTS (
+            SELECT 1 FROM participation_transitions pt WHERE pt.participation_id = p.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM attempt_apps a WHERE a.participation_id = p.id
+          )
       ),
       held_games AS (
         SELECT id FROM outcomes WHERE outcome = 'held'
       ),
+      -- Confirmed on held: LEFT JOIN marks; missing row projects as unknown (0046 has no stored unknown required).
       eligible_attendance AS (
-        SELECT ga.user_id, ga.game_id, ga.value
-        FROM game_attendance ga
-        JOIN held_games h ON h.id = ga.game_id
-        JOIN real_parts p ON p.id = ga.participation_id AND p.status = 'confirmed'
-        WHERE ga.user_id::text !~* $4
-          AND ga.user_id NOT IN (SELECT id FROM demo_user)
+        SELECT p.user_id,
+               p.game_id,
+               COALESCE(ga.value, 'unknown') AS value
+        FROM real_parts p
+        JOIN held_games h ON h.id = p.game_id
+        LEFT JOIN game_attendance ga
+          ON ga.participation_id = p.id
+         AND ga.game_id = p.game_id
+        WHERE p.status = 'confirmed'
+          AND p.user_id::text !~* $4
+          AND p.user_id NOT IN (SELECT id FROM demo_user)
       ),
       present_by_user AS (
         SELECT user_id, count(DISTINCT game_id)::int AS held_present_games
@@ -328,16 +420,16 @@ export class PilotMetricsService {
           AND e.created_by_user_id NOT IN (SELECT id FROM demo_user)
       )
       SELECT
-        (SELECT count(*)::int FROM cohort) AS games_due,
+        (SELECT count(*)::int FROM due_games) AS games_due,
         (SELECT count(*)::int FROM eligible) AS games_published,
-        (SELECT count(*)::int FROM cohort WHERE status = 'cancelled') AS games_cancelled,
+        (SELECT count(*)::int FROM cancelled_disclosed) AS games_cancelled,
         (SELECT count(*)::int FROM window_games_all WHERE status = 'draft' AND id NOT IN (SELECT id FROM demo_games)) AS games_draft,
         (SELECT count(*)::int FROM demo_games) AS games_demo,
         (SELECT count(*)::int FROM outcomes WHERE outcome = 'held') AS held,
         (SELECT count(*)::int FROM outcomes WHERE outcome = 'not_held') AS not_held,
         (SELECT count(*)::int FROM outcomes WHERE outcome = 'unknown') AS unknown_outcome,
         (SELECT count(*)::int FROM attempt_apps) AS applications,
-        (SELECT count(*)::int FROM attempt_confirms) AS confirmations,
+        (SELECT count(*)::int FROM valid_confirms) AS confirmations,
         (SELECT count(*)::int FROM real_parts WHERE status = 'pending') AS status_pending,
         (SELECT count(*)::int FROM real_parts WHERE status = 'confirmed') AS status_confirmed,
         (SELECT count(*)::int FROM real_parts WHERE status = 'withdrawn') AS status_withdrawn,

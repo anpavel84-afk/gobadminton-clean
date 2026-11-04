@@ -10468,7 +10468,7 @@
               "type": "string",
               "format": "date-time"
             },
-            "description": "UTC window start inclusive. Default: now-30d."
+            "description": "Window start inclusive. RFC3339 date-time with Z or numeric offset; normalized to UTC. Default: now-30d. Bare dates / timezone-less local times rejected."
           },
           {
             "name": "to",
@@ -10478,7 +10478,7 @@
               "type": "string",
               "format": "date-time"
             },
-            "description": "UTC window end exclusive. Default: now. Max span 365 days."
+            "description": "Window end exclusive. RFC3339 date-time with Z or numeric offset; normalized to UTC. Default: now. Max span 365 days. Bare dates / timezone-less local times rejected."
           }
         ],
         "responses": {

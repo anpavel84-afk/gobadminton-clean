@@ -46,6 +46,8 @@ run("Admin pilot metrics isolated aggregates", () => {
   let content: Actor;
   let cityId: string;
   let otherCityId: string;
+  /** DB wall clock — JS Date.now / fake timers do not move PostgreSQL now()/clock_timestamp(). */
+  let dbNow: Date;
 
   beforeAll(async () => {
     Object.assign(process.env, {
@@ -89,16 +91,25 @@ run("Admin pilot metrics isolated aggregates", () => {
     ).rows;
     cityId = cities[0]!.id;
     otherCityId = cities[1]?.id ?? cities[0]!.id;
+    dbNow = (await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
   }, 120_000);
 
   beforeEach(async () => {
     await pool.query("DELETE FROM admin_rate_windows");
+    dbNow = (await pool.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
   });
 
   afterAll(async () => {
     await app?.close();
     await pool?.end();
   });
+
+  function hoursAgo(h: number) {
+    return new Date(dbNow.getTime() - h * 3_600_000);
+  }
+  function hoursAhead(h: number) {
+    return new Date(dbNow.getTime() + h * 3_600_000);
+  }
 
   async function user(name = "pilot460 synthetic") {
     return (
@@ -154,8 +165,9 @@ run("Admin pilot metrics isolated aggregates", () => {
     startsAt: Date;
     status?: string;
     id?: string;
+    durationMs?: number;
   }) {
-    const ends = new Date(input.startsAt.getTime() + 3_600_000);
+    const ends = new Date(input.startsAt.getTime() + (input.durationMs ?? 3_600_000));
     const status = input.status ?? "published";
     return (
       await pool.query<{ id: string }>(
@@ -228,7 +240,7 @@ run("Admin pilot metrics isolated aggregates", () => {
     return row;
   }
 
-  async function confirm(participationId: string, userId: string, fromVersion: number) {
+  async function confirm(participationId: string, userId: string, _fromVersion: number) {
     const row = (
       await pool.query<{ id: string; version: number }>(
         `UPDATE participations
@@ -349,11 +361,12 @@ run("Admin pilot metrics isolated aggregates", () => {
     const player = await user("pilot460 player");
     const player2 = await user("pilot460 player2");
     const venueId = await venue(owner);
-    const from = new Date("2026-10-01T00:00:00.000Z");
-    const to = new Date("2026-11-01T00:00:00.000Z");
-    const inWindow = new Date("2026-10-15T12:00:00.000Z");
-    const inWindow2 = new Date("2026-10-20T12:00:00.000Z");
-    const outside = new Date("2026-09-01T12:00:00.000Z");
+    // Coherent relative to DB clock: past due games + outside window; window spans past→near future.
+    const from = hoursAgo(30 * 24);
+    const to = hoursAhead(14 * 24);
+    const inWindow = hoursAgo(14 * 24);
+    const inWindow2 = hoursAgo(7 * 24);
+    const outside = hoursAgo(45 * 24);
 
     const g1 = await game({ ownerId: owner, venueId, startsAt: inWindow });
     const g2 = await game({ ownerId: owner, venueId, startsAt: inWindow2 });
@@ -361,14 +374,14 @@ run("Admin pilot metrics isolated aggregates", () => {
     const gCancelled = await game({
       ownerId: owner,
       venueId,
-      startsAt: new Date("2026-10-18T12:00:00.000Z"),
+      startsAt: hoursAgo(10 * 24),
       status: "cancelled",
     });
     await pool.query("UPDATE games SET cancelled_at=now() WHERE id=$1", [gCancelled]);
     const gDraft = await game({
       ownerId: owner,
       venueId,
-      startsAt: new Date("2026-10-19T12:00:00.000Z"),
+      startsAt: hoursAgo(9 * 24),
       status: "draft",
     });
 
@@ -479,6 +492,7 @@ run("Admin pilot metrics isolated aggregates", () => {
     expect(body.applications.count).toBeGreaterThanOrEqual(4); // 2 apps on g1 (fresh+reapply) + 2 on g2
     expect(body.applications.confirmations).toBeGreaterThanOrEqual(4); // confirm, confirm after reapply, two on g2
     expect(body.applications.confirmationRate).not.toBeNull();
+    expect(body.applications.confirmationRate).toBeLessThanOrEqual(1);
     expect(body.games.held).toBeGreaterThanOrEqual(2);
     expect(body.games.heldRate).toBe(1);
     expect(body.games.cancelledDisclosed).toBeGreaterThanOrEqual(1);
@@ -494,9 +508,161 @@ run("Admin pilot metrics isolated aggregates", () => {
     void gDraft;
   });
 
+  it("P460-A missing attendance mark counts eligible+unknown; distinct present by user/game", async () => {
+    const from = hoursAgo(20 * 24);
+    const to = hoursAhead(2 * 24);
+    const qs = `cityId=${cityId}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    const before = (await get(qs)).json();
+
+    const owner = await user("pilot460 miss-mark owner");
+    const player = await user("pilot460 miss-mark player");
+    const venueId = await venue(owner);
+    const gHeld = await game({ ownerId: owner, venueId, startsAt: hoursAgo(5 * 24) });
+    const part = await applyAttempt({ gameId: gHeld, userId: player });
+    await confirm(part.id, owner, part.version);
+    await outcome(gHeld, "held", owner);
+    // No attendance row — must project unknown, not drop the eligible participant.
+
+    const res = await get(qs);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.attendance.eligibleOnHeldGames).toBe(before.attendance.eligibleOnHeldGames + 1);
+    expect(body.attendance.unknown).toBe(before.attendance.unknown + 1);
+    expect(body.attendance.present).toBe(before.attendance.present);
+  });
+
+  it("P460-B cancelled games disclosed but applications/statuses excluded from working cohort", async () => {
+    const from = hoursAgo(20 * 24);
+    const to = hoursAhead(2 * 24);
+    const qs = `cityId=${cityId}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    const before = (await get(qs)).json();
+
+    const owner = await user("pilot460 cancel owner");
+    const player = await user("pilot460 cancel player");
+    const venueId = await venue(owner);
+    const gCancel = await game({
+      ownerId: owner,
+      venueId,
+      startsAt: hoursAgo(4 * 24),
+      status: "cancelled",
+    });
+    await pool.query("UPDATE games SET cancelled_at=now() WHERE id=$1", [gCancel]);
+    const part = await applyAttempt({ gameId: gCancel, userId: player });
+    await confirm(part.id, owner, part.version);
+
+    const res = await get(qs);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.games.cancelledDisclosed).toBe(before.games.cancelledDisclosed + 1);
+    expect(body.applications.count).toBe(before.applications.count);
+    expect(body.applications.confirmations).toBe(before.applications.confirmations);
+    expect(body.applications.currentStatus.confirmed).toBe(
+      before.applications.currentStatus.confirmed,
+    );
+    expect(body.games.dueInWindow).toBe(before.games.dueInWindow);
+    expect(body.exclusionPolicy.cancellationsDisclosedSeparately).toBe(true);
+    expect(body.games.held + body.games.notHeld + body.games.unknownOutcome).toBe(
+      body.games.dueInWindow,
+    );
+  });
+
+  it("P460-C future published in window is publishedEligible but not due/unknown; past due counts", async () => {
+    const from = hoursAgo(10 * 24);
+    const to = hoursAhead(20 * 24);
+    const qs = `cityId=${cityId}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    const before = (await get(qs)).json();
+
+    const owner = await user("pilot460 due owner");
+    const venueId = await venue(owner);
+    const pastDue = await game({ ownerId: owner, venueId, startsAt: hoursAgo(3 * 24) });
+    const futurePub = await game({
+      ownerId: owner,
+      venueId,
+      startsAt: hoursAhead(5 * 24),
+      durationMs: 3_600_000,
+    });
+    // Explicit outcome on future must not enter due cohort.
+    await outcome(futurePub, "held", owner);
+    void pastDue;
+
+    const res = await get(qs);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.games.publishedEligible).toBe(before.games.publishedEligible + 2);
+    expect(body.games.dueInWindow).toBe(before.games.dueInWindow + 1);
+    expect(body.games.unknownOutcome).toBe(before.games.unknownOutcome + 1);
+    expect(body.games.held).toBe(before.games.held); // future held outcome ignored
+    expect(body.games.held + body.games.notHeld + body.games.unknownOutcome).toBe(
+      body.games.dueInWindow,
+    );
+  });
+
+  it("P460-D orphan confirm without pending-origin is coverage unknown, not manufactured rate>1", async () => {
+    const from = hoursAgo(15 * 24);
+    const to = hoursAhead(2 * 24);
+    const qs = `cityId=${cityId}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    const before = (await get(qs)).json();
+
+    const owner = await user("pilot460 orphan owner");
+    const player = await user("pilot460 orphan player");
+    const venueId = await venue(owner);
+    const g = await game({ ownerId: owner, venueId, startsAt: hoursAgo(2 * 24) });
+    // Partial history: participation confirmed with only confirmed transition (no pending origin).
+    const row = (
+      await pool.query<{ id: string; version: number }>(
+        `INSERT INTO participations (game_id, user_id, status, attempt_number, version, requested_at, confirmed_at)
+         VALUES ($1,$2,'confirmed',1,2,now(),now())
+         RETURNING id, version`,
+        [g, player],
+      )
+    ).rows[0]!;
+    await pool.query(
+      `INSERT INTO participation_transitions
+         (participation_id, from_status, to_status, actor_id, reason_code, aggregate_version, game_version)
+       VALUES ($1,'pending','confirmed',$2,'legacy_partial',2,1)`,
+      [row.id, owner],
+    );
+
+    const res = await get(qs);
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.coverage.participationsWithoutAttemptProof).toBe(
+      before.coverage.participationsWithoutAttemptProof + 1,
+    );
+    expect(body.applications.count).toBe(before.applications.count);
+    expect(body.applications.confirmations).toBe(before.applications.confirmations);
+    expect(body.coverage.sufficient).toBe(false);
+    expect(
+      body.applications.confirmationRate === null || body.applications.confirmationRate <= 1,
+    ).toBe(true);
+    expect(body.coverage.notes.some((n: string) => /coverage|попыт|pending/i.test(n))).toBe(true);
+  });
+
+  it("P460-E rejects non-RFC3339 / rollover window bounds", async () => {
+    expect((await get(`cityId=${cityId}&from=2026-10-15&to=2026-11-01T00:00:00.000Z`)).statusCode).toBe(
+      400,
+    );
+    expect(
+      (await get(`cityId=${cityId}&from=2026-10-15T12:00:00&to=2026-11-01T00:00:00.000Z`)).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await get(
+          `cityId=${cityId}&from=2026-11-31T00:00:00.000Z&to=2026-12-02T00:00:00.000Z`,
+        )
+      ).statusCode,
+    ).toBe(400);
+    const ok = await get(
+      `cityId=${cityId}&from=${encodeURIComponent(hoursAgo(5).toISOString())}&to=${encodeURIComponent(hoursAhead(1).toISOString())}`,
+    );
+    expect(ok.statusCode).toBe(200);
+  });
+
   it("returns null rates and insufficient coverage for empty window", async () => {
+    const emptyFrom = hoursAgo(400 * 24);
+    const emptyTo = hoursAgo(399 * 24);
     const res = await get(
-      `cityId=${cityId}&from=${encodeURIComponent("2020-01-01T00:00:00.000Z")}&to=${encodeURIComponent("2020-01-02T00:00:00.000Z")}`,
+      `cityId=${cityId}&from=${encodeURIComponent(emptyFrom.toISOString())}&to=${encodeURIComponent(emptyTo.toISOString())}`,
     );
     expect(res.statusCode).toBe(200);
     const body = res.json();
