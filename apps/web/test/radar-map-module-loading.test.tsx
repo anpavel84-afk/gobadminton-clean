@@ -4,6 +4,7 @@ import type { DynamicOptions } from "next/dynamic";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GeographicRadarMap } from "../src/components/consumer/radar/GeographicRadarMap";
 import { RadarMapModuleLoading } from "../src/components/consumer/radar/RadarMapModuleLoading";
+import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { UnifiedDirectoryController } from "../src/lib/unified-directory";
 
 type MapProps = ComponentProps<typeof GeographicRadarMap>;
@@ -70,6 +71,7 @@ describe("Radar map module loading", () => {
     const onUnavailable = vi.fn();
     // Server rendering checks the alert before the mount effect can set failed.
     const html = renderToStaticMarkup(createElement(Component, {
+      cityId: MOSCOW_BUNDLE.cityId,
       controller: new UnifiedDirectoryController(), rows: [], selected: null,
       onSelect: vi.fn(), onUnavailable,
     }));

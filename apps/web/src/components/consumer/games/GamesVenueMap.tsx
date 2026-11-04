@@ -72,13 +72,15 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
   const [warnings, setWarnings] = useState(0);
   useEffect(() => {
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
-    const pack = mapBundleForCity(cityId);
-    if (!pack) {
+    const selectedPack = mapBundleForCity(cityId);
+    if (!selectedPack) {
       setFailure({ kind: "style", fatal: true });
       setStatus("");
       callbacks.current.onAvailability?.(false);
       return () => { alive = false; };
     }
+    // Non-null capture for the whole effect lifecycle, including nested async start().
+    const pack: FixedMapBundle = selectedPack;
     const cameraKey = cameraStorageKey(cityId);
     const saveCamera = () => {
       if (!instance) return;
