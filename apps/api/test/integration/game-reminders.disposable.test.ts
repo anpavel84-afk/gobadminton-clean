@@ -327,6 +327,74 @@ run("#457 postgame reminders — disposable", () => {
     }
   });
 
+  it("ensure-missing skips inactive/restricted so newer eligible progresses under batchLimit 2", async () => {
+    const inactiveOwner = await actor("Reminders inactive ensure-skip");
+    const restrictedOwner = await actor("Reminders restricted ensure-skip");
+    const eligibleOwner = await actor("Reminders eligible ensure-liveness");
+    const oldInactive = await createEndedGame(inactiveOwner);
+    const oldRestricted = await createEndedGame(restrictedOwner);
+    const newerEligible = await createEndedGame(eligibleOwner);
+    const fixed = Date.now();
+    async function setEndedAt(gameId: string, endsMs: number) {
+      const endsAt = new Date(endsMs);
+      const startsAt = new Date(endsMs - 2 * 3600_000);
+      const deadlineAt = new Date(startsAt.getTime() - 3600_000);
+      await pool.query(
+        `UPDATE games
+         SET starts_at = $2,
+             application_deadline_at = $3,
+             ends_at = $4
+         WHERE id = $1`,
+        [gameId, startsAt, deadlineAt, endsAt],
+      );
+    }
+    // Older ineligible (zero reminder rows) before newer eligible — must not fill LIMIT.
+    await setEndedAt(oldInactive.id, fixed - 3 * 86400000);
+    await setEndedAt(oldRestricted.id, fixed - 2 * 86400000);
+    await setEndedAt(newerEligible.id, fixed - 1 * 86400000);
+    await pool.query(`UPDATE users SET status = 'disabled' WHERE id = $1`, [
+      inactiveOwner.userId,
+    ]);
+    const restrictPrincipalId = (
+      await pool.query<{ id: string }>(
+        "INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",
+        [restrictedOwner.userId],
+      )
+    ).rows[0]!.id;
+    await pool.query(
+      `INSERT INTO user_restrictions(user_id, capability, reason_code, expires_at, created_by)
+       VALUES ($1, 'account.access', 'synthetic_fixture', clock_timestamp() + interval '1 hour', $2)`,
+      [restrictedOwner.userId, restrictPrincipalId],
+    );
+    const command = new GameRemindersCommand(env);
+    const result = await command.execute(
+      pool,
+      { kind: "sweep" },
+      { now: new Date(fixed), batchLimit: 2, manageTransactions: true },
+    );
+    expect(result.skipped).toBe(false);
+    expect(result.ensured).toBeGreaterThanOrEqual(3);
+    expect(result.activated).toBeGreaterThanOrEqual(1);
+    const newerCount = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM game_outcome_reminders WHERE game_id = $1`,
+      [newerEligible.id],
+    );
+    expect(newerCount.rows[0]!.n).toBe(3);
+    const newerVisible = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM game_outcome_reminders
+       WHERE game_id = $1 AND state = 'visible'`,
+      [newerEligible.id],
+    );
+    expect(newerVisible.rows[0]!.n).toBe(1);
+    for (const gameId of [oldInactive.id, oldRestricted.id]) {
+      const n = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM game_outcome_reminders WHERE game_id = $1`,
+        [gameId],
+      );
+      expect(n.rows[0]!.n).toBe(0);
+    }
+  });
+
   it("Later advances ordinal under cap; does not unbounded re-show the same card", async () => {
     const game = await createEndedGame(organizer);
     // One fixed clock: t0 = current fixed now; ends 4d ago so ordinals are due.
@@ -501,6 +569,117 @@ run("#457 postgame reminders — disposable", () => {
       [game.id, organizer.userId],
     );
     expect(slots.rows[0].n).toBeLessThanOrEqual(3);
+  });
+
+  it("Later replay after other-game revoke omits B; unchanged perms keep equal body", async () => {
+    const gameA = await createEndedGame(organizer);
+    // B owned by co-organizer; organizer is active manager so both appear in own list.
+    const gameB = await createEndedGame(coOrganizer);
+    await pool.query(
+      `INSERT INTO game_managers (game_id, user_id, role, status)
+       VALUES ($1, $2, 'manager', 'active')
+       ON CONFLICT (game_id, user_id) DO UPDATE
+         SET status = 'active', role = 'manager', revoked_at = NULL, updated_at = now()`,
+      [gameB.id, organizer.userId],
+    );
+    await pool.query(
+      `UPDATE games SET title = $2 WHERE id = $1`,
+      [gameA.id, "Reminders game A title"],
+    );
+    await pool.query(
+      `UPDATE games SET title = $2 WHERE id = $1`,
+      [gameB.id, "Reminders game B private title"],
+    );
+    const now = new Date(
+      Math.max(gameA.endsAt.getTime(), gameB.endsAt.getTime()) + 2 * 3600_000,
+    );
+    await sweep(now);
+    const listed = await get(organizer, "/v1/me/postgame-reminders");
+    expect(listed.statusCode).toBe(200);
+    const items = listed.json().items as Array<{
+      id: string;
+      gameId: string;
+      gameTitle: string | null;
+      version: number;
+    }>;
+    const remA = items.find((i) => i.gameId === gameA.id);
+    const remB = items.find((i) => i.gameId === gameB.id);
+    expect(remA).toBeTruthy();
+    expect(remB).toBeTruthy();
+    expect(remB!.gameTitle).toBe("Reminders game B private title");
+
+    const idem = key();
+    const later1 = await post(
+      organizer,
+      `/v1/me/postgame-reminders/${remA!.id}`,
+      { command: "later", expectedVersion: remA!.version },
+      idem,
+    );
+    expect(later1.statusCode).toBe(200);
+    expect(
+      (later1.json().items as Array<{ gameId: string }>).some((i) => i.gameId === gameB.id),
+    ).toBe(true);
+
+    await pool.query(
+      `UPDATE game_managers
+       SET status = 'revoked', revoked_at = now(), updated_at = now()
+       WHERE game_id = $1 AND user_id = $2`,
+      [gameB.id, organizer.userId],
+    );
+
+    const laterReplay = await post(
+      organizer,
+      `/v1/me/postgame-reminders/${remA!.id}`,
+      { command: "later", expectedVersion: remA!.version },
+      idem,
+    );
+    expect(laterReplay.statusCode).toBe(200);
+    const replayItems = laterReplay.json().items as Array<{
+      gameId: string;
+      gameTitle: string | null;
+    }>;
+    expect(replayItems.every((i) => i.gameId !== gameB.id)).toBe(true);
+    expect(
+      replayItems.every((i) => i.gameTitle !== "Reminders game B private title"),
+    ).toBe(true);
+    const aRow = await pool.query<{ state: string; version: number }>(
+      `SELECT state, version FROM game_outcome_reminders WHERE id = $1`,
+      [remA!.id],
+    );
+    expect(aRow.rows[0]!.state).toBe("snoozed");
+    expect(aRow.rows[0]!.version).toBe(remA!.version + 1);
+
+    // Unchanged permissions: equal replay body (fresh pair of games).
+    const eqA = await createEndedGame(organizer);
+    const eqB = await createEndedGame(organizer);
+    const eqNow = new Date(
+      Math.max(eqA.endsAt.getTime(), eqB.endsAt.getTime()) + 2 * 3600_000,
+    );
+    await sweep(eqNow);
+    const eqListed = await get(organizer, "/v1/me/postgame-reminders");
+    const eqRemA = (eqListed.json().items as Array<{ id: string; gameId: string; version: number }>).find(
+      (i) => i.gameId === eqA.id,
+    );
+    expect(eqRemA).toBeTruthy();
+    const eqIdem = key();
+    const eq1 = await post(
+      organizer,
+      `/v1/me/postgame-reminders/${eqRemA!.id}`,
+      { command: "later", expectedVersion: eqRemA!.version },
+      eqIdem,
+    );
+    expect(eq1.statusCode).toBe(200);
+    const eq2 = await post(
+      organizer,
+      `/v1/me/postgame-reminders/${eqRemA!.id}`,
+      { command: "later", expectedVersion: eqRemA!.version },
+      eqIdem,
+    );
+    expect(eq2.statusCode).toBe(200);
+    expect(eq2.json()).toEqual(eq1.json());
+    expect(
+      (eq2.json().items as Array<{ gameId: string }>).some((i) => i.gameId === eqB.id),
+    ).toBe(true);
   });
 
   it("cross-account Later is private 404; foreign GET empty for that game", async () => {

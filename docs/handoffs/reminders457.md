@@ -1,16 +1,23 @@
-# #457 Internal post-game organizer reminders — author handoff (pass4)
+# #457 Internal post-game organizer reminders — author handoff (pass6)
 
 ## Scope delivered (source only)
 
 Bounded durable **in-app** reminders for the current organizer to record game outcome after `endsAt`, max **3** activation rounds / ordinals, «Подвести итоги» / «Позже». No auto `held`/`absent`/sanctions. No SMS/email/Web Push delivery. Existing PgBoss worker + `POST_GAME_INTERNAL_ENABLED` (default off).
 
-## Repair pass4 (exact findings from pass3 DB FAIL + R1/stop)
+## Repair pass6 (exact Sol Medium QA FAIL P2 on `db4f4751`)
 
 | Finding | Fix |
 |---------|-----|
-| Later cap expects activated=1 got 0 | Fixture clock axis: `t0` = fixed now; after HTTP Later read persisted `snoozed_until`; next fake sweep = `max(until, prevActivation+MIN_GAP)+1ms` (HTTP uses real `clock_timestamp`) |
-| R1 overdue cooling starvation | Candidate SQL for scheduled-due mirrors `canActivateAnother` (count&lt;3 + min 24h gap) **before** `LIMIT`; cooling 4d-ended games drop out so batchLimit 2 reaches the third |
-| Stop gated on `ends_at<=now`; no `account.access` | Stop authorities independent of due-end gate; candidate + `processGame` apply cancel/outcome/role/inactive/`unrestrictedSql(account.access)` when enabled; future-rescheduled cancel + restriction subcases |
+| R457-1 ensure-missing monopolizes batch | Pre-LIMIT ensure-missing EXISTS mirrors `accountGate`: `users.status='active'` + `unrestrictedSql(account.access)` on `gm.user_id`. Ineligible managers with zero rows no longer occupy bounded sweep; open-row stop path unchanged. Regression: older inactive + restricted before newer eligible, `batchLimit` 2 → newer ensures/activates; ineligible stay at 0 rows |
+| R457-2 Later receipt leaks other games | `authorizeReplay` still validates target locks/manager; then **current-projects** stored `ReminderListView` in place via `listMineWithClient` (MutationRunner returns stored body). After revoke of other game B, same A key/body replay omits B/title and does not re-mutate. Unchanged-perms equality replay preserved |
+
+## Prior repairs retained (pass4/pass5)
+
+| Finding | Fix |
+|---------|-----|
+| Later cap / fixture clock | `snoozed_until` + min-gap axis for next fake sweep |
+| R1 overdue cooling starvation | Candidate scheduled-due mirrors `canActivateAnother` before LIMIT |
+| Stop gated on ends_at / no account.access | Stop authorities independent of due-end; cancel/outcome/role/inactive/restriction |
 
 ## Design choices (local, not Owner SLA)
 
@@ -19,16 +26,18 @@ Bounded durable **in-app** reminders for the current organizer to record game ou
 | Schedule | 1h / 24h / 72h after `endsAt` |
 | Activation gap | min 24h between actual activations (no 3-card catch-up) |
 | Snooze («Позже») | 24h; advances to next ordinal on expiry; does not reset max-3 activations |
-| Organizer | Active `game_managers` role `owner`\|`manager` |
+| Organizer | Active `game_managers` role `owner`\|`manager` + active user + account.access |
 | Dedup | UNIQUE `(game_id, organizer_user_id, ordinal)` |
 | Batch | 50 actionable games per sweep |
 | Probe | `to_regclass` before domain work; never catch `42P01` as success |
+| Later replay | Target auth + current list projection; no MutationRunner extension |
 
-## Key paths (this pass)
+## Key paths (this pass — only4)
 
 | Area | Paths |
 |------|--------|
-| Command | `apps/api/src/games/game-reminders.command.ts` only |
+| Command | `apps/api/src/games/game-reminders.command.ts` |
+| Service | `apps/api/src/games/game-reminders.service.ts` |
 | Disposable | `apps/api/test/integration/game-reminders.disposable.test.ts` |
 | Handoff | `docs/handoffs/reminders457.md` |
 
@@ -36,12 +45,13 @@ Bounded durable **in-app** reminders for the current organizer to record game ou
 
 - R2: max 3 activations / one visible card / min spacing
 - R3: consistent locks (HTTP Actor→Game→manager→Reminder; worker Game→managers→reminders)
-- No schema/gates/versions/root/live/network/models rewrite
+- Cap3 / attempts / history / local restrictions overlay
+- No schema/gates/versions/root/live/network/models/framework/migration/worker/API-contract rewrite
 - Cross-account → private 404; Later does not touch attendance/disputes/outcomes
 
-## Checks not run in author lane
+## Checks / publication (author lane)
 
-No install / network / Git / live DB / runtime / PROD. Native status is not PASS. PMA: prior 7/8 + type/lint/foundation/unit/web/migration PASS reused; run all 8 disposable + new assertions together, then first independent Sol Medium content QA.
+**Source-only.** No install / network / Git / live DB / runtime / DEV / PROD in this pass. Native status is not PASS. No DEV ACCEPTED claim. Prior DB 8/8 + type/lint/foundation/unit/web receipts at reviewed SHA reused as baseline; PMA: re-run disposable suite including the two new regressions, then independent Sol Medium content QA.
 
 ## UAT
 

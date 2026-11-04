@@ -135,7 +135,7 @@ export class GameRemindersService {
       key,
       requestHash,
       requiredCapabilities: ["account.access"],
-      authorizeReplay: async (client) => {
+      authorizeReplay: async (client, stored) => {
         if (!reminderWritesEnabled(this.env)) writesUnavailable();
         if (!(await probeRemindersInstalled(client))) writesUnavailable();
         // Lock order: Actor (MutationRunner) → Game → manager → Reminder
@@ -144,6 +144,15 @@ export class GameRemindersService {
         await this.lockGame(client, tip.game_id);
         await this.assertCurrentManager(client, tip.game_id, userId);
         await this.lockOwnReminder(client, reminderId, userId, tip.game_id);
+        // Current projection: MutationRunner returns stored body unchanged, so
+        // refresh in place — stale other-game rows must not leak after revoke.
+        const now = (
+          await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")
+        ).rows[0]!.now;
+        const current = await this.listMineWithClient(client, userId, now);
+        stored.items = current.items;
+        stored.writesEnabled = current.writesEnabled;
+        stored.installed = current.installed;
       },
       execute: async (client) => {
         if (!reminderWritesEnabled(this.env)) writesUnavailable();
@@ -197,6 +206,7 @@ export class GameRemindersService {
         );
 
         // Own list after mutation — private to actor; no cross-account leak.
+        // Receipt may retain this snapshot; authorizeReplay reprojects current.
         const list = await this.listMineWithClient(client, userId, now);
         return { statusCode: 200, body: list };
       },

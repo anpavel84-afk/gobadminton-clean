@@ -110,9 +110,16 @@ export class GameRemindersCommand {
     // stop authorities. Stop work is independent of ends_at so future-rescheduled
     // cancel/held/role-lost/restriction still drains open history. Cooling-down
     // overdue scheduled rows (min gap / cap) do not monopolize LIMIT.
+    // Ensure-missing mirrors accountGate (active user + account.access) so
+    // ineligible managers with zero rows cannot occupy the bounded batch forever.
     const accountAccessOkSql = unrestrictedSql(
       this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
       "r.organizer_user_id",
+      ["account.access"],
+    );
+    const managerAccountAccessOkSql = unrestrictedSql(
+      this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+      "gm.user_id",
       ["account.access"],
     );
     const candidates = await readExec.query<{ id: string }>(
@@ -177,9 +184,12 @@ export class GameRemindersCommand {
                  AND EXISTS (
                    SELECT 1
                    FROM game_managers gm
+                   INNER JOIN users u ON u.id = gm.user_id
                    WHERE gm.game_id = g.id
                      AND gm.status = 'active'
                      AND gm.role IN ('owner', 'manager')
+                     AND u.status = 'active'
+                     AND (${managerAccountAccessOkSql})
                      AND (
                        SELECT count(*)::int
                        FROM game_outcome_reminders r
