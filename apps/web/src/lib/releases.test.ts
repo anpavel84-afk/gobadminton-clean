@@ -10,8 +10,8 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.26 with API 0.33.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.26");
+  it("bumps current descriptor to alpha.27 with API 0.33.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.27");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.33.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -25,8 +25,8 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/сводк|пилот|администратор/i);
-    expect(prose).toMatch(/вход|проверяющ|отзыв/i);
+    expect(prose).toMatch(/понятн|пояснен|отзыв/i);
+    expect(prose).toMatch(/организатор|тренер|публикац/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE/i);
   });
 

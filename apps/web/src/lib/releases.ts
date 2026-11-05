@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.26" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.27" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.33.0" as const;
@@ -424,20 +424,17 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.26",
-  "title": "Отдельный доступ для проверки сводки пилота",
+  "application_version": "0.1.0-alpha.27",
+  "title": "Понятные пояснения к отзывам",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "Отдельный вход для разрешённого проверяющего без VK и Яндекса",
-    "Просмотр сводки пилота без разрешения изменять данные или открывать другие разделы",
-    "Отзыв доступа прекращает все связанные сеансы проверяющего"
+  "additions": [],
+  "fixes": [
+    "Уточнено, кто может оставить отзыв об организаторе или тренере после совместной игры",
+    "В истории alpha.20 однозначно указано, что автор может снять свой отзыв с публикации"
   ],
-  "fixes": [],
   "known_limitations": [
-    "Приёмка владельцем ещё не выполнена",
-    "Ключевой вход по умолчанию выключен и доступен только в проверенной среде разработки после отдельной настройки",
-    "Готовность отдельной учётной записи подтверждается настоящей проверкой входа"
+    "Приёмка владельцем ещё не выполнена"
   ],
   "feature_catalogue": "delta"
 };
@@ -1140,7 +1137,7 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       }
     ],
     "additions": [
-      "Перед выбором игры можно ознакомиться с отзывами об организаторе или тренере. Оставить отзыв могут участники с подтверждённым прошлым опытом; предусмотрены ответ, возражение и отзыв публикации",
+      "Перед выбором игры можно ознакомиться с отзывами об организаторе или тренере. Оставить отзыв могут участники с подтверждённым прошлым опытом; предусмотрены ответ, возражение, а автор может снять свой отзыв с публикации",
       "Спорные тексты разбирает человек в служебных обращениях: ожидание, чтение согласованного источника и явное решение; статус «решено» сам по себе ничего не публикует"
     ],
     "fixes": [],
@@ -1329,6 +1326,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем после обычного входа ещё не выполнена",
       "Аутентифицированная проверка Admin и физическая приёмка на устройстве ещё не выполнены",
       "Сводка не запускает реальный пилот и не обещает коммерческие KPI или новый сбор персональных данных"
+    ]
+  },
+  {
+    "source_sha": "360001c6231157f30fdf11606ef8111c291fb099",
+    "application_version": "0.1.0-alpha.26",
+    "version_label": "0.1.0-alpha.26",
+    "title": "Отдельный доступ для проверки сводки пилота",
+    "api_contract_version": "0.33.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41935663994-a2",
+        "accepted_at": "2026-11-04T23:55:28Z",
+        "api_digest": "sha256:5cf215fe32cb69b75fb8a7b74c265d808088d576b362fa82b24425b70df79b31",
+        "web_digest": "sha256:446f880c9f7747452aafc4d84fd4b2ec4c7e35fc779e90d78da11f4296bd1d94",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Отдельный вход для разрешённого проверяющего без VK и Яндекса",
+      "Просмотр сводки пилота без разрешения изменять данные или открывать другие разделы",
+      "Отзыв доступа прекращает все связанные сеансы проверяющего"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Ключевой вход по умолчанию выключен и доступен только в проверенной среде разработки после отдельной настройки",
+      "Готовность отдельной учётной записи подтверждается настоящей проверкой входа"
     ]
   },
 

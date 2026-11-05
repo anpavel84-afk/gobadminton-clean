@@ -77,6 +77,10 @@ function reviewsButtonLabel(count: number, role: RoleKind): string {
   return count > 0 ? `Отзывы ${noun} · ${count}` : `Отзывы ${noun}`;
 }
 
+/** Neutral rule only — does not claim this viewer is eligible or ineligible. */
+const WRITE_ELIGIBILITY_HINT =
+  "Оставить отзыв можно только о своей прошедшей игре или тренировке с подтверждённым участием и посещением.";
+
 /**
  * Compact public role reputation entry for game detail / profile.
  * Server counts only — never invent gallery counters. Reading does not require attendance.
@@ -191,6 +195,7 @@ export function RoleReputationPanel({
           Публичная история этой роли сейчас недоступна. Это не значит, что человек «никогда не проводил»
           встречи — подтверждённая история может отсутствовать.
         </p>
+        <p className="gb-role-rep__hint">{WRITE_ELIGIBILITY_HINT}</p>
       </div>
     );
   }
@@ -204,6 +209,7 @@ export function RoleReputationPanel({
           ? `${published} ${publishedReviewsForm(published)}. Приватные сообщения и ожидающие тексты сюда не входят.`
           : "Пока нет опубликованных отзывов по этой роли."}
       </p>
+      <p className="gb-role-rep__hint">{WRITE_ELIGIBILITY_HINT}</p>
       <div className="gb-role-rep__actions">
         <Button
           variant="outline"

@@ -21,8 +21,8 @@ import { GET as healthGet } from "../src/app/health/route";
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.26 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.26");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.27 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.27");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.33.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -38,8 +38,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/сводк|пилот|администратор/i);
-    expect(currentProse).toMatch(/вход|проверяющ|отзыв/i);
+    expect(currentProse).toMatch(/понятн|пояснен|отзыв/i);
+    expect(currentProse).toMatch(/организатор|тренер|публикац/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -190,10 +190,20 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(29);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(30);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(34);
+    ).toBe(35);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.26"
+      && row.source_sha === "360001c6231157f30fdf11606ef8111c291fb099"
+      && row.deployments[0]?.release_id === "r41935663994-a2"
+      && row.deployments[0]?.accepted_at === "2026-11-04T23:55:28Z"
+      && row.deployments[0]?.api_digest === "sha256:5cf215fe32cb69b75fb8a7b74c265d808088d576b362fa82b24425b70df79b31"
+      && row.deployments[0]?.web_digest === "sha256:446f880c9f7747452aafc4d84fd4b2ec4c7e35fc779e90d78da11f4296bd1d94"
+      && row.api_contract_version === "0.33.0"
+      && row.title === "Отдельный доступ для проверки сводки пилота",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.20"
       && row.source_sha === "9db516ce96499d440a49e7e35029137c33a11429"
@@ -201,7 +211,9 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.accepted_at === "2026-11-03T02:01:14Z"
       && row.deployments[0]?.api_digest === "sha256:7f84a7cd5a01abfb3752a8fc2de2d87311e6e5c1e61b076863eb6666b697002e"
       && row.deployments[0]?.web_digest === "sha256:3b576868391ea2d808f13d1e1cf559392c284bff53074cc80733fd88cde57c0d"
-      && row.api_contract_version === "0.28.0",
+      && row.api_contract_version === "0.28.0"
+      && row.additions.some((line) => line.includes("автор может снять свой отзыв с публикации"))
+      && !row.additions.some((line) => line.includes("отзыв публикации")),
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.21"
