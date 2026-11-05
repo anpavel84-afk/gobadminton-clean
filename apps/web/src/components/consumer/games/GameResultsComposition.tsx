@@ -989,6 +989,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                 contextId: row.contextId,
                 displayName: row.displayName,
               }))}
+              venueId={game?.venue?.id ?? null}
             />
           ) : null}
         </>

@@ -1,6 +1,30 @@
 -- #394 public venue experience reviews after confirmed held participation.
 -- Additive only. Legacy entity_comments VENUE rows stay closed/unverified.
 -- No CHECK(TRUE). No rewrite of 0051/0053/0054. No venue public-reply role.
+-- No backfill of historical played-at venue from mutable games.venue_id.
+
+-- Prospective immutable played-at venue snapshot. Written on publish/held only.
+-- Current games.venue_id alone is never historical proof; missing row → missing_history.
+CREATE TABLE game_played_at_venue_attributions (
+  game_id uuid PRIMARY KEY REFERENCES games (id),
+  source_venue_id uuid NOT NULL REFERENCES venues (id),
+  game_version integer NOT NULL
+    CHECK (game_version BETWEEN 1 AND 2147483647),
+  source text NOT NULL
+    CHECK (source IN ('publish_freeze', 'held_confirm')),
+  actor_user_id uuid NULL REFERENCES users (id),
+  recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE INDEX game_played_at_venue_attributions_venue_idx
+  ON game_played_at_venue_attributions (source_venue_id, recorded_at DESC);
+
+CREATE TRIGGER game_played_at_venue_attributions_immutable
+  BEFORE UPDATE OR DELETE OR TRUNCATE ON game_played_at_venue_attributions
+  FOR EACH STATEMENT EXECUTE FUNCTION support_immutable();
+
+COMMENT ON TABLE game_played_at_venue_attributions IS
+  '#394 immutable played-at venue; never rewritten on later games.venue_id change or merge retarget.';
 
 -- One current author/canonical-venue slot; immutable game-linked private revisions.
 CREATE TABLE venue_review_slots (
@@ -37,6 +61,7 @@ CREATE INDEX venue_review_slots_venue_status_idx
   ON venue_review_slots (canonical_venue_id, status, updated_at DESC);
 
 -- Event fence retains uniqueness after withdrawal (one author/venue/game).
+-- first_eligible_at is server-derived from immutable end/outcome/present evidence (not probe clock).
 CREATE TABLE venue_review_event_fences (
   author_user_id uuid NOT NULL REFERENCES users (id),
   game_id uuid NOT NULL REFERENCES games (id),
@@ -50,6 +75,29 @@ CREATE TABLE venue_review_event_fences (
 CREATE TRIGGER venue_review_event_fences_immutable
   BEFORE UPDATE OR DELETE OR TRUNCATE ON venue_review_event_fences
   FOR EACH STATEMENT EXECUTE FUNCTION support_immutable();
+
+-- Mutable per-game submit window companion (appeal pause / favorable resume). Fence stays immutable.
+CREATE TABLE venue_review_submit_windows (
+  author_user_id uuid NOT NULL,
+  game_id uuid NOT NULL,
+  canonical_venue_id uuid NOT NULL,
+  appeal_opened_at timestamptz NULL,
+  remaining_ms_at_appeal bigint NULL
+    CHECK (remaining_ms_at_appeal IS NULL OR remaining_ms_at_appeal >= 0),
+  window_deadline_at timestamptz NULL,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (author_user_id, game_id, canonical_venue_id),
+  CONSTRAINT venue_review_submit_windows_fence_fkey
+    FOREIGN KEY (author_user_id, game_id, canonical_venue_id)
+    REFERENCES venue_review_event_fences (author_user_id, game_id, canonical_venue_id),
+  CONSTRAINT venue_review_submit_windows_appeal_pair_chk CHECK (
+    (appeal_opened_at IS NULL AND remaining_ms_at_appeal IS NULL)
+    OR (appeal_opened_at IS NOT NULL AND remaining_ms_at_appeal IS NOT NULL)
+  )
+);
+
+COMMENT ON TABLE venue_review_submit_windows IS
+  '#394 per-game appeal pause + max(remaining,7d) resume; ordinary toggles do not reset first_eligible_at.';
 
 CREATE TABLE venue_review_revisions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

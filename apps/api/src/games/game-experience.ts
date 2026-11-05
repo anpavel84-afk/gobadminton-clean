@@ -2,6 +2,7 @@
  * Shared confirmed-experience predicates for private peer (#394) and venue experience.
  * Pure policy — callers load assertions; never trust client present/identity flags.
  */
+import type { PoolClient } from "pg";
 import {
   eligibleFromTransitions,
   isPermittedPresentAssertion,
@@ -80,6 +81,7 @@ export function classifyUnconfirmedAttendance(args: {
 export function evaluateVenueExperienceAdmission(args: {
   lifecycleOk: boolean;
   outcomeHeld: boolean;
+  openOutcomeDispute: boolean;
   ownEligible: boolean;
   authorConfirmedPresent: boolean;
   authorOpenDispute: boolean;
@@ -87,9 +89,11 @@ export function evaluateVenueExperienceAdmission(args: {
   subjectUserId: string;
   canonicalVenueId: string | null;
   canonicalResolved: boolean;
+  /** Historical played-at attribution present and usable. */
+  playedAtAttributed: boolean;
   venueAffiliated: boolean;
 }): VenueExperienceAdmission {
-  if (!args.canonicalResolved || !args.canonicalVenueId) {
+  if (!args.playedAtAttributed || !args.canonicalResolved || !args.canonicalVenueId) {
     return { status: "missing_history", reason: "venue_attribution_unavailable" };
   }
   if (args.venueAffiliated) {
@@ -97,6 +101,7 @@ export function evaluateVenueExperienceAdmission(args: {
   }
   if (!args.lifecycleOk) return { status: "deny", reason: "lifecycle" };
   if (!args.outcomeHeld) return { status: "hold", reason: "outcome_unknown" };
+  if (args.openOutcomeDispute) return { status: "hold", reason: "outcome_dispute" };
   if (!args.authorConfirmedPresent) {
     return classifyUnconfirmedAttendance({
       subjectUserId: args.subjectUserId,
@@ -106,4 +111,33 @@ export function evaluateVenueExperienceAdmission(args: {
     });
   }
   return { status: "may_submit" };
+}
+
+/**
+ * Prospective immutable played-at venue snapshot.
+ * First writer wins; later games.venue_id / merge retarget never rewrites.
+ * No-ops when 0058 table is not installed yet.
+ */
+export async function ensurePlayedAtVenueAttribution(
+  client: PoolClient,
+  args: {
+    gameId: string;
+    sourceVenueId: string;
+    gameVersion: number;
+    actorUserId: string | null;
+    source: "publish_freeze" | "held_confirm";
+  },
+): Promise<void> {
+  const installed = Boolean(
+    (await client.query("SELECT to_regclass('game_played_at_venue_attributions') AS name")).rows[0]
+      ?.name,
+  );
+  if (!installed) return;
+  await client.query(
+    `INSERT INTO game_played_at_venue_attributions
+       (game_id, source_venue_id, game_version, source, actor_user_id)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (game_id) DO NOTHING`,
+    [args.gameId, args.sourceVenueId, args.gameVersion, args.source, args.actorUserId],
+  );
 }

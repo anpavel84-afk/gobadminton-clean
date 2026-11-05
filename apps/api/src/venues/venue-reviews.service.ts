@@ -8,6 +8,7 @@ import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import {
   eligibleFromTransitions,
+  isPermittedPresentAssertion,
   type AttendanceSource,
   type AttendanceValue,
 } from "../games/game-attendance.policy";
@@ -30,22 +31,23 @@ import {
 } from "./venue-reviews.dto";
 import {
   PUBLIC_AUTHOR_LABEL,
+  computeAppealResumeDeadline,
   computeNotBefore,
   decodePublicCursor,
+  deriveFirstEligibleAt,
   isPubliclyVisible,
   opaqueHandle,
   parseOrThrow,
   postGameWritesEnabled,
   projectionHash,
   redactPublicCursor,
+  remainingSubmitWindowMs,
   topicsAllowed,
   unavailable,
   withinSubmitWindow,
   writesUnavailable,
-  VENUE_APPEAL_MIN_WINDOW_MS,
   VENUE_REVIEW_PAGE_DEFAULT,
   VENUE_REVIEW_PAGE_MAX,
-  VENUE_SUBMIT_WINDOW_MS,
 } from "./venue-reviews.policy";
 
 type SlotRow = {
@@ -164,14 +166,171 @@ export class VenueReviewsService {
     userId: string,
     canonicalVenueId: string,
   ): Promise<boolean> {
-    // No verified venue-representative role in v1 — only refuse obvious creator of venue row.
-    const row = (
+    // v1: refuse venue creator and any historic admin action actor on this venue identity.
+    const creator = (
       await client.query(
         `SELECT 1 FROM venues WHERE id = $1 AND created_by_user_id = $2 LIMIT 1`,
         [canonicalVenueId, userId],
       )
     ).rows[0];
-    return Boolean(row);
+    if (creator) return true;
+    const staff = (
+      await client.query(
+        `SELECT 1
+         FROM venue_admin_actions a
+         JOIN admin_principals p ON p.id = a.actor_id
+         WHERE a.venue_id = $1 AND p.user_id = $2
+         LIMIT 1`,
+        [canonicalVenueId, userId],
+      )
+    ).rows[0];
+    return Boolean(staff);
+  }
+
+  private async loadPlayedAtAttribution(
+    client: PoolClient | Pool,
+    gameId: string,
+  ): Promise<{ sourceVenueId: string } | null> {
+    const installed = Boolean(
+      (await client.query("SELECT to_regclass('game_played_at_venue_attributions') AS name")).rows[0]
+        ?.name,
+    );
+    if (!installed) return null;
+    const row = (
+      await client.query<{ source_venue_id: string }>(
+        `SELECT source_venue_id FROM game_played_at_venue_attributions WHERE game_id = $1`,
+        [gameId],
+      )
+    ).rows[0];
+    return row ? { sourceVenueId: row.source_venue_id } : null;
+  }
+
+  private async hasOpenOutcomeDispute(client: PoolClient | Pool, gameId: string): Promise<boolean> {
+    // Held/role basis open_dispute is the existing typed signal that the held outcome is contested.
+    if (
+      (await client.query("SELECT to_regclass('game_role_proofs') AS name")).rows[0]?.name
+    ) {
+      const role = (
+        await client.query(
+          `SELECT 1 FROM game_role_proofs
+           WHERE game_id = $1 AND open_dispute = true LIMIT 1`,
+          [gameId],
+        )
+      ).rows[0];
+      if (role) return true;
+    }
+    // Open Cases linked to the game that are not attendance-dispute or venue-review intakes.
+    const openCase = (
+      await client.query(
+        `SELECT 1
+         FROM support_case_links l
+         JOIN support_cases c ON c.id = l.case_id
+         WHERE l.game_id = $1
+           AND c.status IN ('open', 'in_review')
+           AND (
+             to_regclass('game_attendance_dispute_case_links') IS NULL
+             OR NOT EXISTS (
+               SELECT 1 FROM game_attendance_dispute_case_links d WHERE d.case_id = c.id
+             )
+           )
+           AND (
+             to_regclass('venue_review_case_links') IS NULL
+             OR NOT EXISTS (
+               SELECT 1 FROM venue_review_case_links v WHERE v.case_id = c.id
+             )
+           )
+         LIMIT 1`,
+        [gameId],
+      )
+    ).rows[0];
+    return Boolean(openCase);
+  }
+
+  private async loadEligibilityTimestamps(
+    client: PoolClient,
+    gameId: string,
+    participationId: string | null,
+    subjectUserId: string,
+  ): Promise<{
+    outcomeHeldRecordedAt: Date | null;
+    presentPermittedRecordedAt: Date | null;
+  }> {
+    const held = (
+      await client.query<{ recorded_at: Date }>(
+        `SELECT recorded_at FROM game_outcome_revisions
+         WHERE game_id = $1 AND after_value = 'held'
+         ORDER BY resource_version ASC, recorded_at ASC
+         LIMIT 1`,
+        [gameId],
+      )
+    ).rows[0];
+    let presentPermittedRecordedAt: Date | null = null;
+    if (participationId) {
+      const present = (
+        await client.query<{ recorded_at: Date; source: AttendanceSource; actor_user_id: string }>(
+          `SELECT recorded_at, source, actor_user_id FROM game_attendance_revisions
+           WHERE participation_id = $1 AND after_value = 'present'
+           ORDER BY resource_version ASC, recorded_at ASC`,
+          [participationId],
+        )
+      ).rows;
+      for (const row of present) {
+        if (
+          isPermittedPresentAssertion({
+            value: "present",
+            source: row.source,
+            actorUserId: row.actor_user_id,
+            subjectUserId,
+          })
+        ) {
+          presentPermittedRecordedAt = row.recorded_at;
+          break;
+        }
+      }
+    }
+    return {
+      outcomeHeldRecordedAt: held?.recorded_at ?? null,
+      presentPermittedRecordedAt,
+    };
+  }
+
+  private async loadSubmitWindow(
+    client: PoolClient,
+    authorUserId: string,
+    gameId: string,
+    canonicalVenueId: string,
+  ): Promise<{
+    firstEligibleAt: Date | null;
+    appealOpen: boolean;
+    remainingMsAtAppeal: number | null;
+    windowDeadlineAt: Date | null;
+  }> {
+    const fence = (
+      await client.query<{ first_eligible_at: Date }>(
+        `SELECT first_eligible_at FROM venue_review_event_fences
+         WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id = $3`,
+        [authorUserId, gameId, canonicalVenueId],
+      )
+    ).rows[0];
+    const win = (
+      await client.query<{
+        appeal_opened_at: Date | null;
+        remaining_ms_at_appeal: string | null;
+        window_deadline_at: Date | null;
+      }>(
+        `SELECT appeal_opened_at, remaining_ms_at_appeal, window_deadline_at
+         FROM venue_review_submit_windows
+         WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id = $3`,
+        [authorUserId, gameId, canonicalVenueId],
+      )
+    ).rows[0];
+    return {
+      firstEligibleAt: fence?.first_eligible_at ?? null,
+      appealOpen: Boolean(win?.appeal_opened_at && !win.window_deadline_at),
+      remainingMsAtAppeal:
+        win?.remaining_ms_at_appeal != null ? Number(win.remaining_ms_at_appeal) : null,
+      windowDeadlineAt: win?.window_deadline_at ?? null,
+    };
   }
 
   private async loadAdmission(
@@ -183,6 +342,7 @@ export class VenueReviewsService {
     verdict: ReturnType<typeof evaluateVenueExperienceAdmission>;
     game: GameLock;
     canonicalVenueId: string | null;
+    attributedSourceVenueId: string | null;
     outcomeVersion: number;
     attendanceVersion: number;
     firstEligibleCandidate: Date | null;
@@ -206,36 +366,38 @@ export class VenueReviewsService {
       game.ends_at.getTime() <= now.getTime() &&
       (game.status === "published" || game.status === "completed");
     const outcomeHeld = outcome?.value === "held";
-    const venue = await this.resolveCanonicalVenue(client, game.venue_id);
+    const openOutcomeDispute = await this.hasOpenOutcomeDispute(client, gameId);
+    // Historical played-at only — never trust mutable games.venue_id alone.
+    const attribution = await this.loadPlayedAtAttribution(client, gameId);
+    const attributedSourceVenueId = attribution?.sourceVenueId ?? null;
+    const venue = attributedSourceVenueId
+      ? await this.resolveCanonicalVenue(client, attributedSourceVenueId)
+      : null;
     const canonicalVenueId = venue?.resolved ? venue.canonicalVenueId : null;
-    if (
-      expectedVenueId &&
-      canonicalVenueId &&
-      expectedVenueId !== canonicalVenueId &&
-      expectedVenueId !== game.venue_id
-    ) {
-      return {
-        verdict: { status: "deny", reason: "wrong_venue" },
-        game,
-        canonicalVenueId,
-        outcomeVersion: outcome?.version ?? 0,
-        attendanceVersion: 0,
-        firstEligibleCandidate: null,
-      };
-    }
-    // Accept either source or canonical id as the page venue.
-    let pageVenueOk = true;
-    if (expectedVenueId) {
+    const playedAtAttributed = Boolean(attribution && venue?.resolved && canonicalVenueId);
+    if (expectedVenueId && playedAtAttributed && canonicalVenueId) {
       const expectedCanon = await this.resolveCanonicalVenue(client, expectedVenueId);
-      if (!expectedCanon?.resolved || expectedCanon.canonicalVenueId !== canonicalVenueId) {
-        pageVenueOk = false;
+      if (
+        !expectedCanon?.resolved ||
+        expectedCanon.canonicalVenueId !== canonicalVenueId
+      ) {
+        return {
+          verdict: { status: "deny", reason: "wrong_venue" },
+          game,
+          canonicalVenueId,
+          attributedSourceVenueId,
+          outcomeVersion: outcome?.version ?? 0,
+          attendanceVersion: 0,
+          firstEligibleCandidate: null,
+        };
       }
-    }
-    if (!pageVenueOk) {
+    } else if (expectedVenueId && !playedAtAttributed) {
+      // Page venue cannot be proven from current row when history is missing.
       return {
-        verdict: { status: "deny", reason: "wrong_venue" },
+        verdict: { status: "missing_history", reason: "venue_attribution_unavailable" },
         game,
-        canonicalVenueId,
+        canonicalVenueId: null,
+        attributedSourceVenueId: null,
         outcomeVersion: outcome?.version ?? 0,
         attendanceVersion: 0,
         firstEligibleCandidate: null,
@@ -280,6 +442,7 @@ export class VenueReviewsService {
     const verdict = evaluateVenueExperienceAdmission({
       lifecycleOk,
       outcomeHeld,
+      openOutcomeDispute,
       ownEligible,
       authorConfirmedPresent: confirmed,
       authorOpenDispute: openDispute,
@@ -287,14 +450,28 @@ export class VenueReviewsService {
       subjectUserId: userId,
       canonicalVenueId,
       canonicalResolved: Boolean(venue?.resolved && canonicalVenueId),
+      playedAtAttributed,
       venueAffiliated: affiliated,
     });
-    const firstEligibleCandidate =
-      verdict.status === "may_submit" ? now : null;
+    let firstEligibleCandidate: Date | null = null;
+    if (verdict.status === "may_submit") {
+      const stamps = await this.loadEligibilityTimestamps(
+        client,
+        gameId,
+        own?.id ?? null,
+        userId,
+      );
+      firstEligibleCandidate = deriveFirstEligibleAt({
+        endsAt: game.ends_at,
+        outcomeHeldRecordedAt: stamps.outcomeHeldRecordedAt,
+        presentPermittedRecordedAt: stamps.presentPermittedRecordedAt,
+      });
+    }
     return {
       verdict,
       game,
       canonicalVenueId,
+      attributedSourceVenueId,
       outcomeVersion: outcome?.version ?? 0,
       attendanceVersion: assertion?.version ?? 0,
       firstEligibleCandidate,
@@ -309,7 +486,9 @@ export class VenueReviewsService {
     if (verdict.reason === "attendance_unmarked" || verdict.reason === "attendance_unknown") {
       return "attendance_unmarked";
     }
-    if (verdict.reason === "attendance_dispute") return "attendance_clarifying";
+    if (verdict.reason === "attendance_dispute" || verdict.reason === "outcome_dispute") {
+      return "attendance_clarifying";
+    }
     return null;
   }
 
@@ -342,6 +521,7 @@ export class VenueReviewsService {
     );
     const cursor = decodePublicCursor(opts.cursor);
     const now = new Date();
+    // Reports / basis_under_review alone must not hide approved public criticism.
     const rows = await this.pool.query<{
       public_handle: string;
       body_text: string;
@@ -355,7 +535,6 @@ export class VenueReviewsService {
        JOIN venue_review_revisions r ON r.id = s.approved_revision_id
        WHERE s.canonical_venue_id = $1
          AND s.status IN ('published', 'revision_waiting')
-         AND s.basis_under_review = false
          AND r.audience = 'public_venue'
          AND r.lifecycle = 'published'
          AND r.not_before IS NOT NULL
@@ -381,7 +560,6 @@ export class VenueReviewsService {
          JOIN venue_review_revisions r ON r.id = s.approved_revision_id
          WHERE s.canonical_venue_id = $1
            AND s.status IN ('published', 'revision_waiting')
-           AND s.basis_under_review = false
            AND r.audience = 'public_venue'
            AND r.lifecycle = 'published'
            AND r.not_before IS NOT NULL
@@ -413,7 +591,8 @@ export class VenueReviewsService {
     if (!(await this.installed(this.pool))) return { bases: [] };
     const canon = await this.resolveCanonicalVenue(this.pool, venueId);
     if (!canon?.resolved) return { bases: [] };
-    // Own ended games at this canonical venue — private to author.
+    // Own ended games with immutable played-at attribution to this canonical venue.
+    // Never select by mutable games.venue_id alone.
     const games = await this.pool.query<{
       id: string;
       title: string | null;
@@ -423,15 +602,18 @@ export class VenueReviewsService {
       venue_id: string;
     }>(
       `${effectiveVenueCtes(
-        `SELECT g.venue_id AS id FROM games g
+        `SELECT a.source_venue_id AS id
+         FROM game_played_at_venue_attributions a
+         INNER JOIN games g ON g.id = a.game_id
          INNER JOIN participations p ON p.game_id = g.id AND p.user_id = $1
          WHERE g.ends_at <= clock_timestamp()
            AND g.status IN ('published', 'completed')`,
       )}
-       SELECT g.id, g.title, g.starts_at, g.ends_at, g.status, g.venue_id
-       FROM games g
+       SELECT g.id, g.title, g.starts_at, g.ends_at, g.status, a.source_venue_id AS venue_id
+       FROM game_played_at_venue_attributions a
+       INNER JOIN games g ON g.id = a.game_id
        INNER JOIN participations p ON p.game_id = g.id AND p.user_id = $1
-       INNER JOIN effective_venues ev ON ev.source_id = g.venue_id
+       INNER JOIN effective_venues ev ON ev.source_id = a.source_venue_id
        WHERE ev.canonical_resolved AND ev.id = $2
          AND g.ends_at <= clock_timestamp()
          AND g.status IN ('published', 'completed')
@@ -444,18 +626,20 @@ export class VenueReviewsService {
     try {
       for (const g of games.rows) {
         const adm = await this.loadAdmission(client, userId, g.id, venueId);
-        const fence = (
-          await client.query<{ first_eligible_at: Date }>(
-            `SELECT first_eligible_at FROM venue_review_event_fences
-             WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id = $3`,
-            [userId, g.id, canon.canonicalVenueId],
-          )
-        ).rows[0];
+        const win = await this.loadSubmitWindow(client, userId, g.id, canon.canonicalVenueId);
         let admission: OwnVenueEligibilityBasisDto["admission"] = adm.verdict.status;
         let reason = adm.verdict.status === "may_submit" ? null : adm.verdict.reason;
-        if (adm.verdict.status === "may_submit") {
-          const first = fence?.first_eligible_at ?? adm.firstEligibleCandidate;
-          if (first && !withinSubmitWindow({ firstEligibleAt: first, now: new Date() })) {
+        const first = win.firstEligibleAt ?? adm.firstEligibleCandidate;
+        if (adm.verdict.status === "may_submit" && first) {
+          if (
+            !withinSubmitWindow({
+              firstEligibleAt: first,
+              now: new Date(),
+              appealOpen: win.appealOpen,
+              remainingMsAtAppeal: win.remainingMsAtAppeal,
+              windowDeadlineAt: win.windowDeadlineAt,
+            })
+          ) {
             admission = "deny";
             reason = "window_closed";
           }
@@ -467,7 +651,7 @@ export class VenueReviewsService {
           reason,
           outcomeVersion: adm.outcomeVersion,
           attendanceVersion: adm.attendanceVersion,
-          firstEligibleAt: fence?.first_eligible_at?.toISOString() ?? null,
+          firstEligibleAt: first?.toISOString() ?? null,
           helpHint: this.helpHint(adm.verdict),
         });
       }
@@ -616,7 +800,7 @@ export class VenueReviewsService {
     if (args.expectedSlotVersion != null && slot.version !== args.expectedSlotVersion) {
       throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
     }
-    // Fence + first eligible anchor (immutable once set).
+    // Per-game fence + derived first eligible (immutable once set). Never use probe clock.
     const existingFence = (
       await client.query<{ first_eligible_at: Date }>(
         `SELECT first_eligible_at FROM venue_review_event_fences
@@ -626,22 +810,23 @@ export class VenueReviewsService {
     ).rows[0];
     let firstEligibleAt = existingFence?.first_eligible_at ?? null;
     if (!existingFence) {
-      // Another game may already own the slot fence for a different game — allowed to update slot.
-      const otherFence = (
-        await client.query(
-          `SELECT 1 FROM venue_review_event_fences
-           WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id <> $3`,
-          [args.userId, args.gameId, adm.canonicalVenueId],
-        )
-      ).rows[0];
-      void otherFence;
-      firstEligibleAt = new Date();
+      firstEligibleAt = adm.firstEligibleCandidate;
+      if (!firstEligibleAt) {
+        throw unprocessable("VENUE_ELIGIBILITY_ANCHOR_MISSING", "Нет подтверждённого допуска");
+      }
       await client.query(
         `INSERT INTO venue_review_event_fences
            (author_user_id, game_id, canonical_venue_id, slot_id, first_eligible_at)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT DO NOTHING`,
         [args.userId, args.gameId, adm.canonicalVenueId, slot.id, firstEligibleAt],
+      );
+      await client.query(
+        `INSERT INTO venue_review_submit_windows
+           (author_user_id, game_id, canonical_venue_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT DO NOTHING`,
+        [args.userId, args.gameId, adm.canonicalVenueId],
       );
       const re = (
         await client.query<{ first_eligible_at: Date }>(
@@ -652,7 +837,7 @@ export class VenueReviewsService {
       ).rows[0];
       firstEligibleAt = re!.first_eligible_at;
     }
-    // Slot-level first_eligible_at: earliest across fences; ordinary edits do not reset.
+    // Slot-level first_eligible_at is informational earliest; window is always per-game.
     if (!slot.first_eligible_at) {
       await client.query(
         `UPDATE venue_review_slots SET first_eligible_at = $2, updated_at = clock_timestamp()
@@ -660,8 +845,22 @@ export class VenueReviewsService {
         [slot.id, firstEligibleAt],
       );
     }
-    const slotFirst = slot.first_eligible_at ?? firstEligibleAt!;
-    if (!withinSubmitWindow({ firstEligibleAt: slotFirst, now: new Date() })) {
+    const win = await this.loadSubmitWindow(
+      client,
+      args.userId,
+      args.gameId,
+      adm.canonicalVenueId,
+    );
+    const gameFirst = win.firstEligibleAt ?? firstEligibleAt!;
+    if (
+      !withinSubmitWindow({
+        firstEligibleAt: gameFirst,
+        now: new Date(),
+        appealOpen: win.appealOpen,
+        remainingMsAtAppeal: win.remainingMsAtAppeal,
+        windowDeadlineAt: win.windowDeadlineAt,
+      })
+    ) {
       throw unprocessable("VENUE_WINDOW_CLOSED", "Срок подачи истёк");
     }
     const nextVersion =
@@ -959,6 +1158,46 @@ export class VenueReviewsService {
               [slot.id],
             )
           ).rows[0];
+          const tipRevisionId = slot.pending_revision_id ?? slot.approved_revision_id;
+          const tipRev = tipRevisionId
+            ? (
+                await client.query<{ game_id: string }>(
+                  `SELECT game_id FROM venue_review_revisions WHERE id = $1 AND slot_id = $2`,
+                  [tipRevisionId, slot.id],
+                )
+              ).rows[0]
+            : null;
+          if (!tipRev) {
+            throw unprocessable("VENUE_APPEAL_DENIED", "Апелляция недоступна");
+          }
+          const win = await this.loadSubmitWindow(
+            client,
+            userId,
+            tipRev.game_id,
+            slot.canonical_venue_id,
+          );
+          const first = win.firstEligibleAt;
+          if (!first) {
+            throw unprocessable("VENUE_ELIGIBILITY_ANCHOR_MISSING", "Нет подтверждённого допуска");
+          }
+          const now = new Date();
+          const remaining = remainingSubmitWindowMs({
+            firstEligibleAt: first,
+            now,
+            windowDeadlineAt: win.windowDeadlineAt,
+          });
+          await client.query(
+            `INSERT INTO venue_review_submit_windows
+               (author_user_id, game_id, canonical_venue_id,
+                appeal_opened_at, remaining_ms_at_appeal, window_deadline_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,NULL,clock_timestamp())
+             ON CONFLICT (author_user_id, game_id, canonical_venue_id) DO UPDATE
+             SET appeal_opened_at = EXCLUDED.appeal_opened_at,
+                 remaining_ms_at_appeal = EXCLUDED.remaining_ms_at_appeal,
+                 window_deadline_at = NULL,
+                 updated_at = clock_timestamp()`,
+            [userId, tipRev.game_id, slot.canonical_venue_id, now, remaining],
+          );
           const intake = await this.createPendingIntake(client, {
             kind: "appeal",
             slotId: slot.id,
@@ -972,12 +1211,6 @@ export class VenueReviewsService {
              WHERE id = $1`,
             [slot.id],
           );
-          // Appeal preserves remaining window and grants at least 7 days from now via bonus marker:
-          // store by extending first_eligible_at backward is forbidden; window check uses max(remaining,7d)
-          // implemented in withinSubmitWindow callers via appealBonus — eligibility re-read uses
-          // VENUE_APPEAL_MIN_WINDOW_MS from appeal intake created_at when present.
-          void VENUE_APPEAL_MIN_WINDOW_MS;
-          void VENUE_SUBMIT_WINDOW_MS;
           const refreshed = (
             await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
           ).rows[0]!;
@@ -1196,6 +1429,10 @@ export class VenueReviewsService {
        WHERE id = $1`,
       [slot.id, published.id, revisionId],
     );
+    const refreshed = (
+      await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
+    ).rows[0]!;
+    await this.resumeAppealWindowAfterFavorable(client, refreshed, now);
     return { notBefore };
   }
 
@@ -1219,7 +1456,14 @@ export class VenueReviewsService {
 
   async applyRestore(
     client: PoolClient,
-    slot: Pick<SlotRow, "id" | "approved_revision_id">,
+    slot: Pick<
+      SlotRow,
+      | "id"
+      | "approved_revision_id"
+      | "pending_revision_id"
+      | "author_user_id"
+      | "canonical_venue_id"
+    >,
   ): Promise<void> {
     if (!slot.approved_revision_id) {
       throw conflict("RESTORE_DENIED", "Восстановление недоступно");
@@ -1229,6 +1473,48 @@ export class VenueReviewsService {
        SET status = 'published', version = version + 1, updated_at = clock_timestamp()
        WHERE id = $1`,
       [slot.id],
+    );
+    await this.resumeAppealWindowAfterFavorable(client, slot);
+  }
+
+  /**
+   * Favorable independent appeal resolution: deadline = now + max(remaining_at_pause, 7d).
+   * No-op when no open appeal pause is recorded for the tip game.
+   */
+  async resumeAppealWindowAfterFavorable(
+    client: PoolClient,
+    slot: Pick<SlotRow, "id" | "author_user_id" | "canonical_venue_id" | "approved_revision_id" | "pending_revision_id">,
+    now = new Date(),
+  ): Promise<void> {
+    const tipId = slot.pending_revision_id ?? slot.approved_revision_id;
+    if (!tipId) return;
+    const tip = (
+      await client.query<{ game_id: string }>(
+        `SELECT game_id FROM venue_review_revisions WHERE id = $1 AND slot_id = $2`,
+        [tipId, slot.id],
+      )
+    ).rows[0];
+    if (!tip) return;
+    const win = (
+      await client.query<{ remaining_ms_at_appeal: string | null; window_deadline_at: Date | null }>(
+        `SELECT remaining_ms_at_appeal, window_deadline_at
+         FROM venue_review_submit_windows
+         WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id = $3
+           AND appeal_opened_at IS NOT NULL AND window_deadline_at IS NULL
+         FOR UPDATE`,
+        [slot.author_user_id, tip.game_id, slot.canonical_venue_id],
+      )
+    ).rows[0];
+    if (!win || win.remaining_ms_at_appeal == null) return;
+    const deadline = computeAppealResumeDeadline({
+      remainingMsAtAppeal: Number(win.remaining_ms_at_appeal),
+      resolvedAt: now,
+    });
+    await client.query(
+      `UPDATE venue_review_submit_windows
+       SET window_deadline_at = $4, updated_at = clock_timestamp()
+       WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id = $3`,
+      [slot.author_user_id, tip.game_id, slot.canonical_venue_id, deadline],
     );
   }
 }

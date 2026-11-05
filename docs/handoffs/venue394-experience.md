@@ -1,26 +1,32 @@
-# Handoff · #394 venue experience · attempt 34
+# Handoff · #394 venue experience · attempt 35
 
 ## Candidate
 
-End-to-end source for public venue experience on existing API/web/Admin/Cases.
+Continuation of pass1 source on public venue experience (API/web/Admin/Cases).
 
-- Migration `0058_venue_experience_reviews` (+ rollback)
-- `VenueReviewsService` / controller; admin intake/decide; Cases hint `venueReview`
-- Web VenuePage panel + composer (self_draft default, public consent/preview)
-- OpenAPI **0.34.0**; releases current **alpha.28** (alpha.27 seed ACCEPTED facts retained; CURRENT `source_sha` null until trusted freeze)
-- Shared predicate `game-experience.ts` reused from game-feedback
+### Policy corrections in this attempt
 
-## Not claimed
+1. **Historical played-at** — additive `game_played_at_venue_attributions` (immutable). Written prospectively on `games.publish` and `outcome=held`. `loadAdmission` / eligibility never treat mutable `games.venue_id` as proof; missing row → `missing_history`. No historical backfill.
+2. **14-day window** — `first_eligible_at` derived from max(ends_at, first held revision, first permitted present). Fence insert uses that stamp, not probe/`new Date()`. Window is **per-game** (not forever blocked by slot-level first game). Appeal pause + favorable resume `max(remaining,7d)` via mutable `venue_review_submit_windows`.
+3. **Outcome dispute / publication / COI** — open role-proof `open_dispute` or open non-attendance/non-venue-review Cases on the game hold admission; reports do not hide published text; approve reaffirms eligibility; reviewer COI covers historic manager seats + venue-admin actors; author affiliation includes venue-admin proof.
+4. **Composition** — `GameResultsComposition` wires `venueId={game?.venue?.id}` into `GameFeedbackPanel`.
 
-- DEV ACCEPTED / smoke / Owner UAT / PROD
+### Disposable tests
+
+`venue-reviews.disposable.test.ts` and `admin-venue-reviews.disposable.test.ts` now contain real auth/CSRF/idempotency/Admin WebAuthn paths (skipped unless `RUN_DB_INTEGRATION=1`). Pattern mirrors role-reputation disposables.
+
+## Metadata retained
+
+- alpha.28 / API 0.34.0; alpha.27 seed ACCEPTED facts unchanged
+- CURRENT `source_sha` null until trusted freeze
+- No DEV/UAT/PROD claims by author
+
+## Not claimed / Root remaining
+
 - Live disposable DB execution by author
-- Wiring `venueId` into `GameFeedbackPanel` from `GameResultsComposition` (file outside allowed_paths — bounded follow-up)
-- Full disposable integration bodies (harness placeholders; CI to expand)
+- Independent QA / Product CI / DEV smoke / Owner UAT
+- Exact release SHA/receipt freeze
 
-## Remaining checks (trusted process)
+## Checks run by author
 
-1. Unit: `venue-reviews.policy.test.ts`, web venue-reviews tests, releases alpha.28, admin VenueReviewCases surface, admin protocol count 50
-2. Independent QA (Codex Sol Medium)
-3. Product CI + migration smoke includes `0058`
-4. Disposable auth/CSRF/idempotency path + approve+48h guest projection
-5. DEV release + version history freeze with exact SHA/receipt when Root provides facts
+- Targeted unit file edits; Root runs full tests + independent QA

@@ -41,6 +41,7 @@ type SlotRow = {
   approved_revision_id: string | null;
   pending_revision_id: string | null;
   public_handle: string;
+  first_eligible_at?: Date | null;
 };
 
 const manages = (actor: AuditActor) => hasPermission(actor.roles as AdminRole[], "case.manage");
@@ -155,6 +156,21 @@ export class AdminVenueReviewsService {
     ) {
       throw forbidden("REVIEWER_VENUE_CONFLICT", "Связанный с площадкой проверяющий исключён");
     }
+    // Historic venue staff/admin actions — fail closed when affiliation proof exists.
+    if (
+      (
+        await client.query(
+          `SELECT 1
+           FROM venue_admin_actions a
+           JOIN admin_principals p ON p.id = a.actor_id
+           WHERE a.venue_id = $1 AND p.user_id = $2
+           LIMIT 1`,
+          [affected.venueId, reviewerUserId],
+        )
+      ).rows[0]
+    ) {
+      throw forbidden("REVIEWER_VENUE_CONFLICT", "Связанный с площадкой проверяющий исключён");
+    }
     for (const gameId of affected.gameIds) {
       if (
         (
@@ -166,6 +182,7 @@ export class AdminVenueReviewsService {
       ) {
         throw forbidden("REVIEWER_MANAGER_CONFLICT", "Организатор игры не может быть независимым проверяющим");
       }
+      // Any historic manager seat (active or revoked) is a conflict — not only current active.
       if (
         (
           await client.query(

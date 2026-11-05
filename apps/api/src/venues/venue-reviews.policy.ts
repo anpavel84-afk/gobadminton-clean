@@ -49,6 +49,11 @@ export function computeNotBefore(approvedAt: Date, lastMaterialEditAt: Date): Da
   return approvedAt.getTime() >= delayed.getTime() ? approvedAt : delayed;
 }
 
+/**
+ * Public visibility for an already-approved revision.
+ * Reports / basis_under_review alone must not hide published criticism;
+ * independent remove or author withdraw changes status instead.
+ */
 export function isPubliclyVisible(args: {
   slotStatus: string;
   approvedRevisionId: string | null;
@@ -56,20 +61,72 @@ export function isPubliclyVisible(args: {
   now: Date;
   basisUnderReview: boolean;
 }): boolean {
-  if (args.basisUnderReview) return false;
+  void args.basisUnderReview;
   if (!args.approvedRevisionId || !args.notBefore) return false;
   if (args.slotStatus !== "published" && args.slotStatus !== "revision_waiting") return false;
   return args.notBefore.getTime() <= args.now.getTime();
 }
 
-export function withinSubmitWindow(args: {
+/**
+ * Earliest moment all eligibility gates were first jointly true.
+ * Ordinary attendance toggles / probes must not supply `now`.
+ */
+export function deriveFirstEligibleAt(parts: {
+  endsAt: Date;
+  outcomeHeldRecordedAt: Date | null;
+  presentPermittedRecordedAt: Date | null;
+}): Date | null {
+  if (!parts.outcomeHeldRecordedAt || !parts.presentPermittedRecordedAt) return null;
+  return new Date(
+    Math.max(
+      parts.endsAt.getTime(),
+      parts.outcomeHeldRecordedAt.getTime(),
+      parts.presentPermittedRecordedAt.getTime(),
+    ),
+  );
+}
+
+export type SubmitWindowState = {
   firstEligibleAt: Date;
   now: Date;
-  appealBonusMs?: number;
-}): boolean {
+  /** Appeal opened and not yet favorably resumed. */
+  appealOpen?: boolean;
+  remainingMsAtAppeal?: number | null;
+  /** After favorable independent resolution: now_at_resolve + max(remaining, 7d). */
+  windowDeadlineAt?: Date | null;
+};
+
+/** 14-day window from first eligible; appeal pauses remaining; resume grants max(remaining,7d). */
+export function withinSubmitWindow(args: SubmitWindowState): boolean {
+  if (args.windowDeadlineAt) {
+    return args.now.getTime() <= args.windowDeadlineAt.getTime();
+  }
+  if (args.appealOpen && args.remainingMsAtAppeal != null) {
+    return args.remainingMsAtAppeal > 0;
+  }
   const baseEnd = args.firstEligibleAt.getTime() + VENUE_SUBMIT_WINDOW_MS;
-  const end = Math.max(baseEnd, args.firstEligibleAt.getTime() + (args.appealBonusMs ?? 0));
-  return args.now.getTime() <= end;
+  return args.now.getTime() <= baseEnd;
+}
+
+/** Remaining ms in the active window at `now` (0 if already closed). */
+export function remainingSubmitWindowMs(args: {
+  firstEligibleAt: Date;
+  now: Date;
+  windowDeadlineAt?: Date | null;
+}): number {
+  const end = args.windowDeadlineAt
+    ? args.windowDeadlineAt.getTime()
+    : args.firstEligibleAt.getTime() + VENUE_SUBMIT_WINDOW_MS;
+  return Math.max(0, end - args.now.getTime());
+}
+
+/** After favorable appeal resolution: deadline = resolvedAt + max(remaining, 7d). */
+export function computeAppealResumeDeadline(args: {
+  remainingMsAtAppeal: number;
+  resolvedAt: Date;
+}): Date {
+  const grant = Math.max(args.remainingMsAtAppeal, VENUE_APPEAL_MIN_WINDOW_MS);
+  return new Date(args.resolvedAt.getTime() + grant);
 }
 
 export function redactPublicCursor(payload: Record<string, unknown>): string {

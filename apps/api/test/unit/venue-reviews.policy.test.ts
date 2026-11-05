@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeAppealResumeDeadline,
   computeNotBefore,
+  deriveFirstEligibleAt,
   isPubliclyVisible,
   projectionHash,
+  remainingSubmitWindowMs,
   topicsAllowed,
   withinSubmitWindow,
+  VENUE_APPEAL_MIN_WINDOW_MS,
   VENUE_PUBLICATION_DELAY_MS,
   VENUE_SUBMIT_WINDOW_MS,
 } from "../../src/venues/venue-reviews.policy";
@@ -41,7 +45,7 @@ describe("venue-reviews.policy", () => {
     expect(computeNotBefore(lateApprove, edit).getTime()).toBe(lateApprove.getTime());
   });
 
-  it("gates public visibility on status, notBefore and holds", () => {
+  it("keeps published text visible despite basis_under_review / reports", () => {
     const notBefore = new Date("2026-11-03T00:00:00Z");
     expect(
       isPubliclyVisible({
@@ -49,7 +53,7 @@ describe("venue-reviews.policy", () => {
         approvedRevisionId: "r1",
         notBefore,
         now: new Date("2026-11-03T00:00:01Z"),
-        basisUnderReview: false,
+        basisUnderReview: true,
       }),
     ).toBe(true);
     expect(
@@ -63,11 +67,11 @@ describe("venue-reviews.policy", () => {
     ).toBe(false);
     expect(
       isPubliclyVisible({
-        slotStatus: "published",
+        slotStatus: "submitted_waiting",
         approvedRevisionId: "r1",
         notBefore,
         now: new Date("2026-11-04T00:00:00Z"),
-        basisUnderReview: true,
+        basisUnderReview: false,
       }),
     ).toBe(false);
   });
@@ -88,6 +92,61 @@ describe("venue-reviews.policy", () => {
     ).toBe(false);
   });
 
+  it("derives first eligible from immutable end/outcome/present stamps, not probe clock", () => {
+    const endsAt = new Date("2026-11-01T14:00:00Z");
+    const heldAt = new Date("2026-11-01T15:00:00Z");
+    const presentAt = new Date("2026-11-01T16:00:00Z");
+    expect(
+      deriveFirstEligibleAt({
+        endsAt,
+        outcomeHeldRecordedAt: heldAt,
+        presentPermittedRecordedAt: presentAt,
+      })?.toISOString(),
+    ).toBe(presentAt.toISOString());
+    expect(
+      deriveFirstEligibleAt({
+        endsAt,
+        outcomeHeldRecordedAt: null,
+        presentPermittedRecordedAt: presentAt,
+      }),
+    ).toBeNull();
+  });
+
+  it("pauses remaining window on appeal and resumes with max(remaining,7d)", () => {
+    const first = new Date("2026-11-01T00:00:00Z");
+    const mid = new Date(first.getTime() + 10 * 24 * 60 * 60 * 1000);
+    const remaining = remainingSubmitWindowMs({ firstEligibleAt: first, now: mid });
+    expect(remaining).toBe(4 * 24 * 60 * 60 * 1000);
+    expect(
+      withinSubmitWindow({
+        firstEligibleAt: first,
+        now: new Date(mid.getTime() + 30 * 24 * 60 * 60 * 1000),
+        appealOpen: true,
+        remainingMsAtAppeal: remaining,
+      }),
+    ).toBe(true);
+    const resolvedAt = new Date("2026-11-20T00:00:00Z");
+    const deadline = computeAppealResumeDeadline({
+      remainingMsAtAppeal: remaining,
+      resolvedAt,
+    });
+    expect(deadline.getTime()).toBe(resolvedAt.getTime() + VENUE_APPEAL_MIN_WINDOW_MS);
+    expect(
+      withinSubmitWindow({
+        firstEligibleAt: first,
+        now: new Date(deadline.getTime() - 1),
+        windowDeadlineAt: deadline,
+      }),
+    ).toBe(true);
+    expect(
+      withinSubmitWindow({
+        firstEligibleAt: first,
+        now: new Date(deadline.getTime() + 1),
+        windowDeadlineAt: deadline,
+      }),
+    ).toBe(false);
+  });
+
   it("allows only surface/lighting/amenities topics", () => {
     expect(topicsAllowed(["surface"])).toBe(true);
     expect(topicsAllowed(["surface", "lighting", "amenities", "extra"])).toBe(false);
@@ -99,6 +158,7 @@ describe("game-experience venue admission", () => {
   const base = {
     lifecycleOk: true,
     outcomeHeld: true,
+    openOutcomeDispute: false,
     ownEligible: true,
     authorConfirmedPresent: true,
     authorOpenDispute: false,
@@ -111,14 +171,26 @@ describe("game-experience venue admission", () => {
     subjectUserId: "player",
     canonicalVenueId: "venue",
     canonicalResolved: true,
+    playedAtAttributed: true,
     venueAffiliated: false,
   };
 
-  it("admits confirmed held participant at resolved venue", () => {
+  it("admits confirmed held participant at resolved attributed venue", () => {
     expect(evaluateVenueExperienceAdmission(base)).toEqual({ status: "may_submit" });
   });
 
-  it("holds unmarked attendance and denies self-venue", () => {
+  it("fail-closes missing historical played-at and holds outcome disputes", () => {
+    expect(
+      evaluateVenueExperienceAdmission({
+        ...base,
+        playedAtAttributed: false,
+        canonicalResolved: false,
+        canonicalVenueId: null,
+      }),
+    ).toMatchObject({ status: "missing_history" });
+    expect(
+      evaluateVenueExperienceAdmission({ ...base, openOutcomeDispute: true }),
+    ).toMatchObject({ status: "hold", reason: "outcome_dispute" });
     expect(
       evaluateVenueExperienceAdmission({
         ...base,
@@ -129,13 +201,6 @@ describe("game-experience venue admission", () => {
     expect(
       evaluateVenueExperienceAdmission({ ...base, venueAffiliated: true }),
     ).toMatchObject({ status: "deny", reason: "venue_affiliation" });
-    expect(
-      evaluateVenueExperienceAdmission({
-        ...base,
-        canonicalResolved: false,
-        canonicalVenueId: null,
-      }),
-    ).toMatchObject({ status: "missing_history" });
   });
 
   it("requires permitted present for confirmed experience", () => {

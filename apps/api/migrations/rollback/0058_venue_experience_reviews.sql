@@ -7,8 +7,10 @@ BEGIN
      OR EXISTS (SELECT 1 FROM venue_review_reports)
      OR EXISTS (SELECT 1 FROM venue_review_pending_intakes)
      OR EXISTS (SELECT 1 FROM venue_review_revisions)
+     OR EXISTS (SELECT 1 FROM venue_review_submit_windows)
      OR EXISTS (SELECT 1 FROM venue_review_event_fences)
      OR EXISTS (SELECT 1 FROM venue_review_slots)
+     OR EXISTS (SELECT 1 FROM game_played_at_venue_attributions)
   THEN
     RAISE EXCEPTION
       'rollback 0058 blocked: venue experience review history exists'
@@ -21,6 +23,8 @@ DROP TRIGGER IF EXISTS venue_review_case_links_immutable ON venue_review_case_li
 DROP TRIGGER IF EXISTS venue_review_reports_immutable ON venue_review_reports;
 DROP TRIGGER IF EXISTS venue_review_revisions_immutable ON venue_review_revisions;
 DROP TRIGGER IF EXISTS venue_review_event_fences_immutable ON venue_review_event_fences;
+DROP TRIGGER IF EXISTS game_played_at_venue_attributions_immutable
+  ON game_played_at_venue_attributions;
 
 ALTER TABLE venue_review_pending_intakes
   DROP CONSTRAINT IF EXISTS venue_review_pending_intakes_prior_decision_fkey;
@@ -33,5 +37,7 @@ DROP TABLE IF EXISTS venue_review_case_links;
 DROP TABLE IF EXISTS venue_review_reports;
 DROP TABLE IF EXISTS venue_review_pending_intakes;
 DROP TABLE IF EXISTS venue_review_revisions;
+DROP TABLE IF EXISTS venue_review_submit_windows;
 DROP TABLE IF EXISTS venue_review_event_fences;
 DROP TABLE IF EXISTS venue_review_slots;
+DROP TABLE IF EXISTS game_played_at_venue_attributions;
