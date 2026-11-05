@@ -75,7 +75,7 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/помощ|готовност/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/одобрения первого личного сообщения/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
