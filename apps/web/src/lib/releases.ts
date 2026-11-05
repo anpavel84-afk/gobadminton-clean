@@ -431,10 +431,12 @@ export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   "additions": [],
   "fixes": [
     "Уточнено, кто может оставить отзыв об организаторе или тренере после совместной игры",
-    "В истории alpha.20 однозначно указано, что автор может снять свой отзыв с публикации"
+    "В истории alpha.20 однозначно указано, что автор может снять свой отзыв с публикации",
+    "На экране версий показаны ограничения текущего выпуска без устаревших утверждений первой alpha о недоступности почты, итогов после игры и push"
   ],
   "known_limitations": [
-    "Приёмка владельцем ещё не выполнена"
+    "Приёмка владельцем ещё не выполнена",
+    "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
   ],
   "feature_catalogue": "delta"
 };
@@ -1392,6 +1394,18 @@ export function groupFeatures(features: readonly ReleaseFeature[]): { group: str
     map.get(feature.group)!.push(feature);
   }
   return order.map((group) => ({ group, items: map.get(group)! }));
+}
+
+/** Limitations listed for the named row on /releases. First-alpha baseline only when that named row is the first release. */
+export function visibleKnownLimitations(
+  named: Pick<NamedReleaseNotes, "application_version" | "feature_catalogue" | "known_limitations">,
+): readonly string[] {
+  const isFirstNamed =
+    named.application_version === FIRST_NAMED_APPLICATION_VERSION
+    || named.feature_catalogue === "full_baseline";
+  if (!isFirstNamed) return named.known_limitations;
+  const extras = named.known_limitations.filter((item) => !FIRST_ALPHA_KNOWN_LIMITATIONS.includes(item));
+  return [...FIRST_ALPHA_KNOWN_LIMITATIONS, ...extras];
 }
 
 export function shortSha(sha: string | null | undefined): string {

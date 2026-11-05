@@ -1,6 +1,6 @@
-import { createElement, type AnchorHTMLAttributes } from "react";
+import { createElement, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopFooter } from "../src/components/consumer/DesktopFooter";
 import { ReleaseLink, isDevReleasesHost } from "../src/components/consumer/ReleaseLink";
 import {
@@ -8,6 +8,7 @@ import {
   CURRENT_APPLICATION_VERSION,
   CURRENT_NAMED_RELEASE,
   FIRST_ALPHA_FEATURES,
+  FIRST_ALPHA_KNOWN_LIMITATIONS,
   FIRST_NAMED_APPLICATION_VERSION,
   FIRST_NAMED_RELEASE,
   SWITCHED_OFF_INTERNAL,
@@ -15,10 +16,34 @@ import {
   groupFeatures,
   runtimeBuildGitSha,
   shortSha,
+  visibleKnownLimitations,
 } from "../src/lib/releases";
 import { GET as healthGet } from "../src/app/health/route";
 
+const loadReleasesPageModelMock = vi.hoisted(() => vi.fn());
+
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
+vi.mock("next/headers", () => ({
+  headers: async () => ({
+    get: (name: string) => (name === "host" || name === "x-forwarded-host" ? "dev.gobadminton.ru" : null),
+  }),
+}));
+vi.mock("next/navigation", () => ({
+  notFound: () => {
+    throw new Error("not-found");
+  },
+}));
+vi.mock("../src/components/consumer/ConsumerShell", () => ({
+  ConsumerShell: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("../src/lib/releases-server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/releases-server")>();
+  return {
+    ...actual,
+    isTrustedDevReleasesRuntime: () => true,
+    loadReleasesPageModel: loadReleasesPageModelMock,
+  };
+});
 
 describe("releases catalogue integrity", () => {
   it("keeps first alpha.1 baseline literal while current descriptor is alpha.27 delta", () => {
@@ -46,6 +71,18 @@ describe("releases catalogue integrity", () => {
     );
     expect(currentProse).not.toMatch(/PROD остаётся alpha\.2|не развёрнут|не установлен|DEV remains/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/приёмк|НЕ выполн/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
+      /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
+    );
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/экран(?:е|а)? версий|ограничен/i);
+    expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
+    expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
+      /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
+    );
+    expect(visibleKnownLimitations(FIRST_NAMED_RELEASE)).toEqual([
+      ...FIRST_ALPHA_KNOWN_LIMITATIONS,
+      ...FIRST_NAMED_RELEASE.known_limitations.filter((item) => !FIRST_ALPHA_KNOWN_LIMITATIONS.includes(item)),
+    ]);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(SWITCHED_OFF_INTERNAL).toHaveLength(6);
     expect(groupFeatures(FIRST_ALPHA_FEATURES).length).toBeGreaterThan(5);
@@ -312,5 +349,33 @@ describe("DEV-only release link and footer version badge", () => {
     expect(html).toContain("gb-site-footer-version");
     expect(html).not.toContain('href="/releases"');
     expect(html).toContain('href="/about"');
+  });
+});
+
+describe("releases page current known limitations SSR (#473)", () => {
+  beforeEach(() => {
+    loadReleasesPageModelMock.mockReset();
+    loadReleasesPageModelMock.mockResolvedValue({
+      build: { applicationVersion: CURRENT_APPLICATION_VERSION, gitSha: "unknown" },
+      named: { ...CURRENT_NAMED_RELEASE, source_sha: null },
+      environments: [],
+      history: [],
+      checkedAt: "2026-11-05T00:00:00.000Z",
+    });
+  });
+
+  it("renders current named limits, not first-alpha false email/postgame/push claims", async () => {
+    const ReleasesPage = (await import("../src/app/releases/page")).default;
+    const tree = await ReleasesPage();
+    const html = renderToStaticMarkup(tree);
+    for (const item of CURRENT_NAMED_RELEASE.known_limitations) {
+      expect(html).toContain(item);
+    }
+    expect(html).toContain("Техническая установка выпуска на тестовом сайте не означает");
+    expect(html).toContain("Раздел Admin и тестовая геопозиция остаются служебными");
+    expect(html).not.toMatch(/Вход по электронной почте недоступен/);
+    expect(html).not.toMatch(/Результаты и отзывы после игры не запущены/);
+    expect(html).not.toMatch(/Push-уведомления не активны/);
+    expect(html).not.toContain(FIRST_ALPHA_KNOWN_LIMITATIONS[4]!);
   });
 });
