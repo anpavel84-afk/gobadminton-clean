@@ -19,6 +19,7 @@ import {
   visibleKnownLimitations,
 } from "../src/lib/releases";
 import { GET as healthGet } from "../src/app/health/route";
+import type * as ReleasesServer from "../src/lib/releases-server";
 
 const loadReleasesPageModelMock = vi.hoisted(() => vi.fn());
 
@@ -37,7 +38,7 @@ vi.mock("../src/components/consumer/ConsumerShell", () => ({
   ConsumerShell: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("../src/lib/releases-server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/releases-server")>();
+  const actual = await importOriginal<typeof ReleasesServer>();
   return {
     ...actual,
     isTrustedDevReleasesRuntime: () => true,
