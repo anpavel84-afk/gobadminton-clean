@@ -11,6 +11,7 @@ import { hasPermission, type AdminRole } from "./rbac";
 import type { CaseCommand } from "./cases.dto";
 import { CASE_EVIDENCE_POLICY, type CaseEvidencePolicy } from "./case-evidence-policy";
 import { AdminRoleReputationService } from "./role-reputation.service";
+import { AdminVenueReviewsService } from "./venue-reviews.service";
 type CaseRow = {id:string; status:string; version:number; assigned_to:string|null; created_at:Date; updated_at:Date};
 type Page = {beforeId?:string; limit:number};
 const manages = (actor: AuditActor) => hasPermission(actor.roles as AdminRole[], "case.manage");
@@ -19,7 +20,8 @@ const caseDto = (r:CaseRow) => ({id:r.id,status:r.status,version:r.version,assig
 export class AdminCasesService {
   constructor(private readonly admin:AdminService, @Inject(APP_ENV) private readonly env:AppEnv,
     @Inject(CASE_EVIDENCE_POLICY) private readonly policy:CaseEvidencePolicy,
-    private readonly roleReputation: AdminRoleReputationService) {}
+    private readonly roleReputation: AdminRoleReputationService,
+    private readonly venueReviews: AdminVenueReviewsService) {}
   enabled() { this.admin.enabled(); if(!this.env.CASES_INTERNAL_ENABLED) throw notFound("CASES_DISABLED","Обращения недоступны"); }
   private manage(actor:AuditActor) { if(!manages(actor)) throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения"); }
   private async scoped(c:PoolClient,actor:AuditActor,id:string) {
@@ -83,8 +85,8 @@ export class AdminCasesService {
         LEFT JOIN abuse_reports ar ON ar.id=l.report_id
         WHERE l.case_id=$1 ORDER BY l.id`,[id])).rows;
       const history=(await c.query("SELECT id,case_version,action,note_code,audit_id,created_at FROM support_case_actions WHERE case_id=$1 AND ($2::integer IS NULL OR case_version<$2) ORDER BY case_version DESC LIMIT 101",[id,beforeVersion??null])).rows;
-      // Optional safe role-reputation hint — metadata only; no plaintext/private proof.
-      // Guard table absence for legacy isolated fixtures without migration 0054.
+      // Optional safe role-reputation / venue-review hint — metadata only; no plaintext/private proof.
+      // Guard table absence for legacy isolated fixtures without migration 0054/0058.
       let roleReputation: {
         pendingKind: string;
         role: string;
@@ -111,6 +113,7 @@ export class AdminCasesService {
           };
         }
       }
+      const venueReview = await this.venueReviews.caseHint(c, id);
       await appendAudit(c,{actor:a,action:"admin.case_read",targetType:"case",targetId:id,permission:manages(a)?"case.manage":"case.assigned.manage",reason:"operations_read"});
       return {
         ...caseDto(r),
@@ -118,6 +121,7 @@ export class AdminCasesService {
         history:history.slice(0,100).map(x=>({id:x.id,version:x.case_version,action:x.action,noteCode:x.note_code,auditId:x.audit_id,createdAt:x.created_at})),
         nextHistoryBeforeVersion:history.length>100?history[99]!.case_version:null,
         ...(roleReputation?{roleReputation}:{}),
+        ...(venueReview?{venueReview}:{}),
       };
     });
   }
@@ -204,9 +208,14 @@ export class AdminCasesService {
     if (input.action === "role_basis_resolve") {
       return this.roleReputation.resolveBasis(request, id, key, input);
     }
+    if (input.action === "venue_review_decide") {
+      return this.venueReviews.decide(request, id, key, input);
+    }
     type LegacyCaseCommand = Exclude<
       CaseCommand,
-      { action: "role_review_decide" } | { action: "role_basis_resolve" }
+      | { action: "role_review_decide" }
+      | { action: "role_basis_resolve" }
+      | { action: "venue_review_decide" }
     >;
     const legacy = input as LegacyCaseCommand;
     return this.admin.privilegedCommand(request,key,"user.lookup",legacy.action==="capture_evidence","case.command",{id,...legacy},async(c,a,keyHash)=>{

@@ -196,7 +196,16 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0055_role_web_push",
         "0056_postgame_reminders",
         "0057_dev_qa_admin",
+        "0058_venue_experience_reviews",
       ]);
+      expect(
+        (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
+          ?.name,
+      ).toBe("venue_review_slots");
+      expect(
+        (await pool.query("SELECT to_regclass('public.venue_review_pending_intakes')::text AS name"))
+          .rows[0]?.name,
+      ).toBe("venue_review_pending_intakes");
       expect((await pool.query("SELECT to_regclass('public.game_court_booking')::text AS name")).rows[0]?.name).toBe("game_court_booking");
       expect((await pool.query("SELECT to_regclass('public.entity_comments')::text AS name")).rows[0]?.name).toBe("entity_comments");
       expect((await pool.query("SELECT to_regclass('public.entity_comment_revisions')::text AS name")).rows[0]?.name).toBe("entity_comment_revisions");

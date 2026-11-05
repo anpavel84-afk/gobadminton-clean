@@ -1,0 +1,163 @@
+/* #394 venue experience reviews — Spacious40 / Onest / existing tokens. */
+.gb-venue-reviews {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: var(--gb-ink);
+}
+
+.gb-venue-reviews__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gb-lime, #c8f07a) 35%, white);
+  color: var(--gb-ink);
+  font-size: 13px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.gb-venue-reviews__badge--muted {
+  background: var(--gb-wash, #f3f4f2);
+  font-weight: 500;
+  color: var(--gb-ink-soft);
+}
+
+.gb-venue-reviews__title {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.gb-venue-reviews__lede {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--gb-ink-soft);
+}
+
+.gb-venue-reviews__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gb-venue-reviews__field label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.gb-venue-reviews__field select,
+.gb-venue-reviews__field textarea {
+  min-height: 44px;
+  border-radius: 16px;
+  border: 1px solid var(--gb-line);
+  background: var(--gb-white, #fff);
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--gb-ink);
+}
+
+.gb-venue-reviews__field textarea {
+  min-height: 120px;
+  resize: vertical;
+  font-size: 16px;
+}
+
+.gb-venue-reviews__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gb-ink-soft);
+}
+
+.gb-venue-reviews__count {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gb-ink-soft);
+  text-align: right;
+}
+
+.gb-venue-reviews__audience {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 20px;
+  background: var(--gb-wash, #f3f4f2);
+}
+
+.gb-venue-reviews__audience label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.gb-venue-reviews__preview {
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid var(--gb-line);
+  background: var(--gb-white, #fff);
+}
+
+.gb-venue-reviews__preview strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.gb-venue-reviews__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gb-venue-reviews__card {
+  padding: 16px 18px;
+  border-radius: 28px;
+  background: var(--gb-white, #fff);
+  border: 1px solid var(--gb-line);
+}
+
+.gb-venue-reviews__card-meta {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--gb-ink-soft);
+}
+
+.gb-venue-reviews__card-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.gb-venue-reviews__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.gb-venue-reviews__actions > :is(button, a) {
+  min-height: 44px;
+}
+
+.gb-venue-reviews__composer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 20px;
+}
+
+@media (max-width: 720px) {
+  .gb-venue-reviews__title {
+    font-size: 20px;
+  }
+}

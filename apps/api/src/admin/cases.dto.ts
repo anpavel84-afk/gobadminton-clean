@@ -49,6 +49,17 @@ export const caseCommandSchema = z.discriminatedUnion("action", [
       reasonCode: reason,
     })
     .strict(),
+  z
+    .object({
+      action: z.literal("venue_review_decide"),
+      expectedCaseVersion: z.number().int().positive().max(2147483646),
+      expectedResourceVersion: z.number().int().min(1).max(2147483647),
+      exactRevisionId: uuid,
+      decision: z.enum(["approve", "retain", "request_correction", "remove", "restore"]),
+      rationale: plainRationale,
+      reasonCode: reason,
+    })
+    .strict(),
 ]);
 export type CaseCommand = z.infer<typeof caseCommandSchema>;
 export const casePageSchema = z.object({ beforeId: uuid.optional(), limit: z.coerce.number().int().min(1).max(100).default(25) }).strict();
