@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.28" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.29" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.34.0" as const;
@@ -424,19 +424,19 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.28",
-  "title": "Опыт игры на площадке",
+  "application_version": "0.1.0-alpha.29",
+  "title": "Актуальная помощь и проверка готовности",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "После подтверждённого участия в прошедшей игре можно поделиться опытом игры на этой площадке",
-    "Пояснения помогают понять, когда отзыв доступен и кому он виден"
+  "additions": [],
+  "fixes": [
+    "Убрано устаревшее объяснение обязательного одобрения первого личного сообщения",
+    "Зафиксированы оставшиеся проверки документов, поддержки, удаления аккаунта и устройств перед пилотом"
   ],
-  "fixes": [],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
-    "Публикация отзыва о площадке требует независимой проверки точной редакции и паузы 48 часов",
-    "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
+    "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно",
+    "Проверка уведомлений на настоящем iPhone ещё не выполнена"
   ],
   "feature_catalogue": "delta"
 };
@@ -1386,6 +1386,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",
+      "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
+    ]
+  },
+
+  {
+    "source_sha": "9bd1ad648fd74123da7ede7377471813ce8fe17d",
+    "application_version": "0.1.0-alpha.28",
+    "version_label": "0.1.0-alpha.28",
+    "title": "Опыт игры на площадке",
+    "api_contract_version": "0.34.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41950962808-a1",
+        "accepted_at": "2026-11-05T02:00:50Z",
+        "api_digest": "sha256:ba1d71fb564780f427c7b591e4f944920f60bdce9d502ef60ff5a40d38e925f9",
+        "web_digest": "sha256:fe0f6c3e31fc046d7824120e873d908cee6785b6aeba95a65c20b82e42039d2d",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "После подтверждённого участия в прошедшей игре можно поделиться опытом игры на этой площадке",
+      "Пояснения помогают понять, когда отзыв доступен и кому он виден"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Публикация отзыва о площадке требует независимой проверки точной редакции и паузы 48 часов",
       "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
     ]
   },
