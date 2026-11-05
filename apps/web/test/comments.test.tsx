@@ -67,8 +67,9 @@ describe("#394 CommentsSection", () => {
       resolve(__dirname, "../src/components/consumer/venues/VenuePage.tsx"),
       "utf8",
     );
-    expect(venueSrc).toContain("Отзывы после игр появятся здесь");
-    expect(venueSrc).toContain("Публичные отзывы после подтверждённого участия пока недоступны");
+    expect(venueSrc).toContain("VenueReviewsPanel");
+    expect(venueSrc).toContain("csrfToken={csrf}");
+    expect(venueSrc).toContain("canWrite={signedIn && Boolean(csrf)}");
     expect(venueSrc).toMatch(/SurfacePanel/);
     expect(venueSrc).not.toMatch(/CommentsSection/);
     expect(venueSrc).not.toMatch(/Войдите, чтобы оставить комментарий|Ваш комментарий|canCreate/);
