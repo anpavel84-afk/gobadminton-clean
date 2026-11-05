@@ -183,6 +183,33 @@ describe("#394 role reputation consumer UI — behavioral", () => {
     expect(html).not.toContain("9 опубликованных");
   });
 
+  it("explains write eligibility in ready and unavailable panels without offering write from unavailable", () => {
+    const eligibility =
+      "Оставить отзыв можно только о своей прошедшей игре или тренировке с подтверждённым участием и посещением.";
+    const unavailable = renderToStaticMarkup(
+      createElement(RoleReputationPanel, {
+        role: "training",
+        card: card({ role: "training", availability: "unavailable" }),
+        canWrite: true,
+      }),
+    );
+    expect(unavailable).toContain(eligibility);
+    expect(unavailable).not.toContain("Поделиться опытом");
+    expect(unavailable).not.toMatch(/вы можете|вам доступн|вам недоступн|не можете оставить/i);
+
+    const ready = renderToStaticMarkup(
+      createElement(RoleReputationPanel, {
+        role: "organization",
+        card: card({ role: "organization", heldGamesCount: 1, publishedReviewCount: 0 }),
+        canWrite: false,
+      }),
+    );
+    expect(ready).toContain(eligibility);
+    expect(ready).toContain("Пока нет опубликованных отзывов по этой роли.");
+    expect(ready).not.toContain("Поделиться опытом");
+    expect(ready).not.toMatch(/вы можете|вам доступн|вам недоступн|не можете оставить/i);
+  });
+
   it("card actions bind exact role handle when opening reviews", () => {
     const handle = "b".repeat(32);
     const gameId = "g0000000-0000-4000-8000-000000000001";

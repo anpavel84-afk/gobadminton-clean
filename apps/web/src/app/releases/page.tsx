@@ -5,10 +5,10 @@ import { ConsumerShell } from "../../components/consumer/ConsumerShell";
 import { ReleaseLink } from "../../components/consumer/ReleaseLink";
 import {
   FIRST_ALPHA_FEATURES,
-  FIRST_ALPHA_KNOWN_LIMITATIONS,
   formatReleaseDateRu,
   groupFeatures,
   shortSha,
+  visibleKnownLimitations,
 } from "../../lib/releases";
 import {
   isTrustedDevReleasesRuntime,
@@ -179,6 +179,7 @@ export default async function ReleasesPage() {
 
   const model = await loadReleasesPageModel();
   const groups = groupFeatures(FIRST_ALPHA_FEATURES);
+  const knownLimits = visibleKnownLimitations(model.named);
 
   return (
     <ConsumerShell active="none" title="Версии" mode="local" reading>
@@ -256,14 +257,11 @@ export default async function ReleasesPage() {
         <section className="gb-releases-section" aria-labelledby="releases-limits">
           <h2 id="releases-limits">Известные ограничения</h2>
           <ul className="gb-releases-limits">
-            {FIRST_ALPHA_KNOWN_LIMITATIONS.map((item) => <li key={item}>{item}</li>)}
-            {model.named.known_limitations
-              .filter((item) => !FIRST_ALPHA_KNOWN_LIMITATIONS.includes(item))
-              .map((item) => <li key={item}>{item}</li>)}
+            {knownLimits.map((item) => <li key={item}>{item}</li>)}
           </ul>
           <p className="gb-releases-note">
-            Раздел Admin служебный. Вход по электронной почте недоступен. Результаты и отзывы после игры не запущены.
-            Push-уведомления не активны. Тестовая геопозиция не для обычных пользователей.
+            Техническая установка выпуска на тестовом сайте не означает, что владелец уже проверил сервис после обычного входа.
+            Раздел Admin и тестовая геопозиция остаются служебными, не для обычных пользователей.
           </p>
         </section>
 
