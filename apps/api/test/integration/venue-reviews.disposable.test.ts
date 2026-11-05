@@ -363,7 +363,7 @@ run("#394 venue experience — disposable", () => {
   }
 
   it("guest read allowed; write denied without CSRF/session; missing attribution fail-closed", async () => {
-    const past = new Date("2026-10-01T18:00:00.000Z");
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const seeded = await seedHeldGame({
       organizerId: organizer.userId,
       participantId: participant.userId,
@@ -446,7 +446,7 @@ run("#394 venue experience — disposable", () => {
   });
 
   it("eligible held+present draft→consent→intake→approve+48h guest projection; edit keeps approved text; report does not hide", async () => {
-    const past = new Date("2026-10-02T18:00:00.000Z");
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const seeded = await seedHeldGame({
       organizerId: organizer.userId,
       participantId: participant.userId,
@@ -473,7 +473,7 @@ run("#394 venue experience — disposable", () => {
         topics: ["surface"],
       },
     });
-    expect(draft.statusCode).toBe(200);
+    expect(draft.statusCode, draft.body).toBe(200);
     expect(draft.json().status).toBe("self_draft");
     expect(draft.json().publicVisible).toBe(false);
 

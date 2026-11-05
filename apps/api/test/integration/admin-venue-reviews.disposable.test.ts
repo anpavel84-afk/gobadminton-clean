@@ -209,7 +209,7 @@ run("#394 admin venue reviews — disposable", () => {
         [MOSCOW_CITY_ID, organizerId],
       )
     ).rows[0]!;
-    const endsAt = new Date("2026-10-03T18:00:00.000Z");
+    const endsAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const starts = new Date(endsAt.getTime() - 3600_000);
     const gameId = randomUUID();
     await pool.query(
@@ -312,7 +312,7 @@ run("#394 admin venue reviews — disposable", () => {
         consentProjectionHash: hash,
       },
     });
-    expect(created.statusCode).toBe(200);
+    expect(created.statusCode, created.body).toBe(200);
     const pending = (
       await pool.query<{ id: string; version: number; revision_id: string }>(
         `SELECT id, version, revision_id FROM venue_review_pending_intakes
