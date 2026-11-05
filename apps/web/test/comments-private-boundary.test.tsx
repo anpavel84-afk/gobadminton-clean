@@ -529,7 +529,7 @@ describe("#394 comments private boundary", () => {
     expect(mutation.run).not.toHaveBeenCalled();
   });
 
-  it("VenuePage shows honest reviews placeholder without broad CommentsSection composer", async () => {
+  it("VenuePage offers confirmed-experience reviews without broad CommentsSection composer", async () => {
     vi.mocked(getMe).mockResolvedValue({ ok: true, status: 200, data: me });
 
     hooks.cursor = 0;
@@ -539,8 +539,10 @@ describe("#394 comments private boundary", () => {
 
     hooks.cursor = 0;
     const html = renderToStaticMarkup(VenuePage({ venueId }));
-    expect(html).toContain("Отзывы после игр появятся здесь");
-    expect(html).toContain("Публичные отзывы после подтверждённого участия пока недоступны");
+    expect(html).toContain("Опыт на площадке");
+    expect(html).toContain("от участников с подтверждённым посещением");
+    expect(html).toContain("без профиля и деталей встречи");
+    expect(html).toContain("Поделиться опытом");
     expect(html).not.toContain("Ваш комментарий");
     expect(html).not.toContain("Войдите, чтобы оставить комментарий");
     expect(html).not.toContain("напишите");

@@ -27,6 +27,7 @@ import {
 } from "./game-outcomes.policy";
 import { GameAttendanceService } from "./game-attendance.service";
 import { GameFeedbackService } from "./game-feedback.service";
+import { ensurePlayedAtVenueAttribution } from "./game-experience";
 import { RoleReputationService } from "./role-reputation.service";
 
 type AccessRole = "manager" | "participant" | "none";
@@ -337,6 +338,19 @@ export class GameOutcomesService {
           );
         }
         if (body.outcome === "held") {
+          const venueSnap = (
+            await client.query<{ venue_id: string; version: number }>(
+              `SELECT venue_id, version FROM games WHERE id = $1`,
+              [gameId],
+            )
+          ).rows[0]!;
+          await ensurePlayedAtVenueAttribution(client, {
+            gameId,
+            sourceVenueId: venueSnap.venue_id,
+            gameVersion: venueSnap.version,
+            actorUserId: userId,
+            source: "held_confirm",
+          });
           await this.roleReputation.confirmRolesAtHeld(client, {
             gameId,
             outcomeVersion: nextVersion,

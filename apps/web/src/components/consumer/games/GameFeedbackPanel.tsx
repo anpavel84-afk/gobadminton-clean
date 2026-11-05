@@ -79,6 +79,7 @@ export function GameFeedbackPanel({
   noteSubjects = [],
   confirmedOperation = null,
   onConfirmedOperationSeen,
+  venueId = null,
 }: {
   gameId: string;
   feedback: GameFeedbackSlice | null | undefined;
@@ -90,6 +91,8 @@ export function GameFeedbackPanel({
   /** Validated-success frozen request from host; ignored when null / unrelated. */
   confirmedOperation?: SocialMutationPending | null;
   onConfirmedOperationSeen?: () => void;
+  /** Canonical/public venue id for companion «о площадке» entry when host can supply it. */
+  venueId?: string | null;
 }) {
   const caps = feedback?.capabilities;
   const writes = Boolean(feedback?.installed && feedback.writesEnabled);
@@ -470,6 +473,15 @@ export function GameFeedbackPanel({
             <span className="gb-postgame__pill">Без публичного рейтинга</span>
           </div>
           <p>Один игровой контекст. Каждый текст виден только указанному адресату.</p>
+          {venueId ? (
+            <p>
+              <a href={`/venues/${encodeURIComponent(venueId)}`}>
+                Поделиться опытом о площадке
+              </a>
+              {" — "}
+              отдельный выбор видимости на странице площадки; не публикует приватный отзыв игроку.
+            </p>
+          ) : null}
 
           <div className="gb-postgame__segment" role="tablist" aria-label="Тип обратной связи">
             {modes

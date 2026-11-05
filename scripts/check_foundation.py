@@ -285,6 +285,7 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                             "/players/query",
                             "/players/query/map",
                             "/me/role-reviews/consent-preview",
+                            "/me/venue-reviews/consent-preview",
                         }
                         and operation.get("x-operation-kind") == "authenticated-read"
                     )

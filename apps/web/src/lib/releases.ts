@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.27" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.28" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.33.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.34.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,18 +424,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.27",
-  "title": "Понятные пояснения к отзывам",
+  "application_version": "0.1.0-alpha.28",
+  "title": "Опыт игры на площадке",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
-  "fixes": [
-    "Уточнено, кто может оставить отзыв об организаторе или тренере после совместной игры",
-    "В истории alpha.20 однозначно указано, что автор может снять свой отзыв с публикации",
-    "На экране версий показаны ограничения текущего выпуска без устаревших утверждений первой alpha о недоступности почты, итогов после игры и push"
+  "additions": [
+    "После подтверждённого участия в прошедшей игре можно поделиться опытом игры на этой площадке",
+    "Пояснения помогают понять, когда отзыв доступен и кому он виден"
   ],
+  "fixes": [],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
+    "Публикация отзыва о площадке требует независимой проверки точной редакции и паузы 48 часов",
     "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
   ],
   "feature_catalogue": "delta"
@@ -1358,6 +1358,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем ещё не выполнена",
       "Ключевой вход по умолчанию выключен и доступен только в проверенной среде разработки после отдельной настройки",
       "Готовность отдельной учётной записи подтверждается настоящей проверкой входа"
+    ]
+  },
+  {
+    "source_sha": "1354cceaa38b2ec629fabc3ae366d0c3b05e047f",
+    "application_version": "0.1.0-alpha.27",
+    "version_label": "0.1.0-alpha.27",
+    "title": "Понятные пояснения к отзывам",
+    "api_contract_version": "0.33.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41941603234-a1",
+        "accepted_at": "2026-11-05T00:34:19Z",
+        "api_digest": "sha256:841553084c7c3d06d2a464bc92a8cac843c921e03178acf2aadd76516b386e63",
+        "web_digest": "sha256:4479b1edb464418d750e6dcfd30f8f769e67a67eae2e575cc1e1777957efaa34",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Уточнено, кто может оставить отзыв об организаторе или тренере после совместной игры",
+      "В истории alpha.20 однозначно указано, что автор может снять свой отзыв с публикации",
+      "На экране версий показаны ограничения текущего выпуска без устаревших утверждений первой alpha о недоступности почты, итогов после игры и push"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
     ]
   },
 

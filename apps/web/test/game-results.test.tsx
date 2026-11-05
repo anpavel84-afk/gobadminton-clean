@@ -69,6 +69,7 @@ describe("PG-1b game results helpers", () => {
     expect(page).toContain("GameResultsPage");
     expect(composition).toContain("Участники / Итоги");
     expect(composition).toContain("GameFeedbackPanel");
+    expect(composition).toContain("venueId={game?.venue?.id ?? null}");
     expect(composition).toContain("useGameResultsMutation");
     expect(composition).toContain("parseResultsSection");
     expect(composition).toContain("selectTab");

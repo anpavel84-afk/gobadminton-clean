@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.27 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.27");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.33.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.28 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.28");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.34.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,8 +64,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/понятн|пояснен|отзыв/i);
-    expect(currentProse).toMatch(/организатор|тренер|публикац/i);
+    expect(currentProse).toMatch(/опыт|площадк/i);
+    expect(currentProse).toMatch(/подтвержд|пояснен|види/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -75,7 +75,7 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/экран(?:е|а)? версий|ограничен/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/опыт|площадк/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
@@ -228,10 +228,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(30);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(31);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(35);
+    ).toBe(36);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.26"
       && row.source_sha === "360001c6231157f30fdf11606ef8111c291fb099"
@@ -241,6 +241,14 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.web_digest === "sha256:446f880c9f7747452aafc4d84fd4b2ec4c7e35fc779e90d78da11f4296bd1d94"
       && row.api_contract_version === "0.33.0"
       && row.title === "Отдельный доступ для проверки сводки пилота",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.27"
+      && row.source_sha === "1354cceaa38b2ec629fabc3ae366d0c3b05e047f"
+      && row.deployments[0]?.release_id === "r41941603234-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-05T00:34:19Z"
+      && row.api_contract_version === "0.33.0"
+      && row.title === "Понятные пояснения к отзывам",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.20"

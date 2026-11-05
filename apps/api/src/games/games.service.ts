@@ -29,6 +29,7 @@ import { readGamesMap } from "./games-map.read";
 import type { DiscoveryFilter } from "./games-discovery.query";
 import { GameAuthorityService } from "./game-authority.service";
 import { RoleReputationService } from "./role-reputation.service";
+import { ensurePlayedAtVenueAttribution } from "./game-experience";
 import { unrestrictedSql } from "../restrictions/policy";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 
@@ -431,17 +432,24 @@ export class GamesService {
         }
 
         assertFutureStart(locked.starts_at);
-        const updated = await client.query<{ id: string; version: number }>(
+        const updated = await client.query<{ id: string; version: number; venue_id: string }>(
           `UPDATE games
            SET status = 'published',
                version = version + 1,
                published_at = now(),
                updated_at = now()
            WHERE id = $1
-           RETURNING id, version`,
+           RETURNING id, version, venue_id`,
           [gameId],
         );
         const published = updated.rows[0]!;
+        await ensurePlayedAtVenueAttribution(client, {
+          gameId: published.id,
+          sourceVenueId: published.venue_id,
+          gameVersion: published.version,
+          actorUserId: userId,
+          source: "publish_freeze",
+        });
         const organizer = (
           await client.query<{ user_id: string }>(
             `SELECT user_id FROM game_managers

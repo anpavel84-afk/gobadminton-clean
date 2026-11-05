@@ -33,7 +33,7 @@ for(const [path,item] of Object.entries(api.paths)) {
 }
 // Venue covers + ordered gallery add/replace/delete/reorder/set-main and gallery read
 // + pilot metrics summary GET (#460).
-assert.equal(operations,47,"Update this inventory deliberately when adding an Admin operation");
+assert.equal(operations,50,"Update this inventory deliberately when adding an Admin operation");
 for(const path of proofs) assert(api.paths[path]?.post, `Missing proof ceremony ${path}`);
 const pilotGet=api.paths["/admin/pilot-metrics"]?.get;
 assert.ok(pilotGet,"Missing GET /admin/pilot-metrics");

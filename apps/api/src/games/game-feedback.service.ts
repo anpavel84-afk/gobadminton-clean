@@ -8,10 +8,10 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import { GameAttendanceService } from "./game-attendance.service";
 import {
   eligibleFromTransitions,
-  isPermittedPresentAssertion,
   type AttendanceSource,
   type AttendanceValue,
 } from "./game-attendance.policy";
+import { subjectHasConfirmedExperience as subjectHasConfirmedExperiencePredicate } from "./game-experience";
 import {
   assertLifecycleForFeedback,
   createReviewRequest,
@@ -283,7 +283,7 @@ export class GameFeedbackService {
   /**
    * Confirmed shared-experience predicate for one subject in a held game.
    * Historical eligibility + permitted present + no open dispute.
-   * Safe for later venue reuse; does not disclose foreign reasons to callers.
+   * Shared with venue experience via game-experience.ts; does not disclose foreign reasons.
    */
   private async subjectHasConfirmedExperience(
     client: PoolClient | Pool,
@@ -299,22 +299,17 @@ export class GameFeedbackService {
        WHERE participation_id = $1 ORDER BY at ASC, id ASC`,
       [participationId],
     );
-    const verdict = eligibleFromTransitions(
-      transitions.rows,
+    const openDispute = await this.hasOpenDispute(client, participationId);
+    const assertion = await this.readAttendanceAssertion(client, participationId);
+    return subjectHasConfirmedExperiencePredicate({
+      transitions: transitions.rows,
       startsAt,
+      endsAt,
       currentStatus,
       confirmedAt,
-      endsAt,
-    );
-    if (!verdict.eligible) return false;
-    if (await this.hasOpenDispute(client, participationId)) return false;
-    const assertion = await this.readAttendanceAssertion(client, participationId);
-    if (!assertion) return false;
-    return isPermittedPresentAssertion({
-      value: assertion.value,
-      source: assertion.source,
-      actorUserId: assertion.actorUserId,
       subjectUserId,
+      openDispute,
+      assertion,
     });
   }
 
