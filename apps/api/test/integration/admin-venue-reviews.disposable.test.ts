@@ -444,4 +444,151 @@ run("#394 admin venue reviews — disposable", () => {
     expect(ok.statusCode).toBe(200);
     expect(ok.json().notBefore).toBeTruthy();
   });
+
+  it("VENUE-394-03: stale Case approve of replaced pending A fails without DB side effect", async () => {
+    const seeded = await seedSubmittedReview();
+    const intake = await app.inject({
+      method: "POST",
+      url: "/v1/admin/cases/venue-review-intake",
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        pendingIntakeId: seeded.pending.id,
+        expectedIntakeVersion: seeded.pending.version,
+        reasonCode: "operations_review",
+        assignToSelf: true,
+      },
+    });
+    expect(intake.statusCode).toBe(200);
+    const caseId = intake.json().caseId as string;
+    const sourceA = await app.inject({
+      method: "GET",
+      url: `/v1/admin/cases/${caseId}/venue-review-source`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: { origin: adminOrigin },
+    });
+    expect(sourceA.statusCode).toBe(200);
+    const revisionA = sourceA.json().reviewRevision;
+    expect(revisionA?.id).toBe(seeded.pending.revision_id);
+
+    const slotBefore = (
+      await pool.query<{
+        id: string;
+        version: number;
+        approved_revision_id: string | null;
+        pending_revision_id: string | null;
+        status: string;
+      }>(`SELECT id, version, approved_revision_id, pending_revision_id, status FROM venue_review_slots WHERE public_handle=$1`, [
+        seeded.handle,
+      ])
+    ).rows[0]!;
+    const textB = "Замена pending A на B — Case A не должен опубликовать устаревшее согласие.";
+    const hashB = projectionHash({
+      canonicalVenueId: seeded.venueId,
+      audience: "public_venue",
+      text: textB,
+      topics: ["surface"],
+    });
+    const replace = await app.inject({
+      method: "POST",
+      url: `/v1/me/venue-reviews/${slotBefore.id}/commands`,
+      headers: {
+        cookie: authorCookie,
+        "x-csrf-token": authorCsrf,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: slotBefore.version,
+        gameId: seeded.gameId,
+        audience: "public_venue",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: textB,
+        topics: ["surface"],
+        consentProjectionHash: hashB,
+      },
+    });
+    expect(replace.statusCode, replace.body).toBe(200);
+
+    const slotAfterReplace = (
+      await pool.query<{
+        approved_revision_id: string | null;
+        pending_revision_id: string | null;
+        status: string;
+        version: number;
+      }>(`SELECT approved_revision_id, pending_revision_id, status, version FROM venue_review_slots WHERE id=$1`, [
+        slotBefore.id,
+      ])
+    ).rows[0]!;
+    expect(slotAfterReplace.pending_revision_id).not.toBe(revisionA.id);
+    expect(slotAfterReplace.approved_revision_id).toBeNull();
+
+    const publishedBefore = (
+      await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM venue_review_revisions
+         WHERE slot_id=$1 AND lifecycle='published'`,
+        [slotBefore.id],
+      )
+    ).rows[0]!.n;
+
+    const staleApprove = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        action: "venue_review_decide",
+        expectedCaseVersion: intake.json().caseVersion,
+        expectedResourceVersion: revisionA.resourceVersion,
+        exactRevisionId: revisionA.id,
+        decision: "approve",
+        rationale: "Stale Case A must not publish replaced revision",
+        reasonCode: "operations_review",
+      },
+    });
+    expect(staleApprove.statusCode).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(staleApprove.json())).toMatch(/REVISION_NOT_CURRENT|не является текущей/i);
+
+    const slotAfter = (
+      await pool.query<{
+        approved_revision_id: string | null;
+        pending_revision_id: string | null;
+        status: string;
+        version: number;
+      }>(`SELECT approved_revision_id, pending_revision_id, status, version FROM venue_review_slots WHERE id=$1`, [
+        slotBefore.id,
+      ])
+    ).rows[0]!;
+    expect(slotAfter.approved_revision_id).toBeNull();
+    expect(slotAfter.pending_revision_id).toBe(slotAfterReplace.pending_revision_id);
+    expect(slotAfter.status).toBe(slotAfterReplace.status);
+    expect(slotAfter.version).toBe(slotAfterReplace.version);
+
+    const publishedAfter = (
+      await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM venue_review_revisions
+         WHERE slot_id=$1 AND lifecycle='published'`,
+        [slotBefore.id],
+      )
+    ).rows[0]!.n;
+    expect(publishedAfter).toBe(publishedBefore);
+
+    const decisions = (
+      await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM venue_review_decisions WHERE case_id=$1`,
+        [caseId],
+      )
+    ).rows[0]!.n;
+    expect(decisions).toBe("0");
+  });
 });

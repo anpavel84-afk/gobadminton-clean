@@ -506,6 +506,24 @@ export class AdminVenueReviewsService {
         if (!rev || rev.resource_version !== input.expectedResourceVersion) {
           throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
         }
+        // Author may replace pending A with B after Case intake; linked Case for A remains.
+        // Approve / submit-bound correction must target current pending — never republish stale consent.
+        if (
+          (input.decision === "approve" ||
+            (input.decision === "request_correction" && pending.kind === "review_submit")) &&
+          slot.pending_revision_id !== input.exactRevisionId
+        ) {
+          throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
+        }
+        if (
+          (input.decision === "remove" || input.decision === "restore") &&
+          pending.kind === "review_submit" &&
+          slot.pending_revision_id != null &&
+          slot.pending_revision_id !== input.exactRevisionId
+        ) {
+          // Stale submit Case must not mutate publication while a newer pending tip exists.
+          throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
+        }
         const gameIds = await this.gameIdsForSlot(client, slot.id);
         await this.assertIndependent(
           client,

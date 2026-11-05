@@ -670,4 +670,266 @@ run("#394 venue experience — disposable", () => {
     });
     expect(outsiderWrite.statusCode).toBeGreaterThanOrEqual(400);
   });
+
+  async function ageMaterialEdit(revisionId: string) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL session_replication_role = replica");
+      await client.query(
+        `UPDATE venue_review_revisions
+         SET last_material_edit_at = clock_timestamp() - interval '3 days'
+         WHERE id=$1`,
+        [revisionId],
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function submitPublic(opts: {
+    slotId: string;
+    expectedVersion: number;
+    gameId: string;
+    venueId: string;
+    text: string;
+    topics: string[];
+  }) {
+    const hash = projectionHash({
+      canonicalVenueId: opts.venueId,
+      audience: "public_venue",
+      text: opts.text,
+      topics: opts.topics,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/me/venue-reviews/${opts.slotId}/commands`,
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: opts.expectedVersion,
+        gameId: opts.gameId,
+        audience: "public_venue",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: opts.text,
+        topics: opts.topics,
+        consentProjectionHash: hash,
+      },
+    });
+    return res;
+  }
+
+  it("VENUE-394-01: early approve of B keeps published A public until B not_before", async () => {
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const seeded = await seedHeldGame({
+      organizerId: organizer.userId,
+      participantId: participant.userId,
+      endsAt: past,
+      venueCreatedBy: outsider.userId,
+    });
+    const textA =
+      "Покрытие удобное, места между кортами достаточно — текст A остаётся до видимости B.";
+    const create = await app.inject({
+      method: "POST",
+      url: "/v1/me/venue-reviews",
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        venueId: seeded.venueId,
+        gameId: seeded.gameId,
+        audience: "public_venue",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: textA,
+        topics: ["surface"],
+        consentProjectionHash: projectionHash({
+          canonicalVenueId: seeded.venueId,
+          audience: "public_venue",
+          text: textA,
+          topics: ["surface"],
+        }),
+      },
+    });
+    expect(create.statusCode, create.body).toBe(200);
+    const pendingA = (
+      await pool.query<{ id: string; version: number; revision_id: string }>(
+        `SELECT id, version, revision_id FROM venue_review_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [create.json().id],
+      )
+    ).rows[0]!;
+    await ageMaterialEdit(pendingA.revision_id);
+    await humanApprovePending(pendingA.id, pendingA.version);
+
+    const publicA = await app.inject({
+      method: "GET",
+      url: `/v1/venues/${seeded.venueId}/experience-reviews`,
+    });
+    expect(publicA.json().publishedCount).toBe(1);
+    expect(publicA.json().items[0].text).toBe(textA);
+
+    const textB = "Редакция B одобрена рано; ещё не должна вытеснять A до not_before.";
+    const slotVersion = (
+      await pool.query<{ version: number }>(`SELECT version FROM venue_review_slots WHERE id=$1`, [
+        create.json().id,
+      ])
+    ).rows[0]!.version;
+    const submitB = await submitPublic({
+      slotId: create.json().id,
+      expectedVersion: slotVersion,
+      gameId: seeded.gameId,
+      venueId: seeded.venueId,
+      text: textB,
+      topics: ["lighting"],
+    });
+    expect(submitB.statusCode, submitB.body).toBe(200);
+    const pendingB = (
+      await pool.query<{ id: string; version: number; revision_id: string }>(
+        `SELECT id, version, revision_id FROM venue_review_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [create.json().id],
+      )
+    ).rows[0]!;
+    // Do NOT age B — approve now so not_before is ~now+48h.
+    const approvedB = await humanApprovePending(pendingB.id, pendingB.version);
+    expect(new Date(approvedB.notBefore!).getTime()).toBeGreaterThan(Date.now() + 47 * 60 * 60 * 1000);
+
+    const duringDelay = await app.inject({
+      method: "GET",
+      url: `/v1/venues/${seeded.venueId}/experience-reviews`,
+    });
+    expect(duringDelay.json().publishedCount).toBe(1);
+    expect(duringDelay.json().items[0].text).toBe(textA);
+    expect(JSON.stringify(duringDelay.json())).not.toContain(textB);
+
+    const mine = await app.inject({
+      method: "GET",
+      url: "/v1/me/venue-reviews",
+      headers: { cookie: participant.cookie },
+    });
+    const own = mine.json().items.find((i: { id: string }) => i.id === create.json().id);
+    expect(own.publicVisible).toBe(true);
+  });
+
+  it("VENUE-394-02: private draft after pending public edit keeps published A visible", async () => {
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const seeded = await seedHeldGame({
+      organizerId: organizer.userId,
+      participantId: participant.userId,
+      endsAt: past,
+      venueCreatedBy: outsider.userId,
+    });
+    const textA = "Опубликованный текст A должен оставаться видимым при личном черновике C.";
+    const create = await app.inject({
+      method: "POST",
+      url: "/v1/me/venue-reviews",
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        venueId: seeded.venueId,
+        gameId: seeded.gameId,
+        audience: "public_venue",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: textA,
+        topics: ["amenities"],
+        consentProjectionHash: projectionHash({
+          canonicalVenueId: seeded.venueId,
+          audience: "public_venue",
+          text: textA,
+          topics: ["amenities"],
+        }),
+      },
+    });
+    expect(create.statusCode, create.body).toBe(200);
+    const pendingA = (
+      await pool.query<{ id: string; version: number; revision_id: string }>(
+        `SELECT id, version, revision_id FROM venue_review_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [create.json().id],
+      )
+    ).rows[0]!;
+    await ageMaterialEdit(pendingA.revision_id);
+    await humanApprovePending(pendingA.id, pendingA.version);
+
+    const textB = "Публичная правка B ожидает проверки.";
+    let slotVersion = (
+      await pool.query<{ version: number }>(`SELECT version FROM venue_review_slots WHERE id=$1`, [
+        create.json().id,
+      ])
+    ).rows[0]!.version;
+    const submitB = await submitPublic({
+      slotId: create.json().id,
+      expectedVersion: slotVersion,
+      gameId: seeded.gameId,
+      venueId: seeded.venueId,
+      text: textB,
+      topics: ["surface"],
+    });
+    expect(submitB.statusCode).toBe(200);
+    expect(submitB.json().status).toBe("revision_waiting");
+
+    slotVersion = (
+      await pool.query<{ version: number }>(`SELECT version FROM venue_review_slots WHERE id=$1`, [
+        create.json().id,
+      ])
+    ).rows[0]!.version;
+    const draftC = await app.inject({
+      method: "POST",
+      url: `/v1/me/venue-reviews/${create.json().id}/commands`,
+      headers: {
+        cookie: participant.cookie,
+        "x-csrf-token": participant.csrfToken,
+        origin,
+        "idempotency-key": randomUUID(),
+        "content-type": "application/json",
+      },
+      payload: {
+        action: "submit_revision",
+        expectedVersion: slotVersion,
+        gameId: seeded.gameId,
+        audience: "self_draft",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text: "Личный черновик C не должен скрывать опубликованный A.",
+        topics: ["lighting"],
+      },
+    });
+    expect(draftC.statusCode, draftC.body).toBe(200);
+    expect(draftC.json().status).toBe("revision_waiting");
+    expect(draftC.json().publicVisible).toBe(false);
+
+    const stillPublic = await app.inject({
+      method: "GET",
+      url: `/v1/venues/${seeded.venueId}/experience-reviews`,
+    });
+    expect(stillPublic.json().publishedCount).toBe(1);
+    expect(stillPublic.json().items[0].text).toBe(textA);
+
+    const mine = await app.inject({
+      method: "GET",
+      url: "/v1/me/venue-reviews",
+      headers: { cookie: participant.cookie },
+    });
+    const own = mine.json().items.find((i: { id: string }) => i.id === create.json().id);
+    expect(own.status).toBe("revision_waiting");
+    expect(own.publicVisible).toBe(true);
+  });
 });

@@ -521,7 +521,9 @@ export class VenueReviewsService {
     );
     const cursor = decodePublicCursor(opts.cursor);
     const now = new Date();
-    // Reports / basis_under_review alone must not hide approved public criticism.
+    // Effective public tip = latest immutable published revision already past not_before.
+    // approved_revision_id may already point at a newer approved tip still in its 48h delay;
+    // keep prior visible text until that tip is actually eligible (no scheduler).
     const rows = await this.pool.query<{
       public_handle: string;
       body_text: string;
@@ -532,13 +534,19 @@ export class VenueReviewsService {
     }>(
       `SELECT s.public_handle, r.body_text, r.topics, r.resource_version, r.not_before, s.updated_at
        FROM venue_review_slots s
-       JOIN venue_review_revisions r ON r.id = s.approved_revision_id
+       JOIN LATERAL (
+         SELECT body_text, topics, resource_version, not_before
+         FROM venue_review_revisions
+         WHERE slot_id = s.id
+           AND audience = 'public_venue'
+           AND lifecycle = 'published'
+           AND not_before IS NOT NULL
+           AND not_before <= $2
+         ORDER BY not_before DESC, resource_version DESC
+         LIMIT 1
+       ) r ON true
        WHERE s.canonical_venue_id = $1
          AND s.status IN ('published', 'revision_waiting')
-         AND r.audience = 'public_venue'
-         AND r.lifecycle = 'published'
-         AND r.not_before IS NOT NULL
-         AND r.not_before <= $2
          AND ($3::timestamptz IS NULL OR (s.updated_at, s.public_handle) < ($3::timestamptz, $4::text))
        ORDER BY s.updated_at DESC, s.public_handle DESC
        LIMIT $5`,
@@ -557,13 +565,19 @@ export class VenueReviewsService {
       await this.pool.query<{ n: string }>(
         `SELECT count(*)::text AS n
          FROM venue_review_slots s
-         JOIN venue_review_revisions r ON r.id = s.approved_revision_id
+         JOIN LATERAL (
+           SELECT 1
+           FROM venue_review_revisions
+           WHERE slot_id = s.id
+             AND audience = 'public_venue'
+             AND lifecycle = 'published'
+             AND not_before IS NOT NULL
+             AND not_before <= $2
+           ORDER BY not_before DESC, resource_version DESC
+           LIMIT 1
+         ) r ON true
          WHERE s.canonical_venue_id = $1
-           AND s.status IN ('published', 'revision_waiting')
-           AND r.audience = 'public_venue'
-           AND r.lifecycle = 'published'
-           AND r.not_before IS NOT NULL
-           AND r.not_before <= $2`,
+           AND s.status IN ('published', 'revision_waiting')`,
         [canon.canonicalVenueId, now],
       )
     ).rows[0];
@@ -900,8 +914,11 @@ export class VenueReviewsService {
     let status = slot.status;
     let receiptToken: string | null = null;
     if (args.audience === "self_draft") {
+      // Keep approved public tip visible while author edits a private draft over a
+      // published or already revision_waiting slot (pending public B must not flip to self_draft).
       status =
-        slot.approved_revision_id && slot.status === "published"
+        slot.approved_revision_id &&
+        (slot.status === "published" || slot.status === "revision_waiting")
           ? "revision_waiting"
           : "self_draft";
       await client.query(
@@ -1024,6 +1041,8 @@ export class VenueReviewsService {
       pending_version: number | null;
       not_before: Date | null;
       approved_id: string | null;
+      visible_not_before: Date | null;
+      visible_revision_id: string | null;
       receipt_token: string | null;
     }>(
       `SELECT s.id, s.public_handle, s.canonical_venue_id, s.status, s.version,
@@ -1035,10 +1054,23 @@ export class VenueReviewsService {
               pr.resource_version AS pending_version,
               ar.not_before,
               s.approved_revision_id AS approved_id,
+              vis.not_before AS visible_not_before,
+              vis.id AS visible_revision_id,
               pi.receipt_token
        FROM venue_review_slots s
        LEFT JOIN venue_review_revisions ar ON ar.id = s.approved_revision_id
        LEFT JOIN venue_review_revisions pr ON pr.id = s.pending_revision_id
+       LEFT JOIN LATERAL (
+         SELECT id, not_before
+         FROM venue_review_revisions
+         WHERE slot_id = s.id
+           AND audience = 'public_venue'
+           AND lifecycle = 'published'
+           AND not_before IS NOT NULL
+           AND not_before <= $2
+         ORDER BY not_before DESC, resource_version DESC
+         LIMIT 1
+       ) vis ON true
        LEFT JOIN LATERAL (
          SELECT receipt_token FROM venue_review_pending_intakes
          WHERE slot_id = s.id AND submitted_by_user_id = s.author_user_id
@@ -1049,7 +1081,7 @@ export class VenueReviewsService {
        WHERE s.author_user_id = $1
        ORDER BY s.updated_at DESC
        LIMIT 50`,
-      [userId],
+      [userId, now],
     );
     return {
       items: rows.rows.map((r) => ({
@@ -1065,8 +1097,8 @@ export class VenueReviewsService {
         approvedRevision: r.approved_version,
         publicVisible: isPubliclyVisible({
           slotStatus: r.status,
-          approvedRevisionId: r.approved_id,
-          notBefore: r.not_before,
+          approvedRevisionId: r.visible_revision_id ?? r.approved_id,
+          notBefore: r.visible_not_before,
           now,
           basisUnderReview: r.basis_under_review,
         }),
@@ -1366,6 +1398,10 @@ export class VenueReviewsService {
     }
     if (slot.status === "withdrawn") {
       throw conflict("WITHDRAWN_NOT_APPROVABLE", "Отозванный отзыв нельзя опубликовать");
+    }
+    // Only the current pending tip may be approved — superseded Case revisions stay recorded.
+    if (slot.pending_revision_id !== revisionId) {
+      throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
     }
     const expected = projectionHash({
       canonicalVenueId: slot.canonical_venue_id,

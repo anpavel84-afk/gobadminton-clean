@@ -76,6 +76,28 @@ describe("venue-reviews.policy", () => {
     ).toBe(false);
   });
 
+  it("keeps effective visibility under revision_waiting when visible tip not_before has passed", () => {
+    const visibleTip = new Date(Date.now() - 60_000);
+    expect(
+      isPubliclyVisible({
+        slotStatus: "revision_waiting",
+        approvedRevisionId: "visible-a",
+        notBefore: visibleTip,
+        now: new Date(),
+        basisUnderReview: false,
+      }),
+    ).toBe(true);
+    expect(
+      isPubliclyVisible({
+        slotStatus: "revision_waiting",
+        approvedRevisionId: "future-b",
+        notBefore: new Date(Date.now() + VENUE_PUBLICATION_DELAY_MS),
+        now: new Date(),
+        basisUnderReview: false,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps 14-day window from first eligible without ordinary toggle reset", () => {
     const first = new Date("2026-11-01T12:00:00Z");
     expect(
