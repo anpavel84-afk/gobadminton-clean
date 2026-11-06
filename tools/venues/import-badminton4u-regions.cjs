@@ -514,6 +514,35 @@ function markerDigest(markers) {
   return null;
 }
 
+/** First marker payload after prefix, or null if absent. */
+function markerPayload(markers, prefix) {
+  if (!Array.isArray(markers)) return null;
+  for (const m of markers) {
+    if (typeof m === "string" && m.startsWith(prefix)) {
+      return m.slice(prefix.length);
+    }
+  }
+  return null;
+}
+
+/**
+ * Replay must keep durable B4U_SOURCE_V1 and B4U_REVIEW_RESOLUTION_V1 byte-identical.
+ * SOURCE_VENUE_ID + REGIONS485_DIGEST alone are not enough: missing/altered provenance
+ * → caller refuses IDEMPOTENT_REPLAY_CONFLICT.
+ * B4U_CONTACTS_V1 is excluded so later public-contact enrichment can still SKIP.
+ * Both sides absent for B4U_REVIEW_RESOLUTION_V1 = legacy optional-absent compatibility.
+ */
+function immutableProvenanceMarkersMatch(expectedMarkers, priorMarkers) {
+  const expectedSource = markerPayload(expectedMarkers, MARKER_SOURCE_JSON);
+  const priorSource = markerPayload(priorMarkers, MARKER_SOURCE_JSON);
+  if (expectedSource === null || priorSource === null || expectedSource !== priorSource) {
+    return false;
+  }
+  const expectedResolution = markerPayload(expectedMarkers, MARKER_REVIEW_RESOLUTION);
+  const priorResolution = markerPayload(priorMarkers, MARKER_REVIEW_RESOLUTION);
+  return expectedResolution === priorResolution;
+}
+
 function validateCity(city, seenIds, seenNames) {
   assertPlainObject(city, "INVALID_CITY");
   assertAllowlist(city, CITY_KEYS, "INVALID_CITY");
@@ -1012,6 +1041,10 @@ function planAgainstState(manifest, digest, state, normalize) {
       const sourceIdsMatch =
         priorSources.has(venue.sourceVenueId) &&
         (venue.sourceVenueAliases || []).every((alias) => priorSources.has(alias));
+      const provenanceMarkersOk = immutableProvenanceMarkersMatch(
+        markers,
+        prior.review_markers,
+      );
       const coreIdentityOk =
         prior.id === venue.id &&
         prior.name === venue.name &&
@@ -1030,10 +1063,13 @@ function planAgainstState(manifest, digest, state, normalize) {
         (prior.court_count ?? null) === (venue.courtCount ?? null) &&
         identityKeys.get(key) === venue.id &&
         priorDigest === digest &&
-        sourceIdsMatch;
-      // Same source ID + same immutable digest + valid identity markers:
+        sourceIdsMatch &&
+        provenanceMarkersOk;
+      // Same source ID + same immutable digest + durable B4U_SOURCE_V1 /
+      // B4U_REVIEW_RESOLUTION_V1 (legacy both-absent OK) + valid identity:
       // SKIP and preserve later authorized public-data contact enrichment (zero writes).
       // Do not blind-skip arbitrary existing UUIDs; refuse different digests / collisions.
+      // Missing/altered source JSON or resolution marker → IDEMPOTENT_REPLAY_CONFLICT.
       // Different digest (or identity drift) that would overwrite contacts → IDEMPOTENT_REPLAY_CONFLICT.
       if (coreIdentityOk) {
         toSkip.push(prepared);
@@ -1426,6 +1462,7 @@ module.exports = {
   sha256Hex,
   distanceMeters,
   buildReviewMarkers,
+  immutableProvenanceMarkersMatch,
   validateManifest,
   validateReviewResolution,
   validateSourceVenueAliases,

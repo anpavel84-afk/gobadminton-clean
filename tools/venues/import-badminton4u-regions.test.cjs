@@ -19,6 +19,9 @@ const {
   rolesHaveVenueManage,
   CITY_RADIUS_METERS,
   DEDUPE_METERS,
+  MARKER_SOURCE_JSON,
+  MARKER_REVIEW_RESOLUTION,
+  MARKER_CONTACTS_JSON,
 } = require("./import-badminton4u-regions.cjs");
 
 function normalizeVenueText(input) {
@@ -990,6 +993,209 @@ describe("sourceVenueAliases + reviewResolution", () => {
           ]),
         ),
       /REVIEW_RESOLUTION_CORRECTED_MISMATCH/,
+    );
+  });
+});
+
+describe("immutable provenance marker replay", () => {
+  function priorRowFromPrepared(prepared, reviewMarkers, extras = {}) {
+    return {
+      id: prepared.id,
+      name: prepared.name,
+      address: prepared.address,
+      city_id: prepared.cityId,
+      timezone: prepared.timezone,
+      provenance: "admin_created",
+      data_status: "unverified",
+      lifecycle_state: "unverified",
+      normalized_name: prepared.normalizedName,
+      normalized_address: prepared.normalizedAddress,
+      normalization_version: 1,
+      identity_discriminator: prepared.identityDiscriminator,
+      review_markers: reviewMarkers,
+      public_contacts: extras.public_contacts ?? null,
+      court_count: prepared.courtCount ?? null,
+      latitude: prepared.latitude,
+      longitude: prepared.longitude,
+    };
+  }
+
+  function stripMarker(markers, prefix) {
+    return markers.filter((m) => !(typeof m === "string" && m.startsWith(prefix)));
+  }
+
+  function replaceMarker(markers, prefix, nextFull) {
+    return markers.map((m) =>
+      typeof m === "string" && m.startsWith(prefix) ? nextFull : m,
+    );
+  }
+
+  it("refuses missing/altered B4U_SOURCE_V1 or B4U_REVIEW_RESOLUTION_V1 at same digest+identity", () => {
+    const cities = buildCities();
+    const krasnodar = cities.find((c) => c.nameRu === "Краснодар");
+    const resolution = {
+      kind: "EXPLICIT_PUBLIC_SOURCE_ADDRESS_POINT_CORRECTION",
+      original: {
+        address: "Динская",
+        latitude: null,
+        longitude: null,
+        sourceVenueId: "B4U-V-F943CB46",
+        importReady: "no",
+        collectedAt: "2026-10-07",
+      },
+      corrected: {
+        address: "Краснодарский край, станица Динская, улица Тельмана, 139/1",
+        latitude: 45.1964268,
+        longitude: 39.2437748,
+      },
+      primaryAddressSourceURL: "https://sport-dinsk.ru/osnovnye-svedeniya",
+      pointSourceURL: "https://nominatim.openstreetmap.org/search?q=dinsk&format=jsonv2",
+      pointCheckedAt: "2026-11-06T17:17:43.100165+00:00",
+      reason: "Stanitsa-only row corrected to Rekord Telmana point.",
+    };
+    const venue = venueFixture("B4U-V-F943CB46", krasnodar, {
+      name: "Спорткомплекс «Рекорд»",
+      address: resolution.corrected.address,
+      latitude: resolution.corrected.latitude,
+      longitude: resolution.corrected.longitude,
+      sourceUrls: ["https://badminton4u.ru/clubs/126"],
+      clubSources: [
+        { clubId: "B4U-C-126", name: "Рекорд", url: "https://badminton4u.ru/clubs/126" },
+      ],
+      reviewResolution: resolution,
+    });
+    const manifest = validateManifest(validManifest([venue]));
+    const digest = "c3".repeat(32);
+    const prepared = planAgainstState(
+      manifest,
+      digest,
+      { cities: [], venues: [], identityKeys: [] },
+      normalize,
+    ).toInsert[0];
+    const identityKeys = [{ dedupe_key: prepared.key, venue_id: prepared.id }];
+
+    const driftCases = [
+      stripMarker(prepared.markers, MARKER_SOURCE_JSON),
+      replaceMarker(
+        prepared.markers,
+        MARKER_SOURCE_JSON,
+        `${MARKER_SOURCE_JSON}{"tampered":true}`,
+      ),
+      stripMarker(prepared.markers, MARKER_REVIEW_RESOLUTION),
+      replaceMarker(
+        prepared.markers,
+        MARKER_REVIEW_RESOLUTION,
+        `${MARKER_REVIEW_RESOLUTION}{"kind":"TAMPERED"}`,
+      ),
+    ];
+    for (const drifted of driftCases) {
+      assert.throws(
+        () =>
+          planAgainstState(
+            manifest,
+            digest,
+            {
+              cities: [],
+              venues: [priorRowFromPrepared(prepared, drifted)],
+              identityKeys,
+            },
+            normalize,
+          ),
+        /IDEMPOTENT_REPLAY_CONFLICT/,
+      );
+    }
+
+    // Exact same immutable markers → SKIP (zero writes).
+    const exact = planAgainstState(
+      manifest,
+      digest,
+      {
+        cities: [],
+        venues: [priorRowFromPrepared(prepared, prepared.markers)],
+        identityKeys,
+      },
+      normalize,
+    );
+    assert.equal(exact.toInsert.length, 0);
+    assert.equal(exact.toSkip.length, 1);
+  });
+
+  it("legacy absent resolution still SKIPs; enriched contacts preserved", () => {
+    const cities = buildCities();
+    const venue = venueFixture("B4U-V-AAAA00A1", cities[0]);
+    const manifest = validateManifest(validManifest([venue]));
+    const digest = "d4".repeat(32);
+    const prepared = planAgainstState(
+      manifest,
+      digest,
+      { cities: [], venues: [], identityKeys: [] },
+      normalize,
+    ).toInsert[0];
+    assert.equal(
+      prepared.markers.some((m) => m.startsWith(MARKER_REVIEW_RESOLUTION)),
+      false,
+    );
+    const identityKeys = [{ dedupe_key: prepared.key, venue_id: prepared.id }];
+
+    const legacy = planAgainstState(
+      manifest,
+      digest,
+      {
+        cities: [],
+        venues: [priorRowFromPrepared(prepared, prepared.markers)],
+        identityKeys,
+      },
+      normalize,
+    );
+    assert.equal(legacy.toInsert.length, 0);
+    assert.equal(legacy.toSkip.length, 1);
+
+    // Contacts marker / row enrichment must not force a write or conflict.
+    const enrichedMarkers = replaceMarker(
+      prepared.markers,
+      MARKER_CONTACTS_JSON,
+      `${MARKER_CONTACTS_JSON}{"publicContacts":{"phone":"+79990001122","website":null,"messengers":[]},"contactSources":[],"courtCount":null}`,
+    );
+    const enriched = planAgainstState(
+      manifest,
+      digest,
+      {
+        cities: [],
+        venues: [
+          priorRowFromPrepared(prepared, enrichedMarkers, {
+            public_contacts: {
+              phone: "+79990001122",
+              website: null,
+              messengers: [],
+            },
+          }),
+        ],
+        identityKeys,
+      },
+      normalize,
+    );
+    assert.equal(enriched.toInsert.length, 0);
+    assert.equal(enriched.toSkip.length, 1);
+
+    // Legacy row still refuses if durable source JSON vanished while digest+ids remain.
+    assert.throws(
+      () =>
+        planAgainstState(
+          manifest,
+          digest,
+          {
+            cities: [],
+            venues: [
+              priorRowFromPrepared(
+                prepared,
+                stripMarker(prepared.markers, MARKER_SOURCE_JSON),
+              ),
+            ],
+            identityKeys,
+          },
+          normalize,
+        ),
+      /IDEMPOTENT_REPLAY_CONFLICT/,
     );
   });
 });
