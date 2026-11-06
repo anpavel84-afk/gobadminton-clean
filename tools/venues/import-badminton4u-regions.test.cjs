@@ -412,7 +412,7 @@ describe("planAgainstState", () => {
     assert.equal(second.citiesToInsert.length, 0);
   });
 
-  it("pure planner does not haversine-reject near address neighbors; contact drift still aborts", () => {
+  it("pure planner does not haversine-reject near address neighbors; enriched contacts SKIP on same digest", () => {
     const cities = buildCities();
     const venue = venueFixture("B4U-V-AAAA0001", cities[0], {
       address: "Одинаковый адрес 1",
@@ -460,11 +460,55 @@ describe("planAgainstState", () => {
       { cities: [], venues: [], identityKeys: [] },
       normalize,
     ).toInsert[0];
+    // Same source + same digest + identity markers: preserve later public-data enrichment (SKIP, zero writes).
+    const enriched = planAgainstState(
+      manifest,
+      digest,
+      {
+        cities: manifest.cities.map((c) => ({
+          id: c.id,
+          country_code: "RU",
+          name_ru: c.nameRu,
+          name_en: c.nameEn,
+          default_timezone: c.timezone,
+        })),
+        venues: [
+          {
+            id: prepared.id,
+            name: prepared.name,
+            address: prepared.address,
+            city_id: prepared.cityId,
+            timezone: prepared.timezone,
+            provenance: "admin_created",
+            data_status: "unverified",
+            lifecycle_state: "unverified",
+            normalized_name: prepared.normalizedName,
+            normalized_address: prepared.normalizedAddress,
+            normalization_version: 1,
+            identity_discriminator: prepared.identityDiscriminator,
+            review_markers: prepared.markers,
+            public_contacts: {
+              phone: "+7 999 000-00-00",
+              website: "https://tennisnsk.ru",
+              messengers: [],
+            },
+            court_count: null,
+            latitude: prepared.latitude,
+            longitude: prepared.longitude,
+          },
+        ],
+        identityKeys: [{ dedupe_key: prepared.key, venue_id: prepared.id }],
+      },
+      normalize,
+    );
+    assert.equal(enriched.toInsert.length, 0);
+    assert.equal(enriched.toSkip.length, 1);
+    // Different digest attempting the same UUID must still refuse (no blind UUID skip).
     assert.throws(
       () =>
         planAgainstState(
           manifest,
-          digest,
+          "d".repeat(64),
           {
             cities: manifest.cities.map((c) => ({
               id: c.id,
@@ -502,7 +546,7 @@ describe("planAgainstState", () => {
           },
           normalize,
         ),
-      /CONTACT_CONFLICT_NO_OVERWRITE/,
+      /IDEMPOTENT_REPLAY_CONFLICT/,
     );
   });
 
@@ -769,6 +813,184 @@ describe("runImport injectable client", () => {
     assert.ok(markers.some((m) => m.startsWith("B4U_SOURCE_V1=")));
     assert.ok(markers.some((m) => m.startsWith("B4U_CONTACTS_V1=")));
     assert.ok(markers.some((m) => m.startsWith("REGIONS485_DIGEST=")));
+  });
+});
+
+describe("sourceVenueAliases + reviewResolution", () => {
+  it("accepts Rostov-style aliases on one canonical UUID and refuses alias collisions", () => {
+    const cities = buildCities();
+    const rostov = cities.find((c) => c.nameRu === "Ростов-на-Дону");
+    const primary = "B4U-V-8CAA0D60";
+    const alias = "B4U-V-0123E53D";
+    const club198 = "https://badminton4u.ru/clubs/198";
+    const club269 = "https://badminton4u.ru/clubs/269";
+    const venue = venueFixture(primary, rostov, {
+      name: "Легкоатлетический манеж ДГТУ",
+      address: "г. Ростов-на-Дону, ул. Юфимцева, 16",
+      latitude: 47.241055,
+      longitude: 39.709454,
+      sourceUrls: [club198, club269],
+      clubSources: [
+        { clubId: "B4U-C-198", name: "Клуб 198", url: club198 },
+        { clubId: "B4U-C-269", name: "Клуб 269", url: club269 },
+      ],
+      sourceVenueAliases: [alias],
+    });
+    const manifest = validateManifest(validManifest([venue]));
+    assert.deepEqual(manifest.venues[0].sourceVenueAliases, [alias]);
+    assert.equal(manifest.venues[0].id, venueIdForSourceVenueId(primary));
+    const digest = "a1".repeat(32);
+    const markers = buildReviewMarkers(manifest.venues[0], digest);
+    assert.ok(markers.includes(`SOURCE_VENUE_ID=${primary}`));
+    assert.ok(markers.includes(`SOURCE_VENUE_ID=${alias}`));
+    const sourceJson = JSON.parse(
+      markers.find((m) => m.startsWith("B4U_SOURCE_V1=")).slice("B4U_SOURCE_V1=".length),
+    );
+    assert.deepEqual(sourceJson.sourceVenueAliases, [alias]);
+
+    const first = planAgainstState(
+      manifest,
+      digest,
+      { cities: [], venues: [], identityKeys: [] },
+      normalize,
+    );
+    assert.equal(first.toInsert.length, 1);
+    assert.equal(first.toSkip.length, 0);
+    const prepared = first.toInsert[0];
+    const replay = planAgainstState(
+      manifest,
+      digest,
+      {
+        cities: [],
+        venues: [
+          {
+            id: prepared.id,
+            name: prepared.name,
+            address: prepared.address,
+            city_id: prepared.cityId,
+            timezone: prepared.timezone,
+            provenance: "admin_created",
+            data_status: "unverified",
+            lifecycle_state: "unverified",
+            normalized_name: prepared.normalizedName,
+            normalized_address: prepared.normalizedAddress,
+            normalization_version: 1,
+            identity_discriminator: prepared.identityDiscriminator,
+            review_markers: prepared.markers,
+            public_contacts: null,
+            court_count: null,
+            latitude: prepared.latitude,
+            longitude: prepared.longitude,
+          },
+        ],
+        identityKeys: [{ dedupe_key: prepared.key, venue_id: prepared.id }],
+      },
+      normalize,
+    );
+    assert.equal(replay.toInsert.length, 0);
+    assert.equal(replay.toSkip.length, 1);
+
+    assert.throws(
+      () =>
+        validateManifest(
+          validManifest([
+            venueFixture(primary, rostov, { sourceVenueAliases: [alias] }),
+            venueFixture(alias, rostov, {
+              name: "Дубль",
+              address: "другой адрес",
+              latitude: rostov.centerLatitude + 0.02,
+              longitude: rostov.centerLongitude + 0.02,
+            }),
+          ]),
+        ),
+      /ALIAS_CONFLICTS_WITH_SOURCE|DUPLICATE_SOURCE_VENUE_ID/,
+    );
+    assert.throws(
+      () =>
+        validateManifest(
+          validManifest([
+            venueFixture(primary, rostov, { sourceVenueAliases: [primary] }),
+          ]),
+        ),
+      /ALIAS_EQUALS_PRIMARY/,
+    );
+  });
+
+  it("persists reviewResolution original→corrected and refuses corrected mismatch / absent-field compat", () => {
+    const cities = buildCities();
+    const krasnodar = cities.find((c) => c.nameRu === "Краснодар");
+    const resolution = {
+      kind: "EXPLICIT_PUBLIC_SOURCE_ADDRESS_POINT_CORRECTION",
+      original: {
+        address: "Динская",
+        latitude: null,
+        longitude: null,
+        sourceVenueId: "B4U-V-F943CB45",
+        importReady: "no",
+        collectedAt: "2026-10-07",
+      },
+      corrected: {
+        address: "Краснодарский край, станица Динская, улица Тельмана, 139/1",
+        latitude: 45.1964268,
+        longitude: 39.2437748,
+      },
+      primaryAddressSourceURL:
+        "https://sport-dinsk.ru/svedeniya-ob-obrazovatelnoj-organizatsii/osnovnye-svedeniya",
+      pointSourceURL:
+        "https://nominatim.openstreetmap.org/search?q=dinsk&format=jsonv2",
+      pointCheckedAt: "2026-11-06T17:17:43.100165+00:00",
+      reason: "Original stanitsa-only row; Rekord Telmana 139/1 point qualified.",
+    };
+    const venue = venueFixture("B4U-V-F943CB45", krasnodar, {
+      name: "Спорткомплекс «Рекорд»",
+      address: resolution.corrected.address,
+      latitude: resolution.corrected.latitude,
+      longitude: resolution.corrected.longitude,
+      sourceUrls: ["https://badminton4u.ru/clubs/126"],
+      clubSources: [
+        { clubId: "B4U-C-126", name: "Рекорд", url: "https://badminton4u.ru/clubs/126" },
+      ],
+      reviewResolution: resolution,
+    });
+    const manifest = validateManifest(validManifest([venue]));
+    assert.equal(manifest.venues[0].reviewResolution.kind, resolution.kind);
+    const digest = "b2".repeat(32);
+    const markers = buildReviewMarkers(manifest.venues[0], digest);
+    const resMarker = markers.find((m) => m.startsWith("B4U_REVIEW_RESOLUTION_V1="));
+    assert.ok(resMarker);
+    const parsed = JSON.parse(resMarker.slice("B4U_REVIEW_RESOLUTION_V1=".length));
+    assert.equal(parsed.original.address, "Динская");
+    assert.equal(parsed.corrected.latitude, 45.1964268);
+
+    // Optional-absent: legacy venue without reviewResolution keeps old marker set (no resolution marker).
+    const legacy = validateManifest(
+      validManifest([venueFixture("B4U-V-AAAA0099", krasnodar)]),
+    );
+    const legacyMarkers = buildReviewMarkers(legacy.venues[0], digest);
+    assert.equal(
+      legacyMarkers.some((m) => m.startsWith("B4U_REVIEW_RESOLUTION_V1=")),
+      false,
+    );
+    assert.equal(legacyMarkers.filter((m) => m.startsWith("SOURCE_VENUE_ID=")).length, 1);
+
+    assert.throws(
+      () =>
+        validateManifest(
+          validManifest([
+            venueFixture("B4U-V-F943CB45", krasnodar, {
+              address: "другой адрес",
+              latitude: resolution.corrected.latitude,
+              longitude: resolution.corrected.longitude,
+              sourceUrls: ["https://badminton4u.ru/clubs/126"],
+              clubSources: [
+                { clubId: "B4U-C-126", name: "Рекорд", url: "https://badminton4u.ru/clubs/126" },
+              ],
+              reviewResolution: resolution,
+            }),
+          ]),
+        ),
+      /REVIEW_RESOLUTION_CORRECTED_MISMATCH/,
+    );
   });
 });
 

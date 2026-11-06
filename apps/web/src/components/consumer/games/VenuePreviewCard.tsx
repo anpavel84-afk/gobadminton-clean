@@ -4,6 +4,7 @@ import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { nearestGameLabel, venueGameCount } from "../../../lib/venue-popup";
 import { VenueCover } from "../venues/VenueCover";
 import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
+import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import "../../../styles/venue-popup.css";
 
 export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, galleryIndex, onGalleryIndexChange }: {
@@ -14,12 +15,16 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
 }) {
   // Cover/media stay presentational inside the single row button — no nested interactive controls.
   // Morph slot still goes through VenueGallery so ordered gallery + main-at-nonzero stay coherent.
+  // Source credit is a sibling footer outside the 64px/minmax(0,1fr)/44px row button (not a 4th grid child).
   const multi = (venue.profile?.gallery?.items?.length ?? 0) > 1;
+  const catalogSource = venue.profile?.catalogSource;
+  const hasSource = Boolean(safeCatalogSource(catalogSource));
   const media = coverSlot || multi
     ? <VenueGallery
         venue={venue}
         size="compact"
         showCredit={false}
+        showSourceCredit={false}
         coverSlot={coverSlot}
         coverFallback={coverFallback}
         className="gb-venue-preview-cover"
@@ -27,7 +32,12 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
         onIndexChange={onGalleryIndexChange}
       />
     : <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-preview-cover" venueId={venue.id} />;
-  return <div className="gb-venue-preview" role="region" aria-label="Выбранная площадка">
+  return <div
+    className="gb-venue-preview"
+    data-has-source={hasSource ? "true" : undefined}
+    role="region"
+    aria-label="Выбранная площадка"
+  >
     {!embedded && <button type="button" className="gb-venue-handle" aria-label="Развернуть площадку" onClick={onOpen}><span /></button>}
     <button type="button" className="gb-venue-preview-button" aria-label={`Открыть площадку ${venue.name}`} onClick={onOpen}>
       {media}
@@ -38,5 +48,10 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
       </span>
       <span className="gb-venue-preview-arrow" aria-hidden="true">↑</span>
     </button>
+    {hasSource ? (
+      <div className="gb-venue-preview-source">
+        <VenueSourceCredit catalogSource={catalogSource} variant="compactPrimary" />
+      </div>
+    ) : null}
   </div>;
 }

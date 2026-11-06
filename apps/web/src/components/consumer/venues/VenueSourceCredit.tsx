@@ -38,15 +38,24 @@ function stopCardGesture(event: ReactMouseEvent) {
   event.stopPropagation();
 }
 
-export function VenueSourceCredit({ catalogSource }: { catalogSource?: VenueCatalogSource | null }) {
+export function VenueSourceCredit({
+  catalogSource,
+  variant = "full",
+}: {
+  catalogSource?: VenueCatalogSource | null;
+  /** Compact map footer: primary club source only. Full sheet/profile/picker keep every club link. */
+  variant?: "full" | "compactPrimary";
+}) {
   const source = safeCatalogSource(catalogSource);
   if (!source) return null;
   const primaryClub = source.clubs[0];
   if (!primaryClub) return null;
+  const clubs = variant === "compactPrimary" ? [primaryClub] : source.clubs;
   return (
     <span
       className="gb-venue-cover-credit gb-venue-source-credit"
       data-kind="catalog-source"
+      data-variant={variant === "compactPrimary" ? "compact-primary" : "full"}
       style={{
         fontSize: "var(--c23-meta)",
         lineHeight: "var(--c23-meta-lh)",
@@ -63,7 +72,7 @@ export function VenueSourceCredit({ catalogSource }: { catalogSource?: VenueCata
       >
         Источник: badminton4u.ru
       </a>
-      {source.clubs.map((club, index) => (
+      {clubs.map((club, index) => (
         <span key={club.id}>
           {index === 0 ? " · " : ", "}
           <a

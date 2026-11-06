@@ -102,6 +102,10 @@ describe("VenueGallery", () => {
     emptyWithSource.profile = { ...emptyWithSource.profile!, catalogSource };
     const emptyHtml = ssr(<VenueGallery venue={emptyWithSource} showCredit={false} />);
     expect(emptyHtml).toContain("Источник: badminton4u.ru");
+    // Compact interactive parents suppress gallery source; parents render sibling footer instead.
+    const suppressed = ssr(<VenueGallery venue={withSource} showCredit={false} showSourceCredit={false} />);
+    expect(suppressed).not.toContain("Источник: badminton4u.ru");
+    expect(suppressed).not.toContain("Badmclub НН");
   });
   it("replaces failed gallery photo with illustration alt/credit, not club photo credit", () => {
     const item = { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } };

@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.31" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.32" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
@@ -424,13 +424,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.31",
-  "title": "Выбор города для поиска",
+  "application_version": "0.1.0-alpha.32",
+  "title": "Карточка площадки и уточнённые адреса",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
+  "additions": [
+    "Дополнительные площадки с уточнёнными адресами после проверки источника"
+  ],
   "fixes": [
-    "Исправлен выбор города: карта и список площадок показывают выбранный город"
+    "Исправлена компактная карточка площадки на карте: источник и название снова читаются нормально"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
@@ -1479,6 +1481,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем ещё не выполнена",
       "Часть сведений о площадках ещё находится на проверке",
       "Независимая мобильная проверка новых карт ещё не завершена",
+      "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
+    ]
+  },
+
+  {
+    "source_sha": "1dbd135ae3af27dbc2bd8771a432d32489791a9c",
+    "application_version": "0.1.0-alpha.31",
+    "version_label": "0.1.0-alpha.31",
+    "title": "Выбор города для поиска",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42268408755-a1",
+        "accepted_at": "2026-11-06T18:25:52Z",
+        "api_digest": "sha256:ee7a063b3d40fc013b6e2d34c2e5625aea6ac7f7d121dcaa48c16c5069ab9bbb",
+        "web_digest": "sha256:c94bedd3d55e7e363b2823b573ead1a0224e8acb4f3e1614304daff76174cdb5",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Исправлен выбор города: карта и список площадок показывают выбранный город"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
       "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
     ]
   },

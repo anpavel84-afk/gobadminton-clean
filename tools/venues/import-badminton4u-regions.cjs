@@ -23,6 +23,9 @@ const MARKER_SOURCE = "SOURCE_VENUE_ID=";
 const MARKER_DIGEST = "REGIONS485_DIGEST=";
 const MARKER_SOURCE_JSON = "B4U_SOURCE_V1=";
 const MARKER_CONTACTS_JSON = "B4U_CONTACTS_V1=";
+/** Optional durable original→corrected provenance; absent on legacy rows stays compatible. */
+const MARKER_REVIEW_RESOLUTION = "B4U_REVIEW_RESOLUTION_V1=";
+const REVIEW_RESOLUTION_KIND = "EXPLICIT_PUBLIC_SOURCE_ADDRESS_POINT_CORRECTION";
 
 /** Exact 11 approved regional cities (Челябинск / Уфа / Пермь excluded). */
 const APPROVED_CITIES = Object.freeze({
@@ -99,6 +102,9 @@ const VENUE_KEYS = new Set([
   "publicContacts",
   "contactSources",
   "courtCount",
+  // Optional bounded extensions — absent keeps strict V1 byte-compatible markers.
+  "sourceVenueAliases",
+  "reviewResolution",
 ]);
 const CLUB_KEYS = new Set(["clubId", "name", "url"]);
 const CONTACT_SOURCE_KEYS = new Set([
@@ -109,6 +115,25 @@ const CONTACT_SOURCE_KEYS = new Set([
 ]);
 const PUBLIC_CONTACT_KEYS = new Set(["phone", "website", "messengers"]);
 const MESSENGER_KEYS = new Set(["kind", "url"]);
+const REVIEW_RESOLUTION_KEYS = new Set([
+  "kind",
+  "original",
+  "corrected",
+  "primaryAddressSourceURL",
+  "pointSourceURL",
+  "pointCheckedAt",
+  "reason",
+]);
+const REVIEW_ORIGINAL_KEYS = new Set([
+  "address",
+  "latitude",
+  "longitude",
+  "sourceVenueId",
+  "importReady",
+  "collectedAt",
+]);
+const REVIEW_CORRECTED_KEYS = new Set(["address", "latitude", "longitude"]);
+const REVIEW_IMPORT_READY = new Set(["yes", "no", "after_review"]);
 const PRIVATE_KEY_RE =
   /^(private|raw|secret|token|cookie|password|phoneRaw|privateRaw)/i;
 
@@ -316,17 +341,177 @@ function buildReviewMarkers(venue, digest) {
     nameBasis: venue.nameBasis,
     manifestDigest: digest,
   };
+  if (venue.sourceVenueAliases && venue.sourceVenueAliases.length > 0) {
+    sourcePayload.sourceVenueAliases = venue.sourceVenueAliases;
+  }
   const contactsPayload = {
     publicContacts: venue.publicContacts,
     contactSources: venue.contactSources,
     courtCount: venue.courtCount === undefined ? null : venue.courtCount,
   };
-  return [
+  const markers = [
     `${MARKER_SOURCE}${venue.sourceVenueId}`,
+  ];
+  for (const alias of venue.sourceVenueAliases || []) {
+    markers.push(`${MARKER_SOURCE}${alias}`);
+  }
+  markers.push(
     `${MARKER_DIGEST}${digest}`,
     `${MARKER_SOURCE_JSON}${JSON.stringify(stableJson(sourcePayload))}`,
     `${MARKER_CONTACTS_JSON}${JSON.stringify(stableJson(contactsPayload))}`,
-  ];
+  );
+  if (venue.reviewResolution) {
+    markers.push(
+      `${MARKER_REVIEW_RESOLUTION}${JSON.stringify(stableJson(venue.reviewResolution))}`,
+    );
+  }
+  return markers;
+}
+
+/**
+ * Optional explicit public-source address/point correction.
+ * Original archive/CSV untouched; provenance persists in review_markers.
+ * Corrected tuple must match the manifest venue address+point exactly.
+ */
+function validateReviewResolution(raw, venue) {
+  assertPlainObject(raw, "INVALID_REVIEW_RESOLUTION");
+  assertAllowlist(raw, REVIEW_RESOLUTION_KEYS, "INVALID_REVIEW_RESOLUTION");
+  for (const key of REVIEW_RESOLUTION_KEYS) {
+    if (!(key in raw)) fail("INVALID_REVIEW_RESOLUTION", `missing ${key}`);
+  }
+  if (raw.kind !== REVIEW_RESOLUTION_KIND) {
+    fail("INVALID_REVIEW_RESOLUTION", "kind");
+  }
+  assertPlainObject(raw.original, "INVALID_REVIEW_RESOLUTION");
+  assertAllowlist(raw.original, REVIEW_ORIGINAL_KEYS, "INVALID_REVIEW_RESOLUTION");
+  for (const key of REVIEW_ORIGINAL_KEYS) {
+    if (!(key in raw.original)) fail("INVALID_REVIEW_RESOLUTION", `original.${key}`);
+  }
+  assertPlainObject(raw.corrected, "INVALID_REVIEW_RESOLUTION");
+  assertAllowlist(raw.corrected, REVIEW_CORRECTED_KEYS, "INVALID_REVIEW_RESOLUTION");
+  for (const key of REVIEW_CORRECTED_KEYS) {
+    if (!(key in raw.corrected)) fail("INVALID_REVIEW_RESOLUTION", `corrected.${key}`);
+  }
+  if (typeof raw.original.address !== "string" || !raw.original.address.trim()) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.address");
+  }
+  if (raw.original.sourceVenueId !== venue.sourceVenueId) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.sourceVenueId");
+  }
+  if (!REVIEW_IMPORT_READY.has(raw.original.importReady)) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.importReady");
+  }
+  if (!isDateLike(raw.original.collectedAt)) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.collectedAt");
+  }
+  const origLat = raw.original.latitude;
+  const origLon = raw.original.longitude;
+  if (origLat !== null && !isFiniteNumber(origLat)) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.latitude");
+  }
+  if (origLon !== null && !isFiniteNumber(origLon)) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.longitude");
+  }
+  if ((origLat === null) !== (origLon === null)) {
+    fail("INVALID_REVIEW_RESOLUTION", "original.coords_pair");
+  }
+  if (typeof raw.corrected.address !== "string" || !raw.corrected.address.trim()) {
+    fail("INVALID_REVIEW_RESOLUTION", "corrected.address");
+  }
+  if (!isFiniteNumber(raw.corrected.latitude) || !isFiniteNumber(raw.corrected.longitude)) {
+    fail("INVALID_REVIEW_RESOLUTION", "corrected.coords");
+  }
+  if (raw.corrected.address.trim() !== venue.address.trim()) {
+    fail("REVIEW_RESOLUTION_CORRECTED_MISMATCH", "address");
+  }
+  if (
+    Math.abs(raw.corrected.latitude - venue.latitude) > 1e-9 ||
+    Math.abs(raw.corrected.longitude - venue.longitude) > 1e-9
+  ) {
+    fail("REVIEW_RESOLUTION_CORRECTED_MISMATCH", "coords");
+  }
+  const primaryUrl = httpsUrlOk(raw.primaryAddressSourceURL);
+  if (!primaryUrl) fail("INVALID_REVIEW_RESOLUTION", "primaryAddressSourceURL");
+  const pointUrl = httpsUrlOk(raw.pointSourceURL);
+  if (!pointUrl) fail("INVALID_REVIEW_RESOLUTION", "pointSourceURL");
+  if (!isDateLike(raw.pointCheckedAt)) {
+    fail("INVALID_REVIEW_RESOLUTION", "pointCheckedAt");
+  }
+  if (typeof raw.reason !== "string" || !raw.reason.trim() || raw.reason.length > 800) {
+    fail("INVALID_REVIEW_RESOLUTION", "reason");
+  }
+  if (hasForbiddenScalars(raw.reason)) fail("INVALID_REVIEW_RESOLUTION", "reason");
+  return {
+    kind: REVIEW_RESOLUTION_KIND,
+    original: {
+      address: raw.original.address.trim(),
+      latitude: origLat === null ? null : origLat,
+      longitude: origLon === null ? null : origLon,
+      sourceVenueId: raw.original.sourceVenueId,
+      importReady: raw.original.importReady,
+      collectedAt: raw.original.collectedAt,
+    },
+    corrected: {
+      address: raw.corrected.address.trim(),
+      latitude: raw.corrected.latitude,
+      longitude: raw.corrected.longitude,
+    },
+    primaryAddressSourceURL: primaryUrl,
+    pointSourceURL: pointUrl,
+    pointCheckedAt: raw.pointCheckedAt,
+    reason: raw.reason.trim(),
+  };
+}
+
+/**
+ * Optional non-primary B4U-V aliases for one physical venue (same clubs on one UUID).
+ * Primary UUID stays uuidv5(namespace + primary sourceVenueId).
+ */
+function validateSourceVenueAliases(raw, primaryId, seenSourceIds) {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) fail("INVALID_SOURCE_VENUE_ALIASES");
+  if (raw.length === 0) fail("INVALID_SOURCE_VENUE_ALIASES", "empty");
+  if (raw.length > 8) fail("INVALID_SOURCE_VENUE_ALIASES", "too_many");
+  const out = [];
+  const local = new Set();
+  for (const item of raw) {
+    if (typeof item !== "string" || !SOURCE_VENUE_RE.test(item)) {
+      fail("INVALID_SOURCE_VENUE_ALIAS", String(item));
+    }
+    if (item === primaryId) {
+      fail("ALIAS_EQUALS_PRIMARY", item);
+    }
+    if (local.has(item)) fail("DUPLICATE_SOURCE_VENUE_ALIAS", item);
+    if (seenSourceIds.has(item)) {
+      fail("ALIAS_CONFLICTS_WITH_SOURCE", item);
+    }
+    local.add(item);
+    seenSourceIds.add(item);
+    out.push(item);
+  }
+  out.sort();
+  return out;
+}
+
+function markerSourceIds(markers) {
+  const ids = [];
+  if (!Array.isArray(markers)) return ids;
+  for (const m of markers) {
+    if (typeof m === "string" && m.startsWith(MARKER_SOURCE)) {
+      ids.push(m.slice(MARKER_SOURCE.length));
+    }
+  }
+  return ids;
+}
+
+function markerDigest(markers) {
+  if (!Array.isArray(markers)) return null;
+  for (const m of markers) {
+    if (typeof m === "string" && m.startsWith(MARKER_DIGEST)) {
+      return m.slice(MARKER_DIGEST.length);
+    }
+  }
+  return null;
 }
 
 function validateCity(city, seenIds, seenNames) {
@@ -529,6 +714,21 @@ function validateVenue(venue, citiesById, seenVenueIds, seenSourceIds) {
     }
     courtCount = venue.courtCount;
   }
+  const sourceVenueAliases = validateSourceVenueAliases(
+    venue.sourceVenueAliases,
+    venue.sourceVenueId,
+    seenSourceIds,
+  );
+  const trimmedVenue = {
+    sourceVenueId: venue.sourceVenueId,
+    address: venue.address.trim(),
+    latitude: venue.latitude,
+    longitude: venue.longitude,
+  };
+  let reviewResolution;
+  if ("reviewResolution" in venue && venue.reviewResolution != null) {
+    reviewResolution = validateReviewResolution(venue.reviewResolution, trimmedVenue);
+  }
   return {
     id: venue.id.toLowerCase(),
     sourceVenueId: venue.sourceVenueId,
@@ -545,6 +745,8 @@ function validateVenue(venue, citiesById, seenVenueIds, seenSourceIds) {
     publicContacts,
     contactSources,
     courtCount,
+    sourceVenueAliases,
+    reviewResolution,
     // Convenience for planners; not a manifest key — do not re-validate this object.
     timezone: city.timezone,
   };
@@ -744,10 +946,12 @@ function planAgainstState(manifest, digest, state, normalize) {
   const bySource = new Map();
   for (const v of existingVenues) {
     const markers = Array.isArray(v.review_markers) ? v.review_markers : [];
-    for (const m of markers) {
-      if (typeof m === "string" && m.startsWith(MARKER_SOURCE)) {
-        bySource.set(m.slice(MARKER_SOURCE.length), v);
+    for (const sourceId of markerSourceIds(markers)) {
+      const existing = bySource.get(sourceId);
+      if (existing && existing.id !== v.id) {
+        fail("SOURCE_ID_CONFLICT", sourceId);
       }
+      bySource.set(sourceId, v);
     }
   }
 
@@ -779,9 +983,18 @@ function planAgainstState(manifest, digest, state, normalize) {
     // loadStateForPlan (or spatialFacts). Do not haversine-reject here.
 
     const priorById = byId.get(venue.id);
-    const priorBySource = bySource.get(venue.sourceVenueId);
-    if (priorBySource && priorBySource.id !== venue.id) {
-      fail("SOURCE_ID_CONFLICT", venue.sourceVenueId);
+    const claimedIds = [venue.sourceVenueId, ...(venue.sourceVenueAliases || [])];
+    let priorBySource = null;
+    for (const sourceId of claimedIds) {
+      const hit = bySource.get(sourceId);
+      if (!hit) continue;
+      if (hit.id !== venue.id) {
+        fail("SOURCE_ID_CONFLICT", sourceId);
+      }
+      if (priorBySource && priorBySource.id !== hit.id) {
+        fail("SOURCE_MAPPING_CONFLICT", sourceId);
+      }
+      priorBySource = hit;
     }
     if (priorById && priorBySource && priorById.id !== priorBySource.id) {
       fail("SOURCE_MAPPING_CONFLICT", venue.sourceVenueId);
@@ -794,7 +1007,12 @@ function planAgainstState(manifest, digest, state, normalize) {
     if (prior) {
       const lat = Number(prior.latitude);
       const lon = Number(prior.longitude);
-      const immutableOk =
+      const priorDigest = markerDigest(prior.review_markers);
+      const priorSources = new Set(markerSourceIds(prior.review_markers));
+      const sourceIdsMatch =
+        priorSources.has(venue.sourceVenueId) &&
+        (venue.sourceVenueAliases || []).every((alias) => priorSources.has(alias));
+      const coreIdentityOk =
         prior.id === venue.id &&
         prior.name === venue.name &&
         prior.address === venue.address &&
@@ -809,15 +1027,25 @@ function planAgainstState(manifest, digest, state, normalize) {
         prior.identity_discriminator === identityDiscriminator &&
         Math.abs(lat - venue.latitude) <= 1e-6 &&
         Math.abs(lon - venue.longitude) <= 1e-6 &&
-        markersEqual(prior.review_markers, markers) &&
         (prior.court_count ?? null) === (venue.courtCount ?? null) &&
-        identityKeys.get(key) === venue.id;
-      if (!immutableOk) fail("IDEMPOTENT_REPLAY_CONFLICT", venue.sourceVenueId);
-      if (!contactsEqual(prior.public_contacts ?? null, venue.publicContacts)) {
-        fail("CONTACT_CONFLICT_NO_OVERWRITE", venue.sourceVenueId);
+        identityKeys.get(key) === venue.id &&
+        priorDigest === digest &&
+        sourceIdsMatch;
+      // Same source ID + same immutable digest + valid identity markers:
+      // SKIP and preserve later authorized public-data contact enrichment (zero writes).
+      // Do not blind-skip arbitrary existing UUIDs; refuse different digests / collisions.
+      // Different digest (or identity drift) that would overwrite contacts → IDEMPOTENT_REPLAY_CONFLICT.
+      if (coreIdentityOk) {
+        toSkip.push(prepared);
+      } else {
+        fail("IDEMPOTENT_REPLAY_CONFLICT", venue.sourceVenueId);
       }
-      toSkip.push(prepared);
     } else {
+      // Alias must not collide with another row's durable source identity.
+      for (const sourceId of claimedIds) {
+        const hit = bySource.get(sourceId);
+        if (hit && hit.id !== venue.id) fail("SOURCE_ID_CONFLICT", sourceId);
+      }
       toInsert.push(prepared);
     }
   }
@@ -1191,12 +1419,16 @@ module.exports = {
   MARKER_DIGEST,
   MARKER_SOURCE_JSON,
   MARKER_CONTACTS_JSON,
+  MARKER_REVIEW_RESOLUTION,
+  REVIEW_RESOLUTION_KIND,
   uuidV5,
   venueIdForSourceVenueId,
   sha256Hex,
   distanceMeters,
   buildReviewMarkers,
   validateManifest,
+  validateReviewResolution,
+  validateSourceVenueAliases,
   parseCliArgs,
   planAgainstState,
   runImport,

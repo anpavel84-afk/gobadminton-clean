@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.31 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.31");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.32 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.32");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,8 +64,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/город|выбор|карт/i);
+    expect(currentProse).toMatch(/карточка|площадк|адрес/i);
     expect(currentProse).toMatch(/приёмк/i);
+    expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -228,10 +229,20 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(34);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(35);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(39);
+    ).toBe(40);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.31"
+      && row.source_sha === "1dbd135ae3af27dbc2bd8771a432d32489791a9c"
+      && row.deployments[0]?.release_id === "r42268408755-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-06T18:25:52Z"
+      && row.deployments[0]?.api_digest === "sha256:ee7a063b3d40fc013b6e2d34c2e5625aea6ac7f7d121dcaa48c16c5069ab9bbb"
+      && row.deployments[0]?.web_digest === "sha256:c94bedd3d55e7e363b2823b573ead1a0224e8acb4f3e1614304daff76174cdb5"
+      && row.api_contract_version === "0.36.0"
+      && row.title === "Выбор города для поиска",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.29"
       && row.source_sha === "76490b2be720e9f6b923bd3db477fb6065d6d13c"

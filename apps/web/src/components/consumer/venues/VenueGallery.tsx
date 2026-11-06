@@ -77,6 +77,7 @@ export function VenueGallery({
   coverSlot,
   coverFallback = false,
   showCredit = true,
+  showSourceCredit = true,
   index: controlledIndex,
   onIndexChange,
 }: {
@@ -88,6 +89,8 @@ export function VenueGallery({
   /** Shared SelectedVenueCover resource already shows the generic after main-loan failure. */
   coverFallback?: boolean;
   showCredit?: boolean;
+  /** Catalog source credit; false in compact select-button parents that render it as a sibling footer. */
+  showSourceCredit?: boolean;
   /** Parent-owned index keeps compact↔expanded selection aligned for one venue. */
   index?: number;
   onIndexChange?: (index: number, item: GalleryItem | null) => void;
@@ -212,7 +215,8 @@ export function VenueGallery({
 
   const catalogSource = "profile" in venue ? venue.profile?.catalogSource : undefined;
   // Avoid empty credit wrappers in compact picker thumbs when there is nothing to show.
-  const sourceCredit = safeCatalogSource(catalogSource)
+  // Compact interactive parents pass showSourceCredit={false} and render VenueSourceCredit outside the row/select button.
+  const sourceCredit = showSourceCredit && safeCatalogSource(catalogSource)
     ? <VenueSourceCredit catalogSource={catalogSource} />
     : null;
 

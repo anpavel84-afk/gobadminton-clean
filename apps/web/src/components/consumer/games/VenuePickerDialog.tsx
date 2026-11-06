@@ -2,6 +2,7 @@
 import { CloseButton } from "../CloseButton";
 
 import { VenueGallery } from "../venues/VenueGallery";
+import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent } from "react";
@@ -115,6 +116,8 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
             <p className="gb-venue-picker-empty" role="status">Подождите, загружаем площадки…</p>
           ) : visible.length ? visible.map(venue => {
             const photos = galleryItemCount(venue);
+            const catalogSource = venue.profile?.catalogSource;
+            const hasSource = Boolean(safeCatalogSource(catalogSource));
             return (
               <div key={venue.id} className="gb-venue-picker-option-block">
                 <button
@@ -123,14 +126,20 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                   aria-pressed={selectedId === venue.id}
                   onClick={() => onSelect(venue)}
                 >
-                  {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select. */}
-                  <VenueGallery venue={venue} size="compact" showCredit={false} className="gb-venue-cover--thumb" />
+                  {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select.
+                      Source credit stays outside this select button (no nested anchors). */}
+                  <VenueGallery venue={venue} size="compact" showCredit={false} showSourceCredit={false} className="gb-venue-cover--thumb" />
                   <span className="gb-venue-picker-option-copy">
                     <span className="gb-venue-picker-option-name">{venue.name}</span>
                     <span className="gb-venue-picker-option-address">{venue.address}</span>
                   </span>
                   {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
                 </button>
+                {hasSource ? (
+                  <div className="gb-venue-picker-option-source">
+                    <VenueSourceCredit catalogSource={catalogSource} />
+                  </div>
+                ) : null}
                 {photos >= 2 ? (
                   <details className="gb-venue-picker-photos">
                     <summary tabIndex={0} className="gb-venue-picker-photos__summary">
