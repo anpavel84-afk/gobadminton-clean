@@ -1,4 +1,4 @@
-import { regionalCityById } from "@gobadminton/contracts";
+import { regionalCityById } from "@gobadminton/contracts/regional-cities";
 
 export type SelectedLocation = {
   cityId: string;

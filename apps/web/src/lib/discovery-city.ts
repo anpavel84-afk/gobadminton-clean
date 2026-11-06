@@ -1,4 +1,4 @@
-import { regionalCityById } from "@gobadminton/contracts";
+import { regionalCityById } from "@gobadminton/contracts/regional-cities";
 import { apiFetch, type ApiResult } from "./api-client";
 import type { Me } from "./consumer-types";
 import type { SelectedLocation } from "./location-context";
