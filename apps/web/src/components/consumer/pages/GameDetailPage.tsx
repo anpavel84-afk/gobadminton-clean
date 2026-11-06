@@ -17,14 +17,15 @@ import { GameCourtBookingPanel } from "../games/GameCourtBooking";
 import { CommentsSection } from "../comments/CommentsSection";
 import { isRecommendableGame } from "../../../lib/game-recommendations";
 
-function ParticipationActions({ game, own, busy, notice, readable, onRequest, onReload }: {
+function ParticipationActions({ game, own, busy, notice, readable, checkingParticipation, onRequest, onReload }: {
   game: Game; own: Participation | null; busy: boolean; notice: string | null;
-  readable: boolean; onRequest: () => void; onReload: () => void;
+  readable: boolean; checkingParticipation: boolean; onRequest: () => void; onReload: () => void;
 }) {
   const cancelled = game.status === "cancelled";
   const status = cancelled ? "cancelled_by_game" : own?.status;
   return <GameActionBar>
-    {!readable ? <><strong>Не удалось проверить участие</strong><p>Обновите данные перед отправкой заявки.</p><Button variant="outline" disabled={busy} onClick={onReload}>Проверить участие</Button></>
+    {checkingParticipation ? <p role="status">Проверяем участие</p>
+      : !readable ? <><strong>Не удалось проверить участие</strong><p>Обновите данные перед отправкой заявки.</p><Button variant="outline" disabled={busy} onClick={onReload}>Проверить участие</Button></>
       : status ? <>
         <GameStatusBadge tone={status}>{participationLabel(status)}</GameStatusBadge>
         {status === "pending" && <p>Ждём решения организатора. Место пока не подтверждено.</p>}
@@ -61,6 +62,7 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
   const [chatAvailable, setChatAvailable] = useState(false);
   const [courtEligible, setCourtEligible] = useState(false);
   const [readable, setReadable] = useState(false);
+  const [checkingParticipation, setCheckingParticipation] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const generation = useRef(0);
@@ -74,12 +76,13 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
     setChatAvailable(false);
     setCourtEligible(false);
     setReadable(false);
+    setCheckingParticipation(true);
     setOwn(null);
     setMe(null);
 
     const result = await getGame(gameId);
     if (current !== generation.current) return;
-    if (!result.ok) { setGame(null); setState("error"); return; }
+    if (!result.ok) { setGame(null); setCheckingParticipation(false); setState("error"); return; }
     setGame(result.data);
     // Public game is enough for the page body; private probes must not delay that paint.
     setState("ready");
@@ -87,7 +90,9 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
     const account = await getMe();
     if (current !== generation.current) return;
     if (!account.ok) {
+      // Guest 401 → normal auth CTA; other auth failures keep retry error after checking clears.
       if (account.status === 401) setReadable(true);
+      setCheckingParticipation(false);
       return;
     }
     setMe(account.data);
@@ -100,6 +105,8 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
       setOwn(participation);
       setReadable(true);
     }
+    // Participation proof resolved (ok or failed) — clear checking before any private follow-ups.
+    setCheckingParticipation(false);
 
     const confirmed = isConfirmedMember(participation);
     let managed = false;
@@ -175,7 +182,7 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
           </div>
           <div className="gb-game-detail-contextual__primary">
             <div className="gb-game-booking__terms"><strong>{capacityStatusLabel(game)}</strong><p>{settlementTerms(game.settlement)}</p></div>
-            <ParticipationActions game={game} own={own} busy={busy} notice={notice} readable={readable} onRequest={() => void onRequest()} onReload={() => void reload()} />
+            <ParticipationActions game={game} own={own} busy={busy} notice={notice} readable={readable} checkingParticipation={checkingParticipation} onRequest={() => void onRequest()} onReload={() => void reload()} />
           </div>
         </section>
         <div className="gb-game-detail-grid">

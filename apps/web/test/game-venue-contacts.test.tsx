@@ -172,6 +172,41 @@ describe("game-only venue contacts", () => {
 });
 
 describe("game detail private surface eligibility (#473)", () => {
+  it("deferred getMe keeps public ready with neutral checking, then normal CTA", async () => {
+    let finishMe!: (result: Awaited<ReturnType<typeof getMe>>) => void;
+    vi.mocked(getMe).mockImplementationOnce(() => new Promise(resolve => { finishMe = resolve; }));
+    render(); effects();
+    await Promise.resolve();
+    const pending = render();
+    expect(pending).toContain('data-state="ready"');
+    expect(pending).toContain("Проверяем участие");
+    expect(pending).not.toContain("Не удалось проверить участие");
+    expect(pending).not.toContain(">Проверить участие<");
+    finishMe({ ok: true, status: 200, data: { id: "viewer", displayName: "Viewer", csrfToken: "test", locale: "ru", linkedProviders: [] } });
+    const done = await settle();
+    expect(done).toContain("Оставить заявку");
+    expect(done).not.toContain("Проверяем участие");
+    expect(done).not.toContain("Не удалось проверить участие");
+  });
+
+  it("deferred parts keeps neutral checking until resolution; failure shows retry only after", async () => {
+    let finishParts!: (result: Awaited<ReturnType<typeof listAllMyParticipations>>) => void;
+    vi.mocked(listAllMyParticipations).mockImplementationOnce(() => new Promise(resolve => { finishParts = resolve; }));
+    render(); effects();
+    await Promise.resolve();
+    await Promise.resolve();
+    const pending = render();
+    expect(pending).toContain('data-state="ready"');
+    expect(pending).toContain("Проверяем участие");
+    expect(pending).not.toContain("Не удалось проверить участие");
+    expect(pending).not.toContain(">Проверить участие<");
+    finishParts({ ok: false, status: 503, error: "offline" });
+    const failed = await settle();
+    expect(failed).toContain("Не удалось проверить участие");
+    expect(failed).toContain("Проверить участие");
+    expect(failed).not.toContain("Проверяем участие");
+  });
+
   it("outsider with session probes managed list once and never chat/court GET", async () => {
     await settle();
     expect(getMyManagedGame).toHaveBeenCalledWith("a");
