@@ -308,14 +308,14 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   // Render actual expanded info using a separate hook scope before release.
   const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects, active: hooks.active };
   hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.active = true;
-  let info: ReturnType<typeof VenueSheet>;
   try {
-    info = VenueSheet({ venue, games: [], gamesReady: true, now: 0, embedded: true, active: false, onCollapse() {}, onDeselect() {} });
-  } finally {
+    const info = VenueSheet({ venue, games: [], gamesReady: true, now: 0, embedded: true, active: false, onCollapse() {}, onDeselect() {} });
+    // Keep harness inactive for SSR so descendants use real React hooks.
     hooks.active = false;
+    expect(renderToStaticMarkup(info)).toContain("Создать игру на этой площадке");
+  } finally {
+    Object.assign(hooks, saved);
   }
-  expect(renderToStaticMarkup(info)).toContain("Создать игру на этой площадке");
-  Object.assign(hooks, saved);
   expect(h.change).not.toHaveBeenCalled();
   h.pointer("onPointerUp", 400, 2200); expect(h.change).toHaveBeenLastCalledWith(true);
   vi.advanceTimersByTime(220); expect(h.height()).toBe("88dvh");
