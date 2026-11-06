@@ -6,33 +6,46 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { nearestGameLabel } from "../src/lib/venue-popup";
+// Manual slots only while invoking the root under test as a function; SSR
+// descendants (VenueCover) use real React hooks + lazy useState initializers.
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
-  effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useId: () => "venue-title",
-  useState<T>(initial: T) {
-    const index = hooks.cursor++; const slots = hooks.slots;
-    if (!(index in slots)) slots[index] = initial;
-    return [slots[index], (next: T | ((old: T) => T)) => {
-      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-}));
+  effects: [] as (() => void)[], cleanups: [] as (() => void)[], active: false }));
+vi.mock("react", async importOriginal => {
+  const ReactActual = await importOriginal<typeof React>();
+  const readInitial = <T,>(initial: T | (() => T)): T =>
+    typeof initial === "function" ? (initial as () => T)() : initial;
+  return {
+    ...ReactActual,
+    useId: () => (hooks.active ? "venue-title" : ReactActual.useId()),
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return ReactActual.useState(initial);
+      const index = hooks.cursor++; const slots = hooks.slots;
+      if (!(index in slots)) slots[index] = readInitial(initial);
+      return [slots[index], (next: T | ((old: T) => T)) => {
+        slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) {
+      if (!hooks.active) return ReactActual.useRef(initial);
+      const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial };
+    },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return ReactActual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return ReactActual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+  };
+});
 
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 const venue: VenueSummary = { id: "a", name: "Зал А", address: "Улица 1", cityId: "city", timezone: "Europe/Moscow" };
@@ -46,7 +59,13 @@ function game(startsAt: string, endsAt: string): Game {
 }
 it("renders the real cover and region with named keyboard buttons; opens once", () => {
   const onOpen = vi.fn();
-  const tree = VenuePreviewCard({ venue, games: [], gamesReady: true, now: 0, onOpen });
+  hooks.active = true;
+  let tree: ReturnType<typeof VenuePreviewCard>;
+  try {
+    tree = VenuePreviewCard({ venue, games: [], gamesReady: true, now: 0, onOpen });
+  } finally {
+    hooks.active = false;
+  }
   const html = renderToStaticMarkup(tree);
   expect(html).toContain('role="region" aria-label="Выбранная площадка"');
   expect(html.match(/<button /g)).toHaveLength(2);
@@ -59,7 +78,14 @@ it("renders the real cover and region with named keyboard buttons; opens once", 
   }
   activate(tree); expect(onOpen).toHaveBeenCalledTimes(2);
   const uploadedUrl = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
-  expect(renderToStaticMarkup(<VenuePreviewCard venue={{ ...venue, cover: { uploadedUrl } }} games={[]} gamesReady now={0} onOpen={onOpen} />)).toContain('data-cover="uploaded"');
+  // Pending: per-venue illustration while uploaded photo has not loaded (SSR/first paint).
+  const uploaded = renderToStaticMarkup(<VenuePreviewCard venue={{ ...venue, cover: { uploadedUrl } }} games={[]} gamesReady now={0} onOpen={onOpen} />);
+  expect(uploaded).toContain('data-cover="default"');
+  expect(uploaded).toContain('data-pending="uploaded"');
+  expect(uploaded).toContain('data-fallback="illustration"');
+  expect(uploaded).toContain(uploadedUrl);
+  expect(uploaded).toContain("opacity:0");
+  expect(uploaded.match(/<img /g)).toHaveLength(1);
 });
 it("distinguishes unavailable from checked empty and never shows stale time", () => {
   const games = [game("2026-11-04T10:00:00Z", "2026-11-04T11:00:00Z")];
@@ -103,11 +129,15 @@ function popupHarness(initial: boolean, reduced = false) {
   const change = vi.fn((value: boolean) => { expanded = value; });
   const deselectPopup = vi.fn();
   const run = <T,>(fn: () => T): T => {
-    const saved = { slots: hooks.slots, cursor: hooks.cursor, cleanups: hooks.cleanups, effects: hooks.effects };
-    hooks.slots = state.slots; hooks.cursor = 0; hooks.cleanups = state.cleanups; hooks.effects = [];
-    const result = fn(); hooks.effects.splice(0).forEach(effect => effect());
-    state.slots = hooks.slots; state.cleanups = hooks.cleanups;
-    Object.assign(hooks, saved); return result;
+    const saved = { slots: hooks.slots, cursor: hooks.cursor, cleanups: hooks.cleanups, effects: hooks.effects, active: hooks.active };
+    hooks.slots = state.slots; hooks.cursor = 0; hooks.cleanups = state.cleanups; hooks.effects = []; hooks.active = true;
+    try {
+      const result = fn(); hooks.effects.splice(0).forEach(effect => effect());
+      state.slots = hooks.slots; state.cleanups = hooks.cleanups;
+      return result;
+    } finally {
+      Object.assign(hooks, saved);
+    }
   };
   const contentProps = { venue, games: [], gamesReady: true, now: 0, onCollapse: () => change(false), onDeselect: deselectPopup };
   const renderPopup = () => run(() => {
@@ -155,9 +185,14 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   expect(h.find("gb-venue-popup").props.style).toMatchObject({ transition: "none" });
   expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(false); // the image stays compact until animation ends
   // Render actual expanded info using a separate hook scope before release.
-  const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects };
-  hooks.slots = []; hooks.cursor = 0; hooks.effects = [];
-  const info = VenueSheet({ venue, games: [], gamesReady: true, now: 0, embedded: true, active: false, onCollapse() {}, onDeselect() {} });
+  const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects, active: hooks.active };
+  hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.active = true;
+  let info: ReturnType<typeof VenueSheet>;
+  try {
+    info = VenueSheet({ venue, games: [], gamesReady: true, now: 0, embedded: true, active: false, onCollapse() {}, onDeselect() {} });
+  } finally {
+    hooks.active = false;
+  }
   expect(renderToStaticMarkup(info)).toContain("Создать игру на этой площадке");
   Object.assign(hooks, saved);
   expect(h.change).not.toHaveBeenCalled();

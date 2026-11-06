@@ -6,33 +6,47 @@ import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
 // Explicit effect/state harness: real component, transport, pagination, timers and cards.
 // No browser dependency is installed in this source checkout.
+// Manual slots apply only while invoking the root under test as a function; SSR
+// descendants (VenueCover/VenueGallery/GameCover) keep real React hook state so
+// they never reuse VenueSheet's gameId=null slot or skip useState lazy init.
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
-  effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useId: () => "venue-title",
-  useState<T>(initial: T) {
-    const index = hooks.cursor++; const slots = hooks.slots;
-    if (!(index in slots)) slots[index] = initial;
-    return [slots[index], (next: T | ((old: T) => T)) => {
-      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-}));
+  effects: [] as (() => void)[], cleanups: [] as (() => void)[], active: false }));
+vi.mock("react", async importOriginal => {
+  const ReactActual = await importOriginal<typeof React>();
+  const readInitial = <T,>(initial: T | (() => T)): T =>
+    typeof initial === "function" ? (initial as () => T)() : initial;
+  return {
+    ...ReactActual,
+    useId: () => (hooks.active ? "venue-title" : ReactActual.useId()),
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return ReactActual.useState(initial);
+      const index = hooks.cursor++; const slots = hooks.slots;
+      if (!(index in slots)) slots[index] = readInitial(initial);
+      return [slots[index], (next: T | ((old: T) => T)) => {
+        slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) {
+      if (!hooks.active) return ReactActual.useRef(initial);
+      const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial };
+    },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return ReactActual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return ReactActual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+  };
+});
 
 import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
@@ -72,12 +86,19 @@ const first = new FocusTarget(); const last = new FocusTarget(); const initiator
 const collapse = vi.fn(); const deselect = vi.fn(); const focus = first.focus;
 let props: React.ComponentProps<typeof VenueSheet>;
 function render() {
-  hooks.cursor = 0; const tree = VenueSheet(props);
-  for (const node of elements(tree)) {
-    const ref = node.props.ref as { current: unknown } | undefined;
-    if (ref) ref.current = node.props.className === "gb-venue-sheet" ? panel : first;
+  hooks.cursor = 0; hooks.active = true;
+  let tree: ReturnType<typeof VenueSheet>;
+  try {
+    tree = VenueSheet(props);
+    for (const node of elements(tree)) {
+      const ref = node.props.ref as { current: unknown } | undefined;
+      if (ref) ref.current = node.props.className === "gb-venue-sheet" ? panel : first;
+    }
+    hooks.effects.splice(0).forEach(effect => effect());
+  } finally {
+    hooks.active = false;
   }
-  hooks.effects.splice(0).forEach(effect => effect()); return tree;
+  return tree;
 }
 const handle = new FocusTarget();
 let excludedTargets: FocusTarget[] = [];
@@ -213,11 +234,15 @@ function popupHarness(initial: boolean, reduced = false) {
   const change = vi.fn((value: boolean) => { expanded = value; });
   const deselectPopup = vi.fn();
   const run = <T,>(fn: () => T): T => {
-    const saved = { slots: hooks.slots, cursor: hooks.cursor, cleanups: hooks.cleanups, effects: hooks.effects };
-    hooks.slots = state.slots; hooks.cursor = 0; hooks.cleanups = state.cleanups; hooks.effects = [];
-    const result = fn(); hooks.effects.splice(0).forEach(effect => effect());
-    state.slots = hooks.slots; state.cleanups = hooks.cleanups;
-    Object.assign(hooks, saved); return result;
+    const saved = { slots: hooks.slots, cursor: hooks.cursor, cleanups: hooks.cleanups, effects: hooks.effects, active: hooks.active };
+    hooks.slots = state.slots; hooks.cursor = 0; hooks.cleanups = state.cleanups; hooks.effects = []; hooks.active = true;
+    try {
+      const result = fn(); hooks.effects.splice(0).forEach(effect => effect());
+      state.slots = hooks.slots; state.cleanups = hooks.cleanups;
+      return result;
+    } finally {
+      Object.assign(hooks, saved);
+    }
   };
   const contentProps = { venue, games: [], gamesReady: true, now: 0, onCollapse: () => change(false), onDeselect: deselectPopup };
   const renderPopup = () => run(() => {
@@ -281,9 +306,14 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   // Image stays in compact cover instead of mounting full VenueSheet on first move.
   expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(false);
   // Render actual expanded info using a separate hook scope before release.
-  const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects };
-  hooks.slots = []; hooks.cursor = 0; hooks.effects = [];
-  const info = VenueSheet({ venue, games: [], gamesReady: true, now: 0, embedded: true, active: false, onCollapse() {}, onDeselect() {} });
+  const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects, active: hooks.active };
+  hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.active = true;
+  let info: ReturnType<typeof VenueSheet>;
+  try {
+    info = VenueSheet({ venue, games: [], gamesReady: true, now: 0, embedded: true, active: false, onCollapse() {}, onDeselect() {} });
+  } finally {
+    hooks.active = false;
+  }
   expect(renderToStaticMarkup(info)).toContain("Создать игру на этой площадке");
   Object.assign(hooks, saved);
   expect(h.change).not.toHaveBeenCalled();
