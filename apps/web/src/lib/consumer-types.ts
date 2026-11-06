@@ -255,6 +255,12 @@ export type CreateVenueInput = {
 };
 
 /** Existing V1a public projection; absent on older API versions. */
+export type VenueCatalogSource = {
+  provider: "badminton4u.ru";
+  venueId: string;
+  clubs: { id: string; name: string; url: string }[];
+};
+
 export type VenueProfile = {
   courtCount: number | null;
   amenities: { parking: boolean | null; showers: boolean | null };
@@ -270,6 +276,8 @@ export type VenueProfile = {
       credit: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null };
     }[];
   };
+  /** Optional public business-source credit; omitted for legacy venues. */
+  catalogSource?: VenueCatalogSource | null;
 };
 
 export type Venue = CreateVenueInput & {

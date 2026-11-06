@@ -4,6 +4,7 @@ import { z } from "zod";
 import { httpsCreditUrl } from "../lib/original-http-authority";
 import { publicContactUrl } from "./public-venue-contacts";
 import { mapPublicGalleryItem, type PublicGalleryItem, type VenueGalleryItemRow } from "./venue-gallery";
+import { parseVenueCatalogSource, type VenueCatalogSource } from "./venue-catalog-source";
 
 const ajv = new Ajv2020();
 addFormats(ajv);
@@ -39,6 +40,8 @@ export type VenueProfileRow = {
   cover_credit_text?: unknown;
   cover_credit_url?: unknown;
   gallery_items?: unknown;
+  /** Internal only — never leaked as raw markers on the wire. */
+  review_markers?: unknown;
 };
 export type VenueProfile = {
   courtCount: number | null;
@@ -49,11 +52,13 @@ export type VenueProfile = {
     coverage: "ordered";
     items: PublicGalleryItem[];
   };
+  /** Optional public business-source credit; omitted for legacy/invalid markers. */
+  catalogSource?: VenueCatalogSource;
 };
 
 /** Per-key extraction is safe even on schema 0039, before description exists. */
 export function venueProfileSelectSql(relation: "v" | "venues"): string {
-  return ["court_count", "amenity_parking", "amenity_showers", "public_description", "public_profile_updated_at"]
+  return ["court_count", "amenity_parking", "amenity_showers", "public_description", "public_profile_updated_at", "review_markers"]
     .map((key) => `to_jsonb(${relation})->'${key}' AS ${key}`).join(", ");
 }
 
@@ -125,7 +130,7 @@ export function readVenueProfile(row: VenueProfileRow): VenueProfile {
   const rawDate = row.public_profile_updated_at;
   const date = rawDate instanceof Date ? rawDate
     : typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}T/.test(rawDate) ? new Date(rawDate) : null;
-  return {
+  const profile: VenueProfile = {
     courtCount: typeof count === "number" && Number.isInteger(count) && count >= 0 && count <= 2147483647 ? count : null,
     amenities: {
       parking: typeof row.amenity_parking === "boolean" ? row.amenity_parking : null,
@@ -135,4 +140,7 @@ export function readVenueProfile(row: VenueProfileRow): VenueProfile {
     updatedAt: date && Number.isFinite(date.getTime()) ? date.toISOString() : null,
     gallery: { coverage: "ordered", items: readOrderedGallery(row) },
   };
+  const catalogSource = parseVenueCatalogSource(row.review_markers);
+  if (catalogSource) profile.catalogSource = catalogSource;
+  return profile;
 }

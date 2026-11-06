@@ -4,6 +4,7 @@ import type { Venue, VenueProfile } from "../../../lib/consumer-types";
 import { httpsCreditUrl } from "../../../lib/original-http-authority";
 import { VenueCover, venueCoverUrl } from "./VenueCover";
 import { VenueCoverCredit } from "./VenueCoverCredit";
+import { VenueSourceCredit, safeCatalogSource } from "./VenueSourceCredit";
 import "../../../styles/venue-gallery.css";
 
 export type GalleryItem = VenueProfile["gallery"]["items"][number];
@@ -209,10 +210,23 @@ export function VenueGallery({
     event.stopPropagation();
   }
 
+  const catalogSource = "profile" in venue ? venue.profile?.catalogSource : undefined;
+  // Avoid empty credit wrappers in compact picker thumbs when there is nothing to show.
+  const sourceCredit = safeCatalogSource(catalogSource)
+    ? <VenueSourceCredit catalogSource={catalogSource} />
+    : null;
+
   if (items.length === 0) {
-    // Preserve parent morph/fallback slot when gallery has no items; do not invent credit.
-    if (coverSlot) return <>{coverSlot}</>;
-    return <VenueCover cover={venue.cover} name={venue.name} className={className} venueId={venue.id} />;
+    // Preserve parent morph/fallback slot when gallery has no items; do not invent photo credit.
+    // Source attribution still renders for every presented venue (including fallback cover).
+    const emptyCredit = sourceCredit ? <div className="gb-venue-gallery__credit">{sourceCredit}</div> : null;
+    if (coverSlot) {
+      return <>{coverSlot}{emptyCredit}</>;
+    }
+    return <>
+      <VenueCover cover={venue.cover} name={venue.name} className={className} venueId={venue.id} />
+      {emptyCredit}
+    </>;
   }
 
   const showControls = items.length > 1 && size !== "compact";
@@ -268,9 +282,12 @@ export function VenueGallery({
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>
       </>}
     </div>
-    {showCredit && current ? <div className="gb-venue-gallery__credit"><VenueCoverCredit credit={failed === current.url || mainLoanFallback
-      ? { kind: "illustration", text: "Иллюстрация", url: null }
-      : current.credit} /></div> : null}
+    {(showCredit && current) || sourceCredit ? <div className="gb-venue-gallery__credit">
+      {showCredit && current ? <VenueCoverCredit credit={failed === current.url || mainLoanFallback
+        ? { kind: "illustration", text: "Иллюстрация", url: null }
+        : current.credit} /> : null}
+      {sourceCredit}
+    </div> : null}
   </div>;
 }
 

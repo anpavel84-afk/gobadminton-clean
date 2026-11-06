@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.29" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.30" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.34.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.35.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,19 +424,23 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.29",
-  "title": "Актуальная помощь и проверка готовности",
+  "application_version": "0.1.0-alpha.30",
+  "title": "Региональные карты и источник площадок",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
+  "additions": [
+    "Карты ещё 11 городов для поиска игр и площадок",
+    "Видимая ссылка на источник badminton4u.ru у импортированных площадок",
+    "Каталог площадок новых городов с данными клубов"
+  ],
   "fixes": [
-    "Убрано устаревшее объяснение обязательного одобрения первого личного сообщения",
-    "Зафиксированы оставшиеся проверки документов, поддержки, удаления аккаунта и устройств перед пилотом"
+    "Площадки за пределами 40 км не попадают в подборку нового города"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
-    "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно",
-    "Проверка уведомлений на настоящем iPhone ещё не выполнена"
+    "Часть сведений о площадках ещё находится на проверке",
+    "Новые карты ещё ожидают проверки на мобильных устройствах",
+    "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
   ],
   "feature_catalogue": "delta"
 };
@@ -1417,6 +1421,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем ещё не выполнена",
       "Публикация отзыва о площадке требует независимой проверки точной редакции и паузы 48 часов",
       "Раздел Admin служебный; тестовая геопозиция не для обычных пользователей"
+    ]
+  },
+
+  {
+    "source_sha": "76490b2be720e9f6b923bd3db477fb6065d6d13c",
+    "application_version": "0.1.0-alpha.29",
+    "version_label": "0.1.0-alpha.29",
+    "title": "Актуальная помощь и проверка готовности",
+    "api_contract_version": "0.34.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r41954344736-a1",
+        "accepted_at": "2026-11-05T02:24:52Z",
+        "api_digest": "sha256:e64b5c6f9ea34c69fe7d87ef3d6d21e52facf4bac370a48570b1d4eecde36a1b",
+        "web_digest": "sha256:6c500ba801385cb62e8a753c9d5d86912bf4953ea53c86dbddc1f6f4bc62451c",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Убрано устаревшее объяснение обязательного одобрения первого личного сообщения",
+      "Зафиксированы оставшиеся проверки документов, поддержки, удаления аккаунта и устройств перед пилотом"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно",
+      "Проверка уведомлений на настоящем iPhone ещё не выполнена"
     ]
   },
 
