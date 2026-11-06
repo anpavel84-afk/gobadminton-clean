@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.33" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.34" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
@@ -424,14 +424,13 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.33",
-  "title": "Приватные функции игры и загрузка обложек",
+  "application_version": "0.1.0-alpha.34",
+  "title": "Имя тренера на телефоне",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "Закрытые и приватные функции игры запрашиваются только там, где они доступны",
-    "В выборе площадки обложки больше не показывают пустые ячейки во время загрузки"
+    "На телефоне имя тренера и отзывы отображаются отдельными читаемыми блоками"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
@@ -1541,6 +1540,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем ещё не выполнена",
       "Часть сведений о площадках ещё находится на проверке",
       "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
+    ]
+  },
+
+  {
+    "source_sha": "ebebea18f216260f8ecd7de8e4c450d157b21a5b",
+    "application_version": "0.1.0-alpha.33",
+    "version_label": "0.1.0-alpha.33",
+    "title": "Приватные функции игры и загрузка обложек",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42290038408-a1",
+        "accepted_at": "2026-11-06T20:43:19Z",
+        "api_digest": "sha256:ca0e416f2bb09ef43fe7008a4478440886c429baf0cdb33cdb184eae9b8ccaa6",
+        "web_digest": "sha256:4004b085adafc4bae0cada62310266a53d787a858875a7f37b3ff15e3a15a59d",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Закрытые и приватные функции игры запрашиваются только там, где они доступны",
+      "В выборе площадки обложки больше не показывают пустые ячейки во время загрузки"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
     ]
   },
 
