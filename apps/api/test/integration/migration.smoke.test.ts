@@ -197,6 +197,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0056_postgame_reminders",
         "0057_dev_qa_admin",
         "0058_venue_experience_reviews",
+        "0059_regional_discovery_preferences",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]

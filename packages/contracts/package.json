@@ -8,7 +8,8 @@
     "./openapi.json": "./openapi.json",
     "./package.json": "./package.json",
     "./game-types": "./src/game.generated.ts",
-    "./friendship-types": "./src/friendship.generated.ts"
+    "./friendship-types": "./src/friendship.generated.ts",
+    "./regional-cities": "./src/regional-cities.ts"
   },
   "scripts": {
     "check": "node ./scripts/check-openapi.mjs",
@@ -31,6 +32,9 @@
       ],
       "friendship-types": [
         "src/friendship.generated.ts"
+      ],
+      "regional-cities": [
+        "src/regional-cities.ts"
       ]
     }
   }

@@ -1,3 +1,5 @@
+import { regionalCityById } from "@gobadminton/contracts/regional-cities";
+
 export type SelectedLocation = {
   cityId: string;
   nameRu: string;
@@ -7,13 +9,16 @@ export type SelectedLocation = {
 const STORAGE_KEY = "gb.consumer.location.v1";
 const INTENT_KEY = "gb.consumer.authIntent.v1";
 
-// Owner's two city-selection groups: Москва includes МО;
-// Санкт-Петербург includes ЛО. Invalidate stale borough/city IDs
-// left in sessionStorage by the superseded bulk Venue import.
-const SUPPORTED_CITY_IDS = new Set([
-  "a0000000-0000-4000-8000-000000000001",
-  "a0000000-0000-4000-8000-000000000002",
-]);
+const MOSCOW = "a0000000-0000-4000-8000-000000000001";
+const PETERSBURG = "a0000000-0000-4000-8000-000000000002";
+
+/** Derive canonical label/timezone; never trust caller or storage metadata. */
+function canonicalSelectedLocation(cityId: string): SelectedLocation | null {
+  if (cityId === MOSCOW) return { cityId: MOSCOW, nameRu: "Москва", timezone: "Europe/Moscow" };
+  if (cityId === PETERSBURG) return { cityId: PETERSBURG, nameRu: "Санкт-Петербург", timezone: "Europe/Moscow" };
+  const regional = regionalCityById(cityId);
+  return regional ? { cityId: regional.id, nameRu: regional.nameRu, timezone: regional.timezone } : null;
+}
 
 export function readSelectedLocation(): SelectedLocation | null {
   if (typeof window === "undefined") return null;
@@ -22,19 +27,21 @@ export function readSelectedLocation(): SelectedLocation | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as SelectedLocation;
     if (!parsed?.cityId || !parsed?.nameRu) return null;
-    if (!SUPPORTED_CITY_IDS.has(parsed.cityId)) {
+    const canonical = canonicalSelectedLocation(parsed.cityId);
+    if (!canonical) {
       try { window.sessionStorage.removeItem(STORAGE_KEY); } catch { /* optional legacy cache */ }
       return null;
     }
-    return { cityId: parsed.cityId, nameRu: parsed.cityId.endsWith("1") ? "Москва" : "Санкт-Петербург", timezone: "Europe/Moscow" };
+    return canonical;
   } catch {
     return null;
   }
 }
 
 export function writeSelectedLocation(location: SelectedLocation): void {
-  if (!SUPPORTED_CITY_IDS.has(location.cityId)) return;
-  try { window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(location)); } catch { /* legacy session seed only */ }
+  const canonical = canonicalSelectedLocation(location.cityId);
+  if (!canonical) return;
+  try { window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(canonical)); } catch { /* legacy session seed only */ }
 }
 
 export function clearSelectedLocation(): void {

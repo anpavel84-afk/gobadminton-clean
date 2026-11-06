@@ -1,3 +1,4 @@
+import { regionalCityById } from "@gobadminton/contracts/regional-cities";
 import { apiFetch, type ApiResult } from "./api-client";
 import type { Me } from "./consumer-types";
 import type { SelectedLocation } from "./location-context";
@@ -6,9 +7,13 @@ export const DISCOVERY_CITY_KEY = "gb.consumer.discoveryCity.v2";
 export const MOSCOW = "a0000000-0000-4000-8000-000000000001";
 export const PETERSBURG = "a0000000-0000-4000-8000-000000000002";
 const YEAR = 365 * 86400000;
-// The two frozen catalog groups; never trust caller/storage labels or municipalities.
+// Thirteen approved discovery cities; never trust caller/storage labels or municipalities.
 export function supportedLocation(id: unknown): SelectedLocation | null {
-  return id === MOSCOW || id === PETERSBURG ? { cityId: id, nameRu: id === MOSCOW ? "Москва" : "Санкт-Петербург", timezone: "Europe/Moscow" } : null;
+  if (id === MOSCOW) return { cityId: MOSCOW, nameRu: "Москва", timezone: "Europe/Moscow" };
+  if (id === PETERSBURG) return { cityId: PETERSBURG, nameRu: "Санкт-Петербург", timezone: "Europe/Moscow" };
+  if (typeof id !== "string") return null;
+  const regional = regionalCityById(id);
+  return regional ? { cityId: regional.id, nameRu: regional.nameRu, timezone: regional.timezone } : null;
 }
 export type ManualCity = { cityId: string; source: "manual"; savedAt: number; expiresAt: number; serverVersion?: number; sync: "pending" | "acknowledged" };
 type DeviceCities = { guest?: ManualCity; accounts: Record<string, ManualCity> };

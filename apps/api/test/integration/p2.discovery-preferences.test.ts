@@ -524,4 +524,41 @@ describeIntegration("P2 private discovery preference on real PostgreSQL/PostGIS"
     expect(replay).toContain("skip 0024_user_discovery_preferences");
     expect((await pool.query("SELECT * FROM schema_migrations ORDER BY id")).rows).toEqual(before);
   });
+
+  it("accepts regional discovery preference with synthetic city rows; keeps Moscow/SPB; rejects arbitrary; rollback retains regional rows", async () => {
+    const novosibirsk = "1775016f-373e-5a15-958b-1305770b2b16";
+    const arbitrary = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    await pool.query(
+      `INSERT INTO cities(id,country_code,name_ru,name_en,default_timezone)
+       VALUES ($1,'RU','Новосибирск','Novosibirsk','Asia/Novosibirsk'),
+              ($2,'RU','Arbitrary','Arbitrary','Europe/Moscow')
+       ON CONFLICT DO NOTHING`,
+      [novosibirsk, arbitrary],
+    );
+    try {
+      expect((await put(owner, { cityId: moscow, expectedVersion: 0 })).json()).toEqual({ cityId: moscow, version: 1 });
+      expect((await put(owner, { cityId: petersburg, expectedVersion: 1 })).json()).toEqual({ cityId: petersburg, version: 2 });
+      expect((await put(owner, { cityId: novosibirsk, expectedVersion: 2 })).json()).toEqual({ cityId: novosibirsk, version: 3 });
+      expect((await get(owner)).json()).toEqual({ cityId: novosibirsk, version: 3 });
+      const rejected = await put(owner, { cityId: arbitrary, expectedVersion: 3 });
+      expect(rejected.statusCode).toBe(422);
+      expect((await get(owner)).json()).toEqual({ cityId: novosibirsk, version: 3 });
+
+      const beforeRollback = (await pool.query(
+        `SELECT city_id AS "cityId", version FROM user_discovery_preferences WHERE user_id=$1`,
+        [owner.userId],
+      )).rows[0];
+      expect(beforeRollback).toEqual({ cityId: novosibirsk, version: 3 });
+      await expect(
+        pool.query(readFileSync(path.join(apiRoot, "migrations/rollback/0059_regional_discovery_preferences.sql"), "utf8")),
+      ).rejects.toThrow(/rollback 0059 blocked: regional discovery preferences exist/);
+      expect((await pool.query(
+        `SELECT city_id AS "cityId", version FROM user_discovery_preferences WHERE user_id=$1`,
+        [owner.userId],
+      )).rows[0]).toEqual(beforeRollback);
+    } finally {
+      await pool.query("DELETE FROM user_discovery_preferences WHERE user_id=$1", [owner.userId]);
+      await pool.query("DELETE FROM cities WHERE id=ANY($1::uuid[])", [[novosibirsk, arbitrary]]);
+    }
+  });
 });
