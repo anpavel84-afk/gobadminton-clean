@@ -162,6 +162,17 @@
   display: block;
   margin-top: 8px;
 }
+.gb-venue-gallery__credit > .gb-venue-source-credit {
+  display: block;
+}
+.gb-venue-gallery__credit > .gb-venue-cover-credit + .gb-venue-source-credit {
+  margin-top: 4px;
+}
+/* Source links must not inherit card/button hit targets in compact picker thumbs. */
+.gb-venue-gallery-wrap .gb-venue-source-credit a {
+  position: relative;
+  z-index: 1;
+}
 .gb-desktop-map-inspector .gb-venue-gallery,
 .gb-venue-sheet[data-desktop="true"] .gb-venue-gallery {
   max-height: 200px;

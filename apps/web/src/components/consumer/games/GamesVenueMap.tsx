@@ -12,7 +12,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { filterVenuesForMapLayer } from "../../../lib/map-layer-filters";
-import { MOSCOW_BUNDLE, allowedMapResource, isApprovedAppOrigin, mapBundleForCity, mapIdForBundle, pointInBundleBounds, type FixedMapBundle } from "../../../lib/radar-map-assets";
+import { MOSCOW_BUNDLE, allowedMapResource, cityLabelForBundle, isApprovedAppOrigin, mapBundleForCity, pointInBundleBounds, type FixedMapBundle } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 import { useMapLayerFilters } from "./MapLayerFilters";
 /** Moscow keeps the legacy unscoped key; other supported cities are scoped. */
@@ -26,9 +26,13 @@ function sessionStorageVenue(cityId: string) {
   try { return sessionStorage.getItem(selectedStorageKey(cityId)); } catch { return null; }
 }
 function mapAriaLabel(bundle: FixedMapBundle) {
-  return mapIdForBundle(bundle) === "saint-petersburg"
-    ? "Карта Санкт-Петербурга: стрелки перемещают карту, плюс и минус меняют масштаб"
-    : "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб";
+  const city = cityLabelForBundle(bundle);
+  // Keep accepted Moscow/SPb genitive phrasing; regional packs use the real city label.
+  const place =
+    city === "Москва" ? "Москвы"
+    : city === "Санкт-Петербург" ? "Санкт-Петербурга"
+    : city;
+  return `Карта ${place}: стрелки перемещают карту, плюс и минус меняют масштаб`;
 }
 interface VenueMarkerEntry {
   marker: maplibregl.Marker;

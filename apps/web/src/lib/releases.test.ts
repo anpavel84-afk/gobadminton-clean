@@ -10,9 +10,9 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.29 with API 0.34.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.29");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.34.0");
+  it("bumps current descriptor to alpha.30 with API 0.35.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.30");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.35.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(CURRENT_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
@@ -25,9 +25,17 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/помощ|готовност/i);
-    expect(prose).toMatch(/сообщен|документ/i);
+    expect(prose).toMatch(/карт|источник|импорт/i);
+    expect(prose).toMatch(/VERIFY|визуальн|приёмк/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE/i);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.29" &&
+          row.source_sha === "76490b2be720e9f6b923bd3db477fb6065d6d13c" &&
+          row.deployments[0]?.release_id === "r41954344736-a1",
+      ),
+    ).toBe(true);
   });
 
   it("preserves alpha.19/alpha.20/alpha.21 historical seeds and prior alphas", () => {

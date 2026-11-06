@@ -3,9 +3,11 @@ import type { UnifiedSnapshot } from "@gobadminton/contracts";
 import {
   MOSCOW_BUNDLE,
   SAINT_PETERSBURG_BUNDLE,
+  REGIONAL_MAP_PACKS,
   allowedMapResource,
   candidateMapAllowed,
   candidateMapConfigAllowed,
+  cityLabelForBundle,
   mapBundleForCity,
   mapIdForBundle,
   pointInBundleBounds,
@@ -101,5 +103,28 @@ describe("closed Moscow + Saint Petersburg map packs", () => {
     expect(pointInBundleBounds(37.6176, 55.7517, SAINT_PETERSBURG_BUNDLE)).toBe(false);
     expect(pointInBundleBounds(37.6176, 55.7517, MOSCOW_BUNDLE)).toBe(true);
     expect(pointInBundleBounds(30.3158, 59.9391, MOSCOW_BUNDLE)).toBe(false);
+  });
+});
+
+describe("eleven regional fixed map packs (#485)", () => {
+  it("pins exact metadata for all 11 packs without changing Moscow/SPb literals", () => {
+    expect(REGIONAL_MAP_PACKS).toHaveLength(11);
+    expect(MOSCOW_BUNDLE.version).toBe("moscow-20261007-p4-098a869f-v001");
+    expect(SAINT_PETERSBURG_BUNDLE.version).toBe("saint-petersburg-20261104-p4-b7d3b1a8-v001");
+    expect(new Set(REGIONAL_MAP_PACKS.map((p) => p.cityId)).size).toBe(11);
+    for (const pack of REGIONAL_MAP_PACKS) {
+      expect(mapBundleForCity(pack.cityId)).toEqual(pack);
+      expect(mapIdForBundle(pack)).toBe(pack.mapId);
+      expect(cityLabelForBundle(pack)).toBe(pack.cityLabel);
+      expect(cityLabelForBundle(pack)).not.toBe("Москва");
+      expect(allowedMapResource(`${pack.prefix}style-dev.json`, pack)).toBe(true);
+      expect(pointInBundleBounds(pack.center[0], pack.center[1], pack)).toBe(true);
+      const [[, south], [, north]] = pack.bounds;
+      expect(pointInBundleBounds(pack.center[0], north + (north - south), pack)).toBe(false);
+    }
+    const a = REGIONAL_MAP_PACKS[0]!;
+    const b = REGIONAL_MAP_PACKS[1]!;
+    expect(allowedMapResource(`${b.prefix}style-dev.json`, a)).toBe(false);
+    expect(mapBundleForCity("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")).toBeNull();
   });
 });

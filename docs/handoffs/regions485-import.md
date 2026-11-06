@@ -1,111 +1,31 @@
-# Regions #485 — bounded Badminton4u import adapter (DEV)
+# Regions #485 — fixed maps, public attribution, operator QA repair
 
-Source-only OPS adapter for Owner Direct #485. Publishes reviewed `import_ready=yes` regional venues into the existing catalog using current admin/audit/normalize primitives. No product redesign, no PROD, no author-side apply.
+Source-only work for Owner Direct #485 (attempt 2). Continues the DEV import adapter and adds public regional map packs + business-source credits. No PROD, no author-side apply/deploy/GitHub.
 
-## Files
+## Files (this milestone)
 
-- `tools/venues/import-badminton4u-regions.cjs` — CommonJS CLI + exported validator/planner/runner
-- `tools/venues/import-badminton4u-regions.test.cjs` — `node:test` pure validation / injectable client tests
+- `tools/venues/import-badminton4u-regions.cjs` (+ `.test.cjs`) — QA repair: actor lock SQL shape, contact provenance, PostGIS-authoritative 40 km / 150 m
+- `packages/contracts/src/regional-cities.ts` — immutable 11 city UUID/center/timezone/40 km literals
+- `apps/web/src/lib/regional-map-packs.ts` — 11 packaged Protomaps 4.15.2 descriptors (not published by author)
+- `apps/web/src/lib/radar-map-assets.ts` — `mapBundleForCity` / `mapIdForBundle` extended for the 11 packs only
+- `apps/api/src/venues/venue-catalog-source.ts` — strict `B4U_SOURCE_V1` → public `catalogSource`
+- `apps/api/src/venues/venue-profile.ts` / `venues.service.ts` — profile projection + regional `ST_DWithin(…, 40000)` on catalog search for the 11 ids only
+- `apps/web/src/components/consumer/venues/VenueSourceCredit.tsx` (+ gallery wiring)
+- `apps/web/src/lib/releases.ts` — alpha.30 / API 0.35.0 candidate; historical seed for accepted alpha.29 only (no fake candidate receipt)
 - This handoff
+
+## Operator QA repairs (independent FAIL → fix)
+
+1. **Actor lock** — `FOR UPDATE OF p,u` on a non-aggregate principal+user query, then separate `GROUP BY` grants read (revocation serialization preserved).
+2. **Contact provenance** — every nonempty public phone/website/messenger requires a matching `contactSources` `{contactType,value}`; empty contacts remain valid.
+3. **Spatial authority** — spherical haversine never rejects 40 km or 150 m; `ST_DWithin` geography is authoritative for city radius, existing catalog pairs, and new batch pairs.
 
 ## Runtime assumptions
 
-Execute inside the existing API container with cwd `/app/apps/api` so `createRequire(./package.json)` resolves `pg`, `./dist/venues/venue-normalize.js`, `./dist/admin/admin-db.js`, and `./dist/config/env.js`.
+Execute import inside the existing API container (`cwd` `/app/apps/api`). Trusted parent owns: disposable PostGIS integration, map-asset publication, reviewed manifest `--apply` on DEV, Product CI, and DEV acceptance. Author must not run live import/deploy.
 
-Trusted parent owns: disposable PostGIS integration, deploy locks, reviewed manifest preparation, `--apply` on DEV, and DEV acceptance. Author must not run live import/deploy.
+## Out of scope / limitations
 
-## Manifest schema `REGIONS485_IMPORT_V1`
-
-Allowlisted top-level keys only:
-
-| Key | Rule |
-| --- | --- |
-| `schema` | Exact `REGIONS485_IMPORT_V1` |
-| `batch` | Short slug `[a-z0-9][a-z0-9_-]{0,63}` |
-| `sourceArchiveSha256` | Exact `18022f227b237cd7d5b5e193dd0bf1c7b299c843297c4a356b6e2f9cb837221e` |
-| `cities` | Exact **11** approved cities (Челябинск / Уфа / Пермь excluded) |
-| `venues` | 0..50 reviewed rows; FIRST_15 is the publication priority, not a hard schema count |
-
-### Cities (11)
-
-Frozen `nameRu` → IANA timezone / `nameEn` (validated with `Intl.DateTimeFormat`):
-
-- Новосибирск → `Asia/Novosibirsk` / Novosibirsk
-- Екатеринбург → `Asia/Yekaterinburg` / Yekaterinburg
-- Казань → `Europe/Moscow` / Kazan
-- Нижний Новгород → `Europe/Moscow` / Nizhny Novgorod
-- Самара → `Europe/Samara` / Samara
-- Омск → `Asia/Omsk` / Omsk
-- Ростов-на-Дону → `Europe/Moscow` / Rostov-on-Don
-- Красноярск → `Asia/Krasnoyarsk` / Krasnoyarsk
-- Воронеж → `Europe/Moscow` / Voronezh
-- Волгоград → `Europe/Volgograd` / Volgograd
-- Краснодар → `Europe/Moscow` / Krasnodar
-
-Each city also supplies: deterministic `id` (trusted preparation UUIDv5), `centerLatitude` / `centerLongitude`, `centerSourceUrl` (https), `centerCheckedAt`.
-
-### Venues
-
-Required: `id`, `sourceVenueId` (`B4U-V-` + 8 uppercase hex), `name`, `address`, `cityId`, `latitude`, `longitude`, `importReady` literal `yes`, `sourceUrls` (`https://badminton4u.ru/clubs/<digits>`), `clubSources` (`clubId` `B4U-C-<digits>` + name + matching url), `collectedAt`, `nameBasis` (`SOURCE_VENUE_NAME` \| `EXPLICIT_SOURCE_CLUB_LABEL`), `contactSources`.
-
-Optional: `publicContacts` (normal app shape only; empty/null OK; no private fields), `courtCount` ≥ 0.
-
-`id` must equal UUIDv5 (URL namespace) of `gobadminton:badminton4u:` + `sourceVenueId`.
-
-New venues are forced within **40 km** (inclusive) of their city center via planning haversine + SQL `ST_DWithin` (does not filter historical Moscow/SPb catalog rows). Source coordinates are never adjusted.
-
-Unknown keys / `privateRaw*` / unsafe URLs / empty title|address / invalid coords / duplicates / club URL mismatches are hard rejects. Held-for-review rows must not appear in the manifest. Photos/logos/about/reviews are out of scope; cover fallback remains the existing deterministic media path.
-
-A distinct later manifest may carry the 13 explicit source-club fallback names. Flagged phone venues omit phone values until proof.
-
-## Operator CLI
-
-```bash
-# default: READ ONLY transaction, no audit/write
-node /path/to/tools/venues/import-badminton4u-regions.cjs \
-  --manifest /reviewed/regions485.json \
-  --manifest-sha256 <sha256-of-file-bytes> \
-  --actor-principal-id <active-principal-uuid>
-
-# disposable full write path then ROLLBACK
-node ... --manifest ... --manifest-sha256 ... --actor-principal-id ... --trial-rollback
-
-# trusted DEV apply (parent only after QA/CI)
-node ... --manifest ... --manifest-sha256 ... --actor-principal-id ... --apply
-```
-
-`--actor-principal-id` must be an active principal bound to an active user with active `superadmin` or `content_manager` (`venue.manage`) grant. No session/grant minting.
-
-Modes:
-
-- `DRY_RUN` — `BEGIN` + `SET TRANSACTION READ ONLY`, plan only, `ROLLBACK`
-- `APPLY` — `adminTransaction` (admin authority lock) + `gobadminton_venue_catalog` lock, commit
-- `TRIAL_ROLLBACK` — same locks/writes/audits as apply, then `ROLLBACK`
-
-## Write contract
-
-- Insert missing cities (`country_code=RU`); exact id/name/timezone reuse; conflicts abort the whole batch
-- Insert only **new** venues: `lifecycle_state`/`data_status` = `unverified`, `provenance` = `admin_created`, `created_by_user_id` = validated actor user id
-- Identity via existing `venue-normalize` + `venue_identity_keys`
-- Durable `review_markers` strings: `SOURCE_VENUE_ID=…`, `REGIONS485_DIGEST=…`, `B4U_SOURCE_V1=<json>`, `B4U_CONTACTS_V1=<json>`
-- Per new venue: `appendAudit` (`venue.manage`, reason `owner_regions485_import`) + `venue_admin_actions` + `outbox_events` (same shape as `AdminVenuesService.create`)
-- Exact id/source replay with identical immutable facts + contacts + identity → **SKIP**, zero writes/audits
-- Contact drift on an existing row → conflict (never overwrite admin-edited contacts)
-- Address normalized equality **and** `ST_DWithin` ≤ 150 m with a different id → abort (no auto-merge; name alone never merges)
-- No edits/deletes of existing venues/games/users; no status promotion; baseline unrelated venues retained
-- stdout: sanitized JSON counts/ids/digest/transactionMode only (no secrets, env, or private fields)
-
-## Tests
-
-```bash
-node --test tools/venues/import-badminton4u-regions.test.cjs
-```
-
-Parent still runs disposable PostGIS integration before any DEV `--apply`.
-
-## Out of scope / limitations (this milestone)
-
-- Business attribution UI, map packs, and other #485 product surfaces
-- Live DB apply, GitHub mutations, PROD, pipeline/`.github` changes
-- Replaying the historical 106-row importer (DEMO deletion, game reassignment, municipality reconstruction) — reference only
-- Claiming QA PASS or DEV ACCEPTED
+- Claiming Mode B / AGY READY, QA PASS, or DEV ACCEPTED
+- PROD, main merge, gallery rewrite, Radar people-region expansion, UnifiedMap enum expansion
+- Fake deploy receipt/date for the current alpha.30 candidate

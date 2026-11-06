@@ -502,15 +502,8 @@ function validateVenue(venue, citiesById, seenVenueIds, seenSourceIds) {
   if (venue.latitude < -90 || venue.latitude > 90 || venue.longitude < -180 || venue.longitude > 180) {
     fail("INVALID_VENUE_COORDS");
   }
-  const dist = distanceMeters(
-    venue.latitude,
-    venue.longitude,
-    city.centerLatitude,
-    city.centerLongitude,
-  );
-  if (dist > CITY_RADIUS_METERS) {
-    fail("VENUE_OUTSIDE_CITY_RADIUS", venue.sourceVenueId);
-  }
+  // City radius and 150 m dedup are authoritative only via PostGIS ST_DWithin
+  // (loadStateForPlan). Spherical haversine must never reject those boundaries.
   if (
     venue.nameBasis !== "SOURCE_VENUE_NAME" &&
     venue.nameBasis !== "EXPLICIT_SOURCE_CLUB_LABEL"
@@ -524,6 +517,7 @@ function validateVenue(venue, citiesById, seenVenueIds, seenSourceIds) {
   );
   const publicContacts = parsePublicContacts(venue.publicContacts);
   const contactSources = validateContactSources(venue.contactSources);
+  assertContactProvenance(publicContacts, contactSources);
   let courtCount;
   if ("courtCount" in venue) {
     if (
@@ -551,23 +545,29 @@ function validateVenue(venue, citiesById, seenVenueIds, seenSourceIds) {
     publicContacts,
     contactSources,
     courtCount,
+    // Convenience for planners; not a manifest key — do not re-validate this object.
     timezone: city.timezone,
   };
 }
 
-function assertBatchAddressDedup(venues, normalizeVenueText) {
-  for (let i = 0; i < venues.length; i++) {
-    for (let j = i + 1; j < venues.length; j++) {
-      const a = venues[i];
-      const b = venues[j];
-      const sameAddress =
-        normalizeVenueText(a.address) === normalizeVenueText(b.address);
-      const near =
-        distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude) <=
-        DEDUPE_METERS;
-      if (sameAddress && near && a.id !== b.id) {
-        fail("BATCH_AMBIGUOUS_DEDUP", `${a.sourceVenueId}/${b.sourceVenueId}`);
-      }
+function assertContactProvenance(publicContacts, contactSources) {
+  if (!publicContacts) return;
+  const required = [];
+  if (publicContacts.phone) {
+    required.push({ contactType: "phone", value: publicContacts.phone });
+  }
+  if (publicContacts.website) {
+    required.push({ contactType: "website", value: publicContacts.website });
+  }
+  for (const messenger of publicContacts.messengers) {
+    required.push({ contactType: messenger.kind, value: messenger.url });
+  }
+  for (const need of required) {
+    const matched = contactSources.some(
+      (row) => row.contactType === need.contactType && row.value === need.value,
+    );
+    if (!matched) {
+      fail("CONTACT_PROVENANCE_MISSING", `${need.contactType}`);
     }
   }
 }
@@ -658,7 +658,21 @@ function rolesHaveVenueManage(roles) {
 }
 
 async function requireImportActorSafe(client, principalId, forUpdate) {
-  const locking = forUpdate ? " FOR UPDATE OF p,u" : "";
+  // Lock principal+user in a valid non-aggregate query, then read active grants.
+  // FOR UPDATE cannot combine with GROUP BY (PostgreSQL rejects the old shape).
+  if (forUpdate) {
+    const locked = (
+      await client.query(
+        `SELECT p.user_id
+           FROM admin_principals p
+           JOIN users u ON u.id = p.user_id
+          WHERE p.id = $1 AND p.status = 'active' AND u.status = 'active'
+          FOR UPDATE OF p, u`,
+        [principalId],
+      )
+    ).rows[0];
+    if (!locked) fail("IMPORT_ACTOR_REFUSED");
+  }
   const row = (
     await client.query(
       `SELECT p.user_id,
@@ -666,7 +680,7 @@ async function requireImportActorSafe(client, principalId, forUpdate) {
          FROM admin_principals p
          JOIN users u ON u.id = p.user_id
          LEFT JOIN admin_role_grants g ON g.principal_id = p.id
-        WHERE p.id = $1 AND p.status = 'active' AND u.status = 'active'${locking}
+        WHERE p.id = $1 AND p.status = 'active' AND u.status = 'active'
         GROUP BY p.user_id`,
       [principalId],
     )
@@ -694,7 +708,8 @@ function planAgainstState(manifest, digest, state, normalize) {
     venueDedupeKey,
     VENUE_NORMALIZATION_VERSION,
   } = normalize;
-  assertBatchAddressDedup(manifest.venues, normalizeVenueText);
+  // Batch/catalog 150 m + 40 km gates are PostGIS-only (loadStateForPlan).
+  // Pure planner may consume spatialFacts already validated by the DB path.
 
   const cityById = new Map(manifest.cities.map((c) => [c.id, c]));
   const existingCities = state.cities || [];
@@ -760,21 +775,8 @@ function planAgainstState(manifest, digest, state, normalize) {
       timezone: cityById.get(venue.cityId).timezone,
     };
 
-    for (const other of existingVenues) {
-      if (other.lifecycle_state === "merged") continue;
-      if (other.id === venue.id) continue;
-      const sameAddress =
-        normalizeVenueText(other.address) === normalizedAddress ||
-        other.normalized_address === normalizedAddress;
-      const near =
-        typeof other.latitude === "number" &&
-        typeof other.longitude === "number" &&
-        distanceMeters(venue.latitude, venue.longitude, other.latitude, other.longitude) <=
-          DEDUPE_METERS;
-      if (sameAddress && near) {
-        fail("EXISTING_AMBIGUOUS_DEDUP", `${venue.sourceVenueId}/${other.id}`);
-      }
-    }
+    // Existing-catalog 150 m address collisions are authoritative via PostGIS in
+    // loadStateForPlan (or spatialFacts). Do not haversine-reject here.
 
     const priorById = byId.get(venue.id);
     const priorBySource = bySource.get(venue.sourceVenueId);
@@ -823,6 +825,20 @@ function planAgainstState(manifest, digest, state, normalize) {
   return { citiesToInsert, citiesReused, toInsert, toSkip };
 }
 
+async function geographyWithin(client, lon1, lat1, lon2, lat2, meters) {
+  const row = (
+    await client.query(
+      `SELECT ST_DWithin(
+         ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,
+         ST_SetSRID(ST_MakePoint($3,$4),4326)::geography,
+         $5
+       ) AS inside`,
+      [lon1, lat1, lon2, lat2, meters],
+    )
+  ).rows[0];
+  return Boolean(row?.inside);
+}
+
 async function loadStateForPlan(client, manifest, normalizeVenueText) {
   const cityIds = manifest.cities.map((c) => c.id);
   const cityNames = manifest.cities.map((c) => c.nameRu);
@@ -854,23 +870,15 @@ async function loadStateForPlan(client, manifest, normalizeVenueText) {
 
   for (const venue of manifest.venues) {
     const city = manifest.cities.find((c) => c.id === venue.cityId);
-    const ok = (
-      await client.query(
-        `SELECT ST_DWithin(
-           ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,
-           ST_SetSRID(ST_MakePoint($3,$4),4326)::geography,
-           $5
-         ) AS inside`,
-        [
-          venue.longitude,
-          venue.latitude,
-          city.centerLongitude,
-          city.centerLatitude,
-          CITY_RADIUS_METERS,
-        ],
-      )
-    ).rows[0];
-    if (!ok?.inside) fail("VENUE_OUTSIDE_CITY_RADIUS", venue.sourceVenueId);
+    const inside = await geographyWithin(
+      client,
+      venue.longitude,
+      venue.latitude,
+      city.centerLongitude,
+      city.centerLatitude,
+      CITY_RADIUS_METERS,
+    );
+    if (!inside) fail("VENUE_OUTSIDE_CITY_RADIUS", venue.sourceVenueId);
 
     const normalizedAddress = normalizeVenueText(venue.address);
     const ambiguous = (
@@ -890,6 +898,26 @@ async function loadStateForPlan(client, manifest, normalizeVenueText) {
     ).rows[0];
     if (ambiguous) {
       fail("EXISTING_AMBIGUOUS_DEDUP", `${venue.sourceVenueId}/${ambiguous.id}`);
+    }
+  }
+
+  // New-batch pairs: same normalized address + PostGIS ≤150 m → abort (no haversine).
+  for (let i = 0; i < manifest.venues.length; i++) {
+    for (let j = i + 1; j < manifest.venues.length; j++) {
+      const a = manifest.venues[i];
+      const b = manifest.venues[j];
+      if (normalizeVenueText(a.address) !== normalizeVenueText(b.address)) continue;
+      const near = await geographyWithin(
+        client,
+        a.longitude,
+        a.latitude,
+        b.longitude,
+        b.latitude,
+        DEDUPE_METERS,
+      );
+      if (near) {
+        fail("BATCH_AMBIGUOUS_DEDUP", `${a.sourceVenueId}/${b.sourceVenueId}`);
+      }
     }
   }
 

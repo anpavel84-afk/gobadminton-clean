@@ -1,5 +1,6 @@
 import type { UnifiedSnapshot } from "@gobadminton/contracts";
 import type { RadarConfig } from "./unified-directory";
+import { REGIONAL_MAP_PACKS, regionalMapPackForCity, type RegionalMapPack } from "./regional-map-packs";
 export const MOSCOW_BUNDLE = {
   version: "moscow-20261007-p4-098a869f-v001",
   cityId: "a0000000-0000-4000-8000-000000000001",
@@ -19,21 +20,34 @@ export const SAINT_PETERSBURG_BUNDLE = {
   bounds: [[27.25, 58.35], [36.05, 62.25]] as [[number, number], [number, number]],
   defaultZoom: 10.5,
 };
-export type FixedMapBundle = typeof MOSCOW_BUNDLE | typeof SAINT_PETERSBURG_BUNDLE;
+export type FixedMapBundle =
+  | typeof MOSCOW_BUNDLE
+  | typeof SAINT_PETERSBURG_BUNDLE
+  | RegionalMapPack;
+export { REGIONAL_MAP_PACKS, regionalMapPackForCity };
 export const DEV_APP_ORIGIN = "https://dev.gobadminton.ru";
 export const PROD_APP_ORIGIN = "https://gobadminton.ru";
 /** Exact browser app origin: registered DEV or canonical PROD only. */
 export function isApprovedAppOrigin(origin: string): boolean {
   return origin === DEV_APP_ORIGIN || origin === PROD_APP_ORIGIN;
 }
-/** Closed lookup of the two known city packs; unknown city → null (honest unavailable). */
+/** Closed lookup of known city packs; unknown city → null (honest unavailable). */
 export function mapBundleForCity(cityId: string | null | undefined): FixedMapBundle | null {
   if (cityId === MOSCOW_BUNDLE.cityId) return MOSCOW_BUNDLE;
   if (cityId === SAINT_PETERSBURG_BUNDLE.cityId) return SAINT_PETERSBURG_BUNDLE;
-  return null;
+  return regionalMapPackForCity(cityId);
 }
-export function mapIdForBundle(bundle: FixedMapBundle): "moscow" | "saint-petersburg" {
-  return bundle === SAINT_PETERSBURG_BUNDLE ? "saint-petersburg" : "moscow";
+export function mapIdForBundle(bundle: FixedMapBundle): string {
+  if ("mapId" in bundle && typeof bundle.mapId === "string") return bundle.mapId;
+  return "moscow";
+}
+/** Human city label for accessibility/status — never invent Moscow for other packs. */
+export function cityLabelForBundle(bundle: FixedMapBundle): string {
+  if ("cityLabel" in bundle && typeof bundle.cityLabel === "string") return bundle.cityLabel;
+  if (bundle === SAINT_PETERSBURG_BUNDLE || mapIdForBundle(bundle) === "saint-petersburg") {
+    return "Санкт-Петербург";
+  }
+  return "Москва";
 }
 export function pointInBundleBounds(lon: number, lat: number, bundle: FixedMapBundle): boolean {
   const [[west, south], [east, north]] = bundle.bounds;

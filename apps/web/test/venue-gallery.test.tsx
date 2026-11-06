@@ -85,6 +85,24 @@ describe("VenueGallery", () => {
     expect(empty).not.toContain("Предыдущее фото");
     expect(empty).not.toContain("Фото: Клуб");
   });
+
+  it("renders catalog source credit independent of showCredit photo flag", () => {
+    const catalogSource = {
+      provider: "badminton4u.ru" as const,
+      venueId: "B4U-V-33540253",
+      clubs: [{ id: "B4U-C-208", name: "Badmclub НН", url: "https://badminton4u.ru/clubs/208" }],
+    };
+    const withSource = venue([{ id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Клуб", url: "https://club.example" } }]);
+    withSource.profile = { ...withSource.profile!, catalogSource };
+    const html = ssr(<VenueGallery venue={withSource} showCredit={false} />);
+    expect(html).toContain("Источник: badminton4u.ru");
+    expect(html).toContain("Badmclub НН");
+    expect(html).not.toContain("Фото: Клуб");
+    const emptyWithSource = venue([], null);
+    emptyWithSource.profile = { ...emptyWithSource.profile!, catalogSource };
+    const emptyHtml = ssr(<VenueGallery venue={emptyWithSource} showCredit={false} />);
+    expect(emptyHtml).toContain("Источник: badminton4u.ru");
+  });
   it("replaces failed gallery photo with illustration alt/credit, not club photo credit", () => {
     const item = { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } };
     const v = venue([item]);

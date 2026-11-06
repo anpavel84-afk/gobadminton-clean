@@ -19,6 +19,25 @@ import {
   venueProposalFingerprint,
 } from "./venue-normalize";
 
+/** #485 regional discovery centers — mirrors packages/contracts/src/regional-cities.ts. */
+export const REGIONAL_CITY_RADIUS_METERS = 40000;
+const REGIONAL_CITY_CENTERS: ReadonlyMap<string, { lon: number; lat: number }> = new Map([
+  ["1775016f-373e-5a15-958b-1305770b2b16", { lon: 82.9226887, lat: 55.0288307 }],
+  ["bec5831e-d6d2-59da-9d17-0c32b1eca331", { lon: 60.6007886, lat: 56.8382071 }],
+  ["5c219eb1-87da-5fd3-9194-20e9d1501315", { lon: 49.1115022, lat: 55.7946485 }],
+  ["3113cbf1-c8bd-5475-9774-2e9567414f46", { lon: 44.0051395, lat: 56.3264816 }],
+  ["1a08b6d0-7bb8-5df5-903d-633ebc064a6e", { lon: 92.872586, lat: 56.0091173 }],
+  ["2f9a0a40-b6cd-53f6-8f0d-06cfb607cd0e", { lon: 50.1014927, lat: 53.1956255 }],
+  ["38d822e9-2c2a-5969-871c-ee6da3c702da", { lon: 39.7198736, lat: 47.2222596 }],
+  ["17b9f926-c927-59be-9adb-1434a971e2e4", { lon: 38.9772396, lat: 45.0351532 }],
+  ["cc3fde74-3c6d-5dc6-8e87-eb463e45ade3", { lon: 73.371529, lat: 54.991375 }],
+  ["f89658dd-d378-593d-9ec0-b8dae693f0af", { lon: 39.2005858, lat: 51.6605982 }],
+  ["dc1f0006-1076-5e28-8608-63ecd96240eb", { lon: 44.5153353, lat: 48.7081906 }],
+]);
+export function regionalCityCenter(cityId: string): { lon: number; lat: number } | null {
+  return REGIONAL_CITY_CENTERS.get(cityId) ?? null;
+}
+
 export type CityDto = {
   id: string;
   countryCode: string;
@@ -185,6 +204,20 @@ export class VenuesService {
       WHERE city_id = $1
         AND lifecycle_state = ANY($2::text[])
     `;
+    // #485 regional cities only: discovery uses shared OSM center + ST_DWithin 40 km.
+    // Moscow/SPb and other historical cities stay unscoped (no retro 40 km filter).
+    const regional = regionalCityCenter(input.cityId);
+    if (regional) {
+      params.push(regional.lon, regional.lat, REGIONAL_CITY_RADIUS_METERS);
+      const lonIdx = params.length - 2;
+      const latIdx = params.length - 1;
+      const radiusIdx = params.length;
+      sql += ` AND ST_DWithin(
+        location,
+        ST_SetSRID(ST_MakePoint($${lonIdx}, $${latIdx}), 4326)::geography,
+        $${radiusIdx}
+      )`;
+    }
     if (normalizedQ.length > 0) {
       params.push(`%${normalizedQ}%`);
       sql += ` AND (normalized_name LIKE $${params.length} OR normalized_address LIKE $${params.length})`;

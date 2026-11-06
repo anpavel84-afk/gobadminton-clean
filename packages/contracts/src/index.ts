@@ -36,3 +36,11 @@ export type {
   VenueReviewsSummary,
   CreateVenueReviewRequest,
 } from "./venue-reviews.js";
+
+export {
+  REGIONAL_CITIES,
+  REGIONAL_CITY_RADIUS_METERS,
+  regionalCityById,
+  isRegionalCityId,
+} from "./regional-cities.js";
+export type { RegionalCity, RegionalCityId } from "./regional-cities.js";

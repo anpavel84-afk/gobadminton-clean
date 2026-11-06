@@ -197,7 +197,7 @@ describe("validateManifest", () => {
     );
   });
 
-  it("rejects importReady!=yes, bad coords, mismatched venue UUID, missing clubs", () => {
+  it("rejects importReady!=yes, mismatched venue UUID, missing clubs; pure validate does not haversine-reject radius", () => {
     const cities = buildCities();
     const city = cities[0];
     const base = venueFixture("B4U-V-BBBBBBBB", city);
@@ -212,19 +212,17 @@ describe("validateManifest", () => {
         ),
       /VENUE_ID_MISMATCH/,
     );
-    assert.throws(
-      () =>
-        validateManifest(
-          validManifest([
-            {
-              ...base,
-              latitude: city.centerLatitude + 1,
-              longitude: city.centerLongitude + 1,
-            },
-          ]),
-        ),
-      /VENUE_OUTSIDE_CITY_RADIUS/,
+    // Far coords stay valid in pure validate; PostGIS ST_DWithin is authoritative later.
+    const far = validateManifest(
+      validManifest([
+        {
+          ...base,
+          latitude: city.centerLatitude + 1,
+          longitude: city.centerLongitude + 1,
+        },
+      ]),
     );
+    assert.equal(far.venues.length, 1);
     assert.throws(
       () => validateManifest(validManifest([{ ...base, clubSources: [] }])),
       /MISSING_CLUB_SOURCES/,
@@ -247,6 +245,44 @@ describe("validateManifest", () => {
         ),
       /CLUB_URL_ID_MISMATCH/,
     );
+  });
+
+  it("requires matching contactSources for every nonempty public contact", () => {
+    const cities = buildCities();
+    const city = cities[0];
+    const base = venueFixture("B4U-V-CCCC0001", city, {
+      publicContacts: {
+        phone: null,
+        website: "https://example.org/hall",
+        messengers: [],
+      },
+      contactSources: [],
+    });
+    assert.throws(
+      () => validateManifest(validManifest([base])),
+      /CONTACT_PROVENANCE_MISSING/,
+    );
+    const ok = venueFixture("B4U-V-CCCC0002", city, {
+      publicContacts: {
+        phone: null,
+        website: "https://example.org/hall",
+        messengers: [],
+      },
+      contactSources: [
+        {
+          contactType: "website",
+          value: "https://example.org/hall",
+          sourceUrl: "https://example.org/hall",
+          checkedAt: "2026-11-06T12:00:00.000Z",
+        },
+      ],
+    });
+    assert.equal(validateManifest(validManifest([ok])).venues.length, 1);
+    const emptyOk = venueFixture("B4U-V-CCCC0003", city, {
+      publicContacts: { phone: null, website: null, messengers: [] },
+      contactSources: [],
+    });
+    assert.equal(validateManifest(validManifest([emptyOk])).venues.length, 1);
   });
 
   it("rejects empty title/address, >50 venues, duplicate B4U ids", () => {
@@ -376,7 +412,7 @@ describe("planAgainstState", () => {
     assert.equal(second.citiesToInsert.length, 0);
   });
 
-  it("aborts on address+150m ambiguous different IDs and contact drift", () => {
+  it("pure planner does not haversine-reject near address neighbors; contact drift still aborts", () => {
     const cities = buildCities();
     const venue = venueFixture("B4U-V-AAAA0001", cities[0], {
       address: "Одинаковый адрес 1",
@@ -386,39 +422,37 @@ describe("planAgainstState", () => {
     const otherId = venueIdForSourceVenueId("B4U-V-AAAA0002");
     const manifest = validateManifest(validManifest([venue]));
     const digest = "c".repeat(64);
-    assert.throws(
-      () =>
-        planAgainstState(
-          manifest,
-          digest,
+    // Near same-address neighbor is PostGIS-only (loadStateForPlan); pure planner continues.
+    const nearPlan = planAgainstState(
+      manifest,
+      digest,
+      {
+        cities: [],
+        venues: [
           {
-            cities: [],
-            venues: [
-              {
-                id: otherId,
-                name: "Другое имя",
-                address: "Одинаковый адрес 1",
-                city_id: cities[0].id,
-                timezone: cities[0].timezone,
-                provenance: "admin_created",
-                data_status: "unverified",
-                lifecycle_state: "unverified",
-                normalized_name: normalizeVenueText("Другое имя"),
-                normalized_address: normalizeVenueText("Одинаковый адрес 1"),
-                normalization_version: 1,
-                identity_discriminator: "",
-                review_markers: [],
-                public_contacts: null,
-                latitude: cities[0].centerLatitude,
-                longitude: cities[0].centerLongitude,
-              },
-            ],
-            identityKeys: [],
+            id: otherId,
+            name: "Другое имя",
+            address: "Одинаковый адрес 1",
+            city_id: cities[0].id,
+            timezone: cities[0].timezone,
+            provenance: "admin_created",
+            data_status: "unverified",
+            lifecycle_state: "unverified",
+            normalized_name: normalizeVenueText("Другое имя"),
+            normalized_address: normalizeVenueText("Одинаковый адрес 1"),
+            normalization_version: 1,
+            identity_discriminator: "",
+            review_markers: [],
+            public_contacts: null,
+            latitude: cities[0].centerLatitude,
+            longitude: cities[0].centerLongitude,
           },
-          normalize,
-        ),
-      /EXISTING_AMBIGUOUS_DEDUP/,
+        ],
+        identityKeys: [],
+      },
+      normalize,
     );
+    assert.equal(nearPlan.toInsert.length, 1);
 
     const prepared = planAgainstState(
       manifest,
@@ -548,6 +582,130 @@ describe("runImport injectable client", () => {
     assert.equal(rolesHaveVenueManage(["pilot_viewer"]), false);
   });
 
+  it("PostGIS path rejects outside radius and existing 150m address collisions", async () => {
+    const cities = buildCities();
+    const venue = venueFixture("B4U-V-AAAA0008", cities[0], {
+      address: "Одинаковый адрес SQL",
+      latitude: cities[0].centerLatitude,
+      longitude: cities[0].centerLongitude,
+    });
+    const far = venueFixture("B4U-V-AAAA0009", cities[0], {
+      latitude: cities[0].centerLatitude + 2,
+      longitude: cities[0].centerLongitude + 2,
+    });
+    const farManifest = validateManifest(validManifest([far]));
+    const nearManifest = validateManifest(validManifest([venue]));
+    const digest = "a".repeat(64);
+    const farClient = {
+      async query(sql) {
+        const text = String(sql);
+        if (/admin_principals/.test(text)) {
+          return { rows: [{ user_id: "u1", roles: ["superadmin"] }], rowCount: 1 };
+        }
+        if (/FROM cities/.test(text)) return { rows: [], rowCount: 0 };
+        if (/FROM venues v/.test(text)) return { rows: [], rowCount: 0 };
+        if (/venue_identity_keys/.test(text)) return { rows: [], rowCount: 0 };
+        if (/ST_DWithin/.test(text) && /inside/.test(text)) {
+          return { rows: [{ inside: false }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    await assert.rejects(
+      () =>
+        runImport({
+          mode: "DRY_RUN",
+          manifest: farManifest,
+          digest,
+          actorPrincipalId: "44444444-4444-4444-8444-444444444444",
+          deps: { client: farClient, normalize, appendAudit: async () => "a" },
+        }),
+      /VENUE_OUTSIDE_CITY_RADIUS/,
+    );
+
+    const nearClient = {
+      async query(sql) {
+        const text = String(sql);
+        if (/admin_principals/.test(text)) {
+          return { rows: [{ user_id: "u1", roles: ["superadmin"] }], rowCount: 1 };
+        }
+        if (/FROM cities/.test(text)) return { rows: [], rowCount: 0 };
+        if (/FROM venues v/.test(text)) return { rows: [], rowCount: 0 };
+        if (/venue_identity_keys/.test(text) && /SELECT/.test(text)) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (/ST_DWithin/.test(text) && /inside/.test(text)) {
+          return { rows: [{ inside: true }], rowCount: 1 };
+        }
+        if (/SELECT id FROM venues/.test(text) && /ST_DWithin/.test(text)) {
+          return { rows: [{ id: venueIdForSourceVenueId("B4U-V-AAAA0002") }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    await assert.rejects(
+      () =>
+        runImport({
+          mode: "DRY_RUN",
+          manifest: nearManifest,
+          digest,
+          actorPrincipalId: "55555555-5555-4555-8555-555555555555",
+          deps: { client: nearClient, normalize, appendAudit: async () => "a" },
+        }),
+      /EXISTING_AMBIGUOUS_DEDUP/,
+    );
+  });
+
+  it("writable actor lock uses FOR UPDATE without GROUP BY, then separate grants query", async () => {
+    const cities = buildCities();
+    const venue = venueFixture("B4U-V-AAAA0007", cities[5]);
+    const manifest = validateManifest(validManifest([venue]));
+    const digest = "f".repeat(64);
+    const actorSql = [];
+    const client = {
+      async query(sql) {
+        const text = String(sql).replace(/\s+/g, " ").trim();
+        if (/admin_principals/.test(text)) {
+          actorSql.push(text);
+          if (/FOR UPDATE/.test(text)) {
+            assert.equal(/GROUP BY/.test(text), false);
+            return { rows: [{ user_id: "user-1" }], rowCount: 1 };
+          }
+          assert.equal(/FOR UPDATE/.test(text), false);
+          assert.ok(/GROUP BY/.test(text));
+          return { rows: [{ user_id: "user-1", roles: ["content_manager"] }], rowCount: 1 };
+        }
+        if (/FROM cities/.test(text)) return { rows: [], rowCount: 0 };
+        if (/FROM venues v/.test(text)) return { rows: [], rowCount: 0 };
+        if (/venue_identity_keys/.test(text) && /SELECT/.test(text)) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (/ST_DWithin/.test(text) && /inside/.test(text)) {
+          return { rows: [{ inside: true }], rowCount: 1 };
+        }
+        if (/ST_DWithin/.test(text)) return { rows: [], rowCount: 0 };
+        if (/INSERT INTO/.test(text)) {
+          return { rows: [{ id: "x", version: 1, venue_id: "x" }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    await runImport({
+      mode: "APPLY",
+      manifest,
+      digest,
+      actorPrincipalId: "33333333-3333-4333-8333-333333333333",
+      deps: {
+        client,
+        normalize,
+        appendAudit: async () => "audit-lock",
+      },
+    });
+    assert.equal(actorSql.length, 2);
+    assert.ok(/FOR UPDATE OF p, u/.test(actorSql[0]));
+    assert.ok(/GROUP BY p\.user_id/.test(actorSql[1]));
+  });
+
   it("writable injectable path inserts city+venue+audit atomically-shaped calls", async () => {
     const cities = buildCities();
     const venue = venueFixture("B4U-V-AAAA0006", cities[4]);
@@ -559,6 +717,9 @@ describe("runImport injectable client", () => {
       async query(sql, params) {
         const text = String(sql).replace(/\s+/g, " ").trim();
         statements.push(text.slice(0, 80));
+        if (/admin_principals/.test(text) && /FOR UPDATE/.test(text)) {
+          return { rows: [{ user_id: "user-1" }], rowCount: 1 };
+        }
         if (/admin_principals/.test(text)) {
           return { rows: [{ user_id: "user-1", roles: ["superadmin"] }], rowCount: 1 };
         }
