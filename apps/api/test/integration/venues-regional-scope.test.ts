@@ -8,7 +8,6 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { REGIONAL_CITIES } from "../../../../packages/contracts/src/regional-cities";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
 import {
@@ -19,6 +18,16 @@ import {
 } from "../../src/venues/venues.service";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
+
+/** Explicit approved Novosibirsk fixture — independent of production REGIONAL_CITIES. */
+const NOVOSIBIRSK_FIXTURE = {
+  id: "1775016f-373e-5a15-958b-1305770b2b16",
+  nameRu: "Новосибирск",
+  nameEn: "Novosibirsk",
+  timezone: "Asia/Novosibirsk",
+  centerLongitude: 82.9226887,
+  centerLatitude: 55.0288307,
+} as const;
 
 function guardedUrl(): URL {
   if (!process.env.DATABASE_URL) {
@@ -40,7 +49,7 @@ run("venues regional scope: disposable PostGIS searchCatalog", () => {
   let pool: Pool | undefined;
   let service: VenuesService;
   let userId: string;
-  const novosibirsk = REGIONAL_CITIES[0]!;
+  const novosibirsk = NOVOSIBIRSK_FIXTURE;
 
   function db(): Pool {
     if (!pool) throw new Error("Missing disposable DB");
@@ -74,15 +83,17 @@ run("venues regional scope: disposable PostGIS searchCatalog", () => {
     if (!user) throw new Error("fixture user");
     userId = user.id;
 
-    for (const city of REGIONAL_CITIES) {
-      await db().query(
-        `INSERT INTO cities(id, country_code, name_ru, name_en, default_timezone)
-         VALUES ($1, 'RU', $2, $3, $4)
-         ON CONFLICT (id) DO NOTHING`,
-        [city.id, city.nameRu, city.nameEn, city.timezone],
-      );
-    }
-    expect(REGIONAL_CITIES).toHaveLength(11);
+    await db().query(
+      `INSERT INTO cities(id, country_code, name_ru, name_en, default_timezone)
+       VALUES ($1, 'RU', $2, $3, $4)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        NOVOSIBIRSK_FIXTURE.id,
+        NOVOSIBIRSK_FIXTURE.nameRu,
+        NOVOSIBIRSK_FIXTURE.nameEn,
+        NOVOSIBIRSK_FIXTURE.timezone,
+      ],
+    );
     expect(REGIONAL_CITY_RADIUS_METERS).toBe(40000);
 
     // Idempotency/MutationRunner unused by searchCatalog — stub only; do not mock pool.query.
@@ -117,8 +128,8 @@ run("venues regional scope: disposable PostGIS searchCatalog", () => {
          $1, $2, $3, $4, 'Europe/Moscow',
          ST_Project(
            ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography,
-           $7,
-           radians($8)
+           $7::double precision,
+           radians($8::double precision)
          ),
          $9, 'unverified', $10, $11
        )`,
@@ -163,8 +174,11 @@ run("venues regional scope: disposable PostGIS searchCatalog", () => {
   }
 
   it("applies 40 km ST_DWithin for regional cities including near-boundary and map-bbox negatives", async () => {
-    const centerLon = novosibirsk.centerLongitude;
-    const centerLat = novosibirsk.centerLatitude;
+    // Literals kept independent of fixture object so a wrong-center regression is detectable.
+    const centerLon = 82.9226887;
+    const centerLat = 55.0288307;
+    expect(novosibirsk.centerLongitude).toBe(centerLon);
+    expect(novosibirsk.centerLatitude).toBe(centerLat);
     // ~5 km north — inside radius.
     const insideId = await placeProjected({
       cityId: novosibirsk.id,
