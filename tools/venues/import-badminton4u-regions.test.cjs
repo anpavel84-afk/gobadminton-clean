@@ -1198,6 +1198,142 @@ describe("immutable provenance marker replay", () => {
       /IDEMPOTENT_REPLAY_CONFLICT/,
     );
   });
+
+  it("refuses duplicate identical/altered B4U_SOURCE_V1 or B4U_REVIEW_RESOLUTION_V1", () => {
+    const cities = buildCities();
+    const krasnodar = cities.find((c) => c.nameRu === "Краснодар");
+    const resolution = {
+      kind: "EXPLICIT_PUBLIC_SOURCE_ADDRESS_POINT_CORRECTION",
+      original: {
+        address: "Динская",
+        latitude: null,
+        longitude: null,
+        sourceVenueId: "B4U-V-F943CB46",
+        importReady: "no",
+        collectedAt: "2026-10-07",
+      },
+      corrected: {
+        address: "Краснодарский край, станица Динская, улица Тельмана, 139/1",
+        latitude: 45.1964268,
+        longitude: 39.2437748,
+      },
+      primaryAddressSourceURL: "https://sport-dinsk.ru/osnovnye-svedeniya",
+      pointSourceURL: "https://nominatim.openstreetmap.org/search?q=dinsk&format=jsonv2",
+      pointCheckedAt: "2026-11-06T17:17:43.100165+00:00",
+      reason: "Stanitsa-only row corrected to Rekord Telmana point.",
+    };
+    const venue = venueFixture("B4U-V-F943CB46", krasnodar, {
+      name: "Спорткомплекс «Рекорд»",
+      address: resolution.corrected.address,
+      latitude: resolution.corrected.latitude,
+      longitude: resolution.corrected.longitude,
+      sourceUrls: ["https://badminton4u.ru/clubs/126"],
+      clubSources: [
+        { clubId: "B4U-C-126", name: "Рекорд", url: "https://badminton4u.ru/clubs/126" },
+      ],
+      reviewResolution: resolution,
+    });
+    const manifest = validateManifest(validManifest([venue]));
+    const digest = "c5".repeat(32);
+    const prepared = planAgainstState(
+      manifest,
+      digest,
+      { cities: [], venues: [], identityKeys: [] },
+      normalize,
+    ).toInsert[0];
+    const identityKeys = [{ dedupe_key: prepared.key, venue_id: prepared.id }];
+    const sourceMarker = prepared.markers.find((m) => m.startsWith(MARKER_SOURCE_JSON));
+    const resolutionMarker = prepared.markers.find((m) =>
+      m.startsWith(MARKER_REVIEW_RESOLUTION),
+    );
+    assert.ok(sourceMarker);
+    assert.ok(resolutionMarker);
+
+    const duplicateCases = [
+      // identical source duplicate (append)
+      [...prepared.markers, sourceMarker],
+      // altered source duplicate (append after exact)
+      [...prepared.markers, `${MARKER_SOURCE_JSON}{"tampered":true}`],
+      // altered source first, exact second
+      [
+        `${MARKER_SOURCE_JSON}{"tampered":true}`,
+        ...prepared.markers.filter((m) => !m.startsWith(MARKER_SOURCE_JSON)),
+        sourceMarker,
+      ],
+      // identical resolution duplicate
+      [...prepared.markers, resolutionMarker],
+      // altered resolution duplicate (append)
+      [...prepared.markers, `${MARKER_REVIEW_RESOLUTION}{"kind":"TAMPERED"}`],
+      // altered resolution first, exact second
+      [
+        `${MARKER_REVIEW_RESOLUTION}{"kind":"TAMPERED"}`,
+        ...prepared.markers.filter((m) => !m.startsWith(MARKER_REVIEW_RESOLUTION)),
+        resolutionMarker,
+      ],
+    ];
+    for (const drifted of duplicateCases) {
+      assert.throws(
+        () =>
+          planAgainstState(
+            manifest,
+            digest,
+            {
+              cities: [],
+              venues: [priorRowFromPrepared(prepared, drifted)],
+              identityKeys,
+            },
+            normalize,
+          ),
+        /IDEMPOTENT_REPLAY_CONFLICT/,
+      );
+    }
+
+    // Legacy absent resolution: duplicate source or unexpected resolution → conflict.
+    const legacyVenue = venueFixture("B4U-V-AAAA00A1", cities[0]);
+    const legacyManifest = validateManifest(validManifest([legacyVenue]));
+    const legacyDigest = "c6".repeat(32);
+    const legacyPrepared = planAgainstState(
+      legacyManifest,
+      legacyDigest,
+      { cities: [], venues: [], identityKeys: [] },
+      normalize,
+    ).toInsert[0];
+    assert.equal(
+      legacyPrepared.markers.some((m) => m.startsWith(MARKER_REVIEW_RESOLUTION)),
+      false,
+    );
+    const legacyIdentityKeys = [
+      { dedupe_key: legacyPrepared.key, venue_id: legacyPrepared.id },
+    ];
+    const legacySource = legacyPrepared.markers.find((m) =>
+      m.startsWith(MARKER_SOURCE_JSON),
+    );
+    const legacyDuplicateCases = [
+      [...legacyPrepared.markers, legacySource],
+      [...legacyPrepared.markers, `${MARKER_SOURCE_JSON}{"tampered":true}`],
+      [...legacyPrepared.markers, `${MARKER_REVIEW_RESOLUTION}{"kind":"UNEXPECTED"}`],
+      [
+        `${MARKER_REVIEW_RESOLUTION}{"kind":"UNEXPECTED"}`,
+        ...legacyPrepared.markers,
+      ],
+    ];
+    for (const drifted of legacyDuplicateCases) {
+      assert.throws(
+        () =>
+          planAgainstState(
+            legacyManifest,
+            legacyDigest,
+            {
+              cities: [],
+              venues: [priorRowFromPrepared(legacyPrepared, drifted)],
+              identityKeys: legacyIdentityKeys,
+            },
+            normalize,
+          ),
+        /IDEMPOTENT_REPLAY_CONFLICT/,
+      );
+    }
+  });
 });
 
 describe("geo helpers", () => {

@@ -514,8 +514,22 @@ function markerDigest(markers) {
   return null;
 }
 
-/** First marker payload after prefix, or null if absent. */
+/** Count markers that start with prefix. */
+function markerPrefixCount(markers, prefix) {
+  if (!Array.isArray(markers)) return 0;
+  let count = 0;
+  for (const m of markers) {
+    if (typeof m === "string" && m.startsWith(prefix)) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Payload of the sole marker with prefix, or null if absent.
+ * Duplicates (identical or altered) are not readable — caller must require count === 1.
+ */
 function markerPayload(markers, prefix) {
+  if (markerPrefixCount(markers, prefix) !== 1) return null;
   if (!Array.isArray(markers)) return null;
   for (const m of markers) {
     if (typeof m === "string" && m.startsWith(prefix)) {
@@ -530,17 +544,42 @@ function markerPayload(markers, prefix) {
  * SOURCE_VENUE_ID + REGIONS485_DIGEST alone are not enough: missing/altered provenance
  * → caller refuses IDEMPOTENT_REPLAY_CONFLICT.
  * B4U_CONTACTS_V1 is excluded so later public-contact enrichment can still SKIP.
- * Both sides absent for B4U_REVIEW_RESOLUTION_V1 = legacy optional-absent compatibility.
+ * Exactly one B4U_SOURCE_V1 on both sides with identical bytes.
+ * B4U_REVIEW_RESOLUTION_V1: only two paths — both exactly one identical, or both zero
+ * (legacy optional-absent). Duplicate identical/altered markers (any order) and
+ * unexpected resolution when legacy-absent → refuse match.
  */
 function immutableProvenanceMarkersMatch(expectedMarkers, priorMarkers) {
+  if (
+    markerPrefixCount(expectedMarkers, MARKER_SOURCE_JSON) !== 1 ||
+    markerPrefixCount(priorMarkers, MARKER_SOURCE_JSON) !== 1
+  ) {
+    return false;
+  }
   const expectedSource = markerPayload(expectedMarkers, MARKER_SOURCE_JSON);
   const priorSource = markerPayload(priorMarkers, MARKER_SOURCE_JSON);
   if (expectedSource === null || priorSource === null || expectedSource !== priorSource) {
     return false;
   }
-  const expectedResolution = markerPayload(expectedMarkers, MARKER_REVIEW_RESOLUTION);
-  const priorResolution = markerPayload(priorMarkers, MARKER_REVIEW_RESOLUTION);
-  return expectedResolution === priorResolution;
+
+  const expectedResolutionCount = markerPrefixCount(
+    expectedMarkers,
+    MARKER_REVIEW_RESOLUTION,
+  );
+  const priorResolutionCount = markerPrefixCount(priorMarkers, MARKER_REVIEW_RESOLUTION);
+  if (expectedResolutionCount === 0 && priorResolutionCount === 0) {
+    return true;
+  }
+  if (expectedResolutionCount === 1 && priorResolutionCount === 1) {
+    const expectedResolution = markerPayload(expectedMarkers, MARKER_REVIEW_RESOLUTION);
+    const priorResolution = markerPayload(priorMarkers, MARKER_REVIEW_RESOLUTION);
+    return (
+      expectedResolution !== null &&
+      priorResolution !== null &&
+      expectedResolution === priorResolution
+    );
+  }
+  return false;
 }
 
 function validateCity(city, seenIds, seenNames) {
