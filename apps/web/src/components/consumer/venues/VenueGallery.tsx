@@ -2,6 +2,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefCallback, type MouseEvent as ReactMouseEvent } from "react";
 import type { Venue, VenueProfile } from "../../../lib/consumer-types";
 import { httpsCreditUrl } from "../../../lib/original-http-authority";
+import { venueIllustrationUrl } from "../../../lib/venue-illustration";
 import { VenueCover, venueCoverUrl } from "./VenueCover";
 import { VenueCoverCredit } from "./VenueCoverCredit";
 import { VenueSourceCredit, safeCatalogSource } from "./VenueSourceCredit";
@@ -110,6 +111,7 @@ export function VenueGallery({
     notify.current?.(next, items[next] ?? null);
   };
   const [failed, setFailed] = useState<string | null>(null);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
   const suppressClick = useRef(false);
   const labelId = useId();
@@ -119,9 +121,25 @@ export function VenueGallery({
   // Keep the morph main-loan slot after shared-resource fallback (one image); local failed still leaves morph.
   const useMorphSlot = Boolean(coverSlot && current && mainUrl && current.url === mainUrl && failed !== current.url);
   const mainLoanFallback = Boolean(coverSlot && coverFallback && current && mainUrl && current.url === mainUrl);
+  // Compact picker thumb: show per-venue illustration while the uploaded frame is empty (not morph path).
+  const compactPending = Boolean(
+    size === "compact"
+    && !useMorphSlot
+    && current
+    && failed !== current.url
+    && loadedSrc !== current.url,
+  );
+  const compactPendingStyle = compactPending
+    ? {
+        backgroundImage: `url("${venueIllustrationUrl(venue.id)}")`,
+        backgroundSize: "cover" as const,
+        backgroundPosition: "center",
+      }
+    : undefined;
 
   useEffect(() => {
     setFailed(null);
+    setLoadedSrc(null);
     // Parent-owned controlled index survives compact→expanded remount on the same venue.
     // Uncontrolled (and new-venue parent resets) still start on the main image.
     if (controlledIndex !== undefined) return;
@@ -129,6 +147,8 @@ export function VenueGallery({
     commitIndex(next);
     // Reset only when the selected venue identity changes.
   }, [venue.id]);
+  // loadedSrc is compared to current.url — a swipe/index change is pending until that url loads.
+  // Do not clear loadedSrc in an effect after ref cache-hit, or complete images stay empty.
 
   useEffect(() => {
     if (items.length === 0) {
@@ -257,6 +277,8 @@ export function VenueGallery({
       </span>
       <div
         className="gb-venue-gallery__frame"
+        data-pending={compactPending ? "uploaded" : undefined}
+        style={compactPendingStyle}
         onErrorCapture={(event) => {
           // Main loan: capture runs before the shared resource target listener — do not setFailed
           // (that would drop morph and mount a second fallback img). Let the resource own it.
@@ -274,6 +296,12 @@ export function VenueGallery({
               alt={`Обложка: ${venue.name}`}
               loading="eager"
               decoding="async"
+              style={size === "compact" && loadedSrc !== current.url ? { opacity: 0 } : undefined}
+              ref={(node) => {
+                if (!node || size !== "compact" || !current || loadedSrc === current.url) return;
+                if (node.complete && node.naturalWidth > 0) setLoadedSrc(current.url);
+              }}
+              onLoad={() => setLoadedSrc(current.url)}
               onError={() => setFailed(current.url)}
             />
           : <VenueCover cover={undefined} name={venue.name} venueId={venue.id} />}

@@ -50,11 +50,47 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     expect(again).toContain(`src="${venueIllustrationUrl(idA)}"`);
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idA) as typeof VENUE_ILLUSTRATION_URLS[number]);
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idB) as typeof VENUE_ILLUSTRATION_URLS[number]);
-    // Uploaded cover still wins over the generic illustration.
-    const uploaded=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="Synthetic"/>);
-    expect(uploaded).toContain(url);
-    expect(uploaded).not.toContain('data-fallback="illustration"');
-    expect(uploaded).toContain('data-cover="uploaded"');
+  });
+  it("shows per-venue illustration while uploaded photo is pending before onLoad",()=>{
+    const idA="00000037-1111-4111-8111-111111111111";
+    const illustration=venueIllustrationUrl(idA);
+    // SSR/first paint: uploaded src present but not yet cover=uploaded; illustration background fills the cell.
+    const pending=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="Synthetic"/>);
+    expect(pending).toContain(url);
+    expect(pending).toContain('data-cover="default"');
+    expect(pending).toContain('data-fallback="illustration"');
+    expect(pending).toContain('data-pending="uploaded"');
+    expect(pending).toContain(`url(&quot;${illustration}&quot;)`);
+    expect(pending).toContain("opacity:0");
+    expect(pending).toContain("loading=\"lazy\"");
+    // Without venueId: keep immediate uploaded paint (discovery/hero); do not invent illustration.
+    const noVenue=renderToStaticMarkup(<VenueCover cover={{uploadedUrl:url}} name="Synthetic"/>);
+    expect(noVenue).toContain(url);
+    expect(noVenue).toContain('data-cover="uploaded"');
+    expect(noVenue).not.toContain('data-pending="uploaded"');
+    expect(noVenue).not.toContain("venue-illustrations");
+    expect(noVenue).not.toContain("opacity:0");
+  });
+  it("resets pending eligibility when venue id or uploaded url changes",()=>{
+    const idA="00000037-1111-4111-8111-111111111111";
+    const idB="00000037-1111-4111-8111-111111111112";
+    const urlB="/v1/media/venue-covers/"+"b".repeat(64)+".png";
+    const first=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="A"/>);
+    expect(first).toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
+    const swappedVenue=renderToStaticMarkup(<VenueCover venueId={idB} cover={{uploadedUrl:url}} name="B"/>);
+    expect(swappedVenue).toContain(`url(&quot;${venueIllustrationUrl(idB)}&quot;)`);
+    expect(swappedVenue).toContain('data-pending="uploaded"');
+    expect(swappedVenue).not.toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
+    const swappedUrl=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:urlB}} name="A"/>);
+    expect(swappedUrl).toContain(urlB);
+    expect(swappedUrl).toContain('data-pending="uploaded"');
+    expect(swappedUrl).toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
+    // Error fallback path remains the existing illustration img (no uploaded src).
+    const failed=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:null}} name="Synthetic"/>);
+    expect(failed).toContain(`src="${venueIllustrationUrl(idA)}"`);
+    expect(failed).toContain('data-fallback="illustration"');
+    expect(failed).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(failed).not.toContain(url);
   });
   it("does not grant an editor by venueId; no controls until scoped server access",()=>{
     expect(renderToStaticMarkup(<VenueCoverEditor venueId="00000037-1111-4111-8111-111111111111" onChange={vi.fn()}/>)).toBe("");

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getGame, getMe, listAllMyParticipations, requestParticipation } from "../../../lib/api-client";
+import { getGame, getMe, getMyManagedGame, listAllMyParticipations, requestParticipation } from "../../../lib/api-client";
 import { getGameChat } from "../../../lib/messaging-api";
 import type { Game, GameDetail, Me, Participation } from "../../../lib/consumer-types";
 import { canRequestParticipation, capacityStatusLabel, dominantParticipation, participationLabel, settlementTerms } from "../../../lib/game-presentation";
@@ -40,6 +40,18 @@ function ParticipationActions({ game, own, busy, notice, readable, onRequest, on
   </GameActionBar>;
 }
 
+/** Confirmed participant only — pending/terminal statuses are not private-surface membership. */
+function isConfirmedMember(own: Participation | null): boolean {
+  return own?.status === "confirmed";
+}
+
+/** Chat is available only for published games that have not ended yet. */
+function isChatWindowOpen(game: GameDetail, now = Date.now()): boolean {
+  if (game.status !== "published") return false;
+  const ends = Date.parse(game.endsAt);
+  return Number.isFinite(ends) && ends > now;
+}
+
 export function GameDetailPage({ gameId }: { gameId: string }) {
   const [authOpen, setAuthOpen] = useState(false);
   const [game, setGame] = useState<GameDetail | null>(null);
@@ -47,6 +59,7 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
   const [own, setOwn] = useState<Participation | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [chatAvailable, setChatAvailable] = useState(false);
+  const [courtEligible, setCourtEligible] = useState(false);
   const [readable, setReadable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -55,21 +68,58 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
 
   const reload = useCallback(async () => {
     const current = ++generation.current;
-    setState("loading"); setGame(null); setChatAvailable(false); setReadable(false); setOwn(null); setMe(null);
+    // Clear private surfaces before any await so route/account switches never flash old actor data.
+    setState("loading");
+    setGame(null);
+    setChatAvailable(false);
+    setCourtEligible(false);
+    setReadable(false);
+    setOwn(null);
+    setMe(null);
+
     const result = await getGame(gameId);
     if (current !== generation.current) return;
     if (!result.ok) { setGame(null); setState("error"); return; }
     setGame(result.data);
+    // Public game is enough for the page body; private probes must not delay that paint.
+    setState("ready");
+
     const account = await getMe();
     if (current !== generation.current) return;
-    if (account.ok) {
-      setMe(account.data);
-      const [parts, chat] = await Promise.all([listAllMyParticipations(), getGameChat(gameId)]);
+    if (!account.ok) {
+      if (account.status === 401) setReadable(true);
+      return;
+    }
+    setMe(account.data);
+
+    const parts = await listAllMyParticipations();
+    if (current !== generation.current) return;
+    let participation: Participation | null = null;
+    if (parts.ok) {
+      participation = dominantParticipation(parts.data, gameId);
+      setOwn(participation);
+      setReadable(true);
+    }
+
+    const confirmed = isConfirmedMember(participation);
+    let managed = false;
+    if (!confirmed) {
+      // Authoritative owner/manager evidence — never guess from organizer.id / createdByMe.
+      const managedResult = await getMyManagedGame(gameId);
+      if (current !== generation.current) return;
+      if (managedResult.ok && managedResult.data) managed = true;
+      // Failed/unknown managed proof: leave private surfaces idle (no speculative GET).
+    }
+
+    const member = confirmed || managed;
+    setCourtEligible(member);
+
+    if (member && isChatWindowOpen(result.data)) {
+      if (current !== generation.current) return;
+      const chat = await getGameChat(gameId);
       if (current !== generation.current) return;
       setChatAvailable(chat.ok && chat.data.lifecycleState === "active");
-      if (parts.ok) { setOwn(dominantParticipation(parts.data, gameId)); setReadable(true); }
-    } else if (account.status === 401) { setReadable(true); }
-    setState("ready");
+    }
   }, [gameId]);
 
   useEffect(() => {
@@ -136,7 +186,7 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
               onLogin={() => setAuthOpen(true)}
             />
             {me && <GameVenueContacts venue={game.venue} />}
-            {me && <GameCourtBookingPanel gameId={game.id} meId={me.id} csrfToken={me.csrfToken} />}
+            {me && courtEligible && <GameCourtBookingPanel gameId={game.id} meId={me.id} csrfToken={me.csrfToken} />}
             {chatAvailable && (
               <section className="gb-game-chat-section" aria-label="Чат игры">
                 <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>
