@@ -27,6 +27,23 @@
 .gb-venue-picker-option-block > .gb-venue-picker-option {
   border-bottom: 0;
 }
+/* Source credit sibling footer — outside the select button (no nested anchors in the row). */
+.gb-venue-picker-option-source {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0 22px 10px;
+  overflow: hidden;
+  font-size: var(--c23-meta, 14px);
+  line-height: var(--c23-meta-lh, 20px);
+  color: var(--gb-text-secondary, #5c6560);
+}
+.gb-venue-picker-option-source .gb-venue-source-credit { display: block; }
+@media (max-width: 720px) {
+  .gb-venue-picker-option-source { padding-left: 16px; padding-right: 16px; }
+}
+@media (min-width: 1024px) {
+  .gb-venue-picker-option-source { padding-left: 40px; padding-right: 40px; }
+}
 .gb-venue-picker-photos {
   margin: 0;
   padding: 0 22px 12px;
