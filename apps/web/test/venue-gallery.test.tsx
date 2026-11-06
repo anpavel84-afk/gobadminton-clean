@@ -127,7 +127,9 @@ describe("VenueGallery", () => {
     const html = ssr(<VenueGallery venue={venue([], url("a"), { uploadedUrl: url("a"), credit: null })} />);
     expect(html).toContain(url("a"));
     expect(html).not.toContain("Иллюстрация");
-    expect(html).toContain('data-cover="uploaded"');
+    // Empty-gallery cover uses VenueCover: pending illustration fill until onLoad; no photo credit invented.
+    expect(html).toContain('data-pending="uploaded"');
+    expect(html).toContain('data-cover="default"');
   });
 
   it("preserves honest legacy cover credit on empty-gallery fallback (plain text when URL unsafe)", () => {
@@ -189,6 +191,50 @@ describe("VenueGallery", () => {
     ])} size="compact" showCredit={false} />);
     expect(html).not.toContain("<button");
     expect(html).not.toContain("Предыдущее фото");
+  });
+
+  it("compact frame shows per-venue illustration while uploaded photo is pending, then clears after load", () => {
+    const target = venue([
+      { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+    ]);
+    const illustration = venueIllustrationUrl(target.id);
+    const pending = ssr(<VenueGallery venue={target} size="compact" showCredit={false} />);
+    expect(pending).toContain('data-size="compact"');
+    expect(pending).toContain('data-pending="uploaded"');
+    expect(pending).toContain(`url(&quot;${illustration}&quot;)`);
+    expect(pending).toContain(url("a"));
+    expect(pending).toContain("opacity:0");
+    expect(pending).not.toContain("Иллюстрация"); // showCredit=false; do not invent illustration attribution
+    // Reuse harness slots: loadedSrc is the last null useState after index/failed.
+    hooks.cursor = 0;
+    renderToStaticMarkup(<VenueGallery venue={target} size="compact" showCredit={false} />);
+    let loadedSlot = -1;
+    for (let i = hooks.slots.length - 1; i >= 0; i--) {
+      if (hooks.slots[i] === null) { loadedSlot = i; break; }
+    }
+    expect(loadedSlot).toBeGreaterThanOrEqual(0);
+    hooks.slots[loadedSlot] = url("a");
+    hooks.cursor = 0;
+    const ready = renderToStaticMarkup(<VenueGallery venue={target} size="compact" showCredit={false} />);
+    expect(ready).not.toContain('data-pending="uploaded"');
+    expect(ready).not.toContain(`url(&quot;${illustration}&quot;)`);
+    expect(ready).toContain(url("a"));
+    expect(ready).not.toContain("opacity:0");
+  });
+
+  it("compact pending illustration resets when venue id changes without old photo flash", () => {
+    const a = venue([{ id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } }]);
+    const b = {
+      ...venue([{ id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } }]),
+      id: "a0000000-0000-4000-8000-000000000002",
+    };
+    const first = ssr(<VenueGallery venue={a} size="compact" showCredit={false} />);
+    expect(first).toContain(`url(&quot;${venueIllustrationUrl(a.id)}&quot;)`);
+    const second = ssr(<VenueGallery venue={b} size="compact" showCredit={false} />);
+    expect(second).toContain(`url(&quot;${venueIllustrationUrl(b.id)}&quot;)`);
+    expect(second).toContain(url("b"));
+    expect(second).not.toContain(url("a"));
+    expect(second).toContain('data-pending="uploaded"');
   });
 
   it("integrates gallery with morph slot in preview instead of bypassing", () => {

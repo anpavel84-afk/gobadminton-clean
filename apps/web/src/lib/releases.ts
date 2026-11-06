@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.32" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.33" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
@@ -424,20 +424,19 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.32",
-  "title": "Карточка площадки и уточнённые адреса",
+  "application_version": "0.1.0-alpha.33",
+  "title": "Приватные функции игры и загрузка обложек",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "Дополнительные площадки с уточнёнными адресами после проверки источника"
-  ],
+  "additions": [],
   "fixes": [
-    "Исправлена компактная карточка площадки на карте: источник и название снова читаются нормально"
+    "Закрытые и приватные функции игры запрашиваются только там, где они доступны",
+    "В выборе площадки обложки больше не показывают пустые ячейки во время загрузки"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
     "Часть сведений о площадках ещё находится на проверке",
-    "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
+    "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
   ],
   "feature_catalogue": "delta"
 };
@@ -1506,6 +1505,37 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "additions": [],
     "fixes": [
       "Исправлен выбор города: карта и список площадок показывают выбранный город"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
+    ]
+  },
+
+  {
+    "source_sha": "9b07e77fcf300b0265e2151478c45d2881b389d0",
+    "application_version": "0.1.0-alpha.32",
+    "version_label": "0.1.0-alpha.32",
+    "title": "Карточка площадки и уточнённые адреса",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42280047435-a1",
+        "accepted_at": "2026-11-06T19:34:49Z",
+        "api_digest": "sha256:9f0b07204b6907849188abce8863a735d9b90148dd9b06fa435ab1eeea8c19de",
+        "web_digest": "sha256:b06268f74eb4edee8c90806c94c7bbf27495ed9edd1a4087026cb2320f29f1eb",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Дополнительные площадки с уточнёнными адресами после проверки источника"
+    ],
+    "fixes": [
+      "Исправлена компактная карточка площадки на карте: источник и название снова читаются нормально"
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",

@@ -40,21 +40,37 @@ vi.mock("next/link", () => ({ default: ({ children, ...props }: { children: Reac
 vi.mock("../src/lib/api-client", () => ({
   getGame: vi.fn(),
   getMe: vi.fn(),
+  getMyManagedGame: vi.fn(),
   listAllMyParticipations: vi.fn(),
   requestParticipation: vi.fn(),
-  // GameDetailPage mounts GameCourtBookingPanel; panel GET must settle without unhandled rejection.
+  // GameDetailPage mounts GameCourtBookingPanel only when eligible; panel GET must settle without unhandled rejection.
   getGameCourtBooking: vi.fn(),
 }));
 vi.mock("../src/lib/messaging-api", () => ({ getGameChat: vi.fn() }));
-import { getGame, getGameCourtBooking, getMe, listAllMyParticipations } from "../src/lib/api-client";
+import { getGame, getGameCourtBooking, getMe, getMyManagedGame, listAllMyParticipations } from "../src/lib/api-client";
 import { getGameChat } from "../src/lib/messaging-api";
 import { GameDetailPage } from "../src/components/consumer/pages/GameDetailPage";
+import type { Participation } from "../src/lib/consumer-types";
 const publicVenue: VenueSummary = { id: "venue", name: "Зал", address: "Адрес", cityId: "city", timezone: "UTC" };
 const privateVenue = { ...publicVenue, contactPhone: "+7 (999) 123-45-67", contactWebsite: "https://example.org/booking", bookingNote: "PRIVATE_SENTINEL <img src=x onerror=alert(1)>" };
-const game = { id: "a", venue: privateVenue, status: "published", availablePlaces: 3, applicationDeadlineAt: "2099-01-01", settlement: { mode: "external", terms: "Условия" } } as GameDetail;
+const game = { id: "a", venue: privateVenue, status: "published", endsAt: "2099-01-01T16:00:00Z", availablePlaces: 3, applicationDeadlineAt: "2099-01-01", settlement: { mode: "external", terms: "Условия" } } as GameDetail;
+function participation(status: Participation["status"], gameId = "a"): Participation {
+  return { id: `p-${status}`, gameId, userId: "viewer", status, version: 1, attemptNumber: 1, requestedAt: "2026-01-01T00:00:00Z" };
+}
+const activeChat = {
+  id: "chat", kind: "game" as const, gameId: "a", lifecycleState: "active" as const, version: 1,
+  lastMessageAt: null, lastMessageSeq: "0", readThroughSeq: "0", unreadCount: 0,
+  memberRole: "member" as const, createdAt: "2026-01-01T00:00:00Z",
+};
+function courtBooking(status: "unspecified" | "arranging" | "organizer_confirmed" | "not_arranged", canUpdate: boolean) {
+  return {
+    gameId: "a", status, version: 1, updatedAt: null, declarationSource: "organizer_declared" as const,
+    allowedActions: { canUpdate },
+  };
+}
 function render(id = "a") { hooks.cursor = 0; return renderToStaticMarkup(GameDetailPage({ gameId: id })); }
 function effects() { hooks.effects.splice(0).forEach(fn => fn()); }
-async function settle(id = "a") { for (let i = 0; i < 10; i++) { render(id); effects(); await Promise.resolve(); } return render(id); }
+async function settle(id = "a") { for (let i = 0; i < 12; i++) { render(id); effects(); await Promise.resolve(); } return render(id); }
 const markup = (venue: GameDetail["venue"]) => renderToStaticMarkup(<GameVenueContacts venue={venue} />);
 beforeEach(() => {
   hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.cleanups = [];
@@ -62,6 +78,7 @@ beforeEach(() => {
   vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: game });
   vi.mocked(getMe).mockResolvedValue({ ok: true, status: 200, data: { id: "viewer", displayName: "Viewer", csrfToken: "test", locale: "ru", linkedProviders: [] } });
   vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [] });
+  vi.mocked(getMyManagedGame).mockResolvedValue({ ok: true, status: 200, data: null });
   // Indistinguishable private 404: contact assertions stay independent of booking panel surface.
   vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: false, status: 404, error: "not_found" });
   vi.mocked(getGameChat).mockResolvedValue({ ok: false, status: 403, error: "denied" });
@@ -153,6 +170,160 @@ describe("game-only venue contacts", () => {
     const html = await settle(); expect(html).toContain("Игра недоступна"); expect(html).not.toContain("PRIVATE_SENTINEL");
   });
 });
+
+describe("game detail private surface eligibility (#473)", () => {
+  it("deferred getMe keeps public ready with neutral checking, then normal CTA", async () => {
+    let finishMe!: (result: Awaited<ReturnType<typeof getMe>>) => void;
+    vi.mocked(getMe).mockImplementationOnce(() => new Promise(resolve => { finishMe = resolve; }));
+    render(); effects();
+    await Promise.resolve();
+    const pending = render();
+    expect(pending).toContain('data-state="ready"');
+    expect(pending).toContain("Проверяем участие");
+    expect(pending).not.toContain("Не удалось проверить участие");
+    expect(pending).not.toContain(">Проверить участие<");
+    finishMe({ ok: true, status: 200, data: { id: "viewer", displayName: "Viewer", csrfToken: "test", locale: "ru", linkedProviders: [] } });
+    const done = await settle();
+    expect(done).toContain("Оставить заявку");
+    expect(done).not.toContain("Проверяем участие");
+    expect(done).not.toContain("Не удалось проверить участие");
+  });
+
+  it("deferred parts keeps neutral checking until resolution; failure shows retry only after", async () => {
+    let finishParts!: (result: Awaited<ReturnType<typeof listAllMyParticipations>>) => void;
+    vi.mocked(listAllMyParticipations).mockImplementationOnce(() => new Promise(resolve => { finishParts = resolve; }));
+    render(); effects();
+    await Promise.resolve();
+    await Promise.resolve();
+    const pending = render();
+    expect(pending).toContain('data-state="ready"');
+    expect(pending).toContain("Проверяем участие");
+    expect(pending).not.toContain("Не удалось проверить участие");
+    expect(pending).not.toContain(">Проверить участие<");
+    finishParts({ ok: false, status: 503, error: "offline" });
+    const failed = await settle();
+    expect(failed).toContain("Не удалось проверить участие");
+    expect(failed).toContain("Проверить участие");
+    expect(failed).not.toContain("Проверяем участие");
+  });
+
+  it("outsider with session probes managed list once and never chat/court GET", async () => {
+    await settle();
+    expect(getMyManagedGame).toHaveBeenCalledWith("a");
+    expect(getGameChat).not.toHaveBeenCalled();
+    expect(getGameCourtBooking).not.toHaveBeenCalled();
+    expect(await settle()).not.toContain("Чат игры");
+  });
+
+  it("guest skips all private membership probes", async () => {
+    vi.mocked(getMe).mockResolvedValue({ ok: false, status: 401, error: "guest" });
+    await settle();
+    expect(listAllMyParticipations).not.toHaveBeenCalled();
+    expect(getMyManagedGame).not.toHaveBeenCalled();
+    expect(getGameChat).not.toHaveBeenCalled();
+    expect(getGameCourtBooking).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "rejected", "withdrawn", "removed", "expired", "cancelled_by_game"] as const)(
+    "%s participation skips chat/court speculative GET",
+    async (status) => {
+      vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [participation(status)] });
+      await settle();
+      expect(getMyManagedGame).toHaveBeenCalled();
+      expect(getGameChat).not.toHaveBeenCalled();
+      expect(getGameCourtBooking).not.toHaveBeenCalled();
+    },
+  );
+
+  it("confirmed participant mounts court and requests chat for published future game", async () => {
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [participation("confirmed")] });
+    vi.mocked(getGameChat).mockResolvedValue({ ok: true, status: 200, data: activeChat });
+    vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: true, status: 200, data: courtBooking("unspecified", false) });
+    const html = await settle();
+    expect(getMyManagedGame).not.toHaveBeenCalled();
+    expect(getGameChat).toHaveBeenCalledWith("a");
+    expect(getGameCourtBooking).toHaveBeenCalled();
+    expect(html).toContain("Чат игры");
+  });
+
+  it("delegated manager without participation still gets court+chat when published future", async () => {
+    vi.mocked(getMyManagedGame).mockResolvedValue({
+      ok: true, status: 200,
+      data: { ...game, management: { role: "manager", createdByMe: false } } as never,
+    });
+    vi.mocked(getGameChat).mockResolvedValue({ ok: true, status: 200, data: activeChat });
+    vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: true, status: 200, data: courtBooking("arranging", true) });
+    await settle();
+    expect(getMyManagedGame).toHaveBeenCalledWith("a");
+    expect(getGameChat).toHaveBeenCalledWith("a");
+    expect(getGameCourtBooking).toHaveBeenCalled();
+  });
+
+  it("closed/past published game skips chat GET but still mounts court for confirmed member", async () => {
+    vi.mocked(getGame).mockResolvedValue({
+      ok: true, status: 200,
+      data: { ...game, endsAt: "2020-01-01T16:00:00Z" },
+    });
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [participation("confirmed")] });
+    vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: true, status: 200, data: courtBooking("organizer_confirmed", false) });
+    await settle();
+    expect(getGameChat).not.toHaveBeenCalled();
+    expect(getGameCourtBooking).toHaveBeenCalled();
+  });
+
+  it("cancelled published-window game skips chat GET for manager while court remains eligible", async () => {
+    vi.mocked(getGame).mockResolvedValue({
+      ok: true, status: 200,
+      data: { ...game, status: "cancelled" },
+    });
+    vi.mocked(getMyManagedGame).mockResolvedValue({
+      ok: true, status: 200,
+      data: { ...game, status: "cancelled", management: { role: "owner", createdByMe: true } } as never,
+    });
+    vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: true, status: 200, data: courtBooking("not_arranged", true) });
+    await settle();
+    expect(getGameChat).not.toHaveBeenCalled();
+    expect(getGameCourtBooking).toHaveBeenCalled();
+  });
+
+  it("failed participation proof without managed hit skips private GET", async () => {
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: false, status: 503, error: "offline" });
+    await settle();
+    expect(getMyManagedGame).toHaveBeenCalled();
+    expect(getGameChat).not.toHaveBeenCalled();
+    expect(getGameCourtBooking).not.toHaveBeenCalled();
+  });
+
+  it("route change clears private surfaces before late previous-actor chat resolves", async () => {
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [participation("confirmed")] });
+    let finishChat!: (result: Awaited<ReturnType<typeof getGameChat>>) => void;
+    vi.mocked(getGameChat).mockImplementationOnce(() => new Promise(resolve => { finishChat = resolve; }));
+    vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: true, status: 200, data: courtBooking("unspecified", false) });
+    await settle("a");
+    expect(getGameChat).toHaveBeenCalled();
+    vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: { ...game, id: "b", venue: publicVenue } });
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [] });
+    vi.mocked(getMyManagedGame).mockResolvedValue({ ok: true, status: 200, data: null });
+    window.dispatchEvent(new Event("focus"));
+    const mid = render("b");
+    expect(mid).not.toContain("Чат игры");
+    expect(mid).not.toContain("PRIVATE_SENTINEL");
+    finishChat({ ok: true, status: 200, data: activeChat });
+    expect(await settle("b")).not.toContain("Чат игры");
+  });
+
+  it("session change clears private surfaces immediately", async () => {
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [participation("confirmed")] });
+    vi.mocked(getGameChat).mockResolvedValue({ ok: true, status: 200, data: activeChat });
+    vi.mocked(getGameCourtBooking).mockResolvedValue({ ok: true, status: 200, data: courtBooking("unspecified", false) });
+    expect(await settle()).toContain("Чат игры");
+    vi.mocked(getMe).mockResolvedValue({ ok: false, status: 401, error: "guest" });
+    window.dispatchEvent(new Event("gb-session-changed"));
+    expect(render()).not.toContain("Чат игры");
+    expect(await settle()).not.toContain("Чат игры");
+  });
+});
+
 // Compile-time public/private fence: public venue types cannot name private keys.
 const publicTypeFence: [Extract<keyof Venue, "contactPhone" | "contactWebsite" | "bookingNote">, Extract<keyof VenueSummary, "contactPhone" | "contactWebsite" | "bookingNote">] extends [never, never] ? true : never = true;
 void publicTypeFence;
