@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.30" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.31" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.35.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,22 +424,17 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.30",
-  "title": "Региональные карты и источник площадок",
+  "application_version": "0.1.0-alpha.31",
+  "title": "Выбор города для поиска",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "Карты ещё 11 городов для поиска игр и площадок",
-    "Видимая ссылка на источник badminton4u.ru у импортированных площадок",
-    "Каталог площадок новых городов с данными клубов"
-  ],
+  "additions": [],
   "fixes": [
-    "Площадки за пределами 40 км не попадают в подборку нового города"
+    "Исправлен выбор города: карта и список площадок показывают выбранный город"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
     "Часть сведений о площадках ещё находится на проверке",
-    "Новые карты ещё ожидают проверки на мобильных устройствах",
     "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
   ],
   "feature_catalogue": "delta"
@@ -1451,6 +1446,40 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Приёмка владельцем ещё не выполнена",
       "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно",
       "Проверка уведомлений на настоящем iPhone ещё не выполнена"
+    ]
+  },
+
+  {
+    "source_sha": "9e7b1fcb7dddd7706e5902b755883d48b3cf945b",
+    "application_version": "0.1.0-alpha.30",
+    "version_label": "0.1.0-alpha.30",
+    "title": "Региональные карты и источник площадок",
+    "api_contract_version": "0.35.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42259332272-a1",
+        "accepted_at": "2026-11-06T17:26:22Z",
+        "api_digest": "sha256:bfc21680a8a761490689c4d9c2e27da5782c4abc76211616fe98f4bcb4a9587b",
+        "web_digest": "sha256:9c9bce96000be81d90adb251e1a74c28d4c990ef2c53c9053b0708011276d3dc",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Карты ещё 11 городов для поиска игр и площадок",
+      "Видимая ссылка на источник badminton4u.ru у импортированных площадок",
+      "Каталог площадок новых городов с данными клубов"
+    ],
+    "fixes": [
+      "Площадки за пределами 40 км не попадают в подборку нового города"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Независимая мобильная проверка новых карт ещё не завершена",
+      "Документы и контакт поддержки пока не опубликованы; удаление аккаунта пока недоступно"
     ]
   },
 

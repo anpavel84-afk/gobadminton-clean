@@ -102,10 +102,27 @@ describe("discovery city exact contract and asynchronous authority", () => {
     const work=c.start();await flush();await work;device.setItem(DISCOVERY_CITY_KEY,JSON.stringify({guest:manual(PETERSBURG),accounts:{B:manual(MOSCOW)}}));c.storageChanged();expect(c.snapshot().location?.cityId).toBe(PETERSBURG);
   });
   it("rejects expired/corrupt/municipal values and derives labels from supported IDs", () => {
+    const NOVOSIBIRSK = "1775016f-373e-5a15-958b-1305770b2b16";
     expect(validManual({...manual(MOSCOW),expiresAt:Date.now()-1})).toBe(false);
     expect(validManual({...manual(MOSCOW),cityId:"municipality"})).toBe(false);
     expect(validManual({...manual(MOSCOW),serverVersion:NaN})).toBe(false);
+    expect(validManual({...manual("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")})).toBe(false);
     const device=storage();device.setItem(DISCOVERY_CITY_KEY,"null");expect(readDeviceCities(device).accounts).toEqual({});
-    expect(supportedLocation(MOSCOW)).toEqual({cityId:MOSCOW,nameRu:"Москва",timezone:"Europe/Moscow"});expect(supportedLocation("municipality")).toBeNull();
+    expect(supportedLocation(MOSCOW)).toEqual({cityId:MOSCOW,nameRu:"Москва",timezone:"Europe/Moscow"});
+    expect(supportedLocation(PETERSBURG)).toEqual({cityId:PETERSBURG,nameRu:"Санкт-Петербург",timezone:"Europe/Moscow"});
+    expect(supportedLocation(NOVOSIBIRSK)).toEqual({cityId:NOVOSIBIRSK,nameRu:"Новосибирск",timezone:"Asia/Novosibirsk"});
+    expect(supportedLocation("municipality")).toBeNull();
+    expect(supportedLocation("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")).toBeNull();
+  });
+  it("manual regional choice is accepted and survives guest restart", async () => {
+    const NOVOSIBIRSK = "1775016f-373e-5a15-958b-1305770b2b16";
+    const device = storage();
+    const {c} = harness(p => p === "/v1/me" ? fail(401) : ok({cityId:MOSCOW,source:"default"}), device);
+    const work = c.start(); await flush(); await work;
+    expect(c.choose(NOVOSIBIRSK)).toBe(true);
+    expect(c.snapshot().location).toEqual({cityId:NOVOSIBIRSK,nameRu:"Новосибирск",timezone:"Asia/Novosibirsk"});
+    const next = harness(p => p === "/v1/me" ? fail(401) : ok({cityId:MOSCOW,source:"default"}), device).c;
+    const reload = next.start(); await flush(); await reload;
+    expect(next.snapshot().location?.cityId).toBe(NOVOSIBIRSK);
   });
 });

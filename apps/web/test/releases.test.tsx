@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.30 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.30");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.35.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.31 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.31");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,8 +64,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/карт|источник|импорт/i);
-    expect(currentProse).toMatch(/VERIFY|визуальн|приёмк/i);
+    expect(currentProse).toMatch(/город|выбор|карт/i);
+    expect(currentProse).toMatch(/приёмк/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
@@ -75,7 +75,7 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/11 город|badminton4u|импорт/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/город|выбор|карт/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
@@ -228,10 +228,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(33);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(34);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(38);
+    ).toBe(39);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.29"
       && row.source_sha === "76490b2be720e9f6b923bd3db477fb6065d6d13c"
@@ -240,6 +240,16 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.api_digest === "sha256:e64b5c6f9ea34c69fe7d87ef3d6d21e52facf4bac370a48570b1d4eecde36a1b"
       && row.deployments[0]?.web_digest === "sha256:6c500ba801385cb62e8a753c9d5d86912bf4953ea53c86dbddc1f6f4bc62451c"
       && row.api_contract_version === "0.34.0",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.30"
+      && row.source_sha === "9e7b1fcb7dddd7706e5902b755883d48b3cf945b"
+      && row.deployments[0]?.release_id === "r42259332272-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-06T17:26:22Z"
+      && row.deployments[0]?.api_digest === "sha256:bfc21680a8a761490689c4d9c2e27da5782c4abc76211616fe98f4bcb4a9587b"
+      && row.deployments[0]?.web_digest === "sha256:9c9bce96000be81d90adb251e1a74c28d4c990ef2c53c9053b0708011276d3dc"
+      && row.api_contract_version === "0.35.0"
+      && row.title === "Региональные карты и источник площадок",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.26"
