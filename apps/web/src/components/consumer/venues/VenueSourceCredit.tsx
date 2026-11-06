@@ -41,6 +41,8 @@ function stopCardGesture(event: ReactMouseEvent) {
 export function VenueSourceCredit({ catalogSource }: { catalogSource?: VenueCatalogSource | null }) {
   const source = safeCatalogSource(catalogSource);
   if (!source) return null;
+  const primaryClub = source.clubs[0];
+  if (!primaryClub) return null;
   return (
     <span
       className="gb-venue-cover-credit gb-venue-source-credit"
@@ -54,7 +56,7 @@ export function VenueSourceCredit({ catalogSource }: { catalogSource?: VenueCata
       onPointerDown={stopCardGesture}
     >
       <a
-        href="https://badminton4u.ru/"
+        href={primaryClub.url}
         target="_blank"
         rel="noopener noreferrer nofollow"
         onClick={stopCardGesture}

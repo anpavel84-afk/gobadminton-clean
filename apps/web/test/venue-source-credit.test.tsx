@@ -17,7 +17,13 @@ describe("VenueSourceCredit", () => {
     expect(html).toContain("Источник: badminton4u.ru");
     expect(html).toContain("Badmclub НН");
     expect(html).toContain("Второй клуб");
+    // Main «Источник» anchor targets the validated first club page, not the provider homepage.
+    expect(html).toMatch(
+      /href="https:\/\/badminton4u\.ru\/clubs\/208"[^>]*>Источник: badminton4u\.ru</,
+    );
+    expect(html).not.toContain('href="https://badminton4u.ru/"');
     expect(html).toContain('href="https://badminton4u.ru/clubs/208"');
+    expect(html).toContain('href="https://badminton4u.ru/clubs/209"');
     expect(html).toContain('rel="noopener noreferrer nofollow"');
     expect(safeCatalogSource({
       ...catalogSource,
@@ -27,6 +33,11 @@ describe("VenueSourceCredit", () => {
       ...catalogSource,
       clubs: [{ id: "B4U-C-208", name: "<script>", url: "https://badminton4u.ru/clubs/208" }],
     })).toBeNull();
+    expect(safeCatalogSource({
+      ...catalogSource,
+      clubs: [],
+    })).toBeNull();
     expect(renderToStaticMarkup(<VenueSourceCredit catalogSource={null} />)).toBe("");
+    expect(renderToStaticMarkup(<VenueSourceCredit catalogSource={undefined} />)).toBe("");
   });
 });

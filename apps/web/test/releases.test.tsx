@@ -238,7 +238,7 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.release_id === "r41954344736-a1"
       && row.deployments[0]?.accepted_at === "2026-11-05T02:24:52Z"
       && row.deployments[0]?.api_digest === "sha256:e64b5c6f9ea34c69fe7d87ef3d6d21e52facf4bac370a48570b1d4eecde36a1b"
-      && row.deployments[0]?.web_digest === "sha256:b6c500ba801385cb62e8a753c9d5d86912bf4953ea53c86dbddc1f6f4bc62451c"
+      && row.deployments[0]?.web_digest === "sha256:6c500ba801385cb62e8a753c9d5d86912bf4953ea53c86dbddc1f6f4bc62451c"
       && row.api_contract_version === "0.34.0",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
