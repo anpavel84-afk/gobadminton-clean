@@ -275,7 +275,7 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     const service=app.get(GamesService);
     await service.publish(a.userId,a.session.session.id,g.id,randomUUID(),saved.json().version);
     await service.publish(a.userId,a.session.session.id,inheritor.id,randomUUID(),inheritor.version);
-    const image=await read(ownUrl);expect(image.statusCode,image.body).toBe(200);expect(image.headers["cache-control"]).toBe("no-store");expect(image.headers.vary).toBe("Cookie");
+    const image=await read(ownUrl);expect(image.statusCode,image.body).toBe(200);expect(image.headers["cache-control"]).toBe("no-store");expect(image.headers.vary).toBe("Cookie, Accept");
     const meta=await sharp(image.rawPayload).metadata();expect(meta).toMatchObject({format:"png",width:1200,height:400});expect(meta.exif).toBeUndefined();expect(meta.icc).toBeUndefined();
     const changed=await upload(v.id,2);expect(changed.statusCode,changed.body).toBe(200);const current=changed.json().cover.uploadedUrl;
     async function projections(id:string,expected:string|null){

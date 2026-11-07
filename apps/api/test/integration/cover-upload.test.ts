@@ -63,7 +63,7 @@ run("owned cover: disposable PostGIS API", () => {
     const hide=await app.inject({method:"PUT",url:"/v1/me/social-profile/visibility",headers:{...own,"content-type":"application/json","idempotency-key":randomUUID()},payload:{directoryVisible:false,expectedVersion:version}});
     expect(hide.statusCode,hide.body).toBe(200);version=hide.json().version;
     expect((await read()).statusCode).toBe(404);expect((await read(other)).statusCode).toBe(404);
-    const image=await read(own);expect(image.statusCode).toBe(200);expect(image.headers["cache-control"]).toBe("no-store");expect(image.headers.vary).toBe("Cookie");
+    const image=await read(own);expect(image.statusCode).toBe(200);expect(image.headers["cache-control"]).toBe("no-store");expect(image.headers.vary).toBe("Cookie, Accept");
     const meta=await sharp(image.rawPayload).metadata();expect(meta).toMatchObject({width:1200,height:400,format:"png"});expect(meta.exif).toBeUndefined();expect(meta.icc).toBeUndefined();
     expect((await app.inject({method:"GET",url:"/v1/me/cover",headers:own})).json()).toEqual({version,cover:{uploadedUrl:url}});
     const approval=await pool.query("SELECT a.surface_key,a.decision FROM player_social_profiles p JOIN content_moderation_approvals a ON a.id=p.cover_moderation_approval_id WHERE p.user_id=$1",[user]);expect(approval.rows[0]).toEqual({surface_key:"cover_image",decision:"allow"});
