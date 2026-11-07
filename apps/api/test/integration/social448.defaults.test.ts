@@ -340,7 +340,7 @@ run("Owner #448 social profile defaults", () => {
       directory_visible: false,
       contact_policy: "closed",
       directory_visibility_provenance: DIRECTORY_VISIBILITY_PROVENANCE.USER_OPT_OUT,
-      display_name: "Legacy Missing",
+      display_name: SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
       version: 2,
     });
   });
