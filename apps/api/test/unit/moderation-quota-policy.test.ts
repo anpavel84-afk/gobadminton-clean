@@ -104,11 +104,12 @@ describe("moderation DEV quantity-quota pause policy", () => {
         return { rowCount: 1, rows: [{ user_id: params[0] }] };
       }),
     };
-    const pauseUntil = new Date("2027-01-01T00:00:00.000Z");
+    // Production ContentModerationService always binds the Owner hard deadline constant.
+    expect(DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL.toISOString()).toBe("2027-01-01T00:00:00.000Z");
     expect(
       await reserveModerationAttemptRow(pool, "11111111-1111-1111-1111-111111111111", "text", {
         trustedDevEnv: true,
-        pauseUntil,
+        pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
       }),
     ).toBe(true);
     const call = seen[0] as { sql: string; params: unknown[] };
@@ -116,8 +117,10 @@ describe("moderation DEV quantity-quota pause policy", () => {
       "11111111-1111-1111-1111-111111111111",
       "text",
       true,
-      pauseUntil,
+      DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
     ]);
+    expect(call.params[3]).toBe(DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL);
+    expect((call.params[3] as Date).toISOString()).toBe("2027-01-01T00:00:00.000Z");
     expect(call.sql).toMatch(/\$3::boolean AND now\(\) < \$4::timestamptz/);
     expect(call.sql).toMatch(/next_allowed_at IS NULL OR content_moderation_rate_budgets\.next_allowed_at <= now\(\)/);
     // Quantity OR-group must not wrap next_allowed_at.

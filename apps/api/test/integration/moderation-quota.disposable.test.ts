@@ -97,8 +97,16 @@ run("moderation quantity quota reservation — synthetic PostGIS only", () => {
     ).rows[0];
   }
 
+  /** Active-branch SQL tests bind a future deadline relative to this DB's clock (not the Owner constant). */
+  async function futurePauseUntil(msAhead = 60_000): Promise<Date> {
+    const clock = await pool.query<{ now: Date }>("SELECT now() AS now");
+    return new Date(clock.rows[0]!.now.getTime() + msAhead);
+  }
+
   it("local/non-DEV over-quota still 429-equivalent without provider I/O", async () => {
     await seed({ count: 10, dayCount: 10 });
+    // Non-DEV fail-closed: Owner constant may be used; env gate alone blocks.
+    expect(DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL.toISOString()).toBe("2027-01-01T00:00:00.000Z");
     const ok = await reserveModerationAttemptRow(pool, userId, "image", {
       trustedDevEnv: false,
       pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
@@ -112,7 +120,7 @@ run("moderation quantity quota reservation — synthetic PostGIS only", () => {
     await seed({ count: 10, dayCount: 50 });
     const ok = await reserveModerationAttemptRow(pool, userId, "image", {
       trustedDevEnv: true,
-      pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+      pauseUntil: await futurePauseUntil(),
     });
     expect(ok).toBe(true);
     expect(await row()).toEqual({ count: 11, day_count: 51 });
@@ -161,13 +169,14 @@ run("moderation quantity quota reservation — synthetic PostGIS only", () => {
     expect(
       await reserveModerationAttemptRow(pool, userId, "image", {
         trustedDevEnv: false,
-        pauseUntil: new Date(Date.now() + 86400_000),
+        pauseUntil: await futurePauseUntil(86400_000),
       }),
     ).toBe(false);
     expect(await row()).toEqual({ count: 10, day_count: 50 });
   });
 
   it("next_allowed_at provider backoff is never bypassed by quantity pause", async () => {
+    const pauseUntil = await futurePauseUntil();
     await seed({
       count: 3,
       dayCount: 3,
@@ -176,7 +185,7 @@ run("moderation quantity quota reservation — synthetic PostGIS only", () => {
     expect(
       await reserveModerationAttemptRow(pool, userId, "image", {
         trustedDevEnv: true,
-        pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+        pauseUntil,
       }),
     ).toBe(false);
     expect(await row()).toEqual({ count: 3, day_count: 3 });
@@ -188,7 +197,7 @@ run("moderation quantity quota reservation — synthetic PostGIS only", () => {
     expect(
       await reserveModerationAttemptRow(pool, userId, "image", {
         trustedDevEnv: true,
-        pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+        pauseUntil,
       }),
     ).toBe(true);
     expect(await row()).toEqual({ count: 4, day_count: 4 });
@@ -207,7 +216,7 @@ run("moderation quantity quota reservation — synthetic PostGIS only", () => {
     expect(
       await reserveModerationAttemptRow(pool, userId, "image", {
         trustedDevEnv: true,
-        pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+        pauseUntil: await futurePauseUntil(),
       }),
     ).toBe(true);
     expect(await row()).toEqual({ count: 2, day_count: 51 });

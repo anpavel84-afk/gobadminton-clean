@@ -1,4 +1,3 @@
-import type { Pool } from "pg";
 import type { AppEnv } from "../config/env";
 
 /**
@@ -15,6 +14,17 @@ export type ModerationQuotaEnv = Pick<
   AppEnv,
   "NODE_ENV" | "APP_ENV" | "PUBLIC_WEB_ORIGIN" | "PUBLIC_API_ORIGIN"
 >;
+
+/**
+ * Narrow (text, values) query port actually used by reservation SQL.
+ * Method form keeps real `pg.Pool` assignable; avoids overloaded `Pool["query"]` stub friction.
+ */
+export type ModerationQuotaQueryPort = {
+  query(
+    queryText: string,
+    values: unknown[],
+  ): Promise<{ rowCount: number | null; rows: Array<Record<string, unknown>> }>;
+};
 
 /**
  * Exact trusted DEV runtime discrimination (mvp|stage + production + both public origins).
@@ -54,7 +64,7 @@ export type ReserveModerationAttemptOptions = {
  * Counts / day_counts still increment on every successful reservation.
  */
 export async function reserveModerationAttemptRow(
-  pool: Pick<Pool, "query">,
+  pool: ModerationQuotaQueryPort,
   actorId: string,
   bucket: "image" | "text",
   options: ReserveModerationAttemptOptions,
