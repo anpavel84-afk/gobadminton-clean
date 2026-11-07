@@ -178,6 +178,8 @@ describeIntegration("LS-04 GameInvitation", () => {
     await pool.query("DELETE FROM social_pairs");
     await pool.query("DELETE FROM player_looking_intents");
     await pool.query("DELETE FROM player_social_profiles");
+    // Shared synthetic actors: unique profile/game text consumes moderation budget (10/15min).
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
   });
 
   async function login(provider: "vk" | "yandex"): Promise<Session> {
@@ -287,6 +289,10 @@ describeIntegration("LS-04 GameInvitation", () => {
     owner: Session,
     opts: { capacity: number; title?: string },
   ) {
+    // Isolate text budget per synthetic draft (same owner, many unique titles in one test).
+    await pool.query("DELETE FROM content_moderation_rate_budgets WHERE user_id=$1", [
+      owner.userId,
+    ]);
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
     const venueRes = await app.inject({
       method: "POST",

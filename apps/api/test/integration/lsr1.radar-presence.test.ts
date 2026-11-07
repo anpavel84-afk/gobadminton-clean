@@ -872,9 +872,10 @@ describeIntegration("LS-R1 radar presence/matching", () => {
     });
     expect(before.statusCode).toBe(200);
     // Owner #448: missing profile is materialized ON (no fake city/consent stamps).
+    // MOD-V2-A: automatic public name is trusted Игрок (not account/provider displayName).
     expect(before.json()).toMatchObject({
       version: 1,
-      displayName: "LSR1 Player A",
+      displayName: "Игрок",
       directoryVisible: true,
       cityId: null,
       consentPolicyVersion: null,
@@ -900,7 +901,7 @@ describeIntegration("LS-R1 radar presence/matching", () => {
       consentPolicyVersion: string | null;
       optedInAt: string | null;
     };
-    expect(own.displayName).toBe("LSR1 Player A");
+    expect(own.displayName).toBe("Игрок");
     expect(own.directoryVisible).toBe(true);
     expect(own.cityId).toBeNull();
     expect(own.socialEligible).toBe(true);

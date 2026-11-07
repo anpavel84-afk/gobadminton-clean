@@ -199,6 +199,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0058_venue_experience_reviews",
         "0059_regional_discovery_preferences",
         "0060_game_event_push",
+        "0061_content_moderation_text",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -246,6 +247,59 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.web_push_delivery_intents')::text AS name")).rows[0]?.name).toBe("web_push_delivery_intents");
       // 0060 #496 game-event push preference columns + cancel snapshot + event_key uniqueness.
       expect((await pool.query("SELECT to_regclass('public.web_push_game_cancel_recipients')::text AS name")).rows[0]?.name).toBe("web_push_game_cancel_recipients");
+      // 0061 #506 MOD-V2-A text bindings + expanded approval surface allowlist.
+      expect((await pool.query("SELECT to_regclass('public.content_moderation_bindings')::text AS name")).rows[0]?.name).toBe("content_moderation_bindings");
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/profile_bio/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/organizer_public_contact/);
+      const bindingsRollback = await pool.connect();
+      try {
+        await bindingsRollback.query("BEGIN");
+        await bindingsRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/rollback/0061_content_moderation_text.sql"),
+            "utf8",
+          ),
+        );
+        expect(
+          (await bindingsRollback.query("SELECT to_regclass('public.content_moderation_bindings')::text AS name"))
+            .rows[0]?.name,
+        ).toBeNull();
+        expect(
+          (await bindingsRollback.query("SELECT 1 FROM schema_migrations WHERE id='0061_content_moderation_text'"))
+            .rowCount,
+        ).toBe(0);
+        expect(
+          (
+            await bindingsRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_approvals'::regclass
+                 AND conname = 'content_moderation_approvals_surface_key_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).not.toMatch(/organizer_public_contact/);
+      } finally {
+        await bindingsRollback.query("ROLLBACK");
+        bindingsRollback.release();
+      }
       const pushPrefCols = await pool.query<{ column_name: string }>(
         `SELECT column_name FROM information_schema.columns
          WHERE table_schema='public' AND table_name='web_push_preferences'

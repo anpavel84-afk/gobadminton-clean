@@ -237,11 +237,13 @@ run("Owner #448 social profile defaults", () => {
       cityId: null,
       consentPolicyVersion: null,
       optedInAt: null,
-      displayName: "Social448 OAuth Name",
+      // MOD-V2-A: automatic OAuth public name is trusted Игрок (not provider displayName).
+      displayName: SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
     });
     const wire = JSON.stringify(own.json());
     expect(wire).not.toContain(oauthIdentity.email);
     expect(wire).not.toContain(session.userId);
+    expect(wire).not.toContain(oauthIdentity.displayName);
 
     const row = await pool.query<{
       directory_visible: boolean;
@@ -261,7 +263,7 @@ run("Owner #448 social profile defaults", () => {
       city_id: null,
       consent_policy_version: null,
       opted_in_at: null,
-      display_name: "Social448 OAuth Name",
+      display_name: SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
     });
   });
 

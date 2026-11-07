@@ -253,7 +253,8 @@ describeIntegration("Owner A actual API city/near-future/time/idempotency", () =
     expect(saved.json()).toMatchObject({ version: 1, cityId: MOSCOW_CITY_ID, directoryVisible: true,
       contactPolicy: "requests", radarConsented: false, consentPolicyVersion: null, optedInAt: null,
       radarConsentPolicyVersion: null, radarConsentedAt: null, level: null, bio: null });
-    expect(saved.json().displayName).toBe("OA2 Fictional Player");
+    // MOD-V2-A: bootstrap without explicit displayName uses trusted Игрок (not users.display_name).
+    expect(saved.json().displayName).toBe("Игрок");
     const replay = await patchProfile(session, valid, saveKey);
     expect(replay.statusCode).toBe(201); expect(replay.json()).toEqual(saved.json());
     const changed = await patchProfile(session, { ...valid, cityId: missing }, saveKey);

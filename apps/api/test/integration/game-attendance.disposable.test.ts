@@ -57,6 +57,8 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql") && f < "0047").sort()) {
       await migrate(file);
     }
+    // Current GamesModule text publication requires 0061 bindings (outside the N-1 attendance cut).
+    await migrate("0061_content_moderation_text.sql");
     env = loadEnv({
       NODE_ENV: "test",
       APP_ENV: "local",
