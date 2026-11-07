@@ -740,20 +740,12 @@
   /* Keep cover geometry readable; no backdrop-filter. */
 }
 
+/* Placement only — skin comes from canonical CloseButton (.gb-close-button). */
 .gb-player-browse .pb-tutorial-close {
   position: absolute;
   right: max(8px, env(safe-area-inset-right, 0px));
   top: max(8px, env(safe-area-inset-top, 0px));
   z-index: 2;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: #13221a33;
-  color: var(--pb-white);
-  cursor: pointer;
 }
 
 .gb-player-browse .pb-tutorial-hit {
@@ -1333,14 +1325,6 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 18px;
-}
-
-.gb-player-browse .pb-dir-toolbar__popover-title button {
-  border: 0;
-  background: transparent;
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
 }
 
 .gb-player-browse .pb-dir-toolbar__chips {

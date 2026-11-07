@@ -2224,14 +2224,11 @@ export function PlayerBrowseDeck({
             onPointerDown={(event) => { event.stopPropagation(); }}
             onClick={(event) => { event.stopPropagation(); }}
           >
-            <button
-              type="button"
+            <CloseButton
               className="pb-tutorial-close"
               aria-label="Закрыть подсказку"
               onClick={abortTutorial}
-            >
-              ×
-            </button>
+            />
             <button
               ref={bindTutorialHitRef}
               type="button"

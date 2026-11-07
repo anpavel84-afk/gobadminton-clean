@@ -49,7 +49,7 @@ vi.mock("maplibre-gl", () => ({
 }));
 import { GamesMapViewport } from "../src/components/consumer/games/GamesMapViewport";
 import { GamesVenueMap } from "../src/components/consumer/games/GamesVenueMap";
-import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
+import { MOSCOW_BUNDLE, SAINT_PETERSBURG_BUNDLE } from "../src/lib/radar-map-assets";
 import type { VenueSummary } from "../src/lib/consumer-types";
 class FakeMap {
   handlers = new Map<string, ((event: unknown) => void)[]>();
@@ -78,7 +78,13 @@ function click(tree: React.ReactNode, label: string): void {
   if (tree.props.children === label) tree.props.onClick?.();
   Children.forEach(tree.props.children, child => click(child, label));
 }
-async function start() { render(); await vi.waitFor(() => expect(h.maps).toHaveLength(1)); h.maps[0]!.emit("load"); return h.maps[0]!; }
+/** Construct the MapLibre instance without emitting basemap `load` (deferred load). */
+async function constructMap(overrides: Partial<React.ComponentProps<typeof GamesVenueMap>> = {}) {
+  render(overrides);
+  await vi.waitFor(() => expect(h.maps.length).toBeGreaterThan(0));
+  return h.maps[h.maps.length - 1]!;
+}
+async function start() { const map = await constructMap(); map.emit("load"); return map; }
 beforeEach(() => {
   vi.useFakeTimers(); h.slots = []; h.cursor = 0; h.effects = []; h.cleanups = []; h.maps = []; h.width = 400;
   errorCard.mockClear(); availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear(); h.buttons = []; h.selected = null;
@@ -236,4 +242,69 @@ it("updates changed marker fields in place while count-only updates preserve sep
   h.lngLat.mockClear(); h.replace.mockClear();
   render({ venues: [{ ...venue, name: "Новый зал", longitude: 37.8, latitude: 55.8 }], counts: new Map([["v", 0]]) });
   expect(h.lngLat).not.toHaveBeenCalled(); expect(h.replace).not.toHaveBeenCalled();
+});
+
+it("reconciles public markers before basemap load with data-map-ready false until real load", async () => {
+  await constructMap();
+  const preLoad = render();
+  expect(h.markerCreates).toBe(1);
+  expect(renderToStaticMarkup(preLoad)).toContain('data-map-ready="false"');
+  expect(availability).not.toHaveBeenCalledWith(true);
+  h.maps[0]!.emit("load");
+  const loaded = render();
+  expect(renderToStaticMarkup(loaded)).toContain('data-map-ready="true"');
+  expect(h.markerCreates).toBe(1);
+  expect(availability).toHaveBeenCalledWith(true);
+});
+
+it("attaches markers when venue data arrives after map construct and before load", async () => {
+  await constructMap({ venues: [], counts: new Map() });
+  expect(h.markerCreates).toBe(0);
+  render({ venues: [], counts: new Map() });
+  expect(h.markerCreates).toBe(0);
+  expect(renderToStaticMarkup(render({ venues: [], counts: new Map() }))).toContain('data-map-ready="false"');
+  render({ venues: [venue], counts: new Map([["v", 1]]) });
+  expect(h.markerCreates).toBe(1);
+  expect(renderToStaticMarkup(render({ venues: [venue], counts: new Map([["v", 1]]) }))).toContain('data-map-ready="false"');
+});
+
+it("clears pre-load markers on city change and retry without duplicates", async () => {
+  await constructMap();
+  render();
+  expect(h.markerCreates).toBe(1);
+  const firstMap = h.maps[0]!;
+  vi.stubGlobal("crypto", {
+    subtle: {
+      digest: async () => new Uint8Array(SAINT_PETERSBURG_BUNDLE.styleHash.match(/../g)!.map(hex => parseInt(hex, 16))).buffer,
+    },
+  });
+  const spbVenue = { id: "spb", name: "Зал СПб", latitude: 59.94, longitude: 30.32 } as VenueSummary;
+  render({ cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]) });
+  expect(h.markerRemove).toHaveBeenCalled();
+  expect(firstMap.remove).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(h.maps).toHaveLength(2));
+  const createsAfterCity = h.markerCreates;
+  render({ cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]) });
+  expect(h.markerCreates).toBe(createsAfterCity + 1);
+  expect(renderToStaticMarkup(render({
+    cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]),
+  }))).toContain('data-map-ready="false"');
+  h.maps[1]!.emit("error", { kind: "style" });
+  const failed = render({ cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]) });
+  const createsBeforeRetry = h.markerCreates;
+  h.markerRemove.mockClear();
+  click(failed, "Повторить");
+  render({ cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]) });
+  expect(h.markerRemove).toHaveBeenCalled();
+  await vi.waitFor(() => expect(h.maps).toHaveLength(3));
+  render({ cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]) });
+  expect(h.markerCreates).toBe(createsBeforeRetry + 1);
+  expect(renderToStaticMarkup(render({
+    cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]),
+  }))).toContain('data-map-ready="false"');
+  h.maps[2]!.emit("load");
+  expect(renderToStaticMarkup(render({
+    cityId: SAINT_PETERSBURG_BUNDLE.cityId, venues: [spbVenue], counts: new Map([["spb", 1]]),
+  }))).toContain('data-map-ready="true"');
+  expect(h.markerCreates).toBe(createsBeforeRetry + 1);
 });

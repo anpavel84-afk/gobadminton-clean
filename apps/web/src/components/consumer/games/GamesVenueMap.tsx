@@ -64,6 +64,8 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
   const [resumeCamera, setResumeCamera] = useState(false);
   const [sharedMap, setSharedMap] = useState<LibreMap>();
   const [ready, setReady] = useState(false);
+  /** Validated style + current Map instance for this city/attempt; not basemap load. */
+  const [markerAttach, setMarkerAttach] = useState<{ cityId: string; attempt: number } | null>(null);
   const [settled, setSettled] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
   const [attempt, setAttempt] = useState(0);
@@ -145,6 +147,8 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
         });
         // Pan, pinch and keyboard remain native; fullscreen has no zoom overlay.
         instance.touchZoomRotate.disableRotation(); map.current = instance;
+        // Markers may attach after validated style + this instance; ready/Radar stay on real load.
+        if (alive) setMarkerAttach({ cityId, attempt });
         try {
           setResumeCamera(sessionStorage.getItem("gb-games-map-returning") === "venue");
           sessionStorage.removeItem("gb-games-map-returning");
@@ -208,7 +212,13 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
       markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
   }, [attempt, cityId]);
   useEffect(() => {
-    if (!ready || !map.current || !bundle) return;
+    if (
+      !markerAttach
+      || markerAttach.cityId !== cityId
+      || markerAttach.attempt !== attempt
+      || !map.current
+      || !bundle
+    ) return;
     reconcileVenueMarkers<VenueMarkerEntry>(markers.current, markerVenues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
@@ -248,7 +258,7 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
       },
       remove: entry => entry.marker.remove(),
     }, bundle);
-  }, [ready, markerVenues, counts, selectedVenueId, bundle, cityId]);
+  }, [markerAttach, attempt, markerVenues, counts, selectedVenueId, bundle, cityId]);
   useEffect(() => {
     if (!ready || !map.current) return;
     const canvas = map.current.getCanvas();
