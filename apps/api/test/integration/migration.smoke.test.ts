@@ -291,6 +291,26 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0]?.consrc,
       ).toMatch(/entity_comment/);
+      // 0062 claim_nonce + unknown reservation for external-prepare fencing.
+      expect(
+        (
+          await pool.query<{ column_name: string; is_nullable: string }>(
+            `SELECT column_name, is_nullable
+             FROM information_schema.columns
+             WHERE table_name = 'idempotency_records' AND column_name = 'claim_nonce'`,
+          )
+        ).rows[0],
+      ).toEqual({ column_name: "claim_nonce", is_nullable: "YES" });
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.idempotency_records'::regclass
+               AND conname = 'idempotency_records_reservation_state_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/unknown/);
       const commentSurfacesRollback = await pool.connect();
       try {
         await commentSurfacesRollback.query("BEGIN");
@@ -373,6 +393,26 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           (await commentSurfacesRollback.query("SELECT 1 FROM schema_migrations WHERE id='0062_content_moderation_comments'"))
             .rowCount,
         ).toBe(0);
+        // claim_nonce + unknown allowlist retained (non-destructive rollback).
+        expect(
+          (
+            await commentSurfacesRollback.query<{ column_name: string }>(
+              `SELECT column_name
+               FROM information_schema.columns
+               WHERE table_name = 'idempotency_records' AND column_name = 'claim_nonce'`,
+            )
+          ).rows[0]?.column_name,
+        ).toBe("claim_nonce");
+        expect(
+          (
+            await commentSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.idempotency_records'::regclass
+                 AND conname = 'idempotency_records_reservation_state_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/unknown/);
         // Re-apply forward migration after rollback (idempotent widen).
         await commentSurfacesRollback.query(
           readFileSync(

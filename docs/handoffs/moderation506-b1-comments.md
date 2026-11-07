@@ -1,40 +1,41 @@
-# Handoff — #506 MOD-V2-B1a public comment gate (B1a bounded QA repair)
+# Handoff — #506 MOD-V2-B1a public comment gate (B1a repair19 claim-owner / unknown)
 
 ## Assignment
 
-- Issue: #506 continuation (`OWNER506_B1A_BOUNDED_QA_ROLLBACK_CONCURRENT_IDEMPOTENCY_FIX`)
-- Base reviewed FAIL: `d0240f4b91babdbb1ead1f4cbbd98b5836de6d9e` (Sol Medium first QA receipt retained)
+- Issue: #506 continuation (`OWNER506_B1A_EXACT_CLAIM_OWNER_UNKNOWN_PROVIDER_NO_REPLAY`)
+- Base reviewed FAIL: `2e8c70fedff02c9f4da8e75e3808c18c2096a106` (Sol Medium QA18 HIGH retained)
 - Author: Cursor Auto
-- Scope: bounded repair of QA HIGH rollback + QA MEDIUM concurrent same-key provider race only
-- Not claimed: B1b/B2/C/D, #507 Done, PROD, release metadata/deploy
+- Scope: bounded repair of QA HIGH — claimExternalOnce TTL reclaim of processing/unknown + missing claim-owner fencing on complete/release
+- Not claimed: B1b/B2/C/D, #507 Done, PROD, release metadata/deploy, UI406/release46 frozen branch
 
 ## Prior independent QA (retained)
 
-Sol Medium FAIL on `d0240f4…`:
-
-1. HIGH — `rollback/0062` restored 0061 CHECKs that reject real `comment_body` / `entity_comment` rows after publication; empty-DB smoke missed this.
-2. MEDIUM — concurrent same-key create/update both missed `findReplay` and called `approveTexts` before key reservation; `runIdempotent` resolved too late.
+1. First Sol Medium FAIL on `d0240f4…`: rollback CHECK narrowing + concurrent same-key provider race — **resolved** in prior repair; receipts retained.
+2. QA18 HIGH on `2e8c70f…`: after 120s, `claimExternalOnce` deleted a processing claim even for UNKNOWN provider outcome and allowed another paid same-key attempt; no ownership token so late original complete/release could mutate a replacement claim.
 
 ## What changed (this repair)
 
-- `migrations/rollback/0062_content_moderation_comments.sql`: additive/non-destructive. Removes only the `schema_migrations` marker. **Retains** expanded CHECK allowlists and all approval/binding/comment rows. Documented: narrowing to 0061 would lose/reject retained B1a publication history; original A surfaces remain valid under the kept expanded CHECKs. Re-apply of `0062` is an idempotent widen.
-- `MutationRunner.runWithExternalPrepare`: durable same-key `processing` claim committed **before** external prepare; prepare runs with no DB/advisory lock held; final fence re-locks the claim and completes. Concurrent same hash → `COMMAND_IN_PROGRESS` (no provider). Different payload same key → `IDEMPOTENCY_KEY_REUSED` before prepare. Known 4xx releases the claim; `503` keeps it until finite TTL (120s) so same-key retries do not blindly re-enter paid provider work. Multi-instance: Postgres UNIQUE row is the cross-worker fence (not process-local only).
-- `CommentsService.create` / `update`: use `runWithExternalPrepare` (authorize preflight → `approveTexts` inside prepare; final publication fence unchanged). Delete unchanged.
-- `public-comment-moderation.test.ts`: self-contained Admin recipe (`HOST=127.0.0.1`, `ADMIN_INTERNAL_ENABLED`, isolated `ADMIN_ORIGIN`/`ADMIN_AUTH_PEPPER`) like `comments.disposable.test.ts`; adds concurrent same-key race with provider deliberately blocked (assert ≤1 provider attempt + CIP + replay + hash mismatch).
-- `migration.smoke.test.ts`: populated comment approval/binding rows + rollback + re-apply; expects retained `comment_body` / `entity_comment` compatibility.
-- Unit: `mutation-runner.test.ts` for claim/CIP/replay/hash-mismatch paths.
+- `migrations/0062_content_moderation_comments.sql`: additive `idempotency_records.claim_nonce` + `reservation_state` allowlist includes `unknown`; widened `state_fields_chk`. Comment surfaces CHECKs unchanged in meaning.
+- `migrations/rollback/0062_…`: still non-destructive — removes only migration marker; **retains** claim_nonce, unknown allowlist, expanded moderation CHECKs and history.
+- `MutationRunner.runWithExternalPrepare`:
+  - Inserts opaque `claim_nonce` on claim; `completeExternalOnce` / `releaseExternalClaim` require exact nonce (owner fencing). Soft TTL is observational only — **never** deletes processing/unknown on clock advance.
+  - Reclaim path deletes only expired **completed** receipts (aligned with `IdempotencyService`).
+  - Provider **503** seals `reservation_state=unknown` with durable 503 body (conservative, non-publishing); same-key retry replays 503 without a second paid prepare. Known 4xx still releases for correction.
+  - Late original with wrong/replaced nonce cannot complete or release; multi-instance authority remains Postgres UNIQUE row; no I/O under DB locks.
+- Unit regressions: TTL-after-503 no second prepare; wrong-owner complete/release; preserved CIP / hash-mismatch / replay / 4xx-release.
+- `schema.ts`: `claimNonce` column. Handoff updated. No fictitious releases / old receipt mutation.
 
 ## Checks run by author
 
-- API unit: `mutation-runner` 3, `text-moderation` 4, `comments` 6 — PASS.
-- API `tsc --noEmit` and eslint on touched source/tests — PASS.
-- Disposable DB integration / populated rollback / concurrent provider-block race: not run here (no disposable Postgres in author env); parent runs exact disposable + populated rollback.
+- API unit: `mutation-runner` (+ new regressions), related comments/text-moderation as applicable.
+- API `tsc --noEmit` and eslint on touched source/tests.
+- Disposable DB integration / populated rollback: parent runs actual DB; author env may lack disposable Postgres.
 - No real provider, live DEV/PROD DB, paid analysis, release, or independent QA claim.
 
 ## Remaining / next
 
-- Independent QA delta only (findings against this repair); first FAIL receipt stays on record.
+- Independent QA **delta only** against this HIGH (prior rollback/concurrent findings stay resolved on record).
 - Mandatory product CI + guarded DEV release/smoke still required before B1a DONE.
 - Owner UAT = NOT_TESTED until Owner tests.
-- B1b / B2 / C / D and #507 I1 remain future; venue comments stay CURRENT closed pending #507.
-- Source A45 unchanged reuse; no image M1 rewrite; no private egress; no app version/history edits here.
+- B1b / B2 / C / D and #507 remain future; private egress OFF; M1 unchanged.
+- Source A45 unchanged reuse; no app version/history/deploy edits here.

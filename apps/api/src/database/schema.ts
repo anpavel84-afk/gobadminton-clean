@@ -228,6 +228,8 @@ export const idempotencyRecords = pgTable("idempotency_records", {
   reservationState: text("reservation_state").notNull().default("completed"),
   statusCode: integer("status_code"),
   responseBody: jsonb("response_body"),
+  /** Owner token for external-prepare claims; null on legacy/non-external rows. */
+  claimNonce: uuid("claim_nonce"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
