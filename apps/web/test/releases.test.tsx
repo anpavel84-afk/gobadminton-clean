@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.35 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.35");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.36 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.36");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,7 +64,7 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/заглушк|ракетк|гост|обложк/i);
+    expect(currentProse).toMatch(/гост|площадк|личн|запрос/i);
     expect(currentProse).toMatch(/приёмк/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
@@ -77,7 +77,7 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/ракетк|сетк|гост|профиль/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/гост|площадк|личн|запрос|профиль/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
@@ -230,10 +230,21 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(38);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(39);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(43);
+    ).toBe(44);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.35"
+      && row.source_sha === "5c75185408042d7d119a7f63304c9ac609b68cbc"
+      && row.deployments[0]?.release_id === "r42321599702-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-07T01:05:19Z"
+      && row.deployments[0]?.api_digest === "sha256:26423380b7c1e96205c934d177f12557fcc7aac28286a35026d2d7530887978b"
+      && row.deployments[0]?.web_digest === "sha256:c7a56b4e234c64742b051a98b2014872955a57f182512ced3515b04960ac3e50"
+      && row.api_contract_version === "0.36.0"
+      && row.title === "Мгновенная заглушка обложки и гостевые запросы"
+      && row.fixes.length === 2,
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.34"
       && row.source_sha === "d96df8096a0b4c6394fa5ab1f3e6e26ad378710e"

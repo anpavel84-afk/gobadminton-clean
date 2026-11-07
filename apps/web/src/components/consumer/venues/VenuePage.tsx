@@ -9,6 +9,7 @@ import { VenuePublicProfile } from "./VenuePublicProfile";
 import { VenuePublicContacts } from "../games/VenueSheet";
 import { GamesMapView } from "../games/GamesMapView";
 import { gamesMapReturnPath } from "../../../lib/games-venue-map";
+import { shouldSkipUnauthenticatedPrivateGet } from "../../../lib/session-presence";
 import { VenueReviewsPanel } from "./VenueReviewsPanel";
 
 export function VenuePage({venueId}:{venueId:string}) {
@@ -35,6 +36,8 @@ export function VenuePage({venueId}:{venueId:string}) {
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[venueId,reload]);
   useEffect(()=>{
+    // Explicit guest hint: clear local identity without a direct /v1/me probe.
+    if(shouldSkipUnauthenticatedPrivateGet("/v1/me","GET")){setSignedIn(false);setCsrf(null);return;}
     const controller=new AbortController();
     void fetch("/v1/me",{cache:"no-store",credentials:"include",signal:controller.signal})
       .then(async (r)=>{

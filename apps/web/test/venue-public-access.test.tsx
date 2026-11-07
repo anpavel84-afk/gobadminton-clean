@@ -51,7 +51,11 @@ vi.mock("next/dynamic", () => ({ default: () => function MapStub() { return <div
 import { VenuePage } from "../src/components/consumer/venues/VenuePage";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { getMe } from "../src/lib/api-client";
-import { resetSessionPresenceForTests } from "../src/lib/session-presence";
+import {
+  markSessionPresence,
+  resetSessionPresenceForTests,
+  type SessionPresence,
+} from "../src/lib/session-presence";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 const cover = "/v1/media/venue-covers/" + "a".repeat(64) + ".png";
 const a: Venue = { id: "a", cityId: MOSCOW_BUNDLE.cityId, name: "Зал А", address: "Адрес А", timezone: "Europe/Moscow", latitude: 55.7, longitude: 37.6, dataStatus: "verified", provenance: "PRIVATE_SENTINEL_205", cover: { uploadedUrl: cover, credit: { kind: "illustration", text: "Автор фото", url: null } }, profile: { courtCount: 4, amenities: { parking: false, showers: null }, updatedAt: "2026-10-22T12:00:00.000Z", gallery: { coverage: "cover_only", items: [] } }, publicContacts: { phone: "+79991234567", website: "https://example.org", messengers: [] } };
@@ -121,13 +125,26 @@ function action(predicate: (node: React.ReactElement<Record<string, unknown>>) =
   if (typeof callback !== "function") throw new Error(`Missing action ${prop}`);
   return callback as (...args: unknown[]) => void;
 }
+function installPartialDom() {
+  const attrs = new Map<string, string>();
+  const documentElement = {
+    getAttribute(name: string) { return attrs.has(name) ? attrs.get(name)! : null; },
+    setAttribute(name: string, value: string) { attrs.set(name, value); },
+    removeAttribute(name: string) { attrs.delete(name); },
+  };
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "", pathname: "/games", assign: vi.fn() } }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), {
+    visibilityState: "visible",
+    querySelector: () => null,
+    documentElement,
+  }));
+}
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
   instances = new Map(); runtime.pending = []; calls.length = 0; games = [game]; signedIn = false; publicFailure = false; gamesReady = true;
   coverCredit = { kind: "illustration", text: "Автор фото", url: null };
   resetSessionPresenceForTests();
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "", pathname: "/games", assign: vi.fn() } }));
-  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", querySelector: () => null }));
+  installPartialDom();
   vi.stubGlobal("sessionStorage", { setItem: vi.fn() });
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
     const path = String(input); calls.push(path);
@@ -176,6 +193,38 @@ it("retries failed public GET successfully without any admin request", async () 
   expect(text).toContain("Зал А"); expect(text).not.toContain("Площадка недоступна."); assertPublic();
   expect(calls.filter(path => path === "/v1/venues/a")).toHaveLength(2);
 });
+
+it("skips VenuePage identity /v1/me when session presence is known absent", async () => {
+  markSessionPresence("absent");
+  calls.length = 0;
+  const root = <VenuePage venueId="a" />;
+  await settle(root);
+  expect(calls.filter(path => path === "/v1/me")).toEqual([]);
+  expect(text).toContain("Зал А");
+  expect(text).toContain("Адрес А");
+  expect(text).toContain("Количество кортов4");
+  expect(text).toContain("Тестовая игра");
+  expect(nodes.some(node => node.type === "a" && node.props.href === "tel:+79991234567")).toBe(true);
+  assertPublic();
+  await settleAfterGalleryImgLoad(root);
+  expect(text).toContain("Автор фото");
+  expect(calls.filter(path => path === "/v1/me")).toEqual([]);
+  assertPublic();
+});
+
+for (const presence of ["present", "unknown"] as const satisfies readonly SessionPresence[]) {
+  it(`probes real VenuePage /v1/me when session presence is ${presence}`, async () => {
+    markSessionPresence(presence);
+    signedIn = presence === "present";
+    calls.length = 0;
+    const root = <VenuePage venueId="a" />;
+    await settle(root);
+    expect(calls.filter(path => path === "/v1/me")).toEqual(["/v1/me"]);
+    expect(text).toContain("Зал А");
+    expect(text).toContain("Тестовая игра");
+    assertPublic();
+  });
+}
 
 type PendingVenue = {
   path: string; signal: AbortSignal;
