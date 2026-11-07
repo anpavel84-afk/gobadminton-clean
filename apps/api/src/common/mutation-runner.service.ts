@@ -1,9 +1,10 @@
 import { assertCapabilities, operationCapabilities, type UserCapability } from "../restrictions/policy";
 import type { AppEnv } from "../config/env";
 import { APP_ENV } from "../tokens";
-import { HttpException, Inject, Injectable } from "@nestjs/common";
+import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { commandInProgress } from "../auth/problem";
+import { commandInProgress, conflict } from "../auth/problem";
 import { DATABASE_POOL } from "../tokens";
 import { ActorFenceService } from "./actor-fence.service";
 import {
@@ -13,6 +14,13 @@ import {
   IdempotencyService,
   idempotencyRetryBackoffMs,
 } from "./idempotency.service";
+
+/** Soft window marker for in-flight external claims (observability only — never reclaim). */
+const EXTERNAL_PREPARE_RESERVATION_TTL_MS = 120_000;
+/** Completed receipt TTL — matches IdempotencyService complete(). */
+const IDEMPOTENCY_COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
+/** Sealed unknown outcomes retain history; no automatic same-key paid replay. */
+const EXTERNAL_UNKNOWN_TTL_MS = IDEMPOTENCY_COMPLETED_TTL_MS;
 
 export type MutationResult<T> = {
   statusCode: number;
@@ -30,11 +38,31 @@ type MutationInput<T> = {
   execute: (client: PoolClient) => Promise<MutationResult<T>>;
 };
 
+type ExternalPrepareInput<TPrep, T> = {
+  actorId: string;
+  sessionId: string;
+  operation: string;
+  key: string;
+  requestHash: string;
+  requiredCapabilities?: readonly UserCapability[];
+  authorizeReplay: (client: PoolClient, body: T) => Promise<void>;
+  /** Runs only after durable same-key claim; must not hold DB locks across awaits. */
+  prepare: () => Promise<TPrep>;
+  execute: (client: PoolClient, prepared: TPrep) => Promise<MutationResult<T>>;
+};
+
 /**
  * Shared mutation transaction protocol:
  * BEGIN → timeouts → actor/session fence → insert-first idempotency
  * → (authorizeReplay | execute) → complete → COMMIT.
  * Game/Participation locking remains inside execute/authorizeReplay.
+ *
+ * External-prepare path claims a durable processing row with an opaque
+ * claim_nonce, runs prepare outside any transaction, then completes or
+ * releases only under that exact owner token. Ambiguous/503 provider
+ * outcomes seal reservation_state=unknown (no TTL reclaim / paid replay).
+ * Concurrent same-key workers see COMMAND_IN_PROGRESS / KEY_REUSED before
+ * provider I/O. Multi-instance authority is the Postgres UNIQUE row.
  */
 @Injectable()
 export class MutationRunner {
@@ -55,6 +83,59 @@ export class MutationRunner {
 
   async runIdempotent<T>(input: MutationInput<T>): Promise<MutationResult<T>> {
     return this.withRetries(() => this.runOnce(input, false));
+  }
+
+  /**
+   * Same-key fence before paid external preparation. At most one worker prepares;
+   * losers get COMMAND_IN_PROGRESS or KEY_REUSED without provider I/O. Known
+   * 4xx prepare/publish failures release the claim; 503 seals unknown so
+   * same-key retries never blindly repeat a paid/ambiguous provider effect.
+   */
+  async runWithExternalPrepare<TPrep, T>(
+    input: ExternalPrepareInput<TPrep, T>,
+  ): Promise<MutationResult<T>> {
+    const claim = await this.withRetries(() => this.claimExternalOnce(input));
+    if (claim.kind === "replay") {
+      return claim.result;
+    }
+
+    const claimNonce = claim.claimNonce;
+    let prepared: TPrep;
+    try {
+      prepared = await input.prepare();
+    } catch (error) {
+      await this.afterExternalPrepareFailure(input, claimNonce, error);
+      throw error;
+    }
+
+    try {
+      return await this.withRetries(() =>
+        this.completeExternalOnce(input, prepared, claimNonce),
+      );
+    } catch (error) {
+      await this.afterExternalPrepareFailure(input, claimNonce, error);
+      throw error;
+    }
+  }
+
+  private async afterExternalPrepareFailure(
+    input: {
+      actorId: string;
+      operation: string;
+      key: string;
+      requestHash: string;
+    },
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    if (shouldReleaseExternalPrepareClaim(error)) {
+      await this.releaseExternalClaim(input, claimNonce).catch(() => undefined);
+      return;
+    }
+    if (isServiceUnavailable(error)) {
+      await this.sealExternalUnknown(input, claimNonce, error).catch(() => undefined);
+    }
+    // Ambiguous non-HTTP / CIP: leave processing; never reclaim after TTL.
   }
 
   private async withRetries<T>(run: () => Promise<T>): Promise<T> {
@@ -155,6 +236,316 @@ export class MutationRunner {
       client.release();
     }
   }
+
+  private async claimExternalOnce<TPrep, T>(
+    input: ExternalPrepareInput<TPrep, T>,
+  ): Promise<
+    | { kind: "prepare"; claimNonce: string }
+    | { kind: "replay"; result: MutationResult<T> }
+  > {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL lock_timeout = '${IDEMPOTENCY_LOCK_TIMEOUT}'`);
+      await client.query(
+        `SET LOCAL statement_timeout = '${IDEMPOTENCY_STATEMENT_TIMEOUT}'`,
+      );
+      await this.actorFence.assertActiveConsumerInTransaction(client, {
+        actorId: input.actorId,
+        sessionId: input.sessionId,
+      });
+      await assertCapabilities(
+        client,
+        this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+        input.actorId,
+        [...operationCapabilities(input.operation), ...(input.requiredCapabilities ?? [])],
+      );
+
+      const keyHash = this.idempotency.keyHash(input.key);
+      const claimNonce = randomUUID();
+      const expiresAt = new Date(Date.now() + EXTERNAL_PREPARE_RESERVATION_TTL_MS);
+
+      // Reclaim only expired COMPLETED receipts — never processing or unknown.
+      // Unknown/processing rows preserve paid-attempt history and block replay.
+      await client.query(
+        `DELETE FROM idempotency_records
+         WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
+           AND reservation_state = 'completed'
+           AND expires_at <= now()`,
+        [input.actorId, input.operation, keyHash],
+      );
+
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO idempotency_records
+           (actor_id, operation, key_hash, request_hash, reservation_state,
+            status_code, response_body, claim_nonce, expires_at)
+         VALUES ($1, $2, $3, $4, 'processing', NULL, NULL, $5, $6)
+         ON CONFLICT (actor_id, operation, key_hash) DO NOTHING
+         RETURNING id`,
+        [
+          input.actorId,
+          input.operation,
+          keyHash,
+          input.requestHash,
+          claimNonce,
+          expiresAt,
+        ],
+      );
+      if (inserted.rows[0]) {
+        await client.query("COMMIT");
+        return { kind: "prepare", claimNonce };
+      }
+
+      const existing = await client.query<{
+        request_hash: string;
+        status_code: number | null;
+        response_body: T | null;
+        expires_at: Date;
+        reservation_state: string;
+      }>(
+        `SELECT request_hash, status_code, response_body, expires_at, reservation_state
+         FROM idempotency_records
+         WHERE actor_id = $1 AND operation = $2 AND key_hash = $3`,
+        [input.actorId, input.operation, keyHash],
+      );
+      const row = existing.rows[0];
+      if (!row) {
+        throw commandInProgress();
+      }
+      if (row.request_hash !== input.requestHash) {
+        throw conflict(
+          "IDEMPOTENCY_KEY_REUSED",
+          "Idempotency-Key уже использован с другим телом запроса",
+        );
+      }
+      if (row.reservation_state === "processing") {
+        // Expired processing is still authoritative — do not reclaim / re-pay.
+        throw commandInProgress();
+      }
+      if (row.reservation_state === "unknown") {
+        // Sealed ambiguous/paid outcome: conservative non-publishing replay.
+        throw replaySealedUnknown(row.status_code, row.response_body);
+      }
+      if (row.expires_at.getTime() <= Date.now()) {
+        // Expired completed — delete and reclaim in a follow-up retry.
+        await client.query(
+          `DELETE FROM idempotency_records
+           WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
+             AND reservation_state = 'completed'
+             AND expires_at <= now()`,
+          [input.actorId, input.operation, keyHash],
+        );
+        await client.query("COMMIT");
+        throw commandInProgress();
+      }
+      if (row.status_code === null || row.response_body === null) {
+        throw new Error("completed idempotency receipt missing status/body");
+      }
+      await input.authorizeReplay(client, row.response_body);
+      await client.query("COMMIT");
+      return {
+        kind: "replay",
+        result: { statusCode: row.status_code, body: row.response_body },
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async completeExternalOnce<TPrep, T>(
+    input: ExternalPrepareInput<TPrep, T>,
+    prepared: TPrep,
+    claimNonce: string,
+  ): Promise<MutationResult<T>> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL lock_timeout = '${IDEMPOTENCY_LOCK_TIMEOUT}'`);
+      await client.query(
+        `SET LOCAL statement_timeout = '${IDEMPOTENCY_STATEMENT_TIMEOUT}'`,
+      );
+      await this.actorFence.assertActiveConsumerInTransaction(client, {
+        actorId: input.actorId,
+        sessionId: input.sessionId,
+      });
+      await assertCapabilities(
+        client,
+        this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+        input.actorId,
+        [...operationCapabilities(input.operation), ...(input.requiredCapabilities ?? [])],
+      );
+
+      const keyHash = this.idempotency.keyHash(input.key);
+      // Owner fencing: exact claim_nonce. Late original may complete after the
+      // soft TTL marker; wrong-owner / replacement claims cannot finalize.
+      const locked = await client.query<{ id: string }>(
+        `SELECT id FROM idempotency_records
+         WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
+           AND request_hash = $4
+           AND claim_nonce = $5
+           AND reservation_state = 'processing'
+         FOR UPDATE`,
+        [input.actorId, input.operation, keyHash, input.requestHash, claimNonce],
+      );
+      if (!locked.rows[0]) {
+        throw commandInProgress();
+      }
+
+      const result = await input.execute(client, prepared);
+      const completedExpires = new Date(Date.now() + IDEMPOTENCY_COMPLETED_TTL_MS);
+      const updated = await client.query(
+        `UPDATE idempotency_records
+         SET reservation_state = 'completed',
+             request_hash = $4,
+             status_code = $5,
+             response_body = $6::jsonb,
+             expires_at = $7
+         WHERE actor_id = $1
+           AND operation = $2
+           AND key_hash = $3
+           AND claim_nonce = $8
+           AND reservation_state = 'processing'`,
+        [
+          input.actorId,
+          input.operation,
+          keyHash,
+          input.requestHash,
+          result.statusCode,
+          JSON.stringify(result.body),
+          completedExpires,
+          claimNonce,
+        ],
+      );
+      if (updated.rowCount !== 1) {
+        throw new Error("idempotency complete failed: missing processing reservation");
+      }
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async releaseExternalClaim(
+    input: {
+      actorId: string;
+      operation: string;
+      key: string;
+      requestHash: string;
+    },
+    claimNonce: string,
+  ): Promise<void> {
+    const keyHash = this.idempotency.keyHash(input.key);
+    await this.pool.query(
+      `DELETE FROM idempotency_records
+       WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
+         AND request_hash = $4
+         AND claim_nonce = $5
+         AND reservation_state = 'processing'`,
+      [input.actorId, input.operation, keyHash, input.requestHash, claimNonce],
+    );
+  }
+
+  private async sealExternalUnknown(
+    input: {
+      actorId: string;
+      operation: string;
+      key: string;
+      requestHash: string;
+    },
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    const keyHash = this.idempotency.keyHash(input.key);
+    const status =
+      error instanceof HttpException
+        ? error.getStatus()
+        : HttpStatus.SERVICE_UNAVAILABLE;
+    const body =
+      error instanceof HttpException
+        ? error.getResponse()
+        : {
+            type: "about:blank",
+            title: "Временно недоступно",
+            status: HttpStatus.SERVICE_UNAVAILABLE,
+            code: "MODERATION_TEMPORARILY_UNAVAILABLE",
+          };
+    const expiresAt = new Date(Date.now() + EXTERNAL_UNKNOWN_TTL_MS);
+    await this.pool.query(
+      `UPDATE idempotency_records
+       SET reservation_state = 'unknown',
+           status_code = $5,
+           response_body = $6::jsonb,
+           expires_at = $7
+       WHERE actor_id = $1
+         AND operation = $2
+         AND key_hash = $3
+         AND request_hash = $4
+         AND claim_nonce = $8
+         AND reservation_state = 'processing'`,
+      [
+        input.actorId,
+        input.operation,
+        keyHash,
+        input.requestHash,
+        status,
+        JSON.stringify(body),
+        expiresAt,
+        claimNonce,
+      ],
+    );
+  }
+}
+
+function shouldReleaseExternalPrepareClaim(error: unknown): boolean {
+  if (!(error instanceof HttpException)) {
+    // Ambiguous non-HTTP failure after prepare may follow a paid attempt —
+    // keep the durable claim until explicit owner release or unknown seal.
+    return false;
+  }
+  const status = error.getStatus();
+  if (
+    status === HttpStatus.SERVICE_UNAVAILABLE ||
+    status === HttpStatus.CONFLICT
+  ) {
+    // 503: unknown/unavailable provider outcome. CONFLICT includes
+    // COMMAND_IN_PROGRESS (keep) and domain conflicts released below via code.
+    const code =
+      typeof error.getResponse() === "object" &&
+      error.getResponse() &&
+      "code" in (error.getResponse() as object)
+        ? String((error.getResponse() as { code?: unknown }).code ?? "")
+        : "";
+    if (status === HttpStatus.SERVICE_UNAVAILABLE) return false;
+    if (code === "COMMAND_IN_PROGRESS") return false;
+    // VERSION_CONFLICT / other domain 409 after prepare: release so a new key can proceed.
+    return true;
+  }
+  // Known client/authz/validation outcomes: release and allow a fresh attempt.
+  return status >= 400 && status < 500;
+}
+
+function isServiceUnavailable(error: unknown): boolean {
+  return (
+    error instanceof HttpException &&
+    error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE
+  );
+}
+
+function replaySealedUnknown(
+  statusCode: number | null,
+  responseBody: unknown,
+): HttpException {
+  if (statusCode != null && responseBody != null) {
+    return new HttpException(responseBody, statusCode);
+  }
+  return commandInProgress();
 }
 
 function sleep(ms: number): Promise<void> {

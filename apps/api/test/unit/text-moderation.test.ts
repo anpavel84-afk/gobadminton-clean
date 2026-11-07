@@ -11,6 +11,8 @@ import {
   OpenAIModerationProvider,
   parseTextResponse,
 } from "../../src/moderation/openai-provider";
+import { evaluateLocalText } from "../../src/moderation/local-text-policy";
+import { TEXT_FIELD_HINTS, TEXT_SURFACE_KIND } from "../../src/moderation/text-policy";
 
 const rawEnv = {
   NODE_ENV: "test",
@@ -107,6 +109,15 @@ describe("text moderation adapter", () => {
     });
     expect(fake.textCalls).toBe(1);
     expect(fake.calls).toBe(0);
+  });
+
+  it("treats comment_body as prose: criticism/quotes contextual, not identity hard-reject", () => {
+    expect(TEXT_SURFACE_KIND.comment_body).toBe("prose");
+    expect(TEXT_FIELD_HINTS.comment_body).toMatch(/комментария/i);
+    expect(evaluateLocalText("Слабая организация на корте", "prose").kind).toBe("clean");
+    expect(
+      evaluateLocalText('Он написал «хуйня», цитирую для отчёта', "prose").kind,
+    ).toBe("contextual");
   });
 
   it("bounds text retries on transport failure", async () => {

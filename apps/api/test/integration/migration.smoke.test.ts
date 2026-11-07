@@ -200,6 +200,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0059_regional_discovery_preferences",
         "0060_game_event_push",
         "0061_content_moderation_text",
+        "0062_content_moderation_comments",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -269,6 +270,172 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0]?.consrc,
       ).toMatch(/organizer_public_contact/);
+      // 0062 #506 B1a comment_body + entity_comment binding catalogue (0061 untouched).
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/comment_body/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_bindings'::regclass
+               AND conname = 'content_moderation_bindings_entity_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/entity_comment/);
+      // 0062 claim_nonce + unknown reservation for external-prepare fencing.
+      expect(
+        (
+          await pool.query<{ column_name: string; is_nullable: string }>(
+            `SELECT column_name, is_nullable
+             FROM information_schema.columns
+             WHERE table_name = 'idempotency_records' AND column_name = 'claim_nonce'`,
+          )
+        ).rows[0],
+      ).toEqual({ column_name: "claim_nonce", is_nullable: "YES" });
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.idempotency_records'::regclass
+               AND conname = 'idempotency_records_reservation_state_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/unknown/);
+      const commentSurfacesRollback = await pool.connect();
+      try {
+        await commentSurfacesRollback.query("BEGIN");
+        // Populated B1a history must survive rollback; narrowing CHECKs would fail.
+        const actorId = "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
+        await commentSurfacesRollback.query(
+          `INSERT INTO users(id, display_name) VALUES ($1::uuid, 'Synthetic 0062 rollback actor')
+           ON CONFLICT (id) DO NOTHING`,
+          [actorId],
+        );
+        const syntheticApproval = await commentSurfacesRollback.query<{ id: string }>(
+          `INSERT INTO content_moderation_approvals(
+             content_type, surface_key, fingerprint_version, content_fingerprint,
+             policy_version, local_policy_version, provider_key, provider_model,
+             category_flags, decision, checked_at)
+           VALUES (
+             'text', 'comment_body', 1, $1,
+             'public-text-v1', 'ru-profanity-v1', 'fake', 'synthetic-model',
+             '{}'::jsonb, 'allow', now())
+           RETURNING id`,
+          ["a".repeat(64)],
+        );
+        const commentEntityId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        await commentSurfacesRollback.query(
+          `INSERT INTO content_moderation_bindings(
+             entity_kind, entity_id, surface_key, resource_version,
+             approval_id, actor_user_id, binding_kind)
+           VALUES ('entity_comment', $1::uuid, 'comment_body', 1, $2::uuid, $3::uuid, 'publication')`,
+          [commentEntityId, syntheticApproval.rows[0]!.id, actorId],
+        );
+        await commentSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/rollback/0062_content_moderation_comments.sql"),
+            "utf8",
+          ),
+        );
+        // Additive compatibility: expanded allowlists retained with history.
+        expect(
+          (
+            await commentSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_approvals'::regclass
+                 AND conname = 'content_moderation_approvals_surface_key_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/comment_body/);
+        expect(
+          (
+            await commentSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_bindings'::regclass
+                 AND conname = 'content_moderation_bindings_entity_kind_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/entity_comment/);
+        expect(
+          (
+            await commentSurfacesRollback.query(
+              `SELECT surface_key FROM content_moderation_approvals WHERE id = $1`,
+              [syntheticApproval.rows[0]!.id],
+            )
+          ).rows[0]?.surface_key,
+        ).toBe("comment_body");
+        expect(
+          (
+            await commentSurfacesRollback.query(
+              `SELECT entity_kind FROM content_moderation_bindings
+               WHERE entity_id = $1::uuid AND surface_key = 'comment_body'`,
+              [commentEntityId],
+            )
+          ).rows[0]?.entity_kind,
+        ).toBe("entity_comment");
+        expect(
+          (await commentSurfacesRollback.query("SELECT to_regclass('public.content_moderation_bindings')::text AS name"))
+            .rows[0]?.name,
+        ).toBe("content_moderation_bindings");
+        expect(
+          (await commentSurfacesRollback.query("SELECT 1 FROM schema_migrations WHERE id='0062_content_moderation_comments'"))
+            .rowCount,
+        ).toBe(0);
+        // claim_nonce + unknown allowlist retained (non-destructive rollback).
+        expect(
+          (
+            await commentSurfacesRollback.query<{ column_name: string }>(
+              `SELECT column_name
+               FROM information_schema.columns
+               WHERE table_name = 'idempotency_records' AND column_name = 'claim_nonce'`,
+            )
+          ).rows[0]?.column_name,
+        ).toBe("claim_nonce");
+        expect(
+          (
+            await commentSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.idempotency_records'::regclass
+                 AND conname = 'idempotency_records_reservation_state_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/unknown/);
+        // Re-apply forward migration after rollback (idempotent widen).
+        await commentSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/0062_content_moderation_comments.sql"),
+            "utf8",
+          ),
+        );
+        await commentSurfacesRollback.query(
+          `INSERT INTO schema_migrations(id) VALUES ('0062_content_moderation_comments')
+           ON CONFLICT DO NOTHING`,
+        );
+        expect(
+          (
+            await commentSurfacesRollback.query(
+              `SELECT surface_key FROM content_moderation_approvals WHERE id = $1`,
+              [syntheticApproval.rows[0]!.id],
+            )
+          ).rows[0]?.surface_key,
+        ).toBe("comment_body");
+      } finally {
+        await commentSurfacesRollback.query("ROLLBACK");
+        commentSurfacesRollback.release();
+      }
       const bindingsRollback = await pool.connect();
       try {
         await bindingsRollback.query("BEGIN");

@@ -6,6 +6,10 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import type { AppEnv } from "../config/env";
 import { publicModerationSql, readModeration } from "../game-moderation/projection";
 import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import {
   avatarForUser,
   emptyAvatar,
   safeProviderAvatar,
@@ -72,6 +76,7 @@ export class CommentsService {
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
     private readonly pairs: PairFenceService,
+    private readonly moderation: ContentModerationService,
   ) {}
 
   async list(
@@ -303,18 +308,30 @@ export class CommentsService {
       parentCommentId,
       text,
     });
-    return this.mutations.runIdempotent<CommentView>({
+    const receipt = {
       actorId,
       sessionId,
       operation: "comments.create",
       key,
       requestHash,
-      requiredCapabilities: ["account.access", "profile.public"],
-      authorizeReplay: async (client) => {
+      requiredCapabilities: ["account.access", "profile.public"] as const,
+      authorizeReplay: async (client: PoolClient) => {
         await this.lockAndAssertPublicParent(client, kind, entityId);
         await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
       },
-      execute: async (client) => {
+    };
+
+    // Durable same-key claim before provider I/O; concurrent losers never approveTexts.
+    return this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
+      ...receipt,
+      prepare: async () => {
+        // Parent/actor/block fences before any provider I/O; no locks held across network.
+        await this.authorizeWritePreflight(kind, entityId, actorId, parentCommentId);
+        return this.moderation.approveTexts(actorId, [
+          { surface: "comment_body", text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, textApproval) => {
         await this.lockAndAssertPublicParent(client, kind, entityId);
         await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
         const inserted = (
@@ -332,6 +349,11 @@ export class CommentsService {
            VALUES ($1, $2, $3, 1, $4, $5, false)`,
           [inserted.id, kind, entityId, actorId, text],
         );
+        await this.bindCommentPublication(client, textApproval, text, {
+          commentId: inserted.id,
+          resourceVersion: 1,
+          actorUserId: actorId,
+        });
         const projected = await this.loadProjected(client, inserted.id, actorId);
         return { statusCode: 201, body: projected };
       },
@@ -353,19 +375,29 @@ export class CommentsService {
       expectedVersion: body.expectedVersion,
       text,
     });
-    return this.mutations.runIdempotent<CommentView>({
+    const receipt = {
       actorId,
       sessionId,
       operation: "comments.update",
       key,
       requestHash,
-      requiredCapabilities: ["account.access", "profile.public"],
-      authorizeReplay: async (client) => {
+      requiredCapabilities: ["account.access", "profile.public"] as const,
+      authorizeReplay: async (client: PoolClient) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
         this.assertBroadVenueWriteClosed(row.entity_kind);
       },
-      execute: async (client) => {
+    };
+
+    return this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
+      ...receipt,
+      prepare: async () => {
+        await this.authorizeUpdatePreflight(commentId, actorId, body.expectedVersion);
+        return this.moderation.approveTexts(actorId, [
+          { surface: "comment_body", text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, textApproval) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
         this.assertBroadVenueWriteClosed(row.entity_kind);
@@ -389,6 +421,11 @@ export class CommentsService {
            VALUES ($1, $2, $3, $4, $5, $6, $7, false)`,
           [commentId, next.entity_kind, next.entity_id, next.version, actorId, row.body, text],
         );
+        await this.bindCommentPublication(client, textApproval, text, {
+          commentId,
+          resourceVersion: next.version,
+          actorUserId: actorId,
+        });
         return { statusCode: 200, body: await this.loadProjected(client, commentId, actorId) };
       },
     });
@@ -555,8 +592,10 @@ export class CommentsService {
   }
 
   /**
-   * Broad VENUE create/reply/update closed until real postgame attendance eligibility.
+   * Broad VENUE create/reply/update remain CURRENT runtime-closed pending Owner-approved #507 I1.
+   * Not a permanent product-by-design ban; #507 supersedes permanent closure of general venue discussion.
    * Owned delete/withdrawal stays on its own path and must not call this guard.
+   * When #507 opens allowed venue writes, the same comment_body gate must protect them.
    */
   private assertBroadVenueWriteClosed(kind: EntityCommentKind): void {
     if (kind === "venue") {
@@ -568,9 +607,80 @@ export class CommentsService {
   }
 
   /**
+   * Short authorized preflight before provider I/O. Ends before approveTexts.
+   * Final execute revalidates the same fences under MutationRunner locks.
+   */
+  private async authorizeWritePreflight(
+    kind: EntityCommentKind,
+    entityId: string,
+    actorId: string,
+    parentCommentId: string | null,
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        await this.lockAndAssertPublicParent(client, kind, entityId);
+        await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  private async authorizeUpdatePreflight(
+    commentId: string,
+    actorId: string,
+    expectedVersion: number,
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        const row = await this.lockOwnedLiveComment(client, commentId, actorId);
+        await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
+        this.assertBroadVenueWriteClosed(row.entity_kind);
+        if (row.version !== expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  private async bindCommentPublication(
+    client: PoolClient,
+    approval: TextBatchApproval,
+    text: string,
+    meta: { commentId: string; resourceVersion: number; actorUserId: string },
+  ): Promise<void> {
+    await this.moderation.bindTexts(
+      client,
+      approval,
+      [{ surface: "comment_body", text }],
+      {
+        entityKind: "entity_comment",
+        entityId: meta.commentId,
+        resourceVersion: meta.resourceVersion,
+        actorUserId: meta.actorUserId,
+        bindingKind: "publication",
+      },
+    );
+  }
+
+  /**
    * List projection of write eligibility — same capability + game-organizer block gates as create.
    * Does not invent admin policy; read stays available when false.
-   * Broad VENUE create is always false (no fabricated attendance eligibility).
+   * Broad VENUE create is always false while #507 I1 is pending (runtime closed, not permanent).
    */
   private async resolveCanCreate(
     client: PoolClient,

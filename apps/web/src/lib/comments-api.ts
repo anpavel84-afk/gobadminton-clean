@@ -1,4 +1,4 @@
-import { apiFetch } from "./api-client";
+import { apiFetch, type ApiResult } from "./api-client";
 import type {
   CommentEntityKind,
   CreateCommentBody,
@@ -7,6 +7,31 @@ import type {
   EntityCommentPage,
   UpdateCommentBody,
 } from "./comments-types";
+
+/**
+ * Neutral inline notice for public-comment moderation outcomes.
+ * Preserves unsent composer text; never exposes tokens/categories/scores.
+ */
+export function publicCommentModerationNotice(
+  result: Extract<ApiResult<unknown>, { ok: false }> | { code?: string; status?: number },
+): string | null {
+  const code = "problem" in result
+    ? result.problem?.code
+    : (result as { code?: string }).code;
+  if (code === "PUBLIC_TEXT_CONTENT_REJECTED") {
+    const fields = "problem" in result ? result.problem?.fields : undefined;
+    if (fields?.text) return fields.text;
+    if (fields && Object.keys(fields).length > 0) return Object.values(fields).join(". ");
+    return "Измените текст комментария";
+  }
+  if (code === "MODERATION_TEMPORARILY_UNAVAILABLE" || code === "MODERATION_POLICY_MISMATCH") {
+    return "Проверка текста временно недоступна. Попробуйте позже — прежний текст не изменён.";
+  }
+  if (code === "MODERATION_RATE_LIMITED") {
+    return "Слишком много проверок текста. Попробуйте позже.";
+  }
+  return null;
+}
 
 function entityPath(kind: CommentEntityKind, entityId: string): string {
   return kind === "game"

@@ -228,6 +228,8 @@ export const idempotencyRecords = pgTable("idempotency_records", {
   reservationState: text("reservation_state").notNull().default("completed"),
   statusCode: integer("status_code"),
   responseBody: jsonb("response_body"),
+  /** Owner token for external-prepare claims; null on legacy/non-external rows. */
+  claimNonce: uuid("claim_nonce"),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -411,7 +413,10 @@ export const contentModerationRateBudgets = pgTable("content_moderation_rate_bud
   updatedAt: timestamp("updated_at", {withTimezone: true}).notNull().defaultNow(),
 }, (table) => [primaryKey({columns: [table.userId, table.bucket]})]);
 
-/** Typed publication/candidate binding; approval row holds exact hash/policy. No raw body. */
+/**
+ * Typed publication/candidate binding; approval row holds exact hash/policy. No raw body.
+ * entity_kind includes entity_comment (B1a); surface catalogue extended via migrations 0061/0062.
+ */
 export const contentModerationBindings = pgTable("content_moderation_bindings", {
   id: uuid("id").defaultRandom().primaryKey(),
   entityKind: text("entity_kind").notNull(),

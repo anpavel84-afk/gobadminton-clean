@@ -28,6 +28,7 @@ vi.mock("../src/lib/comments-api", () => ({
   updateEntityCommentPath: (id: string) => `/v1/comments/${id}`,
   deleteEntityCommentPath: (id: string) => `/v1/comments/${id}`,
   isCommentView: () => false,
+  publicCommentModerationNotice: () => null,
 }));
 
 describe("#394 CommentsSection", () => {
@@ -98,5 +99,17 @@ describe("#394 CommentsSection", () => {
     expect(src).toContain("canAuthorSafety");
     expect(src).toContain("Комментарий удалён");
     expect(src).toMatch(/item\.deleted[\s\S]*?gb-comment__tombstone/);
+  });
+
+  it("wires moderation inline notice and clears drafts only on success", () => {
+    const src = readFileSync(
+      resolve(__dirname, "../src/components/consumer/comments/CommentsSection.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("publicCommentModerationNotice");
+    expect(src).toContain("moderationNotice ?? mutation.notice");
+    expect(src).toContain('setDraft("")');
+    expect(src).toMatch(/onSuccess[\s\S]*setDraft\(""\)/);
+    expect(src).not.toMatch(/onRefresh[\s\S]*setDraft\(""\)/);
   });
 });

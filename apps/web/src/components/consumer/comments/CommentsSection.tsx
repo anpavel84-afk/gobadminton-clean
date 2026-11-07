@@ -7,6 +7,7 @@ import {
   deleteEntityCommentPath,
   isCommentView,
   listEntityComments,
+  publicCommentModerationNotice,
   updateEntityCommentPath,
 } from "../../../lib/comments-api";
 import type { CommentEntityKind, EntityComment, EntityCommentPage } from "../../../lib/comments-types";
@@ -408,6 +409,14 @@ export function CommentsSection({
   const pageReady = Boolean(currentPage) && state === "ready";
   const count = currentPage?.visibleCount;
   const canCreate = Boolean(currentPage?.canCreate);
+  /** Prefer moderation field/retry hints; drafts clear only on validated success. */
+  const moderationNotice = publicCommentModerationNotice({ code: mutation.code });
+  const mutationNotice = {
+    notice: moderationNotice ?? mutation.notice,
+    pending: mutation.pending,
+    busy: mutation.busy,
+    retry: mutation.retry,
+  };
   /** Drop stale own edit/delete chrome when bound write capability is revoked. */
   if (currentPage && !canCreate) {
     if (editId !== null) setEditId(null);
@@ -476,7 +485,7 @@ export function CommentsSection({
         </div>
       ) : null}
 
-      <MutationNotice mutation={mutation} />
+      <MutationNotice mutation={mutationNotice} />
       {status ? <p className="gb-comments__status" role="status">{status}</p> : null}
 
       {state === "loading" && !currentPage ? <p className="gb-comments__feedback" role="status">Загружаем комментарии…</p> : null}
