@@ -1,35 +1,40 @@
-# Handoff — #506 MOD-V2-B1a public comment gate (pass16)
+# Handoff — #506 MOD-V2-B1a public comment gate (B1a bounded QA repair)
 
 ## Assignment
 
-- Issue: #506 continuation (`OWNER506_MOD_V2_B1A_PUBLIC_COMMENTS_FIRST_COHERENT_SLICE`)
-- Base: `2650fcbe21976564b8b1ff90aac67ea4eca5b569` (A45 ACCEPTED DEV / PR #508 / `r42393881246-a1`)
+- Issue: #506 continuation (`OWNER506_B1A_BOUNDED_QA_ROLLBACK_CONCURRENT_IDEMPOTENCY_FIX`)
+- Base reviewed FAIL: `d0240f4b91babdbb1ead1f4cbbd98b5836de6d9e` (Sol Medium first QA receipt retained)
 - Author: Cursor Auto
-- Scope: first coherent B1a public game comment create/reply/edit text gate only
-- Not in this pass: B1b role/venue review queues, B2 venue Admin/import text, #507 venue discussion open, release version/history, PROD
+- Scope: bounded repair of QA HIGH rollback + QA MEDIUM concurrent same-key provider race only
+- Not claimed: B1b/B2/C/D, #507 Done, PROD, release metadata/deploy
 
-## What changed
+## Prior independent QA (retained)
 
-- `CommentsService.create` / `update`: `findReplay` → short authorize preflight (parent publicity, capabilities already in runner, block/ownership/version) → `ContentModerationService.approveTexts` → `runIdempotent` final fence → `bindTexts` to `entity_comment` + `comment_body` + comment UUID/version/publication.
-- Delete remains provider-independent.
-- Broad venue writes stay CURRENT runtime closed pending Owner-approved #507 (not permanent by-design); matrix/OpenAPI/comments say the same. `comment_body` catalogue is ready for allowed venue writes when #507 opens.
-- Migration `0062_content_moderation_comments.sql` (+ rollback) expands approval/binding CHECKs; never edits 0061.
-- Web: existing CommentsSection inline notice path uses `publicCommentModerationNotice`; drafts clear only on validated success.
-- OpenAPI: create/update comment document 422 `fields.text`, 503/429 moderation outcomes; success DTO unchanged.
-- Coverage matrix updated with A45 evidence + B1a SOURCE_CANDIDATE; B1b/B2/C/D pending; private external egress OFF.
+Sol Medium FAIL on `d0240f4…`:
+
+1. HIGH — `rollback/0062` restored 0061 CHECKs that reject real `comment_body` / `entity_comment` rows after publication; empty-DB smoke missed this.
+2. MEDIUM — concurrent same-key create/update both missed `findReplay` and called `approveTexts` before key reservation; `runIdempotent` resolved too late.
+
+## What changed (this repair)
+
+- `migrations/rollback/0062_content_moderation_comments.sql`: additive/non-destructive. Removes only the `schema_migrations` marker. **Retains** expanded CHECK allowlists and all approval/binding/comment rows. Documented: narrowing to 0061 would lose/reject retained B1a publication history; original A surfaces remain valid under the kept expanded CHECKs. Re-apply of `0062` is an idempotent widen.
+- `MutationRunner.runWithExternalPrepare`: durable same-key `processing` claim committed **before** external prepare; prepare runs with no DB/advisory lock held; final fence re-locks the claim and completes. Concurrent same hash → `COMMAND_IN_PROGRESS` (no provider). Different payload same key → `IDEMPOTENCY_KEY_REUSED` before prepare. Known 4xx releases the claim; `503` keeps it until finite TTL (120s) so same-key retries do not blindly re-enter paid provider work. Multi-instance: Postgres UNIQUE row is the cross-worker fence (not process-local only).
+- `CommentsService.create` / `update`: use `runWithExternalPrepare` (authorize preflight → `approveTexts` inside prepare; final publication fence unchanged). Delete unchanged.
+- `public-comment-moderation.test.ts`: self-contained Admin recipe (`HOST=127.0.0.1`, `ADMIN_INTERNAL_ENABLED`, isolated `ADMIN_ORIGIN`/`ADMIN_AUTH_PEPPER`) like `comments.disposable.test.ts`; adds concurrent same-key race with provider deliberately blocked (assert ≤1 provider attempt + CIP + replay + hash mismatch).
+- `migration.smoke.test.ts`: populated comment approval/binding rows + rollback + re-apply; expects retained `comment_body` / `entity_comment` compatibility.
+- Unit: `mutation-runner.test.ts` for claim/CIP/replay/hash-mismatch paths.
 
 ## Checks run by author
 
-- Targeted unit: `text-moderation` comment_body prose/contextual; `comments` policy; web `comments-api` / `comments` composer notice wiring.
-- Integration: `public-comment-moderation.test.ts` (fake provider, disposable DB when `RUN_DB_INTEGRATION=1`) — safe create/reply/edit; reject/503 retain body; unauthorized/blocked/stale/venue-closed zero provider calls; same-key replay / hash mismatch; delete zero calls; concurrent parent cancel final fence.
-- Migration smoke expects 0062 + rollback-to-0061 surfaces.
-- Author did **not** run real provider, live DB, paid analysis, or claim independent QA/CI/DEV.
+- API unit: `mutation-runner` 3, `text-moderation` 4, `comments` 6 — PASS.
+- API `tsc --noEmit` and eslint on touched source/tests — PASS.
+- Disposable DB integration / populated rollback / concurrent provider-block race: not run here (no disposable Postgres in author env); parent runs exact disposable + populated rollback.
+- No real provider, live DEV/PROD DB, paid analysis, release, or independent QA claim.
 
-## Remaining NOT_TESTED / next
+## Remaining / next
 
-- Independent QA (Codex Sol Medium default) + mandatory product CI + guarded DEV release/smoke for this B1a candidate.
+- Independent QA delta only (findings against this repair); first FAIL receipt stays on record.
+- Mandatory product CI + guarded DEV release/smoke still required before B1a DONE.
 - Owner UAT = NOT_TESTED until Owner tests.
-- B1b public role/venue review queues; B2 venue/Admin/import text — same #506, later.
-- #507 I1 for opening broad venue comments (no partial feature here).
-- #507 D/S retained; no #507 source in this pass.
-- Parent integrates current accepted DEV + actual receipt before B1 release candidate; no app version/history edits here.
+- B1b / B2 / C / D and #507 I1 remain future; venue comments stay CURRENT closed pending #507.
+- Source A45 unchanged reuse; no image M1 rewrite; no private egress; no app version/history edits here.

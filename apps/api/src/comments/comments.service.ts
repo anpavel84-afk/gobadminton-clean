@@ -320,18 +320,18 @@ export class CommentsService {
         await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
       },
     };
-    const replay = await this.mutations.findReplay<CommentView>(receipt);
-    if (replay) return replay;
 
-    // Parent/actor/block fences before any provider I/O; no locks held across network.
-    await this.authorizeWritePreflight(kind, entityId, actorId, parentCommentId);
-    const textApproval = await this.moderation.approveTexts(actorId, [
-      { surface: "comment_body", text, fieldId: "text" },
-    ]);
-
-    return this.mutations.runIdempotent<CommentView>({
+    // Durable same-key claim before provider I/O; concurrent losers never approveTexts.
+    return this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
       ...receipt,
-      execute: async (client) => {
+      prepare: async () => {
+        // Parent/actor/block fences before any provider I/O; no locks held across network.
+        await this.authorizeWritePreflight(kind, entityId, actorId, parentCommentId);
+        return this.moderation.approveTexts(actorId, [
+          { surface: "comment_body", text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, textApproval) => {
         await this.lockAndAssertPublicParent(client, kind, entityId);
         await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
         const inserted = (
@@ -388,17 +388,16 @@ export class CommentsService {
         this.assertBroadVenueWriteClosed(row.entity_kind);
       },
     };
-    const replay = await this.mutations.findReplay<CommentView>(receipt);
-    if (replay) return replay;
 
-    await this.authorizeUpdatePreflight(commentId, actorId, body.expectedVersion);
-    const textApproval = await this.moderation.approveTexts(actorId, [
-      { surface: "comment_body", text, fieldId: "text" },
-    ]);
-
-    return this.mutations.runIdempotent<CommentView>({
+    return this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
       ...receipt,
-      execute: async (client) => {
+      prepare: async () => {
+        await this.authorizeUpdatePreflight(commentId, actorId, body.expectedVersion);
+        return this.moderation.approveTexts(actorId, [
+          { surface: "comment_body", text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, textApproval) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
         this.assertBroadVenueWriteClosed(row.entity_kind);

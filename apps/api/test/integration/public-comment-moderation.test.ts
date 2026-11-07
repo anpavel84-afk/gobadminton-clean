@@ -89,9 +89,13 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
 
   beforeAll(async () => {
     assertDisposableDatabase(databaseUrl);
+    // Self-contained Admin simulation (do not rely on parent env; matches comments.disposable).
+    const adminOrigin = "http://localhost:19494";
+    const adminPepper = "comment-mod-synthetic-admin-pepper-only!!";
     Object.assign(process.env, {
       NODE_ENV: "test",
       APP_ENV: "local",
+      HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
       PUBLIC_API_ORIGIN: "http://127.0.0.1:3012",
       PUBLIC_WEB_ORIGIN: webOrigin,
@@ -99,6 +103,9 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "comment-mod-synthetic-fingerprint-secret!!",
       SOCIAL_DIRECTORY_ENABLED: "1",
+      ADMIN_INTERNAL_ENABLED: "1",
+      ADMIN_ORIGIN: adminOrigin,
+      ADMIN_AUTH_PEPPER: adminPepper,
       USER_RESTRICTIONS_INTERNAL_ENABLED: "1",
       GAME_MODERATION_INTERNAL_ENABLED: "1",
       COOKIE_SECURE: "false",
@@ -111,7 +118,25 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
     });
     const db = createDatabase(databaseUrl);
     pool = db.pool;
-    const env = loadEnv(process.env);
+    const env = loadEnv({
+      NODE_ENV: "test",
+      APP_ENV: "local",
+      HOST: "127.0.0.1",
+      DATABASE_URL: databaseUrl,
+      PUBLIC_API_ORIGIN: "http://127.0.0.1:3012",
+      PUBLIC_WEB_ORIGIN: webOrigin,
+      ALLOWED_WEB_ORIGINS: webOrigin,
+      CONTENT_MODERATION_PROVIDER: "fake",
+      CONTENT_MODERATION_FINGERPRINT_SECRET: "comment-mod-synthetic-fingerprint-secret!!",
+      SOCIAL_DIRECTORY_ENABLED: "1",
+      ADMIN_INTERNAL_ENABLED: "1",
+      ADMIN_ORIGIN: adminOrigin,
+      ADMIN_AUTH_PEPPER: adminPepper,
+      USER_RESTRICTIONS_INTERNAL_ENABLED: "1",
+      GAME_MODERATION_INTERNAL_ENABLED: "1",
+      COOKIE_SECURE: "false",
+      AUTH_PEPPER: "comment-mod-synthetic-pepper-only!!",
+    });
     fake = new FakeModerationProvider(env);
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -484,5 +509,76 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       [gameId],
     );
     expect(count.rows[0]!.n).toBe(0);
+  });
+
+  it("concurrent same-key create: one provider attempt; loser CIP then safe replay", async () => {
+    const { gameId } = await createPublishedGame(author);
+    const url = `/v1/games/${gameId}/comments`;
+    const idem = key();
+    let releaseProvider!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    let enteredProvider = 0;
+    fake.textFixture = async (input) => {
+      enteredProvider += 1;
+      await blocked;
+      return safeTextBatchDecision(input.texts.length);
+    };
+
+    const first = app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text: "Параллельный один ключ", parentCommentId: null },
+    });
+    // Wait until the winner has entered provider (claim already durable).
+    for (let i = 0; i < 100 && enteredProvider === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(enteredProvider).toBe(1);
+
+    const second = app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text: "Параллельный один ключ", parentCommentId: null },
+    });
+    // Second must resolve as CIP without a second provider entry while first is blocked.
+    const secondResult = await second;
+    expect(enteredProvider).toBe(1);
+    expect(secondResult.statusCode).toBe(409);
+    expect(secondResult.json().code).toBe("COMMAND_IN_PROGRESS");
+
+    releaseProvider();
+    const firstResult = await first;
+    expect(firstResult.statusCode).toBe(201);
+    expect(fake.textCalls).toBe(1);
+
+    const replay = await app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text: "Параллельный один ключ", parentCommentId: null },
+    });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json().id).toBe(firstResult.json().id);
+    expect(fake.textCalls).toBe(1);
+
+    const mismatch = await app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text: "Другое тело того же ключа", parentCommentId: null },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(fake.textCalls).toBe(1);
+
+    const count = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM entity_comments WHERE entity_id = $1::uuid AND deleted_at IS NULL`,
+      [gameId],
+    );
+    expect(count.rows[0]!.n).toBe(1);
   });
 });
