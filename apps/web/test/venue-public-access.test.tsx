@@ -179,10 +179,17 @@ for (const member of [false, true]) {
     window.dispatchEvent(new Event("focus")); await settle(root);
     expect(text).toContain("Расписание временно недоступно"); expect(text).not.toContain("Нет предстоящих доступных игр"); assertPublic();
     root = <VenuePage venueId="b" />; await settle(root);
-    // No published media: neutral empty copy (not equipment/illustration underlay).
+    // No published media: deterministic default illustration (pending until decode).
     expect(text).toContain("Зал Б");
-    expect(text).toContain("Фотографии площадки пока нет");
-    expect(text).not.toContain("Иллюстрация");
+    expect(text).not.toContain("Фотографии площадки пока нет");
+    const illustrationImg = nodes.find(node =>
+      node.type === "img"
+      && typeof node.props.src === "string"
+      && String(node.props.src).includes("/discovery/venue-illustrations/"),
+    );
+    expect(illustrationImg).toBeTruthy();
+    await settleAfterGalleryImgLoad(root, String(illustrationImg!.props.src));
+    expect(text).toContain("Иллюстрация");
     assertPublic();
     expect(text).toContain("Контакты пока не добавлены"); expect(text).not.toContain("Количество кортов4");
     expect(nodes.some(node => node.type === "a" && node.props.href === "tel:+79991234567")).toBe(false);

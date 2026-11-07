@@ -1,14 +1,18 @@
 "use client";
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { venueMediaSkeletonStyle } from "../../../lib/venue-illustration";
+import {
+  VENUE_ILLUSTRATION_ALT,
+  venueIllustrationUrl,
+  venueMediaSkeletonStyle,
+} from "../../../lib/venue-illustration";
 
 type CoverPhase = {
   key: string;
-  /** Last successfully decoded raster src (uploaded or discovery fallback). */
+  /** Last successfully decoded raster src (uploaded or default illustration / discovery). */
   loaded: string | null;
   /** Sticky: uploaded cover URL that failed; cleared only on url+venue key change. */
   failed: string | null;
-  /** Discovery court/trainer raster failed — keep skeleton-free empty; hide broken img. */
+  /** Default illustration or discovery raster failed — honest error, not silent fill. */
   fallbackError: boolean;
 };
 
@@ -45,8 +49,16 @@ export function VenueCover({ cover, className = "", name = "площадки", f
   const uploadedReady = Boolean(url && failed !== url && (!gatePending || loaded === url));
   const uploadedPending = Boolean(url && failed !== url && gatePending && loaded !== url);
   const uploadedFailed = Boolean(url && failed === url);
-  // Genuine no published media for a venue-scoped cover — neutral cell, not equipment filler.
+  // Genuine no published media for a venue-scoped cover — deterministic illustration asset.
   const noMedia = Boolean(gatePending && !url);
+  const illustrationSrc = noMedia && venueId ? venueIllustrationUrl(venueId) : null;
+  const illustrationPending = Boolean(
+    illustrationSrc
+    && loaded !== illustrationSrc
+    && !fallbackError,
+  );
+  const illustrationReady = Boolean(illustrationSrc && loaded === illustrationSrc && !fallbackError);
+  const illustrationFailed = Boolean(illustrationSrc && fallbackError);
   // Discovery/hero without venueId still uses court/trainer ready assets (not venue media).
   const useDiscoveryFallback = !uploadedReady && !uploadedFailed && !noMedia && !gatePending;
   const fallbackSrc = useDiscoveryFallback
@@ -62,17 +74,25 @@ export function VenueCover({ cover, className = "", name = "площадки", f
     && !fallbackError,
   );
   // Immediate static skeleton (no asset request, no equipment SVG).
-  const showSkeleton = uploadedPending || fallbackPending;
+  const showSkeleton = uploadedPending || fallbackPending || illustrationPending;
   const style: CSSProperties | undefined = showSkeleton
     ? venueMediaSkeletonStyle()
     : uploadedReady && gatePending
       ? { backgroundImage: "none", backgroundColor: "var(--c23-surface)" }
-      : noMedia || uploadedFailed || fallbackError
-        ? { backgroundImage: "none", backgroundColor: "var(--gb-paper, #f5f6f2)" }
-        : undefined;
+      : illustrationReady
+        ? { backgroundImage: "none", backgroundColor: "var(--c23-surface)" }
+        : uploadedFailed || fallbackError || illustrationFailed
+          ? { backgroundImage: "none", backgroundColor: "var(--gb-paper, #f5f6f2)" }
+          : undefined;
 
   function retry() {
-    if (!url) return;
+    if (url) {
+      setPhase({ key, loaded: null, failed: null, fallbackError: false });
+      setRetryToken((value) => value + 1);
+      onRetry?.();
+      return;
+    }
+    if (!illustrationSrc) return;
     setPhase({ key, loaded: null, failed: null, fallbackError: false });
     setRetryToken((value) => value + 1);
     onRetry?.();
@@ -110,8 +130,48 @@ export function VenueCover({ cover, className = "", name = "площадки", f
         retry();
       }}>Повторить</button> : null}
     </span>;
-  } else if (noMedia) {
-    body = <span className="gb-venue-cover__status" data-state="empty">Фотографии площадки пока нет</span>;
+  } else if (illustrationSrc) {
+    if (illustrationFailed) {
+      body = <span className="gb-venue-cover__status" data-state="error">
+        <span>Не удалось загрузить иллюстрацию</span>
+        {allowRetry ? <button type="button" className="gb-venue-cover__retry" onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          retry();
+        }}>Повторить</button> : null}
+      </span>;
+    } else {
+      body = <>
+        <img
+          key={`${illustrationSrc}:${retryToken}`}
+          src={illustrationSrc}
+          alt={VENUE_ILLUSTRATION_ALT}
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onDragStart={(event) => { event.preventDefault(); }}
+          style={illustrationPending ? { opacity: 0 } : undefined}
+          ref={(node) => {
+            if (!node || !illustrationSrc || loaded === illustrationSrc || fallbackError) return;
+            if (!node.complete) return;
+            if (node.naturalWidth > 0) {
+              setPhase({ key, loaded: illustrationSrc, failed: null, fallbackError: false });
+            } else {
+              setPhase({ key, loaded: null, failed: null, fallbackError: true });
+            }
+          }}
+          onLoad={() => {
+            setPhase({ key, loaded: illustrationSrc, failed: null, fallbackError: false });
+          }}
+          onError={() => {
+            setPhase({ key, loaded: null, failed: null, fallbackError: true });
+          }}
+        />
+        {illustrationPending
+          ? <span className="gb-venue-cover__status" data-state="loading" role="status">Загружаем иллюстрацию…</span>
+          : null}
+      </>;
+    }
   } else if (fallbackSrc) {
     body = <img
       src={fallbackSrc}
@@ -142,11 +202,28 @@ export function VenueCover({ cover, className = "", name = "площадки", f
   return <span
     className={`gb-venue-cover ${className}`}
     data-cover={uploadedReady ? "uploaded" : "default"}
-    data-fallback={uploadedReady || noMedia || uploadedFailed ? undefined : (useDiscoveryFallback ? fallbackKind : undefined)}
-    data-pending={uploadedPending ? "uploaded" : fallbackPending ? "fallback" : undefined}
-    data-state={uploadedFailed ? "error" : noMedia ? "empty" : undefined}
+    data-fallback={
+      uploadedReady || uploadedFailed
+        ? undefined
+        : illustrationReady || illustrationPending || illustrationFailed
+          ? "illustration"
+          : (useDiscoveryFallback ? fallbackKind : undefined)
+    }
+    data-pending={
+      uploadedPending
+        ? "uploaded"
+        : illustrationPending
+          ? "illustration"
+          : fallbackPending
+            ? "fallback"
+            : undefined
+    }
+    data-state={uploadedFailed || illustrationFailed ? "error" : undefined}
     style={style}
   >
     {body}
+    {illustrationReady
+      ? <span className="gb-venue-cover__badge" aria-hidden="true">Иллюстрация</span>
+      : null}
   </span>;
 }

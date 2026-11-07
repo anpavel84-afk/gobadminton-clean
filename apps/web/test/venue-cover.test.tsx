@@ -46,6 +46,7 @@ const venueId="00000037-1111-4111-8111-111111111111";
 
 type ImgProps = {
   src?: string;
+  alt?: string;
   style?: { opacity?: number };
   onLoad?: () => void;
   onError?: () => void;
@@ -107,19 +108,27 @@ describe("venue cover presentation / mutation wire protocol",()=>{
       expect(markup).not.toContain("▱");
     }
   });
-  it("shows neutral no-photo when venueId is supplied without uploaded cover; keeps illustration asset map",()=>{
+  it("shows deterministic default illustration when venueId is supplied without uploaded cover",()=>{
     const idA="00000037-1111-4111-8111-111111111111";
     const idB="00000037-1111-4111-8111-111111111112";
+    const assetA = venueIllustrationUrl(idA);
     const a=renderToStaticMarkup(<VenueCover venueId={idA}/>);
     const again=renderToStaticMarkup(<VenueCover venueId={idA}/>);
-    expect(a).toContain('data-state="empty"');
-    expect(a).toContain("Фотографии площадки пока нет");
-    expect(a).not.toContain("venue-illustrations");
+    expect(a).toContain(`src="${assetA}"`);
+    expect(a).toContain('data-pending="illustration"');
+    expect(a).toContain('data-fallback="illustration"');
+    expect(a).toContain('data-cover="default"');
+    expect(a).toContain(skeletonMarkup());
+    expect(a).toContain("opacity:0");
+    expect(a).toContain(`alt="Иллюстрация: бадминтон"`);
+    expect(a).not.toContain("Фотографии площадки пока нет");
     expect(a).not.toContain("data:image/svg+xml");
     expect(a).not.toContain("Бадминтонный корт");
-    expect(again).toContain('data-state="empty"');
-    expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idA) as typeof VENUE_ILLUSTRATION_URLS[number]);
+    expect(a).not.toContain('data-state="empty"');
+    expect(again).toContain(`src="${assetA}"`);
+    expect(VENUE_ILLUSTRATION_URLS).toContain(assetA as typeof VENUE_ILLUSTRATION_URLS[number]);
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idB) as typeof VENUE_ILLUSTRATION_URLS[number]);
+    expect(assetA).toBe(venueIllustrationUrl(idA));
   });
   it("shows immediate static CSS skeleton while uploaded photo is pending before onLoad",()=>{
     const idA="00000037-1111-4111-8111-111111111111";
@@ -155,10 +164,11 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     expect(swappedUrl).toContain(urlB);
     expect(swappedUrl).toContain('data-pending="uploaded"');
     expect(swappedUrl).toContain(skeletonMarkup());
-    // Genuine no-media — neutral empty, not equipment filler.
+    // Genuine no-media — pending default illustration, not equipment filler.
     const empty=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:null}} name="Synthetic"/>);
-    expect(empty).toContain('data-state="empty"');
-    expect(empty).toContain("Фотографии площадки пока нет");
+    expect(empty).toContain('data-pending="illustration"');
+    expect(empty).toContain(venueIllustrationUrl(idA));
+    expect(empty).not.toContain("Фотографии площадки пока нет");
     expect(empty).not.toContain("data:image/svg+xml");
     expect(empty).not.toContain(url);
   });
@@ -199,14 +209,44 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     expect(html).not.toContain("data:image/svg+xml");
   });
 
-  it("no-media empty state does not invent loaded imagery", () => {
+  it("no-media default illustration pending → ready badge; failed illustration retries without photo disguise", () => {
     const props = { venueId, cover: { uploadedUrl: null as string | null }, name: "Synthetic" };
-    const tree = renderCover(props);
-    const html = renderToStaticMarkup(tree);
-    expect(html).toContain('data-state="empty"');
-    expect(html).toContain("Фотографии площадки пока нет");
-    expect(html).not.toContain("<img");
+    const asset = venueIllustrationUrl(venueId);
+    let tree = renderCover(props);
+    let html = renderToStaticMarkup(tree);
+    expect(html).toContain(`src="${asset}"`);
+    expect(html).toContain('data-pending="illustration"');
+    expect(html).toContain(skeletonMarkup());
+    expect(html).not.toContain("Фотографии площадки пока нет");
     expect(html).not.toContain("data:image/svg+xml");
+    const pendingImg = coverImg(tree);
+    expect(pendingImg.props.alt).toBe("Иллюстрация: бадминтон");
+    pendingImg.props.onLoad?.();
+    tree = renderCover(props);
+    html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-fallback="illustration"');
+    expect(html).not.toContain("data-pending");
+    expect(html).toContain(">Иллюстрация</span>");
+    expect(html).not.toContain('data-state="error"');
+
+    hooks.slots = [];
+    tree = renderCover(props);
+    coverImg(tree).props.onError?.();
+    tree = renderCover(props);
+    html = renderToStaticMarkup(tree);
+    expect(html).toContain('data-state="error"');
+    expect(html).toContain("Не удалось загрузить иллюстрацию");
+    expect(html).toContain("Повторить");
+    expect(html).not.toContain(`src="${asset}"`);
+    const retry = elements(tree).find(node => node.type === "button");
+    expect(retry).toBeTruthy();
+    (retry!.props.onClick as (event: { preventDefault: () => void; stopPropagation: () => void }) => void)({
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+    tree = renderCover(props);
+    expect(coverImg(tree).props.src).toBe(asset);
+    expect(renderToStaticMarkup(tree)).toContain('data-pending="illustration"');
   });
 
   it("cache-complete original and fresh venue/url reset via actual callbacks", () => {
