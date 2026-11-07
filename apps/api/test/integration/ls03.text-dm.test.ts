@@ -180,6 +180,8 @@ describeIntegration("LS-03 text DM", () => {
     await pool.query("DELETE FROM social_pairs");
     await pool.query("DELETE FROM player_looking_intents");
     await pool.query("DELETE FROM player_social_profiles");
+    // Shared synthetic actors: unique ensureOpenProfile names consume text budget (10/15min).
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
   });
 
   async function login(provider: "vk" | "yandex"): Promise<Session> {

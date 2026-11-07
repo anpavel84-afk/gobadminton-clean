@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { deactivateTrainerProfile, deleteMyLookingForGame, getMe, getMySocialProfile, getTrainerProfile, listCities, logout, patchMySocialProfile, putMyLookingForGame, putMySocialProfileVisibility } from "../../../lib/api-client";
+import { deactivateTrainerProfile, deleteMyLookingForGame, getMe, getMySocialProfile, getTrainerProfile, listCities, logout, patchMySocialProfile, publicTextModerationNotice, putMyLookingForGame, putMySocialProfileVisibility } from "../../../lib/api-client";
 import type { ApiResult } from "../../../lib/api-client";
 import type { City, Me, OwnSocialProfile, TrainerProfile } from "../../../lib/consumer-types";
 import { formatSocialLevel, isSocialDirectoryDisabled, lookingIntentActive, lookingIntentExpired } from "../../../lib/player-presentation";
@@ -87,9 +87,20 @@ export function ProfilePage() {
     if (result.ok) return;
     if (result.status === 401) { setState("auth"); setEditing(false); setLookingEdit(false); }
     else if (isSocialDirectoryDisabled(result)) { setSocialUnavailable(true); setEditing(false); setLookingEdit(false); }
-    else if (result.status === 0 || result.status >= 500 || result.status === 409) {
-      setNeedsRefresh(true); setNotice(result.status === 409 ? "Профиль изменился. Обновите данные перед сохранением." : "Не удалось подтвердить результат. Обновите данные перед следующим действием.");
-    } else setNotice("Не удалось сохранить изменения. Проверьте поля и попробуйте позже.");
+    else {
+      // Recognized public-text moderation notices first: keep form + edit mode; do not force refresh.
+      const moderation = publicTextModerationNotice(result);
+      if (moderation) {
+        setNotice(moderation);
+      } else if (result.status === 0 || result.status >= 500 || result.status === 409) {
+        setNeedsRefresh(true);
+        setNotice(result.status === 409
+          ? "Профиль изменился. Обновите данные перед сохранением."
+          : "Не удалось подтвердить результат. Обновите данные перед следующим действием.");
+      } else {
+        setNotice("Не удалось сохранить изменения. Проверьте поля и попробуйте позже.");
+      }
+    }
   }
   async function saveProfile() {
     if (!me || !social || busy || needsRefresh) return;

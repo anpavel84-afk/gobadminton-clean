@@ -176,7 +176,7 @@ export class GameAttendanceService {
   private async displayName(client: PoolClient | Pool, userId: string): Promise<string> {
     const row = (
       await client.query<{ display_name: string }>(
-        `SELECT COALESCE(NULLIF(TRIM(p.display_name), ''), NULLIF(TRIM(u.display_name), ''), 'Игрок') AS display_name
+        `SELECT COALESCE(NULLIF(TRIM(p.display_name), ''), 'Игрок') AS display_name
          FROM users u
          LEFT JOIN player_social_profiles p ON p.user_id = u.id
          WHERE u.id = $1`,
@@ -200,7 +200,7 @@ export class GameAttendanceService {
       display_name: string;
     }>(
       `SELECT p.id, p.user_id, p.status, p.confirmed_at,
-              COALESCE(NULLIF(TRIM(sp.display_name), ''), NULLIF(TRIM(u.display_name), ''), 'Игрок') AS display_name
+              COALESCE(NULLIF(TRIM(sp.display_name), ''), 'Игрок') AS display_name
        FROM participations p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN player_social_profiles sp ON sp.user_id = p.user_id
@@ -387,7 +387,7 @@ export class GameAttendanceService {
       const part = (
         await client.query<{ id: string; display_name: string }>(
           `SELECT p.id,
-                  COALESCE(NULLIF(TRIM(sp.display_name), ''), NULLIF(TRIM(u.display_name), ''), 'Игрок') AS display_name
+                  COALESCE(NULLIF(TRIM(sp.display_name), ''), 'Игрок') AS display_name
            FROM participations p
            JOIN users u ON u.id = p.user_id
            LEFT JOIN player_social_profiles sp ON sp.user_id = p.user_id

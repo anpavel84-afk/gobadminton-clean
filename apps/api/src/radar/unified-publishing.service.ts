@@ -12,12 +12,23 @@ import {
   problem,
 } from "../auth/problem";
 import { MutationRunner } from "../common/mutation-runner.service";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 import { isDemoUuid, DEMO_SPB_CITY_ID } from "../database/demo-ids";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { RadarFeatureService } from "./radar-feature";
 import { RadarBudgetService } from "./radar-budget.service";
 import { resolveRadarRegion } from "./coarse-location";
-import { RADAR_REGION_MOSCOW, RADAR_REGION_SPB } from "./constants";
+import {
+  RADAR_FIX_FUTURE_TOLERANCE_SECONDS,
+  RADAR_FIX_MAX_AGE_SECONDS,
+  RADAR_REGION_MOSCOW,
+  RADAR_REGION_SPB,
+  type RadarExposureMode,
+} from "./constants";
 import { quantizeUnified } from "./unified-location";
 import {
   UNIFIED_WIRE,
@@ -92,6 +103,7 @@ export class UnifiedPublishingService {
     private readonly mutations: MutationRunner,
     private readonly feature: RadarFeatureService,
     private readonly budgets: RadarBudgetService,
+    private readonly moderation: ContentModerationService,
   ) {}
   async status(userId: string, sessionId: string) {
     const r = await this.pool.query<Presence>(
@@ -185,15 +197,16 @@ export class UnifiedPublishingService {
     const requestHash = createHmac("sha256", this.env.AUTH_PEPPER)
       .update(operation + JSON.stringify(input))
       .digest("hex");
-    const result = await this.mutations.runIdempotent<
-      ReturnType<typeof activationReceipt>
-    >({
+    const receipt = {
       actorId: userId,
       sessionId,
       operation,
       key,
       requestHash,
-      authorizeReplay: async (client, body) => {
+      authorizeReplay: async (
+        client: PoolClient,
+        body: ReturnType<typeof activationReceipt>,
+      ) => {
         await this.requireProfile(client, userId);
         const r = await this.owned(
           client,
@@ -206,8 +219,31 @@ export class UnifiedPublishingService {
           throw conflict("VERSION_CONFLICT", "Конфликт поколения Radar");
         await this.requireConsent(client, userId);
       },
+    };
+
+    let textApproval: TextBatchApproval | null = null;
+    if (kind === "start" || kind === "takeover") {
+      // Authorized replay before any text provider. Accepted same-key replay
+      // bypasses moderation and still reprojects ephemeral wire metadata below.
+      const replay = await this.mutations.findReplay<
+        ReturnType<typeof activationReceipt>
+      >(receipt);
+      if (replay) {
+        return this.presentWireActivation(userId, sessionId, replay);
+      }
+      await this.preflightEligibleBeforeTextProvider(userId, kind, mode, input);
+      textApproval = await this.preflightExistingProfileText(userId);
+    }
+
+    const result = await this.mutations.runIdempotent<
+      ReturnType<typeof activationReceipt>
+    >({
+      ...receipt,
       execute: async (client) => {
         await this.requireProfile(client, userId);
+        if (textApproval) {
+          await this.bindExistingProfileText(client, userId, textApproval);
+        }
         if (kind === "start" || kind === "takeover") {
           // First v2 ON/takeover always carries exact explicit evidence, never upgrades v1.
           const registry = await client.query(
@@ -405,8 +441,15 @@ export class UnifiedPublishingService {
         };
       },
     });
-    // Durable receipt contains only the generation CAS. Re-read current ephemeral
-    // metadata for transport; never persist model, point, accuracy or fix clocks.
+    return this.presentWireActivation(userId, sessionId, result);
+  }
+
+  /** Durable receipt is generation CAS only; re-read ephemeral transport metadata. */
+  private async presentWireActivation(
+    userId: string,
+    sessionId: string,
+    result: { statusCode: number; body: ReturnType<typeof activationReceipt> },
+  ) {
     const current = await this.pool.query<Presence>(
       "SELECT *, ST_Y(coarse_center::geometry) AS coarse_latitude, ST_X(coarse_center::geometry) AS coarse_longitude FROM radar_presences WHERE user_id=$1 AND owner_session_id=$2 AND activation_id=$3 AND version=$4 AND policy_version=$5 AND LEAST(expires_at,hard_expires_at,foreground_until,location_valid_until)>clock_timestamp()",
       [
@@ -427,11 +470,129 @@ export class UnifiedPublishingService {
       body: v2Metadata(current.rows[0], sessionId),
     };
   }
+
+  /**
+   * Read-only eligibility before external text I/O for start/takeover.
+   * No bootstrap write, budget consume, consent publish, or presence mutation.
+   * Location region/time eligibility is pure (no PostGIS / geo-budget) and still
+   * revalidated by fix() under the final mutation race fences.
+   */
+  private async preflightEligibleBeforeTextProvider(
+    userId: string,
+    kind: "start" | "takeover",
+    mode: RadarExposureMode,
+    input: {
+      activationId?: string;
+      expectedVersion?: number;
+      location?: Parameters<typeof quantizeUnified>[1];
+    },
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const profile = await client.query<{
+        social_eligible: boolean;
+        display_name: string;
+      }>(
+        "SELECT social_eligible, display_name FROM player_social_profiles WHERE user_id=$1",
+        [userId],
+      );
+      const row = profile.rows[0];
+      if (row) {
+        if (!row.social_eligible)
+          throw forbidden("VIEWER_RESTRICTED", "Социальный профиль недоступен");
+        if (!row.display_name.trim())
+          throw unprocessable("RADAR_PROFILE_INCOMPLETE", "Требуется имя игрока");
+      }
+      const registry = await client.query(
+        "SELECT 1 FROM radar_disclosures WHERE policy_version=$1 AND disclosure_id=$2 AND disclosure_sha256=$3 AND disclosure_text=$4",
+        [
+          UNIFIED_POLICY,
+          UNIFIED_DISCLOSURE_ID,
+          UNIFIED_DISCLOSURE_HASH,
+          UNIFIED_DISCLOSURE_TEXT,
+        ],
+      );
+      if (!registry.rows[0])
+        throw forbidden(
+          "RADAR_DISCLOSURE_UNAVAILABLE",
+          "Раскрытие Radar недоступно",
+        );
+      const presence = await client.query<Presence>(
+        "SELECT * FROM radar_presences WHERE user_id=$1",
+        [userId],
+      );
+      const old = presence.rows[0];
+      const active =
+        !!old &&
+        Math.min(
+          old.expires_at.getTime(),
+          old.foreground_until.getTime(),
+          old.location_valid_until.getTime(),
+          old.hard_expires_at.getTime(),
+        ) > Date.now();
+      if (kind === "start" && active)
+        throw conflict("RADAR_SESSION_OWNED", "Radar уже активен");
+      if (
+        kind === "takeover" &&
+        (!old ||
+          !input.activationId ||
+          old.activation_id !== input.activationId ||
+          Number(old.version) !== input.expectedVersion)
+      )
+        throw conflict("VERSION_CONFLICT", "Конфликт поколения Radar");
+      if (!input.location)
+        throw unprocessable("LOCATION_INVALID", "Требуется геолокация");
+      // Pure eligibility only — never consumeGeo / PostGIS inside this txn.
+      this.assertFixEligibleBeforeTextProvider(input.location, mode);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Mirror fix()/quantizeFix/quantizeUnified rejection gates that do not need
+   * PostGIS or geo budget, so unsupported/stale fixes never reach text I/O.
+   */
+  private assertFixEligibleBeforeTextProvider(
+    location: Parameters<typeof quantizeUnified>[1],
+    mode: RadarExposureMode,
+  ): void {
+    const capturedMs = Date.parse(location.capturedAt);
+    if (!Number.isFinite(capturedMs)) {
+      throw unprocessable("LOCATION_INVALID", "Некорректное время фиксации");
+    }
+    const nowMs = Date.now();
+    const ageSec = (nowMs - capturedMs) / 1000;
+    if (ageSec > RADAR_FIX_MAX_AGE_SECONDS) {
+      throw unprocessable("LOCATION_TOO_OLD", "Геолокация устарела");
+    }
+    if (ageSec < -RADAR_FIX_FUTURE_TOLERANCE_SECONDS) {
+      throw unprocessable("LOCATION_INVALID", "Некорректное время фиксации");
+    }
+    // quantizeUnified also rejects age>=60s after PostGIS; mirror before provider I/O.
+    if (capturedMs + 60_000 <= nowMs) {
+      throw unprocessable("LOCATION_TOO_OLD", "Геолокация устарела");
+    }
+    // Same live/synthetic allowlist as fix() — pure, no geo budget.
+    resolveRadarRegion(
+      location.latitude,
+      location.longitude,
+      mode === "synthetic_demo"
+        ? [RADAR_REGION_MOSCOW, RADAR_REGION_SPB]
+        : [RADAR_REGION_MOSCOW],
+    );
+  }
+
   private async fix(
     client: PoolClient,
     userId: string,
     location: Parameters<typeof quantizeUnified>[1],
-    mode: "live" | "synthetic_demo",
+    mode: RadarExposureMode,
   ) {
     await this.budgets.consumeGeo(client, userId, new Date());
     const region = resolveRadarRegion(
@@ -450,9 +611,71 @@ export class UnifiedPublishingService {
       mode,
     );
   }
+  private async preflightExistingProfileText(
+    userId: string,
+  ): Promise<TextBatchApproval | null> {
+    const row = (
+      await this.pool.query<{ display_name: string; bio: string | null }>(
+        `SELECT display_name, bio FROM player_social_profiles WHERE user_id = $1`,
+        [userId],
+      )
+    ).rows[0];
+    if (!row) return null;
+    const fields: TextFieldCandidate[] = [];
+    const name = row.display_name.trim();
+    if (name.length > 0 && name !== "Игрок") {
+      fields.push({
+        surface: "profile_display_name",
+        text: row.display_name,
+        fieldId: "displayName",
+      });
+    }
+    if (row.bio && row.bio.length > 0) {
+      fields.push({ surface: "profile_bio", text: row.bio, fieldId: "bio" });
+    }
+    if (fields.length === 0) return null;
+    return this.moderation.approveTexts(userId, fields);
+  }
+
+  private async bindExistingProfileText(
+    client: PoolClient,
+    userId: string,
+    approval: TextBatchApproval,
+  ): Promise<void> {
+    const row = (
+      await client.query<{ display_name: string; bio: string | null; version: number }>(
+        `SELECT display_name, bio, version FROM player_social_profiles WHERE user_id = $1 FOR UPDATE`,
+        [userId],
+      )
+    ).rows[0];
+    if (!row) return;
+    const committed: Array<{ surface: "profile_display_name" | "profile_bio"; text: string }> = [];
+    for (const field of approval.fields) {
+      if (field.surface === "profile_display_name") {
+        if (field.text !== row.display_name) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        committed.push({ surface: "profile_display_name", text: row.display_name });
+      } else if (field.surface === "profile_bio") {
+        if (!row.bio || field.text !== row.bio) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        committed.push({ surface: "profile_bio", text: row.bio });
+      }
+    }
+    if (committed.length === 0) return;
+    await this.moderation.bindTexts(client, approval, committed, {
+      entityKind: "player_social_profile",
+      entityId: userId,
+      resourceVersion: row.version,
+      actorUserId: userId,
+      bindingKind: "publication",
+    });
+  }
+
   private async requireProfile(client: PoolClient, userId: string) {
     await client.query(
-      "INSERT INTO player_social_profiles(user_id,display_name) SELECT id,left(coalesce(nullif(btrim(display_name),''),'Игрок'),80) FROM users WHERE id=$1 ON CONFLICT(user_id) DO NOTHING",
+      "INSERT INTO player_social_profiles(user_id,display_name) SELECT id,'Игрок' FROM users WHERE id=$1 ON CONFLICT(user_id) DO NOTHING",
       [userId],
     );
     const p = await client.query<{

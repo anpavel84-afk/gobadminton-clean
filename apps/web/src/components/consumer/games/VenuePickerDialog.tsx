@@ -126,8 +126,9 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                   aria-pressed={selectedId === venue.id}
                   onClick={() => onSelect(venue)}
                 >
-                  {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select.
-                      Source credit stays outside this select button (no nested anchors). */}
+                  {/* Compact gallery: no nav / no retry controls inside the select button.
+                      Horizontal swipe is click-suppressed so it does not select.
+                      Source credit and sheet retry stay outside (no nested anchors/controls). */}
                   <VenueGallery venue={venue} size="compact" showCredit={false} showSourceCredit={false} className="gb-venue-cover--thumb" />
                   <span className="gb-venue-picker-option-copy">
                     <span className="gb-venue-picker-option-name">{venue.name}</span>
@@ -140,13 +141,14 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                     <VenueSourceCredit catalogSource={catalogSource} />
                   </div>
                 ) : null}
-                {photos >= 2 ? (
+                {photos >= 1 ? (
                   <details className="gb-venue-picker-photos">
                     <summary tabIndex={0} className="gb-venue-picker-photos__summary">
                       Фото · {photos}
                     </summary>
                     <div className="gb-venue-picker-photos__body">
-                      {/* Sibling sheet gallery: arrows, counter, focused arrow keys — outside the select button. */}
+                      {/* Sibling sheet gallery: arrows (when 2+), counter, retry — outside the select button.
+                          Single failed thumb still gets a reachable retry here (compact has none). */}
                       <VenueGallery venue={venue} size="sheet" showCredit />
                     </div>
                   </details>

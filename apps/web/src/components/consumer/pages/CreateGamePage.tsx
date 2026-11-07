@@ -18,6 +18,7 @@ import {
   listMyCreatedGames,
   getTrainerProfile,
   getGamePreferences,
+  publicTextModerationNotice,
   listAllMyParticipations,
   listAllCityVenues,
   publishGame,
@@ -384,11 +385,12 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
       const createResult = await createGame({ ...previewPayload, venueId }, me.csrfToken);
       if (epoch !== sessionEpoch.current) return;
       if (!createResult.ok) {
-        if ([400, 401, 403, 422].includes(createResult.status)) {
-          setError(createResult.status === 401 || createResult.status === 403 ? "Вход или разрешение на сохранение истекли. Обновите проверку входа и попробуйте снова." : createResult.problem?.code === "GAME_START_NOT_FUTURE" ? "Начало уже прошло. Выберите другое время." : "Не удалось создать игру. Проверьте поля, площадку и доступность профиля тренера.");
+        const moderation = publicTextModerationNotice(createResult);
+        if ([400, 401, 403, 422, 429, 503].includes(createResult.status)) {
+          setError(createResult.status === 401 || createResult.status === 403 ? "Вход или разрешение на сохранение истекли. Обновите проверку входа и попробуйте снова." : createResult.problem?.code === "GAME_START_NOT_FUTURE" ? "Начало уже прошло. Выберите другое время." : (moderation ?? "Не удалось создать игру. Проверьте поля, площадку и доступность профиля тренера."));
           setStep("form"); return;
         }
-        setError("Не удалось подтвердить создание игры.");
+        setError(moderation ?? "Не удалось подтвердить создание игры.");
         setStep(createResult.status === 409 || createResult.status === 412 ? "conflict" : "unknown");
         await rereadResult(null); return;
       }

@@ -63,7 +63,8 @@ function service() {
   const proofs={redeem:vi.fn(async()=>redeemed),assertFinalGeographicProof:vi.fn(async()=>{})};
   const actor={assertActiveConsumerInTransaction:vi.fn(async()=>{})};
   const budgets={consumePreview:vi.fn(async()=>{})};
-  const args=[{connect:async()=>database.client},env,{assertAccess:()=>"live"},{},{},{},actor,budgets,proofs,{contactableTargets:async()=>new Set<string>()}];
+  const moderation={approveTexts:vi.fn(async()=>null),bindTexts:vi.fn(async()=>undefined)};
+  const args=[{connect:async()=>database.client},env,{assertAccess:()=>"live"},{},{},{},actor,budgets,proofs,{contactableTargets:async()=>new Set<string>()},moderation];
   const radar=new RadarService(...args as ConstructorParameters<typeof RadarService>);
   return {radar,...database,proofs,actor,budgets};
 }

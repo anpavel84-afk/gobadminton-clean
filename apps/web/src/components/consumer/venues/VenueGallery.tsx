@@ -2,7 +2,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefCallback, type MouseEvent as ReactMouseEvent } from "react";
 import type { Venue, VenueProfile } from "../../../lib/consumer-types";
 import { httpsCreditUrl } from "../../../lib/original-http-authority";
-import { venueEquipmentPlaceholderStyle } from "../../../lib/venue-illustration";
+import { venueMediaSkeletonStyle } from "../../../lib/venue-illustration";
 import { VenueCover, venueCoverUrl } from "./VenueCover";
 import { VenueCoverCredit } from "./VenueCoverCredit";
 import { VenueSourceCredit, safeCatalogSource } from "./VenueSourceCredit";
@@ -12,6 +12,16 @@ export type GalleryItem = VenueProfile["gallery"]["items"][number];
 
 const AXIS_LOCK = 10;
 const SWIPE_THRESHOLD = 48;
+
+/** Exclude interactive descendants before drag/capture so arrow clicks keep their target. */
+function isGalleryInteractiveTarget(target: EventTarget | null): boolean {
+  if (!target || typeof (target as Element).closest !== "function") return false;
+  return Boolean(
+    (target as Element).closest(
+      "button,a,input,select,textarea,summary,label,[role='button'],[role='link'],[role='textbox']",
+    ),
+  );
+}
 
 function readItems(gallery: Venue["profile"] extends infer P ? P : never, cover?: Venue["cover"]): GalleryItem[] {
   const profile = gallery && typeof gallery === "object" ? gallery as VenueProfile : null;
@@ -81,13 +91,14 @@ export function VenueGallery({
   showSourceCredit = true,
   index: controlledIndex,
   onIndexChange,
+  onCoverRetry,
 }: {
   venue: Pick<Venue, "id" | "name" | "cover" | "profile"> | (Pick<Venue, "id" | "name" | "cover"> & { profile?: Venue["profile"] });
   className?: string;
   size?: "sheet" | "compact" | "page";
   /** Reuse SelectedVenueCover morph slot for the current main-matching image. */
   coverSlot?: ReactNode;
-  /** Shared SelectedVenueCover resource already shows the generic after main-loan failure. */
+  /** Shared SelectedVenueCover resource already failed the main loan. */
   coverFallback?: boolean;
   showCredit?: boolean;
   /** Catalog source credit; false in compact select-button parents that render it as a sibling footer. */
@@ -95,6 +106,8 @@ export function VenueGallery({
   /** Parent-owned index keeps compact↔expanded selection aligned for one venue. */
   index?: number;
   onIndexChange?: (index: number, item: GalleryItem | null) => void;
+  /** Optional morph-resource retry when the shared main cover failed. */
+  onCoverRetry?: () => void;
 }) {
   const items = readItems(venue.profile ?? null, venue.cover);
   const [uncontrolledIndex, setUncontrolledIndex] = useState(() => mainIndex(items, venue.cover));
@@ -112,30 +125,33 @@ export function VenueGallery({
   };
   const [failed, setFailed] = useState<string | null>(null);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   const drag = useRef<Drag | null>(null);
   const suppressClick = useRef(false);
   const labelId = useId();
+  const statusId = useId();
   const safeIndex = items.length === 0 ? 0 : ((index % items.length) + items.length) % items.length;
   const current = items[safeIndex] ?? null;
   const mainUrl = venueCoverUrl(venue.cover?.uploadedUrl);
-  // Keep the morph main-loan slot after shared-resource fallback (one image); local failed still leaves morph.
+  const mainLoanFailed = Boolean(coverSlot && coverFallback && current && mainUrl && current.url === mainUrl);
+  // Keep the morph main-loan slot for pending/ready/failed paint of the single shared image.
   const useMorphSlot = Boolean(coverSlot && current && mainUrl && current.url === mainUrl && failed !== current.url);
-  const mainLoanFallback = Boolean(coverSlot && coverFallback && current && mainUrl && current.url === mainUrl);
-  // All gallery sizes: immediate inline SVG underlay while the single current photo is empty (not morph path).
+  const imageFailed = Boolean(current && (failed === current.url || mainLoanFailed));
+  // All gallery sizes: static skeleton while the single current photo is empty (not morph path).
   // Morph keeps one physical photo node; frame underlay is CSS-only and does not steal gestures.
   const framePending = Boolean(
     !useMorphSlot
     && current
-    && failed !== current.url
+    && !imageFailed
     && loadedSrc !== current.url,
   );
-  const framePendingStyle = framePending
-    ? venueEquipmentPlaceholderStyle()
-    : undefined;
+  const framePendingStyle = framePending ? venueMediaSkeletonStyle() : undefined;
+  const imageReady = Boolean(current && !imageFailed && loadedSrc === current.url);
 
   useEffect(() => {
     setFailed(null);
     setLoadedSrc(null);
+    setRetryToken(0);
     // Parent-owned controlled index survives compact→expanded remount on the same venue.
     // Uncontrolled (and new-venue parent resets) still start on the main image.
     if (controlledIndex !== undefined) return;
@@ -170,6 +186,17 @@ export function VenueGallery({
     commitIndex((safeIndex + delta + items.length) % items.length);
   }
 
+  function retryCurrent() {
+    if (!current) return;
+    if (mainLoanFailed) {
+      onCoverRetry?.();
+      return;
+    }
+    setFailed(null);
+    setLoadedSrc(null);
+    setRetryToken((value) => value + 1);
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (items.length < 2) return;
     if (event.key === "ArrowLeft") { event.preventDefault(); event.stopPropagation(); go(-1); }
@@ -178,6 +205,8 @@ export function VenueGallery({
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (items.length < 2 || event.button !== 0) return;
+    // Real mouse clicks on nav (and nested SVG glyphs) must not start gallery capture.
+    if (isGalleryInteractiveTarget(event.target)) return;
     // A fresh real press clears stale swipe click-suppression so the first tap is not swallowed.
     suppressClick.current = false;
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: "pending" };
@@ -235,21 +264,68 @@ export function VenueGallery({
   const sourceCredit = showSourceCredit && safeCatalogSource(catalogSource)
     ? <VenueSourceCredit catalogSource={catalogSource} />
     : null;
+  const allowRetry = size !== "compact";
 
   if (items.length === 0) {
     // Preserve parent morph/fallback slot when gallery has no items; do not invent photo credit.
-    // Source attribution still renders for every presented venue (including fallback cover).
+    // Source attribution still renders for every presented venue (including empty media).
     const emptyCredit = sourceCredit ? <div className="gb-venue-gallery__credit">{sourceCredit}</div> : null;
+    const legacyCoverUrl = venueCoverUrl(venue.cover?.uploadedUrl);
     if (coverSlot) {
+      // Keep the single shared morph slot. When there is no published URL, overlay the
+      // same neutral no-photo copy used by non-morph empty frames (compact + expanded).
+      if (!legacyCoverUrl) {
+        return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
+          <div
+            className="gb-venue-gallery"
+            data-size={size === "compact" ? "compact" : size}
+            data-count={0}
+            role="group"
+            aria-roledescription="gallery"
+          >
+            <div className="gb-venue-gallery__frame" data-state="empty">
+              {coverSlot}
+              <div className="gb-venue-gallery__status" data-state="empty" role="status">
+                <p>Фотографии площадки пока нет</p>
+              </div>
+            </div>
+          </div>
+          {emptyCredit}
+        </div>;
+      }
       return <>{coverSlot}{emptyCredit}</>;
     }
+    // Unattributed legacy cover still paints through VenueCover (pending → ready / failed).
+    // Genuine no published media → neutral text (sheet/page) or neutral thumb (compact).
+    if (!legacyCoverUrl && size !== "compact") {
+      return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
+        <div className="gb-venue-gallery" data-size={size} data-count={0} role="group" aria-roledescription="gallery">
+          <div className="gb-venue-gallery__frame" data-state="empty">
+            <div className="gb-venue-gallery__status" data-state="empty" role="status">
+              <p>Фотографии площадки пока нет</p>
+            </div>
+          </div>
+        </div>
+        {emptyCredit}
+      </div>;
+    }
     return <>
-      <VenueCover cover={venue.cover} name={venue.name} className={className} venueId={venue.id} />
+      <VenueCover
+        cover={venue.cover}
+        name={venue.name}
+        className={className}
+        venueId={venue.id}
+        allowRetry={size !== "compact"}
+      />
       {emptyCredit}
     </>;
   }
 
   const showControls = items.length > 1 && size !== "compact";
+  // Compact thumbs stay caption-free (aria-busy + skeleton only); sheet/page keep the loading line.
+  const statusText = framePending && size !== "compact"
+    ? "Загружаем фотографию…"
+    : (imageFailed && size === "compact" ? "Фото не загрузилось" : null);
 
   return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
     <div
@@ -259,6 +335,8 @@ export function VenueGallery({
       role="group"
       aria-roledescription="gallery"
       aria-labelledby={labelId}
+      aria-describedby={(statusText || imageFailed) ? statusId : undefined}
+      aria-busy={framePending || undefined}
       tabIndex={showControls ? 0 : undefined}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
@@ -274,6 +352,7 @@ export function VenueGallery({
       <div
         className="gb-venue-gallery__frame"
         data-pending={framePending ? "uploaded" : undefined}
+        data-state={imageFailed ? "error" : undefined}
         style={framePendingStyle}
         onErrorCapture={(event) => {
           // Main loan: capture runs before the shared resource target listener — do not setFailed
@@ -285,13 +364,42 @@ export function VenueGallery({
           if (target.getAttribute("src") === current.url) setFailed(current.url);
         }}
       >
-        {useMorphSlot ? coverSlot : current && failed !== current.url
+        {useMorphSlot ? <>
+          {coverSlot}
+          {mainLoanFailed && size !== "compact" ? (
+            <div className="gb-venue-gallery__status" data-state="error" id={statusId} role="alert">
+              <p>Не удалось загрузить фотографию</p>
+              <p>Информация о площадке доступна ниже</p>
+              {onCoverRetry ? (
+                <button type="button" className="gb-venue-gallery__retry" onClick={(event) => {
+                  event.stopPropagation();
+                  onCoverRetry();
+                }}>Повторить загрузку</button>
+              ) : null}
+            </div>
+          ) : null}
+        </> : imageFailed && current
+          ? <div className="gb-venue-gallery__status" data-state="error" id={statusId} role="alert">
+              {size === "compact" ? <p>Фото не загрузилось</p> : <>
+                <p>Не удалось загрузить фотографию</p>
+                <p>Информация о площадке доступна ниже</p>
+                {allowRetry ? (
+                  <button type="button" className="gb-venue-gallery__retry" onClick={(event) => {
+                    event.stopPropagation();
+                    retryCurrent();
+                  }}>Повторить загрузку</button>
+                ) : null}
+              </>}
+            </div>
+          : current
           ? <img
-              key={current.url}
+              key={`${current.url}:${retryToken}`}
               src={current.url}
               alt={`Обложка: ${venue.name}`}
               loading="eager"
               decoding="async"
+              draggable={false}
+              onDragStart={(event) => { event.preventDefault(); }}
               style={framePending ? { opacity: 0 } : undefined}
               ref={(node) => {
                 if (!node || !current || loadedSrc === current.url) return;
@@ -300,22 +408,32 @@ export function VenueGallery({
               onLoad={() => setLoadedSrc(current.url)}
               onError={() => setFailed(current.url)}
             />
-          : <VenueCover cover={undefined} name={venue.name} venueId={venue.id} />}
+          : null}
       </div>
       {showControls && <>
         <div className="gb-venue-gallery__nav">
-          <button type="button" aria-label="Предыдущее фото" onClick={(event) => { event.stopPropagation(); go(-1); }}>←</button>
-          <button type="button" aria-label="Следующее фото" onClick={(event) => { event.stopPropagation(); go(1); }}>→</button>
+          <button type="button" aria-label="Предыдущее фото" onClick={(event) => { event.stopPropagation(); go(-1); }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M10.5 3.5 6 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.75" />
+            </svg>
+          </button>
+          <button type="button" aria-label="Следующее фото" onClick={(event) => { event.stopPropagation(); go(1); }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M5.5 3.5 10 8l-4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.75" />
+            </svg>
+          </button>
         </div>
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>
       </>}
     </div>
-    {(showCredit && current) || sourceCredit ? <div className="gb-venue-gallery__credit">
-      {showCredit && current ? <VenueCoverCredit credit={failed === current.url || mainLoanFallback || framePending
-        ? { kind: "illustration", text: "Иллюстрация", url: null }
-        : current.credit} /> : null}
+    {(showCredit && current && imageReady) || sourceCredit || (showCredit && framePending && size !== "compact") || (showCredit && imageFailed && size !== "compact") ? <div className="gb-venue-gallery__credit">
+      {showCredit && framePending && size !== "compact" ? <p className="gb-venue-gallery__caption" id={statusId} role="status">Загружаем фотографию…</p> : null}
+      {showCredit && imageFailed && size !== "compact" ? <p className="gb-venue-gallery__caption">Фотография временно недоступна</p> : null}
+      {showCredit && current && imageReady ? <VenueCoverCredit credit={current.credit} /> : null}
       {sourceCredit}
-    </div> : null}
+    </div> : (statusText && size === "compact" && !(imageFailed && !useMorphSlot)
+      ? <span id={statusId} className="gb-sr-only" role="status">{statusText}</span>
+      : null)}
   </div>;
 }
 

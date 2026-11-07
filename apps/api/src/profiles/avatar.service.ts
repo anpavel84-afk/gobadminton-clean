@@ -106,7 +106,7 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
         const approvalId = key && approval && verifiedBytes ? await (slot === "cover" ? this.moderation.bindImage(client, approval, verifiedBytes, "cover") : this.moderation.bindImage(client, approval, verifiedBytes)) : null;
         const updated = current.rows[0]
           ? await client.query<{version: number}>(`UPDATE player_social_profiles SET ${column}_key = $2, ${column}_moderation_approval_id = $3, version = version + 1, updated_at = now() WHERE user_id = $1 RETURNING version`, [actor.userId, key ?? null, approvalId])
-          : await client.query<{version: number}>(`INSERT INTO player_social_profiles(user_id, ${column}_key, ${column}_moderation_approval_id, display_name) SELECT id, $2, $3, display_name FROM users WHERE id = $1 RETURNING version`, [actor.userId, key ?? null, approvalId]);
+          : await client.query<{version: number}>(`INSERT INTO player_social_profiles(user_id, ${column}_key, ${column}_moderation_approval_id, display_name) SELECT id, $2, $3, $4 FROM users WHERE id = $1 RETURNING version`, [actor.userId, key ?? null, approvalId, "Игрок"]);
         if (key) await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [key]);
         return { statusCode: 200, body: { version: updated.rows[0]!.version, ...await presentation(client) } };
       } });

@@ -18,6 +18,7 @@ import type {
 } from "../../src/auth/providers/types";
 import { loadEnv } from "../../src/config/env";
 import { createDatabase } from "../../src/database/client";
+import { SOCIAL_PROFILE_SAFE_DISPLAY_NAME } from "../../src/profiles/social-profile-defaults";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
@@ -201,7 +202,8 @@ describeIntegration("F-02 identity/session integration", () => {
       directory_visibility_provenance: "owner_default",
       consent_policy_version: null,
       city_id: null,
-      display_name: "Player A",
+      // MOD-V2-A: automatic OAuth public name is trusted Игрок (not provider displayName).
+      display_name: SOCIAL_PROFILE_SAFE_DISPLAY_NAME,
     });
     await pool.query(
       `UPDATE player_social_profiles

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
+import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { nearestGameLabel } from "../src/lib/venue-popup";
 // Manual slots only while invoking the root under test as a function; SSR
 // descendants (VenueCover) use real React hooks + lazy useState initializers.
@@ -78,14 +79,62 @@ it("renders the real cover and region with named keyboard buttons; opens once", 
   }
   activate(tree); expect(onOpen).toHaveBeenCalledTimes(2);
   const uploadedUrl = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
-  // Pending: per-venue illustration while uploaded photo has not loaded (SSR/first paint).
+  // Pending: static skeleton while uploaded photo has not loaded (no equipment illustration filler).
   const uploaded = renderToStaticMarkup(<VenuePreviewCard venue={{ ...venue, cover: { uploadedUrl } }} games={[]} gamesReady now={0} onOpen={onOpen} />);
   expect(uploaded).toContain('data-cover="default"');
   expect(uploaded).toContain('data-pending="uploaded"');
-  expect(uploaded).toContain('data-fallback="illustration"');
+  expect(uploaded).not.toContain('data-fallback="illustration"');
+  expect(uploaded).not.toContain("/discovery/venue-illustrations/");
   expect(uploaded).toContain(uploadedUrl);
   expect(uploaded).toContain("opacity:0");
   expect(uploaded.match(/<img /g)).toHaveLength(1);
+});
+it("forwards morph coverFallback and onCoverRetry into VenueGallery", () => {
+  const onCoverRetry = vi.fn();
+  const multi: VenueSummary = {
+    ...venue,
+    cover: { uploadedUrl: `/v1/media/venue-covers/${"a".repeat(64)}.png` },
+    profile: {
+      courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+      gallery: {
+        coverage: "ordered",
+        items: [
+          { id: "a0000000-0000-4000-8000-000000000011", url: `/v1/media/venue-covers/${"a".repeat(64)}.png`, credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+          { id: "a0000000-0000-4000-8000-000000000012", url: `/v1/media/venue-covers/${"b".repeat(64)}.png`, credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } },
+        ],
+      },
+    },
+  };
+  hooks.active = true;
+  let tree: ReturnType<typeof VenuePreviewCard>;
+  try {
+    tree = VenuePreviewCard({
+      venue: multi,
+      games: [],
+      gamesReady: true,
+      now: 0,
+      onOpen: vi.fn(),
+      coverSlot: <span data-testid="morph-slot" />,
+      coverFallback: true,
+      onCoverRetry,
+    });
+  } finally {
+    hooks.active = false;
+  }
+  function findGallery(node: ReactNode): React.ReactElement<Record<string, unknown>> | null {
+    if (!isValidElement<Record<string, unknown>>(node)) return null;
+    if (node.type === VenueGallery) return node;
+    const kids = Children.toArray(node.props.children as ReactNode);
+    for (const child of kids) {
+      const hit = findGallery(child);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const gallery = findGallery(tree);
+  expect(gallery).toBeTruthy();
+  expect(gallery!.props.coverFallback).toBe(true);
+  expect(gallery!.props.onCoverRetry).toBe(onCoverRetry);
 });
 it("distinguishes unavailable from checked empty and never shows stale time", () => {
   const games = [game("2026-11-04T10:00:00Z", "2026-11-04T11:00:00Z")];

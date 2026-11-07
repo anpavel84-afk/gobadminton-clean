@@ -1,9 +1,14 @@
 import { Inject, Injectable } from "@nestjs/common";
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import { DATABASE_POOL } from "../tokens";
-import { forbidden, notFound, unprocessable } from "../auth/problem";
+import { unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 
 export type OrganizerDto = {
   id: string;
@@ -25,6 +30,7 @@ export class OrganizersService {
     @Inject(DATABASE_POOL) private readonly pool: Pool,
     private readonly idempotency: IdempotencyService,
     private readonly mutations: MutationRunner,
+    private readonly moderation: ContentModerationService,
   ) {}
 
   async createPersonal(
@@ -47,13 +53,36 @@ export class OrganizersService {
 
     const operation = "organizers.createPersonal";
     const requestHash = this.idempotency.requestHash({ displayName, publicContact });
-    return this.mutations.runIdempotent<OrganizerDto>({
+    const receipt = {
       actorId: userId,
       sessionId,
       operation,
       key: idempotencyKey,
       requestHash,
       authorizeReplay: async () => undefined,
+    };
+    const replay = await this.mutations.findReplay<OrganizerDto>(receipt);
+    if (replay) return replay;
+
+    const textFields: TextFieldCandidate[] = [
+      {
+        surface: "organizer_display_name",
+        text: displayName,
+        fieldId: "displayName",
+      },
+      {
+        surface: "organizer_public_contact",
+        text: publicContact,
+        fieldId: "publicContact",
+      },
+    ];
+    const textApproval: TextBatchApproval = await this.moderation.approveTexts(
+      userId,
+      textFields,
+    );
+
+    return this.mutations.runIdempotent<OrganizerDto>({
+      ...receipt,
       execute: async (client) => {
         const organizer = await client.query<{
           id: string;
@@ -74,6 +103,21 @@ export class OrganizersService {
              (organizer_id, user_id, role, status)
            VALUES ($1, $2, 'owner', 'active')`,
           [row.id, userId],
+        );
+        await this.moderation.bindTexts(
+          client,
+          textApproval,
+          [
+            { surface: "organizer_display_name", text: row.display_name },
+            { surface: "organizer_public_contact", text: row.public_contact },
+          ],
+          {
+            entityKind: "organizer",
+            entityId: row.id,
+            resourceVersion: 1,
+            actorUserId: userId,
+            bindingKind: "publication",
+          },
         );
         const body: OrganizerDto = {
           id: row.id,
@@ -117,47 +161,5 @@ export class OrganizersService {
         role: row.role,
       })),
     };
-  }
-
-  async assertCanManage(
-    client: PoolClient,
-    organizerId: string,
-    userId: string,
-  ): Promise<void> {
-    const result = await client.query<{ role: string; status: string }>(
-      `SELECT m.role, m.status
-       FROM organizer_memberships m
-       INNER JOIN organizers o ON o.id = m.organizer_id
-       WHERE m.organizer_id = $1
-         AND m.user_id = $2
-         AND o.onboarding_status = 'active'
-       FOR UPDATE OF m`,
-      [organizerId, userId],
-    );
-    const membership = result.rows[0];
-    if (!membership) {
-      throw notFound("ORGANIZER_NOT_FOUND", "Организатор не найден");
-    }
-    if (membership.status !== "active") {
-      throw forbidden(
-        "MEMBERSHIP_REVOKED",
-        "Членство организатора отозвано",
-      );
-    }
-    if (membership.role !== "owner" && membership.role !== "manager") {
-      throw forbidden("ORGANIZER_FORBIDDEN", "Недостаточно прав организатора");
-    }
-  }
-
-  async revokeMembershipForTests(
-    organizerId: string,
-    userId: string,
-  ): Promise<void> {
-    await this.pool.query(
-      `UPDATE organizer_memberships
-       SET status = 'revoked', revoked_at = now(), updated_at = now()
-       WHERE organizer_id = $1 AND user_id = $2`,
-      [organizerId, userId],
-    );
   }
 }

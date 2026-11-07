@@ -11,7 +11,12 @@ import { MODERATION_PROVIDER, MODERATION_MODEL, ModerationProviderError } from "
     if (env.CONTENT_MODERATION_PROVIDER === "fake") return new FakeModerationProvider(env);
     if (env.CONTENT_MODERATION_PROVIDER === "openai") return new OpenAIModerationProvider(env);
     // Unconfigured test harnesses fail closed; non-test startup is rejected by loadEnv.
-    return {key: "openai", model: MODERATION_MODEL, moderateImage: async () => {throw new ModerationProviderError("unavailable");}};
+    return {
+      key: "openai" as const,
+      model: MODERATION_MODEL,
+      moderateImage: async () => { throw new ModerationProviderError("unavailable"); },
+      moderateTexts: async () => { throw new ModerationProviderError("unavailable"); },
+    };
   },
 }], exports: [ContentModerationService, MODERATION_PROVIDER]})
 export class ModerationModule {}

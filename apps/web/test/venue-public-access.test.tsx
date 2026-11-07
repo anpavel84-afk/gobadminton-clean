@@ -162,7 +162,10 @@ for (const member of [false, true]) {
   it(`keeps public venue effects read-only for ${member ? "member" : "guest"}`, async () => {
     signedIn = member; expect((await getMe()).ok).toBe(member);
     let root = <VenuePage venueId="a" />; await settle(root);
-    expect(text).toContain("Иллюстрация");
+    // Pending uploaded cover: loading caption only — no ready credit / generic «Иллюстрация».
+    expect(text).toContain("Загружаем фотографию…");
+    expect(text).not.toContain("Иллюстрация");
+    expect(text).not.toContain("Автор фото");
     expect(nodes.some(node => node.type === "img" && node.props.src === cover)).toBe(true);
     await settleAfterGalleryImgLoad(root);
     expect(text).toContain("Зал А"); expect(text).toContain("Адрес А"); expect(text).toContain("Автор фото"); expect(text).toContain("Тестовая игра");
@@ -176,7 +179,11 @@ for (const member of [false, true]) {
     window.dispatchEvent(new Event("focus")); await settle(root);
     expect(text).toContain("Расписание временно недоступно"); expect(text).not.toContain("Нет предстоящих доступных игр"); assertPublic();
     root = <VenuePage venueId="b" />; await settle(root);
-    expect(text).toContain("Зал Б"); expect(nodes.some(node => node.props["data-cover"] === "default")).toBe(true); assertPublic();
+    // No published media: neutral empty copy (not equipment/illustration underlay).
+    expect(text).toContain("Зал Б");
+    expect(text).toContain("Фотографии площадки пока нет");
+    expect(text).not.toContain("Иллюстрация");
+    assertPublic();
     expect(text).toContain("Контакты пока не добавлены"); expect(text).not.toContain("Количество кортов4");
     expect(nodes.some(node => node.type === "a" && node.props.href === "tel:+79991234567")).toBe(false);
     const map = <GamesMapView cityId={a.cityId} day="" />; await settle(map);
@@ -324,8 +331,10 @@ it("does not link a VenuePage cover credit whose authority disagrees", async () 
   coverCredit = { kind: "photo", text: "Фото: Клуб", url: "https:///@evil.example/phish" };
   const root = <VenuePage venueId="a" />;
   await settle(root);
-  expect(text).toContain("Иллюстрация");
+  // Pending: no ready photo credit and no invented illustration label.
+  expect(text).toContain("Загружаем фотографию…");
   expect(text).not.toContain("Фото: Клуб");
+  expect(text).not.toContain("Иллюстрация");
   await settleAfterGalleryImgLoad(root);
   expect(text).toContain("Фото: Клуб");
   expect(nodes.some(node => node.type === "a" && String(node.props.href).includes("evil.example"))).toBe(false);
@@ -337,8 +346,9 @@ it("links a safe VenuePage cover credit to its serialized href", async () => {
   coverCredit = { kind: "photo", text: "Фото: Клуб", url: "https://example.org/photos" };
   const root = <VenuePage venueId="a" />;
   await settle(root);
-  expect(text).toContain("Иллюстрация");
+  expect(text).toContain("Загружаем фотографию…");
   expect(text).not.toContain("Фото: Клуб");
+  expect(text).not.toContain("Иллюстрация");
   await settleAfterGalleryImgLoad(root);
   expect(text).toContain("Фото: Клуб");
   expect(nodes.some(node => node.type === "a" && node.props.href === "https://example.org/photos")).toBe(true);
@@ -352,8 +362,9 @@ it("rejects a VenuePage cover credit whose serialized href exceeds 300 character
   coverCredit = { kind: "photo", text: "Фото: Клуб", url: bomb };
   const root = <VenuePage venueId="a" />;
   await settle(root);
-  expect(text).toContain("Иллюстрация");
+  expect(text).toContain("Загружаем фотографию…");
   expect(text).not.toContain("Фото: Клуб");
+  expect(text).not.toContain("Иллюстрация");
   await settleAfterGalleryImgLoad(root);
   expect(text).toContain("Фото: Клуб");
   expect(nodes.some(node => node.type === "a" && String(node.props.href).includes("%27"))).toBe(false);

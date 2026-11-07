@@ -182,7 +182,7 @@ export class AdminAttendanceDisputesService {
   private async displayName(client: PoolClient, userId: string): Promise<string> {
     const row = (
       await client.query<{ display_name: string }>(
-        `SELECT COALESCE(NULLIF(TRIM(p.display_name), ''), NULLIF(TRIM(u.display_name), ''), 'Игрок') AS display_name
+        `SELECT COALESCE(NULLIF(TRIM(p.display_name), ''), 'Игрок') AS display_name
          FROM users u
          LEFT JOIN player_social_profiles p ON p.user_id = u.id
          WHERE u.id = $1`,

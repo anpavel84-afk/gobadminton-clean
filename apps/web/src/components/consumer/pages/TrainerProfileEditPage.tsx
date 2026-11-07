@@ -6,6 +6,7 @@ import {
   deactivateTrainerProfile,
   getMe,
   getTrainerProfile,
+  publicTextModerationNotice,
   upsertTrainerProfile,
 } from "../../../lib/api-client";
 import type { Me, TrainerProfile } from "../../../lib/consumer-types";
@@ -67,14 +68,17 @@ export function TrainerProfileEditPage() {
     setBusy(false);
     if (!r.ok) {
       if (r.status === 401) setState("auth");
+      const moderation = publicTextModerationNotice(r);
       if (r.status === 0 || r.status >= 500 || r.status === 409) {
         setRefresh(true);
         setNotice(
-          "Обновите данные, чтобы проверить результат перед следующим сохранением.",
+          moderation ??
+            "Обновите данные, чтобы проверить результат перед следующим сохранением.",
         );
       } else {
         setNotice(
-          "Не удалось сохранить профиль. Проверьте поля и попробуйте позже.",
+          moderation ??
+            "Не удалось сохранить профиль. Проверьте поля и попробуйте позже.",
         );
       }
       return;

@@ -57,6 +57,9 @@ import {
   resetRadarPresenceBeforeServingTraffic,
   sqlExecutorFromPg,
 } from "../../src/radar/radar-recovery";
+import { FakeModerationProvider } from "../../src/moderation/fake-provider";
+import { MODERATION_PROVIDER } from "../../src/moderation/provider";
+import { UnifiedPublishingService } from "../../src/radar/unified-publishing.service";
 
 type Person = { id: string; publicId: string; issued: IssuedSession };
 type Snapshot = Awaited<ReturnType<UnifiedPlayersService["query"]>> & {
@@ -1584,6 +1587,197 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       await clearBudget(owner);
       expect((await service.query(owner.id,owner.issued.session.id,initial(), false)).items.some(r=>r.player.displayName.startsWith("TEST"))).toBe(false);
     } finally { Object.assign(env,saved); }
+  });
+
+  it("start/takeover text provider stays behind auth replay and eligibility preflight", async () => {
+    const fake = app.get<FakeModerationProvider>(MODERATION_PROVIDER);
+    const publishing = app.get(UnifiedPublishingService);
+    expect(fake).toBeInstanceOf(FakeModerationProvider);
+
+    // Revoked session at service fence: no provider I/O (HTTP auth would stop earlier).
+    const revoked = await person("Revoked Text Gate");
+    await sessions.revokeSession(revoked.issued.session.id);
+    const revokedCalls = fake.textCalls;
+    await expect(
+      publishing.command(
+        revoked.id,
+        revoked.issued.session.id,
+        randomUUID(),
+        "start",
+        startBody(),
+      ),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(fake.textCalls).toBe(revokedCalls);
+
+    // Ineligible profile: no provider I/O.
+    const ineligible = await person("Ineligible Text Gate");
+    await pool.query(
+      "UPDATE player_social_profiles SET social_eligible=false WHERE user_id=$1",
+      [ineligible.id],
+    );
+    const ineligibleCalls = fake.textCalls;
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: headers(ineligible),
+      payload: startBody(),
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().code).toBe("VIEWER_RESTRICTED");
+    expect(fake.textCalls).toBe(ineligibleCalls);
+
+    // Allowed activation still works and may call the provider once.
+    const allowed = await person("Allowed Text Gate");
+    const beforeAllowed = fake.textCalls;
+    const startKey = randomUUID();
+    // Freeze the start request once: startBody()/fix() mint capturedAt from
+    // Date.now(), so a second builder call changes requestHash and correctly 409s.
+    const startPayload = startBody();
+    const started = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: { ...headers(allowed), "idempotency-key": startKey },
+      payload: startPayload,
+    });
+    expect(started.statusCode, started.body).toBe(201);
+    expect(started.json().activationId).toBeTruthy();
+    // Wire DTO must carry ephemeral metadata — not the durable activation receipt alone.
+    expect(started.json()).toMatchObject({
+      state: "active",
+      model: expect.any(String),
+      contractVersion: UNIFIED_WIRE,
+    });
+    const afterStartCalls = fake.textCalls;
+    expect(afterStartCalls).toBeGreaterThan(beforeAllowed);
+
+    // Same-key start replay adds zero provider calls; wire still has ephemeral metadata.
+    const startReplay = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: { ...headers(allowed), "idempotency-key": startKey },
+      payload: startPayload,
+    });
+    expect(startReplay.statusCode, startReplay.body).toBe(201);
+    expect(startReplay.json().activationId).toBe(started.json().activationId);
+    expect(startReplay.json()).toHaveProperty("model");
+    expect(fake.textCalls).toBe(afterStartCalls);
+
+    // Takeover same-key replay also adds zero provider calls.
+    const replacement = {
+      ...allowed,
+      issued: await sessions.createConsumerSession(allowed.id),
+    };
+    const takeoverKey = randomUUID();
+    const takeoverPayload = {
+      ...startPayload,
+      activationId: started.json().activationId as string,
+      expectedVersion: started.json().version as number,
+      confirm: true,
+    };
+    const takeover = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations/current/takeover",
+      headers: { ...headers(replacement), "idempotency-key": takeoverKey },
+      payload: takeoverPayload,
+    });
+    expect(takeover.statusCode, takeover.body).toBe(200);
+    const afterTakeoverCalls = fake.textCalls;
+    expect(afterTakeoverCalls).toBeGreaterThanOrEqual(afterStartCalls);
+    const takeoverReplay = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations/current/takeover",
+      headers: { ...headers(replacement), "idempotency-key": takeoverKey },
+      payload: takeoverPayload,
+    });
+    expect(takeoverReplay.statusCode, takeoverReplay.body).toBe(200);
+    expect(takeoverReplay.json().activationId).toBe(takeover.json().activationId);
+    expect(takeoverReplay.json()).toHaveProperty("model");
+    expect(fake.textCalls).toBe(afterTakeoverCalls);
+  });
+
+  it("valid-shape unsupported/stale fixes never reach text provider on start/takeover", async () => {
+    const fake = app.get<FakeModerationProvider>(MODERATION_PROVIDER);
+    const unsupportedFix = fix(10, 20, 10); // valid schema shape, outside Moscow live region
+    const staleFix = {
+      ...fix(),
+      capturedAt: new Date(Date.now() - 120_000).toISOString(),
+    };
+
+    for (const [label, badLocation, code] of [
+      ["unsupported-region", unsupportedFix, "RADAR_REGION_UNSUPPORTED"],
+      ["stale", staleFix, "LOCATION_TOO_OLD"],
+    ] as const) {
+      const starter = await person(`Loc Gate Start ${label}`);
+      const beforeStart = fake.textCalls;
+      const deniedStart = await app.inject({
+        method: "POST",
+        url: "/v1/me/radar/activations",
+        headers: headers(starter),
+        payload: startBody(badLocation),
+      });
+      expect(deniedStart.statusCode, deniedStart.body).toBe(422);
+      expect(deniedStart.json().code).toBe(code);
+      expect(fake.textCalls).toBe(beforeStart);
+      expect(
+        (
+          await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [
+            starter.id,
+          ])
+        ).rowCount,
+      ).toBe(0);
+
+      const owner = await person(`Loc Gate Takeover ${label}`);
+      const active = await start(owner);
+      const replacement = {
+        ...owner,
+        issued: await sessions.createConsumerSession(owner.id),
+      };
+      const beforeTakeover = fake.textCalls;
+      const deniedTakeover = await app.inject({
+        method: "POST",
+        url: "/v1/me/radar/activations/current/takeover",
+        headers: headers(replacement),
+        payload: {
+          ...startBody(badLocation),
+          activationId: active.activationId,
+          expectedVersion: active.version,
+          confirm: true,
+        },
+      });
+      expect(deniedTakeover.statusCode, deniedTakeover.body).toBe(422);
+      expect(deniedTakeover.json().code).toBe(code);
+      expect(fake.textCalls).toBe(beforeTakeover);
+      const stillOwned = await pool.query<{ version: string }>(
+        "SELECT version::text AS version FROM radar_presences WHERE user_id=$1 AND activation_id=$2",
+        [owner.id, active.activationId],
+      );
+      expect(stillOwned.rowCount).toBe(1);
+      expect(Number(stillOwned.rows[0]!.version)).toBe(active.version);
+    }
+
+    // Allowed activation/replay path remains intact after the location gate cases.
+    const allowed = await person("Loc Gate Allowed Replay");
+    const startKey = randomUUID();
+    const startPayload = startBody();
+    const beforeAllowed = fake.textCalls;
+    const started = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: { ...headers(allowed), "idempotency-key": startKey },
+      payload: startPayload,
+    });
+    expect(started.statusCode, started.body).toBe(201);
+    expect(fake.textCalls).toBeGreaterThan(beforeAllowed);
+    const afterStart = fake.textCalls;
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: { ...headers(allowed), "idempotency-key": startKey },
+      payload: startPayload,
+    });
+    expect(replay.statusCode, replay.body).toBe(201);
+    expect(replay.json().activationId).toBe(started.json().activationId);
+    expect(fake.textCalls).toBe(afterStart);
   });
 
 });

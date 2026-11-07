@@ -143,6 +143,13 @@ run("PG-3 GameFeedback — disposable synthetic PostGIS", () => {
   async function actor(name: string): Promise<Actor> {
     const userId = randomUUID();
     await pool.query("INSERT INTO users(id,display_name) VALUES($1,$2)", [userId, name]);
+    // Seed explicit public profile name for recipientDisplay assertions (not automatic Игрок).
+    await pool.query(
+      `INSERT INTO player_social_profiles
+         (user_id, display_name, directory_visible, contact_policy, directory_visibility_provenance, social_eligible, version)
+       VALUES ($1, $2, true, 'requests', 'owner_default', true, 1)`,
+      [userId, name],
+    );
     const issued = await sessions.createConsumerSession(userId);
     return {
       userId,

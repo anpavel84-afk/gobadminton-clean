@@ -6,7 +6,7 @@ import {
 import { Test } from "@nestjs/testing";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestCoreModule } from "./test-core.module";
 import { uniqueSuffix } from "./unique";
 import { AuthModule } from "../../src/auth/auth.module";
@@ -175,6 +175,12 @@ describeIntegration("Formal invitation privacy/authority boundaries", () => {
     await pool?.end();
   });
 
+  beforeEach(async () => {
+    // Disposable formal_invite_* DB only: shared synthetic owner reuses text moderation
+    // budget (10/15min) across unique draft creates; isolate per test without raising caps.
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
+  });
+
   async function login(provider: "vk" | "yandex"): Promise<Session> {
     const start = await app.inject({
       method: "GET",
@@ -282,6 +288,10 @@ describeIntegration("Formal invitation privacy/authority boundaries", () => {
     owner: Session,
     opts: { capacity: number; title?: string; visibility?: "public" | "unlisted"; address?: string },
   ) {
+    // Isolate text budget per synthetic draft (shared owner, unique host names).
+    await pool.query("DELETE FROM content_moderation_rate_budgets WHERE user_id=$1", [
+      owner.userId,
+    ]);
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
     const venuePayload = {
       cityId: MOSCOW_CITY_ID,

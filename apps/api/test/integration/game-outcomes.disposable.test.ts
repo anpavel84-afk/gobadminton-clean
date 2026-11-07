@@ -62,6 +62,8 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       await migrate(file);
     }
     await migrate("0045_venue_gallery.sql");
+    // Current GamesModule text publication requires 0061 bindings (outside the N-1 outcomes cut).
+    await migrate("0061_content_moderation_text.sql");
     env = loadEnv({
       NODE_ENV: "test",
       APP_ENV: "local",
@@ -101,9 +103,10 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       await client.query("BEGIN");
       await client.query(await readFile(path.join(migrations, "rollback/0042_game_outcomes.sql"), "utf8"));
       expect((await client.query("SELECT to_regclass('game_outcomes') AS name")).rows[0].name).toBeNull();
-      // Explicit ledger after independent 0045 + rolled-back 0042: 0001–0041 and 0045 (not blanket len).
-      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(42);
+      // Explicit ledger after independent 0045/0061 + rolled-back 0042: 0001–0041, 0045, 0061.
+      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(43);
       expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
+      expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0061_content_moderation_text'")).rowCount).toBe(1);
       expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0042_game_outcomes'")).rowCount).toBe(0);
     } finally {
       await client.query("ROLLBACK");
