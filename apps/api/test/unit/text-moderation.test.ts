@@ -130,13 +130,16 @@ describe("text moderation adapter", () => {
     ).toBe("contextual");
   });
 
-  it("B1b role review/reply surfaces stay prose; soft vs hard category split", () => {
+  it("B1b/B1c review surfaces stay prose; soft vs hard category split", () => {
     expect(isReviewTextSurface("role_review_body")).toBe(true);
     expect(isReviewTextSurface("role_reply_body")).toBe(true);
+    expect(isReviewTextSurface("venue_review_body")).toBe(true);
     expect(isReviewTextSurface("comment_body")).toBe(false);
     expect(TEXT_SURFACE_KIND.role_review_body).toBe("prose");
     expect(TEXT_SURFACE_KIND.role_reply_body).toBe("prose");
+    expect(TEXT_SURFACE_KIND.venue_review_body).toBe("prose");
     expect(TEXT_FIELD_HINTS.role_review_body).toMatch(/отзыва/i);
+    expect(TEXT_FIELD_HINTS.venue_review_body).toMatch(/площадк/i);
     // Ordinary profiles/comments still reject any flag; review soft queue is separate.
     expect(REVIEW_QUEUE_CATEGORIES).toEqual(
       expect.arrayContaining(["harassment", "hate", "illicit", "violence"]),
@@ -319,5 +322,86 @@ describe("content moderation binding SQL compatibility", () => {
         },
       ),
     ).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("human venue publication bind names venue_review_decision_id only", async () => {
+    const service = new ContentModerationService({} as Pool, env, fake);
+    const text = "Спокойный отзыв о площадке";
+    const fingerprint = service.textFingerprint("venue_review_body", text);
+    const { client, sqls } = captureClient();
+    await service.bindReviewTexts(
+      client,
+      {
+        fields: [
+          {
+            surface: "venue_review_body",
+            fieldId: "text",
+            text,
+            fingerprint,
+            providerKey: "fake",
+            providerModel: MODERATION_MODEL,
+            policy: PUBLIC_TEXT_POLICY_VERSION,
+            localPolicy: LOCAL_TEXT_POLICY_VERSION,
+            checkedAt: new Date("2026-11-07T00:00:00.000Z"),
+            decision: safeTextItemDecision(),
+            classification: "allow",
+            responseId: null,
+          },
+        ],
+      },
+      [{ surface: "venue_review_body", text }],
+      {
+        entityKind: "venue_review_revision",
+        entityId: "66666666-6666-6666-6666-666666666666",
+        resourceVersion: 2,
+        actorUserId: "22222222-2222-2222-2222-222222222222",
+        actorPrincipalId: "44444444-4444-4444-4444-444444444444",
+        bindingKind: "publication",
+        venueReviewDecisionId: "77777777-7777-7777-7777-777777777777",
+      },
+    );
+    const bindingSql = sqls.find((s) => s.includes("content_moderation_bindings"));
+    expect(bindingSql).toContain("venue_review_decision_id");
+    expect(bindingSql).not.toContain("role_reputation_decision_id");
+  });
+
+  it("venue candidate bind omits both human FK column names", async () => {
+    const service = new ContentModerationService({} as Pool, env, fake);
+    const text = "Кандидат отзыва о площадке";
+    const fingerprint = service.textFingerprint("venue_review_body", text);
+    const { client, sqls } = captureClient();
+    await service.bindReviewTexts(
+      client,
+      {
+        fields: [
+          {
+            surface: "venue_review_body",
+            fieldId: "text",
+            text,
+            fingerprint,
+            providerKey: "fake",
+            providerModel: MODERATION_MODEL,
+            policy: PUBLIC_TEXT_POLICY_VERSION,
+            localPolicy: LOCAL_TEXT_POLICY_VERSION,
+            checkedAt: new Date("2026-11-07T00:00:00.000Z"),
+            decision: safeTextItemDecision(),
+            classification: "allow",
+            responseId: null,
+          },
+        ],
+      },
+      [{ surface: "venue_review_body", text }],
+      {
+        entityKind: "venue_review_revision",
+        entityId: "66666666-6666-6666-6666-666666666666",
+        resourceVersion: 1,
+        actorUserId: "22222222-2222-2222-2222-222222222222",
+        bindingKind: "candidate",
+      },
+    );
+    const bindingSql = sqls.find((s) => s.includes("content_moderation_bindings"));
+    expect(bindingSql).toBeDefined();
+    expect(bindingSql).not.toContain("venue_review_decision_id");
+    expect(bindingSql).not.toContain("role_reputation_decision_id");
   });
 });

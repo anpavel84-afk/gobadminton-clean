@@ -23200,6 +23200,7 @@
           "Venues"
         ],
         "summary": "Create or update venue experience draft/public submission",
+        "description": "#394 + #506 B1c. Cookie+CSRF+Idempotency. self_draft never calls the classifier. Public-consent submission: authorize experience/consent/versions before text moderation; provider outside DB locks; final write revalidates fences and binds classifier candidate evidence to exact venue_review_revision. Classifier ALLOW still creates real human pending intake — never auto-publishes. Soft/ambiguous flags stay pendingreview (decision=review). Hard-safety → 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE / 429 MODERATION_RATE_LIMITED retain prior approved tip and draft form. Withdraw/appeal/report provider-independent.",
         "security": [
           {
             "cookieSession": []
@@ -23266,6 +23267,36 @@
               }
             }
           },
+          "422": {
+            "description": "Validation or PUBLIC_TEXT_CONTENT_REJECTED (optional Problem.fields.text). Prior approved tip unchanged; client keeps unsent input. No matched tokens/categories/scores.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "MODERATION_RATE_LIMITED — retryable; prior tip/draft retained.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "MODERATION_TEMPORARILY_UNAVAILABLE / MODERATION_POLICY_MISMATCH — retryable; prior approved tip retained.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Problem"
           }
@@ -23279,6 +23310,7 @@
           "Venues"
         ],
         "summary": "Own venue review commands (revise/withdraw/appeal)",
+        "description": "#394 + #506 B1c. Public submit_revision/resubmit use the same venue_review_body gate as create (422/503/429; ALLOW stays human-pending). self_draft revise, withdraw and appeal are provider-independent.",
         "security": [
           {
             "cookieSession": []
@@ -23351,6 +23383,36 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation or PUBLIC_TEXT_CONTENT_REJECTED (optional Problem.fields.text). Prior approved tip unchanged.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "MODERATION_RATE_LIMITED — retryable; prior tip/draft retained.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "MODERATION_TEMPORARILY_UNAVAILABLE — retryable; prior approved tip retained.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -23601,6 +23663,7 @@
           "Admin"
         ],
         "summary": "Assigned independent reviewer reads exact venue-review revision",
+        "description": "#506 B1c. Case action venue_review_decide approve/restore preflights classifier outside locks then revalidates under the final command transaction. Approve creates a new immutable published twin; candidate evidence stays on the submitted revision; publication binding targets the published twin + venue_review_decision_id. Restore classifies the actual approved_revision_id tip (may differ from Case exactRevisionId). Soft provider review is preserved on human allow. 422 PUBLIC_TEXT_CONTENT_REJECTED / 503 / 429 retain prior public tip. Other decisions remain provider-independent.",
         "x-client-surface": "admin-only",
         "security": [
           {

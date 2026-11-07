@@ -17,6 +17,10 @@ import {
   subjectHasConfirmedExperience,
   type ExperienceAttendanceAssertion,
 } from "../games/game-experience";
+import {
+  ContentModerationService,
+  type ReviewTextBatchAssessment,
+} from "../moderation/moderation.service";
 import { effectiveVenueCtes } from "./effective-venue.query";
 import {
   consentPreviewRequest,
@@ -81,6 +85,7 @@ export class VenueReviewsService {
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
+    private readonly moderation: ContentModerationService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -778,6 +783,8 @@ export class VenueReviewsService {
       expectedOutcomeVersion: number;
       expectedAttendanceVersion: number;
       expectedSlotVersion: number | null;
+      /** Public-consented path only — classifier evidence; never for self_draft. */
+      assessment?: ReviewTextBatchAssessment | null;
     },
   ): Promise<VenueReviewMutationReceiptDto> {
     if (!topicsAllowed(args.topics)) {
@@ -929,6 +936,9 @@ export class VenueReviewsService {
         [slot.id, rev.id, status],
       );
     } else {
+      if (!args.assessment) {
+        throw unprocessable("VENUE_MODERATION_REQUIRED", "Нужна проверка текста");
+      }
       // Public: cancel prior waiting intake for this slot submit kind.
       await client.query(
         `UPDATE venue_review_pending_intakes SET status = 'cancelled', updated_at = clock_timestamp()
@@ -955,6 +965,19 @@ export class VenueReviewsService {
          WHERE id = $1`,
         [slot.id, rev.id, status],
       );
+      // Classifier ALLOW still creates real human intake — never auto-publishes.
+      await this.moderation.bindReviewTexts(
+        client,
+        args.assessment,
+        [{ surface: "venue_review_body", text: args.text }],
+        {
+          entityKind: "venue_review_revision",
+          entityId: rev.id,
+          resourceVersion,
+          actorUserId: args.userId,
+          bindingKind: "candidate",
+        },
+      );
     }
     const refreshed = (
       await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
@@ -970,6 +993,78 @@ export class VenueReviewsService {
     };
   }
 
+  /**
+   * Short authorized preflight before provider I/O. Ends before assessReviewTexts.
+   * Final execute revalidates the same fences under MutationRunner locks.
+   */
+  private async authorizePublicSubmitPreflight(
+    userId: string,
+    body: {
+      venueId: string;
+      gameId: string;
+      text: string;
+      topics: string[];
+      consentProjectionHash: string;
+      expectedOutcomeVersion: number;
+      expectedAttendanceVersion: number;
+    },
+    expectedSlotVersion: number | null,
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        if (!(await this.installed(client))) writesUnavailable();
+        if (!topicsAllowed(body.topics)) {
+          throw unprocessable("VENUE_TOPICS_INVALID", "Некорректные темы");
+        }
+        const adm = await this.loadAdmission(client, userId, body.gameId, body.venueId);
+        if (adm.verdict.status !== "may_submit" || !adm.canonicalVenueId) {
+          if (adm.verdict.status === "hold" || adm.verdict.status === "missing_history") {
+            throw unprocessable("VENUE_EXPERIENCE_HOLD", "Основание уточняется");
+          }
+          throw unprocessable("VENUE_EXPERIENCE_DENIED", "Нет допуска");
+        }
+        if (adm.outcomeVersion !== body.expectedOutcomeVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия итога устарела");
+        }
+        if (adm.attendanceVersion !== body.expectedAttendanceVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия посещения устарела");
+        }
+        const expected = projectionHash({
+          canonicalVenueId: adm.canonicalVenueId,
+          audience: "public_venue",
+          text: body.text,
+          topics: body.topics,
+        });
+        if (expected !== body.consentProjectionHash) {
+          throw unprocessable("VENUE_CONSENT_MISMATCH", "Согласие не соответствует тексту");
+        }
+        const slot = (
+          await client.query<SlotRow>(
+            `SELECT * FROM venue_review_slots
+             WHERE author_user_id = $1 AND canonical_venue_id = $2
+             FOR SHARE`,
+            [userId, adm.canonicalVenueId],
+          )
+        ).rows[0];
+        if (!slot) {
+          if (expectedSlotVersion !== null && expectedSlotVersion !== 0) {
+            throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+          }
+        } else if (expectedSlotVersion !== null && slot.version !== expectedSlotVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
+  }
+
   async createReview(
     userId: string,
     sessionId: string,
@@ -979,7 +1074,43 @@ export class VenueReviewsService {
     if (!postGameWritesEnabled(this.env)) writesUnavailable();
     const body = parseOrThrow(createVenueReviewRequest, input);
     const requestHash = this.idempotency.requestHash(body);
-    return this.mutations.runIdempotent({
+    // Private self_draft never egresses to the classifier.
+    if (body.audience === "self_draft") {
+      return this.mutations.runIdempotent({
+        actorId: userId,
+        sessionId,
+        operation: "venue_review.create",
+        key,
+        requestHash,
+        authorizeReplay: async (client) => {
+          if (!(await this.installed(client))) writesUnavailable();
+          const adm = await this.loadAdmission(client, userId, body.gameId, body.venueId);
+          if (adm.verdict.status !== "may_submit") {
+            throw unprocessable("VENUE_EXPERIENCE_DENIED", "Нет допуска");
+          }
+        },
+        execute: async (client) => {
+          if (!(await this.installed(client))) writesUnavailable();
+          const receipt = await this.writeRevision(client, {
+            userId,
+            venueId: body.venueId,
+            gameId: body.gameId,
+            audience: "self_draft",
+            text: body.text,
+            topics: body.topics,
+            expectedOutcomeVersion: body.expectedBasisVersions.outcomeVersion,
+            expectedAttendanceVersion: body.expectedBasisVersions.attendanceVersion,
+            expectedSlotVersion: null,
+          });
+          return { statusCode: 200, body: receipt };
+        },
+      });
+    }
+    // Public-consented create: authorize → assess outside locks → exact candidate bind.
+    return this.mutations.runWithExternalPrepare<
+      ReviewTextBatchAssessment,
+      VenueReviewMutationReceiptDto
+    >({
       actorId: userId,
       sessionId,
       operation: "venue_review.create",
@@ -992,31 +1123,38 @@ export class VenueReviewsService {
           throw unprocessable("VENUE_EXPERIENCE_DENIED", "Нет допуска");
         }
       },
-      execute: async (client) => {
+      prepare: async () => {
+        await this.authorizePublicSubmitPreflight(
+          userId,
+          {
+            venueId: body.venueId,
+            gameId: body.gameId,
+            text: body.text,
+            topics: body.topics,
+            consentProjectionHash: body.consentProjectionHash!,
+            expectedOutcomeVersion: body.expectedBasisVersions.outcomeVersion,
+            expectedAttendanceVersion: body.expectedBasisVersions.attendanceVersion,
+          },
+          null,
+        );
+        return this.moderation.assessReviewTexts(userId, [
+          { surface: "venue_review_body", text: body.text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, assessment) => {
         if (!(await this.installed(client))) writesUnavailable();
-        // Uniqueness: one author/venue/game fence — if fence exists for another slot game
-        // with different key body, still update same slot.
-        const fenceExists = (
-          await client.query(
-            `SELECT slot_id FROM venue_review_event_fences
-             WHERE author_user_id = $1 AND game_id = $2`,
-            [userId, body.gameId],
-          )
-        ).rows[0];
-        if (fenceExists) {
-          // Same game already used — treat as revision of existing slot (CAS via null expected).
-        }
         const receipt = await this.writeRevision(client, {
           userId,
           venueId: body.venueId,
           gameId: body.gameId,
-          audience: body.audience,
+          audience: "public_venue",
           text: body.text,
           topics: body.topics,
           consentProjectionHash: body.consentProjectionHash,
           expectedOutcomeVersion: body.expectedBasisVersions.outcomeVersion,
           expectedAttendanceVersion: body.expectedBasisVersions.attendanceVersion,
           expectedSlotVersion: null,
+          assessment,
         });
         return { statusCode: 200, body: receipt };
       },
@@ -1119,7 +1257,173 @@ export class VenueReviewsService {
     if (!postGameWritesEnabled(this.env)) writesUnavailable();
     const body = parseOrThrow(venueReviewCommandRequest, input);
     const requestHash = this.idempotency.requestHash({ reviewId, ...body });
-    return this.mutations.runIdempotent({
+    const providerIndependent =
+      body.action === "withdraw" ||
+      body.action === "appeal" ||
+      (body.action === "submit_revision" && body.audience === "self_draft");
+    // Withdraw/appeal/safety and private self_draft revise are provider-independent.
+    if (providerIndependent) {
+      return this.mutations.runIdempotent({
+        actorId: userId,
+        sessionId,
+        operation: `venue_review.${body.action}`,
+        key,
+        requestHash,
+        authorizeReplay: async (client) => {
+          if (!(await this.installed(client))) writesUnavailable();
+          const slot = (
+            await client.query<SlotRow>(
+              `SELECT * FROM venue_review_slots WHERE id = $1 AND author_user_id = $2`,
+              [reviewId, userId],
+            )
+          ).rows[0];
+          if (!slot) unavailable();
+        },
+        execute: async (client) => {
+          if (!(await this.installed(client))) writesUnavailable();
+          const slot = (
+            await client.query<SlotRow>(
+              `SELECT * FROM venue_review_slots WHERE id = $1 AND author_user_id = $2 FOR UPDATE`,
+              [reviewId, userId],
+            )
+          ).rows[0];
+          if (!slot) unavailable();
+          if (body.action === "withdraw") {
+            if (slot.version !== body.expectedVersion) {
+              throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+            }
+            await client.query(
+              `UPDATE venue_review_slots
+               SET status = 'withdrawn', pending_revision_id = NULL, version = version + 1,
+                   updated_at = clock_timestamp()
+               WHERE id = $1`,
+              [slot.id],
+            );
+            await client.query(
+              `UPDATE venue_review_pending_intakes SET status = 'cancelled', updated_at = clock_timestamp()
+               WHERE slot_id = $1 AND status = 'waiting_intake'`,
+              [slot.id],
+            );
+            const refreshed = (
+              await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
+            ).rows[0]!;
+            return {
+              statusCode: 200,
+              body: {
+                id: refreshed.id,
+                version: refreshed.version,
+                status: refreshed.status,
+                reviewHandle: refreshed.public_handle,
+                receiptToken: null,
+                publicVisible: false,
+                notBefore: null,
+              },
+            };
+          }
+          if (body.action === "appeal") {
+            if (slot.version !== body.expectedVersion) {
+              throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+            }
+            if (slot.status !== "removed" && slot.status !== "needs_correction") {
+              throw unprocessable("VENUE_APPEAL_DENIED", "Апелляция недоступна");
+            }
+            const prior = (
+              await client.query<{ id: string }>(
+                `SELECT id FROM venue_review_decisions WHERE slot_id = $1
+                 ORDER BY recorded_at DESC, id DESC LIMIT 1`,
+                [slot.id],
+              )
+            ).rows[0];
+            const tipRevisionId = slot.pending_revision_id ?? slot.approved_revision_id;
+            const tipRev = tipRevisionId
+              ? (
+                  await client.query<{ game_id: string }>(
+                    `SELECT game_id FROM venue_review_revisions WHERE id = $1 AND slot_id = $2`,
+                    [tipRevisionId, slot.id],
+                  )
+                ).rows[0]
+              : null;
+            if (!tipRev) {
+              throw unprocessable("VENUE_APPEAL_DENIED", "Апелляция недоступна");
+            }
+            const win = await this.loadSubmitWindow(
+              client,
+              userId,
+              tipRev.game_id,
+              slot.canonical_venue_id,
+            );
+            const first = win.firstEligibleAt;
+            if (!first) {
+              throw unprocessable("VENUE_ELIGIBILITY_ANCHOR_MISSING", "Нет подтверждённого допуска");
+            }
+            const now = new Date();
+            const remaining = remainingSubmitWindowMs({
+              firstEligibleAt: first,
+              now,
+              windowDeadlineAt: win.windowDeadlineAt,
+            });
+            await client.query(
+              `INSERT INTO venue_review_submit_windows
+                 (author_user_id, game_id, canonical_venue_id,
+                  appeal_opened_at, remaining_ms_at_appeal, window_deadline_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,NULL,clock_timestamp())
+               ON CONFLICT (author_user_id, game_id, canonical_venue_id) DO UPDATE
+               SET appeal_opened_at = EXCLUDED.appeal_opened_at,
+                   remaining_ms_at_appeal = EXCLUDED.remaining_ms_at_appeal,
+                   window_deadline_at = NULL,
+                   updated_at = clock_timestamp()`,
+              [userId, tipRev.game_id, slot.canonical_venue_id, now, remaining],
+            );
+            const intake = await this.createPendingIntake(client, {
+              kind: "appeal",
+              slotId: slot.id,
+              revisionId: slot.pending_revision_id ?? slot.approved_revision_id,
+              userId,
+              canonicalVenueId: slot.canonical_venue_id,
+              priorDecisionId: prior?.id ?? null,
+            });
+            await client.query(
+              `UPDATE venue_review_slots SET version = version + 1, updated_at = clock_timestamp()
+               WHERE id = $1`,
+              [slot.id],
+            );
+            const refreshed = (
+              await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
+            ).rows[0]!;
+            return {
+              statusCode: 200,
+              body: {
+                id: refreshed.id,
+                version: refreshed.version,
+                status: refreshed.status,
+                reviewHandle: refreshed.public_handle,
+                receiptToken: intake.receiptToken,
+                publicVisible: false,
+                notBefore: null,
+              },
+            };
+          }
+          // self_draft submit_revision | resubmit — zero provider egress
+          const receipt = await this.writeRevision(client, {
+            userId,
+            venueId: slot.canonical_venue_id,
+            gameId: body.gameId,
+            audience: "self_draft",
+            text: body.text,
+            topics: body.topics,
+            expectedOutcomeVersion: body.expectedBasisVersions.outcomeVersion,
+            expectedAttendanceVersion: body.expectedBasisVersions.attendanceVersion,
+            expectedSlotVersion: body.expectedVersion,
+          });
+          return { statusCode: 200, body: receipt };
+        },
+      });
+    }
+    // Public submit_revision / resubmit — provider outside locks; prior approved tip retained on reject/503.
+    return this.mutations.runWithExternalPrepare<
+      ReviewTextBatchAssessment,
+      VenueReviewMutationReceiptDto
+    >({
       actorId: userId,
       sessionId,
       operation: `venue_review.${body.action}`,
@@ -1135,7 +1439,51 @@ export class VenueReviewsService {
         ).rows[0];
         if (!slot) unavailable();
       },
-      execute: async (client) => {
+      prepare: async () => {
+        let canonicalVenueId: string;
+        const client = await this.pool.connect();
+        try {
+          await client.query("BEGIN");
+          try {
+            const slot = (
+              await client.query<SlotRow>(
+                `SELECT * FROM venue_review_slots WHERE id = $1 AND author_user_id = $2 FOR SHARE`,
+                [reviewId, userId],
+              )
+            ).rows[0];
+            if (!slot) unavailable();
+            if (slot.version !== body.expectedVersion) {
+              throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+            }
+            canonicalVenueId = slot.canonical_venue_id;
+            await client.query("COMMIT");
+          } catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+          }
+        } finally {
+          client.release();
+        }
+        const consentProjectionHash =
+          "consentProjectionHash" in body ? body.consentProjectionHash! : "";
+        await this.authorizePublicSubmitPreflight(
+          userId,
+          {
+            venueId: canonicalVenueId,
+            gameId: body.gameId,
+            text: body.text,
+            topics: body.topics,
+            consentProjectionHash,
+            expectedOutcomeVersion: body.expectedBasisVersions.outcomeVersion,
+            expectedAttendanceVersion: body.expectedBasisVersions.attendanceVersion,
+          },
+          body.expectedVersion,
+        );
+        return this.moderation.assessReviewTexts(userId, [
+          { surface: "venue_review_body", text: body.text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, assessment) => {
         if (!(await this.installed(client))) writesUnavailable();
         const slot = (
           await client.query<SlotRow>(
@@ -1144,127 +1492,14 @@ export class VenueReviewsService {
           )
         ).rows[0];
         if (!slot) unavailable();
-        if (body.action === "withdraw") {
-          if (slot.version !== body.expectedVersion) {
-            throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
-          }
-          await client.query(
-            `UPDATE venue_review_slots
-             SET status = 'withdrawn', pending_revision_id = NULL, version = version + 1,
-                 updated_at = clock_timestamp()
-             WHERE id = $1`,
-            [slot.id],
-          );
-          await client.query(
-            `UPDATE venue_review_pending_intakes SET status = 'cancelled', updated_at = clock_timestamp()
-             WHERE slot_id = $1 AND status = 'waiting_intake'`,
-            [slot.id],
-          );
-          const refreshed = (
-            await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
-          ).rows[0]!;
-          return {
-            statusCode: 200,
-            body: {
-              id: refreshed.id,
-              version: refreshed.version,
-              status: refreshed.status,
-              reviewHandle: refreshed.public_handle,
-              receiptToken: null,
-              publicVisible: false,
-              notBefore: null,
-            },
-          };
+        if (slot.version !== body.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
         }
-        if (body.action === "appeal") {
-          if (slot.version !== body.expectedVersion) {
-            throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
-          }
-          if (slot.status !== "removed" && slot.status !== "needs_correction") {
-            throw unprocessable("VENUE_APPEAL_DENIED", "Апелляция недоступна");
-          }
-          const prior = (
-            await client.query<{ id: string }>(
-              `SELECT id FROM venue_review_decisions WHERE slot_id = $1
-               ORDER BY recorded_at DESC, id DESC LIMIT 1`,
-              [slot.id],
-            )
-          ).rows[0];
-          const tipRevisionId = slot.pending_revision_id ?? slot.approved_revision_id;
-          const tipRev = tipRevisionId
-            ? (
-                await client.query<{ game_id: string }>(
-                  `SELECT game_id FROM venue_review_revisions WHERE id = $1 AND slot_id = $2`,
-                  [tipRevisionId, slot.id],
-                )
-              ).rows[0]
-            : null;
-          if (!tipRev) {
-            throw unprocessable("VENUE_APPEAL_DENIED", "Апелляция недоступна");
-          }
-          const win = await this.loadSubmitWindow(
-            client,
-            userId,
-            tipRev.game_id,
-            slot.canonical_venue_id,
-          );
-          const first = win.firstEligibleAt;
-          if (!first) {
-            throw unprocessable("VENUE_ELIGIBILITY_ANCHOR_MISSING", "Нет подтверждённого допуска");
-          }
-          const now = new Date();
-          const remaining = remainingSubmitWindowMs({
-            firstEligibleAt: first,
-            now,
-            windowDeadlineAt: win.windowDeadlineAt,
-          });
-          await client.query(
-            `INSERT INTO venue_review_submit_windows
-               (author_user_id, game_id, canonical_venue_id,
-                appeal_opened_at, remaining_ms_at_appeal, window_deadline_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,NULL,clock_timestamp())
-             ON CONFLICT (author_user_id, game_id, canonical_venue_id) DO UPDATE
-             SET appeal_opened_at = EXCLUDED.appeal_opened_at,
-                 remaining_ms_at_appeal = EXCLUDED.remaining_ms_at_appeal,
-                 window_deadline_at = NULL,
-                 updated_at = clock_timestamp()`,
-            [userId, tipRev.game_id, slot.canonical_venue_id, now, remaining],
-          );
-          const intake = await this.createPendingIntake(client, {
-            kind: "appeal",
-            slotId: slot.id,
-            revisionId: slot.pending_revision_id ?? slot.approved_revision_id,
-            userId,
-            canonicalVenueId: slot.canonical_venue_id,
-            priorDecisionId: prior?.id ?? null,
-          });
-          await client.query(
-            `UPDATE venue_review_slots SET version = version + 1, updated_at = clock_timestamp()
-             WHERE id = $1`,
-            [slot.id],
-          );
-          const refreshed = (
-            await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
-          ).rows[0]!;
-          return {
-            statusCode: 200,
-            body: {
-              id: refreshed.id,
-              version: refreshed.version,
-              status: refreshed.status,
-              reviewHandle: refreshed.public_handle,
-              receiptToken: intake.receiptToken,
-              publicVisible: false,
-              notBefore: null,
-            },
-          };
-        }
-        // submit_revision | resubmit
         const receipt = await this.writeRevision(client, {
           userId,
           venueId: slot.canonical_venue_id,
           gameId: body.gameId,
-          audience: body.audience,
+          audience: "public_venue",
           text: body.text,
           topics: body.topics,
           consentProjectionHash:
@@ -1272,6 +1507,7 @@ export class VenueReviewsService {
           expectedOutcomeVersion: body.expectedBasisVersions.outcomeVersion,
           expectedAttendanceVersion: body.expectedBasisVersions.attendanceVersion,
           expectedSlotVersion: body.expectedVersion,
+          assessment,
         });
         return { statusCode: 200, body: receipt };
       },
@@ -1373,7 +1609,14 @@ export class VenueReviewsService {
     >,
     revisionId: string,
     now = new Date(),
-  ): Promise<{ notBefore: Date }> {
+  ): Promise<{
+    notBefore: Date;
+    /** Exact newly created published twin — publication binding target. */
+    publishedRevisionId: string;
+    publishedResourceVersion: number;
+    bodyText: string;
+    actorUserId: string;
+  }> {
     const rev = (
       await client.query<{
         id: string;
@@ -1417,12 +1660,9 @@ export class VenueReviewsService {
       throw unprocessable("VENUE_EXPERIENCE_DENIED", "Нет допуска к публикации");
     }
     const notBefore = computeNotBefore(now, rev.last_material_edit_at);
-    // Immutable revision: insert published tip copy is forbidden — store approval fields via
-    // new superseding revision row is heavy; policy allows updating tip via slot + decision log,
-    // but revisions are immutable. Encode approved_at/not_before by inserting a published twin? 
-    // Simpler: allow one-shot UPDATE only through a dedicated SQL path — blocked by trigger.
-    // Therefore: insert a new revision that copies body with lifecycle published + not_before,
-    // mark previous pending as superseded via slot pointers only (old row stays submitted).
+    // Immutable revision: insert a new published twin that copies body with lifecycle
+    // published + not_before; mark previous pending as superseded via slot pointers only
+    // (old submitted row stays for candidate binding / Case exactRevisionId).
     const nextVersion =
       (
         await client.query<{ m: number | null }>(
@@ -1430,6 +1670,7 @@ export class VenueReviewsService {
           [slot.id],
         )
       ).rows[0]?.m ?? 0;
+    const publishedResourceVersion = nextVersion + 1;
     const published = (
       await client.query<{ id: string }>(
         `INSERT INTO venue_review_revisions
@@ -1440,7 +1681,7 @@ export class VenueReviewsService {
          RETURNING id`,
         [
           slot.id,
-          nextVersion + 1,
+          publishedResourceVersion,
           rev.game_id,
           rev.body_text,
           rev.topics,
@@ -1469,7 +1710,13 @@ export class VenueReviewsService {
       await client.query<SlotRow>(`SELECT * FROM venue_review_slots WHERE id = $1`, [slot.id])
     ).rows[0]!;
     await this.resumeAppealWindowAfterFavorable(client, refreshed, now);
-    return { notBefore };
+    return {
+      notBefore,
+      publishedRevisionId: published.id,
+      publishedResourceVersion,
+      bodyText: rev.body_text,
+      actorUserId: rev.actor_user_id,
+    };
   }
 
   async applyRemove(client: PoolClient, slotId: string): Promise<void> {
@@ -1511,6 +1758,142 @@ export class VenueReviewsService {
       [slot.id],
     );
     await this.resumeAppealWindowAfterFavorable(client, slot);
+  }
+
+  /**
+   * Narrow publish/restore gate for admin decide — rechecks consent vs projection,
+   * public audience, and current admission. Restore targets approved_revision_id tip.
+   */
+  async assertCurrentPublishGates(
+    client: PoolClient,
+    args: {
+      decision: "approve" | "restore";
+      revisionId: string;
+      slot: SlotRow;
+    },
+  ): Promise<void> {
+    const rev = (
+      await client.query<{
+        id: string;
+        slot_id: string;
+        body_text: string;
+        topics: string[];
+        projection_hash: string | null;
+        audience: string;
+        lifecycle: string;
+        game_id: string;
+        actor_user_id: string;
+      }>(`SELECT * FROM venue_review_revisions WHERE id = $1`, [args.revisionId])
+    ).rows[0];
+    if (!rev || rev.slot_id !== args.slot.id) {
+      throw unprocessable("REVISION_UNAVAILABLE", "Редакция недоступна");
+    }
+    if (rev.audience !== "public_venue" || !rev.projection_hash) {
+      throw unprocessable("VENUE_NOT_PUBLIC", "Редакция не для публикации");
+    }
+    // Never classify or republish author-only drafts (lifecycle fence even if audience row corrupted).
+    if (rev.lifecycle === "self_draft") {
+      throw unprocessable("VENUE_NOT_PUBLIC", "Редакция не для публикации");
+    }
+    if (args.slot.status === "withdrawn" && args.decision === "approve") {
+      throw conflict("WITHDRAWN_NOT_APPROVABLE", "Отозванный отзыв нельзя опубликовать");
+    }
+    if (args.decision === "restore") {
+      if (args.slot.status !== "removed") {
+        throw conflict("RESTORE_DENIED", "Восстановление недоступно");
+      }
+      if (args.slot.approved_revision_id !== rev.id) {
+        throw conflict("RESTORE_DENIED", "Восстановление только текущей одобренной редакции");
+      }
+    }
+    const expected = projectionHash({
+      canonicalVenueId: args.slot.canonical_venue_id,
+      audience: "public_venue",
+      text: rev.body_text,
+      topics: rev.topics ?? [],
+    });
+    if (expected !== rev.projection_hash) {
+      throw unprocessable("VENUE_CONSENT_MISMATCH", "Согласие не соответствует тексту");
+    }
+    const adm = await this.loadAdmission(
+      client,
+      rev.actor_user_id,
+      rev.game_id,
+      args.slot.canonical_venue_id,
+    );
+    if (adm.verdict.status !== "may_submit") {
+      if (adm.verdict.status === "hold" || adm.verdict.status === "missing_history") {
+        throw unprocessable("VENUE_EXPERIENCE_HOLD", "Основание уточняется");
+      }
+      throw unprocessable("VENUE_EXPERIENCE_DENIED", "Нет допуска к публикации");
+    }
+  }
+
+  async loadRevisionPublicText(
+    client: PoolClient,
+    revisionId: string,
+  ): Promise<{
+    text: string;
+    resourceVersion: number;
+    actorUserId: string;
+    audience: string;
+    lifecycle: string;
+  } | null> {
+    const rev = (
+      await client.query<{
+        body_text: string;
+        resource_version: number;
+        actor_user_id: string;
+        audience: string;
+        lifecycle: string;
+      }>(
+        `SELECT body_text, resource_version, actor_user_id, audience, lifecycle
+         FROM venue_review_revisions WHERE id = $1`,
+        [revisionId],
+      )
+    ).rows[0];
+    if (!rev) return null;
+    return {
+      text: rev.body_text,
+      resourceVersion: rev.resource_version,
+      actorUserId: rev.actor_user_id,
+      audience: rev.audience,
+      lifecycle: rev.lifecycle,
+    };
+  }
+
+  assessPublicVenueText(actorId: string, text: string) {
+    return this.moderation.assessReviewTexts(actorId, [
+      { surface: "venue_review_body", text, fieldId: "text" },
+    ]);
+  }
+
+  async bindHumanPublication(
+    client: PoolClient,
+    args: {
+      revisionId: string;
+      resourceVersion: number;
+      text: string;
+      actorUserId: string;
+      actorPrincipalId: string;
+      venueReviewDecisionId: string;
+      assessment: ReviewTextBatchAssessment;
+    },
+  ): Promise<void> {
+    await this.moderation.bindReviewTexts(
+      client,
+      args.assessment,
+      [{ surface: "venue_review_body", text: args.text }],
+      {
+        entityKind: "venue_review_revision",
+        entityId: args.revisionId,
+        resourceVersion: args.resourceVersion,
+        actorUserId: args.actorUserId,
+        actorPrincipalId: args.actorPrincipalId,
+        bindingKind: "publication",
+        venueReviewDecisionId: args.venueReviewDecisionId,
+      },
+    );
   }
 
   /**

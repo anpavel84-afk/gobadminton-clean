@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { publicTextModerationNotice } from "../../../lib/api-client";
 import {
   createVenueReview,
   getOwnVenueReviewEligibility,
@@ -178,6 +179,15 @@ export function VenueReviewComposer({
       );
       if (!mounted.current) return;
       if (!result.ok) {
+        const moderationNotice = publicTextModerationNotice(result);
+        if (moderationNotice) {
+          setNotice(moderationNotice);
+          if (result.problem?.code === "PUBLIC_TEXT_CONTENT_REJECTED") {
+            setUnknownKey(null);
+          }
+          setBusy(false);
+          return;
+        }
         if (result.status === 0 || result.status >= 500) {
           setNotice("Не удалось подтвердить отправку. Текст сохранён");
         } else if (result.status === 409) {

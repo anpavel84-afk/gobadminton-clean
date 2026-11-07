@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.49 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.49");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.50 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.50");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,11 +64,11 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/подпис|фото|галере/i);
-    expect(currentProse).toMatch(/постоянн|место|перелистыв/i);
-    expect(currentProse).toMatch(/обслуживан|принят|без внешней|загрузк/i);
-    expect(currentProse).toMatch(/9 фото|4 площад/i);
-    expect(currentProse).toMatch(/остальн|не заявля|опубликован/i);
+    expect(currentProse).toMatch(/площадк/i);
+    expect(currentProse).toMatch(/проверк.*текст|текст.*проверк/i);
+    expect(currentProse).toMatch(/независим.*человек|очеред.*человек/i);
+    expect(currentProse).toMatch(/сам по себе не публику|не публикует/i);
+    expect(currentProse).toMatch(/личн.*черновик|черновик не уходит/i);
     expect(currentProse).toMatch(/времен|мест|отложен|не реализов/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -248,10 +248,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(52);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(53);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(57);
+    ).toBe(58);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.49"
+      && row.source_sha === "519489d9d0944619b29107b212dc09012e5b418b"
+      && row.deployments[0]?.release_id === "r42418500085-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-07T22:12:06Z"
+      && row.deployments[0]?.api_digest === "sha256:662bcd70dfa500766bfd6cc64dc836fb8a60307ae188e198a9146a34f89760c4"
+      && row.deployments[0]?.web_digest === "sha256:4c2ed4faadbecb22745cd76dbb7ebbe9b513f0f72ab76dc9b758ef5d60fc8707"
+      && row.api_contract_version === "0.37.0"
+      && row.title === "Подпись к фото площадки и обслуживание галереи"
+      && row.additions.length === 3
+      && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.48"
       && row.source_sha === "608f44e9af26da7ea24881fe31c2c7e49ed8aeb3"
