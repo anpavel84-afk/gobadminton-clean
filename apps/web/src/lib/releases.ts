@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.35" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.36" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
@@ -424,14 +424,13 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.35",
-  "title": "Мгновенная заглушка обложки и гостевые запросы",
+  "application_version": "0.1.0-alpha.36",
+  "title": "Гостевой запрос на странице площадки",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "Пока грузится фото или иллюстрация площадки сразу виден нейтральный рисунок ракетки и сетки",
-    "Гость без входа не вызывает личные запросы профиля на странице игры"
+    "Гость без входа не вызывает личный запрос профиля на странице площадки"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
@@ -1594,6 +1593,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "additions": [],
     "fixes": [
       "На телефоне имя тренера и отзывы отображаются отдельными читаемыми блоками"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "5c75185408042d7d119a7f63304c9ac609b68cbc",
+    "application_version": "0.1.0-alpha.35",
+    "version_label": "0.1.0-alpha.35",
+    "title": "Мгновенная заглушка обложки и гостевые запросы",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42321599702-a1",
+        "accepted_at": "2026-11-07T01:05:19Z",
+        "api_digest": "sha256:26423380b7c1e96205c934d177f12557fcc7aac28286a35026d2d7530887978b",
+        "web_digest": "sha256:c7a56b4e234c64742b051a98b2014872955a57f182512ced3515b04960ac3e50",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Пока грузится фото или иллюстрация площадки сразу виден нейтральный рисунок ракетки и сетки",
+      "Гость без входа не вызывает личные запросы профиля на странице игры"
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",
