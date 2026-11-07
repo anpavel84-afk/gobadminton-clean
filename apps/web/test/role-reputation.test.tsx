@@ -78,6 +78,7 @@ import {
   RoleReputationCardActions,
   RoleReputationPanel,
 } from "../src/components/consumer/games/RoleReputationPanel";
+import { publicRoleReviewModerationNotice } from "../src/lib/games-api";
 
 type Props = Record<string, unknown>;
 type Node = { type: unknown; props: Props };
@@ -280,5 +281,42 @@ describe("#394 role reputation consumer UI — behavioral", () => {
         typeof n.props.onClose === "function",
     );
     expect(dialogAfterClose).toBeFalsy();
+  });
+});
+
+describe("#506 B1b role-review moderation notice", () => {
+  it("maps PUBLIC_TEXT_CONTENT_REJECTED fields.text without leaking categories", () => {
+    const notice = publicRoleReviewModerationNotice({
+      ok: false,
+      status: 422,
+      error: "rejected",
+      problem: {
+        type: "about:blank",
+        title: "Измените текст и попробуйте снова",
+        status: 422,
+        code: "PUBLIC_TEXT_CONTENT_REJECTED",
+        requestId: "synthetic",
+        fields: { text: "Измените текст отзыва" },
+      },
+    });
+    expect(notice).toBe("Измените текст отзыва");
+    expect(notice).not.toMatch(/harassment|sexual|score/i);
+  });
+
+  it("maps temporary moderation unavailability", () => {
+    expect(
+      publicRoleReviewModerationNotice({
+        ok: false,
+        status: 503,
+        error: "unavailable",
+        problem: {
+          type: "about:blank",
+          title: "unavailable",
+          status: 503,
+          code: "MODERATION_TEMPORARILY_UNAVAILABLE",
+          requestId: "synthetic",
+        },
+      }),
+    ).toMatch(/временно недоступна/i);
   });
 });

@@ -7,6 +7,7 @@ import {
   previewRoleReviewConsent,
 } from "../../../lib/api-client";
 import type { OwnRoleEligibilityBasis, RoleKind } from "../../../lib/consumer-types";
+import { publicRoleReviewModerationNotice } from "../../../lib/games-api";
 import { Button } from "../Button";
 import { ProfileDialog, SectionHeader } from "../players/ProfileComposition";
 import "../../../styles/role-reputation.css";
@@ -170,6 +171,12 @@ export function RoleReviewComposer({
     setBusy(false);
     if (!mounted.current) return;
     if (!result.ok) {
+      const moderationNotice = publicRoleReviewModerationNotice(result);
+      if (moderationNotice) {
+        // Keep unsent text + consent reset happens via text deps; no optimistic clear.
+        setNotice(moderationNotice);
+        return;
+      }
       if (result.status === 0 || result.status >= 500) {
         setUnknownKey(key);
         setNotice("Не удалось подтвердить отправку. Отзыв мог быть принят — не повторяйте.");

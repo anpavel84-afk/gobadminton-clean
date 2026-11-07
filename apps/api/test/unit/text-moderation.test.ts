@@ -12,7 +12,13 @@ import {
   parseTextResponse,
 } from "../../src/moderation/openai-provider";
 import { evaluateLocalText } from "../../src/moderation/local-text-policy";
-import { TEXT_FIELD_HINTS, TEXT_SURFACE_KIND } from "../../src/moderation/text-policy";
+import {
+  REVIEW_HARD_REJECT_CATEGORIES,
+  REVIEW_QUEUE_CATEGORIES,
+  TEXT_FIELD_HINTS,
+  TEXT_SURFACE_KIND,
+  isReviewTextSurface,
+} from "../../src/moderation/text-policy";
 
 const rawEnv = {
   NODE_ENV: "test",
@@ -118,6 +124,26 @@ describe("text moderation adapter", () => {
     expect(
       evaluateLocalText('Он написал «хуйня», цитирую для отчёта', "prose").kind,
     ).toBe("contextual");
+  });
+
+  it("B1b role review/reply surfaces stay prose; soft vs hard category split", () => {
+    expect(isReviewTextSurface("role_review_body")).toBe(true);
+    expect(isReviewTextSurface("role_reply_body")).toBe(true);
+    expect(isReviewTextSurface("comment_body")).toBe(false);
+    expect(TEXT_SURFACE_KIND.role_review_body).toBe("prose");
+    expect(TEXT_SURFACE_KIND.role_reply_body).toBe("prose");
+    expect(TEXT_FIELD_HINTS.role_review_body).toMatch(/отзыва/i);
+    // Ordinary profiles/comments still reject any flag; review soft queue is separate.
+    expect(REVIEW_QUEUE_CATEGORIES).toEqual(
+      expect.arrayContaining(["harassment", "hate", "illicit", "violence"]),
+    );
+    expect(REVIEW_HARD_REJECT_CATEGORIES).toEqual(
+      expect.arrayContaining(["sexual/minors", "harassment/threatening", "self-harm"]),
+    );
+    expect(REVIEW_HARD_REJECT_CATEGORIES).not.toContain("harassment");
+    expect(
+      evaluateLocalText("Слабая организация, время сдвинули", "prose").kind,
+    ).toBe("clean");
   });
 
   it("bounds text retries on transport failure", async () => {

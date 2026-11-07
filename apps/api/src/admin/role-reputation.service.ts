@@ -4,6 +4,7 @@ import type { PoolClient } from "pg";
 import { conflict, forbidden, notFound, serviceUnavailable } from "../auth/problem";
 import type { AppEnv } from "../config/env";
 import { RoleReputationService } from "../games/role-reputation.service";
+import type { ReviewTextBatchAssessment } from "../moderation/moderation.service";
 import { APP_ENV } from "../tokens";
 import { appendAudit, type AuditActor } from "./admin-db";
 import { AdminService } from "./admin.service";
@@ -568,6 +569,83 @@ export class AdminRoleReputationService {
     input: RoleReviewDecide,
   ) {
     this.enabled();
+    // Read/reject/withdraw/retain/request_correction never call the provider.
+    // Approve/restore: authorize first; if old pending lacks classifier binding,
+    // assess exact consented public text outside the privileged command TX.
+    let preparedAssessment: ReviewTextBatchAssessment | null = null;
+    let preparedRevisionMeta: {
+      text: string;
+      resourceVersion: number;
+      actorUserId: string;
+    } | null = null;
+    if (input.decision === "approve" || input.decision === "restore") {
+      const preflight = await this.admin.privilegedMutationPreflight(
+        request,
+        "user.lookup",
+        async (client, actor) => {
+          await this.requireInstalled(client);
+          if (!canReadAssignedEvidence(actor)) {
+            throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+          }
+          const caze = await this.scopedCase(client, actor, caseId);
+          if (caze.assigned_to !== actor.principalId) {
+            throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
+          }
+          const bound = await this.loadBoundLink(client, caseId);
+          this.assertBoundRevision(bound.pending, input);
+          const slot = (
+            await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [
+              bound.slot_id,
+            ])
+          ).rows[0];
+          if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+          const gameIds = await this.gameIdsForSlot(client, slot.id);
+          await this.assertIndependent(
+            client,
+            actor,
+            await this.independenceForBound(client, slot, bound.pending, gameIds),
+          );
+          const rev = await this.consumerReputation.loadRevisionPublicText(client, {
+            targetKind: input.targetKind,
+            revisionId: input.exactRevisionId,
+          });
+          if (!rev || rev.resourceVersion !== input.expectedResourceVersion) {
+            throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+          }
+          // Revalidate consent/hash/independence gates on the exact revision (outside provider).
+          await this.consumerReputation.assertCurrentPublishGates(client, {
+            decision: input.decision,
+            targetKind: input.targetKind,
+            revisionId: input.exactRevisionId,
+            slot: {
+              id: slot.id,
+              author_user_id: slot.author_user_id,
+              subject_user_id: slot.subject_user_id,
+              role: slot.role as "organization" | "training",
+              public_handle: slot.public_handle,
+              status: slot.status,
+              version: slot.version,
+              approved_revision_id: slot.approved_revision_id,
+              pending_revision_id: slot.pending_revision_id,
+              basis_under_review: false,
+            },
+          });
+          // Assess outside TX reuses cached fingerprint evidence when candidate already exists
+          // (no second paid call). Missing binding still classifies the exact consented text.
+          return {
+            userId: actor.principal.user_id,
+            revision: rev,
+          };
+        },
+      );
+      preparedRevisionMeta = preflight.revision;
+      // Provider outside admin DB/advisory locks; only exact public-consented projection.
+      preparedAssessment = await this.consumerReputation.assessPublicRoleText(
+        preflight.userId,
+        input.targetKind,
+        preflight.revision.text,
+      );
+    }
     return this.admin.privilegedCommand(
       request,
       key,
@@ -781,23 +859,54 @@ export class AdminRoleReputationService {
             );
           }
         }
-        await client.query(
-          `INSERT INTO role_reputation_decisions
-             (case_id, slot_id, decision, target_kind, exact_revision_id,
-              expected_case_version, expected_resource_version, rationale, actor_principal_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [
-            caseId,
-            slot.id,
-            input.decision,
-            input.targetKind,
-            input.exactRevisionId,
-            input.expectedCaseVersion,
-            input.expectedResourceVersion,
-            input.rationale,
-            actor.principalId,
-          ],
-        );
+        const decisionRow = (
+          await client.query<{ id: string }>(
+            `INSERT INTO role_reputation_decisions
+               (case_id, slot_id, decision, target_kind, exact_revision_id,
+                expected_case_version, expected_resource_version, rationale, actor_principal_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             RETURNING id`,
+            [
+              caseId,
+              slot.id,
+              input.decision,
+              input.targetKind,
+              input.exactRevisionId,
+              input.expectedCaseVersion,
+              input.expectedResourceVersion,
+              input.rationale,
+              actor.principalId,
+            ],
+          )
+        ).rows[0]!;
+        // Human allow on provider review: keep approval.decision=review; bind exact human FK.
+        if (
+          (input.decision === "approve" || input.decision === "restore") &&
+          preparedAssessment &&
+          preparedRevisionMeta
+        ) {
+          const freshRev = await this.consumerReputation.loadRevisionPublicText(client, {
+            targetKind: input.targetKind,
+            revisionId: input.exactRevisionId,
+          });
+          if (
+            !freshRev ||
+            freshRev.resourceVersion !== preparedRevisionMeta.resourceVersion ||
+            freshRev.text !== preparedRevisionMeta.text
+          ) {
+            throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+          }
+          await this.consumerReputation.bindHumanPublication(client, {
+            targetKind: input.targetKind,
+            revisionId: input.exactRevisionId,
+            resourceVersion: freshRev.resourceVersion,
+            text: freshRev.text,
+            actorUserId: freshRev.actorUserId,
+            actorPrincipalId: actor.principalId,
+            roleReputationDecisionId: decisionRow.id,
+            assessment: preparedAssessment,
+          });
+        }
         const nextCaseVersion = caze.version + 1;
         await client.query(
           `UPDATE support_cases SET version=$2, updated_at=clock_timestamp() WHERE id=$1`,

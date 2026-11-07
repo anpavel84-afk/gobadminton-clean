@@ -21646,7 +21646,7 @@
           "Games"
         ],
         "summary": "Submit public organizer/trainer role review (pending human approval)",
-        "description": "#394. Server-derived subject from historical proof. Cookie+CSRF+Idempotency. Durable pending intake without requiring assignee. Does not publish legacy private PG-3 rows.",
+        "description": "#394 + #506 B1b. Cookie+CSRF+Idempotency. Authorize experience/membership/role/revision/hash/consent before text moderation; provider outside DB locks; final write revalidates fences and binds classifier candidate evidence to exact role_review_revision. Classifier ALLOW still creates real human pending intake — never auto-publishes. Soft/ambiguous flags stay pendingreview (decision=review, never forged allow). Hard-safety categories → 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE / 429 MODERATION_RATE_LIMITED retain prior approved tip. Withdraw/appeal provider-independent. Private PG-3 notes/feedback never egress.",
         "security": [
           {
             "cookieSession": []
@@ -21708,6 +21708,36 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "description": "Validation or PUBLIC_TEXT_CONTENT_REJECTED (optional Problem.fields.text). Prior approved tip unchanged; client keeps unsent input. No matched tokens/categories/scores.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "MODERATION_TEMPORARILY_UNAVAILABLE / MODERATION_POLICY_MISMATCH — retryable; prior approved tip retained.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "MODERATION_RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -21791,7 +21821,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "#394 + #506 B1b. submit_revision/resubmit use the same role_review_body gate as create (422/503/429; prior approved tip retained). withdraw/appeal are provider-independent."
       }
     },
     "/games/{gameId}/role-reputations/{role}": {
@@ -22219,7 +22250,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "#394 + #506 B1b. Reply submit uses role_reply_body gate with candidate binding to exact reply revision; human approval required. Soft flags → pendingreview. 422/503 retain prior approved reply tip. Withdraw is provider-independent."
       }
     },
     "/role-reviews/{reviewHandle}/reports": {

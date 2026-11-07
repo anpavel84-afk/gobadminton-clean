@@ -368,8 +368,22 @@ export function RoleReputationCases({
         else {
           setPendingRef(null);
           setUncertain(false);
-          if (cause instanceof AdminError && cause.code === "VERSION_CONFLICT" && caseHint) {
-            await openCase(caseHint.id);
+          if (cause instanceof AdminError) {
+            if (cause.code === "VERSION_CONFLICT" && caseHint) {
+              await openCase(caseHint.id);
+            }
+            if (
+              cause.code === "PUBLIC_TEXT_CONTENT_REJECTED" ||
+              cause.code === "MODERATION_TEMPORARILY_UNAVAILABLE" ||
+              cause.code === "MODERATION_POLICY_MISMATCH" ||
+              cause.code === "MODERATION_RATE_LIMITED"
+            ) {
+              setNotice(
+                cause.code === "PUBLIC_TEXT_CONTENT_REJECTED"
+                  ? "Текст не прошёл проверку. Публикация не выполнена; исходная редакция без изменений."
+                  : "Проверка текста временно недоступна. Публикация не выполнена.",
+              );
+            }
           }
         }
         throw cause;
