@@ -56,16 +56,29 @@ describe("text moderation adapter", () => {
 
   it("sends text batch without logging raw body and separates fake counters", async () => {
     const beforeAttempt = vi.fn(async () => undefined);
+    const texts = ["Анна", "Играем в бадминтон"] as const;
     const transport = vi.fn<typeof fetch>(async (_url, options) => {
       const body = JSON.parse(String(options?.body));
       expect(body.model).toBe(MODERATION_MODEL);
+      // Official text batch is string[]; multimodal object[] collapses to one result.
+      expect(body.input).toEqual([...texts]);
+      expect(Array.isArray(body.input) && body.input.every((item: unknown) => typeof item === "string")).toBe(
+        true,
+      );
+      expect(
+        body.input.some(
+          (item: unknown) =>
+            item !== null &&
+            typeof item === "object" &&
+            (item as { type?: string }).type === "text",
+        ),
+      ).toBe(false);
       expect(body.input).toHaveLength(2);
-      expect(body.input.every((item: { type: string }) => item.type === "text")).toBe(true);
       return Response.json(textFixture(2));
     });
     const adapter = new OpenAIModerationProvider(loadEnv(rawEnv), transport);
     const result = await adapter.moderateTexts({
-      texts: ["Анна", "Играем в бадминтон"],
+      texts,
       signal: new AbortController().signal,
       beforeAttempt,
     });

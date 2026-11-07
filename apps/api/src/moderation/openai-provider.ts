@@ -108,10 +108,11 @@ export class OpenAIModerationProvider implements ContentModerationProvider {
       await input.beforeAttempt();
       input.signal.throwIfAborted();
       try {
+        // Text-only batch: string[] yields one result per field; multimodal text objects collapse to one.
         const response = await this.client.moderations.create(
           {
             model: MODERATION_MODEL,
-            input: input.texts.map((text) => ({ type: "text" as const, text })),
+            input: Array.from(input.texts),
           },
           { signal: input.signal, timeout: Math.min(4000, Math.max(1, deadline - Date.now())) },
         );
