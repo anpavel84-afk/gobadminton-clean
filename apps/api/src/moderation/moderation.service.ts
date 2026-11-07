@@ -7,6 +7,11 @@ import type { AppEnv } from "../config/env";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { evaluateLocalText, LOCAL_TEXT_POLICY_VERSION } from "./local-text-policy";
 import {
+  DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+  isExactTrustedDevModerationEnv,
+  reserveModerationAttemptRow,
+} from "./moderation-quota-policy";
+import {
   IMAGE_CATEGORIES,
   MODERATION_MODEL,
   MODERATION_PROVIDER,
@@ -468,20 +473,13 @@ export class ContentModerationService {
 
   private async reserveAttempt(actorId: string, bucket: "image" | "text"): Promise<void> {
     // Single autocommit statement, including concurrent initial reservations; no lock spans provider I/O.
-    const result = await this.pool.query(`
-      INSERT INTO content_moderation_rate_budgets(user_id,bucket,window_started_at,count,day_started_at,day_count)
-      VALUES ($1,$2,now(),1,now(),1)
-      ON CONFLICT(user_id,bucket) DO UPDATE SET
-        window_started_at=CASE WHEN content_moderation_rate_budgets.window_started_at <= now()-interval '15 minutes' THEN now() ELSE content_moderation_rate_budgets.window_started_at END,
-        count=CASE WHEN content_moderation_rate_budgets.window_started_at <= now()-interval '15 minutes' THEN 1 ELSE content_moderation_rate_budgets.count+1 END,
-        day_started_at=CASE WHEN content_moderation_rate_budgets.day_started_at <= now()-interval '1 day' THEN now() ELSE content_moderation_rate_budgets.day_started_at END,
-        day_count=CASE WHEN content_moderation_rate_budgets.day_started_at <= now()-interval '1 day' THEN 1 ELSE content_moderation_rate_budgets.day_count+1 END,
-        updated_at=now()
-      WHERE (content_moderation_rate_budgets.window_started_at <= now()-interval '15 minutes' OR content_moderation_rate_budgets.count < 10)
-        AND (content_moderation_rate_budgets.day_started_at <= now()-interval '1 day' OR content_moderation_rate_budgets.day_count < 50)
-        AND (content_moderation_rate_budgets.next_allowed_at IS NULL OR content_moderation_rate_budgets.next_allowed_at <= now())
-      RETURNING user_id`, [actorId, bucket]);
-    if (!result.rowCount) {
+    // Quantity pause (Owner #506) may permit counts past 10/50 on exact trusted DEV before 2027-01-01;
+    // next_allowed_at / rolling windows / increments stay enforced. Classification gates unchanged.
+    const reserved = await reserveModerationAttemptRow(this.pool, actorId, bucket, {
+      trustedDevEnv: isExactTrustedDevModerationEnv(this.env),
+      pauseUntil: DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+    });
+    if (!reserved) {
       throw problem(
         429,
         "MODERATION_RATE_LIMITED",

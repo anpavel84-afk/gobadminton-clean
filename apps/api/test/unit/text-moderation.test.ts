@@ -14,6 +14,11 @@ import {
   parseTextResponse,
 } from "../../src/moderation/openai-provider";
 import { evaluateLocalText, LOCAL_TEXT_POLICY_VERSION } from "../../src/moderation/local-text-policy";
+import {
+  DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL,
+  isDevModerationQuantityQuotaPauseActive,
+  isExactTrustedDevModerationEnv,
+} from "../../src/moderation/moderation-quota-policy";
 import { ContentModerationService } from "../../src/moderation/moderation.service";
 import {
   PUBLIC_TEXT_POLICY_VERSION,
@@ -151,6 +156,33 @@ describe("text moderation adapter", () => {
     expect(
       evaluateLocalText("Слабая организация, время сдвинули", "prose").kind,
     ).toBe("clean");
+  });
+
+  it("local/test text budget path keeps quantity pause off; provider Retry-After unchanged", async () => {
+    const env = loadEnv(rawEnv);
+    expect(isExactTrustedDevModerationEnv(env)).toBe(false);
+    expect(
+      isDevModerationQuantityQuotaPauseActive(env, new Date("2026-11-08T00:00:00.000Z")),
+    ).toBe(false);
+    expect(DEV_MODERATION_QUANTITY_QUOTA_PAUSE_UNTIL.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    const transport = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ error: { message: "PRIVATE_PAYLOAD" } }), {
+          status: 429,
+          headers: { "retry-after": "12" },
+        }),
+    );
+    const adapter = new OpenAIModerationProvider(env, transport);
+    const reserve = vi.fn(async () => undefined);
+    await expect(
+      adapter.moderateTexts({
+        texts: ["synthetic-quota-boundary"],
+        signal: new AbortController().signal,
+        beforeAttempt: reserve,
+      }),
+    ).rejects.toMatchObject({ kind: "unavailable", retryAfterSeconds: 12 });
+    expect(reserve).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalled();
   });
 
   it("bounds text retries on transport failure", async () => {
