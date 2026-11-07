@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.41" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.42" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,16 +424,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.41",
-  "title": "Площадки: правка имени и адреса, выравнивание переключателей",
+  "application_version": "0.1.0-alpha.42",
+  "title": "Публичные фото площадок: меньший WebP при явной поддержке",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
-  "fixes": [
-    "Служебный импортёр площадок позволяет исправить имя и адрес уже существующей площадки с сохранением её идентификатора; создание площадок, геоданные и права этим выпуском не заявляются",
-    "Выпуск готовит последующее применение проверенных данных; названия «Цех» и «Nord» этим выпуском ещё не изменены",
-    "Ряды переключателей уведомлений о событиях игр выровнены на полную ширину списка"
+  "additions": [
+    "Публичные фотографии площадок передаются как меньший WebP, если браузер явно поддерживает этот формат; для остальных сохраняется исходный PNG",
+    "Действующие проверки модерации и доступности и заголовок no-store для ответа обложки площадки сохранены; обложки игр и игроков не менялись"
   ],
+  "fixes": [],
   "known_limitations": [
     "Изменение времени и места игры и связанные push отложены и не реализованы",
     "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
@@ -1775,6 +1774,36 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Изменение времени и места игры и связанные push отложены и не реализованы",
       "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
       "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.41",
+    "title": "Площадки: правка имени и адреса, выравнивание переключателей",
+    "owner_uat": "NOT_TESTED",
+    "additions": [],
+    "fixes": [
+      "Служебный импортёр площадок позволяет исправить имя и адрес уже существующей площадки с сохранением её идентификатора; создание площадок, геоданные и права этим выпуском не заявляются",
+      "Выпуск готовит последующее применение проверенных данных; названия «Цех» и «Nord» этим выпуском ещё не изменены",
+      "Ряды переключателей уведомлений о событиях игр выровнены на полную ширину списка"
+    ],
+    "known_limitations": [
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "3dbf8e04b978ba5f8a0379379ef46b054008ec44",
+    "version_label": "0.1.0-alpha.41",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42366434024-a1",
+        "api_digest": "sha256:2d76fa61dfc02ef8943b48f108b9d9189460b14cffcb4c47eeb55738e8b47c04",
+        "web_digest": "sha256:46189a35c68cd29842138059eb78cbb9fcbab1e32a1f5ddb20feb3d751fc35cc",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T11:13:52Z",
+        "kind": "pipeline"
+      }
     ]
   },
 

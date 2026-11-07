@@ -1,62 +1,48 @@
-# #406 public venue-cover response bytes — source handoff
+# #406 public venue-cover response — release metadata alpha.42
 
 From: Cursor Auto (source writer). To: independent QA (Codex Sol Medium default) / trusted integrator / Owner UAT.
-Date: 2026-11-07. Assignment: `OWNER_MEASURED406_REPAIR_CONFIRMED_ACCEPT_Q_VALIDATION` · attempt 2.
-Status: SOURCE_REPAIR_COMPLETE / NOT_TESTED (no author CI, DEV install, Slow4G smoke, or PASS claim).
-Exact base: `aa4f2a60bcb71fc7e8a5c43133769e32f6bcf1bf` (independent release #41 uninvolved; #42 metadata not now).
+Date: 2026-11-07. Assignment: `OWNER_MEASURED406_RELEASE42_METADATA_ONLY` · attempt 3.
+Status: SOURCE_METADATA_COMPLETE / NOT_TESTED (author does not claim independent QA PASS, full CI, or DEV.42 ACCEPTED).
+Exact base: `5a6a2ae238d0777e5000b65219e46c8d1df5746e`. Allowed paths only: release catalogue + this handoff. WebP feature / q-repair source and tests untouched.
 
-## Independent QA FAIL (pass 1 → this repair)
+## Prior chain (retained)
 
-Reviewed SHA: `aa4f2a60bcb71fc7e8a5c43133769e32f6bcf1bf`
-Verdict: **FAIL** (P2). Not PASS.
+| Step | Fact |
+| --- | --- |
+| Independent QA pass 1 | P2 FAIL — malformed / out-of-range `Accept` `q` ignored (default weight 1). Retained. |
+| Repair a94e | Strict `q` grammar + 8 targeted unit cases PASS (author). Combined candidate awaits final independent QA. |
+| DEV alpha.41 | ACCEPTED: PR #502 / SHA `3dbf8e04b978ba5f8a0379379ef46b054008ec44` / `r42366434024-a1` / `accepted_at` `2026-11-07T11:13:52Z`. Full CI 7/7; images/health/meta/worker/push UI 4 cases PASS. |
+| Public SPB 2-row identity | Applied separately with backup/CAS/audit/readback — not a new source feature of alpha.42. |
 
-Finding: malformed / out-of-range `q` was ignored, leaving default weight 1 — e.g. `Accept: image/webp;q=NaN` or `q=2` still selected WebP without a valid positive weight. Such variants must be rejected for that explicit media item; address with focused tests.
-
-QA limits (unchanged): source + saved logs only; DEV / real browser / Slow4G on approved photo not checked by QA.
-
-## Repair (attempt 2 — allowed paths only)
+## This pass (metadata only)
 
 | Path | Change |
 | --- | --- |
-| `apps/api/src/profiles/venue-cover-response.ts` | Strict RFC 9110-style `q` grammar (`0[.ddd]` / `1[.000]`, ≤3 fractional digits). Malformed, out-of-range, nonfinite, or duplicate `q` on that `image/webp` item is skipped (no fallback to default 1). Honour `q=0`. PNG fallback + derive path unchanged. |
-| `apps/api/test/unit/venue-cover-response.test.ts` | Focused cases: `q=NaN` / `2` / `-1` / `Infinity` / `garbage` / overlong fraction / `1.1` / duplicate `q` → reject; `q=0` / `q=0.5` / `q=1.000` behaviour preserved; consent/security/read-order/fallback tests untouched. |
-| `docs/handoffs/map406-venue-response.md` | This handoff: records QA FAIL + repair; no PASS / CI / DEV claim. |
+| `apps/web/src/lib/releases.ts` | `CURRENT_APPLICATION_VERSION` → `0.1.0-alpha.42`; API contract stays `0.37.0`. Append exact trusted alpha.41 seed → **50** historical deployments (previous 49 preserved). Current named release: `source_sha` null, Owner UAT `NOT_TESTED`. |
+| `apps/web/src/lib/releases.test.ts` | Literals track alpha.42 + alpha.41 seed date `2026-11-07T11:13:52Z`. |
+| `apps/web/test/releases.test.tsx` | Seed length 45 / deployments 50; alpha.41 accepted assertions; current prose = WebP delta. |
+| `apps/web/test/releases-server.test.ts` | Fifty deployments; accepted_at list appends `2026-11-07T11:13:52Z`; allowlist includes alpha.41. |
+| `docs/handoffs/map406-venue-response.md` | This handoff. |
 
-No controller / media / service / storage / profile / game / release metadata changes.
+### Exact trusted alpha.41 seed (attached)
 
-## Prior measured residual (alpha.40 cold install — context only)
+- SHA-256 of delivered seed JSON: `f3aeee64779b6655afa463edfd0bbeca23f087f93788db8930298ecc3a0fceaf`
+- `source_sha`: `3dbf8e04b978ba5f8a0379379ef46b054008ec44`
+- `release_id`: `r42366434024-a1`
+- `accepted_at`: `2026-11-07T11:13:52Z` (literal date assertions unchanged otherwise)
 
-Source: `map406-gallery-timing-alpha40-pass2/timing-summary.json`
-SHA-256: `096e9ef96d46bae2c9def1365bd81559fcfc8ec500e982cfaf750d0d145de701`
+### Russian product notes (alpha.42)
 
-| Profile | Venue cover transfer | Decoded PNG | Photo visible |
-| --- | ---: | ---: | ---: |
-| COLD_NORMAL | 23.8 ms | 1_054_377 B | 731 ms |
-| EMULATED_SLOW4G_150ms_1.6Mbps | **5555 ms** | 1_054_377 B | **8656 ms** (placeholder → photo 5617 ms) |
-
-Root lab note from prior pass (not republished here): approved photo local check aa4f → 1_054_377 PNG → 46_230 WebP in 73 ms; screenshot quality review done; **not** published / network smoke yet.
-
-## Goal (bounded — unchanged product intent)
-
-Compatible HTTP response optimization **only** for public venue-cover GET:
-
-- After existing `AvatarService.readVenueCover` authorization, if `Accept` explicitly allows `image/webp` with a **valid positive** weight (not `q=0`, not malformed), emit a bounded in-memory WebP derivative via already-installed `sharp`.
-- Otherwise return original PNG bytes.
-- Retain `Cache-Control: no-store`, add `Vary: Accept`, keep `nosniff` + CSP sandbox.
-- Preserve stored PNG/key/moderation/hash/audit/rights; all profile/game cover routes unchanged; no disk cache, worker, DB, uploads, new deps, or provider calls.
-
-## Limits / non-claims
-
-- Does **not** claim independent QA PASS after this repair (re-review required).
-- Does **not** claim CI green, DEV ACCEPTED, Slow4G smoke, or iPhone physical improvement.
-- Clients without explicit valid `image/webp` keep full PNG (no wildcard assumption; invalid `q` does not unlock WebP).
-- Conversion CPU cost is per-request, in-process, after auth; no stale derivative after hide/unapproval (no cache).
-- Expected Slow4G win remains transfer-bound for WebP-capable browsers only; Root must re-measure same photo cold Slow4G before improvement claim.
+- Public venue photographs transferred as smaller WebP when the browser explicitly supports it; original PNG retained for others.
+- Live moderation / availability checks and `no-store` maintained; game and player covers unchanged.
+- Does **not** claim all 134 photos completed, full catalog prefetch, or map rewrite.
+- Time/venue editing and related push remain deferred; iPhone / provider / Owner UAT: `NOT_TESTED`.
+- Root local approved-photo check (1_054_377 → 46_230 B / 73 ms, visually reviewed) is lab context only — **not** installed Slow4G improvement; no invented speed numbers in product notes; no network PASS claim.
 
 ## Out of author path / Root gates
 
-ONE source writer on allowed files only. Root independent QA + Product CI + installed same-photo cold Slow4G smoke before any improvement claim. Truthful alpha.42 metadata only after actual #41 accepted — not this pass. No PROD. No merge/deploy from author.
+ONE source writer on allowed files only. No new deps / Git / network / runtime / paid tools from author. Independent QA on combined candidate → Product CI → DEV.42 smoke afterward (trusted process). No PROD. No merge/deploy from author.
 
 ## Checks
 
-Author: bounded Accept-`q` repair + focused unit cases only. Author self-check ≠ independent QA. UAT: NOT_TESTED.
+Author: release metadata + handoff only. Author self-check ≠ independent QA. UAT: NOT_TESTED.
