@@ -130,7 +130,19 @@
   background-color: var(--gb-paper, #f3f4f1);
 }
 .gb-venue-gallery__frame[data-pending="uploaded"] {
-  background-color: var(--gb-paper, #f3f4f1);
+  /* Calm static skeleton (paper/line); mirrors venueMediaSkeletonStyle, no motion. */
+  background-color: var(--gb-paper, #f5f6f2);
+  background-image:
+    linear-gradient(var(--gb-line, #dfe4dc), var(--gb-line, #dfe4dc)),
+    linear-gradient(var(--gb-line, #dfe4dc), var(--gb-line, #dfe4dc));
+  background-size: 42% 10px, 28% 10px;
+  background-position: center calc(50% - 10px), center calc(50% + 10px);
+  background-repeat: no-repeat;
+}
+.gb-venue-gallery__frame[data-state="empty"],
+.gb-venue-gallery__frame[data-state="error"] {
+  background-color: var(--gb-paper, #f5f6f2);
+  background-image: none;
 }
 .gb-venue-gallery__frame > img,
 .gb-venue-gallery__frame > .gb-venue-cover {
@@ -140,6 +152,54 @@
   object-fit: cover;
 }
 .gb-venue-gallery__frame > .gb-venue-cover { position: absolute; inset: 0; }
+.gb-venue-gallery__status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 16px;
+  box-sizing: border-box;
+  text-align: center;
+  color: var(--gb-ink-soft, #5c6560);
+  font-size: 14px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.gb-venue-gallery__status > p { margin: 0; max-width: 28ch; }
+.gb-venue-gallery__status[data-state="error"] { pointer-events: auto; }
+.gb-venue-gallery__retry {
+  pointer-events: auto;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--gb-line, #dfe4dc);
+  border-radius: 12px;
+  background: var(--gb-white, #fff);
+  color: var(--gb-ink, #111);
+  font: inherit;
+  cursor: pointer;
+}
+.gb-venue-gallery__caption {
+  margin: 0;
+  color: var(--gb-ink-soft, #5c6560);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.gb-venue-gallery[data-size="compact"] .gb-venue-gallery__status {
+  padding: 4px;
+  font-size: 9px;
+  line-height: 1.2;
+  gap: 2px;
+}
+.gb-venue-gallery[data-size="compact"] .gb-venue-gallery__status > p {
+  max-width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
 .gb-venue-gallery__nav {
   position: absolute;
   inset: 0;

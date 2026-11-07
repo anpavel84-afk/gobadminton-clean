@@ -1,11 +1,7 @@
 "use client";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { CSSProperties, RefCallback } from "react";
-import {
-  VENUE_ILLUSTRATION_ALT,
-  venueEquipmentPlaceholderStyle,
-  venueIllustrationUrl,
-} from "../../../lib/venue-illustration";
+import { venueMediaSkeletonStyle } from "../../../lib/venue-illustration";
 import { venueCoverUrl } from "./VenueCover";
 
 const court = "/discovery/badminton-courts.jpg";
@@ -19,75 +15,94 @@ const NEUTRAL_READY_STYLE: CSSProperties = {
   backgroundRepeat: "",
 };
 
+const EMPTY_STYLE: CSSProperties = {
+  backgroundImage: "none",
+  backgroundColor: "var(--gb-paper, #f5f6f2)",
+  backgroundSize: "",
+  backgroundPosition: "",
+  backgroundRepeat: "",
+};
+
 /** A selected venue owns one image; slots only lend it a DOM parent. */
 function createCover(url: string | null, initialName: string, venueId?: string) {
   const slots: Record<Position, HTMLSpanElement | null> = { compact: null, info: null };
   let image: HTMLImageElement | null = null;
   let name = initialName;
-  let fallback = !url;
-  /** Current raster src successfully decoded (uploaded or fallback). */
+  /** True when the uploaded URL failed or there is no published media URL. */
+  let failed = !url;
+  /** Current raster src successfully decoded. */
   let loaded = false;
-  /** Fallback raster failed — keep SVG underlay; never claim loaded; hide broken img. */
-  let fallbackError = false;
+  /** Terminal decode failure for the current intended src. */
+  let decodeError = false;
   let generation = 0;
   let detach: (() => void) | undefined;
   let releaseVersion = 0;
   const listeners = new Set<() => void>();
-  const useIllustration = Boolean(venueId);
-  const fallbackSrc = useIllustration && venueId ? venueIllustrationUrl(venueId) : court;
+  const useCourtFallback = !venueId;
+  const intendedSrc = () => (url ? url : (useCourtFallback ? court : null));
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
   };
-  const getSnapshot = () => fallback;
+  const getSnapshot = () => failed;
   const emit = () => { for (const listener of listeners) listener(); };
   const paint = () => {
-    const uploadedPending = Boolean(url && !fallback && !loaded);
-    const fallbackPending = Boolean(fallback && !loaded && !fallbackError);
-    const uploadedReady = Boolean(url && !fallback && loaded);
-    const fallbackReady = Boolean(fallback && loaded && !fallbackError);
-    const showEquipmentUnderlay = uploadedPending || fallbackPending || fallbackError;
-    const underlay = showEquipmentUnderlay ? venueEquipmentPlaceholderStyle() : undefined;
+    const src = intendedSrc();
+    const uploadedPending = Boolean(url && !failed && !loaded);
+    const courtPending = Boolean(!url && useCourtFallback && !failed && !loaded && !decodeError);
+    const uploadedReady = Boolean(url && !failed && loaded);
+    const courtReady = Boolean(!url && useCourtFallback && loaded && !decodeError);
+    const noMedia = Boolean(!url && venueId);
+    const showSkeleton = uploadedPending || courtPending;
+    const underlay = showSkeleton ? venueMediaSkeletonStyle() : undefined;
     for (const slot of Object.values(slots)) {
       if (!slot) continue;
       slot.dataset.cover = uploadedReady ? "uploaded" : "default";
       if (uploadedReady) delete slot.dataset.fallback;
-      else slot.dataset.fallback = useIllustration ? "illustration" : "court";
+      else if (courtReady || courtPending) slot.dataset.fallback = "court";
+      else delete slot.dataset.fallback;
       if (uploadedPending) slot.dataset.pending = "uploaded";
-      else if (fallbackPending) slot.dataset.pending = "fallback";
+      else if (courtPending) slot.dataset.pending = "fallback";
       else delete slot.dataset.pending;
+      if (failed && url) slot.dataset.state = "error";
+      else if (noMedia) slot.dataset.state = "empty";
+      else delete slot.dataset.state;
       if (underlay) Object.assign(slot.style, underlay);
-      else if (uploadedReady || fallbackReady) Object.assign(slot.style, NEUTRAL_READY_STYLE);
+      else if (uploadedReady || courtReady) Object.assign(slot.style, NEUTRAL_READY_STYLE);
+      else Object.assign(slot.style, EMPTY_STYLE);
     }
     if (image) {
-      image.alt = fallback
-        ? (useIllustration ? VENUE_ILLUSTRATION_ALT : "Бадминтонный корт")
-        : `Обложка: ${name}`;
-      image.style.opacity = showEquipmentUnderlay ? "0" : "";
+      if (!src || (failed && url) || noMedia) {
+        image.style.opacity = "0";
+        image.removeAttribute("alt");
+      } else {
+        image.alt = url ? `Обложка: ${name}` : "Бадминтонный корт";
+        image.style.opacity = showSkeleton ? "0" : "";
+      }
     }
   };
   const applyLoad = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
-    if (fallbackError) return;
+    if (decodeError || (failed && url)) return;
     loaded = true;
+    failed = false;
     paint();
   };
   const applyError = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
-    if (fallback) {
-      // Secondary fallback failure: keep SVG + hidden broken raster; never error-loop.
-      if (fallbackError) return;
-      fallbackError = true;
+    if (!url && useCourtFallback) {
+      if (decodeError) return;
+      decodeError = true;
       loaded = false;
+      failed = true;
       paint();
       return;
     }
-    // Original photo failure → per-venue fallback (pending until that asset decodes).
-    fallback = true;
+    // Uploaded photo failure — terminal failed/retry, never equipment or silent illustration fill.
+    failed = true;
     loaded = false;
-    fallbackError = false;
+    decodeError = true;
     paint();
-    source();
     emit();
   };
   const listen = (probeCache: boolean) => {
@@ -110,14 +125,33 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
     }
   };
   const source = () => {
+    const src = intendedSrc();
+    if (!src) {
+      detach?.();
+      detach = undefined;
+      if (image) {
+        image.removeAttribute("src");
+        image.style.opacity = "0";
+      }
+      paint();
+      return;
+    }
     // Attach listeners for this generation before writing src — do not probe the previous src.
     listen(false);
     if (!image) return;
-    image.src = fallback ? fallbackSrc : url ?? fallbackSrc;
+    image.src = src;
     paint();
     if (!image.complete) return;
     if (image.naturalWidth > 0) applyLoad(image, generation);
     else if (image.getAttribute("src")) applyError(image, generation);
+  };
+  const retry = () => {
+    if (!url) return;
+    failed = false;
+    loaded = false;
+    decodeError = false;
+    source();
+    emit();
   };
   const dispose = () => {
     ++generation;
@@ -150,15 +184,26 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
       image.loading = "eager";
       image.decoding = "async";
       paint();
-      source();
+      // Sticky uploaded failure waits for explicit retry(); no-media has no src.
+      if (!(failed && url) && intendedSrc()) source();
+      else paint();
     }
-    if (image && !detach) listen(true);
+    if (image && !detach && intendedSrc() && !(failed && url)) listen(true);
     paint();
     if (image && image.parentNode !== target) target.appendChild(image);
   };
   const compact: RefCallback<HTMLSpanElement> = node => attach("compact", node);
   const info: RefCallback<HTMLSpanElement> = node => attach("info", node);
-  return { compact, info, release, retain, subscribe, getSnapshot, rename(value: string) { name = value; paint(); } };
+  return {
+    compact,
+    info,
+    release,
+    retain,
+    retry,
+    subscribe,
+    getSnapshot,
+    rename(value: string) { name = value; paint(); },
+  };
 }
 
 export function useSelectedVenueCover(cityId: string, venue?: { id: string; name: string; cover?: { uploadedUrl: string | null } }) {

@@ -126,8 +126,9 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                   aria-pressed={selectedId === venue.id}
                   onClick={() => onSelect(venue)}
                 >
-                  {/* Compact gallery has no nav buttons; horizontal swipe is click-suppressed so it does not select.
-                      Source credit stays outside this select button (no nested anchors). */}
+                  {/* Compact gallery: no nav / no retry controls inside the select button.
+                      Horizontal swipe is click-suppressed so it does not select.
+                      Source credit stays outside (no nested anchors). */}
                   <VenueGallery venue={venue} size="compact" showCredit={false} showSourceCredit={false} className="gb-venue-cover--thumb" />
                   <span className="gb-venue-picker-option-copy">
                     <span className="gb-venue-picker-option-name">{venue.name}</span>
@@ -146,7 +147,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                       Фото · {photos}
                     </summary>
                     <div className="gb-venue-picker-photos__body">
-                      {/* Sibling sheet gallery: arrows, counter, focused arrow keys — outside the select button. */}
+                      {/* Sibling sheet gallery: arrows, counter, retry, focused arrow keys — outside the select button. */}
                       <VenueGallery venue={venue} size="sheet" showCredit />
                     </div>
                   </details>

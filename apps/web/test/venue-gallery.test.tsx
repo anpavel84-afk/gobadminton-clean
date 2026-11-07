@@ -34,7 +34,12 @@ import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { VenuePickerDialog } from "../src/components/consumer/games/VenuePickerDialog";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
-import { VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI, VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
+import { venueMediaSkeletonStyle } from "../src/lib/venue-illustration";
+
+function skeletonMarkup(): string {
+  const style = venueMediaSkeletonStyle();
+  return `background-size:${style.backgroundSize}`;
+}
 
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("react-dom", async (importOriginal) => {
@@ -71,16 +76,17 @@ beforeEach(() => { resetHooks(); });
 afterEach(() => { resetHooks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("VenueGallery", () => {
-  it("hides navigation for a single image and keeps honest fallback when empty", () => {
+  it("hides navigation for a single image and keeps honest no-photo when empty", () => {
     const one = ssr(<VenueGallery venue={venue([{ id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Клуб", url: "https://club.example" } }])} />);
     expect(one).not.toContain("Предыдущее фото");
     expect(one).not.toContain("Следующее фото");
     expect(one).toContain(url("a"));
     const emptyVenue = venue([], null);
     const empty = ssr(<VenueGallery venue={emptyVenue} />);
-    expect(empty).toContain(venueIllustrationUrl(emptyVenue.id));
-    expect(empty).toContain('data-fallback="illustration"');
-    expect(empty).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(empty).toContain("Фотографии площадки пока нет");
+    expect(empty).toContain('data-state="empty"');
+    expect(empty).not.toContain("venue-illustrations");
+    expect(empty).not.toContain("data:image/svg+xml");
     expect(empty).not.toContain("/discovery/badminton-courts.jpg");
     expect(empty).not.toContain("Предыдущее фото");
     expect(empty).not.toContain("Фото: Клуб");
@@ -107,19 +113,20 @@ describe("VenueGallery", () => {
     expect(suppressed).not.toContain("Источник: badminton4u.ru");
     expect(suppressed).not.toContain("Badmclub НН");
   });
-  it("replaces failed gallery photo with illustration alt/credit, not club photo credit", () => {
+  it("replaces failed gallery photo with error/retry, not club photo credit or equipment filler", () => {
     const item = { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } };
     const v = venue([item]);
-    // VenueGallery hook order: index(0), notify ref(1), failed(2), drag/suppress refs(3-4).
+    // VenueGallery hook order: index(0), notify ref(1), failed(2), loadedSrc(3), retryToken(4), drag/suppress refs.
     resetHooks();
     hooks.slots[0] = 0;
     hooks.slots[2] = url("a");
     const after = renderToStaticMarkup(<VenueGallery venue={v} />);
-    expect(after).toContain(venueIllustrationUrl(v.id));
-    expect(after).toContain('data-fallback="illustration"');
-    expect(after).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
-    expect(after).toContain("Иллюстрация");
+    expect(after).toContain("Не удалось загрузить фотографию");
+    expect(after).toContain("Повторить загрузку");
+    expect(after).toContain("Фотография временно недоступна");
     expect(after).not.toContain("Фото: Клуб");
+    expect(after).not.toContain("venue-illustrations");
+    expect(after).not.toContain("data:image/svg+xml");
     expect(after).not.toContain(`src="${url("a")}"`);
   });
 
@@ -176,18 +183,20 @@ describe("VenueGallery", () => {
       { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
       { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "logo", text: "Логотип: Клуб", url: "https://club.example/logo" } },
     ], url("b"));
-    // Pending first paint: main index + url, honest illustration credit until load.
+    // Pending first paint: main index + url, status caption until load — no fake photo credit.
     const pending = ssr(<VenueGallery venue={multi} />);
     expect(pending).toContain(url("b"));
     expect(pending).not.toContain(`src="${url("a")}"`);
     expect(pending).toContain("2/2");
-    expect(pending).toContain("Иллюстрация");
+    expect(pending).toContain("Загружаем фотографию…");
     expect(pending).not.toContain("Логотип: Клуб");
+    expect(pending).not.toContain("data:image/svg+xml");
     // After load of the main (index 1) image: logo credit returns.
     resetHooks();
     hooks.cursor = 0;
     renderToStaticMarkup(<VenueGallery venue={multi} />);
-    // uncontrolledIndex is initialized to mainIndex (1); loadedSrc is the last null useState.
+    // uncontrolledIndex is initialized to mainIndex (1); loadedSrc is the last null useState
+    // (failed is also null; retryToken is 0 so it is not selected).
     expect(hooks.slots[0]).toBe(1);
     let loadedSlot = -1;
     for (let i = hooks.slots.length - 1; i >= 0; i--) {
@@ -212,7 +221,7 @@ describe("VenueGallery", () => {
     expect(pending).toContain("Предыдущее фото");
     expect(pending).toContain("Следующее фото");
     expect(pending).toContain("1/2");
-    expect(pending).toContain("Иллюстрация");
+    expect(pending).toContain("Загружаем фотографию…");
     hooks.cursor = 0;
     renderToStaticMarkup(<VenueGallery venue={multi} />);
     let loadedSlot = -1;
@@ -236,7 +245,7 @@ describe("VenueGallery", () => {
     expect(html).not.toContain("Предыдущее фото");
   });
 
-  it("compact/page frames show immediate inline equipment underlay while uploaded photo is pending, then clear after load", () => {
+  it("compact/page frames show static CSS skeleton while uploaded photo is pending, then clear after load", () => {
     const target = venue([
       { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
     ]);
@@ -244,20 +253,21 @@ describe("VenueGallery", () => {
       const pending = ssr(<VenueGallery venue={target} size={size} showCredit={size !== "compact"} />);
       expect(pending).toContain(`data-size="${size === "compact" ? "compact" : size}"`);
       expect(pending).toContain('data-pending="uploaded"');
-      expect(pending).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-      expect(pending).toContain("data:image/svg+xml");
-      expect(pending).not.toContain(`url(&quot;${venueIllustrationUrl(target.id)}&quot;)`);
+      expect(pending).toContain(skeletonMarkup());
+      expect(pending).toContain("linear-gradient");
+      expect(pending).not.toContain("data:image/svg+xml");
+      expect(pending).not.toContain("venue-illustrations");
       expect(pending).toContain(url("a"));
       expect(pending).toContain("opacity:0");
       if (size === "compact") {
-        expect(pending).not.toContain("Иллюстрация"); // showCredit=false
+        expect(pending).not.toContain("Фото: Один");
+        expect(pending).not.toContain("Загружаем фотографию…");
       } else {
-        // Pending placeholder is not a photo — honest illustration credit until load.
-        expect(pending).toContain("Иллюстрация");
+        expect(pending).toContain("Загружаем фотографию…");
         expect(pending).not.toContain("Фото: Один");
       }
     }
-    // Reuse harness slots: loadedSrc is the last null useState after index/failed.
+    // Reuse harness slots: loadedSrc is the last null useState after index/failed (retryToken=0).
     hooks.cursor = 0;
     renderToStaticMarkup(<VenueGallery venue={target} size="compact" showCredit={false} />);
     let loadedSlot = -1;
@@ -269,26 +279,75 @@ describe("VenueGallery", () => {
     hooks.cursor = 0;
     const ready = renderToStaticMarkup(<VenueGallery venue={target} size="compact" showCredit={false} />);
     expect(ready).not.toContain('data-pending="uploaded"');
-    expect(ready).not.toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(ready).not.toContain(skeletonMarkup());
     expect(ready).toContain(url("a"));
     expect(ready).not.toContain("opacity:0");
   });
 
-  it("pending equipment underlay resets when venue id changes without old photo flash", () => {
+  it("pending skeleton resets when venue id changes without old photo flash", () => {
     const a = venue([{ id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } }]);
     const b = {
       ...venue([{ id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } }]),
       id: "a0000000-0000-4000-8000-000000000002",
     };
     const first = ssr(<VenueGallery venue={a} size="compact" showCredit={false} />);
-    expect(first).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(first).toContain(skeletonMarkup());
     const second = ssr(<VenueGallery venue={b} size="page" showCredit />);
-    expect(second).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(second).toContain(skeletonMarkup());
     expect(second).toContain(url("b"));
     expect(second).not.toContain(url("a"));
     expect(second).toContain('data-pending="uploaded"');
-    expect(second).toContain("Иллюстрация");
+    expect(second).toContain("Загружаем фотографию…");
     expect(second).not.toContain("Фото: Два");
+  });
+
+  it("excludes interactive descendants from gallery drag capture before setPointerCapture", () => {
+    class FakeImage { decoding = ""; src = ""; }
+    vi.stubGlobal("Image", FakeImage);
+    const multi = venue([
+      { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+      { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } },
+    ]);
+    const galleryCapture = new Set<number>();
+    const galleryTarget = {
+      className: "gb-venue-gallery",
+      setPointerCapture: (id: number) => galleryCapture.add(id),
+      hasPointerCapture: (id: number) => galleryCapture.has(id),
+      releasePointerCapture: (id: number) => galleryCapture.delete(id),
+    };
+    const button = { closest(selector: string) { return selector.includes("button") ? this : null; } };
+    const glyph = { closest(selector: string) { return selector.includes("button") ? button : null; } };
+    const media = { closest() { return null; } };
+    resetHooks();
+    const tree = VenueGallery({ venue: multi, size: "sheet" });
+    const galleryNode = (() => {
+      function walk(node: ReactNode): ReactElement<Record<string, unknown>> | null {
+        if (!isValidElement<Record<string, unknown>>(node)) return null;
+        if (node.props.className === "gb-venue-gallery") return node;
+        for (const child of Children.toArray(node.props.children as ReactNode)) {
+          const hit = walk(child);
+          if (hit) return hit;
+        }
+        return null;
+      }
+      return walk(tree);
+    })();
+    expect(galleryNode).toBeTruthy();
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 1, button: 0, clientX: 10, clientY: 10, currentTarget: galleryTarget, target: button,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    expect(galleryCapture.has(1)).toBe(false);
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 2, button: 0, clientX: 10, clientY: 10, currentTarget: galleryTarget, target: glyph,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    expect(galleryCapture.has(2)).toBe(false);
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 3, button: 0, clientX: 10, clientY: 10, currentTarget: galleryTarget, target: media,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    expect(galleryCapture.has(3)).toBe(true);
   });
 
   it("integrates gallery with morph slot in preview instead of bypassing", () => {
@@ -366,8 +425,8 @@ describe("VenueGallery", () => {
     expect(html).toContain("Предыдущее фото");
     expect(html).toContain("Следующее фото");
     expect(html).toContain("1/2");
-    // Sheet credit stays illustration while the photo is still pending (placeholder ≠ photo).
-    expect(html).toContain("Иллюстрация");
+    // Sheet caption is loading status while the photo is still pending (not photo credit).
+    expect(html).toContain("Загружаем фотографию…");
     expect(html).toContain("Альфа");
     // Compact thumb stays inside the select button; sheet nav/credits stay outside (no nested buttons).
     const optionInner = html.match(/class="gb-venue-picker-option"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? "";

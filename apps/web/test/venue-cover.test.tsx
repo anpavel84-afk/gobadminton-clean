@@ -28,8 +28,13 @@ import { VenueCoverEditor } from "../src/components/consumer/venues/VenueCoverEd
 import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
 import { GameHero } from "../src/components/consumer/games/GameDetailComposition";
 import { VenueCoverError, venueCoverRequest } from "../src/lib/venue-cover-api";
-import { VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI, VENUE_ILLUSTRATION_ALT, VENUE_ILLUSTRATION_URLS, venueIllustrationUrl } from "../src/lib/venue-illustration";
+import { VENUE_ILLUSTRATION_URLS, venueIllustrationUrl, venueMediaSkeletonStyle } from "../src/lib/venue-illustration";
 import type { Game } from "../src/lib/consumer-types";
+
+function skeletonMarkup(): string {
+  const style = venueMediaSkeletonStyle();
+  return `background-size:${style.backgroundSize}`;
+}
 afterEach(()=>{
   hooks.active = false;
   hooks.slots = [];
@@ -102,33 +107,31 @@ describe("venue cover presentation / mutation wire protocol",()=>{
       expect(markup).not.toContain("▱");
     }
   });
-  it("uses stable equipment illustration when venueId is supplied without uploaded cover",()=>{
+  it("shows neutral no-photo when venueId is supplied without uploaded cover; keeps illustration asset map",()=>{
     const idA="00000037-1111-4111-8111-111111111111";
     const idB="00000037-1111-4111-8111-111111111112";
     const a=renderToStaticMarkup(<VenueCover venueId={idA}/>);
     const again=renderToStaticMarkup(<VenueCover venueId={idA}/>);
-    expect(a).toContain(`src="${venueIllustrationUrl(idA)}"`);
-    expect(a).toContain('data-fallback="illustration"');
-    expect(a).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
-    expect(a).toContain('data-pending="fallback"');
-    expect(a).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    expect(a).toContain("opacity:0");
+    expect(a).toContain('data-state="empty"');
+    expect(a).toContain("Фотографии площадки пока нет");
+    expect(a).not.toContain("venue-illustrations");
+    expect(a).not.toContain("data:image/svg+xml");
     expect(a).not.toContain("Бадминтонный корт");
-    expect(again).toContain(`src="${venueIllustrationUrl(idA)}"`);
+    expect(again).toContain('data-state="empty"');
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idA) as typeof VENUE_ILLUSTRATION_URLS[number]);
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idB) as typeof VENUE_ILLUSTRATION_URLS[number]);
   });
-  it("shows immediate inline equipment underlay while uploaded photo is pending before onLoad",()=>{
+  it("shows immediate static CSS skeleton while uploaded photo is pending before onLoad",()=>{
     const idA="00000037-1111-4111-8111-111111111111";
-    // SSR/first paint: uploaded src present but not yet cover=uploaded; inline SVG fills the cell (no webp request).
+    // SSR/first paint: uploaded src present but not yet cover=uploaded; static skeleton fills the cell.
     const pending=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="Synthetic"/>);
     expect(pending).toContain(url);
     expect(pending).toContain('data-cover="default"');
-    expect(pending).toContain('data-fallback="illustration"');
     expect(pending).toContain('data-pending="uploaded"');
-    expect(pending).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    expect(pending).toContain("data:image/svg+xml");
-    expect(pending).not.toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
+    expect(pending).toContain(skeletonMarkup());
+    expect(pending).toContain("linear-gradient");
+    expect(pending).not.toContain("data:image/svg+xml");
+    expect(pending).not.toContain("venue-illustrations");
     expect(pending).toContain("opacity:0");
     expect(pending).toContain("loading=\"lazy\"");
     // Without venueId: keep immediate uploaded paint (discovery/hero); do not invent illustration.
@@ -144,88 +147,69 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     const idB="00000037-1111-4111-8111-111111111112";
     const urlB="/v1/media/venue-covers/"+"b".repeat(64)+".png";
     const first=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="A"/>);
-    expect(first).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(first).toContain(skeletonMarkup());
     const swappedVenue=renderToStaticMarkup(<VenueCover venueId={idB} cover={{uploadedUrl:url}} name="B"/>);
-    expect(swappedVenue).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(swappedVenue).toContain(skeletonMarkup());
     expect(swappedVenue).toContain('data-pending="uploaded"');
     const swappedUrl=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:urlB}} name="A"/>);
     expect(swappedUrl).toContain(urlB);
     expect(swappedUrl).toContain('data-pending="uploaded"');
-    expect(swappedUrl).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    // Error fallback path keeps illustration img under immediate SVG underlay (no uploaded src).
-    const failed=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:null}} name="Synthetic"/>);
-    expect(failed).toContain(`src="${venueIllustrationUrl(idA)}"`);
-    expect(failed).toContain('data-fallback="illustration"');
-    expect(failed).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
-    expect(failed).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    expect(failed).not.toContain(url);
+    expect(swappedUrl).toContain(skeletonMarkup());
+    // Genuine no-media — neutral empty, not equipment filler.
+    const empty=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:null}} name="Synthetic"/>);
+    expect(empty).toContain('data-state="empty"');
+    expect(empty).toContain("Фотографии площадки пока нет");
+    expect(empty).not.toContain("data:image/svg+xml");
+    expect(empty).not.toContain(url);
   });
-  it("original onError → fallback onLoad keeps sticky failure (no original revival/retry)", () => {
+  it("original onError shows failed/retry without illustration filler; retry restores pending", () => {
     const props = { venueId, cover: { uploadedUrl: url }, name: "Synthetic" };
     let tree = renderCover(props);
     const original = coverImg(tree);
     expect(original.props.src).toBe(url);
     original.props.onError?.();
     tree = renderCover(props);
-    const fallback = coverImg(tree);
-    const fallbackSrc = venueIllustrationUrl(venueId);
-    expect(fallback.props.src).toBe(fallbackSrc);
-    expect(renderToStaticMarkup(tree)).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    expect(renderToStaticMarkup(tree)).not.toContain(url);
-    fallback.props.onLoad?.();
-    tree = renderCover(props);
-    const after = coverImg(tree);
-    // Fallback success must not clear original failure or retry the broken uploaded src.
-    expect(after.props.src).toBe(fallbackSrc);
-    expect(after.props.src).not.toBe(url);
     const html = renderToStaticMarkup(tree);
-    expect(html).not.toContain(url);
-    expect(html).toContain(`src="${fallbackSrc}"`);
-    expect(html).toContain('data-cover="default"');
-    expect(html).not.toContain('data-pending=');
-    expect(html).not.toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(html).toContain('data-state="error"');
+    expect(html).toContain("Фото не загрузилось");
+    expect(html).toContain("Повторить");
+    expect(html).not.toContain("venue-illustrations");
+    expect(html).not.toContain("data:image/svg+xml");
+    expect(html).not.toContain(`src="${url}"`);
+    const retry = elements(tree).find(node => node.type === "button");
+    expect(retry).toBeTruthy();
+    (retry!.props.onClick as (event: { preventDefault: () => void; stopPropagation: () => void }) => void)({
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+    tree = renderCover(props);
+    expect(coverImg(tree).props.src).toBe(url);
+    expect(renderToStaticMarkup(tree)).toContain('data-pending="uploaded"');
   });
 
-  it("original onError → fallback onError keeps SVG underlay and hides broken raster (no loop)", () => {
-    const props = { venueId, cover: { uploadedUrl: url }, name: "Synthetic" };
+  it("failed state without allowRetry stays non-interactive for picker parents", () => {
+    const props = { venueId, cover: { uploadedUrl: url }, name: "Synthetic", allowRetry: false };
     let tree = renderCover(props);
     coverImg(tree).props.onError?.();
     tree = renderCover(props);
-    const fallback = coverImg(tree);
-    const fallbackSrc = venueIllustrationUrl(venueId);
-    expect(fallback.props.src).toBe(fallbackSrc);
-    fallback.props.onError?.();
-    tree = renderCover(props);
-    const after = coverImg(tree);
-    expect(after.props.src).toBe(fallbackSrc);
-    expect(after.props.src).not.toBe(url);
-    expect(after.props.style?.opacity).toBe(0);
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    expect(html).toContain("data:image/svg+xml");
-    expect(html).not.toContain(url);
-    expect(html).toContain('data-cover="default"');
-    expect(html).toContain('data-fallback="illustration"');
-    // No second pass back to original; underlay remains without claiming loaded.
-    expect(html).not.toContain('data-cover="uploaded"');
+    expect(html).toContain('data-state="error"');
+    expect(html).toContain("Фото не загрузилось");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("data:image/svg+xml");
   });
 
-  it("fallback-only onError (no uploaded source) keeps underlay; does not invent loaded", () => {
+  it("no-media empty state does not invent loaded imagery", () => {
     const props = { venueId, cover: { uploadedUrl: null as string | null }, name: "Synthetic" };
-    let tree = renderCover(props);
-    const img = coverImg(tree);
-    expect(img.props.src).toBe(venueIllustrationUrl(venueId));
-    img.props.onError?.();
-    tree = renderCover(props);
-    const after = coverImg(tree);
-    expect(after.props.src).toBe(venueIllustrationUrl(venueId));
-    expect(after.props.style?.opacity).toBe(0);
+    const tree = renderCover(props);
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
-    expect(html).toContain('data-fallback="illustration"');
+    expect(html).toContain('data-state="empty"');
+    expect(html).toContain("Фотографии площадки пока нет");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("data:image/svg+xml");
   });
 
-  it("cache-complete original/fallback and fresh venue/url reset via actual callbacks", () => {
+  it("cache-complete original and fresh venue/url reset via actual callbacks", () => {
     const props = { venueId, cover: { uploadedUrl: url }, name: "A" };
     let tree = renderCover(props);
     const original = coverImg(tree);
@@ -235,14 +219,14 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     expect(renderToStaticMarkup(tree)).toContain('data-cover="uploaded"');
     expect(renderToStaticMarkup(tree)).toContain("background-color:var(--c23-surface)");
 
-    // Broken cache-complete uploaded → sticky fail → fallback pending underlay.
+    // Broken cache-complete uploaded → sticky fail (no illustration filler).
     hooks.slots = [];
     tree = renderCover(props);
     const broken = coverImg(tree);
     if (typeof broken.props.ref === "function") broken.props.ref({ complete: true, naturalWidth: 0 });
     tree = renderCover(props);
-    expect(coverImg(tree).props.src).toBe(venueIllustrationUrl(venueId));
-    expect(renderToStaticMarkup(tree)).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(renderToStaticMarkup(tree)).toContain('data-state="error"');
+    expect(renderToStaticMarkup(tree)).not.toContain("venue-illustrations");
 
     // Fresh url resets failure.
     const urlB = "/v1/media/venue-covers/" + "b".repeat(64) + ".png";
