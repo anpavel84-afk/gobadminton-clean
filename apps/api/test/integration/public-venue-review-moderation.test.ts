@@ -637,8 +637,10 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
       venue_review_decision_id: string | null;
       entity_kind: string;
       approval_id: string;
+      resource_version: number;
     }>(
-      `SELECT b.binding_kind, a.decision, b.venue_review_decision_id, b.entity_kind, b.approval_id
+      `SELECT b.binding_kind, a.decision, b.venue_review_decision_id, b.entity_kind,
+              b.approval_id, b.resource_version
        FROM content_moderation_bindings b
        JOIN content_moderation_approvals a ON a.id = b.approval_id
        WHERE b.entity_id=$1::uuid AND b.binding_kind='publication'`,
@@ -649,7 +651,16 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
       decision: "review",
       entity_kind: "venue_review_revision",
     });
-    expect(publication.rows[0]?.venue_review_decision_id).toBeTruthy();
+    // Publication must bind the published twin's exact resource_version (not submitted tip).
+    expect(publication.rows[0]?.resource_version).toBe(twin.rows[0]!.resource_version);
+    // Decision created by THIS Case approve on the submitted revision (exact_revision_id).
+    const decision = await pool.query<{ id: string }>(
+      `SELECT id FROM venue_review_decisions
+       WHERE case_id=$1::uuid AND decision='approve' AND exact_revision_id=$2::uuid`,
+      [caseId, submittedId],
+    );
+    expect(decision.rowCount).toBe(1);
+    expect(publication.rows[0]?.venue_review_decision_id).toBe(decision.rows[0]!.id);
     // Exact cached approval row reused — not a forged allow / hidden bypass.
     expect(publication.rows[0]?.approval_id).toBe(candidate.rows[0]?.approval_id);
   });
