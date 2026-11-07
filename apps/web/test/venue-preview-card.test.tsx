@@ -93,7 +93,7 @@ it("renders the real cover and region with named keyboard buttons; opens once", 
   expect(uploaded).toContain("opacity:0");
   expect(uploaded.match(/<img /g)).toHaveLength(1);
 });
-it("forwards morph coverFallback and onCoverRetry into VenueGallery", () => {
+it("forwards morph coverFallback, coverReady and onCoverRetry into VenueGallery", () => {
   const onCoverRetry = vi.fn();
   const multi: VenueSummary = {
     ...venue,
@@ -120,6 +120,7 @@ it("forwards morph coverFallback and onCoverRetry into VenueGallery", () => {
       onOpen: vi.fn(),
       coverSlot: <span data-testid="morph-slot" />,
       coverFallback: true,
+      coverReady: true,
       onCoverRetry,
     });
   } finally {
@@ -138,6 +139,7 @@ it("forwards morph coverFallback and onCoverRetry into VenueGallery", () => {
   const gallery = findGallery(tree);
   expect(gallery).toBeTruthy();
   expect(gallery!.props.coverFallback).toBe(true);
+  expect(gallery!.props.coverReady).toBe(true);
   expect(gallery!.props.onCoverRetry).toBe(onCoverRetry);
 });
 it("distinguishes unavailable from checked empty and never shows stale time", () => {

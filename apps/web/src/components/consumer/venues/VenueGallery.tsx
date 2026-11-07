@@ -176,6 +176,7 @@ export function VenueGallery({
   size = "sheet",
   coverSlot,
   coverFallback = false,
+  coverReady = false,
   showCredit = true,
   showSourceCredit = true,
   index: controlledIndex,
@@ -189,6 +190,11 @@ export function VenueGallery({
   coverSlot?: ReactNode;
   /** Shared SelectedVenueCover resource already failed the main loan. */
   coverFallback?: boolean;
+  /**
+   * Shared morph image actually decoded for the current identity.
+   * Slot loan (useMorphSlot) is not readiness — do not invent ready via !fallback / slot presence.
+   */
+  coverReady?: boolean;
   showCredit?: boolean;
   /** Catalog source credit; false in compact select-button parents that render it as a sibling footer. */
   showSourceCredit?: boolean;
@@ -354,11 +360,15 @@ export function VenueGallery({
     ? <VenueSourceCredit catalogSource={catalogSource} />
     : null;
   const allowRetry = size !== "compact";
+  // Sheet/page reserve a fixed photo-credit line so slide changes never jump layout.
+  // Compact thumbs keep credit hidden and must not gain empty spacing.
+  const reservePhotoCredit = Boolean(showCredit && size !== "compact");
 
   if (items.length === 0) {
     // Preserve parent morph/fallback slot when gallery has no items; do not invent photo credit.
     // Source attribution still renders for every presented venue (including empty media).
     // Counts stay 0 — default illustration is cover paint, not a synthetic gallery item.
+    // Zero/no-photo: catalog source only — no reserved photo-credit slot (badge lives in-frame).
     const emptyCredit = sourceCredit ? <div className="gb-venue-gallery__credit">{sourceCredit}</div> : null;
     const legacyCoverUrl = venueCoverUrl(venue.cover?.uploadedUrl);
     if (coverSlot) {
@@ -421,10 +431,38 @@ export function VenueGallery({
   }
 
   const showControls = items.length > 1 && size !== "compact";
+  // Morph pending: shared resource owns the img (no framePending); still reserve caption height.
+  const morphPending = Boolean(useMorphSlot && !coverReady && !imageFailed);
+  const morphReady = Boolean(useMorphSlot && coverReady && !imageFailed);
   // Compact thumbs stay caption-free (aria-busy + skeleton only); sheet/page keep the loading line.
-  const statusText = framePending && size !== "compact"
+  const statusText = (framePending || morphPending) && size !== "compact"
     ? "Загружаем фотографию…"
     : (imageFailed && size === "compact" ? "Фото не загрузилось" : null);
+  // Morph main loan never sets framePending (shared resource owns the img), so without a
+  // reserved slot slide1 stays creditless until swipe reveals a non-morph credit → ~30px jump.
+  // Ready credit only when the current image is actually decoded (gallery load or morph coverReady).
+  const showReadyCredit = Boolean(
+    reservePhotoCredit && current && !imageFailed && (imageReady || morphReady),
+  );
+  const showPendingCredit = Boolean(reservePhotoCredit && !imageFailed && (framePending || morphPending));
+  const showErrorCredit = Boolean(reservePhotoCredit && imageFailed);
+  const photoCredit = reservePhotoCredit ? (
+    <div className="gb-venue-gallery__photo-credit" data-state={
+      showErrorCredit ? "error" : showPendingCredit ? "pending" : showReadyCredit ? "ready" : "empty"
+    }>
+      {showPendingCredit
+        ? <p className="gb-venue-gallery__caption" id={statusId} role="status">Загружаем фотографию…</p>
+        : null}
+      {showErrorCredit
+        ? <p className="gb-venue-gallery__caption">Фотография временно недоступна</p>
+        : null}
+      {showReadyCredit && current
+        ? <span className="gb-venue-gallery__photo-credit-text" title={current.credit.text}>
+            <VenueCoverCredit credit={current.credit} />
+          </span>
+        : null}
+    </div>
+  ) : null;
 
   return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
     <div
@@ -525,10 +563,8 @@ export function VenueGallery({
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>
       </>}
     </div>
-    {(showCredit && current && imageReady) || sourceCredit || (showCredit && framePending && size !== "compact") || (showCredit && imageFailed && size !== "compact") ? <div className="gb-venue-gallery__credit">
-      {showCredit && framePending && size !== "compact" ? <p className="gb-venue-gallery__caption" id={statusId} role="status">Загружаем фотографию…</p> : null}
-      {showCredit && imageFailed && size !== "compact" ? <p className="gb-venue-gallery__caption">Фотография временно недоступна</p> : null}
-      {showCredit && current && imageReady ? <VenueCoverCredit credit={current.credit} /> : null}
+    {reservePhotoCredit || sourceCredit ? <div className="gb-venue-gallery__credit">
+      {photoCredit}
       {sourceCredit}
     </div> : (statusText && size === "compact" && !(imageFailed && !useMorphSlot)
       ? <span id={statusId} className="gb-sr-only" role="status">{statusText}</span>

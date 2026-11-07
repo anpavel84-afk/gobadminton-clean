@@ -34,13 +34,17 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   let name = initialName;
   /** True when the current intended raster failed (uploaded photo or default illustration). */
   let failed = false;
-  /** Current raster src successfully decoded. */
+  /** Current raster src successfully decoded (decode() when available; else load fallback). */
   let loaded = false;
   /** Terminal decode failure for the current intended src. */
   let decodeError = false;
   let generation = 0;
+  /** Generation for which HTMLImageElement.decode() is already in flight (dedupe). */
+  let decodeEpoch = -1;
   let detach: (() => void) | undefined;
   let releaseVersion = 0;
+  /** Bumps on failed/ready/retry so useSyncExternalStore re-renders; not a readiness signal itself. */
+  let syncVersion = 0;
   const listeners = new Set<() => void>();
   const useCourtFallback = !venueId;
   const intendedSrc = () => {
@@ -53,8 +57,15 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
     listeners.add(listener);
     return () => { listeners.delete(listener); };
   };
+  /** Terminal failure of the current intended raster (back-compat for coverFallback). */
   const getSnapshot = () => failed;
-  const emit = () => { for (const listener of listeners) listener(); };
+  /** True only when the current intended raster has decoded successfully. Slot loan ≠ ready. */
+  const getReadySnapshot = () => loaded && !failed;
+  const getSyncSnapshot = () => syncVersion;
+  const emit = () => {
+    syncVersion += 1;
+    for (const listener of listeners) listener();
+  };
   const paint = () => {
     const src = intendedSrc();
     const uploadedPending = Boolean(url && !failed && !loaded);
@@ -100,9 +111,34 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   const applyLoad = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
     if (decodeError || failed) return;
-    loaded = true;
-    failed = false;
-    paint();
+    const expectedSrc = current.getAttribute("src");
+    if (!expectedSrc || expectedSrc !== intendedSrc()) return;
+
+    const finishReady = () => {
+      // Obsolete async completion after generation bump, release, new venue, or src change must not ready/poison.
+      if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
+      if (decodeError || failed) return;
+      if (current.getAttribute("src") !== expectedSrc || expectedSrc !== intendedSrc()) return;
+      const already = loaded && !failed;
+      loaded = true;
+      failed = false;
+      paint();
+      // Notify subscribers so morph credit can appear only after real decode (not on slot loan).
+      if (!already) emit();
+    };
+
+    // Strict decoded readiness when the browser exposes decode(); load/complete alone are insufficient with decoding="async".
+    if (typeof current.decode === "function") {
+      if (decodeEpoch === version) return;
+      decodeEpoch = version;
+      current.decode().then(finishReady, () => {
+        applyError(current, version);
+      });
+      return;
+    }
+
+    // No decode API (FakeDOM / older engines): honest load/complete fallback — not a strict decode guarantee.
+    finishReady();
   };
   const applyError = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
@@ -221,6 +257,8 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
     retry,
     subscribe,
     getSnapshot,
+    getReadySnapshot,
+    getSyncSnapshot,
     rename(value: string) { name = value; paint(); },
   };
 }
@@ -232,13 +270,16 @@ export function useSelectedVenueCover(cityId: string, venue?: { id: string; name
   const resource = useMemo(() => createCover(url, venue?.name ?? "", id), [cityId, id, url]);
   useEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
   useEffect(() => { resource.retain(); return () => resource.release(); }, [resource]);
-  // Subscribe so parents re-render on terminal failure; expose a live getter so
-  // sync readers (and harness checks) see fallback without an extra render turn.
-  useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);
+  // Subscribe to failed/ready/retry; syncVersion changes on each so parents re-render.
+  // Live getters keep harness/sync readers truthful without inventing readiness from slot presence.
+  useSyncExternalStore(resource.subscribe, resource.getSyncSnapshot, resource.getSyncSnapshot);
   return {
     ...resource,
     get fallback() {
       return resource.getSnapshot();
+    },
+    get ready() {
+      return resource.getReadySnapshot();
     },
   };
 }

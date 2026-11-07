@@ -57,8 +57,27 @@ import {
   type GalleryManifest,
   type GalleryVenueRow,
 } from "../venues/venue-gallery-import";
-import { projectVenueMainCover } from "../venues/venue-gallery.service";
+import {
+  applyOrderedGalleryPositions,
+  projectVenueMainCover,
+} from "../venues/venue-gallery.service";
 import { VENUE_GALLERY_MAX } from "../venues/venue-gallery";
+import {
+  buildAcceptedGalleryMaintenanceReceipt,
+  galleryMaintenanceAdmissionKeyHash,
+  galleryMaintenanceItemFingerprint,
+  galleryMaintenanceManifestDigest,
+  planGalleryMaintenanceManifestBind,
+  planGalleryMaintenanceReplay,
+  planGalleryMaintenanceRow,
+  validateGalleryMaintenanceManifest,
+  type AcceptedGalleryMaintenanceReceipt,
+  type GalleryMaintenanceActiveRow,
+  type GalleryMaintenanceItem,
+  type GalleryMaintenanceManifest,
+  type GalleryMaintenanceReport,
+  type GalleryMaintenanceVenueRow,
+} from "../venues/venue-gallery-maintenance";
 
 export function guardImportEnv(env: NodeJS.ProcessEnv): void {
   if (!["mvp","stage"].includes(env.APP_ENV ?? "") || env.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" ||
@@ -738,6 +757,291 @@ export async function importVenueGallery(
   return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
 }
 
+async function loadAcceptedGalleryMaintenanceReceipt(
+  c: Pick<PoolClient, "query">,
+  keyHash: string,
+): Promise<AcceptedGalleryMaintenanceReceipt | undefined> {
+  const row = (await c.query<{ after_diff: Record<string, unknown> }>(
+    `SELECT after_diff FROM privileged_audit_events
+     WHERE idempotency_hash=$1 AND action_key='venue.gallery_reorder'
+       AND reason_code='venue_gallery_maintenance'
+     ORDER BY created_at DESC LIMIT 1`,
+    [keyHash],
+  )).rows[0];
+  const after = row?.after_diff;
+  if (!after || typeof after.fingerprint !== "string" || typeof after.operation !== "string"
+    || typeof after.venueId !== "string" || typeof after.itemIndex !== "number"
+    || !Array.isArray(after.orderedActiveIds) || !Array.isArray(after.removeIds)
+    || !(after.mainId === null || typeof after.mainId === "string")) {
+    return undefined;
+  }
+  return {
+    fingerprint: after.fingerprint,
+    operation: after.operation,
+    venueId: after.venueId,
+    itemIndex: after.itemIndex,
+    orderedActiveIds: after.orderedActiveIds as string[],
+    mainId: after.mainId as string | null,
+    removeIds: after.removeIds as string[],
+  };
+}
+
+async function loadGalleryMaintenanceOperationDigests(
+  c: Pick<PoolClient, "query">,
+  operation: string,
+): Promise<string[]> {
+  const rows = (await c.query<{ digest: string | null }>(
+    `SELECT after_diff->>'digest' AS digest FROM privileged_audit_events
+     WHERE action_key='venue.gallery_reorder'
+       AND reason_code='venue_gallery_maintenance'
+       AND after_diff->>'operation'=$1`,
+    [operation],
+  )).rows;
+  return rows
+    .map((row) => row.digest)
+    .filter((digest): digest is string => typeof digest === "string" && digest.length > 0);
+}
+
+async function loadGalleryMaintenanceActive(
+  c: Pick<PoolClient, "query">,
+  venueId: string,
+  forUpdate = false,
+): Promise<GalleryMaintenanceActiveRow[]> {
+  return (await c.query<GalleryMaintenanceActiveRow>(
+    `SELECT id, position, is_main FROM venue_gallery_items
+     WHERE venue_id=$1 AND active
+     ORDER BY position ASC${forUpdate ? " FOR UPDATE" : ""}`,
+    [venueId],
+  )).rows;
+}
+
+function maintenanceFail(error: unknown): GalleryMaintenanceReport {
+  const body = error instanceof ProblemHttpException ? error.getResponse() : undefined;
+  const code = typeof body === "object" && body !== null && "code" in body ? body.code : undefined;
+  if (typeof code === "string" && /^[A-Z_]{1,80}$/.test(code)) {
+    return { action: "FAILED", reason: code };
+  }
+  const message = error instanceof Error ? error.message : "";
+  if (/^[A-Z_]{1,80}$/.test(message)) return { action: "FAILED", reason: message };
+  return { action: "FAILED", reason: "MAINTENANCE_ROW_FAILED" };
+}
+
+function emitMaintenanceLine(
+  emit: (line: object) => void,
+  item: GalleryMaintenanceItem,
+  itemIndex: number,
+  name: string,
+  result: GalleryMaintenanceReport,
+): void {
+  emit({
+    venueId: item.venueId,
+    name,
+    itemIndex,
+    orderedActiveIds: item.orderedActiveIds,
+    mainId: item.mainId,
+    removeIds: item.removeIds,
+    action: result.action,
+    reason: result.reason,
+  });
+}
+
+/**
+ * Trusted CLI maintenance: reorder / promote MAIN / soft-remove already-approved gallery
+ * rows under exact CAS + identity. No provider/media I/O. Default dry-run is read-only.
+ */
+export async function importVenueGalleryMaintenance(
+  pool: Pool,
+  manifest: GalleryMaintenanceManifest,
+  principalId: string,
+  apply: boolean,
+  emit: (line: object) => void,
+): Promise<number> {
+  const totals = { APPLIED: 0, SKIPPED: 0, FAILED: 0, READY: 0, HOLD: 0 };
+  const currentDigest = galleryMaintenanceManifestDigest(manifest);
+  const operationLease = `venue_gallery_maintenance_v1:${manifest.operation}`;
+  let operationBlocked = false;
+
+  if (!apply) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN READ ONLY");
+      await requireImportActor(client, principalId, false);
+      const retained = await loadGalleryMaintenanceOperationDigests(client, manifest.operation);
+      const manifestBind = planGalleryMaintenanceManifestBind(currentDigest, retained);
+      if (manifestBind) operationBlocked = true;
+      for (let itemIndex = 0; itemIndex < manifest.items.length; itemIndex++) {
+        const item = manifest.items[itemIndex]!;
+        let name = "";
+        let result: GalleryMaintenanceReport;
+        try {
+          if (operationBlocked && manifestBind) {
+            result = itemIndex === 0 ? manifestBind : { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
+          } else {
+            const keyHash = galleryMaintenanceAdmissionKeyHash(manifest.operation, itemIndex);
+            const fingerprint = galleryMaintenanceItemFingerprint(item);
+            const receipt = await loadAcceptedGalleryMaintenanceReceipt(client, keyHash);
+            if (receipt) {
+              result = planGalleryMaintenanceReplay(fingerprint, receipt);
+            } else {
+              const preview = (await client.query<GalleryMaintenanceVenueRow>(galleryVenueSelect, [item.venueId])).rows[0];
+              name = preview?.name ?? "";
+              const active = await loadGalleryMaintenanceActive(client, item.venueId);
+              result = planGalleryMaintenanceRow(preview, item, active);
+            }
+          }
+        } catch (error: unknown) {
+          result = maintenanceFail(error);
+        }
+        totals[result.action]++;
+        emitMaintenanceLine(emit, item, itemIndex, name, result);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    emit({ totals, digest: currentDigest });
+    return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
+  }
+
+  const userId = await requireImportActor(pool, principalId, true);
+  let lockClient: PoolClient | undefined;
+  try {
+    lockClient = await pool.connect();
+    const claimed = (await lockClient.query<{ ok: boolean }>(
+      "SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok",
+      [operationLease],
+    )).rows[0];
+    if (!claimed?.ok) {
+      for (let itemIndex = 0; itemIndex < manifest.items.length; itemIndex++) {
+        const item = manifest.items[itemIndex]!;
+        const result: GalleryMaintenanceReport = { action: "HOLD", reason: "OPERATION_IN_PROGRESS" };
+        totals.HOLD++;
+        emitMaintenanceLine(emit, item, itemIndex, "", result);
+      }
+      emit({ totals, digest: currentDigest });
+      return 1;
+    }
+
+    const retained = await loadGalleryMaintenanceOperationDigests(pool, manifest.operation);
+    const manifestBind = planGalleryMaintenanceManifestBind(currentDigest, retained);
+    if (manifestBind) operationBlocked = true;
+
+    for (let itemIndex = 0; itemIndex < manifest.items.length; itemIndex++) {
+      const item = manifest.items[itemIndex]!;
+      let name = "";
+      let result: GalleryMaintenanceReport;
+      const fingerprint = galleryMaintenanceItemFingerprint(item);
+      const keyHash = galleryMaintenanceAdmissionKeyHash(manifest.operation, itemIndex);
+      try {
+        if (operationBlocked && manifestBind) {
+          result = itemIndex === 0 ? manifestBind : { action: "FAILED", reason: "DEPENDENT_ITEM_FAILED" };
+        } else if (await requireImportActor(pool, principalId, false) !== userId) {
+          throw new Error("IMPORT_ACTOR_REFUSED");
+        } else {
+          const receipt = await loadAcceptedGalleryMaintenanceReceipt(pool, keyHash);
+          if (receipt) {
+            result = planGalleryMaintenanceReplay(fingerprint, receipt);
+          } else {
+            const applied = await adminTransaction(pool, async (c) => {
+              if (await requireImportActor(c, principalId) !== userId) {
+                throw new Error("IMPORT_ACTOR_REFUSED");
+              }
+              await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
+              const liveDigests = await loadGalleryMaintenanceOperationDigests(c, manifest.operation);
+              const liveBind = planGalleryMaintenanceManifestBind(currentDigest, liveDigests);
+              if (liveBind) return liveBind;
+              const terminal = await loadAcceptedGalleryMaintenanceReceipt(c, keyHash);
+              if (terminal) return planGalleryMaintenanceReplay(fingerprint, terminal);
+
+              const current = (await c.query<GalleryMaintenanceVenueRow>(
+                `${galleryVenueSelect} FOR UPDATE`,
+                [item.venueId],
+              )).rows[0];
+              name = current?.name ?? name;
+              const lockedActive = await loadGalleryMaintenanceActive(c, item.venueId, true);
+              const gate = planGalleryMaintenanceRow(current, item, lockedActive);
+              if (gate.action !== "READY" || !current) return gate;
+
+              if (item.removeIds.length > 0) {
+                await c.query(
+                  `UPDATE venue_gallery_items SET active=false, is_main=false, updated_at=now()
+                   WHERE venue_id=$1 AND id = ANY($2::uuid[]) AND active`,
+                  [item.venueId, item.removeIds],
+                );
+              }
+              await c.query(
+                `UPDATE venue_gallery_items SET is_main=false, updated_at=now()
+                 WHERE venue_id=$1 AND active AND is_main`,
+                [item.venueId],
+              );
+              await applyOrderedGalleryPositions(c, item.venueId, item.orderedActiveIds);
+              if (item.mainId) {
+                await c.query(
+                  `UPDATE venue_gallery_items SET is_main=true, updated_at=now()
+                   WHERE id=$1 AND venue_id=$2 AND active`,
+                  [item.mainId, item.venueId],
+                );
+              }
+              await projectVenueMainCover(c, item.venueId);
+              const updated = (await c.query<{ version: number }>(
+                `UPDATE venues SET version=version+1, updated_at=now()
+                 WHERE id=$1 AND version=$2 RETURNING version`,
+                [item.venueId, item.expectedVersion],
+              )).rows[0];
+              if (!updated) throw new Error("VENUE_VERSION_CONFLICT");
+
+              const receiptBody = buildAcceptedGalleryMaintenanceReceipt(manifest, item, itemIndex);
+              const audit = await appendAudit(c, {
+                actor: { principalId, roles: ["superadmin"] },
+                action: "venue.gallery_reorder",
+                targetType: "venue",
+                targetId: item.venueId,
+                permission: "venue.manage",
+                reason: "venue_gallery_maintenance",
+                keyHash,
+                before: { version: current.version },
+                after: {
+                  version: updated.version,
+                  operation: receiptBody.operation,
+                  venueId: receiptBody.venueId,
+                  itemIndex: receiptBody.itemIndex,
+                  fingerprint: receiptBody.fingerprint,
+                  orderedActiveIds: receiptBody.orderedActiveIds,
+                  mainId: receiptBody.mainId,
+                  removeIds: receiptBody.removeIds,
+                  digest: currentDigest,
+                },
+              });
+              await c.query(
+                "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'gallery',$3,$4)",
+                [item.venueId, updated.version, principalId, audit],
+              );
+              return { action: "APPLIED" as const, reason: "MAINTAINED" };
+            });
+            result = { action: applied.action, reason: applied.reason };
+          }
+        }
+      } catch (error: unknown) {
+        result = maintenanceFail(error);
+      }
+      totals[result.action]++;
+      emitMaintenanceLine(emit, item, itemIndex, name, result);
+    }
+  } finally {
+    if (lockClient) {
+      try {
+        await lockClient.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [operationLease]);
+      } catch { /* unlock best-effort */ }
+      lockClient.release();
+    }
+  }
+  emit({ totals, digest: currentDigest });
+  return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
+}
+
 export async function importVenuePublicData(
   pool: Pool,
   manifest: PublicDataManifest,
@@ -944,16 +1248,17 @@ export async function importVenuePublicData(
 
 export async function main(argv:string[], raw:NodeJS.ProcessEnv = process.env):Promise<number> {
   guardImportEnv(raw);
-  const options = new Map<string,string>(); let apply=false; let publicData=false; let gallery=false;
+  const options = new Map<string,string>(); let apply=false; let publicData=false; let gallery=false; let galleryMaintenance=false;
   for (let i=0;i<argv.length;i++) {
     const arg=argv[i];
     if (arg === "--apply" && !apply) {apply=true;continue;}
     if (arg === "--public-data" && !publicData) {publicData=true;continue;}
     if (arg === "--gallery" && !gallery) {gallery=true;continue;}
+    if (arg === "--gallery-maintenance" && !galleryMaintenance) {galleryMaintenance=true;continue;}
     if (!arg || !["--dir","--manifest","--actor-principal-id"].includes(arg) || options.has(arg)) throw new Error("INVALID_ARGUMENTS");
     const value=argv[++i]; if (!value || value.startsWith("--")) throw new Error("INVALID_ARGUMENTS"); options.set(arg,value);
   }
-  if (publicData && gallery) throw new Error("INVALID_ARGUMENTS");
+  if ([publicData, gallery, galleryMaintenance].filter(Boolean).length > 1) throw new Error("INVALID_ARGUMENTS");
   const dir=options.get("--dir"), file=options.get("--manifest"), actor=options.get("--actor-principal-id");
   if (!dir || !file || !actor || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actor)) throw new Error("INVALID_ARGUMENTS");
   if (publicData) {
@@ -961,6 +1266,16 @@ export async function main(argv:string[], raw:NodeJS.ProcessEnv = process.env):P
     const env = loadEnv(raw), { pool } = createDatabase(env.DATABASE_URL);
     try {
       return await importVenuePublicData(pool, manifest, actor, apply, (line) => console.log(JSON.stringify(line)));
+    } finally { await pool.end(); }
+  }
+  if (galleryMaintenance) {
+    // Manifest-only: no image bytes, no moderation provider construction.
+    const manifest = validateGalleryMaintenanceManifest(
+      JSON.parse((await readBatchFile(dir, file, 256 * 1024)).toString("utf8")),
+    );
+    const env = loadEnv(raw), { pool } = createDatabase(env.DATABASE_URL);
+    try {
+      return await importVenueGalleryMaintenance(pool, manifest, actor, apply, (line) => console.log(JSON.stringify(line)));
     } finally { await pool.end(); }
   }
   if (gallery) {
