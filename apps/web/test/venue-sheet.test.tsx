@@ -52,6 +52,7 @@ import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage"
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { CloseButton } from "../src/components/consumer/CloseButton";
 import { GameTerms } from "../src/components/consumer/games/GameDetailComposition";
+import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { formatSeats } from "../src/lib/game-presentation";
 import { venueDays, venueDayLabel } from "../src/lib/venue-popup";
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
@@ -729,4 +730,19 @@ it("keeps local create open through unavailable/empty schedules and keys its dra
   props = { ...props, venue: { ...props.venue, cityId: "other" } }; expect(create().key).not.toBe(next.key);
   (create().props.onClose as () => void)();
   expect(elements(render()).some(element => element.type === CreateGamePage)).toBe(false);
+});
+
+it("forwards morph coverFallback and onCoverRetry into VenueGallery", () => {
+  const onCoverRetry = vi.fn();
+  props = {
+    ...props,
+    coverSlot: <span data-testid="morph-slot" />,
+    coverFallback: true,
+    onCoverRetry,
+  };
+  const gallery = elements(render()).find(node => node.type === VenueGallery);
+  expect(gallery).toBeTruthy();
+  expect(gallery!.props.coverFallback).toBe(true);
+  expect(gallery!.props.onCoverRetry).toBe(onCoverRetry);
+  expect(gallery!.props.coverSlot).toBeTruthy();
 });
