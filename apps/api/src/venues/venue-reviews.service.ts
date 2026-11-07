@@ -1055,6 +1055,31 @@ export class VenueReviewsService {
         } else if (expectedSlotVersion !== null && slot.version !== expectedSlotVersion) {
           throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
         }
+        // Mirror writeRevision withdrawn + 14-day/appeal window BEFORE paid assess.
+        if (slot?.status === "withdrawn") {
+          throw conflict("WITHDRAWN_SLOT", "Слот после отзыва не открывается повторно этим путём");
+        }
+        const win = await this.loadSubmitWindow(
+          client,
+          userId,
+          body.gameId,
+          adm.canonicalVenueId,
+        );
+        const firstEligibleAt = win.firstEligibleAt ?? adm.firstEligibleCandidate;
+        if (!firstEligibleAt) {
+          throw unprocessable("VENUE_ELIGIBILITY_ANCHOR_MISSING", "Нет подтверждённого допуска");
+        }
+        if (
+          !withinSubmitWindow({
+            firstEligibleAt,
+            now: new Date(),
+            appealOpen: win.appealOpen,
+            remainingMsAtAppeal: win.remainingMsAtAppeal,
+            windowDeadlineAt: win.windowDeadlineAt,
+          })
+        ) {
+          throw unprocessable("VENUE_WINDOW_CLOSED", "Срок подачи истёк");
+        }
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");

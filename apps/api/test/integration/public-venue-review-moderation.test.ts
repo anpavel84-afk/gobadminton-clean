@@ -592,7 +592,8 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
       },
     });
     expect(decide.statusCode).toBe(200);
-    expect(fake.textCalls).toBeGreaterThan(0);
+    // Soft candidate already cached classification=review; approve reuses it (no new provider I/O).
+    expect(fake.textCalls).toBe(0);
 
     const slot = await pool.query<{
       status: string;
@@ -615,8 +616,13 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
     expect(twin.rows[0]?.lifecycle).toBe("published");
     expect(twin.rows[0]?.body_text).toBe(text);
 
-    const candidate = await pool.query(
-      `SELECT b.binding_kind, a.decision, b.venue_review_decision_id
+    const candidate = await pool.query<{
+      binding_kind: string;
+      decision: string;
+      venue_review_decision_id: string | null;
+      approval_id: string;
+    }>(
+      `SELECT b.binding_kind, a.decision, b.venue_review_decision_id, b.approval_id
        FROM content_moderation_bindings b
        JOIN content_moderation_approvals a ON a.id = b.approval_id
        WHERE b.entity_id=$1::uuid AND b.binding_kind='candidate'`,
@@ -630,8 +636,9 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
       decision: string;
       venue_review_decision_id: string | null;
       entity_kind: string;
+      approval_id: string;
     }>(
-      `SELECT b.binding_kind, a.decision, b.venue_review_decision_id, b.entity_kind
+      `SELECT b.binding_kind, a.decision, b.venue_review_decision_id, b.entity_kind, b.approval_id
        FROM content_moderation_bindings b
        JOIN content_moderation_approvals a ON a.id = b.approval_id
        WHERE b.entity_id=$1::uuid AND b.binding_kind='publication'`,
@@ -643,6 +650,8 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
       entity_kind: "venue_review_revision",
     });
     expect(publication.rows[0]?.venue_review_decision_id).toBeTruthy();
+    // Exact cached approval row reused — not a forged allow / hidden bypass.
+    expect(publication.rows[0]?.approval_id).toBe(candidate.rows[0]?.approval_id);
   });
 
   it("0064 surfaces and venue decision FK exist; role XOR preserved", async () => {
@@ -737,5 +746,139 @@ describeIntegration("MOD-V2-B1c public venue-review moderation", () => {
     });
     expect(stale.statusCode).toBe(409);
     expect(fake.textCalls).toBe(0);
+  });
+
+  it("expired submit window rejects revise before provider; zero textCalls", async () => {
+    const { res, gameId, venueId } = await submitPublic("Текст до закрытия окна подачи");
+    expect(res.statusCode).toBe(200);
+    const reviewId = res.json().id as string;
+    const version = res.json().version as number;
+    // Mutable window companion closes after fence is set (fence itself stays immutable).
+    await pool.query(
+      `UPDATE venue_review_submit_windows
+       SET window_deadline_at = clock_timestamp() - interval '1 day',
+           updated_at = clock_timestamp()
+       WHERE author_user_id = $1 AND game_id = $2 AND canonical_venue_id = $3`,
+      [participant.userId, gameId, venueId],
+    );
+    const text = "Ревизия после закрытого окна";
+    const topics = ["surface"];
+    fake.textCalls = 0;
+    const beforeRevisions = (
+      await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM venue_review_revisions`)
+    ).rows[0]!.n;
+    const beforeBindings = (
+      await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM content_moderation_bindings`)
+    ).rows[0]!.n;
+    const beforeIntakes = (
+      await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM venue_review_pending_intakes`)
+    ).rows[0]!.n;
+    const revise = await app.inject({
+      method: "POST",
+      url: `/v1/me/venue-reviews/${reviewId}/commands`,
+      headers: headers(participant),
+      payload: {
+        action: "submit_revision",
+        expectedVersion: version,
+        gameId,
+        audience: "public_venue",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text,
+        topics,
+        consentProjectionHash: projectionHash({
+          canonicalVenueId: venueId,
+          audience: "public_venue",
+          text,
+          topics,
+        }),
+      },
+    });
+    expect(revise.statusCode).toBe(422);
+    expect(revise.json().code).toBe("VENUE_WINDOW_CLOSED");
+    expect(fake.textCalls).toBe(0);
+    expect(
+      (await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM venue_review_revisions`))
+        .rows[0]!.n,
+    ).toBe(beforeRevisions);
+    expect(
+      (
+        await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM content_moderation_bindings`)
+      ).rows[0]!.n,
+    ).toBe(beforeBindings);
+    expect(
+      (
+        await pool.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM venue_review_pending_intakes`,
+        )
+      ).rows[0]!.n,
+    ).toBe(beforeIntakes);
+  });
+
+  it("withdrawn slot rejects public revise before provider; zero textCalls", async () => {
+    const { res, gameId, venueId } = await submitPublic(
+      "Текст до отзыва для preflight-withdrawn",
+    );
+    expect(res.statusCode).toBe(200);
+    const reviewId = res.json().id as string;
+    const version = res.json().version as number;
+    const withdrawn = await app.inject({
+      method: "POST",
+      url: `/v1/me/venue-reviews/${reviewId}/commands`,
+      headers: headers(participant),
+      payload: { action: "withdraw", expectedVersion: version },
+    });
+    expect(withdrawn.statusCode).toBe(200);
+    const nextVersion = withdrawn.json().version as number;
+    const text = "Повтор после отзыва не должен вызывать провайдера";
+    const topics = ["surface"];
+    fake.textCalls = 0;
+    const beforeRevisions = (
+      await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM venue_review_revisions`)
+    ).rows[0]!.n;
+    const beforeBindings = (
+      await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM content_moderation_bindings`)
+    ).rows[0]!.n;
+    const beforeIntakes = (
+      await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM venue_review_pending_intakes`)
+    ).rows[0]!.n;
+    const retry = await app.inject({
+      method: "POST",
+      url: `/v1/me/venue-reviews/${reviewId}/commands`,
+      headers: headers(participant),
+      payload: {
+        action: "submit_revision",
+        expectedVersion: nextVersion,
+        gameId,
+        audience: "public_venue",
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        text,
+        topics,
+        consentProjectionHash: projectionHash({
+          canonicalVenueId: venueId,
+          audience: "public_venue",
+          text,
+          topics,
+        }),
+      },
+    });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json().code).toBe("WITHDRAWN_SLOT");
+    expect(fake.textCalls).toBe(0);
+    expect(
+      (await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM venue_review_revisions`))
+        .rows[0]!.n,
+    ).toBe(beforeRevisions);
+    expect(
+      (
+        await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM content_moderation_bindings`)
+      ).rows[0]!.n,
+    ).toBe(beforeBindings);
+    expect(
+      (
+        await pool.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM venue_review_pending_intakes`,
+        )
+      ).rows[0]!.n,
+    ).toBe(beforeIntakes);
   });
 });

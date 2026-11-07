@@ -87,14 +87,19 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/подпис|фото|галере|обслуживан/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/площадк|отзыв|проверк|человек/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/подпис|галере|обслуживан|9 фото|4 площад/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(
+      /площадк|проверк.*текст|независим.*человек|сам по себе не публику|личн.*черновик/i,
+    );
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce|138|140/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /остальн|не заявля|опубликован|времен|мест|отложен|приёмк|юридическ/i,
+      /комментари|сообщен|аватар|времен|мест|отложен|приёмк|юридическ/i,
+    );
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
+      /#507|\bB2\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
     );
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
