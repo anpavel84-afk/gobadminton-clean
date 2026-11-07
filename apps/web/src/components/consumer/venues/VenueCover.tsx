@@ -86,6 +86,8 @@ export function VenueCover({ cover, className = "", name = "площадки", f
       alt={`Обложка: ${name}`}
       loading="lazy"
       decoding="async"
+      draggable={false}
+      onDragStart={(event) => { event.preventDefault(); }}
       style={uploadedPending ? { opacity: 0 } : undefined}
       ref={(node) => {
         if (!node || !url || !gatePending || failed === url || loaded === url) return;
@@ -116,6 +118,8 @@ export function VenueCover({ cover, className = "", name = "площадки", f
       alt={fallbackAlt}
       loading="lazy"
       decoding="async"
+      draggable={false}
+      onDragStart={(event) => { event.preventDefault(); }}
       style={fallbackPending || fallbackError ? { opacity: 0 } : undefined}
       ref={(node) => {
         if (!node || !gatePending || loaded === fallbackSrc || fallbackError) return;

@@ -364,6 +364,55 @@ describe("VenueGallery", () => {
     expect(galleryCapture.has(3)).toBe(true);
   });
 
+  it("disables native HTML image drag so horizontal swipe is not pointercancelled", () => {
+    class FakeImage { decoding = ""; src = ""; }
+    vi.stubGlobal("Image", FakeImage);
+    const multi = venue([
+      { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+      { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } },
+    ]);
+    const galleryCapture = new Set<number>();
+    const galleryTarget = {
+      className: "gb-venue-gallery",
+      setPointerCapture: (id: number) => galleryCapture.add(id),
+      hasPointerCapture: (id: number) => galleryCapture.has(id),
+      releasePointerCapture: (id: number) => galleryCapture.delete(id),
+    };
+    resetHooks();
+    const tree = VenueGallery({ venue: multi, size: "sheet" });
+    function walk(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+      if (!isValidElement<Record<string, unknown>>(node)) return [];
+      return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(walk)];
+    }
+    const nodes = walk(tree);
+    const img = nodes.find(node => node.type === "img");
+    expect(img).toBeTruthy();
+    expect(img!.props.draggable).toBe(false);
+    const preventDefault = vi.fn();
+    (img!.props.onDragStart as (e: { preventDefault: () => void }) => void)({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    // Existing fixture: horizontal lock then pointercancel must clear drag (no late pointerup advance).
+    const galleryNode = nodes.find(node => node.props.className === "gb-venue-gallery");
+    const indexSlot = hooks.slots[0] as number;
+    expect(galleryNode).toBeTruthy();
+    (galleryNode!.props.onPointerDown as (e: unknown) => void)({
+      pointerId: 7, button: 0, clientX: 200, clientY: 100, currentTarget: galleryTarget, target: { closest() { return null; } },
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (galleryNode!.props.onPointerMove as (e: unknown) => void)({
+      pointerId: 7, clientX: 140, clientY: 102, currentTarget: galleryTarget,
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    });
+    (galleryNode!.props.onPointerCancel as (e: unknown) => void)({
+      pointerId: 7, currentTarget: galleryTarget,
+    });
+    (galleryNode!.props.onPointerUp as (e: unknown) => void)({
+      pointerId: 7, clientX: 140, clientY: 102, currentTarget: galleryTarget, stopPropagation: vi.fn(),
+    });
+    expect(hooks.slots[0]).toBe(indexSlot);
+  });
+
   it("integrates gallery with morph slot in preview instead of bypassing", () => {
     const morph = <span data-testid="morph-slot" className="gb-venue-preview-cover" />;
     const html = ssr(<VenuePreviewCard

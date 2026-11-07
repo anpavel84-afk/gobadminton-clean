@@ -78,10 +78,17 @@ class Node extends EventTarget {
   attributes = new Map<string, string>();
   style: Record<string, unknown> = {};
   className = ""; textContent = ""; alt = ""; loading = ""; decoding = "";
+  /** HTMLImageElement default is draggable; gallery morph must clear it before src. */
+  draggable = true;
   srcWrites: string[] = []; source = ""; captured = new Set<number>();
   complete = false; naturalWidth = 0;
   constructor(readonly tag = "div") { super(); }
-  set src(value: string) { expect(this.loading).toBe("eager"); expect(this.decoding).toBe("async"); this.srcWrites.push(value); this.source = value; this.attributes.set("src", value); }
+  set src(value: string) {
+    expect(this.loading).toBe("eager");
+    expect(this.decoding).toBe("async");
+    expect(this.draggable).toBe(false);
+    this.srcWrites.push(value); this.source = value; this.attributes.set("src", value);
+  }
   get src() { return this.source; }
   setAttribute(key: string, value: string) { this.attributes.set(key, value); }
   getAttribute(key: string) { return this.attributes.get(key) ?? null; }
@@ -260,6 +267,7 @@ function expectFailedOrEmpty(slot: Node | null | undefined, state: "error" | "em
 beforeEach(() => { city = "city"; venue = { id: "venue", name: "Зал", cover: { uploadedUrl: uploaded } }; info = false; });
 it("creates eager/async before src and moves the same image through load/open/close/open/name refresh", () => {
   const renderer = mount(() => <Selected />); const image = imageAt();
+  expect(image.draggable).toBe(false);
   expect(image.srcWrites).toEqual([uploaded]); expect(image.alt).toBe("Обложка: Зал");
   expect(image.parentNode?.className).toBe("gb-venue-cover gb-venue-preview-cover");
   expectPendingSkeleton(image.parentNode, "uploaded");

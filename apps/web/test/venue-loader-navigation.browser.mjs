@@ -138,14 +138,30 @@ try {
   await page.keyboard.press("ArrowLeft");
   assert.equal(await count.textContent(), "1/2");
 
-  // Horizontal swipe on the media frame (not the buttons) still changes the index.
-  const frame = page.locator(".gb-venue-media .gb-venue-gallery__frame");
-  const frameBox = await frame.boundingBox();
-  assert.ok(frameBox);
-  await page.mouse.move(frameBox.x + frameBox.width * 0.7, frameBox.y + frameBox.height / 2);
+  // Horizontal swipe starts on the gallery IMG (native HTML drag must not pointercancel).
+  const photo = page.locator(`.gb-venue-media img[src="${imageA}"]`);
+  await photo.waitFor();
+  assert.equal(await photo.evaluate((node) => node instanceof HTMLImageElement && node.draggable === false), true);
+  const imgBox = await photo.boundingBox();
+  assert.ok(imgBox);
+  await page.evaluate(() => {
+    const root = document.querySelector(".gb-venue-media");
+    if (!root) return;
+    const trace = [];
+    window.__gbSwipeTrace = trace;
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "dragstart"]) {
+      root.addEventListener(type, (event) => {
+        trace.push({ type: event.type, target: event.target && event.target.nodeName });
+      }, true);
+    }
+  });
+  await page.mouse.move(imgBox.x + imgBox.width * 0.7, imgBox.y + imgBox.height / 2);
   await page.mouse.down();
-  await page.mouse.move(frameBox.x + frameBox.width * 0.2, frameBox.y + frameBox.height / 2, { steps: 8 });
+  await page.mouse.move(imgBox.x + imgBox.width * 0.2, imgBox.y + imgBox.height / 2, { steps: 8 });
   await page.mouse.up();
+  const swipeTrace = await page.evaluate(() => window.__gbSwipeTrace || []);
+  assert.equal(swipeTrace.some((event) => event.type === "dragstart"), false, "native image dragstart must not fire");
+  assert.equal(swipeTrace.some((event) => event.type === "pointercancel"), false, "pointercancel must not abort swipe");
   assert.equal(await count.textContent(), "2/2", "horizontal swipe advances");
 
   // Single image: actual VenueGallery must not invent arrows.

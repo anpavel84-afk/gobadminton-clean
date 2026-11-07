@@ -398,6 +398,8 @@ export function VenueGallery({
               alt={`Обложка: ${venue.name}`}
               loading="eager"
               decoding="async"
+              draggable={false}
+              onDragStart={(event) => { event.preventDefault(); }}
               style={framePending ? { opacity: 0 } : undefined}
               ref={(node) => {
                 if (!node || !current || loadedSrc === current.url) return;

@@ -183,6 +183,9 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
       image = document.createElement("img");
       image.loading = "eager";
       image.decoding = "async";
+      // Gallery borrows this morph img; native HTML drag would pointercancel horizontal swipe.
+      image.draggable = false;
+      image.addEventListener("dragstart", (event) => { event.preventDefault(); });
       paint();
       // Sticky uploaded failure waits for explicit retry(); no-media has no src.
       if (!(failed && url) && intendedSrc()) source();
