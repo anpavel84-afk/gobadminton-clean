@@ -375,6 +375,42 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
     expect(still.version).toBe(1);
   });
 
+  it("paid comment reject same-key seals 422 receipt; replay provider0", async () => {
+    const { gameId } = await createPublishedGame(author);
+    const url = `/v1/games/${gameId}/comments`;
+    const idem = key();
+    const text = "Комментарий с отказом провайдера для durable receipt";
+    fake.textFixture = async (input) => flaggedTextBatch(input.texts.length);
+    fake.textCalls = 0;
+    const rejected = await app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text, parentCommentId: null },
+    });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(rejected.json().fields?.text).toBeTruthy();
+    expect(fake.textCalls).toBe(1);
+    const receipt = await pool.query<{ status_code: number; reservation_state: string }>(
+      `SELECT status_code, reservation_state FROM idempotency_records
+       WHERE actor_id=$1 AND operation='comments.create' AND status_code=422`,
+      [author.userId],
+    );
+    expect(receipt.rows[0]?.reservation_state).toBe("completed");
+    expect(receipt.rows[0]?.status_code).toBe(422);
+    const replay = await app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text, parentCommentId: null },
+    });
+    expect(replay.statusCode).toBe(422);
+    expect(replay.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(replay.json().fields?.text).toBe(rejected.json().fields?.text);
+    expect(fake.textCalls).toBe(1);
+  });
+
   it("unauthorized/blocked/stale and venue closed do not call provider", async () => {
     const { gameId, venueId } = await createPublishedGame(author);
     const url = `/v1/games/${gameId}/comments`;

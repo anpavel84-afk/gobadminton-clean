@@ -301,14 +301,20 @@ export class AdminService {
       if (row.reservation_state === "unknown") {
         this.throwSealedAdminUnknown(row.response_ciphertext);
       }
+      if (row.reservation_state === "error") {
+        this.throwSealedAdminKnownReject(row.response_ciphertext);
+      }
       if (!row.response_ciphertext) throw commandInProgress();
       return JSON.parse(openSecret(this.pepper,row.response_ciphertext)) as T;
     });
   }
   /**
    * Same-key fence before paid admin external preparation (classifier / media).
-   * At most one worker prepares; authorized completed receipts replay with zero
-   * provider I/O; processing/unknown never TTL-reclaim into a second paid call.
+   * authorizeReplayScope always runs (session/RBAC/assignment/independence) before
+   * disclosing a receipt. Matching completed/error receipts replay with zero
+   * provider I/O and without requiring expectedCaseVersion still current.
+   * authorizeNewPublication (version/pending/consent/eligibility) runs only on miss.
+   * processing/unknown/error never TTL-reclaim into a second paid call.
    * Keeps Admin session/step-up/origin/CSRF/RBAC — does not use consumer ActorFence.
    */
   async privilegedRunWithExternalPrepare<TPrep, T>(
@@ -318,7 +324,8 @@ export class AdminService {
     stepup: boolean,
     operation: string,
     input: object,
-    authorizePreflight: (client: PoolClient, actor: AdminActor) => Promise<void>,
+    authorizeReplayScope: (client: PoolClient, actor: AdminActor) => Promise<void>,
+    authorizeNewPublication: (client: PoolClient, actor: AdminActor) => Promise<void>,
     prepare: () => Promise<TPrep>,
     execute: (
       client: PoolClient,
@@ -335,7 +342,7 @@ export class AdminService {
     const fingerprint = this.hash(JSON.stringify({ operation, input }));
     const claim = await adminTransaction(this.pool, async (client) => {
       const actor = await this.actor(client, request, true, permission, stepup);
-      await authorizePreflight(client, actor);
+      await authorizeReplayScope(client, actor);
       const previous = (
         await client.query<{
           fingerprint: string;
@@ -357,12 +364,16 @@ export class AdminService {
         if (previous.reservation_state === "unknown") {
           this.throwSealedAdminUnknown(previous.response_ciphertext);
         }
+        if (previous.reservation_state === "error") {
+          this.throwSealedAdminKnownReject(previous.response_ciphertext);
+        }
         if (!previous.response_ciphertext) throw commandInProgress();
         return {
           kind: "replay" as const,
           body: JSON.parse(openSecret(this.pepper, previous.response_ciphertext)) as T,
         };
       }
+      await authorizeNewPublication(client, actor);
       const claimNonce = randomUUID();
       const expiresAt = new Date(Date.now() + ADMIN_EXTERNAL_PREPARE_RESERVATION_TTL_MS);
       const inserted = await client.query<{ actor_id: string }>(
@@ -450,6 +461,17 @@ export class AdminService {
       typeof body.status === "number" ? body.status : HttpStatus.SERVICE_UNAVAILABLE;
     throw new HttpException(body, status);
   }
+  private throwSealedAdminKnownReject(responseCiphertext: string | null): never {
+    if (!responseCiphertext) throw commandInProgress();
+    const body = JSON.parse(openSecret(this.pepper, responseCiphertext)) as {
+      status?: number;
+      code?: string;
+    };
+    const status =
+      typeof body.status === "number" ? body.status : HttpStatus.UNPROCESSABLE_ENTITY;
+    // Known paid classification reject — never return Problem JSON as typed success.
+    throw new HttpException(body, status);
+  }
   private async afterAdminExternalPrepareFailure(
     principalId: string,
     keyHash: string,
@@ -457,6 +479,16 @@ export class AdminService {
     claimNonce: string,
     error: unknown,
   ): Promise<void> {
+    if (isAdminPaidClassificationReject(error)) {
+      await this.sealAdminExternalKnownReject(
+        principalId,
+        keyHash,
+        fingerprint,
+        claimNonce,
+        error,
+      ).catch(() => undefined);
+      return;
+    }
     if (shouldReleaseAdminExternalPrepareClaim(error)) {
       await this.pool
         .query(
@@ -478,6 +510,46 @@ export class AdminService {
       ).catch(() => undefined);
     }
     // Ambiguous non-HTTP / CIP: leave processing; never reclaim after soft TTL.
+  }
+  private async sealAdminExternalKnownReject(
+    principalId: string,
+    keyHash: string,
+    fingerprint: string,
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    const httpStatus =
+      error instanceof HttpException
+        ? error.getStatus()
+        : HttpStatus.UNPROCESSABLE_ENTITY;
+    const response =
+      error instanceof HttpException
+        ? error.getResponse()
+        : {
+            type: "about:blank",
+            title: "Измените текст и попробуйте снова",
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: "PUBLIC_TEXT_CONTENT_REJECTED",
+          };
+    const body =
+      typeof response === "object" && response !== null
+        ? { ...(response as Record<string, unknown>), status: httpStatus }
+        : { status: httpStatus, detail: response };
+    await this.pool.query(
+      `UPDATE admin_command_receipts
+       SET reservation_state='error',
+           response_ciphertext=$5,
+           expires_at=NULL
+       WHERE actor_id=$1 AND key_hash=$2 AND fingerprint=$3
+         AND claim_nonce=$4 AND reservation_state='processing'`,
+      [
+        principalId,
+        keyHash,
+        fingerprint,
+        claimNonce,
+        sealSecret(this.pepper, JSON.stringify(body)),
+      ],
+    );
   }
   private async sealAdminExternalUnknown(
     principalId: string,
@@ -546,6 +618,9 @@ export class AdminService {
         if (previous.reservation_state === "processing") throw commandInProgress();
         if (previous.reservation_state === "unknown") {
           this.throwSealedAdminUnknown(previous.response_ciphertext);
+        }
+        if (previous.reservation_state === "error") {
+          this.throwSealedAdminKnownReject(previous.response_ciphertext);
         }
         if (!previous.response_ciphertext) throw commandInProgress();
         return JSON.parse(openSecret(this.pepper, previous.response_ciphertext)) as T;
@@ -1144,6 +1219,9 @@ export class AdminService {
         if (previous.reservation_state === "unknown") {
           this.throwSealedAdminUnknown(previous.response_ciphertext);
         }
+        if (previous.reservation_state === "error") {
+          this.throwSealedAdminKnownReject(previous.response_ciphertext);
+        }
         if (!previous.response_ciphertext) throw commandInProgress();
         return JSON.parse(
           openSecret(this.pepper, previous.response_ciphertext),
@@ -1383,21 +1461,36 @@ export class AdminService {
   }
 }
 
+function adminHttpExceptionCode(error: unknown): string {
+  if (!(error instanceof HttpException)) return "";
+  const response = error.getResponse();
+  if (typeof response === "object" && response && "code" in response) {
+    return String((response as { code?: unknown }).code ?? "");
+  }
+  return "";
+}
+
+/** Known paid classification hard-reject — durable error receipt, never release/re-pay. */
+function isAdminPaidClassificationReject(error: unknown): boolean {
+  return (
+    error instanceof HttpException &&
+    error.getStatus() === HttpStatus.UNPROCESSABLE_ENTITY &&
+    adminHttpExceptionCode(error) === "PUBLIC_TEXT_CONTENT_REJECTED"
+  );
+}
+
 function shouldReleaseAdminExternalPrepareClaim(error: unknown): boolean {
   if (!(error instanceof HttpException)) return false;
+  if (isAdminPaidClassificationReject(error)) return false;
   const status = error.getStatus();
   if (status === HttpStatus.SERVICE_UNAVAILABLE) return false;
   if (status === HttpStatus.CONFLICT) {
-    const code =
-      typeof error.getResponse() === "object" &&
-      error.getResponse() &&
-      "code" in (error.getResponse() as object)
-        ? String((error.getResponse() as { code?: unknown }).code ?? "")
-        : "";
+    const code = adminHttpExceptionCode(error);
     if (code === "COMMAND_IN_PROGRESS") return false;
     // Domain VERSION_CONFLICT / KEY_REUSED after prepare: release so a new key can proceed.
     return true;
   }
+  // Ordinary unpaid validation / authz / 429 beforeAttempt: release — not paid UNKNOWN.
   return status >= 400 && status < 500;
 }
 

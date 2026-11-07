@@ -61,8 +61,11 @@ type ExternalPrepareInput<TPrep, T> = {
  * claim_nonce, runs prepare outside any transaction, then completes or
  * releases only under that exact owner token. Ambiguous/503 provider
  * outcomes seal reservation_state=unknown (no TTL reclaim / paid replay).
- * Concurrent same-key workers see COMMAND_IN_PROGRESS / KEY_REUSED before
- * provider I/O. Multi-instance authority is the Postgres UNIQUE row.
+ * Known paid PUBLIC_TEXT_CONTENT_REJECTED seals a durable completed 422
+ * receipt (replay same problem status/fields, zero provider). Ordinary
+ * unpaid 4xx/429 release the claim. Concurrent same-key workers see
+ * COMMAND_IN_PROGRESS / KEY_REUSED before provider I/O. Multi-instance
+ * authority is the Postgres UNIQUE row.
  */
 @Injectable()
 export class MutationRunner {
@@ -128,6 +131,10 @@ export class MutationRunner {
     claimNonce: string,
     error: unknown,
   ): Promise<void> {
+    if (isPaidClassificationReject(error)) {
+      await this.sealExternalKnownReject(input, claimNonce, error).catch(() => undefined);
+      return;
+    }
     if (shouldReleaseExternalPrepareClaim(error)) {
       await this.releaseExternalClaim(input, claimNonce).catch(() => undefined);
       return;
@@ -265,13 +272,14 @@ export class MutationRunner {
       const claimNonce = randomUUID();
       const expiresAt = new Date(Date.now() + EXTERNAL_PREPARE_RESERVATION_TTL_MS);
 
-      // Reclaim only expired COMPLETED receipts — never processing or unknown.
-      // Unknown/processing rows preserve paid-attempt history and block replay.
+      // Reclaim only expired successful COMPLETED receipts — never processing,
+      // unknown, or durable known-reject (status_code >= 400) paid history.
       await client.query(
         `DELETE FROM idempotency_records
          WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
            AND reservation_state = 'completed'
-           AND expires_at <= now()`,
+           AND expires_at <= now()
+           AND COALESCE(status_code, 200) < 400`,
         [input.actorId, input.operation, keyHash],
       );
 
@@ -328,11 +336,18 @@ export class MutationRunner {
       }
       if (row.expires_at.getTime() <= Date.now()) {
         // Expired completed — delete and reclaim in a follow-up retry.
+        // Known error (4xx) receipts must not TTL-reclaim into a second paid call.
+        if (row.status_code != null && row.status_code >= 400) {
+          await input.authorizeReplay(client, undefined as unknown as T);
+          await client.query("COMMIT");
+          throw replaySealedKnownReject(row.status_code, row.response_body);
+        }
         await client.query(
           `DELETE FROM idempotency_records
            WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
              AND reservation_state = 'completed'
-             AND expires_at <= now()`,
+             AND expires_at <= now()
+             AND COALESCE(status_code, 200) < 400`,
           [input.actorId, input.operation, keyHash],
         );
         await client.query("COMMIT");
@@ -340,6 +355,13 @@ export class MutationRunner {
       }
       if (row.status_code === null || row.response_body === null) {
         throw new Error("completed idempotency receipt missing status/body");
+      }
+      // Known paid classification reject: reauthorize by request resource IDs only —
+      // never pass Problem JSON as typed success or return 200+Problem.
+      if (row.status_code >= 400) {
+        await input.authorizeReplay(client, undefined as unknown as T);
+        await client.query("COMMIT");
+        throw replaySealedKnownReject(row.status_code, row.response_body);
       }
       await input.authorizeReplay(client, row.response_body);
       await client.query("COMMIT");
@@ -452,6 +474,58 @@ export class MutationRunner {
     );
   }
 
+  private async sealExternalKnownReject(
+    input: {
+      actorId: string;
+      operation: string;
+      key: string;
+      requestHash: string;
+    },
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    const keyHash = this.idempotency.keyHash(input.key);
+    const status =
+      error instanceof HttpException
+        ? error.getStatus()
+        : HttpStatus.UNPROCESSABLE_ENTITY;
+    const body =
+      error instanceof HttpException
+        ? error.getResponse()
+        : {
+            type: "about:blank",
+            title: "Измените текст и попробуйте снова",
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: "PUBLIC_TEXT_CONTENT_REJECTED",
+          };
+    // Durable completed ERROR receipt — same-key replay returns exact 422, no provider.
+    // Long TTL; do not reclaim like ordinary success after expiry (see claimExternalOnce).
+    const expiresAt = new Date(Date.now() + IDEMPOTENCY_COMPLETED_TTL_MS);
+    await this.pool.query(
+      `UPDATE idempotency_records
+       SET reservation_state = 'completed',
+           status_code = $5,
+           response_body = $6::jsonb,
+           expires_at = $7
+       WHERE actor_id = $1
+         AND operation = $2
+         AND key_hash = $3
+         AND request_hash = $4
+         AND claim_nonce = $8
+         AND reservation_state = 'processing'`,
+      [
+        input.actorId,
+        input.operation,
+        keyHash,
+        input.requestHash,
+        status,
+        JSON.stringify(body),
+        expiresAt,
+        claimNonce,
+      ],
+    );
+  }
+
   private async sealExternalUnknown(
     input: {
       actorId: string;
@@ -503,12 +577,31 @@ export class MutationRunner {
   }
 }
 
+function httpExceptionCode(error: unknown): string {
+  if (!(error instanceof HttpException)) return "";
+  const response = error.getResponse();
+  if (typeof response === "object" && response && "code" in response) {
+    return String((response as { code?: unknown }).code ?? "");
+  }
+  return "";
+}
+
+/** Known paid classification hard-reject — durable 422 receipt, never release/re-pay. */
+function isPaidClassificationReject(error: unknown): boolean {
+  return (
+    error instanceof HttpException &&
+    error.getStatus() === HttpStatus.UNPROCESSABLE_ENTITY &&
+    httpExceptionCode(error) === "PUBLIC_TEXT_CONTENT_REJECTED"
+  );
+}
+
 function shouldReleaseExternalPrepareClaim(error: unknown): boolean {
   if (!(error instanceof HttpException)) {
     // Ambiguous non-HTTP failure after prepare may follow a paid attempt —
     // keep the durable claim until explicit owner release or unknown seal.
     return false;
   }
+  if (isPaidClassificationReject(error)) return false;
   const status = error.getStatus();
   if (
     status === HttpStatus.SERVICE_UNAVAILABLE ||
@@ -516,18 +609,13 @@ function shouldReleaseExternalPrepareClaim(error: unknown): boolean {
   ) {
     // 503: unknown/unavailable provider outcome. CONFLICT includes
     // COMMAND_IN_PROGRESS (keep) and domain conflicts released below via code.
-    const code =
-      typeof error.getResponse() === "object" &&
-      error.getResponse() &&
-      "code" in (error.getResponse() as object)
-        ? String((error.getResponse() as { code?: unknown }).code ?? "")
-        : "";
+    const code = httpExceptionCode(error);
     if (status === HttpStatus.SERVICE_UNAVAILABLE) return false;
     if (code === "COMMAND_IN_PROGRESS") return false;
     // VERSION_CONFLICT / other domain 409 after prepare: release so a new key can proceed.
     return true;
   }
-  // Known client/authz/validation outcomes: release and allow a fresh attempt.
+  // Ordinary unpaid validation / authz / 429 beforeAttempt: release — not paid UNKNOWN.
   return status >= 400 && status < 500;
 }
 
@@ -546,6 +634,24 @@ function replaySealedUnknown(
     return new HttpException(responseBody, statusCode);
   }
   return commandInProgress();
+}
+
+function replaySealedKnownReject(
+  statusCode: number,
+  responseBody: unknown,
+): HttpException {
+  if (responseBody != null) {
+    return new HttpException(responseBody, statusCode);
+  }
+  return new HttpException(
+    {
+      type: "about:blank",
+      title: "Измените текст и попробуйте снова",
+      status: statusCode,
+      code: "PUBLIC_TEXT_CONTENT_REJECTED",
+    },
+    statusCode,
+  );
 }
 
 function sleep(ms: number): Promise<void> {

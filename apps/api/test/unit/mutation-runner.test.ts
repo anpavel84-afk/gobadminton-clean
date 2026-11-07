@@ -55,7 +55,9 @@ function makeStore() {
       if (
         row &&
         row.reservation_state === "completed" &&
-        row.expires_at.getTime() <= Date.now()
+        row.expires_at.getTime() <= Date.now() &&
+        // Paid known-reject receipts (status >= 400) are never reclaimed.
+        (row.status_code == null || row.status_code < 400)
       ) {
         rows.delete(keyHash);
         return { rows: [], rowCount: 1 };
@@ -461,7 +463,65 @@ describe("MutationRunner.runWithExternalPrepare", () => {
     expect(completePrepareCalls).toBe(1);
   });
 
-  it("known 4xx releases claim so a corrected same-key attempt can prepare once", async () => {
+  it("paid PUBLIC_TEXT_CONTENT_REJECTED seals durable 422; same-key replays without provider", async () => {
+    const store = makeStore();
+    const { runner } = makeRunner(store.query);
+    let prepareCalls = 0;
+    const problem = {
+      type: "about:blank",
+      title: "Отклонено",
+      status: 422,
+      code: "PUBLIC_TEXT_CONTENT_REJECTED",
+      fields: { text: "Измените формулировку" },
+    };
+    const authorizeReplay = vi.fn(async () => undefined);
+    const input = {
+      actorId: actor.userId,
+      sessionId: actor.sessionId,
+      operation: "comments.create",
+      key: "unit-4xx-paid-reject",
+      requestHash: "hash-4xx-paid",
+      authorizeReplay,
+      prepare: async () => {
+        prepareCalls += 1;
+        throw new HttpException(problem, HttpStatus.UNPROCESSABLE_ENTITY);
+      },
+      execute: async () => ({ statusCode: 201, body: { id: "should-not" } }),
+    };
+
+    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({
+      status: 422,
+      response: expect.objectContaining({
+        code: "PUBLIC_TEXT_CONTENT_REJECTED",
+        fields: { text: "Измените формулировку" },
+      }),
+    });
+    expect(prepareCalls).toBe(1);
+    expect(store.rows.size).toBe(1);
+    const sealed = [...store.rows.values()][0]!;
+    expect(sealed.reservation_state).toBe("completed");
+    expect(sealed.status_code).toBe(422);
+    expect(sealed.response_body).toMatchObject({
+      code: "PUBLIC_TEXT_CONTENT_REJECTED",
+      fields: { text: "Измените формулировку" },
+    });
+
+    authorizeReplay.mockClear();
+    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({
+      status: 422,
+      response: expect.objectContaining({
+        code: "PUBLIC_TEXT_CONTENT_REJECTED",
+        fields: { text: "Измените формулировку" },
+      }),
+    });
+    expect(prepareCalls).toBe(1);
+    expect(authorizeReplay).toHaveBeenCalledTimes(1);
+    // Problem JSON must not be passed as typed success body.
+    const replayArgs = authorizeReplay.mock.calls[0] as unknown as unknown[];
+    expect(replayArgs[1]).toBeUndefined();
+  });
+
+  it("ordinary unpaid 409 still releases claim for a fresh same-key attempt", async () => {
     const store = makeStore();
     const { runner } = makeRunner(store.query);
     let prepareCalls = 0;
@@ -469,8 +529,8 @@ describe("MutationRunner.runWithExternalPrepare", () => {
       actorId: actor.userId,
       sessionId: actor.sessionId,
       operation: "comments.create",
-      key: "unit-4xx-release",
-      requestHash: "hash-4xx",
+      key: "unit-409-release",
+      requestHash: "hash-409",
       authorizeReplay: vi.fn(async () => undefined),
       prepare: async () => {
         prepareCalls += 1;
@@ -478,25 +538,25 @@ describe("MutationRunner.runWithExternalPrepare", () => {
           throw new HttpException(
             {
               type: "about:blank",
-              title: "Отклонено",
-              status: 422,
-              code: "PUBLIC_TEXT_CONTENT_REJECTED",
+              title: "Конфликт",
+              status: 409,
+              code: "VERSION_CONFLICT",
             },
-            HttpStatus.UNPROCESSABLE_ENTITY,
+            HttpStatus.CONFLICT,
           );
         }
         return { approval: true };
       },
-      execute: async () => ({ statusCode: 201, body: { id: "after-correct" } }),
+      execute: async () => ({ statusCode: 201, body: { id: "after-conflict" } }),
     };
 
-    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({ status: 422 });
+    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({ status: 409 });
     expect(prepareCalls).toBe(1);
     expect(store.rows.size).toBe(0);
 
     await expect(runner.runWithExternalPrepare(input)).resolves.toEqual({
       statusCode: 201,
-      body: { id: "after-correct" },
+      body: { id: "after-conflict" },
     });
     expect(prepareCalls).toBe(2);
   });

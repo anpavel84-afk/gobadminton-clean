@@ -613,8 +613,9 @@ export class AdminRoleReputationService {
       actorUserId: string;
     } | null = null;
 
-    // Authorize + expectedCaseVersion + consent/independence + same-key receipt claim
-    // BEFORE paid assess. Concurrent same-key losers get CIP with zero provider I/O.
+    // Replay scope (assignment/independence) before disclosing receipt.
+    // New-publication gates (case version / current pending / consent) only on miss.
+    // Concurrent same-key losers get CIP with zero provider I/O.
     return this.admin.privilegedRunWithExternalPrepare<
       ReviewTextBatchAssessment,
       {
@@ -636,9 +637,6 @@ export class AdminRoleReputationService {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
         }
         const caze = await this.scopedCase(client, actor, caseId);
-        if (caze.version !== input.expectedCaseVersion) {
-          throw conflict("VERSION_CONFLICT", "Версия обращения устарела");
-        }
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
@@ -656,6 +654,48 @@ export class AdminRoleReputationService {
           actor,
           await this.independenceForBound(client, slot, bound.pending, gameIds),
         );
+      },
+      async (client, actor) => {
+        const caze = await this.scopedCase(client, actor, caseId);
+        if (caze.version !== input.expectedCaseVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия обращения устарела");
+        }
+        if (caze.assigned_to !== actor.principalId) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
+        }
+        const bound = await this.loadBoundLink(client, caseId);
+        this.assertBoundRevision(bound.pending, input);
+        const slot = (
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [
+            bound.slot_id,
+          ])
+        ).rows[0];
+        if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+        // Approve target must still be the current pending revision BEFORE paid assess.
+        // Restore uses approved-tip rules inside assertCurrentPublishGates — not pending.
+        if (publishDecision === "approve") {
+          if (input.targetKind === "review") {
+            if (slot.pending_revision_id !== input.exactRevisionId) {
+              throw conflict(
+                "REVISION_NOT_CURRENT",
+                "Редакция не является текущей ожидающей",
+              );
+            }
+          } else {
+            const reply = (
+              await client.query<{ pending_revision_id: string | null }>(
+                `SELECT pending_revision_id FROM role_review_replies WHERE slot_id=$1`,
+                [slot.id],
+              )
+            ).rows[0];
+            if (!reply || reply.pending_revision_id !== input.exactRevisionId) {
+              throw conflict(
+                "REVISION_NOT_CURRENT",
+                "Редакция не является текущей ожидающей",
+              );
+            }
+          }
+        }
         const rev = await this.consumerReputation.loadRevisionPublicText(client, {
           targetKind: input.targetKind,
           revisionId: input.exactRevisionId,

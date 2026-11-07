@@ -663,6 +663,13 @@ describeIntegration("MOD-V2-B1b public role-review moderation", () => {
       "expires_at",
       "reservation_state",
     ]);
+    const receiptState = await pool.query<{ consrc: string }>(
+      `SELECT pg_get_constraintdef(oid) AS consrc
+       FROM pg_constraint
+       WHERE conrelid = 'public.admin_command_receipts'::regclass
+         AND conname = 'admin_command_receipts_reservation_state_chk'`,
+    );
+    expect(receiptState.rows[0]?.consrc).toMatch(/error/);
     // Source must not open new public venue/player comments in this pass.
     const venueWrite = await app.inject({
       method: "POST",
@@ -1009,5 +1016,170 @@ describeIntegration("MOD-V2-B1b public role-review moderation", () => {
       [reviewer.id],
     );
     expect(still.rows.some((r) => r.claim_nonce === ownerNonce)).toBe(true);
+  });
+
+  it("obsolete pending review approve: REVISION_NOT_CURRENT before provider (provider0)", async () => {
+    const text = "Организация встречи была несогласованной по времени и корту";
+    const { res } = await submitReview(text);
+    expect(res.statusCode).toBe(200);
+    const revisionId = (
+      await pool.query<{ pending_revision_id: string }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [res.json().id],
+      )
+    ).rows[0]!.pending_revision_id;
+    await stripClassifierEvidence(revisionId);
+    const { caseId, source } = await intakeAssignedCase(res.json().id);
+    // Legacy obsolete: pending tip moved away from the exact revision under review.
+    await pool.query(
+      `UPDATE role_review_slots SET pending_revision_id=NULL WHERE id=$1`,
+      [res.json().id],
+    );
+    fake.textCalls = 0;
+    const obsolete = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        action: "role_review_decide",
+        expectedCaseVersion: source.caseVersion,
+        expectedResourceVersion: source.reviewRevision.resourceVersion,
+        targetKind: "review",
+        exactRevisionId: source.reviewRevision.id,
+        decision: "approve",
+        rationale: "obsolete pending must not pay",
+        reasonCode: "operations_review",
+      },
+    });
+    expect(obsolete.statusCode).toBe(409);
+    expect(obsolete.json().code).toBe("REVISION_NOT_CURRENT");
+    expect(fake.textCalls).toBe(0);
+  });
+
+  it("admin paid hard-reject seals error receipt; same-key replays 422 with provider0", async () => {
+    const text = "Коммуникация по правилам площадки была путаной и запоздалой";
+    const { res } = await submitReview(text);
+    expect(res.statusCode).toBe(200);
+    const revisionId = (
+      await pool.query<{ pending_revision_id: string }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [res.json().id],
+      )
+    ).rows[0]!.pending_revision_id;
+    await stripClassifierEvidence(revisionId);
+    const { caseId, source } = await intakeAssignedCase(res.json().id);
+    const idem = randomUUID();
+    fake.textFixture = async (input) =>
+      flaggedTextBatch(input.texts.length, "sexual/minors");
+    fake.textCalls = 0;
+    const payload = {
+      action: "role_review_decide",
+      expectedCaseVersion: source.caseVersion,
+      expectedResourceVersion: source.reviewRevision.resourceVersion,
+      targetKind: "review",
+      exactRevisionId: source.reviewRevision.id,
+      decision: "approve",
+      rationale: "paid reject must seal durable error",
+      reasonCode: "operations_review",
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(first.statusCode).toBe(422);
+    expect(first.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(first.json().fields?.text).toBeTruthy();
+    expect(fake.textCalls).toBe(1);
+    const sealed = await pool.query<{ reservation_state: string }>(
+      `SELECT reservation_state FROM admin_command_receipts
+       WHERE actor_id=$1 AND reservation_state='error'`,
+      [reviewer.id],
+    );
+    expect(sealed.rowCount).toBe(1);
+    const replay = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(replay.statusCode).toBe(422);
+    expect(replay.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(replay.json().fields?.text).toBe(first.json().fields?.text);
+    expect(fake.textCalls).toBe(1);
+  });
+
+  it("consumer role hard-reject same-key replays 422 with provider0", async () => {
+    const editText = "Повтор того же жёсткого отказа без второго вызова";
+    const first = await submitReview("Нейтральный принятый отзыв до жёсткого отказа");
+    expect(first.res.statusCode).toBe(200);
+    const reviewId = first.res.json().id as string;
+    const version = first.res.json().version as number;
+    const consentProjectionHash = projectionHash({
+      subjectUserId: organizer.userId,
+      role: "organization",
+      audience: "public",
+      text: editText,
+      topics: ["agreements"],
+    });
+    const idem = randomUUID();
+    fake.textFixture = async (input) =>
+      flaggedTextBatch(input.texts.length, "sexual/minors");
+    fake.textCalls = 0;
+    const payload = {
+      action: "submit_revision",
+      expectedVersion: version,
+      gameId: first.gameId,
+      expectedBasisVersions: {
+        proofVersion: 2,
+        outcomeVersion: 1,
+        attendanceVersion: 1,
+      },
+      text: editText,
+      topics: ["agreements"],
+      consentProjectionHash,
+    };
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${reviewId}/commands`,
+      headers: { ...headers(participant), "idempotency-key": idem },
+      payload,
+    });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(fake.textCalls).toBe(1);
+    const receipt = await pool.query<{ status_code: number; reservation_state: string }>(
+      `SELECT status_code, reservation_state FROM idempotency_records
+       WHERE actor_id=$1 AND operation='role_review.command'
+         AND status_code=422`,
+      [participant.userId],
+    );
+    expect(receipt.rows[0]?.reservation_state).toBe("completed");
+    expect(receipt.rows[0]?.status_code).toBe(422);
+    const replay = await app.inject({
+      method: "POST",
+      url: `/v1/me/role-reviews/${reviewId}/commands`,
+      headers: { ...headers(participant), "idempotency-key": idem },
+      payload,
+    });
+    expect(replay.statusCode).toBe(422);
+    expect(replay.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(fake.textCalls).toBe(1);
   });
 });

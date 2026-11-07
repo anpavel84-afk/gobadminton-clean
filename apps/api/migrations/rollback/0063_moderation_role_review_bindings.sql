@@ -5,8 +5,9 @@
 -- or dropping the human-decision column would reject retained publication /
 -- decision / audit history after any B1b review intake. Non-destructive.
 -- Also retains additive admin_command_receipts reservation_state / claim_nonce /
--- expires_at columns and nullable response_ciphertext so completed ciphertext
--- history and in-flight/unknown paid-attempt fences stay intact.
+-- expires_at columns and nullable response_ciphertext so completed/error
+-- ciphertext history and in-flight/unknown paid-attempt fences stay intact.
+-- reservation_state may include 'error' for durable known paid classification rejects.
 -- Never rewrites 0061/0062. Never deletes or falsifies approval/binding rows.
 
 DELETE FROM schema_migrations WHERE id = '0063_moderation_role_review_bindings';

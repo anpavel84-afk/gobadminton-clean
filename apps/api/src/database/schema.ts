@@ -597,6 +597,7 @@ export const adminCommandReceipts = pgTable("admin_command_receipts", {
   keyHash: text("key_hash").notNull(),
   fingerprint: text("fingerprint").notNull(),
   responseCiphertext: text("response_ciphertext"),
+  /** completed|processing|unknown|error — error seals known paid 422 rejects. */
   reservationState: text("reservation_state").notNull().default("completed"),
   claimNonce: text("claim_nonce"),
   expiresAt: timestamp("expires_at", {withTimezone:true}),

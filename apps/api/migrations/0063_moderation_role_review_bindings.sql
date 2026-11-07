@@ -100,7 +100,7 @@ ALTER TABLE admin_command_receipts
 
 ALTER TABLE admin_command_receipts
   ADD CONSTRAINT admin_command_receipts_reservation_state_chk
-  CHECK (reservation_state IN ('completed', 'processing', 'unknown'));
+  CHECK (reservation_state IN ('completed', 'processing', 'unknown', 'error'));
 
 ALTER TABLE admin_command_receipts
   ADD COLUMN IF NOT EXISTS claim_nonce text NULL;
@@ -118,13 +118,13 @@ ALTER TABLE admin_command_receipts
 ALTER TABLE admin_command_receipts
   ADD CONSTRAINT admin_command_receipts_response_state_chk
   CHECK (
-    (reservation_state = 'completed' AND response_ciphertext IS NOT NULL)
+    (reservation_state IN ('completed', 'error') AND response_ciphertext IS NOT NULL)
     OR (reservation_state IN ('processing', 'unknown'))
   );
 
 COMMENT ON COLUMN admin_command_receipts.reservation_state IS
-  '#506 B1b admin external-prepare: completed|processing|unknown. Unknown/processing are never TTL-reclaimed for a second paid provider attempt. Old rows default completed.';
+  '#506 B1b admin external-prepare: completed|processing|unknown|error. Error = durable known paid classification reject (replay same 422, zero provider). Unknown/processing/error are never TTL-reclaimed for a second paid provider attempt. Old rows default completed.';
 COMMENT ON COLUMN admin_command_receipts.claim_nonce IS
-  '#506 B1b opaque owner token for processing→complete/release/unknown; wrong-owner finalization denied.';
+  '#506 B1b opaque owner token for processing→complete/release/unknown/error; wrong-owner finalization denied.';
 COMMENT ON COLUMN admin_command_receipts.expires_at IS
   '#506 B1b soft marker only for processing/unknown observability; never authorizes paid replay reclaim.';
