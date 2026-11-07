@@ -1,44 +1,33 @@
-# Handoff — #501 Visual QA push discoverability / label (source only)
+# Handoff — #501 Visual QA push discoverability (denied visibility + alpha.44)
 
-**Assignment:** `OWNER_VISUAL501_NARROW_COPY_PRUNE_AND_RELEASE43`
-**Author:** cursor:auto · attempt 2 · base `e25fe3ff0da796cf8c974e49c5d0e0266c4a32b7`
-**Refs:** #501 · intermediate source `42156972` (kept, not published) · GoBad comments 6705710554 / 6706369141
-**Facts:** alpha.40/41 item2 profile button wrap **PASS**; item1 settings discoverability **FAIL**
+**Assignment:** `OWNER_MEDIA_WEBP_ALL_SURFACES_AND_CONFIRMED_501_DENIED_FIX_RELEASE44`
+**Author:** cursor:auto · attempt 6 · base `83ddeb3e1bda95f1d5003d089cadcf2e501c0aba`
+**Refs:** #501 · #406 · combined bounded candidate for DEV.44
 **Route:** `/profile/settings` (push)
-**App candidate:** **0.1.0-alpha.43** / API **0.37.0** — `source_sha` null · Owner UAT **NOT_TESTED** until real acceptance
-**UAT:** Owner / Go Bad / physical iPhone = **NOT_TESTED**
+**App candidate:** **0.1.0-alpha.44** / API **0.37.0** — `source_sha` null · Owner UAT **NOT_TESTED**
+**UAT:** Owner / Go Bad / physical iPhone / provider = **NOT_TESTED**
 
-## Scope (narrow copy + prune)
+## Actual alpha.43 browser FAIL (installed DEV; not product PASS)
 
-1. General block heading / `aria-label`: «Уведомления» (eyebrow «Настройки»).
-2. Master OFF / pre-consent: discoverability hint that after enabling notifications the user can **separately** choose invitations, applications/cancellations, and «Подведите итоги».
-3. Visible canonical iPhone Home Screen helper before the permission gesture (no new popup/flow/component).
-4. Message-consent button copy unchanged: «Включить уведомления о сообщениях». Canonical event toggles stay inline (optional `eventPreferences?.[key]`, default OFF); no helper extract; no consent/session/API/SW/client behavior changes.
-5. `players.css` restored to source-base `fd917` for `.editable-section-header` (no new UI styles; do **not** claim profile button CSS repair — already PASS on alpha.40/41).
+Trusted server ACCEPTED receipt for 43: PR #504 / SHA `4614a000` / `r42372648654-a1` / `accepted_at` `2026-11-07T12:33:39Z` — **server ACCEPTED**, not UI PASS.
 
-## Not claimed
+Installed-43 browser receipt (`visual501-alpha43-installed-browser/receipt.json`): `Notification.permission='denied'`, master OFF, title «Уведомления», **no** game/iPhone discoverability copy. Root cause: `showMasterOffHints` excluded `capability === "denied"`. Corrective **44** pending — **not** already PASS.
 
-- Profile «Изменить» wrap repair (already accepted).
-- New notification types or permission models.
-- Alpha.42 venue WebP / Slow4G receipts (historical ACCEPTED PR #503 / `a72905b8` / `r42369478229-a1` only).
+## Scope this pass
+
+1. Remove **only** the `capability !== "denied"` visibility exclusion so game/postgame + iPhone pre-consent copy stays visible when the browser already blocked notifications (same real GoBad case). Preserve featureAvailable / master-OFF condition, retired return, disabled permission button, enable handler (still no opt-in when denied), session fences, defaults.
+2. Do **not** make browser permission “ready”; do not change fixture expectations to force PASS; keep inline game fieldset / default OFF; no helper refactor; no profile CSS.
+3. Regression: denied pre-consent SSR shows discoverability + iPhone copy; message-consent label unchanged; no `requestPermission` / auto-permission. Existing SSR case remains labeled as SSR (not live API-ready).
+4. Root expected readback after DEV.44: readonly GET fixtures ready OFF/ON at 390/1280 with `Notification.permission=denied`, writes 0; no auth/provider/iPhone fiction.
 
 ## Paths touched (allowed only)
 
 - `apps/web/src/components/consumer/push/PushSettings.tsx`
-- `apps/web/src/styles/players.css`
 - `apps/web/test/web-push.test.tsx`
-- `apps/web/src/lib/releases.ts`
-- `apps/web/src/lib/releases.test.ts`
-- `apps/web/test/releases.test.tsx`
-- `apps/web/test/releases-server.test.ts`
+- `apps/web/src/lib/releases.ts` (+ tests) — alpha.44 notes; exact 43 server seed appended (51→52 deployments)
 - `docs/handoffs/visual501-push-copy.md`
-
-## Checks (author lane)
-
-- Targeted `web-push.test.tsx`: SSR/pre-consent discoverability + iPhone copy; baseline consent/session/fence assertions; helper-only master-ON test removed with extraction prune.
-- Release literals: historical alpha.42 seed exact (`accepted_at` `2026-11-07T11:55:54Z`); deployments 50→51; current alpha.43 notes #501-only Russian copy.
-- No new dependencies / network / Git publish / runtime / PROD.
+- `docs/handoffs/media406-webp-expansion.md`
 
 ## Status
 
-Source candidate only — before independent QA / Product CI / DEV.43. Independent Sol Medium QA → Product CI → merge `dev` → server DEV ACCEPTED → readonly browser 390/1280. Go Bad closes visual-qa Issue only after real PASS. No CI/DEV ACCEPTED / READY / Mode B claim by author.
+Source candidate only — **no independent 44 QA yet**. Independent Codex Sol Medium → Product CI → merge `dev` → server DEV ACCEPTED → actual HTTP/GUI hints readback. Go Bad closes visual-qa Issue only after real PASS. No PROD / Mode B / full product PASS claim. Prior 43 UI FAIL retained separately from server ACCEPTED seed.

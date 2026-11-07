@@ -306,9 +306,9 @@ export function PushSettings({ me }: Props) {
   })();
 
   // Loading (push null) and master-OFF with feature available: explain separate game/postgame choices + iPhone Home Screen.
+  // Visible before consent even when Notification.permission is already "denied" (GoBad #501 / alpha.43 browser FAIL).
   const showMasterOffHints =
-    capability !== "denied" &&
-    (push == null || (push.featureAvailable && !push.preferenceEnabled));
+    push == null || (push.featureAvailable && !push.preferenceEnabled);
 
   return (
     <section className="profile-section" data-surface="push-settings" aria-label="Уведомления">
