@@ -561,16 +561,19 @@ describeIntegration("MOD-V2-A public text moderation", () => {
     );
     expect(pubBindings.rowCount).toBeGreaterThan(0);
     expect(pubBindings.rows.map((row) => row.entity_id)).toEqual(
-      Array(pubBindings.rowCount).fill(gameId),
+      Array.from({ length: pubBindings.rows.length }, () => gameId),
     );
     expect(pubBindings.rows.map((row) => row.resource_version)).toEqual(
-      Array(pubBindings.rowCount).fill(publishedVersion),
+      Array.from({ length: pubBindings.rows.length }, () => publishedVersion),
     );
     expect(pubBindings.rows.map((row) => row.policy_version)).toEqual(
-      Array(pubBindings.rowCount).fill(PUBLIC_TEXT_POLICY_VERSION),
+      Array.from(
+        { length: pubBindings.rows.length },
+        () => PUBLIC_TEXT_POLICY_VERSION,
+      ),
     );
     expect(pubBindings.rows.map((row) => row.decision)).toEqual(
-      Array(pubBindings.rowCount).fill("allow"),
+      Array.from({ length: pubBindings.rows.length }, () => "allow"),
     );
     expect(pubBindings.rows.map((row) => row.surface_key)).toEqual([
       "game_host_display_name",

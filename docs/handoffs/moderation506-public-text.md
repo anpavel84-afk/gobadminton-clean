@@ -1,89 +1,66 @@
-# Handoff · Issue #506 · MOD-V2-A public text (author pass 6 · actualprovider batch contract)
+# Handoff · Issue #506 · MOD-V2-A public text (author pass 7 · test-only type binding arrays)
 
-Bounded repair on frozen base
-`3e62b19a2a7c4ae177a175d89f34ea3aa985812a` (OWNER506_A_ACTUAL_PROVIDER_BATCH_CONTRACT_FIX,
-attempt 6). Prior pass-5 location eligibility and earlier game-authority /
-actor/session/caps/replay preflight repairs remain accepted. No DONE / QA /
-CI / DEV / UAT claims from this source pass.
+Bounded TEST-ONLY repair on frozen base
+`de07de0a03c75364e56b43197afed2f9e3b4e7b0`
+(OWNER506_A_TEST_TYPECHECK_EXACT_BINDING_ARRAYS, attempt 7).
+Prior pass-6 actual-provider batch contract (`string[]` wire) and earlier
+repairs remain accepted and **untouched**. No DONE / QA / CI / DEV / UAT
+claims from this source pass.
 
-## Proven transport failure (parent DEV probe)
+## Proven typecheck failure (input material)
 
-Parent ran exactly one authorised safe synthetic DEV transport probe
-(no private text, approval writes, or app publication). Evidence:
-`text-batch-transport-once.json` (sha256
-`0f21e719ef2fd422bdcb376b9a40db4212da38eb9a4e7f7aee6ea28af5a823a1`).
+`host-api-typecheck.log` (sha256
+`161531d0d41c041bccd9e2aa89c07ade740c98a761eb5e09e814cffce7260fd6`):
 
-Wire format under test: current candidate
-`array_of_text_objects` — `input: [{type:"text",text}, …]` for **two**
-fields.
+- `public-text-moderation.test.ts(564,40): error TS2345` — `string` not
+  assignable to `number` (`.fill(gameId)`)
+- `(570,40): error TS2345` — `.fill(PUBLIC_TEXT_POLICY_VERSION)`
+- `(573,40): error TS2345` — `.fill("allow")`
 
-Actual provider response:
+Cause: `Array(pubBindings.rowCount)` with `rowCount: number | null`
+resolved to the rest-args overload → element type `number | null`, so
+`.fill(string)` failed. Actual HTTP public-5 tests and Radar70 PASS are
+parent facts; this pass only repairs the typed expected-array construction.
 
-- `http_status`: 200
-- `response_model`: `omni-moderation-2024-09-26` (pinned)
-- `result_count`: **1** (not 2)
-- `flagged`: `[false]`
+## Pass-7 concrete repair
 
-So multimodal-shaped text object arrays are **one** combined moderation
-request, not an independent text batch. `parseTextResponse(raw, expected=2)`
-then throws schema → public multi-field updates surface as **503**.
-Prior unit fixture that returned two results while asserting
-`item.type === "text"` masked the wrong wire format; that failure evidence
-is preserved here and must not be treated as historical PASS.
+1. `public-text-moderation.test.ts` — publication binding expectations still
+   assert `rowCount > 0` and the same entity_id / resource_version /
+   policy_version / decision / surface_key values. Expected arrays now use
+   `Array.from({ length: pubBindings.rows.length }, () => …)` so length is
+   a definite `number` and element type matches the filled value. No
+   `any` / `@ts-ignore` / silencing casts. No assertion removed or widened.
 
-Official primary create contract:
-https://developers.openai.com/api/reference/resources/moderations/methods/create
-— `input string[]` for independent text batch vs multimodal `object[]`.
-
-## Pass-6 concrete repair
-
-1. `openai-provider.ts` — `moderateTexts` now sends
-   `input: Array.from(input.texts)` (ordinary `string[]`, exact order/count).
-   Image multimodal payload, pinned model, strict
-   `parseTextResponse(..., expected)`, budgets/deadline/retry/error
-   handling unchanged. No collapse of fields into one decision; expected
-   result cardinality remains `texts.length`.
-
-2. `text-moderation.test.ts` — adapter mock asserts exact `string[]`
-   payload equal to the batch texts, rejects multimodal-shaped
-   `{type:"text"}` batch items, and still requires response
-   cardinality/strict parsing (fixture length 2 for two inputs).
+2. Pass-6 `openai-provider` / `text-moderation` unit contract and all other
+   production sources: **not modified**.
 
 ## Author sandbox status
 
-- Edits limited to allowed paths only (openai-provider + text-moderation
-  unit test + this handoff).
-- No live provider/network, credentials, Git, runtime, or root used here.
-- Affected unit tests and corrected positive safe probe on installed
-  adapter are for parent later; independent delta QA / Product CI / DEV
-  not claimed.
-- Pass-5 location source unchanged; no other code/architecture/deps/
-  releases.
-- Attempts / FAIL / UNKNOWN / model route costs preserved; no fake
-  all-PASS / DEV claim.
+- Allowed paths only: integration test + this handoff.
+- No production / deps / architecture / release / provider / Git / runtime.
+- Parent owns: actual `tsc --noEmit`, affected unit/integration delta, and
+  independent QA. No fake PASS / CI / DEV from author.
 
 ## Parent next (exact)
 
 ```bash
-# From CLEAN repo after trusted integrate of pass-6 paths:
+# From CLEAN repo after trusted integrate of pass-7 paths:
 cd apps/api
-pnpm exec vitest run test/unit/text-moderation.test.ts
-# Then one authorised corrected safe synthetic DEV string[] probe
-# (expect HTTP200 + model pinned + results.length === requested_inputs)
-# Then independent delta QA → Product CI → DEV (UAT=NOT_TESTED)
+pnpm exec tsc --noEmit
+# Then affected unit / independent delta QA on the integration binding
+# assertions (public text moderation publication bindings).
+# Then Product CI → DEV (UAT=NOT_TESTED) when gates green.
 ```
 
 Focus checks for delta QA:
 
-- Text-only batch wire body is `string[]` in exact input order
-- Multimodal `{type:"text"}` object batch is not used for text-only
-- `parseTextResponse` still requires `results.length === texts.length`
-- Image moderation request shape unchanged
-- Prior location eligibility preflight (pass 5) untouched
+- TS2345 at lines 564/570/573 gone without casts
+- `rowCount` still asserted positive
+- Expected entity / version / policy / decision / surfaces unchanged
+- Pass-6 `string[]` text batch wire form untouched
 
 ## Still not claimed
 
 - Overall PASS/DONE from source author
 - Independent QA / Product CI / DEV ACCEPTED
-- Corrected live probe success (parent owns)
 - Mode B binding / AGY author / PROD
