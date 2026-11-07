@@ -1,59 +1,53 @@
 # #406 Venue loader skeleton + desktop gallery arrows
 
-- From: source author (Cursor Auto), integrated test/notes pass 9 with #506
-- To: independent delta QA (Codex Sol Medium by default); parent host for
-  affected tests/types/lint/browser, then CI → guarded DEV after combined
-  alpha.45 candidate
+- From: source author (Cursor Auto), #506 pass 10 browser-only
+- To: parent host rerun of this script on loopback candidate archive, then
+  independent delta QA → CI → guarded DEV
 - Date: 2026-11-07
-- Status: WORKING_DRAFT / READY_FOR_INDEPENDENT_DELTA_QA. Not ACCEPTED,
+- Status: WORKING_DRAFT / READY_FOR_PARENT_BROWSER_RERUN. Not ACCEPTED,
   not independent QA PASS, not CI, not DEV release, not Owner UAT.
-- Assignment: `OWNER506_406_INTEGRATED_ALPHA45_TEST_AND_RELEASE_NOTES_ONLY`,
-  attempt 9, integrated HEAD `0a568b129abe45f06eede3d8a62843b3e098764c`
-  (#406 UI `789f3a8d…` already merged; this pass = remaining 2 test findings
-  + shared alpha.45 notes only)
+- Assignment: `OWNER406_REAL_BROWSER_REGRESSION_REMOVE_SOURCE_TEXT_FALSE_POSITIVE`,
+  attempt 10, base `98685c07af807f6bdd408fead67961c0b7d39c19`
 - Git writes / live runtime / DB / provider / credentials / deploy / installs:
   not performed (forbidden in this source slice)
-- Combined with #506 public-text gates into one alpha.45; no second release
-  number. No #507 / Mode B / future availability claim.
+- Allowed paths only: browser script + this handoff. No production/API/
+  metadata/deps/CI changes.
 
 ## Independent QA inputs actually read
 
-- Delta QA `final.txt` (FAIL @ `789f3a8d…`): (1) browser static preflight
-  `/racket|ellipse…/` forbids legitimate `racket-v1.webp` before Playwright;
-  (2) venue-sheet.test.tsx:126 still expects legacy `data-cover="default"`.
-- Parent actual-component browser receipt @ `789f3a8d…`: PASS native mouse,
-  nested SVG prev, keyboard, 390 tap, static skeleton, zero-gallery, no
-  overflow — on loopback candidate React app only (not installed DEV/UAT).
+- Final integration QA `final.txt` (FAIL @ `98685c07…`): ONE test-only HIGH —
+  browser preflight `/shimmer/i` matches a CSS *comment* in `games.css`
+  («no spinner/shimmer/equipment SVG») before Playwright starts. Production
+  API/UI, fixture repairs, 185 web tests/types/lint, 17 representative PG
+  tests already accepted. Prior overly broad racket filename assertion already
+  fixed. Not a product/style defect.
 
-## Exact repairs (this pass — tests + notes only)
+## Exact repairs (this pass — browser + handoff only)
 
-1. `venue-loader-navigation.browser.mjs` — narrow static preflight to reject
-   inline equipment SVG / `ellipse cx="78"` (and `<svg>…racket|ellipse`);
-   assert published `/discovery/venue-illustrations/racket-v1.webp` allowed.
-   Keep native Playwright mouse/SVG/key/touch/skeleton/empty on real
-   VenueGallery (not copied DOM/handlers); no skipBrowser.
-2. `venue-sheet.test.tsx` — no-media sheet asserts neutral
-   «Фотографии площадки пока нет» + `data-state="empty"`; retain dialog /
-   focus / overflow / ESC. Drop legacy `data-cover="default"`.
-3. Shared `CURRENT_NAMED_RELEASE` alpha.45 title/fixes mention gallery
-   loading/error/empty + desktop arrows beside public-text addition.
-   Same 0.1.0-alpha.45 / API 0.37.0; `source_sha` null; UAT NOT_TESTED.
-4. Handoffs: combined #506+#406 delivery; remaining CI/DEV/UAT with parent.
+1. `venue-loader-navigation.browser.mjs` — removed brittle source-file regex
+   preflight (fs/path reads of illustration/gallery/CSS) and unused imports.
+   Kept 127.0.0.1 origin guard and actual mounted VenueGallery assertions:
+   pending computed `animationName=none` / no inline `svg+xml` / linear-gradient
+   background; native mouse including nested SVG; keyboard; horizontal swipe;
+   loading → loaded; single-image no arrows; empty neutral text. No new
+   source-text literal match; no skip; no copied DOM/handlers; no new deps.
+2. This handoff — truthful pass-10 status only.
 
 ## Checks
 
 | Check | Result |
 | --- | --- |
-| Independent QA final + browser receipt read | DONE |
+| QA final.txt read (shimmer comment false positive) | DONE |
 | Targeted edits in allowed_paths only | DONE |
-| No production UI/API/business source in this pass | DONE |
-| Host vitest/types/lint/browser / Product CI / DEV | NOT_TESTED here — parent |
-| Independent delta QA | PENDING |
-| DEV release / Owner UAT | NOT_TESTED — do not claim PASS |
+| No production CSS/UI/API/deps/CI in this pass | DONE |
+| Parent loopback browser rerun vs candidate archive | NOT_TESTED here — parent |
+| Independent delta QA / Product CI / DEV | NOT_TESTED — pending |
+| Owner UAT | NOT_TESTED — do not claim PASS |
 
 ## NOT_TESTED / limits
 
-- Parent rerun of venue-sheet + browser script against loopback 18984.
+- Parent will rerun this fixed original browser script against exact candidate
+  archive on loopback before final delta QA/CI.
 - Installed DEV / Owner UAT / authenticated picker: NOT_TESTED.
 - Mode B binding / AGY READY: not claimed.
-- Prior source attempts, CI FAIL `42388403418`, and UNKNOWN retained.
+- Prior CI FAIL `42388403418`, paid attempts, and UNKNOWN retained.

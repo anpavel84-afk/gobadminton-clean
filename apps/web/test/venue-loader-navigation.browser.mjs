@@ -5,34 +5,12 @@
 //   node apps/web/test/venue-loader-navigation.browser.mjs
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { readFile } from "node:fs/promises";
 import { URL, pathToFileURL } from "node:url";
 
 const origin = process.env.P1_ORIGIN || "http://127.0.0.1:18984";
 assert.equal(new URL(origin).hostname, "127.0.0.1", "Synthetic loopback only");
 
 const { chromium } = await import(pathToFileURL(`${process.cwd()}/.tools/node_modules/playwright/index.mjs`));
-const illustrationSrc = await readFile(new URL("../src/lib/venue-illustration.ts", import.meta.url), "utf8");
-const gallerySrc = await readFile(new URL("../src/components/consumer/venues/VenueGallery.tsx", import.meta.url), "utf8");
-const gamesCss = await readFile(new URL("../src/styles/games.css", import.meta.url), "utf8");
-const galleryCss = await readFile(new URL("../src/styles/venue-gallery.css", import.meta.url), "utf8");
-
-assert.match(illustrationSrc, /venueMediaSkeletonStyle/);
-assert.doesNotMatch(illustrationSrc, /data:image\/svg\+xml/);
-// Reject leftover inline equipment SVG geometry / pending fillers only.
-// Published raster `/discovery/venue-illustrations/racket-v1.webp` is legitimate.
-assert.doesNotMatch(illustrationSrc, /ellipse cx="78"/);
-assert.doesNotMatch(illustrationSrc, /<svg[\s\S]*?(?:racket|ellipse)/i);
-assert.match(illustrationSrc, /\/discovery\/venue-illustrations\/racket-v1\.webp/);
-assert.match(gallerySrc, /isGalleryInteractiveTarget/);
-assert.match(gallerySrc, /closest\(/);
-assert.match(gallerySrc, /setPointerCapture/);
-assert.match(gallerySrc, /<svg[\s\S]*aria-label="Следующее фото"|aria-label="Следующее фото"[\s\S]*<svg/);
-assert.match(gamesCss, /gb-venue-cover\[data-pending\]/);
-assert.match(gamesCss, /linear-gradient/);
-assert.doesNotMatch(gamesCss, /@keyframes[^{]*pending|shimmer/i);
-assert.match(galleryCss, /gb-venue-gallery__status/);
-assert.match(galleryCss, /gb-venue-gallery__retry/);
 
 const idMulti = "00000037-1111-4111-8111-111111111111";
 const idSingle = "00000038-1111-4111-8111-111111111111";
@@ -115,6 +93,7 @@ try {
     const style = getComputedStyle(node);
     return { animationName: style.animationName, backgroundImage: style.backgroundImage };
   });
+  // Pending skeleton: calm static gradient only — no shimmer animation, no inline equipment SVG.
   assert.equal(pendingStyle.animationName === "none" || pendingStyle.animationName === "", true);
   assert.equal(pendingStyle.backgroundImage.includes("svg+xml"), false);
   assert.match(pendingStyle.backgroundImage, /linear-gradient/);
