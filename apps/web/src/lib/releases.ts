@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.36" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.37" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
@@ -424,13 +424,14 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.36",
-  "title": "Гостевой запрос на странице площадки",
+  "application_version": "0.1.0-alpha.37",
+  "title": "Общие кнопки закрытия и маркеры карты площадок",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "Гость без входа не вызывает личный запрос профиля на странице площадки"
+    "Кнопки закрытия фильтров и подсказки игроков используют общий элемент закрытия",
+    "Публичные маркеры площадок на карте появляются после создания карты, не дожидаясь полной загрузки подложки"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
@@ -1622,6 +1623,34 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "fixes": [
       "Пока грузится фото или иллюстрация площадки сразу виден нейтральный рисунок ракетки и сетки",
       "Гость без входа не вызывает личные запросы профиля на странице игры"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "9af6482afeb0e5552c20af25a04dd6503957202d",
+    "application_version": "0.1.0-alpha.36",
+    "version_label": "0.1.0-alpha.36",
+    "title": "Гостевой запрос на странице площадки",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42325229441-a1",
+        "accepted_at": "2026-11-07T01:45:38Z",
+        "api_digest": "sha256:0e5e09cb63a5737f84bdf045da5c08ff8a3f23b4a8ab21797a19b31e11a3adb5",
+        "web_digest": "sha256:bbdcfa9f9ec128712275589c504698215860f1c24058269b1625654c049724e6",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Гость без входа не вызывает личный запрос профиля на странице площадки"
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",

@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { City } from "../../../lib/consumer-types";
+import { CloseButton } from "../CloseButton";
 import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 
 type Props = {
@@ -121,7 +122,7 @@ export function PlayersDirectoryToolbar({
         <div className="pb-dir-toolbar__popover" id={popoverId} role="dialog" aria-label="Фильтры игроков">
           <div className="pb-dir-toolbar__popover-title">
             <strong>Фильтры игроков</strong>
-            <button ref={closeRef} type="button" aria-label="Закрыть фильтры" onClick={applyAndClose}>×</button>
+            <CloseButton ref={closeRef} aria-label="Закрыть фильтры" onClick={applyAndClose} />
           </div>
           <div className="pb-dir-toolbar__chips" role="group" aria-label="Тип игрока">
             <button
