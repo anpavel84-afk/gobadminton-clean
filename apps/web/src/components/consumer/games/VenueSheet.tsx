@@ -45,10 +45,12 @@ export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; time
   </button>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, galleryIndex, onGalleryIndexChange }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, onCoverRetry, galleryIndex, onGalleryIndexChange }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
+  /** Shared SelectedVenueCover.retry wired from GamesMapView for morph main-loan failure. */
+  onCoverRetry?: () => void;
   galleryIndex?: number;
   onGalleryIndexChange?: (index: number, item: GalleryItem | null) => void;
 }) {
@@ -105,6 +107,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       className="gb-venue-sheet-cover"
       coverSlot={coverSlot}
       coverFallback={coverFallback}
+      onCoverRetry={onCoverRetry}
       showCredit
       index={galleryIndex}
       onIndexChange={onGalleryIndexChange}

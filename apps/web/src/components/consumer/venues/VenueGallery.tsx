@@ -270,10 +270,31 @@ export function VenueGallery({
     // Preserve parent morph/fallback slot when gallery has no items; do not invent photo credit.
     // Source attribution still renders for every presented venue (including empty media).
     const emptyCredit = sourceCredit ? <div className="gb-venue-gallery__credit">{sourceCredit}</div> : null;
+    const legacyCoverUrl = venueCoverUrl(venue.cover?.uploadedUrl);
     if (coverSlot) {
+      // Keep the single shared morph slot. When there is no published URL, overlay the
+      // same neutral no-photo copy used by non-morph empty frames (compact + expanded).
+      if (!legacyCoverUrl) {
+        return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
+          <div
+            className="gb-venue-gallery"
+            data-size={size === "compact" ? "compact" : size}
+            data-count={0}
+            role="group"
+            aria-roledescription="gallery"
+          >
+            <div className="gb-venue-gallery__frame" data-state="empty">
+              {coverSlot}
+              <div className="gb-venue-gallery__status" data-state="empty" role="status">
+                <p>Фотографии площадки пока нет</p>
+              </div>
+            </div>
+          </div>
+          {emptyCredit}
+        </div>;
+      }
       return <>{coverSlot}{emptyCredit}</>;
     }
-    const legacyCoverUrl = venueCoverUrl(venue.cover?.uploadedUrl);
     // Unattributed legacy cover still paints through VenueCover (pending → ready / failed).
     // Genuine no published media → neutral text (sheet/page) or neutral thumb (compact).
     if (!legacyCoverUrl && size !== "compact") {
@@ -301,7 +322,8 @@ export function VenueGallery({
   }
 
   const showControls = items.length > 1 && size !== "compact";
-  const statusText = framePending
+  // Compact thumbs stay caption-free (aria-busy + skeleton only); sheet/page keep the loading line.
+  const statusText = framePending && size !== "compact"
     ? "Загружаем фотографию…"
     : (imageFailed && size === "compact" ? "Фото не загрузилось" : null);
 
@@ -389,10 +411,14 @@ export function VenueGallery({
       {showControls && <>
         <div className="gb-venue-gallery__nav">
           <button type="button" aria-label="Предыдущее фото" onClick={(event) => { event.stopPropagation(); go(-1); }}>
-            <span aria-hidden="true">←</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M10.5 3.5 6 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.75" />
+            </svg>
           </button>
           <button type="button" aria-label="Следующее фото" onClick={(event) => { event.stopPropagation(); go(1); }}>
-            <span aria-hidden="true">→</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M5.5 3.5 10 8l-4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.75" />
+            </svg>
           </button>
         </div>
         <span className="gb-venue-gallery__count" aria-hidden="true">{safeIndex + 1}/{items.length}</span>

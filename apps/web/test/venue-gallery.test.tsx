@@ -90,6 +90,20 @@ describe("VenueGallery", () => {
     expect(empty).not.toContain("/discovery/badminton-courts.jpg");
     expect(empty).not.toContain("Предыдущее фото");
     expect(empty).not.toContain("Фото: Клуб");
+    // Zero-gallery morph slot: keep the single shared cover slot and paint neutral no-photo text.
+    for (const size of ["compact", "sheet"] as const) {
+      const morphEmpty = ssr(<VenueGallery
+        venue={emptyVenue}
+        size={size}
+        coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" />}
+      />);
+      expect(morphEmpty).toContain('data-testid="morph-slot"');
+      expect(morphEmpty).toContain("Фотографии площадки пока нет");
+      expect(morphEmpty).toContain('data-state="empty"');
+      expect(morphEmpty).toContain("gb-venue-gallery__frame");
+      expect(morphEmpty).not.toContain("<img");
+      expect(morphEmpty).not.toContain("venue-illustrations");
+    }
   });
 
   it("renders catalog source credit independent of showCredit photo flag", () => {
@@ -447,10 +461,16 @@ describe("VenueGallery", () => {
     />);
     expect(one).toContain("Бета");
     expect(one).toContain('data-size="compact"');
-    expect(one).not.toContain("gb-venue-picker-photos");
+    // Single photo still opens a sibling sheet so failed thumbs get retry outside the select button.
+    expect(one).toContain("gb-venue-picker-photos");
+    expect(one).toContain("Фото · 1");
+    expect(one).toContain('data-size="sheet"');
     expect(one).not.toContain("Предыдущее фото");
     expect(one).not.toContain("Следующее фото");
-    expect(one).not.toContain('data-size="sheet"');
+    const oneOptionInner = one.match(/class="gb-venue-picker-option"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? "";
+    expect(oneOptionInner).toContain('data-size="compact"');
+    expect(oneOptionInner).not.toContain("<button");
+    expect(oneOptionInner).not.toContain("Повторить загрузку");
 
     // Selecting the row calls onSelect; browsing sheet photos does not.
     function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {

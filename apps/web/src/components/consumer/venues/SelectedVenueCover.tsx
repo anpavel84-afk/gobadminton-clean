@@ -212,8 +212,15 @@ export function useSelectedVenueCover(cityId: string, venue?: { id: string; name
   const resource = useMemo(() => createCover(url, venue?.name ?? "", id), [cityId, id, url]);
   useEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
   useEffect(() => { resource.retain(); return () => resource.release(); }, [resource]);
-  const fallback = useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);
-  return { ...resource, fallback };
+  // Subscribe so parents re-render on terminal failure; expose a live getter so
+  // sync readers (and harness checks) see fallback without an extra render turn.
+  useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);
+  return {
+    ...resource,
+    get fallback() {
+      return resource.getSnapshot();
+    },
+  };
 }
 
 /** Empty React-owned slot: the resource moves its image only during commit. */
