@@ -84,10 +84,17 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/WebP|аватар|облож|площад/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/запрет|событ|iPhone|согласи/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(
+      /публичн.*(имён|имен|описан)|локальн|модельн|публикац|отклонен|временн/i,
+    );
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/профил|тренер|организатор|игр/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
+      /комментар|отзыв|площад|сообщен|аватар|выключен/i,
+    );
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,

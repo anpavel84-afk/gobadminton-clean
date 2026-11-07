@@ -567,8 +567,8 @@ export class GamesService {
         // Fence exact stored public text against preflight evidence.
         if (
           locked.title !== pre.title ||
-          locked.organizer_display_name !== pre.host_display_name ||
-          locked.organizer_public_contact !== pre.host_public_contact ||
+          locked.host_display_name !== pre.host_display_name ||
+          locked.host_public_contact !== pre.host_public_contact ||
           locked.training_description !== pre.training_description ||
           locked.settlement_terms !== pre.settlement_terms ||
           locked.trainer_display_name_snapshot !== pre.trainer_display_name_snapshot
@@ -590,8 +590,8 @@ export class GamesService {
         const published = updated.rows[0]!;
         await this.bindGameTexts(client, textApproval, {
           title: locked.title,
-          hostDisplayName: locked.organizer_display_name,
-          hostPublicContact: locked.organizer_public_contact,
+          hostDisplayName: locked.host_display_name,
+          hostPublicContact: locked.host_public_contact,
           trainingDescription: locked.training_description,
           settlementTerms: locked.settlement_terms,
           trainerDisplayNameSnapshot: locked.trainer_display_name_snapshot,
@@ -1124,6 +1124,12 @@ export class GamesService {
     external_reserved_count: number;
     activity_kind: "regular" | "trainer_led" | null;
     trainer_profile_id: string | null;
+    title: string;
+    host_display_name: string;
+    host_public_contact: string;
+    training_description: string | null;
+    settlement_terms: string;
+    trainer_display_name_snapshot: string | null;
   }> {
     if (!isUuid(gameId)) {
       throw notFound("GAME_NOT_FOUND", "Игра не найдена");
@@ -1141,10 +1147,17 @@ export class GamesService {
       external_reserved_count: number;
       activity_kind: "regular" | "trainer_led" | null;
       trainer_profile_id: string | null;
+      title: string;
+      host_display_name: string;
+      host_public_contact: string;
+      training_description: string | null;
+      settlement_terms: string;
+      trainer_display_name_snapshot: string | null;
     }>(
       `SELECT id, organizer_id, status, version, capacity, external_reserved_count,
               activity_kind, trainer_profile_id, starts_at, ends_at, venue_id,
-              application_deadline_at
+              application_deadline_at, title, host_display_name, host_public_contact,
+              training_description, settlement_terms, trainer_display_name_snapshot
        FROM games
        WHERE id = $1
        FOR UPDATE`,

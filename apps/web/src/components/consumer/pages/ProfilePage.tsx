@@ -87,11 +87,19 @@ export function ProfilePage() {
     if (result.ok) return;
     if (result.status === 401) { setState("auth"); setEditing(false); setLookingEdit(false); }
     else if (isSocialDirectoryDisabled(result)) { setSocialUnavailable(true); setEditing(false); setLookingEdit(false); }
-    else if (result.status === 0 || result.status >= 500 || result.status === 409) {
+    else {
+      // Recognized public-text moderation notices first: keep form + edit mode; do not force refresh.
       const moderation = publicTextModerationNotice(result);
-      setNeedsRefresh(true); setNotice(moderation ?? (result.status === 409 ? "Профиль изменился. Обновите данные перед сохранением." : "Не удалось подтвердить результат. Обновите данные перед следующим действием."));
-    } else {
-      setNotice(publicTextModerationNotice(result) ?? "Не удалось сохранить изменения. Проверьте поля и попробуйте позже.");
+      if (moderation) {
+        setNotice(moderation);
+      } else if (result.status === 0 || result.status >= 500 || result.status === 409) {
+        setNeedsRefresh(true);
+        setNotice(result.status === 409
+          ? "Профиль изменился. Обновите данные перед сохранением."
+          : "Не удалось подтвердить результат. Обновите данные перед следующим действием.");
+      } else {
+        setNotice("Не удалось сохранить изменения. Проверьте поля и попробуйте позже.");
+      }
     }
   }
   async function saveProfile() {
