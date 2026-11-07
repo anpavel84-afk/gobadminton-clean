@@ -143,7 +143,9 @@ describe("#456 web push settings surface", () => {
     expect(html).toContain(PUSH_IPHONE_HOMESCREEN_HINT);
     expect(html).toMatch(/data-surface="push-discoverability"/);
     expect(html).toMatch(/data-surface="push-iphone-homescreen"/);
-    expect(html).toMatch(/Система запретила уведомления/);
+    expect(html).toMatch(/Системные уведомления пока недоступны на тестовом сервере/);
+    expect(html).toMatch(/data-state="loading"/);
+    expect(html).toMatch(/Загружаем настройки уведомлений/);
     expect(PUSH_MESSAGE_ENABLE_LABEL).toBe("Включить уведомления о сообщениях");
     expect(html).not.toMatch(/События игр/);
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe|Notification\.requestPermission/);
