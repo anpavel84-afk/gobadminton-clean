@@ -5,6 +5,7 @@ import { IdempotencyService } from "../common/idempotency.service";
 import { AvatarService } from "./avatar.service";
 import { coverDeleteVersion } from "./cover-command";
 import { coverForUser } from "./cover-presentation";
+import { resolveVenueCoverResponse } from "./venue-cover-response";
 import { Inject } from "@nestjs/common";
 import type { Pool } from "pg";
 import { DATABASE_POOL } from "../tokens";
@@ -34,10 +35,13 @@ export class CoverController {
     return this.media.mutate(actor, this.idempotency.requireKey(request.headers["idempotency-key"]), coverDeleteVersion(request.body, request.headers["x-profile-version"]), undefined, "cover");
   }
   @Get("media/venue-covers/:key")
-  async readVenue(@Param("key") key: string, @Res() reply: FastifyReply) {
-    reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff")
+  async readVenue(@Req() request: FastifyRequest, @Param("key") key: string, @Res() reply: FastifyReply) {
+    reply.header("Cache-Control", "no-store").header("Vary", "Accept").header("X-Content-Type-Options", "nosniff")
       .header("Content-Security-Policy", "default-src 'none'; sandbox");
-    return reply.type("image/png").send(await this.media.readVenueCover(key));
+    // Authorization/read first; negotiation never masks unavailable covers.
+    const original = await this.media.readVenueCover(key);
+    const response = await resolveVenueCoverResponse(original, request.headers.accept);
+    return reply.type(response.contentType).send(response.body);
   }
   @Get("media/covers/:key")
   async read(@Req() request: FastifyRequest, @Param("key") key: string, @Res() reply: FastifyReply) {
