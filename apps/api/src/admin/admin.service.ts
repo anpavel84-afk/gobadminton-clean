@@ -1,5 +1,6 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { HttpException, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
   generateAuthenticationOptions,
@@ -22,6 +23,7 @@ import {
 } from "../auth/crypto";
 import {
   badRequest,
+  commandInProgress,
   conflict,
   forbidden,
   notFound,
@@ -42,6 +44,11 @@ import {
 import type { AdminCommand } from "./dto";
 
 import { devQaKeyAllowed, DEV_QA_AUDIENCE, DEV_QA_LABEL, qaSessionRouteAllowed } from "./dev-qa-policy";
+
+/** Soft marker for in-flight admin external claims — never reclaim / re-prepare after TTL. */
+const ADMIN_EXTERNAL_PREPARE_RESERVATION_TTL_MS = 120_000;
+/** Unknown sealed outcomes keep attempt history; never TTL-reclaim for a second prepare. */
+const ADMIN_EXTERNAL_UNKNOWN_TTL_MS = 24 * 60 * 60 * 1000;
 
 type Principal = {
   id: string;
@@ -277,15 +284,320 @@ export class AdminService {
     operation: string, input: object, scope: (client: PoolClient, actor: AdminActor) => Promise<void>): Promise<T | null> {
     await this.limited(request);
     if (!key || key.length < 16 || key.length > 128) throw badRequest("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key required");
+    const fingerprint = this.hash(JSON.stringify({operation,input}));
     return adminTransaction(this.pool, async client => {
       const actor = await this.actor(client,request,true,permission,true);
       await scope(client,actor);
-      const row = (await client.query<{fingerprint:string;response_ciphertext:string}>(
-        "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",[actor.principalId,this.hash(key)])).rows[0];
+      const row = (
+        await client.query<{
+          fingerprint: string;
+          response_ciphertext: string | null;
+          reservation_state?: string | null;
+        }>(
+          "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
+          [actor.principalId, this.hash(key)],
+        )
+      ).rows[0];
       if (!row) return null;
-      if (row.fingerprint !== this.hash(JSON.stringify({operation,input}))) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
+      if (row.fingerprint !== fingerprint) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
+      const reservationState = adminReceiptReservationState(row);
+      if (reservationState === "processing") throw commandInProgress();
+      if (reservationState === "unknown") {
+        this.throwSealedAdminUnknown(row.response_ciphertext);
+      }
+      if (reservationState === "error") {
+        this.throwSealedAdminKnownReject(row.response_ciphertext);
+      }
+      if (!row.response_ciphertext) throw commandInProgress();
       return JSON.parse(openSecret(this.pepper,row.response_ciphertext)) as T;
     });
+  }
+  /**
+   * Same-key fence before admin external preparation (classifier / media).
+   * authorizeReplayScope always runs (session/RBAC/assignment/independence) before
+   * disclosing a receipt. Matching completed/error receipts replay with zero
+   * provider I/O and without requiring expectedCaseVersion still current.
+   * authorizeNewPublication (version/pending/consent/eligibility) runs only on miss.
+   * Known moderation REJECT seals reservation_state=error (real 422; does not imply
+   * payment — provider budget via beforeAttempt only). processing/unknown/error
+   * never TTL-reclaim into a second prepare.
+   * Keeps Admin session/step-up/origin/CSRF/RBAC — does not use consumer ActorFence.
+   */
+  async privilegedRunWithExternalPrepare<TPrep, T>(
+    request: FastifyRequest,
+    key: string | undefined,
+    permission: AdminPermission,
+    stepup: boolean,
+    operation: string,
+    input: object,
+    authorizeReplayScope: (client: PoolClient, actor: AdminActor) => Promise<void>,
+    authorizeNewPublication: (client: PoolClient, actor: AdminActor) => Promise<void>,
+    prepare: () => Promise<TPrep>,
+    execute: (
+      client: PoolClient,
+      actor: AdminActor,
+      keyHash: string,
+      prepared: TPrep,
+    ) => Promise<T>,
+  ): Promise<T> {
+    await this.limited(request);
+    if (!key || key.length < 16 || key.length > 128) {
+      throw badRequest("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key required");
+    }
+    const keyHash = this.hash(key);
+    const fingerprint = this.hash(JSON.stringify({ operation, input }));
+    const claim = await adminTransaction(this.pool, async (client) => {
+      const actor = await this.actor(client, request, true, permission, stepup);
+      await authorizeReplayScope(client, actor);
+      const previous = (
+        await client.query<{
+          fingerprint: string;
+          response_ciphertext: string | null;
+          reservation_state: string;
+        }>(
+          `SELECT fingerprint, response_ciphertext,
+                  COALESCE(reservation_state, 'completed') AS reservation_state
+           FROM admin_command_receipts
+           WHERE actor_id=$1 AND key_hash=$2`,
+          [actor.principalId, keyHash],
+        )
+      ).rows[0];
+      if (previous) {
+        if (previous.fingerprint !== fingerprint) {
+          throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
+        }
+        if (previous.reservation_state === "processing") throw commandInProgress();
+        if (previous.reservation_state === "unknown") {
+          this.throwSealedAdminUnknown(previous.response_ciphertext);
+        }
+        if (previous.reservation_state === "error") {
+          this.throwSealedAdminKnownReject(previous.response_ciphertext);
+        }
+        if (!previous.response_ciphertext) throw commandInProgress();
+        return {
+          kind: "replay" as const,
+          body: JSON.parse(openSecret(this.pepper, previous.response_ciphertext)) as T,
+        };
+      }
+      await authorizeNewPublication(client, actor);
+      const claimNonce = randomUUID();
+      const expiresAt = new Date(Date.now() + ADMIN_EXTERNAL_PREPARE_RESERVATION_TTL_MS);
+      const inserted = await client.query<{ actor_id: string }>(
+        `INSERT INTO admin_command_receipts
+           (actor_id, key_hash, fingerprint, response_ciphertext,
+            reservation_state, claim_nonce, expires_at)
+         VALUES ($1,$2,$3,NULL,'processing',$4,$5)
+         ON CONFLICT (actor_id, key_hash) DO NOTHING
+         RETURNING actor_id`,
+        [actor.principalId, keyHash, fingerprint, claimNonce, expiresAt],
+      );
+      if (!inserted.rows[0]) throw commandInProgress();
+      return {
+        kind: "prepare" as const,
+        claimNonce,
+        principalId: actor.principalId,
+      };
+    });
+    if (claim.kind === "replay") return claim.body;
+
+    let prepared: TPrep;
+    try {
+      prepared = await prepare();
+    } catch (error) {
+      await this.afterAdminExternalPrepareFailure(
+        claim.principalId,
+        keyHash,
+        fingerprint,
+        claim.claimNonce,
+        error,
+      );
+      throw error;
+    }
+
+    try {
+      return await adminTransaction(this.pool, async (client) => {
+        const actor = await this.actor(client, request, true, permission, stepup);
+        const locked = (
+          await client.query<{ actor_id: string }>(
+            `SELECT actor_id FROM admin_command_receipts
+             WHERE actor_id=$1 AND key_hash=$2 AND fingerprint=$3
+               AND claim_nonce=$4 AND reservation_state='processing'
+             FOR UPDATE`,
+            [actor.principalId, keyHash, fingerprint, claim.claimNonce],
+          )
+        ).rows[0];
+        if (!locked) throw commandInProgress();
+        const result = await execute(client, actor, keyHash, prepared);
+        const updated = await client.query(
+          `UPDATE admin_command_receipts
+           SET reservation_state='completed',
+               response_ciphertext=$4,
+               expires_at=NULL
+           WHERE actor_id=$1 AND key_hash=$2 AND claim_nonce=$3
+             AND reservation_state='processing'`,
+          [
+            actor.principalId,
+            keyHash,
+            claim.claimNonce,
+            sealSecret(this.pepper, JSON.stringify(result)),
+          ],
+        );
+        if (updated.rowCount !== 1) {
+          throw new Error("admin external prepare complete failed: missing processing reservation");
+        }
+        return result;
+      });
+    } catch (error) {
+      await this.afterAdminExternalPrepareFailure(
+        claim.principalId,
+        keyHash,
+        fingerprint,
+        claim.claimNonce,
+        error,
+      );
+      throw error;
+    }
+  }
+  private throwSealedAdminUnknown(responseCiphertext: string | null): never {
+    if (!responseCiphertext) throw commandInProgress();
+    const body = JSON.parse(openSecret(this.pepper, responseCiphertext)) as {
+      status?: number;
+    };
+    const status =
+      typeof body.status === "number" ? body.status : HttpStatus.SERVICE_UNAVAILABLE;
+    throw new HttpException(body, status);
+  }
+  private throwSealedAdminKnownReject(responseCiphertext: string | null): never {
+    if (!responseCiphertext) throw commandInProgress();
+    const body = JSON.parse(openSecret(this.pepper, responseCiphertext)) as {
+      status?: number;
+      code?: string;
+    };
+    const status =
+      typeof body.status === "number" ? body.status : HttpStatus.UNPROCESSABLE_ENTITY;
+    // Known moderation reject — never return Problem JSON as typed success.
+    throw new HttpException(body, status);
+  }
+  private async afterAdminExternalPrepareFailure(
+    principalId: string,
+    keyHash: string,
+    fingerprint: string,
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    if (isAdminKnownModerationReject(error)) {
+      await this.sealAdminExternalKnownReject(
+        principalId,
+        keyHash,
+        fingerprint,
+        claimNonce,
+        error,
+      ).catch(() => undefined);
+      return;
+    }
+    if (shouldReleaseAdminExternalPrepareClaim(error)) {
+      await this.pool
+        .query(
+          `DELETE FROM admin_command_receipts
+           WHERE actor_id=$1 AND key_hash=$2 AND fingerprint=$3
+             AND claim_nonce=$4 AND reservation_state='processing'`,
+          [principalId, keyHash, fingerprint, claimNonce],
+        )
+        .catch(() => undefined);
+      return;
+    }
+    if (isAdminServiceUnavailable(error)) {
+      await this.sealAdminExternalUnknown(
+        principalId,
+        keyHash,
+        fingerprint,
+        claimNonce,
+        error,
+      ).catch(() => undefined);
+    }
+    // Ambiguous non-HTTP / CIP: leave processing; never reclaim after soft TTL.
+  }
+  private async sealAdminExternalKnownReject(
+    principalId: string,
+    keyHash: string,
+    fingerprint: string,
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    const httpStatus =
+      error instanceof HttpException
+        ? error.getStatus()
+        : HttpStatus.UNPROCESSABLE_ENTITY;
+    const response =
+      error instanceof HttpException
+        ? error.getResponse()
+        : {
+            type: "about:blank",
+            title: "Измените текст и попробуйте снова",
+            status: HttpStatus.UNPROCESSABLE_ENTITY,
+            code: "PUBLIC_TEXT_CONTENT_REJECTED",
+          };
+    const body =
+      typeof response === "object" && response !== null
+        ? { ...(response as Record<string, unknown>), status: httpStatus }
+        : { status: httpStatus, detail: response };
+    await this.pool.query(
+      `UPDATE admin_command_receipts
+       SET reservation_state='error',
+           response_ciphertext=$5,
+           expires_at=NULL
+       WHERE actor_id=$1 AND key_hash=$2 AND fingerprint=$3
+         AND claim_nonce=$4 AND reservation_state='processing'`,
+      [
+        principalId,
+        keyHash,
+        fingerprint,
+        claimNonce,
+        sealSecret(this.pepper, JSON.stringify(body)),
+      ],
+    );
+  }
+  private async sealAdminExternalUnknown(
+    principalId: string,
+    keyHash: string,
+    fingerprint: string,
+    claimNonce: string,
+    error: unknown,
+  ): Promise<void> {
+    const httpStatus =
+      error instanceof HttpException
+        ? error.getStatus()
+        : HttpStatus.SERVICE_UNAVAILABLE;
+    const response =
+      error instanceof HttpException
+        ? error.getResponse()
+        : {
+            type: "about:blank",
+            title: "Временно недоступно",
+            status: HttpStatus.SERVICE_UNAVAILABLE,
+            code: "MODERATION_TEMPORARILY_UNAVAILABLE",
+          };
+    const body =
+      typeof response === "object" && response !== null
+        ? { ...(response as Record<string, unknown>), status: httpStatus }
+        : { status: httpStatus, detail: response };
+    const expiresAt = new Date(Date.now() + ADMIN_EXTERNAL_UNKNOWN_TTL_MS);
+    await this.pool.query(
+      `UPDATE admin_command_receipts
+       SET reservation_state='unknown',
+           response_ciphertext=$5,
+           expires_at=$6
+       WHERE actor_id=$1 AND key_hash=$2 AND fingerprint=$3
+         AND claim_nonce=$4 AND reservation_state='processing'`,
+      [
+        principalId,
+        keyHash,
+        fingerprint,
+        claimNonce,
+        sealSecret(this.pepper, JSON.stringify(body)),
+        expiresAt,
+      ],
+    );
   }
   async privilegedCommand<T>(request: FastifyRequest, key: string | undefined,
     permission: AdminPermission, stepup: boolean, operation: string, input: object,
@@ -298,14 +610,35 @@ export class AdminService {
     return adminTransaction(this.pool, async client => {
       const actor = await this.actor(client, request, true, permission, stepup);
       await authorizeScope?.(client, actor);
-      const previous = (await client.query<{fingerprint: string; response_ciphertext: string}>(
-        "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2", [actor.principalId,keyHash])).rows[0];
+      const previous = (
+        await client.query<{
+          fingerprint: string;
+          response_ciphertext: string | null;
+          reservation_state?: string | null;
+        }>(
+          "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
+          [actor.principalId, keyHash],
+        )
+      ).rows[0];
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
+        const reservationState = adminReceiptReservationState(previous);
+        if (reservationState === "processing") throw commandInProgress();
+        if (reservationState === "unknown") {
+          this.throwSealedAdminUnknown(previous.response_ciphertext);
+        }
+        if (reservationState === "error") {
+          this.throwSealedAdminKnownReject(previous.response_ciphertext);
+        }
+        if (!previous.response_ciphertext) throw commandInProgress();
         return JSON.parse(openSecret(this.pepper, previous.response_ciphertext)) as T;
       }
       const result = await execute(client, actor, keyHash);
-      await client.query("INSERT INTO admin_command_receipts(actor_id,key_hash,fingerprint,response_ciphertext) VALUES($1,$2,$3,$4)",
+      // Ordinary completed receipt: omit 0063 columns (DEFAULT completed on 63; N-1 compatible).
+      await client.query(
+        `INSERT INTO admin_command_receipts
+           (actor_id,key_hash,fingerprint,response_ciphertext)
+         VALUES($1,$2,$3,$4)`,
         [actor.principalId,keyHash,fingerprint,sealSecret(this.pepper,JSON.stringify(result))]);
       return result;
     });
@@ -877,7 +1210,11 @@ export class AdminService {
     return adminTransaction(this.pool, async (c) => {
       const a = await this.actor(c, request, true, "identity.manage", true);
       const previous = (
-        await c.query<{ fingerprint: string; response_ciphertext: string }>(
+        await c.query<{
+          fingerprint: string;
+          response_ciphertext: string | null;
+          reservation_state?: string | null;
+        }>(
           "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
           [a.principalId, keyHash],
         )
@@ -885,6 +1222,15 @@ export class AdminService {
       if (previous) {
         if (previous.fingerprint !== fingerprint)
           throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
+        const reservationState = adminReceiptReservationState(previous);
+        if (reservationState === "processing") throw commandInProgress();
+        if (reservationState === "unknown") {
+          this.throwSealedAdminUnknown(previous.response_ciphertext);
+        }
+        if (reservationState === "error") {
+          this.throwSealedAdminKnownReject(previous.response_ciphertext);
+        }
+        if (!previous.response_ciphertext) throw commandInProgress();
         return JSON.parse(
           openSecret(this.pepper, previous.response_ciphertext),
         ) as Record<string, unknown>;
@@ -1069,7 +1415,9 @@ export class AdminService {
         keyHash,
       });
       await c.query(
-        "INSERT INTO admin_command_receipts(actor_id,key_hash,fingerprint,response_ciphertext) VALUES($1,$2,$3,$4)",
+        `INSERT INTO admin_command_receipts
+           (actor_id,key_hash,fingerprint,response_ciphertext)
+         VALUES($1,$2,$3,$4)`,
         [
           a.principalId,
           keyHash,
@@ -1119,4 +1467,61 @@ export class AdminService {
       };
     });
   }
+}
+
+function adminHttpExceptionCode(error: unknown): string {
+  if (!(error instanceof HttpException)) return "";
+  const response = error.getResponse();
+  if (typeof response === "object" && response && "code" in response) {
+    return String((response as { code?: unknown }).code ?? "");
+  }
+  return "";
+}
+
+/**
+ * Pre-63 admin_command_receipts lack reservation_state (always completed +
+ * non-null ciphertext). Absent/null → historical completed only. Present
+ * processing/unknown/error keep exact deny/replay — never coalesce to success.
+ */
+export function adminReceiptReservationState(row: {
+  reservation_state?: string | null;
+}): string {
+  if (row.reservation_state == null) return "completed";
+  return row.reservation_state;
+}
+
+/**
+ * Immutable known moderation REJECT for one exact admin key — durable error receipt.
+ * Local or provider origin; sealing stores the real 422 and never implies payment.
+ * Provider budget is counted only via beforeAttempt; local-result path = 0.
+ */
+export function isAdminKnownModerationReject(error: unknown): boolean {
+  return (
+    error instanceof HttpException &&
+    error.getStatus() === HttpStatus.UNPROCESSABLE_ENTITY &&
+    adminHttpExceptionCode(error) === "PUBLIC_TEXT_CONTENT_REJECTED"
+  );
+}
+
+/** Ordinary validation/auth/budget 4xx/429 release; known moderation REJECT does not. */
+export function shouldReleaseAdminExternalPrepareClaim(error: unknown): boolean {
+  if (!(error instanceof HttpException)) return false;
+  if (isAdminKnownModerationReject(error)) return false;
+  const status = error.getStatus();
+  if (status === HttpStatus.SERVICE_UNAVAILABLE) return false;
+  if (status === HttpStatus.CONFLICT) {
+    const code = adminHttpExceptionCode(error);
+    if (code === "COMMAND_IN_PROGRESS") return false;
+    // Domain VERSION_CONFLICT / KEY_REUSED after prepare: release so a new key can proceed.
+    return true;
+  }
+  // Ordinary validation / authz / budget 429 (not a known moderation decision): release.
+  return status >= 400 && status < 500;
+}
+
+function isAdminServiceUnavailable(error: unknown): boolean {
+  return (
+    error instanceof HttpException &&
+    error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE
+  );
 }

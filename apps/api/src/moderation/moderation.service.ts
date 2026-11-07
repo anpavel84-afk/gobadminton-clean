@@ -20,9 +20,13 @@ import {
 import {
   BindingKind,
   EntityKind,
+  isReviewTextSurface,
   PUBLIC_TEXT_POLICY_VERSION,
+  REVIEW_HARD_REJECT_CATEGORIES,
+  REVIEW_QUEUE_CATEGORIES,
   TEXT_FIELD_HINTS,
   TEXT_SURFACE_KIND,
+  type TextClassificationDecision,
   type TextFieldCandidate,
   type TextSurface,
 } from "./text-policy";
@@ -48,10 +52,17 @@ export type TextFieldApproval = Readonly<{
   localPolicy: string;
   checkedAt: Date;
   decision: TextItemDecision;
+  /** Persisted approvals.decision — allow for A/B1a; allow|review for B1b (never forge allow). */
+  classification: TextClassificationDecision;
   responseId: string | null;
 }>;
 
 export type TextBatchApproval = Readonly<{
+  fields: readonly TextFieldApproval[];
+}>;
+
+/** B1b review assessment: classifier ALLOW still requires independent human approval. */
+export type ReviewTextBatchAssessment = Readonly<{
   fields: readonly TextFieldApproval[];
 }>;
 
@@ -213,6 +224,7 @@ export class ContentModerationService {
             localPolicy: LOCAL_TEXT_POLICY_VERSION,
             checkedAt: row.checked_at,
             decision: { ...decision, categories: { ...decision.categories } },
+            classification: "allow" as const,
             responseId: row.provider_response_id,
           }),
         );
@@ -224,57 +236,14 @@ export class ContentModerationService {
     }
 
     if (needProvider.length > 0) {
-      if (this.processing >= 8) throw this.unavailableText(1);
-      this.processing++;
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let batch: TextBatchDecision;
-      try {
-        batch = await Promise.race([
-          this.provider.moderateTexts({
-            texts: needProvider.map((f) => f.text),
-            signal: controller.signal,
-            beforeAttempt: () => this.reserveAttempt(actorId, "text"),
-          }),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              controller.abort();
-              reject(new ModerationProviderError("unavailable"));
-            }, 6000);
-          }),
-        ]);
-      } catch (error) {
-        if (error instanceof ModerationProviderError) {
-          throw error.kind === "schema"
-            ? this.mismatchText()
-            : this.unavailableText(error.retryAfterSeconds);
-        }
-        if (
-          error instanceof ProblemHttpException &&
-          (error.getResponse() as { code?: string }).code === "MODERATION_RATE_LIMITED"
-        ) {
-          throw error;
-        }
-        throw this.unavailableText();
-      } finally {
-        if (timer) clearTimeout(timer);
-        controller.abort();
-        this.processing--;
-      }
-      if (
-        !batch ||
-        batch.model !== MODERATION_MODEL ||
-        batch.results.length !== needProvider.length ||
-        (batch.responseId !== null &&
-          (typeof batch.responseId !== "string" || batch.responseId.length > 200))
-      ) {
-        throw this.mismatchText();
-      }
+      const batch = await this.runTextProvider(actorId, needProvider.map((f) => f.text));
       const providerReject: Record<string, string> = {};
       for (let i = 0; i < needProvider.length; i++) {
         const field = needProvider[i]!;
         const item = batch.results[i]!;
         this.validateTextItem(item);
+        // Ordinary A/B1a: any provider flag rejects. Review surfaces must use assessReviewTexts.
+        if (isReviewTextSurface(field.surface)) throw this.mismatchText();
         if (item.flagged || TEXT_CATEGORIES.some((key) => item.categories[key])) {
           providerReject[field.fieldId] = TEXT_FIELD_HINTS[field.surface];
           continue;
@@ -291,6 +260,7 @@ export class ContentModerationService {
           localPolicy: LOCAL_TEXT_POLICY_VERSION,
           checkedAt: new Date(),
           decision: { ...item, categories: { ...item.categories } },
+          classification: "allow" as const,
           responseId: batch.responseId,
         });
       }
@@ -298,6 +268,202 @@ export class ContentModerationService {
     }
 
     return Object.freeze({ fields: Object.freeze(approvals.filter(Boolean)) });
+  }
+
+  /**
+   * B1b public role-review/reply assessment. Hard-safety categories → 422.
+   * Soft/queue categories → classification=review (never forged allow).
+   * Clean allow still enters the existing mandatory human intake — does not publish.
+   * Must run outside owning-service / admin locks. No raw body in metadata.
+   */
+  async assessReviewTexts(
+    actorId: string,
+    fields: readonly TextFieldCandidate[],
+  ): Promise<ReviewTextBatchAssessment> {
+    if (fields.length === 0 || fields.length > 16) throw this.mismatchText();
+    for (const field of fields) {
+      if (!isReviewTextSurface(field.surface) || field.text.length === 0) throw this.mismatchText();
+    }
+    const rejectHints: Record<string, string> = {};
+    const prepared: TextFieldCandidate[] = [];
+    for (const field of fields) {
+      const local = evaluateLocalText(field.text, TEXT_SURFACE_KIND[field.surface]);
+      if (local.kind === "reject") {
+        rejectHints[field.fieldId] = TEXT_FIELD_HINTS[field.surface];
+        continue;
+      }
+      prepared.push(field);
+    }
+    if (Object.keys(rejectHints).length > 0) throw this.rejectText(rejectHints);
+
+    const approvals: TextFieldApproval[] = [];
+    const needProvider: TextFieldCandidate[] = [];
+    const needIndex: number[] = [];
+
+    for (const field of prepared) {
+      const fingerprint = this.textFingerprint(field.surface, field.text);
+      const cached = await this.pool.query<{
+        category_flags: TextItemDecision["categories"];
+        provider_response_id: string | null;
+        checked_at: Date;
+        decision: string;
+      }>(
+        `SELECT category_flags, provider_response_id, checked_at, decision
+         FROM content_moderation_approvals
+         WHERE surface_key=$1 AND content_type='text' AND fingerprint_version=1
+           AND content_fingerprint=$2 AND policy_version=$3 AND local_policy_version=$4
+           AND provider_key=$5 AND provider_model=$6
+           AND decision IN ('allow', 'review')`,
+        [
+          field.surface,
+          fingerprint,
+          PUBLIC_TEXT_POLICY_VERSION,
+          LOCAL_TEXT_POLICY_VERSION,
+          this.provider.key,
+          this.provider.model,
+        ],
+      );
+      const row = cached.rows[0];
+      if (row && (row.decision === "allow" || row.decision === "review")) {
+        const item: TextItemDecision = {
+          flagged: TEXT_CATEGORIES.some((key) => row.category_flags[key]),
+          categories: row.category_flags,
+        };
+        this.validateTextItem(item);
+        // Cached review must never be upgraded to forged allow.
+        const recomputed = this.classifyReviewItem(item);
+        if (recomputed === "reject") {
+          rejectHints[field.fieldId] = TEXT_FIELD_HINTS[field.surface];
+          continue;
+        }
+        if (row.decision === "review" && recomputed === "allow") {
+          throw this.mismatchText();
+        }
+        const classification: TextClassificationDecision =
+          row.decision === "review" ? "review" : recomputed;
+        approvals.push(
+          Object.freeze({
+            surface: field.surface,
+            fieldId: field.fieldId,
+            text: field.text,
+            fingerprint,
+            providerKey: this.provider.key,
+            providerModel: this.provider.model,
+            policy: PUBLIC_TEXT_POLICY_VERSION,
+            localPolicy: LOCAL_TEXT_POLICY_VERSION,
+            checkedAt: row.checked_at,
+            decision: { ...item, categories: { ...item.categories } },
+            classification,
+            responseId: row.provider_response_id,
+          }),
+        );
+      } else {
+        needIndex.push(approvals.length);
+        approvals.push(null as unknown as TextFieldApproval);
+        needProvider.push(field);
+      }
+    }
+    if (Object.keys(rejectHints).length > 0) throw this.rejectText(rejectHints);
+
+    if (needProvider.length > 0) {
+      const batch = await this.runTextProvider(actorId, needProvider.map((f) => f.text));
+      for (let i = 0; i < needProvider.length; i++) {
+        const field = needProvider[i]!;
+        const item = batch.results[i]!;
+        this.validateTextItem(item);
+        const classification = this.classifyReviewItem(item);
+        if (classification === "reject") {
+          rejectHints[field.fieldId] = TEXT_FIELD_HINTS[field.surface];
+          continue;
+        }
+        const fingerprint = this.textFingerprint(field.surface, field.text);
+        approvals[needIndex[i]!] = Object.freeze({
+          surface: field.surface,
+          fieldId: field.fieldId,
+          text: field.text,
+          fingerprint,
+          providerKey: this.provider.key,
+          providerModel: this.provider.model,
+          policy: PUBLIC_TEXT_POLICY_VERSION,
+          localPolicy: LOCAL_TEXT_POLICY_VERSION,
+          checkedAt: new Date(),
+          decision: { ...item, categories: { ...item.categories } },
+          classification,
+          responseId: batch.responseId,
+        });
+      }
+      if (Object.keys(rejectHints).length > 0) throw this.rejectText(rejectHints);
+    }
+
+    return Object.freeze({ fields: Object.freeze(approvals.filter(Boolean)) });
+  }
+
+  private classifyReviewItem(item: TextItemDecision): TextClassificationDecision | "reject" {
+    if (REVIEW_HARD_REJECT_CATEGORIES.some((key) => item.categories[key])) return "reject";
+    if (
+      item.flagged ||
+      REVIEW_QUEUE_CATEGORIES.some((key) => item.categories[key]) ||
+      TEXT_CATEGORIES.some((key) => item.categories[key])
+    ) {
+      // Ambiguous / soft flags stay review — never forge provider ALLOW.
+      return "review";
+    }
+    return "allow";
+  }
+
+  private async runTextProvider(actorId: string, texts: readonly string[]): Promise<TextBatchDecision> {
+    if (this.processing >= 8) throw this.unavailableText(1);
+    this.processing++;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const batch = await Promise.race([
+        this.provider.moderateTexts({
+          texts,
+          signal: controller.signal,
+          beforeAttempt: () => this.reserveAttempt(actorId, "text"),
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new ModerationProviderError("unavailable"));
+          }, 6000);
+        }),
+      ]);
+      if (
+        !batch ||
+        batch.model !== MODERATION_MODEL ||
+        batch.results.length !== texts.length ||
+        (batch.responseId !== null &&
+          (typeof batch.responseId !== "string" || batch.responseId.length > 200))
+      ) {
+        throw this.mismatchText();
+      }
+      return batch;
+    } catch (error) {
+      if (error instanceof ModerationProviderError) {
+        throw error.kind === "schema"
+          ? this.mismatchText()
+          : this.unavailableText(error.retryAfterSeconds);
+      }
+      if (
+        error instanceof ProblemHttpException &&
+        (error.getResponse() as { code?: string }).code === "MODERATION_RATE_LIMITED"
+      ) {
+        throw error;
+      }
+      if (
+        error instanceof ProblemHttpException &&
+        (error.getResponse() as { code?: string }).code === "MODERATION_POLICY_MISMATCH"
+      ) {
+        throw error;
+      }
+      throw this.unavailableText();
+    } finally {
+      if (timer) clearTimeout(timer);
+      controller.abort();
+      this.processing--;
+    }
   }
 
   private async reserveAttempt(actorId: string, bucket: "image" | "text"): Promise<void> {
@@ -347,7 +513,7 @@ export class ContentModerationService {
 
   /**
    * Bind prepared text approvals to exact committed field values under the owning
-   * service transaction. Never performs network I/O.
+   * service transaction. Never performs network I/O. Ordinary A/B1a allow-only.
    */
   async bindTexts(
     client: PoolClient,
@@ -362,7 +528,69 @@ export class ContentModerationService {
       bindingKind: BindingKind;
     },
   ): Promise<void> {
-    const bySurface = new Map(batch.fields.map((f) => [f.surface, f]));
+    for (const field of batch.fields) {
+      if (field.classification !== "allow" || isReviewTextSurface(field.surface)) {
+        throw this.mismatchText();
+      }
+    }
+    await this.bindTextRows(client, batch.fields, committed, meta, null);
+  }
+
+  /**
+   * B1b: bind classifier evidence (allow|review) to exact revision.
+   * Never overwrites a provider review decision to allow. Human
+   * role_reputation_decision_id is required for publication and omitted
+   * from SQL when absent (candidate rows use 0063 column default).
+   */
+  async bindReviewTexts(
+    client: PoolClient,
+    batch: ReviewTextBatchAssessment,
+    committed: ReadonlyArray<{ surface: TextSurface; text: string }>,
+    meta: {
+      entityKind: "role_review_revision" | "role_reply_revision";
+      entityId: string;
+      resourceVersion: number;
+      actorUserId: string;
+      actorPrincipalId?: string | null;
+      bindingKind: BindingKind;
+      roleReputationDecisionId?: string | null;
+    },
+  ): Promise<void> {
+    for (const field of batch.fields) {
+      if (!isReviewTextSurface(field.surface)) throw this.mismatchText();
+      if (field.classification !== "allow" && field.classification !== "review") {
+        throw this.mismatchText();
+      }
+    }
+    if (meta.bindingKind === "publication") {
+      if (!meta.roleReputationDecisionId) throw this.mismatchText();
+    } else if (meta.roleReputationDecisionId) {
+      throw this.mismatchText();
+    }
+    await this.bindTextRows(
+      client,
+      batch.fields,
+      committed,
+      meta,
+      meta.roleReputationDecisionId ?? null,
+    );
+  }
+
+  private async bindTextRows(
+    client: PoolClient,
+    fields: readonly TextFieldApproval[],
+    committed: ReadonlyArray<{ surface: TextSurface; text: string }>,
+    meta: {
+      entityKind: EntityKind;
+      entityId: string;
+      resourceVersion: number;
+      actorUserId: string;
+      actorPrincipalId?: string | null;
+      bindingKind: BindingKind;
+    },
+    roleReputationDecisionId: string | null,
+  ): Promise<void> {
+    const bySurface = new Map(fields.map((f) => [f.surface, f]));
     for (const item of committed) {
       if (item.text.length === 0) continue;
       const approval = bySurface.get(item.surface);
@@ -379,22 +607,60 @@ export class ContentModerationService {
         throw this.mismatchText();
       }
       this.validateTextItem(approval.decision);
-      if (approval.decision.flagged || TEXT_CATEGORIES.some((key) => approval.decision.categories[key])) {
+      const classification = approval.classification;
+      if (classification === "allow") {
+        if (
+          approval.decision.flagged ||
+          TEXT_CATEGORIES.some((key) => approval.decision.categories[key])
+        ) {
+          throw this.mismatchText();
+        }
+      } else if (classification === "review") {
+        if (REVIEW_HARD_REJECT_CATEGORIES.some((key) => approval.decision.categories[key])) {
+          throw this.mismatchText();
+        }
+        // review must retain at least one soft/ambiguous signal — never forge allow.
+        if (
+          !approval.decision.flagged &&
+          !REVIEW_QUEUE_CATEGORIES.some((key) => approval.decision.categories[key]) &&
+          !TEXT_CATEGORIES.some((key) => approval.decision.categories[key])
+        ) {
+          throw this.mismatchText();
+        }
+      } else {
         throw this.mismatchText();
       }
       const flags = Object.fromEntries(
         TEXT_CATEGORIES.map((key) => [key, approval.decision.categories[key]]),
       );
-      const inserted = await client.query<{ id: string }>(
+      // Preserve existing review classification on conflict — never overwrite review→allow.
+      const inserted = await client.query<{ id: string; decision: string }>(
         `INSERT INTO content_moderation_approvals(
            content_type, surface_key, fingerprint_version, content_fingerprint,
            policy_version, local_policy_version, provider_key, provider_model,
            provider_response_id, category_flags, decision, checked_at)
-         VALUES ('text',$1,1,$2,$3,$4,$5,$6,$7,$8::jsonb,'allow',$9)
+         VALUES ('text',$1,1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)
          ON CONFLICT(surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model)
-         DO UPDATE SET decision='allow', category_flags=excluded.category_flags,
-           checked_at=excluded.checked_at, provider_response_id=excluded.provider_response_id
-         RETURNING id`,
+         DO UPDATE SET
+           decision = CASE
+             WHEN content_moderation_approvals.decision = 'review' THEN 'review'
+             WHEN EXCLUDED.decision = 'review' THEN 'review'
+             ELSE EXCLUDED.decision
+           END,
+           category_flags = CASE
+             WHEN content_moderation_approvals.decision = 'review' THEN content_moderation_approvals.category_flags
+             WHEN EXCLUDED.decision = 'review' THEN EXCLUDED.category_flags
+             ELSE EXCLUDED.category_flags
+           END,
+           checked_at = CASE
+             WHEN content_moderation_approvals.decision = 'review' THEN content_moderation_approvals.checked_at
+             ELSE EXCLUDED.checked_at
+           END,
+           provider_response_id = CASE
+             WHEN content_moderation_approvals.decision = 'review' THEN content_moderation_approvals.provider_response_id
+             ELSE EXCLUDED.provider_response_id
+           END
+         RETURNING id, decision`,
         [
           item.surface,
           fingerprint,
@@ -404,29 +670,66 @@ export class ContentModerationService {
           approval.providerModel,
           approval.responseId,
           JSON.stringify(flags),
+          classification,
           approval.checkedAt,
         ],
       );
-      await client.query(
-        `INSERT INTO content_moderation_bindings(
-           entity_kind, entity_id, surface_key, resource_version, approval_id,
-           actor_user_id, actor_principal_id, binding_kind)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
-         DO UPDATE SET approval_id = excluded.approval_id,
-           actor_user_id = excluded.actor_user_id,
-           actor_principal_id = excluded.actor_principal_id`,
-        [
-          meta.entityKind,
-          meta.entityId,
-          item.surface,
-          meta.resourceVersion,
-          inserted.rows[0]!.id,
-          meta.actorUserId,
-          meta.actorPrincipalId ?? null,
-          meta.bindingKind,
-        ],
-      );
+      if (
+        classification === "review" &&
+        inserted.rows[0]!.decision !== "review"
+      ) {
+        throw this.mismatchText();
+      }
+      // Ordinary A/comment and candidate role binds must not name the 0063 FK
+      // column (N-1 fixtures lack it). Only human publication writes the FK.
+      if (roleReputationDecisionId !== null) {
+        await client.query(
+          `INSERT INTO content_moderation_bindings(
+             entity_kind, entity_id, surface_key, resource_version, approval_id,
+             actor_user_id, actor_principal_id, binding_kind, role_reputation_decision_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
+           DO UPDATE SET approval_id = excluded.approval_id,
+             actor_user_id = excluded.actor_user_id,
+             actor_principal_id = excluded.actor_principal_id,
+             role_reputation_decision_id = COALESCE(
+               excluded.role_reputation_decision_id,
+               content_moderation_bindings.role_reputation_decision_id
+             )`,
+          [
+            meta.entityKind,
+            meta.entityId,
+            item.surface,
+            meta.resourceVersion,
+            inserted.rows[0]!.id,
+            meta.actorUserId,
+            meta.actorPrincipalId ?? null,
+            meta.bindingKind,
+            roleReputationDecisionId,
+          ],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO content_moderation_bindings(
+             entity_kind, entity_id, surface_key, resource_version, approval_id,
+             actor_user_id, actor_principal_id, binding_kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
+           DO UPDATE SET approval_id = excluded.approval_id,
+             actor_user_id = excluded.actor_user_id,
+             actor_principal_id = excluded.actor_principal_id`,
+          [
+            meta.entityKind,
+            meta.entityId,
+            item.surface,
+            meta.resourceVersion,
+            inserted.rows[0]!.id,
+            meta.actorUserId,
+            meta.actorPrincipalId ?? null,
+            meta.bindingKind,
+          ],
+        );
+      }
     }
   }
 }

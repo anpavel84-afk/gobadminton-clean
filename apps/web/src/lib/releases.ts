@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.47" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.48" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,16 +424,18 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.47",
-  "title": "Комментарии к игре: проверка текста до публикации",
+  "application_version": "0.1.0-alpha.48",
+  "title": "Отзывы об организаторе и тренере: проверка текста до решения человека",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [
-    "Создание, ответ и правка публичного комментария к игре проходят проверку текста до публикации; при отклонении или временной недоступности черновик и уже опубликованный текст сохраняются"
+    "Публичные отзывы и ответы об организаторе и тренере проходят предварительную проверку текста до очереди независимого человека; неоднозначный результат остаётся на проверке, положительный допуск модели сам по себе не публикует текст; при отклонении или временной недоступности уже опубликованный текст и черновик сохраняются"
   ],
-  "fixes": [],
+  "fixes": [
+    "Повтор того же известного отклонения по тому же запросу возвращает сохранённый ответ без повторной внешней проверки"
+  ],
   "known_limitations": [
-    "Отзывы о роли и площадке, широкие комментарии на страницах площадок и связанные разделы ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
+    "Отзывы о площадке, импорт публичного текста площадок, широкие комментарии на страницах площадок, личные сообщения и метаданные аватаров ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
     "Изменение времени и места игры и связанные push отложены и не реализованы",
     "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
@@ -1951,6 +1953,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-07T18:20:21Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.47",
+    "title": "Комментарии к игре: проверка текста до публикации",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "Создание, ответ и правка публичного комментария к игре проходят проверку текста до публикации; при отклонении или временной недоступности черновик и уже опубликованный текст сохраняются"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Отзывы о роли и площадке, широкие комментарии на страницах площадок и связанные разделы ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "cf0349ad52d5caf10a8b40e209e8c837e9c4da43",
+    "version_label": "0.1.0-alpha.47",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42403605993-a1",
+        "api_digest": "sha256:d0dca6a3f0a036a452758393806fc582f8827a8be8734fec30f52f29a4cdb52b",
+        "web_digest": "sha256:f4b63b48aef27f64c5da14ca381ca4cc2786689d8247931ab1a4e8e0e0144ac5",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T19:05:58Z",
         "kind": "pipeline"
       }
     ]

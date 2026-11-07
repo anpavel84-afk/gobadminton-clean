@@ -201,6 +201,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0060_game_event_push",
         "0061_content_moderation_text",
         "0062_content_moderation_comments",
+        "0063_moderation_role_review_bindings",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -291,6 +292,58 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0]?.consrc,
       ).toMatch(/entity_comment/);
+      // 0063 #506 B1b role_review_body / role_reply_body + human decision FK (0061/0062 untouched).
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/role_review_body/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_bindings'::regclass
+               AND conname = 'content_moderation_bindings_entity_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/role_review_revision/);
+      expect(
+        (
+          await pool.query<{ column_name: string; is_nullable: string }>(
+            `SELECT column_name, is_nullable
+             FROM information_schema.columns
+             WHERE table_name = 'content_moderation_bindings'
+               AND column_name = 'role_reputation_decision_id'`,
+          )
+        ).rows[0],
+      ).toEqual({ column_name: "role_reputation_decision_id", is_nullable: "YES" });
+      // 0063 admin external-prepare: reservation_state allows durable known-reject 'error'.
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.admin_command_receipts'::regclass
+               AND conname = 'admin_command_receipts_reservation_state_chk'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/error/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.admin_command_receipts'::regclass
+               AND conname = 'admin_command_receipts_response_state_chk'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/error/);
       // 0062 claim_nonce + unknown reservation for external-prepare fencing.
       expect(
         (
@@ -435,6 +488,68 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       } finally {
         await commentSurfacesRollback.query("ROLLBACK");
         commentSurfacesRollback.release();
+      }
+      // 0063 B1b non-destructive rollback retains role surfaces + human decision column.
+      const roleSurfacesRollback = await pool.connect();
+      try {
+        await roleSurfacesRollback.query("BEGIN");
+        await roleSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/rollback/0063_moderation_role_review_bindings.sql"),
+            "utf8",
+          ),
+        );
+        expect(
+          (
+            await roleSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_approvals'::regclass
+                 AND conname = 'content_moderation_approvals_surface_key_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/role_review_body/);
+        expect(
+          (
+            await roleSurfacesRollback.query<{ column_name: string }>(
+              `SELECT column_name
+               FROM information_schema.columns
+               WHERE table_name = 'content_moderation_bindings'
+                 AND column_name = 'role_reputation_decision_id'`,
+            )
+          ).rows[0]?.column_name,
+        ).toBe("role_reputation_decision_id");
+        expect(
+          (
+            await roleSurfacesRollback.query(
+              "SELECT 1 FROM schema_migrations WHERE id='0063_moderation_role_review_bindings'",
+            )
+          ).rowCount,
+        ).toBe(0);
+        // Non-destructive rollback retains admin 'error' allowlist (known moderation reject receipts).
+        expect(
+          (
+            await roleSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.admin_command_receipts'::regclass
+                 AND conname = 'admin_command_receipts_reservation_state_chk'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/error/);
+        await roleSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/0063_moderation_role_review_bindings.sql"),
+            "utf8",
+          ),
+        );
+        await roleSurfacesRollback.query(
+          `INSERT INTO schema_migrations(id) VALUES ('0063_moderation_role_review_bindings')
+           ON CONFLICT DO NOTHING`,
+        );
+      } finally {
+        await roleSurfacesRollback.query("ROLLBACK");
+        roleSurfacesRollback.release();
       }
       const bindingsRollback = await pool.connect();
       try {

@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.47 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.47");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.48 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.48");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,11 +64,12 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/комментар.*игр|игр.*комментар/i);
-    expect(currentProse).toMatch(/проверк|публикац/i);
-    expect(currentProse).toMatch(/создан|ответ|правк/i);
+    expect(currentProse).toMatch(/отзыв.*организатор|организатор.*отзыв|тренер/i);
+    expect(currentProse).toMatch(/проверк|публикац|очеред|человек/i);
+    expect(currentProse).toMatch(/предварительн|неоднозначн|положительн|допуск/i);
     expect(currentProse).toMatch(/отклонен|недоступн|сохран|чернов|опубликован/i);
-    expect(currentProse).toMatch(/отзыв|площад|сообщен|выключен/i);
+    expect(currentProse).toMatch(/повтор|известн|запрос|внешн/i);
+    expect(currentProse).toMatch(/площад|сообщен|выключен|аватар/i);
     expect(currentProse).toMatch(/времен|мест|отложен|не реализов/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -88,13 +89,14 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/комментар|игр|проверк|публикац/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/комментар|проверк|публикац|сохран/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/отзыв|организатор|тренер|проверк|человек/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/отзыв|проверк|публикац|сохран|человек/i);
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/повтор|известн|запрос|внешн/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /отзыв|площад|комментар|сообщен|выключен/i,
+      /отзыв|площад|комментар|сообщен|выключен|аватар/i,
     );
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
@@ -248,10 +250,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(50);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(51);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(55);
+    ).toBe(56);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.47"
+      && row.source_sha === "cf0349ad52d5caf10a8b40e209e8c837e9c4da43"
+      && row.deployments[0]?.release_id === "r42403605993-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-07T19:05:58Z"
+      && row.deployments[0]?.api_digest === "sha256:d0dca6a3f0a036a452758393806fc582f8827a8be8734fec30f52f29a4cdb52b"
+      && row.deployments[0]?.web_digest === "sha256:f4b63b48aef27f64c5da14ca381ca4cc2786689d8247931ab1a4e8e0e0144ac5"
+      && row.api_contract_version === "0.37.0"
+      && row.title === "Комментарии к игре: проверка текста до публикации"
+      && row.additions.length === 1
+      && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.46"
       && row.source_sha === "264d9e1cf63b4272732b2b9ad2317e9f9b9d320f"

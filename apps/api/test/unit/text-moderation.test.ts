@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { Pool, PoolClient } from "pg";
 import { loadEnv } from "../../src/config/env";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
 import {
@@ -6,13 +7,22 @@ import {
   ModerationProviderError,
   TEXT_CATEGORIES,
   safeTextBatchDecision,
+  safeTextItemDecision,
 } from "../../src/moderation/provider";
 import {
   OpenAIModerationProvider,
   parseTextResponse,
 } from "../../src/moderation/openai-provider";
-import { evaluateLocalText } from "../../src/moderation/local-text-policy";
-import { TEXT_FIELD_HINTS, TEXT_SURFACE_KIND } from "../../src/moderation/text-policy";
+import { evaluateLocalText, LOCAL_TEXT_POLICY_VERSION } from "../../src/moderation/local-text-policy";
+import { ContentModerationService } from "../../src/moderation/moderation.service";
+import {
+  PUBLIC_TEXT_POLICY_VERSION,
+  REVIEW_HARD_REJECT_CATEGORIES,
+  REVIEW_QUEUE_CATEGORIES,
+  TEXT_FIELD_HINTS,
+  TEXT_SURFACE_KIND,
+  isReviewTextSurface,
+} from "../../src/moderation/text-policy";
 
 const rawEnv = {
   NODE_ENV: "test",
@@ -120,6 +130,26 @@ describe("text moderation adapter", () => {
     ).toBe("contextual");
   });
 
+  it("B1b role review/reply surfaces stay prose; soft vs hard category split", () => {
+    expect(isReviewTextSurface("role_review_body")).toBe(true);
+    expect(isReviewTextSurface("role_reply_body")).toBe(true);
+    expect(isReviewTextSurface("comment_body")).toBe(false);
+    expect(TEXT_SURFACE_KIND.role_review_body).toBe("prose");
+    expect(TEXT_SURFACE_KIND.role_reply_body).toBe("prose");
+    expect(TEXT_FIELD_HINTS.role_review_body).toMatch(/отзыва/i);
+    // Ordinary profiles/comments still reject any flag; review soft queue is separate.
+    expect(REVIEW_QUEUE_CATEGORIES).toEqual(
+      expect.arrayContaining(["harassment", "hate", "illicit", "violence"]),
+    );
+    expect(REVIEW_HARD_REJECT_CATEGORIES).toEqual(
+      expect.arrayContaining(["sexual/minors", "harassment/threatening", "self-harm"]),
+    );
+    expect(REVIEW_HARD_REJECT_CATEGORIES).not.toContain("harassment");
+    expect(
+      evaluateLocalText("Слабая организация, время сдвинули", "prose").kind,
+    ).toBe("clean");
+  });
+
   it("bounds text retries on transport failure", async () => {
     const transport = vi.fn<typeof fetch>(
       async () =>
@@ -139,5 +169,155 @@ describe("text moderation adapter", () => {
     ).rejects.toMatchObject({ kind: "unavailable" });
     expect(transport).toHaveBeenCalledTimes(2);
     expect(reserve).toHaveBeenCalledTimes(2);
+  });
+});
+
+/** N-1 binder SQL must omit role_reputation_decision_id unless human publication FK is set. */
+describe("content moderation binding SQL compatibility", () => {
+  const env = loadEnv(rawEnv);
+  const fake = new FakeModerationProvider(
+    { NODE_ENV: "test", APP_ENV: "local" },
+    async () => ({
+      model: MODERATION_MODEL,
+      responseId: null,
+      flagged: false,
+      categories: Object.fromEntries(
+        ["self-harm", "self-harm/intent", "self-harm/instructions", "sexual", "violence", "violence/graphic"].map(
+          (k) => [k, false],
+        ),
+      ) as never,
+    }),
+    async (input) => safeTextBatchDecision(input.texts.length),
+  );
+
+  function captureClient() {
+    const sqls: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        sqls.push(sql);
+        if (sql.includes("content_moderation_approvals")) {
+          return { rows: [{ id: "approval-1", decision: "allow" }] };
+        }
+        return { rows: [] };
+      }),
+    } as unknown as PoolClient;
+    return { client, sqls };
+  }
+
+  it("ordinary A bindTexts omits role_reputation_decision_id column name", async () => {
+    const service = new ContentModerationService({} as Pool, env, fake);
+    const text = "Играем в бадминтон";
+    const fingerprint = service.textFingerprint("game_title", text);
+    const { client, sqls } = captureClient();
+    await service.bindTexts(
+      client,
+      {
+        fields: [
+          {
+            surface: "game_title",
+            fieldId: "title",
+            text,
+            fingerprint,
+            providerKey: "fake",
+            providerModel: MODERATION_MODEL,
+            policy: PUBLIC_TEXT_POLICY_VERSION,
+            localPolicy: LOCAL_TEXT_POLICY_VERSION,
+            checkedAt: new Date("2026-11-07T00:00:00.000Z"),
+            decision: safeTextItemDecision(),
+            classification: "allow",
+            responseId: null,
+          },
+        ],
+      },
+      [{ surface: "game_title", text }],
+      {
+        entityKind: "game",
+        entityId: "11111111-1111-1111-1111-111111111111",
+        resourceVersion: 1,
+        actorUserId: "22222222-2222-2222-2222-222222222222",
+        bindingKind: "publication",
+      },
+    );
+    const bindingSql = sqls.find((s) => s.includes("content_moderation_bindings"));
+    expect(bindingSql).toBeDefined();
+    expect(bindingSql).not.toContain("role_reputation_decision_id");
+  });
+
+  it("human role publication bind names role_reputation_decision_id", async () => {
+    const service = new ContentModerationService({} as Pool, env, fake);
+    const text = "Спокойный отзыв о роли";
+    const fingerprint = service.textFingerprint("role_review_body", text);
+    const { client, sqls } = captureClient();
+    await service.bindReviewTexts(
+      client,
+      {
+        fields: [
+          {
+            surface: "role_review_body",
+            fieldId: "text",
+            text,
+            fingerprint,
+            providerKey: "fake",
+            providerModel: MODERATION_MODEL,
+            policy: PUBLIC_TEXT_POLICY_VERSION,
+            localPolicy: LOCAL_TEXT_POLICY_VERSION,
+            checkedAt: new Date("2026-11-07T00:00:00.000Z"),
+            decision: safeTextItemDecision(),
+            classification: "allow",
+            responseId: null,
+          },
+        ],
+      },
+      [{ surface: "role_review_body", text }],
+      {
+        entityKind: "role_review_revision",
+        entityId: "33333333-3333-3333-3333-333333333333",
+        resourceVersion: 1,
+        actorUserId: "22222222-2222-2222-2222-222222222222",
+        actorPrincipalId: "44444444-4444-4444-4444-444444444444",
+        bindingKind: "publication",
+        roleReputationDecisionId: "55555555-5555-5555-5555-555555555555",
+      },
+    );
+    const bindingSql = sqls.find((s) => s.includes("content_moderation_bindings"));
+    expect(bindingSql).toContain("role_reputation_decision_id");
+  });
+
+  it("publication without human role decision id is rejected", async () => {
+    const service = new ContentModerationService({} as Pool, env, fake);
+    const text = "Спокойный отзыв о роли";
+    const fingerprint = service.textFingerprint("role_review_body", text);
+    const { client } = captureClient();
+    await expect(
+      service.bindReviewTexts(
+        client,
+        {
+          fields: [
+            {
+              surface: "role_review_body",
+              fieldId: "text",
+              text,
+              fingerprint,
+              providerKey: "fake",
+              providerModel: MODERATION_MODEL,
+              policy: PUBLIC_TEXT_POLICY_VERSION,
+              localPolicy: LOCAL_TEXT_POLICY_VERSION,
+              checkedAt: new Date("2026-11-07T00:00:00.000Z"),
+              decision: safeTextItemDecision(),
+              classification: "allow",
+              responseId: null,
+            },
+          ],
+        },
+        [{ surface: "role_review_body", text }],
+        {
+          entityKind: "role_review_revision",
+          entityId: "33333333-3333-3333-3333-333333333333",
+          resourceVersion: 1,
+          actorUserId: "22222222-2222-2222-2222-222222222222",
+          bindingKind: "publication",
+        },
+      ),
+    ).rejects.toMatchObject({ status: 503 });
   });
 });

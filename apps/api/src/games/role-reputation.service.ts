@@ -7,6 +7,10 @@ import { conflict, forbidden, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import { publicModerationSql } from "../game-moderation/projection";
+import {
+  ContentModerationService,
+  type ReviewTextBatchAssessment,
+} from "../moderation/moderation.service";
 import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { unrestrictedSql } from "../restrictions/policy";
 import {
@@ -85,6 +89,7 @@ export class RoleReputationService {
     private readonly mutations: MutationRunner,
     private readonly idempotency: IdempotencyService,
     private readonly attendance: GameAttendanceService,
+    private readonly moderation: ContentModerationService,
   ) {}
 
   private async installed(client: PoolClient | Pool): Promise<boolean> {
@@ -1388,6 +1393,7 @@ export class RoleReputationService {
       consentProjectionHash: string;
     },
     expectedSlotVersion: number | null,
+    assessment: ReviewTextBatchAssessment,
   ): Promise<RoleReviewMutationReceiptDto> {
     if (!topicsAllowedForRole(body.role, body.topics)) {
       throw unprocessable("ROLE_TOPICS_INVALID", "Некорректные темы");
@@ -1515,6 +1521,19 @@ export class RoleReputationService {
       subjectUserId: ctx.proof.subject_user_id,
       role: body.role,
     });
+    // Classifier ALLOW still creates real human intake — never auto-publishes.
+    await this.moderation.bindReviewTexts(
+      client,
+      assessment,
+      [{ surface: "role_review_body", text: body.text }],
+      {
+        entityKind: "role_review_revision",
+        entityId: rev.id,
+        resourceVersion,
+        actorUserId: userId,
+        bindingKind: "candidate",
+      },
+    );
     const fresh = (
       await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id = $1`, [slot.id])
     ).rows[0]!;
@@ -1528,6 +1547,85 @@ export class RoleReputationService {
     };
   }
 
+  /**
+   * Short authorized preflight before provider I/O. Ends before assessReviewTexts.
+   * Final execute revalidates the same fences under MutationRunner locks.
+   */
+  private async authorizeReviewSubmitPreflight(
+    userId: string,
+    body: {
+      gameId: string;
+      role: RoleKind;
+      expectedBasisVersions: {
+        proofVersion: number;
+        outcomeVersion: number;
+        attendanceVersion: number;
+      };
+      text: string;
+      topics: string[];
+      consentProjectionHash: string;
+    },
+    expectedSlotVersion: number | null,
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        if (!(await this.installed(client))) writesUnavailable();
+        if (!topicsAllowedForRole(body.role, body.topics)) {
+          throw unprocessable("ROLE_TOPICS_INVALID", "Некорректные темы");
+        }
+        const ctx = await this.loadAdmissionContext(client, userId, body.gameId, body.role);
+        if (ctx.verdict.status !== "may_submit" || !ctx.proof) {
+          if (ctx.verdict.status === "hold") {
+            throw unprocessable("ROLE_REPUTATION_HOLD", "Основание уточняется");
+          }
+          throw unprocessable("ROLE_REPUTATION_DENIED", "Нет допуска к публикации");
+        }
+        if (ctx.proof.version !== body.expectedBasisVersions.proofVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия основания устарела");
+        }
+        if ((ctx.outcome?.version ?? 0) !== body.expectedBasisVersions.outcomeVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия итога устарела");
+        }
+        if ((ctx.attendance?.version ?? 0) !== body.expectedBasisVersions.attendanceVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия посещения устарела");
+        }
+        const expectedHash = projectionHash({
+          subjectUserId: ctx.proof.subject_user_id,
+          role: body.role,
+          audience: "public",
+          text: body.text,
+          topics: body.topics,
+        });
+        if (expectedHash !== body.consentProjectionHash) {
+          throw unprocessable("ROLE_CONSENT_MISMATCH", "Согласие не соответствует тексту");
+        }
+        const slot = (
+          await client.query<SlotRow>(
+            `SELECT * FROM role_review_slots
+             WHERE author_user_id = $1 AND subject_user_id = $2 AND role = $3
+             FOR SHARE`,
+            [userId, ctx.proof.subject_user_id, body.role],
+          )
+        ).rows[0];
+        if (!slot) {
+          if (expectedSlotVersion !== null && expectedSlotVersion !== 0) {
+            throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+          }
+        } else if (expectedSlotVersion !== null && slot.version !== expectedSlotVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
+  }
+
   async createReview(
     userId: string,
     sessionId: string,
@@ -1537,7 +1635,7 @@ export class RoleReputationService {
     if (!postGameWritesEnabled(this.env)) writesUnavailable();
     const body = parseOrThrow(createRoleReviewRequest, input);
     const requestHash = this.idempotency.requestHash(body);
-    return this.mutations.runIdempotent({
+    return this.mutations.runWithExternalPrepare<ReviewTextBatchAssessment, RoleReviewMutationReceiptDto>({
       actorId: userId,
       sessionId,
       operation: "role_review.create",
@@ -1550,9 +1648,16 @@ export class RoleReputationService {
           throw unprocessable("ROLE_REPUTATION_DENIED", "Нет допуска к публикации");
         }
       },
-      execute: async (client) => {
+      prepare: async () => {
+        await this.authorizeReviewSubmitPreflight(userId, body, null);
+        // Only explicitly public-consented review body leaves the process — never private notes.
+        return this.moderation.assessReviewTexts(userId, [
+          { surface: "role_review_body", text: body.text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, assessment) => {
         if (!(await this.installed(client))) writesUnavailable();
-        const receipt = await this.createOrResubmitReview(client, userId, body, null);
+        const receipt = await this.createOrResubmitReview(client, userId, body, null, assessment);
         return { statusCode: 200, body: receipt };
       },
     });
@@ -1655,66 +1760,67 @@ export class RoleReputationService {
     if (!postGameWritesEnabled(this.env)) writesUnavailable();
     const body = parseOrThrow(roleReviewCommandRequest, input);
     const requestHash = this.idempotency.requestHash({ reviewId, ...body });
-    return this.mutations.runIdempotent({
-      actorId: userId,
-      sessionId,
-      operation: "role_review.command",
-      key,
-      requestHash,
-      authorizeReplay: async (client) => {
-        const slot = (
-          await client.query<SlotRow>(
-            `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
-            [reviewId],
-          )
-        ).rows[0];
-        if (!slot || slot.author_user_id !== userId) unavailable();
-      },
-      execute: async (client) => {
-        if (!(await this.installed(client))) writesUnavailable();
-        const slot = (
-          await client.query<SlotRow>(
-            `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
-            [reviewId],
-          )
-        ).rows[0];
-        if (!slot || slot.author_user_id !== userId) unavailable();
-        if (slot.version !== body.expectedVersion) {
-          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
-        }
-        if (body.action === "withdraw") {
-          await client.query(
-            `UPDATE role_review_slots
-             SET status = 'withdrawn',
-                 version = version + 1,
-                 pending_revision_id = NULL,
-                 approved_revision_id = NULL,
-                 updated_at = clock_timestamp()
-             WHERE id = $1`,
-            [slot.id],
-          );
-          await client.query(
-            `UPDATE role_reputation_pending_intakes
-             SET status = 'cancelled', updated_at = clock_timestamp(), version = version + 1
-             WHERE slot_id = $1 AND status = 'waiting_intake'`,
-            [slot.id],
-          );
-          const fresh = (
-            await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id = $1`, [slot.id])
-          ).rows[0]!;
-          return {
-            statusCode: 200,
-            body: {
-              id: fresh.id,
-              reviewHandle: fresh.public_handle,
-              version: fresh.version,
-              status: fresh.status,
-              receiptToken: opaqueHandle(),
-              pendingIntakeStatus: "waiting_intake" as const,
-            },
-          };
-        }
-        if (body.action === "appeal") {
+    // Withdraw/appeal/safety are provider-independent.
+    if (body.action === "withdraw" || body.action === "appeal") {
+      return this.mutations.runIdempotent({
+        actorId: userId,
+        sessionId,
+        operation: "role_review.command",
+        key,
+        requestHash,
+        authorizeReplay: async (client) => {
+          const slot = (
+            await client.query<SlotRow>(
+              `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
+              [reviewId],
+            )
+          ).rows[0];
+          if (!slot || slot.author_user_id !== userId) unavailable();
+        },
+        execute: async (client) => {
+          if (!(await this.installed(client))) writesUnavailable();
+          const slot = (
+            await client.query<SlotRow>(
+              `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
+              [reviewId],
+            )
+          ).rows[0];
+          if (!slot || slot.author_user_id !== userId) unavailable();
+          if (slot.version !== body.expectedVersion) {
+            throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+          }
+          if (body.action === "withdraw") {
+            await client.query(
+              `UPDATE role_review_slots
+               SET status = 'withdrawn',
+                   version = version + 1,
+                   pending_revision_id = NULL,
+                   approved_revision_id = NULL,
+                   updated_at = clock_timestamp()
+               WHERE id = $1`,
+              [slot.id],
+            );
+            await client.query(
+              `UPDATE role_reputation_pending_intakes
+               SET status = 'cancelled', updated_at = clock_timestamp(), version = version + 1
+               WHERE slot_id = $1 AND status = 'waiting_intake'`,
+              [slot.id],
+            );
+            const fresh = (
+              await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id = $1`, [slot.id])
+            ).rows[0]!;
+            return {
+              statusCode: 200,
+              body: {
+                id: fresh.id,
+                reviewHandle: fresh.public_handle,
+                version: fresh.version,
+                status: fresh.status,
+                receiptToken: opaqueHandle(),
+                pendingIntakeStatus: "waiting_intake" as const,
+              },
+            };
+          }
           const prior = (
             await client.query<{ id: string }>(
               `SELECT id FROM role_reputation_decisions
@@ -1753,6 +1859,74 @@ export class RoleReputationService {
               pendingIntakeStatus: "waiting_intake",
             },
           };
+        },
+      });
+    }
+    // submit_revision / resubmit — provider outside locks; prior approved tip retained on reject/503.
+    return this.mutations.runWithExternalPrepare<ReviewTextBatchAssessment, RoleReviewMutationReceiptDto>({
+      actorId: userId,
+      sessionId,
+      operation: "role_review.command",
+      key,
+      requestHash,
+      authorizeReplay: async (client) => {
+        const slot = (
+          await client.query<SlotRow>(
+            `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
+            [reviewId],
+          )
+        ).rows[0];
+        if (!slot || slot.author_user_id !== userId) unavailable();
+      },
+      prepare: async () => {
+        const client = await this.pool.connect();
+        let slotRole: RoleKind;
+        try {
+          await client.query("BEGIN");
+          try {
+            const slot = (
+              await client.query<SlotRow>(
+                `SELECT * FROM role_review_slots WHERE id = $1 FOR SHARE`,
+                [reviewId],
+              )
+            ).rows[0];
+            if (!slot || slot.author_user_id !== userId) unavailable();
+            if (slot.version !== body.expectedVersion) {
+              throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+            }
+            slotRole = slot.role;
+            await client.query("COMMIT");
+          } catch (error) {
+            await client.query("ROLLBACK");
+            throw error;
+          }
+        } finally {
+          client.release();
+        }
+        const gated = {
+          gameId: body.gameId,
+          role: slotRole,
+          expectedBasisVersions: body.expectedBasisVersions,
+          text: body.text,
+          topics: body.topics,
+          consentProjectionHash: body.consentProjectionHash,
+        };
+        await this.authorizeReviewSubmitPreflight(userId, gated, body.expectedVersion);
+        return this.moderation.assessReviewTexts(userId, [
+          { surface: "role_review_body", text: gated.text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, assessment) => {
+        if (!(await this.installed(client))) writesUnavailable();
+        const slot = (
+          await client.query<SlotRow>(
+            `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
+            [reviewId],
+          )
+        ).rows[0];
+        if (!slot || slot.author_user_id !== userId) unavailable();
+        if (slot.version !== body.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
         }
         const receipt = await this.createOrResubmitReview(
           client,
@@ -1766,10 +1940,79 @@ export class RoleReputationService {
             consentProjectionHash: body.consentProjectionHash,
           },
           body.expectedVersion,
+          assessment,
         );
         return { statusCode: 200, body: receipt };
       },
     });
+  }
+
+  private async authorizeReplySubmitPreflight(
+    userId: string,
+    reviewHandle: string,
+    body: {
+      expectedVersion: number;
+      expectedReviewRevision: number;
+      text: string;
+      consentProjectionHash: string;
+    },
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        if (!(await this.installed(client))) writesUnavailable();
+        const found = await this.loadSlotByPublicHandle(client, reviewHandle);
+        if (!found || found.subject_user_id !== userId) unavailable();
+        const slot = (
+          await client.query<SlotRow>(
+            `SELECT * FROM role_review_slots WHERE id = $1 FOR SHARE`,
+            [found.id],
+          )
+        ).rows[0];
+        if (!slot || slot.subject_user_id !== userId) unavailable();
+        if (slot.status === "withdrawn" || !slot.approved_revision_id) {
+          throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
+        }
+        const approved = (
+          await client.query<{ id: string; resource_version: number }>(
+            `SELECT id, resource_version FROM role_review_revisions WHERE id = $1`,
+            [slot.approved_revision_id],
+          )
+        ).rows[0];
+        if (!approved || approved.resource_version !== body.expectedReviewRevision) {
+          throw conflict("VERSION_CONFLICT", "Версия отзыва устарела");
+        }
+        const expectedHash = projectionHash({
+          subjectUserId: slot.subject_user_id,
+          role: slot.role,
+          audience: "public",
+          text: body.text,
+          topics: [],
+          reviewRevision: approved.resource_version,
+        });
+        if (expectedHash !== body.consentProjectionHash) {
+          throw unprocessable("ROLE_CONSENT_MISMATCH", "Согласие не соответствует тексту");
+        }
+        const reply = (
+          await client.query<{ version: number }>(
+            `SELECT version FROM role_review_replies WHERE slot_id = $1 FOR SHARE`,
+            [slot.id],
+          )
+        ).rows[0];
+        if (!reply) {
+          if (body.expectedVersion !== 0) throw conflict("VERSION_CONFLICT", "Версия ответа устарела");
+        } else if (reply.version !== body.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия ответа устарела");
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
   }
 
   async replyCommand(
@@ -1782,31 +2025,31 @@ export class RoleReputationService {
     if (!postGameWritesEnabled(this.env)) writesUnavailable();
     const body = parseOrThrow(roleReplyCommandRequest, input);
     const requestHash = this.idempotency.requestHash({ reviewHandle, ...body });
-    return this.mutations.runIdempotent({
-      actorId: userId,
-      sessionId,
-      operation: "role_review.reply_command",
-      key,
-      requestHash,
-      authorizeReplay: async (client) => {
-        const slot = await this.loadSlotByPublicHandle(client, reviewHandle);
-        if (!slot || slot.subject_user_id !== userId) unavailable();
-      },
-      execute: async (client) => {
-        if (!(await this.installed(client))) writesUnavailable();
-        const found = await this.loadSlotByPublicHandle(client, reviewHandle);
-        if (!found || found.subject_user_id !== userId) unavailable();
-        const slot = (
-          await client.query<SlotRow>(
-            `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
-            [found.id],
-          )
-        ).rows[0];
-        if (!slot || slot.subject_user_id !== userId) unavailable();
-        if (slot.status === "withdrawn" || !slot.approved_revision_id) {
-          throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
-        }
-        if (body.action === "withdraw") {
+    if (body.action === "withdraw") {
+      return this.mutations.runIdempotent({
+        actorId: userId,
+        sessionId,
+        operation: "role_review.reply_command",
+        key,
+        requestHash,
+        authorizeReplay: async (client) => {
+          const slot = await this.loadSlotByPublicHandle(client, reviewHandle);
+          if (!slot || slot.subject_user_id !== userId) unavailable();
+        },
+        execute: async (client) => {
+          if (!(await this.installed(client))) writesUnavailable();
+          const found = await this.loadSlotByPublicHandle(client, reviewHandle);
+          if (!found || found.subject_user_id !== userId) unavailable();
+          const slot = (
+            await client.query<SlotRow>(
+              `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
+              [found.id],
+            )
+          ).rows[0];
+          if (!slot || slot.subject_user_id !== userId) unavailable();
+          if (slot.status === "withdrawn" || !slot.approved_revision_id) {
+            throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
+          }
           const reply = (
             await client.query(
               `SELECT version, status FROM role_review_replies WHERE slot_id = $1 FOR UPDATE`,
@@ -1827,6 +2070,41 @@ export class RoleReputationService {
             statusCode: 200,
             body: { version: reply.version + 1, status: "withdrawn", receiptToken: opaqueHandle() },
           };
+        },
+      });
+    }
+    return this.mutations.runWithExternalPrepare<
+      ReviewTextBatchAssessment,
+      { version: number; status: string; receiptToken: string }
+    >({
+      actorId: userId,
+      sessionId,
+      operation: "role_review.reply_command",
+      key,
+      requestHash,
+      authorizeReplay: async (client) => {
+        const slot = await this.loadSlotByPublicHandle(client, reviewHandle);
+        if (!slot || slot.subject_user_id !== userId) unavailable();
+      },
+      prepare: async () => {
+        await this.authorizeReplySubmitPreflight(userId, reviewHandle, body);
+        return this.moderation.assessReviewTexts(userId, [
+          { surface: "role_reply_body", text: body.text, fieldId: "text" },
+        ]);
+      },
+      execute: async (client, assessment) => {
+        if (!(await this.installed(client))) writesUnavailable();
+        const found = await this.loadSlotByPublicHandle(client, reviewHandle);
+        if (!found || found.subject_user_id !== userId) unavailable();
+        const slot = (
+          await client.query<SlotRow>(
+            `SELECT * FROM role_review_slots WHERE id = $1 FOR UPDATE`,
+            [found.id],
+          )
+        ).rows[0];
+        if (!slot || slot.subject_user_id !== userId) unavailable();
+        if (slot.status === "withdrawn" || !slot.approved_revision_id) {
+          throw unprocessable("ROLE_REPLY_UNAVAILABLE", "Ответ недоступен");
         }
         const approved = (
           await client.query<{ id: string; resource_version: number; projection_hash: string }>(
@@ -1920,6 +2198,18 @@ export class RoleReputationService {
           subjectUserId: slot.subject_user_id,
           role: slot.role,
         });
+        await this.moderation.bindReviewTexts(
+          client,
+          assessment,
+          [{ surface: "role_reply_body", text: body.text }],
+          {
+            entityKind: "role_reply_revision",
+            entityId: rev.id,
+            resourceVersion,
+            actorUserId: userId,
+            bindingKind: "candidate",
+          },
+        );
         return {
           statusCode: 200,
           body: {
@@ -1930,6 +2220,111 @@ export class RoleReputationService {
         };
       },
     });
+  }
+
+  /** True when exact revision already has classifier candidate evidence (B1b). */
+  async hasReviewCandidateBinding(
+    client: PoolClient,
+    args: {
+      targetKind: "review" | "reply";
+      revisionId: string;
+      resourceVersion: number;
+    },
+  ): Promise<boolean> {
+    const surface = args.targetKind === "review" ? "role_review_body" : "role_reply_body";
+    const entityKind =
+      args.targetKind === "review" ? "role_review_revision" : "role_reply_revision";
+    const row = await client.query(
+      `SELECT 1 FROM content_moderation_bindings
+       WHERE entity_kind = $1 AND entity_id = $2::uuid
+         AND surface_key = $3 AND resource_version = $4
+         AND binding_kind = 'candidate'
+       LIMIT 1`,
+      [entityKind, args.revisionId, surface, args.resourceVersion],
+    );
+    return Boolean(row.rows[0]);
+  }
+
+  async bindHumanPublication(
+    client: PoolClient,
+    args: {
+      targetKind: "review" | "reply";
+      revisionId: string;
+      resourceVersion: number;
+      text: string;
+      actorUserId: string;
+      actorPrincipalId: string;
+      roleReputationDecisionId: string;
+      assessment: ReviewTextBatchAssessment;
+    },
+  ): Promise<void> {
+    const surface = args.targetKind === "review" ? "role_review_body" : "role_reply_body";
+    const entityKind =
+      args.targetKind === "review" ? "role_review_revision" : "role_reply_revision";
+    await this.moderation.bindReviewTexts(
+      client,
+      args.assessment,
+      [{ surface, text: args.text }],
+      {
+        entityKind,
+        entityId: args.revisionId,
+        resourceVersion: args.resourceVersion,
+        actorUserId: args.actorUserId,
+        actorPrincipalId: args.actorPrincipalId,
+        bindingKind: "publication",
+        roleReputationDecisionId: args.roleReputationDecisionId,
+      },
+    );
+  }
+
+  async loadRevisionPublicText(
+    client: PoolClient,
+    args: { targetKind: "review" | "reply"; revisionId: string },
+  ): Promise<{ text: string; resourceVersion: number; actorUserId: string } | null> {
+    if (args.targetKind === "review") {
+      const rev = (
+        await client.query<{
+          body_text: string;
+          resource_version: number;
+          actor_user_id: string;
+        }>(
+          `SELECT body_text, resource_version, actor_user_id FROM role_review_revisions WHERE id = $1`,
+          [args.revisionId],
+        )
+      ).rows[0];
+      if (!rev) return null;
+      return {
+        text: rev.body_text,
+        resourceVersion: rev.resource_version,
+        actorUserId: rev.actor_user_id,
+      };
+    }
+    const rev = (
+      await client.query<{
+        body_text: string;
+        resource_version: number;
+        actor_user_id: string;
+      }>(
+        `SELECT body_text, resource_version, actor_user_id FROM role_review_reply_revisions WHERE id = $1`,
+        [args.revisionId],
+      )
+    ).rows[0];
+    if (!rev) return null;
+    return {
+      text: rev.body_text,
+      resourceVersion: rev.resource_version,
+      actorUserId: rev.actor_user_id,
+    };
+  }
+
+  assessPublicRoleText(actorId: string, targetKind: "review" | "reply", text: string) {
+    return this.moderation.assessReviewTexts(actorId, [
+      {
+        surface: targetKind === "review" ? "role_review_body" : "role_reply_body",
+        text,
+        fieldId: "text",
+      },
+    ]);
   }
 
   async report(
