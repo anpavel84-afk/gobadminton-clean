@@ -1,5 +1,5 @@
 /**
- * Public text surface catalogue and field-kind mapping for MOD-V2-A/B1a/B1b.
+ * Public text surface catalogue and field-kind mapping for MOD-V2-A/B1a/B1b/B1c.
  * Provider policy version is independent from local ru-profanity-v1.
  * Review surfaces keep contextual prose semantics; ordinary A/B1a reject paths unchanged.
  */
@@ -26,12 +26,17 @@ export const TEXT_SURFACES = [
   "comment_body",
   "role_review_body",
   "role_reply_body",
+  "venue_review_body",
 ] as const;
 
 export type TextSurface = (typeof TEXT_SURFACES)[number];
 
-/** B1b public role-review/reply surfaces — human queue mandatory even on classifier ALLOW. */
-export const REVIEW_TEXT_SURFACES = ["role_review_body", "role_reply_body"] as const;
+/** B1b/B1c public review surfaces — human queue mandatory even on classifier ALLOW. */
+export const REVIEW_TEXT_SURFACES = [
+  "role_review_body",
+  "role_reply_body",
+  "venue_review_body",
+] as const;
 export type ReviewTextSurface = (typeof REVIEW_TEXT_SURFACES)[number];
 
 export function isReviewTextSurface(surface: TextSurface): surface is ReviewTextSurface {
@@ -78,6 +83,7 @@ export const TEXT_SURFACE_KIND: Record<TextSurface, LocalTextKind> = {
   comment_body: "prose",
   role_review_body: "prose",
   role_reply_body: "prose",
+  venue_review_body: "prose",
 };
 
 /** Neutral Russian correction hints keyed by client field id (never expose matched tokens). */
@@ -97,6 +103,7 @@ export const TEXT_FIELD_HINTS: Record<TextSurface, string> = {
   comment_body: "Измените текст комментария",
   role_review_body: "Измените текст отзыва",
   role_reply_body: "Измените текст ответа",
+  venue_review_body: "Измените текст отзыва о площадке",
 };
 
 export type TextFieldCandidate = Readonly<{
@@ -114,7 +121,8 @@ export type EntityKind =
   | "game"
   | "entity_comment"
   | "role_review_revision"
-  | "role_reply_revision";
+  | "role_reply_revision"
+  | "venue_review_revision";
 
 export type BindingKind = "candidate" | "publication";
 

@@ -537,23 +537,25 @@ export class ContentModerationService {
   }
 
   /**
-   * B1b: bind classifier evidence (allow|review) to exact revision.
+   * B1b/B1c: bind classifier evidence (allow|review) to exact revision.
    * Never overwrites a provider review decision to allow. Human
-   * role_reputation_decision_id is required for publication and omitted
-   * from SQL when absent (candidate rows use 0063 column default).
+   * role_reputation_decision_id XOR venue_review_decision_id is required for
+   * publication and omitted from SQL when absent (candidate rows must not
+   * name 0063/0064-only FK columns so N-1 fixtures stay compatible).
    */
   async bindReviewTexts(
     client: PoolClient,
     batch: ReviewTextBatchAssessment,
     committed: ReadonlyArray<{ surface: TextSurface; text: string }>,
     meta: {
-      entityKind: "role_review_revision" | "role_reply_revision";
+      entityKind: "role_review_revision" | "role_reply_revision" | "venue_review_revision";
       entityId: string;
       resourceVersion: number;
       actorUserId: string;
       actorPrincipalId?: string | null;
       bindingKind: BindingKind;
       roleReputationDecisionId?: string | null;
+      venueReviewDecisionId?: string | null;
     },
   ): Promise<void> {
     for (const field of batch.fields) {
@@ -562,17 +564,31 @@ export class ContentModerationService {
         throw this.mismatchText();
       }
     }
-    if (meta.bindingKind === "publication") {
-      if (!meta.roleReputationDecisionId) throw this.mismatchText();
-    } else if (meta.roleReputationDecisionId) {
-      throw this.mismatchText();
+    const roleDecision = meta.roleReputationDecisionId ?? null;
+    const venueDecision = meta.venueReviewDecisionId ?? null;
+    if (roleDecision && venueDecision) throw this.mismatchText();
+    if (meta.entityKind === "venue_review_revision") {
+      if (roleDecision) throw this.mismatchText();
+      if (meta.bindingKind === "publication") {
+        if (!venueDecision) throw this.mismatchText();
+      } else if (venueDecision) {
+        throw this.mismatchText();
+      }
+    } else {
+      if (venueDecision) throw this.mismatchText();
+      if (meta.bindingKind === "publication") {
+        if (!roleDecision) throw this.mismatchText();
+      } else if (roleDecision) {
+        throw this.mismatchText();
+      }
     }
     await this.bindTextRows(
       client,
       batch.fields,
       committed,
       meta,
-      meta.roleReputationDecisionId ?? null,
+      roleDecision,
+      venueDecision,
     );
   }
 
@@ -589,6 +605,7 @@ export class ContentModerationService {
       bindingKind: BindingKind;
     },
     roleReputationDecisionId: string | null,
+    venueReviewDecisionId: string | null = null,
   ): Promise<void> {
     const bySurface = new Map(fields.map((f) => [f.surface, f]));
     for (const item of committed) {
@@ -680,8 +697,8 @@ export class ContentModerationService {
       ) {
         throw this.mismatchText();
       }
-      // Ordinary A/comment and candidate role binds must not name the 0063 FK
-      // column (N-1 fixtures lack it). Only human publication writes the FK.
+      // Ordinary A/comment and candidate binds must not name 0063/0064 FK columns
+      // (N-1 fixtures lack them). Only human publication writes the matching FK.
       if (roleReputationDecisionId !== null) {
         await client.query(
           `INSERT INTO content_moderation_bindings(
@@ -706,6 +723,32 @@ export class ContentModerationService {
             meta.actorPrincipalId ?? null,
             meta.bindingKind,
             roleReputationDecisionId,
+          ],
+        );
+      } else if (venueReviewDecisionId !== null) {
+        await client.query(
+          `INSERT INTO content_moderation_bindings(
+             entity_kind, entity_id, surface_key, resource_version, approval_id,
+             actor_user_id, actor_principal_id, binding_kind, venue_review_decision_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
+           DO UPDATE SET approval_id = excluded.approval_id,
+             actor_user_id = excluded.actor_user_id,
+             actor_principal_id = excluded.actor_principal_id,
+             venue_review_decision_id = COALESCE(
+               excluded.venue_review_decision_id,
+               content_moderation_bindings.venue_review_decision_id
+             )`,
+          [
+            meta.entityKind,
+            meta.entityId,
+            item.surface,
+            meta.resourceVersion,
+            inserted.rows[0]!.id,
+            meta.actorUserId,
+            meta.actorPrincipalId ?? null,
+            meta.bindingKind,
+            venueReviewDecisionId,
           ],
         );
       } else {

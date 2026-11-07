@@ -202,6 +202,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0061_content_moderation_text",
         "0062_content_moderation_comments",
         "0063_moderation_role_review_bindings",
+        "0064_moderation_venue_review_bindings",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -323,6 +324,37 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0],
       ).toEqual({ column_name: "role_reputation_decision_id", is_nullable: "YES" });
+      // 0064 #506 B1c venue_review_body + venue_review_revision + venue decision FK.
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/venue_review_body/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_bindings'::regclass
+               AND conname = 'content_moderation_bindings_entity_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/venue_review_revision/);
+      expect(
+        (
+          await pool.query<{ column_name: string; is_nullable: string }>(
+            `SELECT column_name, is_nullable
+             FROM information_schema.columns
+             WHERE table_name = 'content_moderation_bindings'
+               AND column_name = 'venue_review_decision_id'`,
+          )
+        ).rows[0],
+      ).toEqual({ column_name: "venue_review_decision_id", is_nullable: "YES" });
       // 0063 admin external-prepare: reservation_state allows durable known-reject 'error'.
       expect(
         (
@@ -550,6 +582,57 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       } finally {
         await roleSurfacesRollback.query("ROLLBACK");
         roleSurfacesRollback.release();
+      }
+      // 0064 B1c non-destructive rollback retains venue surfaces + human decision column.
+      const venueSurfacesRollback = await pool.connect();
+      try {
+        await venueSurfacesRollback.query("BEGIN");
+        await venueSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/rollback/0064_moderation_venue_review_bindings.sql"),
+            "utf8",
+          ),
+        );
+        expect(
+          (
+            await venueSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_approvals'::regclass
+                 AND conname = 'content_moderation_approvals_surface_key_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/venue_review_body/);
+        expect(
+          (
+            await venueSurfacesRollback.query<{ column_name: string }>(
+              `SELECT column_name
+               FROM information_schema.columns
+               WHERE table_name = 'content_moderation_bindings'
+                 AND column_name = 'venue_review_decision_id'`,
+            )
+          ).rows[0]?.column_name,
+        ).toBe("venue_review_decision_id");
+        expect(
+          (
+            await venueSurfacesRollback.query(
+              "SELECT 1 FROM schema_migrations WHERE id='0064_moderation_venue_review_bindings'",
+            )
+          ).rowCount,
+        ).toBe(0);
+        await venueSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/0064_moderation_venue_review_bindings.sql"),
+            "utf8",
+          ),
+        );
+        await venueSurfacesRollback.query(
+          `INSERT INTO schema_migrations(id) VALUES ('0064_moderation_venue_review_bindings')
+           ON CONFLICT DO NOTHING`,
+        );
+      } finally {
+        await venueSurfacesRollback.query("ROLLBACK");
+        venueSurfacesRollback.release();
       }
       const bindingsRollback = await pool.connect();
       try {

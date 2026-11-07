@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.49" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.50" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,18 +424,16 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.49",
-  "title": "Подпись к фото площадки и обслуживание галереи",
+  "application_version": "0.1.0-alpha.50",
+  "title": "Отзывы о площадке: проверка текста до решения человека",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [
-    "В галерее площадки для подписи к фото сохраняется постоянное место при перелистывании",
-    "Разрешённое обслуживание уже принятой галереи площадки без внешней загрузки новых снимков",
-    "Добавлены 9 фото на 4 площадках"
+    "Публичные отзывы о площадке проходят предварительную проверку текста до очереди независимого человека; неоднозначный результат остаётся на проверке, положительный допуск модели сам по себе не публикует текст; при отклонении или временной недоступности уже опубликованный текст и черновик сохраняются; личный черновик не уходит во внешнюю проверку"
   ],
   "fixes": [],
   "known_limitations": [
-    "Остальные отобранные фото пакета этим выпуском не заявляются опубликованными",
+    "Импорт публичного текста площадок, широкие комментарии на страницах площадок, личные сообщения и метаданные аватаров ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
     "Изменение времени и места игры и связанные push отложены и не реализованы",
     "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
@@ -2013,6 +2011,37 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-07T20:59:58Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.49",
+    "title": "Подпись к фото площадки и обслуживание галереи",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "В галерее площадки для подписи к фото сохраняется постоянное место при перелистывании",
+      "Разрешённое обслуживание уже принятой галереи площадки без внешней загрузки новых снимков",
+      "Добавлены 9 фото на 4 площадках"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Остальные отобранные фото пакета этим выпуском не заявляются опубликованными",
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "519489d9d0944619b29107b212dc09012e5b418b",
+    "version_label": "0.1.0-alpha.49",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42418500085-a1",
+        "api_digest": "sha256:662bcd70dfa500766bfd6cc64dc836fb8a60307ae188e198a9146a34f89760c4",
+        "web_digest": "sha256:4c2ed4faadbecb22745cd76dbb7ebbe9b513f0f72ab76dc9b758ef5d60fc8707",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T22:12:06Z",
         "kind": "pipeline"
       }
     ]

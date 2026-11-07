@@ -415,8 +415,9 @@ export const contentModerationRateBudgets = pgTable("content_moderation_rate_bud
 
 /**
  * Typed publication/candidate binding; approval row holds exact hash/policy. No raw body.
- * entity_kind includes entity_comment (B1a) and role_review/reply revisions (B1b).
- * Surface catalogue extended via migrations 0061/0062/0063. Optional human decision FK (B1b).
+ * entity_kind includes entity_comment (B1a), role_review/reply (B1b), venue_review (B1c).
+ * Surface catalogue extended via migrations 0061–0064. Optional human decision FKs
+ * (role XOR venue; publication-only).
  */
 export const contentModerationBindings = pgTable("content_moderation_bindings", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -429,6 +430,7 @@ export const contentModerationBindings = pgTable("content_moderation_bindings", 
   actorPrincipalId: uuid("actor_principal_id"),
   bindingKind: text("binding_kind").notNull(),
   roleReputationDecisionId: uuid("role_reputation_decision_id"),
+  venueReviewDecisionId: uuid("venue_review_decision_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
