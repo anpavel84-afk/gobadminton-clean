@@ -1,103 +1,102 @@
-# #422 SPB identity repair — public-data importer extension
+# #422 SPB identity repair — public-data importer + alpha.41 package
 
 From: source author (`cursor:auto`). To: independent QA / PM / trusted integrator.
-Date: 2026-11-07. Status: WORKING_DRAFT, NOT INDEPENDENTLY VERIFIED. No QA/DEV/UAT PASS.
-Assignment: `OWNER_SPB422_MINIMAL_COMPATIBLE_IDENTITY_REPAIR_EXISTING_IMPORTER` attempt 2 (fixtures).
-Base: `fe236a8c365b74f55d6c9f1470d9b1868eace49a`. No Git/network/deploy/secrets in this pass.
-Attempt 1 native API unit+types+lint PASS; isolated PostGIS suite 2 PASS / 3 FAIL retained.
-New SPB venue creation, B4 UID forging, 11-city importer/source attribution, release files,
-and actual40 receipt are out of scope (next 41 metadata). PROD not authorized.
+Date: 2026-11-07. Status: AUTHOR CANDIDATE, NOT INDEPENDENTLY VERIFIED.
+No QA PASS, no CI PASS, no DEV ACCEPTED, no Owner UAT claimed in this pass.
+Assignment: `OWNER_SPB422_REPAIR_CONFIRMED_QA_LEGACY_REPLAY_AND_RELEASE41` attempt 3.
+Base: `766266eabf62244403fad20af7bc8c61af6b2798`. No Git/network/deploy/secrets/paid models.
+Related visual-qa: #496 (narrow CSS only). PROD not authorized.
 
-## What changed
+## Independent QA FAIL retained (pass1 → this repair)
 
-Minimal backward-compatible extension of `VENUE_PUBLIC_DATA_BATCH_V1` inside the existing
-public-data importer (no new tool/service/architecture/rights/migration/API admin endpoint).
+Independent QA FAIL on HEAD `85cfbbc` (severity): for public-data items that omit
+`identity`, accepted receipt was checked before `expectedName`/`expectedAddress`.
+Old receipts have no `identity`, so replay compared only previously touched public
+fields. After a contact/profile-only import, an external name/address change made
+the same batch return `SKIPPED` / `PUBLIC_DATA_REPLAY` instead of
+`VENUE_IDENTITY_MISMATCH`. Prior disposable PostGIS 5/5 passed but did not cover
+this legacy-replay finding. All prior author calls and that FAIL remain history.
 
-Optional per-item `identity` object with `name` and/or `address` only, for an **existing**
-venue UUID. At least one of `publicContacts` / `profile` / `identity` is required.
-`sources` + `checkedAt` remain required. Strict schema rejects create/delete/merge/verify/geo/
-city/timezone/private contact/status/gallery fields.
+## Attempt 3 — confirmed P1 fix + ordinary alpha.41 package
 
-## Compatibility
+Allowed paths only (this pass):
 
-- Manifests that omit `identity` keep the same fingerprint/digest bit-for-bit (undefined
-  identity is not serialized into the fingerprint payload).
-- Old receipts without `identity` still load; replay still verifies only touched public fields.
-- Gallery modes, cover import, and ordinary user rights are untouched.
+- `apps/api/src/database/import-venue-covers.ts`
+- `apps/api/test/integration/venue-public-data-import.test.ts`
+- `apps/web/src/styles/push-notifications.css`
+- `apps/web/src/lib/releases.ts`
+- `apps/web/src/lib/releases.test.ts`
+- `apps/web/test/releases.test.tsx`
+- `apps/web/test/releases-server.test.ts`
+- `docs/handoffs/spb422-identity-import.md`
 
-## Apply semantics
+### Public-data planner
 
-1. Eligible lifecycle only: `unverified` | `verified`.
-2. Own accepted receipt (batch+venue key) is checked **before** expectedName/address/version:
-   matching fingerprint + current post-patch identity and all touched public fields → `SKIPPED`
-   (`PUBLIC_DATA_REPLAY`) with zero writes. This is how exact batch replay works after a
-   successful rename/address change (expected* still name the pre-patch identity).
-3. Without own receipt: exact expected old name/address + CAS version; never accept a new
-   identity solely because the row already shows it.
-4. Identity resolve reuses `normalizeVenueText` / `extractIdentityDiscriminator` /
-   `venueDedupeKey`. Only supplied name/address change; non-empty `identity_discriminator`
-   is preserved (name-only fix must not erase unit/hall boundaries). Historical
-   `venue_identity_keys` rows are retained; the new normal key is inserted
-   (`ON CONFLICT DO NOTHING`) under the existing `gobadminton_venue_catalog` advisory fence.
-5. Foreign claim on the new dedupe key → `VENUE_IDENTITY_CONFLICT`, no row/alias/audit writes.
-   Collision/CAS/changed-manifest under the same key → FAIL, no partial writes. Drift after
-   own receipt → `PUBLIC_DATA_DRIFT` (no restoration).
-6. Single transaction: venue row CAS (name/address/normalized_*/discriminator + optional
-   publicContacts/profile + version) first, then reserve the new identity key (historical keys
-   kept), then public-data audit/receipt + admin action + outbox. Foreign key claim after the
-   row write throws to roll back the transaction (no partial alias). Private contacts,
-   location/geo, games venue refs, lifecycle, city, timezone remain untouched. No normalizer
-   rebuild / new geo service.
+In `planPublicDataItemState`:
 
-## Audit / receipt projection
+- Item **without** `identity`: keep legacy `expectedName`/`expectedAddress` check
+  **before** the accepted-receipt branch.
+- Item **with** `identity`: keep receipt-first so own rename/address replay still
+  `SKIPPED` / `PUBLIC_DATA_REPLAY` against post-identity row.
+- Altered fingerprint / drift / foreign collision / CAS continue to FAIL with no
+  partial writes. Strict schema, current aliases, rights, immutable old receipts,
+  old manifest fingerprints, transactional audit unchanged. No create/geo/city/
+  lifecycle/private changes.
 
-`after_diff` gains optional `identity` (the patch object) when identity was applied; before
-records prior `{ name, address }`. Fingerprint and sources stay on the receipt. Load path
-projects `identity` when present.
+### Integration regression (focused)
+
+New disposable PostGIS case: successful contact+profile-only batch → external
+name/address change → same batch replay → `FAILED` / `VENUE_IDENTITY_MISMATCH`
+with zero additional audit/admin/outbox/identity-key writes; separate own-rename
+replay still `SKIPPED` / `PUBLIC_DATA_REPLAY`. Existing CAS / conflict / drift /
+collision assertions retained, not weakened.
+
+### Push settings CSS (#496)
+
+Installed alpha.40 measurement: five canonical toggle rows had uneven widths and
+misaligned right switches. Added only:
+
+`.fr3 .gb-push-settings__event-list .toggle-row { width: 100%; }`
+
+to existing `push-notifications.css`. No React/auth/API/consent/behavior edits.
+No cosmetic implementation-mirroring test; root checks installed browser.
+
+### Release package alpha.41 / API 0.37.0
+
+- `CURRENT_APPLICATION_VERSION` → `0.1.0-alpha.41`; API contract stays `0.37.0`.
+- Appended exact trusted ACTUAL alpha.40 seed (`0d6dd485…`, release
+  `r42362366120-a1`, `accepted_at` literal `2026-11-07T10:09:04Z`) → 49 historical
+  deployments (previous 48 preserved).
+- Current named release: `source_sha` null, Owner UAT `NOT_TESTED`.
+- Russian notes: existing Admin-operated importer can correct existing venue
+  name/address while preserving venue identity; no new creation/geo/rights claimed;
+  enables later checked data application; does **not** claim Ceh/Nord names already
+  changed; time/venue editing and related push remain deferred; includes narrow
+  notification row alignment fix.
+
+## Pre-release status (truthful)
+
+| Gate | Status |
+| --- | --- |
+| Author source edit | Done in allowed paths |
+| Independent QA | Prior FAIL retained; re-run required after this candidate |
+| Product CI | Not run / not claimed in this author pass |
+| Disposable PostGIS | Root/PM re-run required; not claimed PASS here |
+| DEV release / ACCEPTED | Not claimed |
+| Owner UAT | `NOT_TESTED` |
+
+## What this importer still is
+
+Minimal backward-compatible extension of `VENUE_PUBLIC_DATA_BATCH_V1` inside the
+existing public-data importer (no new tool/service/architecture/rights/migration/
+API admin endpoint). Optional per-item `identity` with `name` and/or `address`
+only for an **existing** venue UUID. Manifests that omit `identity` keep the same
+fingerprint/digest bit-for-bit.
 
 ## Known bounds
 
 - Does not create/verify/merge venues; does not mint B4 UIDs; does not change city importer.
-- Does not provide Admin UI session; trusted CLI still requires active superadmin principal +
-  `venue.manage` env guards (`APP_ENV` mvp/stage, DEV web origin, real moderation provider).
-- Dry-run and apply both evaluate identity collision; apply re-checks under the catalog lock.
-- Rollback of a bad apply needs a **fresh CAS** (`expectedVersion` + current expected name/
-  address) and a new source-backed manifest; replaying an old successful identity receipt
-  only SKIPs, it does not restore a later drift.
-
-## Attempt 2 — integration fixture repair only
-
-Allowed paths: `apps/api/test/integration/venue-public-data-import.test.ts` + this handoff.
-No production/security/normalization/idempotency weakening; no ON CONFLICT DO NOTHING on
-fixture key inserts to hide ownership.
-
-Pass-1 PostGIS FAILs (retained history):
-
-1. `venue()` now inserts real `venue_identity_keys`, but ordinary metadata tests reused the
-   same default name/address/`""` discriminator → `venue_identity_keys_pkey` collision before
-   assertions (fingerprint/drift + CAS/actor cases).
-2. Foreign-collision case used `"Target Hall"` / `"Foreign Hall"` with empty stored
-   discriminator. Resolve on empty disc extracts `hall:target` from `"Target Hall Target…"`,
-   so the claim key differed from the target's stored `""` key and import returned 0 instead
-   of `VENUE_IDENTITY_CONFLICT`. Different unit/hall aliases stay distinct by design — not a
-   production merge bug; fixtures must own the **same** physical normal identity including
-   the preserved discriminator.
-
-Fixture fixes:
-
-- Ordinary independent fixtures get unique physical name/address (UUID tag); manifest
-  `expectedName`/`expectedAddress` match the actual fixture. All original CAS / fingerprint /
-  actor / dry-run / rollback / replay assertions preserved.
-- Collision fixtures share explicit `identityDiscriminator: "hall:2"` and rename foreign onto
-  target's name+address so the derived dedupe key is the one the other UUID already owns.
-  Negative assertions stay `FAILED` / `VENUE_IDENTITY_CONFLICT` with unchanged
-  row/alias/audit/outbox; changed-manifest refuse assertions unchanged.
-
-## Checks (author, not independent QA)
-
-Unit coverage extended in `venue-public-data-import.test.ts` (schema, fingerprint stability,
-discriminator preserve, replay/drift, collision helper) — attempt 1 PASS retained.
-Integration coverage: rename/address success + key retention + exact replay SKIP + foreign
-collision / changed manifest atomic refuse; attempt 2 repairs disposable PostGIS fixtures
-only. Live PostGIS and full CI are for PM/independent QA; author pass does not claim
-DEV ACCEPTED.
+- Does not provide Admin UI session; trusted CLI still requires active superadmin.
+- Rollback of a bad apply needs a fresh CAS and a new source-backed manifest.
+- Attempt 1–2 history (unit PASS; fixture repair for unique physical keys / shared
+  discriminator collision) retained; not replayed as new admissions.

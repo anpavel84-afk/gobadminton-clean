@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.40" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.41" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,14 +424,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.40",
-  "title": "Карта: поздняя загрузка и переключатели уведомлений",
+  "application_version": "0.1.0-alpha.41",
+  "title": "Площадки: правка имени и адреса, выравнивание переключателей",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "Карта снимает устаревший таймаут старта после подтверждённой поздней загрузки текущей попытки, не скрывая настоящие ошибки",
-    "Настройки уведомлений о событиях игр используют канонические переключатели"
+    "Служебный импортёр площадок позволяет исправить имя и адрес уже существующей площадки с сохранением её идентификатора; создание площадок, геоданные и права этим выпуском не заявляются",
+    "Выпуск готовит последующее применение проверенных данных; названия «Цех» и «Nord» этим выпуском ещё не изменены",
+    "Ряды переключателей уведомлений о событиях игр выровнены на полную ширину списка"
   ],
   "known_limitations": [
     "Изменение времени и места игры и связанные push отложены и не реализованы",
@@ -1741,6 +1742,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
       "Web Push: напоминание об итоге игры организатору (до трёх раз, с Later)"
     ],
     "fixes": [],
+    "known_limitations": [
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "0d6dd4852db26e0cb9feea03c78119cf5e2b04e4",
+    "application_version": "0.1.0-alpha.40",
+    "version_label": "0.1.0-alpha.40",
+    "title": "Карта: поздняя загрузка и переключатели уведомлений",
+    "api_contract_version": "0.37.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "release_id": "r42362366120-a1",
+        "api_digest": "sha256:2aef121fea64641a8f4d6d7b42be789d49c7195b966a9694c3d305638808187f",
+        "web_digest": "sha256:effe1b06111ef1762d88772647c7c5b903a1934650553ccd8dcbc281b6de15fa",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T10:09:04Z",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Карта снимает устаревший таймаут старта после подтверждённой поздней загрузки текущей попытки, не скрывая настоящие ошибки",
+      "Настройки уведомлений о событиях игр используют канонические переключатели"
+    ],
     "known_limitations": [
       "Изменение времени и места игры и связанные push отложены и не реализованы",
       "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",

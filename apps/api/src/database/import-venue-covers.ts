@@ -146,7 +146,11 @@ async function loadIdentityKeyClaimant(
   )).rows[0]?.venue_id;
 }
 
-/** Receipt before expected-identity/version so own rename replay can SKIP. */
+/**
+ * Legacy items (no identity): expectedName/address before receipt — external identity
+ * drift must FAIL as VENUE_IDENTITY_MISMATCH, not false PUBLIC_DATA_REPLAY.
+ * Identity-patch items: receipt first so own rename/address replay can SKIP.
+ */
 async function planPublicDataItemState(
   c: Pick<PoolClient, "query">,
   batch: string,
@@ -159,20 +163,28 @@ async function planPublicDataItemState(
 
   const keyHash = publicDataKeyHash(batch, item.venueId);
   const fingerprint = publicDataPatchFingerprint(item);
+  const legacyPublicOnly = item.identity === undefined;
+  if (legacyPublicOnly) {
+    const identityMatch = planPublicDataIdentityMatch(row, item);
+    if (identityMatch.action !== "READY") return { name, result: identityMatch };
+  }
+
   const receipt = await loadAcceptedPublicDataReceipt(c, keyHash);
   if (receipt) {
     return { name, result: planPublicDataReplay(row, fingerprint, receipt) };
   }
 
-  const identityMatch = planPublicDataIdentityMatch(row, item);
-  if (identityMatch.action !== "READY") return { name, result: identityMatch };
+  if (!legacyPublicOnly) {
+    const identityMatch = planPublicDataIdentityMatch(row, item);
+    if (identityMatch.action !== "READY") return { name, result: identityMatch };
+  }
 
   const versionPlan = planPublicDataVersion(row, item);
   if (versionPlan.action !== "READY") return { name, result: versionPlan };
 
-  if (item.identity === undefined) return { name, result: { action: "READY", reason: "PUBLIC_DATA_READY" } };
+  if (legacyPublicOnly) return { name, result: { action: "READY", reason: "PUBLIC_DATA_READY" } };
 
-  const nextIdentity = resolvePublicDataIdentity(row, item.identity);
+  const nextIdentity = resolvePublicDataIdentity(row, item.identity!);
   const claimant = await loadIdentityKeyClaimant(c, nextIdentity.dedupeKey);
   const collision = planPublicDataIdentityCollision(claimant, item.venueId);
   if (collision.action !== "READY") return { name, result: collision };

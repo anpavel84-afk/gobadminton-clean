@@ -413,6 +413,77 @@ run("venue public data import: disposable PostGIS", () => {
     expect(keysAfterAddress.length).toBeGreaterThan(midKeys.length);
   });
 
+  it("legacy contact/profile receipt then external identity change fails IDENTITY_MISMATCH; own rename replay still SKIPPED", async () => {
+    const v = await venue();
+    const legacy = manifestFor(v, {
+      profile: { courtCount: 1, amenities: { parking: false, showers: true } },
+    });
+    expect(await importVenuePublicData(db(), legacy, actor, true, () => undefined)).toBe(0);
+    const afterLegacy = await snapshot(v.id);
+    expect(afterLegacy).toMatchObject({
+      version: 2,
+      name: v.name,
+      address: v.address,
+      public_contacts: legacy.items[0]!.publicContacts,
+      court_count: 1,
+      amenity_parking: false,
+      amenity_showers: true,
+    });
+    const auditsBefore = (await db().query(
+      "SELECT count(*)::int AS n FROM privileged_audit_events WHERE target_id=$1",
+      [v.id],
+    )).rows[0]!.n;
+    const actionsBefore = (await db().query(
+      "SELECT count(*)::int AS n FROM venue_admin_actions WHERE venue_id=$1",
+      [v.id],
+    )).rows[0]!.n;
+    const outboxBefore = (await db().query(
+      "SELECT count(*)::int AS n FROM outbox_events WHERE aggregate_id=$1",
+      [v.id],
+    )).rows[0]!.n;
+    const keysBefore = await identityKeys(v.id);
+
+    await db().query(
+      "UPDATE venues SET name=$2, address=$3, version=version+1, updated_at=now() WHERE id=$1",
+      [v.id, "Externally Renamed Arena", "Externally Changed Street 9"],
+    );
+    const drifted = await snapshot(v.id);
+    const failLines: object[] = [];
+    expect(await importVenuePublicData(db(), legacy, actor, true, (l) => failLines.push(l))).toBe(1);
+    expect(failLines).toContainEqual(expect.objectContaining({
+      venueId: v.id, action: "FAILED", reason: "VENUE_IDENTITY_MISMATCH",
+    }));
+    expect(await snapshot(v.id)).toEqual(drifted);
+    expect((await db().query(
+      "SELECT count(*)::int AS n FROM privileged_audit_events WHERE target_id=$1",
+      [v.id],
+    )).rows[0]!.n).toBe(auditsBefore);
+    expect((await db().query(
+      "SELECT count(*)::int AS n FROM venue_admin_actions WHERE venue_id=$1",
+      [v.id],
+    )).rows[0]!.n).toBe(actionsBefore);
+    expect((await db().query(
+      "SELECT count(*)::int AS n FROM outbox_events WHERE aggregate_id=$1",
+      [v.id],
+    )).rows[0]!.n).toBe(outboxBefore);
+    expect(await identityKeys(v.id)).toEqual(keysBefore);
+
+    const renameTarget = await venue({ identityDiscriminator: "hall:7" });
+    const rename = manifestFor(renameTarget, {
+      identity: { name: "Post-identity Rename Hall" },
+    });
+    expect(await importVenuePublicData(db(), rename, actor, true, () => undefined)).toBe(0);
+    const postRename = await snapshot(renameTarget.id);
+    const postKeys = await identityKeys(renameTarget.id);
+    const renameReplay: object[] = [];
+    expect(await importVenuePublicData(db(), rename, actor, true, (l) => renameReplay.push(l))).toBe(0);
+    expect(renameReplay).toContainEqual(expect.objectContaining({
+      venueId: renameTarget.id, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY",
+    }));
+    expect(await snapshot(renameTarget.id)).toEqual(postRename);
+    expect(await identityKeys(renameTarget.id)).toEqual(postKeys);
+  });
+
   it("refuses foreign identity collision and changed identity manifest atomically", async () => {
     // Same preserved unit discriminator on both UUIDs so a rename of foreign onto
     // target's physical name+address derives the SAME dedupe key target already owns.
