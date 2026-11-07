@@ -94,7 +94,7 @@ beforeEach(() => {
   })));
 });
 afterEach(() => { unmount(); vi.useRealTimers(); vi.unstubAllGlobals(); });
-it("finishes >30s sequential pagination, renders venues/schedules, and polls only after completion", async () => {
+it("finishes >30s sequential pagination, renders venues/schedules, and does not idle-poll the catalog", async () => {
   render();
   await vi.advanceTimersByTimeAsync(31000);
   window.dispatchEvent(new Event("focus")); window.dispatchEvent(new Event("online"));
@@ -108,15 +108,33 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   expect(completed).not.toContain("Delayed game"); // schedules are hidden until a venue is selected
   expect(completed).not.toContain("Загружаем");
   expect(completed).not.toContain("В каталоге города пока нет площадок");
-  await vi.advanceTimersByTimeAsync(29999);
+  const venuesBeforeIdle = requests.filter(r => r.url.pathname === "/v1/venues").length;
+  await vi.advanceTimersByTimeAsync(75000);
   expect(requests).toHaveLength(4);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(requests).toHaveLength(6);
+  expect(requests.filter(r => r.url.pathname === "/v1/venues")).toHaveLength(venuesBeforeIdle);
   expect(html()).toContain("Venue · 1");
   expect(html()).not.toContain("Delayed game");
-  await vi.advanceTimersByTimeAsync(40000);
-  expect(html()).toContain("Venue · 1");
   expect(maxInFlight).toBe(2); // at most one request per resource, never two snapshots
+});
+
+it("reloads once on visibility return despite focus burst and rejects hidden refresh", async () => {
+  render();
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(requests).toHaveLength(4);
+  Object.assign(document, { visibilityState: "hidden" });
+  window.dispatchEvent(new Event("focus"));
+  window.dispatchEvent(new Event("online"));
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(requests).toHaveLength(4);
+  Object.assign(document, { visibilityState: "visible" });
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+  window.dispatchEvent(new Event("focus"));
+  expect(requests).toHaveLength(6); // one new venues+games page-1 pair; focus twins share in-flight
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(requests).toHaveLength(8); // exactly one full pagination pair after return
+  expect(html()).toContain("Venue · 1");
+  expect(maxInFlight).toBe(2);
 });
 
 it("announces empty city catalogue only after a fulfilled venues response, never while loading or failed", async () => {
@@ -153,7 +171,8 @@ it("announces empty city catalogue only after a fulfilled venues response, never
 it("retains public venues with unknown counts and truthful failure state", async () => {
   render(); await vi.advanceTimersByTimeAsync(40000);
   fail = true;
-  await vi.advanceTimersByTimeAsync(50000);
+  window.dispatchEvent(new Event("focus"));
+  await vi.advanceTimersByTimeAsync(40000);
   const failed = html();
   expect(failed).toContain("Venue · ?");
   expect(failed).toContain('role="alert"');
@@ -351,4 +370,23 @@ it("recalculates eligibility immediately on a successful response inside the sam
   expect(html()).toContain("Venue · 1");
   await vi.advanceTimersByTimeAsync(0);
   expect(html()).toContain("Venue · 0");
+});
+
+it("keeps the local 30s eligibility clock without a catalog refetch and retries after error via focus", async () => {
+  render();
+  await vi.advanceTimersByTimeAsync(40000);
+  const settled = requests.length;
+  await vi.advanceTimersByTimeAsync(30000);
+  expect(requests).toHaveLength(settled);
+  expect(html()).toContain("Venue · 1");
+  failResource = "reject";
+  window.dispatchEvent(new Event("focus"));
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(html()).toContain('role="alert"');
+  failResource = undefined;
+  await vi.advanceTimersByTimeAsync(1000); // past refresh coalesce cooldown
+  window.dispatchEvent(new Event("focus"));
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(html()).toContain("Venue · 1");
+  expect(html()).not.toContain('role="alert"');
 });
