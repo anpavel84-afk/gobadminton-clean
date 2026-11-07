@@ -1,5 +1,5 @@
 /**
- * Public text surface catalogue and field-kind mapping for MOD-V2-A.
+ * Public text surface catalogue and field-kind mapping for MOD-V2-A/B1a.
  * Provider policy version is independent from local ru-profanity-v1.
  */
 
@@ -7,7 +7,7 @@ import type { LocalTextKind } from "./local-text-policy";
 
 export const PUBLIC_TEXT_POLICY_VERSION = "public-text-v1";
 
-/** Exact A surface keys persisted in content_moderation_approvals.surface_key. */
+/** Exact surface keys persisted in content_moderation_approvals.surface_key. */
 export const TEXT_SURFACES = [
   "profile_display_name",
   "profile_bio",
@@ -21,6 +21,7 @@ export const TEXT_SURFACES = [
   "game_training_description",
   "game_settlement_terms",
   "game_trainer_display_name_snapshot",
+  "comment_body",
 ] as const;
 
 export type TextSurface = (typeof TEXT_SURFACES)[number];
@@ -38,6 +39,7 @@ export const TEXT_SURFACE_KIND: Record<TextSurface, LocalTextKind> = {
   game_training_description: "prose",
   game_settlement_terms: "prose",
   game_trainer_display_name_snapshot: "identity",
+  comment_body: "prose",
 };
 
 /** Neutral Russian correction hints keyed by client field id (never expose matched tokens). */
@@ -54,6 +56,7 @@ export const TEXT_FIELD_HINTS: Record<TextSurface, string> = {
   game_training_description: "Измените описание тренировки",
   game_settlement_terms: "Измените условия участия",
   game_trainer_display_name_snapshot: "Измените имя тренера в профиле тренера и создайте игру снова",
+  comment_body: "Измените текст комментария",
 };
 
 export type TextFieldCandidate = Readonly<{
@@ -68,6 +71,7 @@ export type EntityKind =
   | "player_social_profile"
   | "trainer_profile"
   | "organizer"
-  | "game";
+  | "game"
+  | "entity_comment";
 
 export type BindingKind = "candidate" | "publication";

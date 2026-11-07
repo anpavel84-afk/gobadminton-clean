@@ -411,7 +411,10 @@ export const contentModerationRateBudgets = pgTable("content_moderation_rate_bud
   updatedAt: timestamp("updated_at", {withTimezone: true}).notNull().defaultNow(),
 }, (table) => [primaryKey({columns: [table.userId, table.bucket]})]);
 
-/** Typed publication/candidate binding; approval row holds exact hash/policy. No raw body. */
+/**
+ * Typed publication/candidate binding; approval row holds exact hash/policy. No raw body.
+ * entity_kind includes entity_comment (B1a); surface catalogue extended via migrations 0061/0062.
+ */
 export const contentModerationBindings = pgTable("content_moderation_bindings", {
   id: uuid("id").defaultRandom().primaryKey(),
   entityKind: text("entity_kind").notNull(),

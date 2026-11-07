@@ -20317,7 +20317,7 @@
           "Comments"
         ],
         "summary": "Create a comment or one-level reply on a game",
-        "description": "#394. Active cookie mutation + CSRF/Origin/Idempotency-Key. Requires account.access + profile.public. Reply-to-reply rejected. Parent locked in-transaction; blocks with organizer/author re-checked on execute and replay.",
+        "description": "#394 + #506 B1a. Active cookie mutation + CSRF/Origin/Idempotency-Key. Requires account.access + profile.public. Reply-to-reply rejected. Parent/actor/block/capabilities checked before text moderation; final transaction revalidates fences and binds publication evidence to the comment UUID/version. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text hint); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. No fake PENDING; prior accepted body retained on reject/unavailable. Same-key replay skips provider I/O.",
         "security": [
           {
             "cookieSession": []
@@ -20436,7 +20436,27 @@
             }
           },
           "422": {
-            "description": "Problem details with safe code and requestId; no internals/PII",
+            "description": "Validation or PUBLIC_TEXT_CONTENT_REJECTED (optional Problem.fields.text with neutral Russian hint). Prior public body unchanged; client keeps unsent input. No matched tokens/categories/scores.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "MODERATION_RATE_LIMITED — actor text budget exhausted; retryable. No provider categories/scores.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "MODERATION_TEMPORARILY_UNAVAILABLE or MODERATION_POLICY_MISMATCH — retryable; no public write. Same optional Problem contract.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -20574,7 +20594,7 @@
           "Comments"
         ],
         "summary": "Create a comment or one-level reply on a venue",
-        "description": "#394. Active cookie mutation + CSRF/Origin/Idempotency-Key. Requires account.access + profile.public. Reply-to-reply rejected. Parent locked in-transaction; blocks with organizer/author re-checked on execute and replay.",
+        "description": "#394/#506. Broad venue comment writes remain CURRENT runtime-closed pending Owner-approved #507 (not permanent by-design). When that slice opens, the same comment_body gate applies: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Experience reviews stay on /experience-reviews.",
         "security": [
           {
             "cookieSession": []
@@ -20715,7 +20735,7 @@
           "Comments"
         ],
         "summary": "Edit own comment (CAS)",
-        "description": "#394. Author-only edit with expectedVersion. Cookie mutation + CSRF/Origin/Idempotency-Key. Stale version → conflict, not false success. Parent re-authorized on replay.",
+        "description": "#394 + #506 B1a. Author-only edit with expectedVersion. Cookie mutation + CSRF/Origin/Idempotency-Key. Ownership/parent/version fences run before text moderation; final CAS revalidates and binds publication evidence to the comment UUID/new version. Reject/unavailable keeps prior accepted body. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Stale version → conflict, not false success. Same-key replay skips provider I/O.",
         "security": [
           {
             "cookieSession": []
@@ -20834,7 +20854,27 @@
             }
           },
           "422": {
-            "description": "Problem details with safe code and requestId; no internals/PII",
+            "description": "Validation or PUBLIC_TEXT_CONTENT_REJECTED (optional Problem.fields.text). Prior accepted public body retained; client keeps unsent input.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "MODERATION_RATE_LIMITED — actor text budget exhausted; retryable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "MODERATION_TEMPORARILY_UNAVAILABLE or MODERATION_POLICY_MISMATCH — retryable; prior accepted body unchanged.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -20854,7 +20894,7 @@
           "Comments"
         ],
         "summary": "Tombstone own comment (CAS)",
-        "description": "#394. Author-only soft delete. Public body becomes null; audit retained privately. expectedVersion required in JSON body.",
+        "description": "#394 + #506 B1a. Author-only soft delete. Public body becomes null; audit retained privately. expectedVersion required in JSON body. Provider-independent — deletion/withdrawal works without moderation I/O.",
         "security": [
           {
             "cookieSession": []

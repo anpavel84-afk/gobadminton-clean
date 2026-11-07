@@ -200,6 +200,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0059_regional_discovery_preferences",
         "0060_game_event_push",
         "0061_content_moderation_text",
+        "0062_content_moderation_comments",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -269,6 +270,58 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0]?.consrc,
       ).toMatch(/organizer_public_contact/);
+      // 0062 #506 B1a comment_body + entity_comment binding catalogue (0061 untouched).
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/comment_body/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_bindings'::regclass
+               AND conname = 'content_moderation_bindings_entity_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/entity_comment/);
+      const commentSurfacesRollback = await pool.connect();
+      try {
+        await commentSurfacesRollback.query("BEGIN");
+        await commentSurfacesRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/rollback/0062_content_moderation_comments.sql"),
+            "utf8",
+          ),
+        );
+        expect(
+          (
+            await commentSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_approvals'::regclass
+                 AND conname = 'content_moderation_approvals_surface_key_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).not.toMatch(/comment_body/);
+        expect(
+          (await commentSurfacesRollback.query("SELECT to_regclass('public.content_moderation_bindings')::text AS name"))
+            .rows[0]?.name,
+        ).toBe("content_moderation_bindings");
+        expect(
+          (await commentSurfacesRollback.query("SELECT 1 FROM schema_migrations WHERE id='0062_content_moderation_comments'"))
+            .rowCount,
+        ).toBe(0);
+      } finally {
+        await commentSurfacesRollback.query("ROLLBACK");
+        commentSurfacesRollback.release();
+      }
       const bindingsRollback = await pool.connect();
       try {
         await bindingsRollback.query("BEGIN");
