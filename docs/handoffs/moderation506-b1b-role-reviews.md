@@ -1,31 +1,30 @@
-# Handoff — #506 MOD-V2-B1b · Role48 metadata + known-reject semantics (attempt 24)
+# Handoff — #506 MOD-V2-B1b · CI N-1 non-review compatibility repair (attempt 25)
 
 ## Assignment
 
-- Issue: #506 continuation (`OWNER506_ROLE48_TRUE_METADATA_MIGRATION_FIX_KNOWN_DECISION_SEMANTICS`)
+- Issue: #506 continuation (`OWNER506_ALPHA48_CI_N_MINUS_ONE_NONREVIEW_COMPATIBILITY_REPAIR`)
 - Author: Cursor Auto (sole app source writer)
-- Base (task): `40f2b3ecb0d15b345c9e34fcba2fa51ae57c5238` (root ZERO overlap of accepted `47cf0349ad` into role23 `0c851`)
-- CURRENT actual DEV **47** `cf0349ad52d5caf10a8b40e209e8c837e9c4da43` / `r42403605993-a1` ACCEPTED `2026-11-07T19:05:58Z` remains parent/runtime fact (A + B1a + #406); **this roles candidate unpublished**
-- Scope: bounded finalization24 only — migration.smoke 0063 applied-list/fixtures; known-moderation-reject helper rename/comments (no wire/payment hints); release metadata 48 + trusted 47 seed; coverage/handoff honesty; small helper regressions
-- Not in this pass: live/DB/provider/network/git/deploy, APPLIED 0061/62 or business migration edits, new architecture/roles/venue/features/M1, fake DEV.48 receipt, forced QA PASS
+- Base (task): `5af3a0425e9e3123d8ac76c9172ac4e029019ba4` (PR #512 head)
+- CURRENT actual DEV **47** `cf0349ad52d5caf10a8b40e209e8c837e9c4da43` ACCEPTED remains parent/runtime fact; **48 NOT deployed**
+- Prior independent QA **24 PASS** retained; Product CI `42409618201` 6/7 PASS, database FAIL (4 N-1 disposable suites)
+- Scope: bounded CI repair25 only — ordinary A/comment binder + ordinary Admin receipt SELECT/INSERT compatibility with intentional N-1 schema cuts; small unit regressions; this handoff
+- Not in this pass: edit of the 4 failing integration fixtures/migrations/business fixtures; live/DB/provider/network/git/deploy/release metadata/schema DDL; architecture; B1c/B2/C/D/#507; PROD; paid replay; history reset
 
-## Independent QA findings reconciled (Sol Medium / role23 — two MEDIUM)
+## Failure cause (CI 42409618201)
 
-PMA code evidence (not a waiver):
+Shared runtime named 0063-only columns on ordinary non-review paths while intentional N-1 fixtures omit them:
 
-1. **MEDIUM1/2** `evaluateLocalText` prose never returns `reject` (local-text-policy 185–203). All `runWithExternalPrepare` surfaces `comment_body` / `role_review_body` / `role_reply_body` are prose (`text-policy` 65–80). `assessReviewTexts` restricts `REVIEW_TEXT_SURFACES` (both prose). Unpaid local reject on these routes is **not currently reachable**. Global `approveTexts` identity/contact *can* local-reject, but those A callers do **not** use external-prepare.
-2. Helper contract clarified (no Owner product-rule change): a KNOWN moderation REJECT (local **or** provider) is an immutable decision for one exact key; durable error receipt stores the real 422 and **never implies** external attempt/payment. Provider budget = `beforeAttempt` counters only; local-result = 0. Ordinary validation/auth/budget 4xx/429 retain unpaid cleanup. Unknown stays unknown/non-publishing/no TTL replay.
-3. Rename only: `isPaid*` → `isKnownModerationReject` / `isAdminKnownModerationReject` (+ comments). **No** `paidAttempt` hints, origin columns, fake branches, or local-policy alteration to invent prose HTTP reject.
+1. `content_moderation_bindings.role_reputation_decision_id` missing — 42 PG errors (generic A game/profile/comment text binds always named the nullable Role FK).
+2. `admin_command_receipts.reservation_state` missing — 6 PG errors (ordinary Admin Venue/command receipt readers explicitly SELECTed the new state column).
 
-Independent final QA must verify this proof and may FAIL on a real counterexample; no forced PASS. Baseline 701 missing-durable-receipt regression remains honest (parent stopped before 2nd call).
+N-1 schema cuts are intentional product contracts. Do not weaken/drop those suites or blindly apply latest 63 to fixtures.
 
 ## What changed (source)
 
-- `migration.smoke.test.ts`: expected applied list ends with **0063**; asserts admin `reservation_state`/`response_state` allow `error`; rollback retains error allowlist. 0061/62 untouched; migrations SQL unmodified.
-- `MutationRunner` / `AdminService`: known-reject naming + contract comments; behavior unchanged.
-- Unit: mutation-runner known-422 replay + 429 unpaid cleanup; new `admin-external-prepare.test.ts` helper regressions.
-- Web releases: **0.1.0-alpha.48** current (SHA/date NULL, UAT NOT_TESTED, API 0.37.0); historical **47** from trusted seed `cf0349ad` / `r42403605993-a1` / digests / `2026-11-07T19:05:58Z`. 46/45 unchanged.
-- Coverage + this handoff: A+B1a ACTUAL 47 accepted; B1b SOURCE candidate (not DEV.48).
+- `moderation.service.ts`: generic A/comment and candidate binds INSERT only original binding columns (no `role_reputation_decision_id` name). Human role publication path alone names the FK. `bindReviewTexts` keeps STRICT required human reference for `publication` + typed surface/classification checks; candidate null human ref remains default-compatible under 63. No missing-column catch/fallback that would allow role publication without FK.
+- `admin.service.ts`: ordinary `privilegedReplay` / `privilegedCommand` / `command` use `SELECT *` + `adminReceiptReservationState` (absent/null → historical `completed` only; present `processing`/`unknown`/`error` retain exact deny/replay). Ordinary completed INSERTs omit new 63 columns (DEFAULT `completed` on 63). `privilegedRunWithExternalPrepare` still requires 63 columns/nonce and cannot fall open.
+- Units: binder SQL omit/name regressions in `text-moderation.test.ts`; receipt-state normalization in `admin-external-prepare.test.ts`.
+- Prior QA24 PASS, FAIL/logs, A/B1a/role/classifier/named-release48 source metadata/known-reject local contract unchanged except this compatibility fix.
 
 ## Coverage honesty
 
@@ -33,17 +32,17 @@ Independent final QA must verify this proof and may FAIL on a real counterexampl
 | --- | --- |
 | A | ACTUAL DEV.47 ACCEPTED proof — not re-claimed |
 | B1a comments | Independently QA-PASS / DEV.47 ACCEPTED — not re-claimed |
-| B1b role review/reply | **SOURCE_CANDIDATE** (role48 metadata + known-reject semantics) — not DEV, not READY/ACTIVE; QA23 two MEDIUM pending independent reconciliation |
-| B1c / B2 / C / D / #507 | pending |
+| B1b role review/reply | SOURCE candidate on PR #512 (compat repair25) — not DEV.48, not READY/ACTIVE |
+| B1c / B2 / C / D / #507 | pending; private egress OFF; no PROD |
 
 ## Checks run by author
 
-- Targeted API typecheck / mutation-runner + admin-external-prepare units / web releases tests / related lint where feasible.
-- Full isolated disposable PostGIS migration.smoke + independent final QA → CI → DEV: **parent**.
-- No `.evidence` scratch, no fake future PR/SHA/CI/GoBad/Owner UAT/device. UAT stays NOT_TESTED.
+- Targeted unit: text-moderation binding SQL + admin receipt reservation_state normalization (and retained known-reject helpers).
+- API typecheck / related lint where feasible.
+- Full isolated disposable PostGIS 4 N-1 suites + independent delta QA → CI7 → guarded DEV.48: **parent** after actual checks.
+- No `.evidence` scratch, no fake future PR/SHA/CI/GoBad/Owner UAT. UAT stays NOT_TESTED.
 
 ## Remaining / next (parent)
 
-1. Parent reruns actual disposable PostGIS migration.smoke (0063 applied).
-2. Independent final QA on known-reject semantics proof → Product CI → trusted merge/DEV after frozen47 boundary.
-3. No fake DEV/UAT claims. B1c venue reviews next within #506 when admitted.
+1. Independent delta QA on this compatibility repair → Product CI (expect 7/7 including the 4 N-1 suites) → trusted merge/guarded DEV.48 after frozen47 boundary.
+2. No fake DEV/UAT claims. B1c venue reviews next within #506 when admitted.

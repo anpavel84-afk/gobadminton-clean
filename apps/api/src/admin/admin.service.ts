@@ -288,20 +288,24 @@ export class AdminService {
     return adminTransaction(this.pool, async client => {
       const actor = await this.actor(client,request,true,permission,true);
       await scope(client,actor);
-      const row = (await client.query<{
-        fingerprint: string;
-        response_ciphertext: string | null;
-        reservation_state: string;
-      }>(
-        "SELECT fingerprint, response_ciphertext, COALESCE(reservation_state,'completed') AS reservation_state FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
-        [actor.principalId,this.hash(key)])).rows[0];
+      const row = (
+        await client.query<{
+          fingerprint: string;
+          response_ciphertext: string | null;
+          reservation_state?: string | null;
+        }>(
+          "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
+          [actor.principalId, this.hash(key)],
+        )
+      ).rows[0];
       if (!row) return null;
       if (row.fingerprint !== fingerprint) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
-      if (row.reservation_state === "processing") throw commandInProgress();
-      if (row.reservation_state === "unknown") {
+      const reservationState = adminReceiptReservationState(row);
+      if (reservationState === "processing") throw commandInProgress();
+      if (reservationState === "unknown") {
         this.throwSealedAdminUnknown(row.response_ciphertext);
       }
-      if (row.reservation_state === "error") {
+      if (reservationState === "error") {
         this.throwSealedAdminKnownReject(row.response_ciphertext);
       }
       if (!row.response_ciphertext) throw commandInProgress();
@@ -606,32 +610,35 @@ export class AdminService {
     return adminTransaction(this.pool, async client => {
       const actor = await this.actor(client, request, true, permission, stepup);
       await authorizeScope?.(client, actor);
-      const previous = (await client.query<{
-        fingerprint: string;
-        response_ciphertext: string | null;
-        reservation_state: string;
-      }>(
-        `SELECT fingerprint, response_ciphertext,
-                COALESCE(reservation_state, 'completed') AS reservation_state
-         FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2`,
-        [actor.principalId,keyHash])).rows[0];
+      const previous = (
+        await client.query<{
+          fingerprint: string;
+          response_ciphertext: string | null;
+          reservation_state?: string | null;
+        }>(
+          "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
+          [actor.principalId, keyHash],
+        )
+      ).rows[0];
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
-        if (previous.reservation_state === "processing") throw commandInProgress();
-        if (previous.reservation_state === "unknown") {
+        const reservationState = adminReceiptReservationState(previous);
+        if (reservationState === "processing") throw commandInProgress();
+        if (reservationState === "unknown") {
           this.throwSealedAdminUnknown(previous.response_ciphertext);
         }
-        if (previous.reservation_state === "error") {
+        if (reservationState === "error") {
           this.throwSealedAdminKnownReject(previous.response_ciphertext);
         }
         if (!previous.response_ciphertext) throw commandInProgress();
         return JSON.parse(openSecret(this.pepper, previous.response_ciphertext)) as T;
       }
       const result = await execute(client, actor, keyHash);
+      // Ordinary completed receipt: omit 0063 columns (DEFAULT completed on 63; N-1 compatible).
       await client.query(
         `INSERT INTO admin_command_receipts
-           (actor_id,key_hash,fingerprint,response_ciphertext,reservation_state)
-         VALUES($1,$2,$3,$4,'completed')`,
+           (actor_id,key_hash,fingerprint,response_ciphertext)
+         VALUES($1,$2,$3,$4)`,
         [actor.principalId,keyHash,fingerprint,sealSecret(this.pepper,JSON.stringify(result))]);
       return result;
     });
@@ -1206,22 +1213,21 @@ export class AdminService {
         await c.query<{
           fingerprint: string;
           response_ciphertext: string | null;
-          reservation_state: string;
+          reservation_state?: string | null;
         }>(
-          `SELECT fingerprint, response_ciphertext,
-                  COALESCE(reservation_state, 'completed') AS reservation_state
-           FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2`,
+          "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
           [a.principalId, keyHash],
         )
       ).rows[0];
       if (previous) {
         if (previous.fingerprint !== fingerprint)
           throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
-        if (previous.reservation_state === "processing") throw commandInProgress();
-        if (previous.reservation_state === "unknown") {
+        const reservationState = adminReceiptReservationState(previous);
+        if (reservationState === "processing") throw commandInProgress();
+        if (reservationState === "unknown") {
           this.throwSealedAdminUnknown(previous.response_ciphertext);
         }
-        if (previous.reservation_state === "error") {
+        if (reservationState === "error") {
           this.throwSealedAdminKnownReject(previous.response_ciphertext);
         }
         if (!previous.response_ciphertext) throw commandInProgress();
@@ -1410,8 +1416,8 @@ export class AdminService {
       });
       await c.query(
         `INSERT INTO admin_command_receipts
-           (actor_id,key_hash,fingerprint,response_ciphertext,reservation_state)
-         VALUES($1,$2,$3,$4,'completed')`,
+           (actor_id,key_hash,fingerprint,response_ciphertext)
+         VALUES($1,$2,$3,$4)`,
         [
           a.principalId,
           keyHash,
@@ -1470,6 +1476,18 @@ function adminHttpExceptionCode(error: unknown): string {
     return String((response as { code?: unknown }).code ?? "");
   }
   return "";
+}
+
+/**
+ * Pre-63 admin_command_receipts lack reservation_state (always completed +
+ * non-null ciphertext). Absent/null → historical completed only. Present
+ * processing/unknown/error keep exact deny/replay — never coalesce to success.
+ */
+export function adminReceiptReservationState(row: {
+  reservation_state?: string | null;
+}): string {
+  if (row.reservation_state == null) return "completed";
+  return row.reservation_state;
 }
 
 /**

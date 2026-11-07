@@ -538,8 +538,9 @@ export class ContentModerationService {
 
   /**
    * B1b: bind classifier evidence (allow|review) to exact revision.
-   * Never overwrites a provider review decision to allow. Optional human
-   * role_reputation_decision_id only on publication bindings.
+   * Never overwrites a provider review decision to allow. Human
+   * role_reputation_decision_id is required for publication and omitted
+   * from SQL when absent (candidate rows use 0063 column default).
    */
   async bindReviewTexts(
     client: PoolClient,
@@ -561,10 +562,9 @@ export class ContentModerationService {
         throw this.mismatchText();
       }
     }
-    if (
-      meta.roleReputationDecisionId &&
-      meta.bindingKind !== "publication"
-    ) {
+    if (meta.bindingKind === "publication") {
+      if (!meta.roleReputationDecisionId) throw this.mismatchText();
+    } else if (meta.roleReputationDecisionId) {
       throw this.mismatchText();
     }
     await this.bindTextRows(
@@ -680,31 +680,56 @@ export class ContentModerationService {
       ) {
         throw this.mismatchText();
       }
-      await client.query(
-        `INSERT INTO content_moderation_bindings(
-           entity_kind, entity_id, surface_key, resource_version, approval_id,
-           actor_user_id, actor_principal_id, binding_kind, role_reputation_decision_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
-         DO UPDATE SET approval_id = excluded.approval_id,
-           actor_user_id = excluded.actor_user_id,
-           actor_principal_id = excluded.actor_principal_id,
-           role_reputation_decision_id = COALESCE(
-             excluded.role_reputation_decision_id,
-             content_moderation_bindings.role_reputation_decision_id
-           )`,
-        [
-          meta.entityKind,
-          meta.entityId,
-          item.surface,
-          meta.resourceVersion,
-          inserted.rows[0]!.id,
-          meta.actorUserId,
-          meta.actorPrincipalId ?? null,
-          meta.bindingKind,
-          roleReputationDecisionId,
-        ],
-      );
+      // Ordinary A/comment and candidate role binds must not name the 0063 FK
+      // column (N-1 fixtures lack it). Only human publication writes the FK.
+      if (roleReputationDecisionId !== null) {
+        await client.query(
+          `INSERT INTO content_moderation_bindings(
+             entity_kind, entity_id, surface_key, resource_version, approval_id,
+             actor_user_id, actor_principal_id, binding_kind, role_reputation_decision_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
+           DO UPDATE SET approval_id = excluded.approval_id,
+             actor_user_id = excluded.actor_user_id,
+             actor_principal_id = excluded.actor_principal_id,
+             role_reputation_decision_id = COALESCE(
+               excluded.role_reputation_decision_id,
+               content_moderation_bindings.role_reputation_decision_id
+             )`,
+          [
+            meta.entityKind,
+            meta.entityId,
+            item.surface,
+            meta.resourceVersion,
+            inserted.rows[0]!.id,
+            meta.actorUserId,
+            meta.actorPrincipalId ?? null,
+            meta.bindingKind,
+            roleReputationDecisionId,
+          ],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO content_moderation_bindings(
+             entity_kind, entity_id, surface_key, resource_version, approval_id,
+             actor_user_id, actor_principal_id, binding_kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (entity_kind, entity_id, surface_key, resource_version, binding_kind)
+           DO UPDATE SET approval_id = excluded.approval_id,
+             actor_user_id = excluded.actor_user_id,
+             actor_principal_id = excluded.actor_principal_id`,
+          [
+            meta.entityKind,
+            meta.entityId,
+            item.surface,
+            meta.resourceVersion,
+            inserted.rows[0]!.id,
+            meta.actorUserId,
+            meta.actorPrincipalId ?? null,
+            meta.bindingKind,
+          ],
+        );
+      }
     }
   }
 }

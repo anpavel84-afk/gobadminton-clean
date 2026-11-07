@@ -1,9 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { HttpException, HttpStatus } from "@nestjs/common";
 import {
+  adminReceiptReservationState,
   isAdminKnownModerationReject,
   shouldReleaseAdminExternalPrepareClaim,
 } from "../../src/admin/admin.service";
+
+/** Pre-63 receipts omit reservation_state; present 63 states stay exact. */
+describe("admin ordinary receipt reservation_state compatibility", () => {
+  it("absent or null reservation_state means historical completed only", () => {
+    expect(adminReceiptReservationState({})).toBe("completed");
+    expect(adminReceiptReservationState({ reservation_state: null })).toBe(
+      "completed",
+    );
+    expect(adminReceiptReservationState({ reservation_state: undefined })).toBe(
+      "completed",
+    );
+  });
+
+  it("present processing/unknown/error are never coalesced to completed", () => {
+    expect(
+      adminReceiptReservationState({ reservation_state: "processing" }),
+    ).toBe("processing");
+    expect(adminReceiptReservationState({ reservation_state: "unknown" })).toBe(
+      "unknown",
+    );
+    expect(adminReceiptReservationState({ reservation_state: "error" })).toBe(
+      "error",
+    );
+    expect(
+      adminReceiptReservationState({ reservation_state: "completed" }),
+    ).toBe("completed");
+  });
+});
 
 /** Known moderation REJECT (422) vs ordinary validation/budget release — no payment wire. */
 describe("admin external-prepare known moderation reject helpers", () => {
