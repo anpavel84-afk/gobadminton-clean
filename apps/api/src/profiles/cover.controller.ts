@@ -5,6 +5,7 @@ import { IdempotencyService } from "../common/idempotency.service";
 import { AvatarService } from "./avatar.service";
 import { coverDeleteVersion } from "./cover-command";
 import { coverForUser } from "./cover-presentation";
+import { deriveCoverWebp, resolveMediaImageResponse } from "./media-image-response";
 import { resolveVenueCoverResponse } from "./venue-cover-response";
 import { Inject } from "@nestjs/common";
 import type { Pool } from "pg";
@@ -45,9 +46,12 @@ export class CoverController {
   }
   @Get("media/covers/:key")
   async read(@Req() request: FastifyRequest, @Param("key") key: string, @Res() reply: FastifyReply) {
-    reply.header("Cache-Control", "no-store").header("Vary", "Cookie").header("X-Content-Type-Options", "nosniff")
+    reply.header("Cache-Control", "no-store").header("Vary", "Cookie, Accept").header("X-Content-Type-Options", "nosniff")
       .header("Content-Security-Policy", "default-src 'none'; sandbox");
+    // optionalSession + directory/block/moderation authorization before any derive.
     const actor = await this.auth.optionalSession(request);
-    return reply.type("image/png").send(await this.media.readCover(key, actor?.userId ?? null));
+    const original = await this.media.readCover(key, actor?.userId ?? null);
+    const response = await resolveMediaImageResponse(original, request.headers.accept, deriveCoverWebp);
+    return reply.type(response.contentType).send(response.body);
   }
 }

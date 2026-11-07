@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.43" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.44" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,18 +424,20 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.43",
-  "title": "Уведомления: пояснение выбора событий и подсказка iPhone",
+  "application_version": "0.1.0-alpha.44",
+  "title": "Компактный WebP аватаров и обложек; подсказки уведомлений при запрете браузера",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [
-    "В настройках уведомлений до явного согласия поясняется, что после включения можно отдельно выбрать игровые события и «Подведите итоги»",
-    "Для iPhone указана установка приложения на экран «Домой» перед включением уведомлений"
+    "Загруженные аватары, обложки страницы игрока и обложки игр передаются как компактный WebP после действующих проверок доступа; прозрачность и размеры сохраняются, исходники защищены для аудита; уже принятый WebP площадок сохранён"
   ],
-  "fixes": [],
+  "fixes": [
+    "Пояснения про игровые события, «Подведите итоги» и установку на iPhone остаются видимы, когда браузер запретил уведомления; прямое согласие и запрос разрешения не меняются"
+  ],
   "known_limitations": [
     "Изменение времени и места игры и связанные push отложены и не реализованы",
-    "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
+    "Три PWA-иконки и 26 PNG-спрайтов карты остаются для технической совместимости; массовое переименование на диске, сжатие всего каталога и новые JPEG-конверсии не заявляются",
+    "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
   ],
   "feature_catalogue": "delta"
@@ -1831,6 +1833,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-07T11:55:54Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.43",
+    "title": "Уведомления: пояснение выбора событий и подсказка iPhone",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "В настройках уведомлений до явного согласия поясняется, что после включения можно отдельно выбрать игровые события и «Подведите итоги»",
+      "Для iPhone указана установка приложения на экран «Домой» перед включением уведомлений"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "4614a0006d0e080bca4c8c5cb6335056a80d5a21",
+    "version_label": "0.1.0-alpha.43",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42372648654-a1",
+        "api_digest": "sha256:534eefc04dae07ceb91bbc6e8500ea27e25d94fe0919658a9e818bf9cb146486",
+        "web_digest": "sha256:4472803d6383ea182d19ccb575109b07ae5c2a00487a302587fc536435ad2dbf",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T12:33:39Z",
         "kind": "pipeline"
       }
     ]

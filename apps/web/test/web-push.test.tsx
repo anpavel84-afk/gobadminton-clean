@@ -121,7 +121,7 @@ describe("#456 web push settings surface", () => {
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
   });
 
-  it("SSR / pre-consent (push null) shows discoverability and iPhone Home Screen copy", () => {
+  it("SSR pre-consent (push null; not live API-ready) shows discoverability and iPhone Home Screen copy", () => {
     detectPushCapabilityMock.mockReturnValue("ready");
     const html = renderToStaticMarkup(createElement(PushSettings, { me }));
     expect(html).toContain(PUSH_DISCOVERABILITY_OFF_HINT);
@@ -133,6 +133,22 @@ describe("#456 web push settings surface", () => {
     expect(PUSH_MESSAGE_ENABLE_LABEL).toBe("Включить уведомления о сообщениях");
     expect(html).not.toMatch(/События игр/);
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
+    expect(getPushState).not.toHaveBeenCalled();
+  });
+
+  it("SSR pre-consent with capability denied still shows game/iPhone copy; message enable stays; no auto-permission", () => {
+    detectPushCapabilityMock.mockReturnValue("denied");
+    const html = renderToStaticMarkup(createElement(PushSettings, { me }));
+    expect(html).toContain(PUSH_DISCOVERABILITY_OFF_HINT);
+    expect(html).toContain(PUSH_IPHONE_HOMESCREEN_HINT);
+    expect(html).toMatch(/data-surface="push-discoverability"/);
+    expect(html).toMatch(/data-surface="push-iphone-homescreen"/);
+    expect(html).toMatch(/Системные уведомления пока недоступны на тестовом сервере/);
+    expect(html).toMatch(/data-state="loading"/);
+    expect(html).toMatch(/Загружаем настройки уведомлений/);
+    expect(PUSH_MESSAGE_ENABLE_LABEL).toBe("Включить уведомления о сообщениях");
+    expect(html).not.toMatch(/События игр/);
+    expect(html).not.toMatch(/requestPermission|PushManager\.subscribe|Notification\.requestPermission/);
     expect(getPushState).not.toHaveBeenCalled();
   });
 
