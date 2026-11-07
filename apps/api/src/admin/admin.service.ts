@@ -45,9 +45,9 @@ import type { AdminCommand } from "./dto";
 
 import { devQaKeyAllowed, DEV_QA_AUDIENCE, DEV_QA_LABEL, qaSessionRouteAllowed } from "./dev-qa-policy";
 
-/** Soft marker for in-flight admin external claims — never reclaim / re-pay after TTL. */
+/** Soft marker for in-flight admin external claims — never reclaim / re-prepare after TTL. */
 const ADMIN_EXTERNAL_PREPARE_RESERVATION_TTL_MS = 120_000;
-/** Unknown sealed outcomes keep paid-attempt history; never TTL-reclaim for a second paid call. */
+/** Unknown sealed outcomes keep attempt history; never TTL-reclaim for a second prepare. */
 const ADMIN_EXTERNAL_UNKNOWN_TTL_MS = 24 * 60 * 60 * 1000;
 
 type Principal = {
@@ -309,12 +309,14 @@ export class AdminService {
     });
   }
   /**
-   * Same-key fence before paid admin external preparation (classifier / media).
+   * Same-key fence before admin external preparation (classifier / media).
    * authorizeReplayScope always runs (session/RBAC/assignment/independence) before
    * disclosing a receipt. Matching completed/error receipts replay with zero
    * provider I/O and without requiring expectedCaseVersion still current.
    * authorizeNewPublication (version/pending/consent/eligibility) runs only on miss.
-   * processing/unknown/error never TTL-reclaim into a second paid call.
+   * Known moderation REJECT seals reservation_state=error (real 422; does not imply
+   * payment — provider budget via beforeAttempt only). processing/unknown/error
+   * never TTL-reclaim into a second prepare.
    * Keeps Admin session/step-up/origin/CSRF/RBAC — does not use consumer ActorFence.
    */
   async privilegedRunWithExternalPrepare<TPrep, T>(
@@ -469,7 +471,7 @@ export class AdminService {
     };
     const status =
       typeof body.status === "number" ? body.status : HttpStatus.UNPROCESSABLE_ENTITY;
-    // Known paid classification reject — never return Problem JSON as typed success.
+    // Known moderation reject — never return Problem JSON as typed success.
     throw new HttpException(body, status);
   }
   private async afterAdminExternalPrepareFailure(
@@ -479,7 +481,7 @@ export class AdminService {
     claimNonce: string,
     error: unknown,
   ): Promise<void> {
-    if (isAdminPaidClassificationReject(error)) {
+    if (isAdminKnownModerationReject(error)) {
       await this.sealAdminExternalKnownReject(
         principalId,
         keyHash,
@@ -1470,8 +1472,12 @@ function adminHttpExceptionCode(error: unknown): string {
   return "";
 }
 
-/** Known paid classification hard-reject — durable error receipt, never release/re-pay. */
-function isAdminPaidClassificationReject(error: unknown): boolean {
+/**
+ * Immutable known moderation REJECT for one exact admin key — durable error receipt.
+ * Local or provider origin; sealing stores the real 422 and never implies payment.
+ * Provider budget is counted only via beforeAttempt; local-result path = 0.
+ */
+export function isAdminKnownModerationReject(error: unknown): boolean {
   return (
     error instanceof HttpException &&
     error.getStatus() === HttpStatus.UNPROCESSABLE_ENTITY &&
@@ -1479,9 +1485,10 @@ function isAdminPaidClassificationReject(error: unknown): boolean {
   );
 }
 
-function shouldReleaseAdminExternalPrepareClaim(error: unknown): boolean {
+/** Ordinary validation/auth/budget 4xx/429 release; known moderation REJECT does not. */
+export function shouldReleaseAdminExternalPrepareClaim(error: unknown): boolean {
   if (!(error instanceof HttpException)) return false;
-  if (isAdminPaidClassificationReject(error)) return false;
+  if (isAdminKnownModerationReject(error)) return false;
   const status = error.getStatus();
   if (status === HttpStatus.SERVICE_UNAVAILABLE) return false;
   if (status === HttpStatus.CONFLICT) {
@@ -1490,7 +1497,7 @@ function shouldReleaseAdminExternalPrepareClaim(error: unknown): boolean {
     // Domain VERSION_CONFLICT / KEY_REUSED after prepare: release so a new key can proceed.
     return true;
   }
-  // Ordinary unpaid validation / authz / 429 beforeAttempt: release — not paid UNKNOWN.
+  // Ordinary validation / authz / budget 429 (not a known moderation decision): release.
   return status >= 400 && status < 500;
 }
 

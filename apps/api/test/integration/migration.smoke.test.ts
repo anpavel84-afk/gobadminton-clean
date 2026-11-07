@@ -201,6 +201,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0060_game_event_push",
         "0061_content_moderation_text",
         "0062_content_moderation_comments",
+        "0063_moderation_role_review_bindings",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -322,6 +323,27 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0],
       ).toEqual({ column_name: "role_reputation_decision_id", is_nullable: "YES" });
+      // 0063 admin external-prepare: reservation_state allows durable known-reject 'error'.
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.admin_command_receipts'::regclass
+               AND conname = 'admin_command_receipts_reservation_state_chk'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/error/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.admin_command_receipts'::regclass
+               AND conname = 'admin_command_receipts_response_state_chk'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/error/);
       // 0062 claim_nonce + unknown reservation for external-prepare fencing.
       expect(
         (
@@ -504,6 +526,17 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
             )
           ).rowCount,
         ).toBe(0);
+        // Non-destructive rollback retains admin 'error' allowlist (known moderation reject receipts).
+        expect(
+          (
+            await roleSurfacesRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.admin_command_receipts'::regclass
+                 AND conname = 'admin_command_receipts_reservation_state_chk'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/error/);
         await roleSurfacesRollback.query(
           readFileSync(
             path.join(apiRoot, "migrations/0063_moderation_role_review_bindings.sql"),

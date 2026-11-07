@@ -56,7 +56,7 @@ function makeStore() {
         row &&
         row.reservation_state === "completed" &&
         row.expires_at.getTime() <= Date.now() &&
-        // Paid known-reject receipts (status >= 400) are never reclaimed.
+        // Known moderation reject receipts (status >= 400) are never reclaimed.
         (row.status_code == null || row.status_code < 400)
       ) {
         rows.delete(keyHash);
@@ -450,7 +450,7 @@ describe("MutationRunner.runWithExternalPrepare", () => {
     expect([...store.rows.values()][0]!.claim_nonce).toBe(wrongNonce);
     expect([...store.rows.values()][0]!.status_code).toBeNull();
 
-    // Clock-advanced processing still blocks a new paid prepare.
+    // Clock-advanced processing still blocks a new prepare.
     await expect(
       runner.runWithExternalPrepare({
         ...completeInput,
@@ -463,7 +463,7 @@ describe("MutationRunner.runWithExternalPrepare", () => {
     expect(completePrepareCalls).toBe(1);
   });
 
-  it("paid PUBLIC_TEXT_CONTENT_REJECTED seals durable 422; same-key replays without provider", async () => {
+  it("known moderation 422 seals durable receipt; same-key replays with prepareCalls=0 more", async () => {
     const store = makeStore();
     const { runner } = makeRunner(store.query);
     let prepareCalls = 0;
@@ -479,11 +479,12 @@ describe("MutationRunner.runWithExternalPrepare", () => {
       actorId: actor.userId,
       sessionId: actor.sessionId,
       operation: "comments.create",
-      key: "unit-4xx-paid-reject",
-      requestHash: "hash-4xx-paid",
+      key: "unit-4xx-known-reject",
+      requestHash: "hash-4xx-known",
       authorizeReplay,
       prepare: async () => {
         prepareCalls += 1;
+        // Provider-path known reject (beforeAttempt would be 1 at call site).
         throw new HttpException(problem, HttpStatus.UNPROCESSABLE_ENTITY);
       },
       execute: async () => ({ statusCode: 201, body: { id: "should-not" } }),
@@ -514,11 +515,46 @@ describe("MutationRunner.runWithExternalPrepare", () => {
         fields: { text: "Измените формулировку" },
       }),
     });
+    // Receipt stores real 422; does not imply payment — prepare/beforeAttempt stays 1.
     expect(prepareCalls).toBe(1);
     expect(authorizeReplay).toHaveBeenCalledTimes(1);
     // Problem JSON must not be passed as typed success body.
     const replayArgs = authorizeReplay.mock.calls[0] as unknown as unknown[];
     expect(replayArgs[1]).toBeUndefined();
+  });
+
+  it("locally known 422 (prepare throws before provider) still seals and replays with prepare=1 total", async () => {
+    // Contract: durable 422 receipt ≠ paid attempt. Local reject (if ever thrown into
+    // this fence) seals the same way; current prose surfaces never emit local reject
+    // (evaluateLocalText prose → contextual). Do not alter local-text-policy here.
+    const store = makeStore();
+    const { runner } = makeRunner(store.query);
+    let prepareCalls = 0;
+    const problem = {
+      type: "about:blank",
+      title: "Измените текст и попробуйте снова",
+      status: 422,
+      code: "PUBLIC_TEXT_CONTENT_REJECTED",
+      fields: { text: "Измените текст комментария" },
+    };
+    const input = {
+      actorId: actor.userId,
+      sessionId: actor.sessionId,
+      operation: "comments.create",
+      key: "unit-local-known-422",
+      requestHash: "hash-local-known",
+      authorizeReplay: vi.fn(async () => undefined),
+      prepare: async () => {
+        prepareCalls += 1;
+        throw new HttpException(problem, HttpStatus.UNPROCESSABLE_ENTITY);
+      },
+      execute: async () => ({ statusCode: 201, body: { id: "should-not" } }),
+    };
+    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({ status: 422 });
+    expect(prepareCalls).toBe(1);
+    expect([...store.rows.values()][0]!.status_code).toBe(422);
+    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({ status: 422 });
+    expect(prepareCalls).toBe(1);
   });
 
   it("ordinary unpaid 409 still releases claim for a fresh same-key attempt", async () => {
@@ -557,6 +593,46 @@ describe("MutationRunner.runWithExternalPrepare", () => {
     await expect(runner.runWithExternalPrepare(input)).resolves.toEqual({
       statusCode: 201,
       body: { id: "after-conflict" },
+    });
+    expect(prepareCalls).toBe(2);
+  });
+
+  it("ordinary validation 429 still releases claim (unpaid cleanup)", async () => {
+    const store = makeStore();
+    const { runner } = makeRunner(store.query);
+    let prepareCalls = 0;
+    const input = {
+      actorId: actor.userId,
+      sessionId: actor.sessionId,
+      operation: "comments.create",
+      key: "unit-429-release",
+      requestHash: "hash-429",
+      authorizeReplay: vi.fn(async () => undefined),
+      prepare: async () => {
+        prepareCalls += 1;
+        if (prepareCalls === 1) {
+          throw new HttpException(
+            {
+              type: "about:blank",
+              title: "Слишком много запросов",
+              status: 429,
+              code: "RATE_LIMITED",
+            },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+        return { approval: true };
+      },
+      execute: async () => ({ statusCode: 201, body: { id: "after-429" } }),
+    };
+
+    await expect(runner.runWithExternalPrepare(input)).rejects.toMatchObject({ status: 429 });
+    expect(prepareCalls).toBe(1);
+    expect(store.rows.size).toBe(0);
+
+    await expect(runner.runWithExternalPrepare(input)).resolves.toEqual({
+      statusCode: 201,
+      body: { id: "after-429" },
     });
     expect(prepareCalls).toBe(2);
   });
