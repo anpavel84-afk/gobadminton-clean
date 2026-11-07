@@ -99,15 +99,21 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let tileTimeout: ReturnType<typeof setTimeout> | undefined;
     let fatal = false; let started = false;
+    /** Startup timeout may show the error card while style/init is still pending; a later valid load for this attempt clears it. */
+    let timeoutPending = false;
     const removeMapListeners: (() => void)[] = [];
     let grace: ReturnType<typeof setTimeout> | undefined;
     let deadline: number | undefined;
     const fail = (diagnostic: MapDiagnostic) => {
-      if (!alive || fatal) return;
-      fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false);
+      if (!alive) return;
+      // Pending startup timeout may be replaced by a genuine fatal; other fatals stay sticky.
+      if (fatal && !(timeoutPending && diagnostic.kind !== "timeout")) return;
+      fatal = true; timeoutPending = diagnostic.kind === "timeout";
+      setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false);
     };
     const restore = () => {
-      if (!alive || fatal || deadline === undefined || Date.now() >= deadline) return;
+      // Timeout banner may still be up; restore only clears an active WebGL grace window.
+      if (!alive || (fatal && !timeoutPending) || deadline === undefined || Date.now() >= deadline) return;
       clearTimeout(grace); grace = undefined; deadline = undefined; instance?.triggerRepaint();
     };
     const visible = () => { if (alive && document.visibilityState === "visible") instance?.triggerRepaint(); };
@@ -119,7 +125,8 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
       console.warn("[games-map]", diagnostic.kind, diagnostic.url, diagnostic.status);
       setLastError(diagnostic.kind); setWarnings(n => n + 1);
       if (diagnostic.kind === "webgl") {
-        if (!fatal && deadline === undefined) {
+        // Allow grace after a pending timeout so late load cannot stale-recover during loss.
+        if (deadline === undefined && (!fatal || timeoutPending)) {
           deadline = Date.now() + 4000;
           grace = setTimeout(() => fail(diagnostic), 4000);
         }
@@ -173,7 +180,13 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
         removeMapListeners.push(() => instance?.off("sourcedata", sourcedata));
         const loaded = () => { if (alive) {
           instance?.resize(); loadedAt = Date.now(); setReady(true); setSharedMap(instance);
-          if (!fatal) { callbacks.current.onAvailability?.(true); setStatus(""); }
+          // Recover only a prior startup timeout with no active WebGL grace and no superseding fatal.
+          if (fatal && timeoutPending && deadline === undefined) {
+            fatal = false; timeoutPending = false;
+            setFailure(undefined); callbacks.current.onAvailability?.(true); setStatus("");
+          } else if (!fatal) {
+            callbacks.current.onAvailability?.(true); setStatus("");
+          }
           clearTimeout(timeout);
           tileTimeout = setTimeout(() => { if (!loadedTiles) report({ kind: "tiles", sourceId: "protomaps" }); }, 8000);
         } };

@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.39" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.40" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,18 +424,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.39",
-  "title": "Push по шести событиям игры",
+  "application_version": "0.1.0-alpha.40",
+  "title": "Карта: поздняя загрузка и переключатели уведомлений",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "Web Push: приглашение на игру",
-    "Web Push: новая заявка активному организатору",
-    "Web Push: подтверждение или отклонение заявки игроку",
-    "Web Push: отмена игры связанным участникам",
-    "Web Push: напоминание об итоге игры организатору (до трёх раз, с Later)"
+  "additions": [],
+  "fixes": [
+    "Карта снимает устаревший таймаут старта после подтверждённой поздней загрузки текущей попытки, не скрывая настоящие ошибки",
+    "Настройки уведомлений о событиях игр используют канонические переключатели"
   ],
-  "fixes": [],
   "known_limitations": [
     "Изменение времени и места игры и связанные push отложены и не реализованы",
     "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
@@ -1715,6 +1712,38 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",
       "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "01ea6f2f490c9d8efbbf6b9c58d30d844096ee14",
+    "application_version": "0.1.0-alpha.39",
+    "version_label": "0.1.0-alpha.39",
+    "title": "Push по шести событиям игры",
+    "api_contract_version": "0.37.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42359322474-a1",
+        "accepted_at": "2026-11-07T09:34:34Z",
+        "api_digest": "sha256:dad8252ab11627e9144fd91395012302de3c34f4e249363309e0fd1214425414",
+        "web_digest": "sha256:2c1f1a40e0007b232e1f4dbf99d982266ab1815dbfa382a7b41aeeed08e6a50b",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [
+      "Web Push: приглашение на игру",
+      "Web Push: новая заявка активному организатору",
+      "Web Push: подтверждение или отклонение заявки игроку",
+      "Web Push: отмена игры связанным участникам",
+      "Web Push: напоминание об итоге игры организатору (до трёх раз, с Later)"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
       "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
     ]
   },

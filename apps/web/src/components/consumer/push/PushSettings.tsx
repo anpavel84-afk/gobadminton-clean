@@ -25,7 +25,7 @@ const EVENT_TOGGLES: Array<{ key: keyof PushEventPreferences; label: string }> =
   { key: "outcomeReminders", label: "Напоминания об итоге" },
 ];
 import { Button } from "../Button";
-import { ProfileState, SectionHeader } from "../players/ProfileComposition";
+import { ProfileState, SectionHeader, Toggle } from "../players/ProfileComposition";
 import "../../../styles/push-notifications.css";
 
 type Props = { me: Me };
@@ -331,25 +331,24 @@ export function PushSettings({ me }: Props) {
             </div>
             {push?.preferenceEnabled && (
               <fieldset className="gb-push-settings__events" disabled={busy}>
-                <legend>События игр</legend>
+                <legend className="gb-push-settings__events-legend">События игр</legend>
                 <p className="gb-push-settings__events-note">
-                  Группы по умолчанию выключены, даже если сообщения уже включены. Мастер-выключатель и устройство всегда важнее.
+                  Выберите, какие уведомления об играх получать.
                 </p>
                 <ul className="gb-push-settings__event-list">
-                  {EVENT_TOGGLES.map((item) => (
-                    <li key={item.key}>
-                      <label className="gb-push-settings__event">
-                        <input
-                          type="checkbox"
-                          checked={push.eventPreferences?.[item.key] === true}
-                          onChange={(event) =>
-                            void toggleEvent(item.key, event.target.checked)
-                          }
+                  {EVENT_TOGGLES.map((item) => {
+                    const on = push.eventPreferences?.[item.key] === true;
+                    return (
+                      <li key={item.key}>
+                        <Toggle
+                          label={item.label}
+                          on={on}
+                          disabled={busy || !push.preferenceEnabled}
+                          onClick={() => void toggleEvent(item.key, !on)}
                         />
-                        <span>{item.label}</span>
-                      </label>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               </fieldset>
             )}

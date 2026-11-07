@@ -44,6 +44,46 @@
   color: var(--gb-ink-soft);
 }
 
+/* #498/#496 — narrow event-group restyle; reuse .fr3 .toggle-row, no new toggle family. */
+.gb-push-settings__events {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.gb-push-settings__events-legend {
+  padding: 0;
+  float: none;
+  width: 100%;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gb-ink);
+}
+
+.gb-push-settings__events-note {
+  margin: 0;
+  color: var(--gb-ink-soft);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.gb-push-settings__event-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.gb-push-settings__event-list > li {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 @media (max-width: 430px) {
   .gb-push-settings__actions {
     flex-direction: column;
