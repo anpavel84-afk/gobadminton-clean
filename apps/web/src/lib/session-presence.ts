@@ -6,6 +6,11 @@
 
 export type SessionPresence = "absent" | "present" | "unknown";
 
+/** Optional detail on `gb-session-changed` — logout can pin absent without a guest-probe window. */
+export type SessionChangedDetail = {
+  sessionPresence?: SessionPresence;
+};
+
 export const SESSION_COOKIE_NAME = "__Host-gb_session";
 export const SESSION_PRESENCE_ATTR = "data-gb-session-presence";
 
@@ -14,6 +19,8 @@ const SKIPPABLE_ABSENT_GETS = new Set(["/v1/me", "/v1/me/push"]);
 
 let clientOverride: SessionPresence | null = null;
 let listenersInstalled = false;
+/** Window the listeners/override are bound to — a replaced harness window drops stale override. */
+let boundWindow: Window | null = null;
 
 function normalizePresence(raw: string | null | undefined): SessionPresence {
   if (raw === "absent" || raw === "present") return raw;
@@ -49,9 +56,23 @@ export function markSessionPresence(next: SessionPresence): void {
  * Private expiry: treat as absent so guests stop probing.
  */
 export function ensureSessionPresenceListeners(): void {
-  if (listenersInstalled || typeof window === "undefined") return;
+  if (typeof window === "undefined") return;
+  // New browsing context / test harness window: drop override tied to the previous window.
+  if (boundWindow !== window) {
+    if (boundWindow !== null) clientOverride = null;
+    listenersInstalled = false;
+    boundWindow = window;
+  }
+  if (listenersInstalled) return;
   listenersInstalled = true;
-  window.addEventListener("gb-session-changed", () => {
+  window.addEventListener("gb-session-changed", (event: Event) => {
+    const detail = (event as CustomEvent<SessionChangedDetail | undefined>).detail;
+    // Authoritative logout (or equivalent): keep/reinforce absent — no transient unknown probe window.
+    if (detail?.sessionPresence === "absent") {
+      markSessionPresence("absent");
+      return;
+    }
+    // Login / account switch / generic notify: invalidate SSR absence so /me can run again.
     markSessionPresence("unknown");
   });
   window.addEventListener("gb-private-expired", () => {
@@ -63,6 +84,7 @@ export function ensureSessionPresenceListeners(): void {
 export function resetSessionPresenceForTests(): void {
   clientOverride = null;
   listenersInstalled = false;
+  boundWindow = null;
 }
 
 export function pathWithoutQuery(path: string): string {

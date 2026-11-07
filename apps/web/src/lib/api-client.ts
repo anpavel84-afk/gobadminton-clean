@@ -53,6 +53,7 @@ import type {
 import { resolveApiBaseUrl } from "./api";
 import { avatarAbortable } from "./avatar-preprocess";
 import {
+  ensureSessionPresenceListeners,
   markSessionPresence,
   shouldSkipUnauthenticatedPrivateGet,
 } from "./session-presence";
@@ -517,10 +518,20 @@ export async function logout(csrfToken: string, options: { signal?: AbortSignal;
     idempotent: true,
     signal: options.signal,
   });
-  if (options.notifySession !== false && !options.signal?.aborted && generation === foregroundUpdates.currentGeneration && typeof window !== "undefined") {
-    window.dispatchEvent(new Event("gb-session-changed"));
-    // After logout the session cookie is gone — do not leave eligibility as unknown (would re-probe).
+  const mayNotify =
+    options.notifySession !== false
+    && !options.signal?.aborted
+    && generation === foregroundUpdates.currentGeneration
+    && typeof window !== "undefined";
+  // Only authoritative finished logout proves the cookie is gone. 500/403/network must not lock out.
+  const authoritativeAbsent = result.ok || result.status === 401;
+  if (mayNotify && authoritativeAbsent) {
+    ensureSessionPresenceListeners();
+    // Pin absent before consumers react — no transient unknown /me+/push guest-probe window.
     markSessionPresence("absent");
+    window.dispatchEvent(
+      new CustomEvent("gb-session-changed", { detail: { sessionPresence: "absent" as const } }),
+    );
   }
   return result;
 }
