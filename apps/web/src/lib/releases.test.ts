@@ -30,6 +30,8 @@ describe("releases current descriptor literals", () => {
     expect(prose).toMatch(/комментар|отзыв|площад|сообщен|выключен/i);
     expect(prose).toMatch(/времен|мест|отложен|не реализов/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
+    expect(prose).toMatch(/галере|загрузк|стрелк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);

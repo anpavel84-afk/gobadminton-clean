@@ -89,7 +89,11 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/профил|тренер|организатор|игр/i);
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/публичн|текст/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/галере|состоян|стрелк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/загрузк|ошибк|отсутств|пуст|стрелк|галере/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/WebP|507|alpha\.4[6-9]|Mode B|READY|ACTIVE/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(

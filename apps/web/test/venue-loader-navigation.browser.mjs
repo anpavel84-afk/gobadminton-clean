@@ -19,7 +19,11 @@ const galleryCss = await readFile(new URL("../src/styles/venue-gallery.css", imp
 
 assert.match(illustrationSrc, /venueMediaSkeletonStyle/);
 assert.doesNotMatch(illustrationSrc, /data:image\/svg\+xml/);
-assert.doesNotMatch(illustrationSrc, /racket|ellipse cx="78"/);
+// Reject leftover inline equipment SVG geometry / pending fillers only.
+// Published raster `/discovery/venue-illustrations/racket-v1.webp` is legitimate.
+assert.doesNotMatch(illustrationSrc, /ellipse cx="78"/);
+assert.doesNotMatch(illustrationSrc, /<svg[\s\S]*?(?:racket|ellipse)/i);
+assert.match(illustrationSrc, /\/discovery\/venue-illustrations\/racket-v1\.webp/);
 assert.match(gallerySrc, /isGalleryInteractiveTarget/);
 assert.match(gallerySrc, /closest\(/);
 assert.match(gallerySrc, /setPointerCapture/);
