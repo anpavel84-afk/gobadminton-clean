@@ -129,6 +129,22 @@ it("reports zero vector tiles eight seconds after load", async () => {
   expect(renderToStaticMarkup(render())).toContain('data-map-error="tiles"');
   expect(availability).toHaveBeenCalledWith(false);
 });
+
+it("clears the 20s timeout banner when the current attempt later loads and restores availability", async () => {
+  const map = await constructMap();
+  await vi.advanceTimersByTimeAsync(20000);
+  const timedOut = render();
+  expect(renderToStaticMarkup(timedOut)).toContain("Карта не загрузилась");
+  expect(renderToStaticMarkup(timedOut)).toContain("Карта не ответила вовремя");
+  expect(availability).toHaveBeenCalledWith(false);
+  expect(errorCard).toHaveBeenLastCalledWith(true);
+  map.emit("load");
+  const recovered = render();
+  expect(renderToStaticMarkup(recovered)).not.toContain("Карта не загрузилась");
+  expect(renderToStaticMarkup(recovered)).toContain('data-map-ready="true"');
+  expect(availability).toHaveBeenCalledWith(true);
+  expect(errorCard).toHaveBeenLastCalledWith(false);
+});
 it("does not construct a map in a zero-width container", async () => {
   h.width = 0; render(); await Promise.resolve(); expect(h.maps).toHaveLength(0); expect(fetch).not.toHaveBeenCalled();
 });

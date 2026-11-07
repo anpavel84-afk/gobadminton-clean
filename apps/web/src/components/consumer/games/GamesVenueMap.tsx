@@ -99,12 +99,15 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let tileTimeout: ReturnType<typeof setTimeout> | undefined;
     let fatal = false; let started = false;
+    /** Startup timeout may show the error card while style/init is still pending; a later valid load for this attempt clears it. */
+    let timeoutPending = false;
     const removeMapListeners: (() => void)[] = [];
     let grace: ReturnType<typeof setTimeout> | undefined;
     let deadline: number | undefined;
     const fail = (diagnostic: MapDiagnostic) => {
       if (!alive || fatal) return;
-      fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false);
+      fatal = true; timeoutPending = diagnostic.kind === "timeout";
+      setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false);
     };
     const restore = () => {
       if (!alive || fatal || deadline === undefined || Date.now() >= deadline) return;
@@ -173,7 +176,13 @@ export function GamesVenueMap({ cityId, venues, counts, selectedVenueId, onDesel
         removeMapListeners.push(() => instance?.off("sourcedata", sourcedata));
         const loaded = () => { if (alive) {
           instance?.resize(); loadedAt = Date.now(); setReady(true); setSharedMap(instance);
-          if (!fatal) { callbacks.current.onAvailability?.(true); setStatus(""); }
+          // Real MapLibre load for this city/attempt — not markers alone. Recover only a prior startup timeout.
+          if (fatal && timeoutPending) {
+            fatal = false; timeoutPending = false;
+            setFailure(undefined); callbacks.current.onAvailability?.(true); setStatus("");
+          } else if (!fatal) {
+            callbacks.current.onAvailability?.(true); setStatus("");
+          }
           clearTimeout(timeout);
           tileTimeout = setTimeout(() => { if (!loadedTiles) report({ kind: "tiles", sourceId: "protomaps" }); }, 8000);
         } };
