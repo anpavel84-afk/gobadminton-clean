@@ -59,6 +59,7 @@ ALTER TABLE web_push_delivery_intents
   DROP CONSTRAINT IF EXISTS web_push_delivery_intents_kind_check;
 
 ALTER TABLE web_push_delivery_intents
+  DROP COLUMN IF EXISTS manager_updated_at,
   DROP COLUMN IF EXISTS actor_user_id,
   DROP COLUMN IF EXISTS game_version,
   DROP COLUMN IF EXISTS reminder_ordinal,

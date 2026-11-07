@@ -31,7 +31,9 @@ ALTER TABLE web_push_delivery_intents
     CHECK (reminder_ordinal IS NULL OR reminder_ordinal BETWEEN 1 AND 3),
   ADD COLUMN game_version integer NULL
     CHECK (game_version IS NULL OR game_version BETWEEN 1 AND 2147483647),
-  ADD COLUMN actor_user_id uuid NULL REFERENCES users (id);
+  ADD COLUMN actor_user_id uuid NULL REFERENCES users (id),
+  -- Manager epoch snapshot for new_pending_application (game_managers.updated_at).
+  ADD COLUMN manager_updated_at timestamptz NULL;
 
 ALTER TABLE web_push_delivery_intents
   ADD CONSTRAINT web_push_delivery_intents_kind_check CHECK (

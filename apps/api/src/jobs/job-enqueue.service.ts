@@ -20,7 +20,7 @@ import {
   ensureWebPushQueues,
 } from "./pg-boss.factory";
 import {
-  persistGameEventPushIntent,
+  persistGameEventPushIntentOptional,
   type GamePushIntentInput,
 } from "../push/game-push-intents";
 
@@ -224,31 +224,38 @@ export class JobEnqueueService implements OnModuleDestroy {
   }
 
   /**
-   * Same physical TX as business mutation: durable game-event intent always
-   * lands. PgBoss enqueue isolated via SAVEPOINT. Excludes actor/self.
+   * Same physical TX as business mutation: durable game-event intent lands when
+   * possible (isolated via SAVEPOINT so a failed INSERT cannot abort domain).
+   * PgBoss enqueue isolated via its own SAVEPOINT. Excludes actor/self.
+   * Never throws into the caller business TX.
    */
   async enqueueGameEventWebPush(
     client: PoolClient,
     input: GamePushIntentInput,
   ): Promise<string | null> {
-    if (!this.env.WEB_PUSH_ENABLED) return null;
-    if (input.actorUserId && input.recipientUserId === input.actorUserId) {
+    try {
+      if (!this.env.WEB_PUSH_ENABLED) return null;
+      if (input.actorUserId && input.recipientUserId === input.actorUserId) {
+        return null;
+      }
+      const persisted = await persistGameEventPushIntentOptional(client, input);
+      if (!persisted) return null;
+      const payload: WebPushGameEventDeliverPayload = {
+        kind: input.kind,
+        eventKey: input.eventKey,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId ?? null,
+        gameId: input.gameId,
+        gameVersion: input.gameVersion,
+        invitationId: input.invitationId ?? null,
+        participationId: input.participationId ?? null,
+        reminderId: input.reminderId ?? null,
+        reminderOrdinal: input.reminderOrdinal ?? null,
+      };
+      return await this.tryEnqueueGameEventWebPushJob(client, payload);
+    } catch {
       return null;
     }
-    await persistGameEventPushIntent(client, input);
-    const payload: WebPushGameEventDeliverPayload = {
-      kind: input.kind,
-      eventKey: input.eventKey,
-      recipientUserId: input.recipientUserId,
-      actorUserId: input.actorUserId ?? null,
-      gameId: input.gameId,
-      gameVersion: input.gameVersion,
-      invitationId: input.invitationId ?? null,
-      participationId: input.participationId ?? null,
-      reminderId: input.reminderId ?? null,
-      reminderOrdinal: input.reminderOrdinal ?? null,
-    };
-    return this.tryEnqueueGameEventWebPushJob(client, payload);
   }
 
   /**

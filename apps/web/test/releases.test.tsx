@@ -64,8 +64,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/кнопк|закрыт|маркер|карт|площадк/i);
-    expect(currentProse).toMatch(/приёмк/i);
+    expect(currentProse).toMatch(/уведомлен|приглашен|заявк|отмен|итог/i);
+    expect(currentProse).toMatch(/приёмк|iPhone|транспорт/i);
+    expect(currentProse).toMatch(/UNCONNECTED|BLOCKED|времен|места/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
@@ -77,7 +78,7 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/кнопк|закрыт|маркер|площадк|карт/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/приглашен|заявк|отмен|итог/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,

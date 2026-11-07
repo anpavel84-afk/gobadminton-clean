@@ -81,25 +81,26 @@ export class ParticipationsService {
     input: Parameters<JobEnqueueService["enqueueGameEventWebPush"]>[1],
   ): Promise<void> {
     if (!this.jobs || !this.env.WEB_PUSH_ENABLED) return;
-    try {
-      await this.jobs.enqueueGameEventWebPush(client, input);
-    } catch {
-      /* durable intent may still have landed; recover worker handles pending */
-    }
+    // enqueueGameEventWebPush isolates persist+PgBoss via SAVEPOINT; never
+    // swallows SQL without savepoint (would abort the business TX).
+    await this.jobs.enqueueGameEventWebPush(client, input);
   }
 
-  private async listActiveOrganizerUserIds(
+  private async listActiveOrganizers(
     client: PoolClient,
     gameId: string,
-  ): Promise<string[]> {
-    const rows = await client.query<{ user_id: string }>(
-      `SELECT user_id FROM game_managers
+  ): Promise<Array<{ userId: string; updatedAt: Date }>> {
+    const rows = await client.query<{ user_id: string; updated_at: Date }>(
+      `SELECT user_id, updated_at FROM game_managers
        WHERE game_id = $1
          AND status = 'active'
          AND role IN ('owner', 'manager')`,
       [gameId],
     );
-    return rows.rows.map((r) => r.user_id);
+    return rows.rows.map((r) => ({
+      userId: r.user_id,
+      updatedAt: r.updated_at,
+    }));
   }
 
   /** Only new regular drafts: caller inserted Game and granted owner in this transaction. */
@@ -241,8 +242,8 @@ export class ParticipationsService {
               sourceCode: normalizedSource,
             },
           });
-          const organizers = await this.listActiveOrganizerUserIds(client, body.gameId);
-          for (const organizerId of organizers) {
+          const organizers = await this.listActiveOrganizers(client, body.gameId);
+          for (const organizer of organizers) {
             await this.enqueueGamePush(client, {
               kind: "new_pending_application",
               eventKey: participationEventKey(
@@ -250,11 +251,12 @@ export class ParticipationsService {
                 body.id,
                 body.version,
               ),
-              recipientUserId: organizerId,
+              recipientUserId: organizer.userId,
               actorUserId: userId,
               gameId: body.gameId,
               gameVersion: game.version,
               participationId: body.id,
+              managerUpdatedAt: organizer.updatedAt,
             });
           }
         } else if (row.status === "withdrawn") {
@@ -299,8 +301,8 @@ export class ParticipationsService {
               reapply: true,
             },
           });
-          const organizers = await this.listActiveOrganizerUserIds(client, body.gameId);
-          for (const organizerId of organizers) {
+          const organizers = await this.listActiveOrganizers(client, body.gameId);
+          for (const organizer of organizers) {
             await this.enqueueGamePush(client, {
               kind: "new_pending_application",
               eventKey: participationEventKey(
@@ -308,11 +310,12 @@ export class ParticipationsService {
                 body.id,
                 body.version,
               ),
-              recipientUserId: organizerId,
+              recipientUserId: organizer.userId,
               actorUserId: userId,
               gameId: body.gameId,
               gameVersion: game.version,
               participationId: body.id,
+              managerUpdatedAt: organizer.updatedAt,
             });
           }
         } else {

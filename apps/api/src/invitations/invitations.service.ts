@@ -237,19 +237,16 @@ export class InvitationsService {
           },
         });
         if (this.env.WEB_PUSH_ENABLED) {
-          try {
-            await this.jobs.enqueueGameEventWebPush(client, {
-              kind: "game_invitation",
-              eventKey: invitationEventKey(inserted.id, inserted.version),
-              recipientUserId: inviteeUserId,
-              actorUserId: actorId,
-              gameId: inserted.game_id,
-              gameVersion: game.version,
-              invitationId: inserted.id,
-            });
-          } catch {
-            /* durable intent / recover */
-          }
+          // SAVEPOINT-isolated persist+enqueue — must not abort invitation TX.
+          await this.jobs.enqueueGameEventWebPush(client, {
+            kind: "game_invitation",
+            eventKey: invitationEventKey(inserted.id, inserted.version),
+            recipientUserId: inviteeUserId,
+            actorUserId: actorId,
+            gameId: inserted.game_id,
+            gameVersion: game.version,
+            invitationId: inserted.id,
+          });
         }
         const dto=await this.toDto(client,inserted);
         await this.proofHook.assertFinalProof(client,{actorId,sessionId,targetUserId:inviteeUserId,discoveryProof:normalized.discoveryProof});

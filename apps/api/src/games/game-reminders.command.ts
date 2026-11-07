@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import type { AppEnv } from "../config/env";
 import {
-  persistGameEventPushIntent,
+  persistGameEventPushIntentOptional,
   reminderEventKey,
 } from "../push/game-push-intents";
 import { unrestrictedSql } from "../restrictions/policy";
@@ -694,7 +694,8 @@ export class GameRemindersCommand {
       );
       const gameVersion = game.rows[0]?.version;
       if (typeof gameVersion === "number") {
-        await persistGameEventPushIntent(db, {
+        // Optional: SAVEPOINT so push intent failure cannot abort markVisible.
+        await persistGameEventPushIntentOptional(db, {
           kind: "outcome_reminder",
           eventKey: reminderEventKey(input.reminderId, input.ordinal),
           recipientUserId: input.organizerUserId,

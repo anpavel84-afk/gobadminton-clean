@@ -271,11 +271,8 @@ export class GamesService {
     input: Parameters<JobEnqueueService["enqueueGameEventWebPush"]>[1],
   ): Promise<void> {
     if (!this.jobs || !this.env.WEB_PUSH_ENABLED) return;
-    try {
-      await this.jobs.enqueueGameEventWebPush(client, input);
-    } catch {
-      /* durable intent / recover */
-    }
+    // SAVEPOINT-isolated persist+enqueue; must not swallow bare SQL errors.
+    await this.jobs.enqueueGameEventWebPush(client, input);
   }
 
   async createDraft(
@@ -634,7 +631,12 @@ export class GamesService {
   /**
    * Bounded published schedule/venue change inside an existing TX.
    * Emits time/venue push only when the published values actually change.
-   * Title-only / no-op updates do not notify. Controllers not added here.
+   * Title-only / no-op updates do not notify.
+   *
+   * PRODUCT GAP (Owner approval PENDING): no HTTP/UI game-editing surface and
+   * no change to first-writer-wins played-at attribution in this pass. Helper
+   * kept for tests / future wire-up; user-facing time/place delivery is
+   * UNCONNECTED/BLOCKED until Owner decides.
    */
   async applyPublishedScheduleChangeInTransaction(
     client: PoolClient,

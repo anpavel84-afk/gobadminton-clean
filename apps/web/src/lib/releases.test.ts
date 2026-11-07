@@ -27,6 +27,7 @@ describe("releases current descriptor literals", () => {
     ].join(" ");
     expect(prose).toMatch(/уведомлен|приглашен|заявк|отмен|итог/i);
     expect(prose).toMatch(/приёмк|iPhone|транспорт/i);
+    expect(prose).toMatch(/UNCONNECTED|BLOCKED|времен|места/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(
       TRUSTED_HISTORICAL_SEED.some(

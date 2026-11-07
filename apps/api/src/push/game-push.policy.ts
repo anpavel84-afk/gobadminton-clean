@@ -107,3 +107,38 @@ export function isGamePushKind(value: unknown): value is GamePushKind {
     (GAME_PUSH_KINDS as readonly string[]).includes(value)
   );
 }
+
+/** Dedicated local DB or strict Actions ephemeral recipe — never arbitrary/live. */
+export const GAME_PUSH_DISPOSABLE_DB_NAME = "gobadminton_game_push_disposable";
+
+export function isGamePushDisposableDatabaseUrl(input: {
+  databaseUrl: string;
+  nodeEnv: string | undefined;
+  githubActions?: string;
+  gmap1DisposableDb?: string;
+  pgContainer?: string;
+  ciDbPort?: string;
+}): boolean {
+  let url: URL;
+  try {
+    url = new URL(input.databaseUrl);
+  } catch {
+    return false;
+  }
+  const dedicated =
+    decodeURIComponent(url.pathname) === `/${GAME_PUSH_DISPOSABLE_DB_NAME}`;
+  const hosted =
+    decodeURIComponent(url.pathname) === "/gobadminton" &&
+    input.githubActions === "true" &&
+    input.gmap1DisposableDb === "1" &&
+    /^gb-ci-\d+-\d+-\d+$/.test(input.pgContainer ?? "") &&
+    url.port === input.ciDbPort;
+  return (
+    input.nodeEnv === "test" &&
+    ["postgres:", "postgresql:"].includes(url.protocol) &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+    !url.search &&
+    !url.hash &&
+    (dedicated || hosted)
+  );
+}

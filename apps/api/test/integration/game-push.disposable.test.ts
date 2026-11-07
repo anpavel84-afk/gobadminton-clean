@@ -22,7 +22,10 @@ import {
   deliverGameEventWebPushJob,
   recoverPendingGamePushIntents,
 } from "../../src/push/game-push-delivery";
-import { GAME_PUSH_COPY } from "../../src/push/game-push.policy";
+import {
+  GAME_PUSH_COPY,
+  isGamePushDisposableDatabaseUrl,
+} from "../../src/push/game-push.policy";
 import {
   gameChangeEventKey,
   invitationEventKey,
@@ -41,23 +44,24 @@ import { buildTestCoreModule } from "./test-core.module";
 
 /**
  * #496 game-event push disposable DB checks. Never talks to live providers.
+ * Dedicated DB name or strict hosted Actions ephemeral recipe — never live.
  * External delivery PASS is not claimed from fake transport alone.
  */
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 const origin = "http://127.0.0.1:3001";
-const DB_NAME = "gobadminton_game_push_disposable";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error("Explicit disposable DATABASE_URL required");
-  const url = new URL(raw);
   if (
-    process.env.NODE_ENV !== "test" ||
-    !["postgres:", "postgresql:"].includes(url.protocol) ||
-    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
-    url.search ||
-    url.hash ||
-    decodeURIComponent(url.pathname) !== `/${DB_NAME}`
+    !isGamePushDisposableDatabaseUrl({
+      databaseUrl: raw,
+      nodeEnv: process.env.NODE_ENV,
+      githubActions: process.env.GITHUB_ACTIONS,
+      gmap1DisposableDb: process.env.GMAP1_DISPOSABLE_DB,
+      pgContainer: process.env.PG_CONTAINER,
+      ciDbPort: process.env.CI_DB_PORT,
+    })
   ) {
     throw new Error("Refusing nonlocal/non-test/nonisolated game-push DB");
   }
@@ -657,6 +661,87 @@ run("#496 game event push — disposable", () => {
       enqueueInTx: async () => true,
     });
     expect(recovered.recovered + recovered.failed).toBeGreaterThanOrEqual(0);
+  });
+
+  it("stale invitation/participation eventKey versions and revoked manager actor do not deliver", async () => {
+    sent.length = 0;
+    const game = await seedPublishedGame(organizer);
+    await seedPush(player, `stale-${randomUUID().slice(0, 8)}`, {
+      invites: true,
+      applicationDecisions: true,
+    });
+    const invitationId = randomUUID();
+    const pairId = randomUUID();
+    const low = organizer.userId < player.userId ? organizer.userId : player.userId;
+    const high = organizer.userId < player.userId ? player.userId : organizer.userId;
+    await pool.query(
+      `INSERT INTO social_pairs (id, user_low, user_high) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+      [pairId, low, high],
+    );
+    await pool.query(
+      `INSERT INTO game_invitations (
+         id, game_id, inviter_user_id, invitee_user_id, pair_id, status, version, expires_at
+       ) VALUES ($1,$2,$3,$4,$5,'pending',1, now() + interval '1 day')`,
+      [invitationId, game.id, organizer.userId, player.userId, pairId],
+    );
+    const staleInvite = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "game_invitation",
+        eventKey: invitationEventKey(invitationId, 99),
+        recipientUserId: player.userId,
+        actorUserId: organizer.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        invitationId,
+      },
+    });
+    expect(staleInvite.delivered).toBe(0);
+
+    const participationId = randomUUID();
+    await pool.query(
+      `INSERT INTO participations (id, game_id, user_id, status, attempt_number, version, requested_at, confirmed_at)
+       VALUES ($1,$2,$3,'confirmed',1,2,now(),now())`,
+      [participationId, game.id, player.userId],
+    );
+    const staleConfirm = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "participation_confirmed",
+        eventKey: participationEventKey("participation_confirmed", participationId, 1),
+        recipientUserId: player.userId,
+        actorUserId: organizer.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId,
+      },
+    });
+    expect(staleConfirm.delivered).toBe(0);
+
+    await pool.query(
+      `UPDATE game_managers SET status='revoked', revoked_at=now(), updated_at=now()
+       WHERE game_id=$1 AND user_id=$2`,
+      [game.id, organizer.userId],
+    );
+    const revokedActor = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "participation_confirmed",
+        eventKey: participationEventKey("participation_confirmed", participationId, 2),
+        recipientUserId: player.userId,
+        actorUserId: organizer.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId,
+      },
+    });
+    expect(revokedActor.delivered).toBe(0);
   });
 
   it("co-manager new application requires current active owner/manager proof", async () => {

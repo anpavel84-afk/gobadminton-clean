@@ -21,13 +21,89 @@ describe("#456 sw-push.js handlers", () => {
   });
 
   it("accepts safe game/results click paths and rejects foreign absolute URLs", async () => {
+    const listeners = new Map<string, Array<(event: unknown) => void>>();
+    const navigated: string[] = [];
+    const opened: string[] = [];
+    const cacheStore = new Map<string, Response>();
+
+    const selfMock = {
+      registration: {
+        showNotification: async () => {},
+        getNotifications: async () => [],
+      },
+      clients: {
+        matchAll: async () => [],
+        openWindow: async (url: string) => {
+          opened.push(url);
+          return null;
+        },
+      },
+      addEventListener: (type: string, handler: (event: unknown) => void) => {
+        const list = listeners.get(type) ?? [];
+        list.push(handler);
+        listeners.set(type, list);
+      },
+    };
+
+    const cachesMock = {
+      open: async () => ({
+        match: async (key: string) => cacheStore.get(key) ?? null,
+        put: async (key: string, value: Response) => {
+          cacheStore.set(key, value);
+        },
+      }),
+      delete: async () => true,
+    };
+
     const source = readFileSync(
       path.resolve(__dirname, "../public/sw-push.js"),
       "utf8",
     );
-    expect(source).toMatch(/\/games\//);
-    expect(source).toMatch(/\/my-games\//);
-    expect(source).toMatch(/includes\(":\/\/"\)/);
+    const fn = new Function("self", "caches", "clients", "Response", source);
+    fn(selfMock, cachesMock, selfMock.clients, Response);
+
+    const messageHandlers = listeners.get("message") ?? [];
+    const clickHandlers = listeners.get("notificationclick") ?? [];
+    expect(clickHandlers.length).toBe(1);
+
+    await new Promise<void>((resolve) => {
+      messageHandlers[0]!({
+        data: { type: "gb-push-set-fence", fence: "fence-safe" },
+        waitUntil: (p: Promise<unknown>) => {
+          void p.then(() => resolve());
+        },
+      });
+    });
+
+    const gameId = "11111111-1111-4111-8111-111111111111";
+    const runClick = async (pathValue: string) => {
+      opened.length = 0;
+      navigated.length = 0;
+      await new Promise<void>((resolve) => {
+        clickHandlers[0]!({
+          notification: {
+            close: () => undefined,
+            data: { path: pathValue, fence: "fence-safe" },
+          },
+          waitUntil: (p: Promise<unknown>) => {
+            void p.then(() => resolve());
+          },
+        });
+      });
+    };
+
+    await runClick(`/games/${gameId}`);
+    expect(opened).toEqual([`/games/${gameId}`]);
+
+    await runClick(`/my-games/${gameId}/results`);
+    expect(opened).toEqual([`/my-games/${gameId}/results`]);
+
+    await runClick("https://evil.example/phish");
+    expect(opened).toEqual(["/messages"]);
+
+    await runClick("/games/not-a-uuid");
+    expect(opened).toEqual(["/messages"]);
+    void navigated;
   });
 
   it("shows notification only when fence matches; clears on gb-push-clear", async () => {

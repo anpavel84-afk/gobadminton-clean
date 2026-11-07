@@ -17,6 +17,8 @@ export type GamePushIntentInput = {
   participationId?: string | null;
   reminderId?: string | null;
   reminderOrdinal?: number | null;
+  /** Snapshot of game_managers.updated_at for new_pending_application epoch fence. */
+  managerUpdatedAt?: Date | string | null;
 };
 
 /**
@@ -32,11 +34,13 @@ export async function persistGameEventPushIntent(
     `INSERT INTO web_push_delivery_intents (
        message_id, conversation_id, recipient_user_id, author_user_id,
        kind, game_id, event_key, invitation_id, participation_id,
-       reminder_id, reminder_ordinal, game_version, actor_user_id, status
+       reminder_id, reminder_ordinal, game_version, actor_user_id,
+       manager_updated_at, status
      ) VALUES (
        NULL, NULL, $1, NULL,
        $2, $3, $4, $5, $6,
-       $7, $8, $9, $10, 'pending'
+       $7, $8, $9, $10,
+       $11, 'pending'
      )
      ON CONFLICT (event_key, recipient_user_id) WHERE event_key IS NOT NULL
      DO NOTHING`,
@@ -51,8 +55,36 @@ export async function persistGameEventPushIntent(
       input.reminderOrdinal ?? null,
       input.gameVersion,
       input.actorUserId ?? null,
+      input.managerUpdatedAt ?? null,
     ],
   );
+}
+
+/**
+ * Optional durable intent: SAVEPOINT so a failed INSERT cannot abort the
+ * caller's business TX. Returns false when the intent did not land.
+ */
+export async function persistGameEventPushIntentOptional(
+  client: GamePushSql,
+  input: GamePushIntentInput,
+): Promise<boolean> {
+  try {
+    await client.query("SAVEPOINT web_push_game_intent");
+  } catch {
+    return false;
+  }
+  try {
+    await persistGameEventPushIntent(client, input);
+    await client.query("RELEASE SAVEPOINT web_push_game_intent");
+    return true;
+  } catch {
+    try {
+      await client.query("ROLLBACK TO SAVEPOINT web_push_game_intent");
+    } catch {
+      /* TX may already be unusable; caller still must not see a throw */
+    }
+    return false;
+  }
 }
 
 /** Snapshot pending/confirmed participants at cancel TX for later delivery fence. */
@@ -129,4 +161,42 @@ export function reminderEventKey(
   ordinal: number,
 ): string {
   return `or:${reminderId}:o${ordinal}`;
+}
+
+/** Trusted comparison — eventKey must equal the builder for the current row version. */
+export function eventKeyMatchesInvitation(
+  eventKey: string,
+  invitationId: string,
+  version: number,
+): boolean {
+  return eventKey === invitationEventKey(invitationId, version);
+}
+
+export function eventKeyMatchesParticipation(
+  eventKey: string,
+  kind:
+    | "participation_confirmed"
+    | "participation_rejected"
+    | "new_pending_application",
+  participationId: string,
+  version: number,
+): boolean {
+  return eventKey === participationEventKey(kind, participationId, version);
+}
+
+export function eventKeyMatchesGameChange(
+  eventKey: string,
+  kind: "game_cancelled" | "game_time_changed" | "game_venue_changed",
+  gameId: string,
+  gameVersion: number,
+): boolean {
+  return eventKey === gameChangeEventKey(kind, gameId, gameVersion);
+}
+
+export function eventKeyMatchesReminder(
+  eventKey: string,
+  reminderId: string,
+  ordinal: number,
+): boolean {
+  return eventKey === reminderEventKey(reminderId, ordinal);
 }

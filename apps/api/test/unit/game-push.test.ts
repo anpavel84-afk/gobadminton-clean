@@ -6,12 +6,18 @@ import {
 } from "../../src/jobs/payloads";
 import {
   GAME_PUSH_COPY,
+  GAME_PUSH_DISPOSABLE_DB_NAME,
   GAME_PUSH_KINDS,
   assertSafeGamePushPath,
   eventGroupForKind,
+  isGamePushDisposableDatabaseUrl,
   pathForGamePush,
 } from "../../src/push/game-push.policy";
 import {
+  eventKeyMatchesGameChange,
+  eventKeyMatchesInvitation,
+  eventKeyMatchesParticipation,
+  eventKeyMatchesReminder,
   gameChangeEventKey,
   invitationEventKey,
   participationEventKey,
@@ -76,5 +82,75 @@ describe("#496 game event push policy", () => {
         authorUserId: "a",
       }),
     ).toBe(true);
+  });
+
+  it("rejects stale eventKey versions via trusted builders", () => {
+    expect(eventKeyMatchesInvitation("inv:a:v1", "a", 1)).toBe(true);
+    expect(eventKeyMatchesInvitation("inv:a:v1", "a", 2)).toBe(false);
+    expect(eventKeyMatchesInvitation("inv:a:v2", "a", 1)).toBe(false);
+    expect(
+      eventKeyMatchesParticipation("pc:p:v2", "participation_confirmed", "p", 2),
+    ).toBe(true);
+    expect(
+      eventKeyMatchesParticipation("pc:p:v1", "participation_confirmed", "p", 2),
+    ).toBe(false);
+    expect(
+      eventKeyMatchesParticipation("pr:p:v3", "participation_rejected", "p", 3),
+    ).toBe(true);
+    expect(
+      eventKeyMatchesParticipation("app:p:v4", "new_pending_application", "p", 4),
+    ).toBe(true);
+    expect(eventKeyMatchesGameChange("gc:g:v5", "game_cancelled", "g", 5)).toBe(
+      true,
+    );
+    expect(eventKeyMatchesGameChange("gc:g:v4", "game_cancelled", "g", 5)).toBe(
+      false,
+    );
+    expect(
+      eventKeyMatchesGameChange("gt:g:v6", "game_time_changed", "g", 6),
+    ).toBe(true);
+    expect(eventKeyMatchesReminder("or:r:o2", "r", 2)).toBe(true);
+    expect(eventKeyMatchesReminder("or:r:o1", "r", 2)).toBe(false);
+  });
+
+  it("CI disposable guard allows only dedicated local DB or strict Actions recipe", () => {
+    expect(
+      isGamePushDisposableDatabaseUrl({
+        databaseUrl: `postgres://u:p@127.0.0.1:5432/${GAME_PUSH_DISPOSABLE_DB_NAME}`,
+        nodeEnv: "test",
+      }),
+    ).toBe(true);
+    expect(
+      isGamePushDisposableDatabaseUrl({
+        databaseUrl: "postgres://u:p@127.0.0.1:55432/gobadminton",
+        nodeEnv: "test",
+        githubActions: "true",
+        gmap1DisposableDb: "1",
+        pgContainer: "gb-ci-1-2-3",
+        ciDbPort: "55432",
+      }),
+    ).toBe(true);
+    expect(
+      isGamePushDisposableDatabaseUrl({
+        databaseUrl: "postgres://u:p@127.0.0.1:5432/gobadminton",
+        nodeEnv: "test",
+      }),
+    ).toBe(false);
+    expect(
+      isGamePushDisposableDatabaseUrl({
+        databaseUrl: "postgres://u:p@db.example:5432/gobadminton_game_push_disposable",
+        nodeEnv: "test",
+      }),
+    ).toBe(false);
+    expect(
+      isGamePushDisposableDatabaseUrl({
+        databaseUrl: "postgres://u:p@127.0.0.1:5432/postgres",
+        nodeEnv: "test",
+        githubActions: "true",
+        gmap1DisposableDb: "1",
+        pgContainer: "gb-ci-1-2-3",
+        ciDbPort: "5432",
+      }),
+    ).toBe(false);
   });
 });
