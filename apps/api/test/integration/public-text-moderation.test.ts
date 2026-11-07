@@ -35,6 +35,7 @@ import {
   safeTextBatchDecision,
   TEXT_CATEGORIES,
 } from "../../src/moderation/provider";
+import { PUBLIC_TEXT_POLICY_VERSION } from "../../src/moderation/text-policy";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
 import { OrganizersModule } from "../../src/organizers/organizers.module";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
@@ -527,6 +528,8 @@ describeIntegration("MOD-V2-A public text moderation", () => {
     }
 
     // Promote to published as owner, then foreign still sees privacy 404 (not GAME_NOT_DRAFT).
+    // Draft create already approved the exact host fields; owner publish must reuse
+    // that decision cache (no new provider request) and still bind publication rows.
     const published = await app.inject({
       method: "POST",
       url: `/v1/games/${gameId}/publish`,
@@ -534,8 +537,47 @@ describeIntegration("MOD-V2-A public text moderation", () => {
       payload: { expectedVersion: version },
     });
     expect(published.statusCode).toBe(200);
+    const publishedVersion = published.json().version as number;
     const afterOwnerPublishCalls = fake.textCalls;
-    expect(afterOwnerPublishCalls).toBeGreaterThan(beforeCalls);
+    expect(afterOwnerPublishCalls).toBe(beforeCalls);
+
+    const pubBindings = await pool.query<{
+      surface_key: string;
+      resource_version: number;
+      binding_kind: string;
+      policy_version: string;
+      decision: string;
+      entity_id: string;
+    }>(
+      `SELECT b.surface_key, b.resource_version, b.binding_kind, b.entity_id,
+              a.policy_version, a.decision
+       FROM content_moderation_bindings b
+       JOIN content_moderation_approvals a ON a.id = b.approval_id
+       WHERE b.entity_kind = 'game'
+         AND b.entity_id = $1
+         AND b.binding_kind = 'publication'
+       ORDER BY b.surface_key`,
+      [gameId],
+    );
+    expect(pubBindings.rowCount).toBeGreaterThan(0);
+    expect(pubBindings.rows.map((row) => row.entity_id)).toEqual(
+      Array(pubBindings.rowCount).fill(gameId),
+    );
+    expect(pubBindings.rows.map((row) => row.resource_version)).toEqual(
+      Array(pubBindings.rowCount).fill(publishedVersion),
+    );
+    expect(pubBindings.rows.map((row) => row.policy_version)).toEqual(
+      Array(pubBindings.rowCount).fill(PUBLIC_TEXT_POLICY_VERSION),
+    );
+    expect(pubBindings.rows.map((row) => row.decision)).toEqual(
+      Array(pubBindings.rowCount).fill("allow"),
+    );
+    expect(pubBindings.rows.map((row) => row.surface_key)).toEqual([
+      "game_host_display_name",
+      "game_host_public_contact",
+      "game_settlement_terms",
+      "game_title",
+    ]);
 
     const foreignOnPublished = await app.inject({
       method: "POST",
@@ -544,7 +586,7 @@ describeIntegration("MOD-V2-A public text moderation", () => {
         ...foreignHeaders,
         "idempotency-key": uniqueSuffix("foreign-pub-published"),
       },
-      payload: { expectedVersion: published.json().version as number },
+      payload: { expectedVersion: publishedVersion },
     });
     expect(foreignOnPublished.statusCode).toBe(404);
     expect(foreignOnPublished.json().code).toBe("GAME_NOT_FOUND");
@@ -561,7 +603,7 @@ describeIntegration("MOD-V2-A public text moderation", () => {
     expect(foreignStaleOnPublished.statusCode).toBe(404);
     expect(foreignStaleOnPublished.json().code).toBe("GAME_NOT_FOUND");
 
-    // Foreign probes never reached the text provider; only owner publish did.
+    // Foreign probes never reached the text provider; owner publish reused draft cache.
     expect(fake.textCalls).toBe(afterOwnerPublishCalls);
   });
 });

@@ -1630,11 +1630,14 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     const allowed = await person("Allowed Text Gate");
     const beforeAllowed = fake.textCalls;
     const startKey = randomUUID();
+    // Freeze the start request once: startBody()/fix() mint capturedAt from
+    // Date.now(), so a second builder call changes requestHash and correctly 409s.
+    const startPayload = startBody();
     const started = await app.inject({
       method: "POST",
       url: "/v1/me/radar/activations",
       headers: { ...headers(allowed), "idempotency-key": startKey },
-      payload: startBody(),
+      payload: startPayload,
     });
     expect(started.statusCode, started.body).toBe(201);
     expect(started.json().activationId).toBeTruthy();
@@ -1652,9 +1655,9 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       method: "POST",
       url: "/v1/me/radar/activations",
       headers: { ...headers(allowed), "idempotency-key": startKey },
-      payload: startBody(),
+      payload: startPayload,
     });
-    expect(startReplay.statusCode).toBe(201);
+    expect(startReplay.statusCode, startReplay.body).toBe(201);
     expect(startReplay.json().activationId).toBe(started.json().activationId);
     expect(startReplay.json()).toHaveProperty("model");
     expect(fake.textCalls).toBe(afterStartCalls);
@@ -1666,7 +1669,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     };
     const takeoverKey = randomUUID();
     const takeoverPayload = {
-      ...startBody(),
+      ...startPayload,
       activationId: started.json().activationId as string,
       expectedVersion: started.json().version as number,
       confirm: true,
@@ -1686,7 +1689,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       headers: { ...headers(replacement), "idempotency-key": takeoverKey },
       payload: takeoverPayload,
     });
-    expect(takeoverReplay.statusCode).toBe(200);
+    expect(takeoverReplay.statusCode, takeoverReplay.body).toBe(200);
     expect(takeoverReplay.json().activationId).toBe(takeover.json().activationId);
     expect(takeoverReplay.json()).toHaveProperty("model");
     expect(fake.textCalls).toBe(afterTakeoverCalls);
