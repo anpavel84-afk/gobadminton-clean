@@ -19,6 +19,42 @@ import {
 type ScopeRow = { version: number; count: number };
 
 /**
+ * Reassign active positions to 0..n-1 without violating CHECK (position < 8)
+ * or unique (venue_id, position) WHERE active. Temporary deactivation frees the
+ * partial unique index; undo GC enqueue so still-live storage keys are not collected.
+ * Shared by admin gallery mutations and trusted CLI maintenance — same semantics.
+ */
+export async function applyOrderedGalleryPositions(
+  c: PoolClient,
+  venueId: string,
+  orderedIds: string[],
+): Promise<void> {
+  if (orderedIds.length === 0) return;
+  if (orderedIds.length > VENUE_GALLERY_MAX) {
+    throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
+  }
+  const keys = (await c.query<{ storage_key: string }>(
+    `SELECT storage_key FROM venue_gallery_items
+     WHERE venue_id=$1 AND id = ANY($2::uuid[])`,
+    [venueId, orderedIds],
+  )).rows.map((row) => row.storage_key);
+  await c.query(
+    `UPDATE venue_gallery_items SET active=false, updated_at=now()
+     WHERE venue_id=$1 AND id = ANY($2::uuid[]) AND active`,
+    [venueId, orderedIds],
+  );
+  for (let i = 0; i < orderedIds.length; i++) {
+    await c.query(
+      `UPDATE venue_gallery_items SET position=$2, active=true, updated_at=now() WHERE id=$1`,
+      [orderedIds[i], i],
+    );
+  }
+  if (keys.length > 0) {
+    await c.query("DELETE FROM avatar_media_gc WHERE storage_key = ANY($1::text[])", [keys]);
+  }
+}
+
+/**
  * Shared main→cover projection (credit reset trigger repair + live-key GC).
  * Used by admin gallery mutations and the trusted gallery batch CLI — same semantics.
  */
@@ -117,29 +153,7 @@ export class VenueGalleryService {
    * partial unique index; undo GC enqueue so still-live storage keys are not collected.
    */
   private async applyOrderedPositions(c: PoolClient, venueId: string, orderedIds: string[]): Promise<void> {
-    if (orderedIds.length === 0) return;
-    if (orderedIds.length > VENUE_GALLERY_MAX) {
-      throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
-    }
-    const keys = (await c.query<{ storage_key: string }>(
-      `SELECT storage_key FROM venue_gallery_items
-       WHERE venue_id=$1 AND id = ANY($2::uuid[])`,
-      [venueId, orderedIds],
-    )).rows.map((row) => row.storage_key);
-    await c.query(
-      `UPDATE venue_gallery_items SET active=false, updated_at=now()
-       WHERE venue_id=$1 AND id = ANY($2::uuid[]) AND active`,
-      [venueId, orderedIds],
-    );
-    for (let i = 0; i < orderedIds.length; i++) {
-      await c.query(
-        `UPDATE venue_gallery_items SET position=$2, active=true, updated_at=now() WHERE id=$1`,
-        [orderedIds[i], i],
-      );
-    }
-    if (keys.length > 0) {
-      await c.query("DELETE FROM avatar_media_gc WHERE storage_key = ANY($1::text[])", [keys]);
-    }
+    await applyOrderedGalleryPositions(c, venueId, orderedIds);
   }
 
   async get(request: FastifyRequest, id: string): Promise<VenueGalleryReceipt> {

@@ -17,6 +17,15 @@ import {
   validateImage,
 } from "../../src/venues/venue-gallery-import";
 import { guardImportEnv, loadGalleryBatch, main, readBatchFile } from "../../src/database/import-venue-covers";
+import {
+  galleryMaintenanceAdmissionKeyHash,
+  galleryMaintenanceItemFingerprint,
+  galleryMaintenanceManifestDigest,
+  planGalleryMaintenanceManifestBind,
+  planGalleryMaintenanceReplay,
+  planGalleryMaintenanceRow,
+  validateGalleryMaintenanceManifest,
+} from "../../src/venues/venue-gallery-maintenance";
 
 function evidence(sha: string) {
   return {
@@ -193,7 +202,7 @@ describe("venue gallery batch validation", () => {
     }).reason).toBe("GALLERY_IMPORT_CONFLICT");
   });
 
-  it("CLI refuses unsafe environment and exclusive --gallery/--public-data", async () => {
+  it("CLI refuses unsafe environment and exclusive --gallery/--public-data/--gallery-maintenance", async () => {
     const safe = {
       APP_ENV: "stage",
       PUBLIC_WEB_ORIGIN: "https://dev.gobadminton.ru",
@@ -212,5 +221,138 @@ describe("venue gallery batch validation", () => {
     await expect(main([
       "--gallery", "--public-data", "--dir", "/tmp", "--manifest", "x.json", "--actor-principal-id", randomUUID(),
     ], safe)).rejects.toThrow("INVALID_ARGUMENTS");
+    await expect(main([
+      "--gallery", "--gallery-maintenance", "--dir", "/tmp", "--manifest", "x.json", "--actor-principal-id", randomUUID(),
+    ], safe)).rejects.toThrow("INVALID_ARGUMENTS");
+  });
+});
+
+describe("venue gallery maintenance validation", () => {
+  function maintenanceItem(opts: {
+    venueId?: string;
+    expectedVersion?: number;
+    expectedName?: string;
+    expectedAddress?: string;
+    orderedActiveIds?: string[];
+    mainId?: string | null;
+    removeIds?: string[];
+  } = {}) {
+    const venueId = opts.venueId ?? randomUUID();
+    const keep = opts.orderedActiveIds ?? [randomUUID()];
+    return {
+      venueId,
+      expectedName: opts.expectedName ?? "Synthetic Hall",
+      expectedAddress: opts.expectedAddress ?? "Synthetic Address 1",
+      expectedVersion: opts.expectedVersion ?? 1,
+      orderedActiveIds: keep,
+      mainId: opts.mainId === undefined ? (keep[0] ?? null) : opts.mainId,
+      removeIds: opts.removeIds ?? [],
+    };
+  }
+
+  function maintenanceFixture(items?: ReturnType<typeof maintenanceItem>[]) {
+    const list = items ?? [maintenanceItem()];
+    return {
+      schema: "VENUE_GALLERY_MAINTENANCE_V1" as const,
+      operation: "owner488-reorder-1",
+      count: list.length,
+      items: list,
+    };
+  }
+
+  it("accepts exact order/main/remove and stable admission fingerprints", () => {
+    const a = randomUUID();
+    const b = randomUUID();
+    const c = randomUUID();
+    const raw = maintenanceFixture([maintenanceItem({
+      orderedActiveIds: [b, a],
+      mainId: b,
+      removeIds: [c],
+    })]);
+    const parsed = validateGalleryMaintenanceManifest(raw);
+    expect(parsed.count).toBe(1);
+    const admission = galleryMaintenanceAdmissionKeyHash(parsed.operation, 0);
+    expect(admission).toMatch(/^[a-f0-9]{64}$/);
+    expect(galleryMaintenanceAdmissionKeyHash(parsed.operation, 0)).toBe(admission);
+    expect(galleryMaintenanceAdmissionKeyHash(parsed.operation, 1)).not.toBe(admission);
+    const fp = galleryMaintenanceItemFingerprint(parsed.items[0]!);
+    expect(fp).toMatch(/^[a-f0-9]{64}$/);
+    const digest = galleryMaintenanceManifestDigest(parsed);
+    expect(planGalleryMaintenanceManifestBind(digest, [])).toBeUndefined();
+    expect(planGalleryMaintenanceManifestBind(digest, [digest])).toBeUndefined();
+    expect(planGalleryMaintenanceManifestBind(digest, ["0".repeat(64)])?.reason).toBe("GALLERY_MAINTENANCE_CONFLICT");
+  });
+
+  it("rejects overlap, missing main, non-zero main, duplicate venues", () => {
+    const a = randomUUID();
+    const b = randomUUID();
+    expect(() => validateGalleryMaintenanceManifest(maintenanceFixture([maintenanceItem({
+      orderedActiveIds: [a], mainId: a, removeIds: [a],
+    })]))).toThrow();
+    expect(() => validateGalleryMaintenanceManifest(maintenanceFixture([maintenanceItem({
+      orderedActiveIds: [a, b], mainId: b,
+    })]))).toThrow();
+    expect(() => validateGalleryMaintenanceManifest(maintenanceFixture([maintenanceItem({
+      orderedActiveIds: [], mainId: a,
+    })]))).toThrow();
+    const venueId = randomUUID();
+    expect(() => validateGalleryMaintenanceManifest(maintenanceFixture([
+      maintenanceItem({ venueId, orderedActiveIds: [a], mainId: a }),
+      maintenanceItem({ venueId, orderedActiveIds: [b], mainId: b }),
+    ]))).toThrow();
+  });
+
+  it("plans identity/CAS/set mismatch and known replay without inventing provider work", () => {
+    const a = randomUUID();
+    const b = randomUUID();
+    const venueId = randomUUID();
+    const item = maintenanceItem({
+      venueId,
+      expectedVersion: 4,
+      expectedName: "Hall",
+      expectedAddress: "Addr",
+      orderedActiveIds: [b, a],
+      mainId: b,
+      removeIds: [],
+    });
+    const row = { name: "Hall", address: "Addr", lifecycle_state: "verified", version: 4, canonical_venue_id: null };
+    const active = [
+      { id: a, position: 0, is_main: true },
+      { id: b, position: 1, is_main: false },
+    ];
+    expect(planGalleryMaintenanceRow(undefined, item, active).reason).toBe("VENUE_NOT_FOUND");
+    expect(planGalleryMaintenanceRow({ ...row, name: "Other" }, item, active).reason).toBe("VENUE_IDENTITY_MISMATCH");
+    expect(planGalleryMaintenanceRow({ ...row, version: 3 }, item, active).reason).toBe("VENUE_VERSION_CONFLICT");
+    expect(planGalleryMaintenanceRow(row, item, [active[0]!]).reason).toBe("VENUE_GALLERY_SET_MISMATCH");
+    expect(planGalleryMaintenanceRow(row, item, active).action).toBe("READY");
+    const removeItem = maintenanceItem({
+      venueId,
+      expectedVersion: 4,
+      expectedName: "Hall",
+      expectedAddress: "Addr",
+      orderedActiveIds: [b],
+      mainId: b,
+      removeIds: [a],
+    });
+    expect(planGalleryMaintenanceRow(row, removeItem, active).action).toBe("READY");
+    const fp = galleryMaintenanceItemFingerprint(validateGalleryMaintenanceManifest(maintenanceFixture([item])).items[0]!);
+    expect(planGalleryMaintenanceReplay(fp, {
+      fingerprint: fp,
+      operation: "owner488-reorder-1",
+      venueId,
+      itemIndex: 0,
+      orderedActiveIds: item.orderedActiveIds,
+      mainId: item.mainId,
+      removeIds: item.removeIds,
+    }).reason).toBe("GALLERY_MAINTENANCE_REPLAY");
+    expect(planGalleryMaintenanceReplay("0".repeat(64), {
+      fingerprint: fp,
+      operation: "owner488-reorder-1",
+      venueId,
+      itemIndex: 0,
+      orderedActiveIds: item.orderedActiveIds,
+      mainId: item.mainId,
+      removeIds: item.removeIds,
+    }).reason).toBe("GALLERY_MAINTENANCE_CONFLICT");
   });
 });

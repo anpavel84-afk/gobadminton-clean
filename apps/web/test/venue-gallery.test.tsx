@@ -690,6 +690,75 @@ describe("VenueGallery", () => {
     expect(css).toContain(".gb-venue-picker-photos");
     expect(css).toContain(".gb-venue-picker-option-block");
     expect(css).toContain(".gb-venue-picker-photos__summary");
+    // #509 item4: reserved photo-credit slot + single-line ellipsis (no vertical growth).
+    expect(css).toContain(".gb-venue-gallery__photo-credit");
+    expect(css).toContain("min-height: var(--c23-meta-lh, 20px)");
+    expect(css).toContain("max-height: var(--c23-meta-lh, 20px)");
+    expect(css).toContain("text-overflow: ellipsis");
+    expect(css).toContain("white-space: nowrap");
+  });
+
+  it("reserves a stable photo-credit slot through pending/ready/error/creditless and morph; compact stays unspaced", () => {
+    const catalogSource = {
+      provider: "badminton4u.ru" as const,
+      venueId: "B4U-V-33540253",
+      clubs: [{ id: "B4U-C-208", name: "Badmclub НН", url: "https://badminton4u.ru/clubs/208" }],
+    };
+    const multi = venue([
+      { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: WorldClassZhitnaya", url: "https://club.example/1" } },
+      { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Длинное название источника которое не должно увеличивать высоту слота", url: "https://club.example/2" } },
+    ]);
+    multi.profile = { ...multi.profile!, catalogSource };
+
+    const pending = ssr(<VenueGallery venue={multi} size="sheet" showCredit />);
+    expect(pending).toContain("gb-venue-gallery__photo-credit");
+    expect(pending).toContain('data-state="pending"');
+    expect(pending).toContain("Загружаем фотографию…");
+    expect(pending).toContain("Источник: badminton4u.ru");
+    expect(pending).not.toContain("Фото: WorldClassZhitnaya");
+
+    resetHooks();
+    hooks.cursor = 0;
+    renderToStaticMarkup(<VenueGallery venue={multi} size="sheet" showCredit />);
+    let loadedSlot = -1;
+    for (let i = hooks.slots.length - 1; i >= 0; i--) {
+      if (hooks.slots[i] === null) { loadedSlot = i; break; }
+    }
+    hooks.slots[loadedSlot] = url("a");
+    hooks.cursor = 0;
+    const ready = renderToStaticMarkup(<VenueGallery venue={multi} size="sheet" showCredit />);
+    expect(ready).toContain("gb-venue-gallery__photo-credit");
+    expect(ready).toContain('data-state="ready"');
+    expect(ready).toContain("Фото: WorldClassZhitnaya");
+    expect(ready).toContain('title="Фото: WorldClassZhitnaya"');
+    expect(ready).toContain("Источник: badminton4u.ru");
+
+    resetHooks();
+    hooks.slots[0] = 0;
+    hooks.slots[2] = url("a");
+    const errored = renderToStaticMarkup(<VenueGallery venue={multi} size="sheet" showCredit />);
+    expect(errored).toContain("gb-venue-gallery__photo-credit");
+    expect(errored).toContain('data-state="error"');
+    expect(errored).toContain("Фотография временно недоступна");
+    expect(errored).not.toContain("Фото: WorldClassZhitnaya");
+    expect(errored).toContain("Источник: badminton4u.ru");
+
+    // Morph main loan: reserved slot still present (credit shown via morph-ready path).
+    const morph = ssr(<VenueGallery
+      venue={multi}
+      size="sheet"
+      showCredit
+      coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" data-pending="uploaded" />}
+    />);
+    expect(morph).toContain("gb-venue-gallery__photo-credit");
+    expect(morph).toContain("Фото: WorldClassZhitnaya");
+    expect(morph).toContain('data-testid="morph-slot"');
+
+    // Compact hidden credit must not gain the reserved photo-credit spacing.
+    const compact = ssr(<VenueGallery venue={multi} size="compact" showCredit={false} showSourceCredit={false} />);
+    expect(compact).not.toContain("gb-venue-gallery__photo-credit");
+    expect(compact).not.toContain("gb-venue-gallery__credit");
+    expect(compact).not.toContain("Фото: WorldClassZhitnaya");
   });
 });
 

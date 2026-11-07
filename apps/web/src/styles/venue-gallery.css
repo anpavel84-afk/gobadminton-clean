@@ -243,9 +243,36 @@
   display: block;
   margin-top: 8px;
 }
+/* Fixed one-line photo-credit slot: pending/error/ready/empty share the same height so
+   WorldClass-style creditless→credited slide changes do not add ~30 CSS px. */
+.gb-venue-gallery__photo-credit {
+  display: block;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--c23-meta-lh, 20px);
+  max-height: var(--c23-meta-lh, 20px);
+  overflow: hidden;
+  line-height: var(--c23-meta-lh, 20px);
+}
+.gb-venue-gallery__photo-credit > .gb-venue-gallery__photo-credit-text,
+.gb-venue-gallery__photo-credit > .gb-venue-cover-credit,
+.gb-venue-gallery__photo-credit > .gb-venue-gallery__caption {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--c23-meta-lh, 20px);
+}
+.gb-venue-gallery__photo-credit .gb-venue-cover-credit,
+.gb-venue-gallery__photo-credit .gb-venue-cover-credit a {
+  display: inline;
+}
 .gb-venue-gallery__credit > .gb-venue-source-credit {
   display: block;
 }
+.gb-venue-gallery__credit > .gb-venue-gallery__photo-credit + .gb-venue-source-credit,
 .gb-venue-gallery__credit > .gb-venue-cover-credit + .gb-venue-source-credit {
   margin-top: 4px;
 }
