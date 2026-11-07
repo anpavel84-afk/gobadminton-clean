@@ -1,48 +1,38 @@
-# #406 public venue-cover response — release metadata alpha.42
+# #406 public venue-cover response — bare-q Accept repair (pass 4)
 
 From: Cursor Auto (source writer). To: independent QA (Codex Sol Medium default) / trusted integrator / Owner UAT.
-Date: 2026-11-07. Assignment: `OWNER_MEASURED406_RELEASE42_METADATA_ONLY` · attempt 3.
-Status: SOURCE_METADATA_COMPLETE / NOT_TESTED (author does not claim independent QA PASS, full CI, or DEV.42 ACCEPTED).
-Exact base: `5a6a2ae238d0777e5000b65219e46c8d1df5746e`. Allowed paths only: release catalogue + this handoff. WebP feature / q-repair source and tests untouched.
+Date: 2026-11-07. Assignment: `OWNER_MEASURED406_REPAIR_CONFIRMED_BARE_Q_PARSE` · attempt 4.
+Status: SOURCE_REPAIR_COMPLETE / NOT_TESTED (author does not claim independent QA PASS, Product CI, or DEV.42 ACCEPTED).
+Exact base: `e6e95ada016093d2b0ab2c89a98bc52d0761224b`. Allowed paths only: `venue-cover-response.ts`, unit test, this handoff. Release 42 metadata / trusted 41 seed / controller auth/media/storage/Vary/no-store untouched.
 
 ## Prior chain (retained)
 
 | Step | Fact |
 | --- | --- |
 | Independent QA pass 1 | P2 FAIL — malformed / out-of-range `Accept` `q` ignored (default weight 1). Retained. |
-| Repair a94e | Strict `q` grammar + 8 targeted unit cases PASS (author). Combined candidate awaits final independent QA. |
-| DEV alpha.41 | ACCEPTED: PR #502 / SHA `3dbf8e04b978ba5f8a0379379ef46b054008ec44` / `r42366434024-a1` / `accepted_at` `2026-11-07T11:13:52Z`. Full CI 7/7; images/health/meta/worker/push UI 4 cases PASS. |
-| Public SPB 2-row identity | Applied separately with backup/CAS/audit/readback — not a new source feature of alpha.42. |
+| Repair a94e | Strict `q` grammar + targeted unit cases (author). Combined candidate awaited final independent QA. |
+| Independent QA final (e6e95ada) | P2 FAIL — bare `q` without `=` (`Accept: image/webp;q` and case/whitespace variants) skipped via `eq <= 0 continue`, then default weight 1 selects WebP. Retained; not argued PASS. |
+| DEV alpha.41 | ACCEPTED: PR #502 / SHA `3dbf8e04b978ba5f8a0379379ef46b054008ec44` / `r42366434024-a1` / `accepted_at` `2026-11-07T11:13:52Z`. Remains healthy installed DEV. |
+| alpha.42 candidate e6 | Never published/installed. Future Product CI only after final independent repair acceptance. |
 
-## This pass (metadata only)
+## This pass (bare-q parse repair)
 
 | Path | Change |
 | --- | --- |
-| `apps/web/src/lib/releases.ts` | `CURRENT_APPLICATION_VERSION` → `0.1.0-alpha.42`; API contract stays `0.37.0`. Append exact trusted alpha.41 seed → **50** historical deployments (previous 49 preserved). Current named release: `source_sha` null, Owner UAT `NOT_TESTED`. |
-| `apps/web/src/lib/releases.test.ts` | Literals track alpha.42 + alpha.41 seed date `2026-11-07T11:13:52Z`. |
-| `apps/web/test/releases.test.tsx` | Seed length 45 / deployments 50; alpha.41 accepted assertions; current prose = WebP delta. |
-| `apps/web/test/releases-server.test.ts` | Fifty deployments; accepted_at list appends `2026-11-07T11:13:52Z`; allowlist includes alpha.41. |
-| `docs/handoffs/map406-venue-response.md` | This handoff. |
+| `apps/api/src/profiles/venue-cover-response.ts` | Local parser: bare parameter with exact name `q`/`Q` (trimmed) and no `=` invalidates that media item; does not pretend q absent. Plain `image/webp` still defaults to 1; valid positive q kept; q=0 / NaN / out-of-range / duplicate q still rejected. |
+| `apps/api/test/unit/venue-cover-response.test.ts` | Focused bare `q`/`Q`/trim cases (≥8) + PNG fallback for bare-q Accept; prior PNG fallback and positive compatibility cases remain. |
+| `docs/handoffs/map406-venue-response.md` | This handoff: two QA FAIL + current repair; no QA PASS claim. |
 
-### Exact trusted alpha.41 seed (attached)
+### Behaviour locked this pass
 
-- SHA-256 of delivered seed JSON: `f3aeee64779b6655afa463edfd0bbeca23f087f93788db8930298ecc3a0fceaf`
-- `source_sha`: `3dbf8e04b978ba5f8a0379379ef46b054008ec44`
-- `release_id`: `r42366434024-a1`
-- `accepted_at`: `2026-11-07T11:13:52Z` (literal date assertions unchanged otherwise)
-
-### Russian product notes (alpha.42)
-
-- Public venue photographs transferred as smaller WebP when the browser explicitly supports it; original PNG retained for others.
-- Live moderation / availability checks and `no-store` maintained; game and player covers unchanged.
-- Does **not** claim all 134 photos completed, full catalog prefetch, or map rewrite.
-- Time/venue editing and related push remain deferred; iPhone / provider / Owner UAT: `NOT_TESTED`.
-- Root local approved-photo check (1_054_377 → 46_230 B / 73 ms, visually reviewed) is lab context only — **not** installed Slow4G improvement; no invented speed numbers in product notes; no network PASS claim.
+- Reject: `image/webp;q`, `image/webp;Q`, trimmed/` Q ` spellings, and same item with only PNG sibling.
+- Keep: plain `image/webp` → weight 1; `image/webp;q=0.8` positive; bare non-`q` params ignored; valid sibling may still win.
+- `resolveVenueCoverResponse` falls back to PNG for bare-q Accept (same as q=0 path).
 
 ## Out of author path / Root gates
 
-ONE source writer on allowed files only. No new deps / Git / network / runtime / paid tools from author. Independent QA on combined candidate → Product CI → DEV.42 smoke afterward (trusted process). No PROD. No merge/deploy from author.
+ONE source writer on allowed files only. No new deps / Git / network / runtime / paid tools from author. No change to release42 metadata, trusted41 seed/history, controller auth/media checks/storage/Vary/no-store or other routes. Independent P2 recheck → existing CI → DEV pipeline (trusted process). No PROD. No merge/deploy from author.
 
 ## Checks
 
-Author: release metadata + handoff only. Author self-check ≠ independent QA. UAT: NOT_TESTED.
+Author: focused unit suite for Accept parser + PNG fallback (self-check ≠ independent QA). UAT: NOT_TESTED. Independent QA must re-verify P2 bare-q finding; do not treat this handoff as PASS.

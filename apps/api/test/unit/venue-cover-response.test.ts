@@ -65,6 +65,27 @@ describe("clientAcceptsVenueCoverWebp", () => {
     expect(clientAcceptsVenueCoverWebp("image/webp;q=NaN, image/webp;q=0.5")).toBe(true);
     expect(clientAcceptsVenueCoverWebp("image/webp;q=2, image/png")).toBe(false);
   });
+
+  it("rejects bare q / Q / trimmed q without equals instead of defaulting to 1", () => {
+    expect(clientAcceptsVenueCoverWebp("image/webp;q")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;Q")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp; q")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q ")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp; Q ")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("IMAGE/WEBP;Q")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp(" image/webp ; q ")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q, image/png")).toBe(false);
+
+    // Plain image/webp still defaults to 1; bare non-q params stay ignored.
+    expect(clientAcceptsVenueCoverWebp("image/webp")).toBe(true);
+    expect(clientAcceptsVenueCoverWebp("image/webp;foo")).toBe(true);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=0.8")).toBe(true);
+
+    // Valid sibling may still win; bare-q item must not pretend q absent.
+    expect(clientAcceptsVenueCoverWebp("image/webp;q, image/webp")).toBe(true);
+    expect(clientAcceptsVenueCoverWebp("image/webp;Q, image/webp;q=0.5")).toBe(true);
+    expect(clientAcceptsVenueCoverWebp("image/webp; q , image/webp;q=0")).toBe(false);
+  });
 });
 
 describe("deriveVenueCoverWebp / resolveVenueCoverResponse", () => {
@@ -96,6 +117,14 @@ describe("deriveVenueCoverWebp / resolveVenueCoverResponse", () => {
     const q0 = await resolveVenueCoverResponse(png, "image/webp;q=0");
     expect(q0.contentType).toBe("image/png");
     expect(q0.body.equals(png)).toBe(true);
+
+    const bareQ = await resolveVenueCoverResponse(png, "image/webp;q");
+    expect(bareQ.contentType).toBe("image/png");
+    expect(bareQ.body.equals(png)).toBe(true);
+
+    const bareQTrim = await resolveVenueCoverResponse(png, "image/webp; Q ");
+    expect(bareQTrim.contentType).toBe("image/png");
+    expect(bareQTrim.body.equals(png)).toBe(true);
 
     const fail = await resolveVenueCoverResponse(png, "image/webp", async () => {
       throw new Error("converter boom");

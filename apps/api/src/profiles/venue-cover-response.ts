@@ -18,8 +18,8 @@ const VENUE_COVER_ACCEPT_Q = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 /**
  * True only when Accept explicitly lists image/webp with a positive weight.
  * Wildcards (* / *, image/*) do not imply WebP. Honour image/webp;q=0.
- * Malformed, out-of-range, nonfinite, or duplicate q on that media item is rejected
- * (no fallback to default weight 1).
+ * Malformed, out-of-range, nonfinite, duplicate, or bare (name q, no "=") q on that
+ * media item is rejected (no fallback to default weight 1).
  */
 export function clientAcceptsVenueCoverWebp(accept: string | string[] | undefined): boolean {
   if (accept == null) return false;
@@ -36,13 +36,23 @@ export function clientAcceptsVenueCoverWebp(accept: string | string[] | undefine
     if (media !== "image/webp") continue;
 
     const qValues: string[] = [];
+    let bareQ = false;
     for (const param of params) {
       const eq = param.indexOf("=");
-      if (eq <= 0) continue;
+      if (eq < 0) {
+        // Bare token with exact name q and no "=" is an explicit malformed q.
+        if (param.trim().toLowerCase() === "q") {
+          bareQ = true;
+          break;
+        }
+        continue;
+      }
+      if (eq === 0) continue;
       const name = param.slice(0, eq).trim().toLowerCase();
       if (name !== "q") continue;
       qValues.push(param.slice(eq + 1).trim());
     }
+    if (bareQ) continue;
 
     let q: number;
     if (qValues.length === 0) {
