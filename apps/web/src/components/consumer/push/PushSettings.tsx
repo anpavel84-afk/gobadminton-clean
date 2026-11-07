@@ -40,39 +40,6 @@ export const PUSH_MESSAGE_ENABLE_LABEL = "Включить уведомлени�
 
 type Props = { me: Me };
 
-type EventTogglesProps = {
-  eventPreferences: PushEventPreferences;
-  disabled?: boolean;
-  onToggle: (key: keyof PushEventPreferences, next: boolean) => void;
-};
-
-/** Master-ON event groups; defaults remain OFF until explicit toggle. */
-export function PushGameEventToggles({ eventPreferences, disabled, onToggle }: EventTogglesProps) {
-  return (
-    <fieldset className="gb-push-settings__events" disabled={disabled}>
-      <legend className="gb-push-settings__events-legend">События игр</legend>
-      <p className="gb-push-settings__events-note">
-        Выберите, какие уведомления об играх получать.
-      </p>
-      <ul className="gb-push-settings__event-list">
-        {EVENT_TOGGLES.map((item) => {
-          const on = eventPreferences[item.key] === true;
-          return (
-            <li key={item.key}>
-              <Toggle
-                label={item.label}
-                on={on}
-                disabled={disabled}
-                onClick={() => onToggle(item.key, !on)}
-              />
-            </li>
-          );
-        })}
-      </ul>
-    </fieldset>
-  );
-}
-
 export function PushSettings({ me }: Props) {
   const [state, setState] = useState<"loading" | "ready" | "error" | "retired">("loading");
   const [push, setPush] = useState<PushState | null>(null);
@@ -387,12 +354,28 @@ export function PushSettings({ me }: Props) {
                 Выключить на этом устройстве
               </Button>
             </div>
-            {push?.preferenceEnabled && push.eventPreferences && (
-              <PushGameEventToggles
-                eventPreferences={push.eventPreferences}
-                disabled={busy || !push.preferenceEnabled}
-                onToggle={(key, next) => void toggleEvent(key, next)}
-              />
+            {push?.preferenceEnabled && (
+              <fieldset className="gb-push-settings__events" disabled={busy}>
+                <legend className="gb-push-settings__events-legend">События игр</legend>
+                <p className="gb-push-settings__events-note">
+                  Выберите, какие уведомления об играх получать.
+                </p>
+                <ul className="gb-push-settings__event-list">
+                  {EVENT_TOGGLES.map((item) => {
+                    const on = push.eventPreferences?.[item.key] === true;
+                    return (
+                      <li key={item.key}>
+                        <Toggle
+                          label={item.label}
+                          on={on}
+                          disabled={busy || !push.preferenceEnabled}
+                          onClick={() => void toggleEvent(item.key, !on)}
+                        />
+                      </li>
+                    );
+                  })}
+                </ul>
+              </fieldset>
             )}
             {push && push.devices.length > 0 && (
               <ul className="gb-push-settings__devices" aria-label="Подключённые устройства">

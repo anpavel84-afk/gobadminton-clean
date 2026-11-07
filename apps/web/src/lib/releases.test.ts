@@ -10,8 +10,8 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.42 with API 0.37.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.42");
+  it("bumps current descriptor to alpha.43 with API 0.37.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.43");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -25,13 +25,23 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/WebP|фотограф|площадк|PNG/i);
+    expect(prose).toMatch(/уведомлен|событ|соглас|iPhone|Домой/i);
     expect(prose).toMatch(/времен|мест|отложен|не реализов/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);
-    expect(prose).not.toMatch(/134|Slow4G|5555|8656|все фото|prefetch|перепис/i);
+    expect(prose).not.toMatch(/134|Slow4G|5555|8656|все фото|prefetch|перепис|Изменить|профиль/i);
+    expect(prose).not.toMatch(/WebP|новых типов уведомлен|новой модели разрешен/i);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.42" &&
+          row.source_sha === "a72905b82e3d82ba0c08df44da8046e7db6e31ff" &&
+          row.deployments[0]?.release_id === "r42369478229-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-07T11:55:54Z",
+      ),
+    ).toBe(true);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
         (row) =>

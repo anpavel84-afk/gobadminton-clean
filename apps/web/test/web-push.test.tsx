@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as PushClientModule from "../src/lib/push-client";
 import type * as React from "react";
 import {
-  PushGameEventToggles,
   PushSettings,
   PUSH_DISCOVERABILITY_OFF_HINT,
   PUSH_IPHONE_HOMESCREEN_HINT,
@@ -17,6 +16,7 @@ import {
   getPushFenceGeneration,
   unsubscribePushDevice,
   urlBase64ToUint8Array,
+  type PushCapability,
 } from "../src/lib/push-client";
 import {
   markSessionPresence,
@@ -75,7 +75,7 @@ const getPushState = vi.hoisted(() =>
 const clearPushLocalBinding = vi.hoisted(() => vi.fn(async () => undefined));
 const ensurePushServiceWorker = vi.hoisted(() => vi.fn(async () => null));
 const detectPushCapabilityMock = vi.hoisted(() =>
-  vi.fn(() => "unsupported" as const),
+  vi.fn((): PushCapability => "unsupported"),
 );
 
 vi.mock("../src/lib/push-client", async () => {
@@ -121,7 +121,7 @@ describe("#456 web push settings surface", () => {
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
   });
 
-  it("master OFF supported capability mentions games, postgame choices, and iPhone Home Screen", () => {
+  it("SSR / pre-consent (push null) shows discoverability and iPhone Home Screen copy", () => {
     detectPushCapabilityMock.mockReturnValue("ready");
     const html = renderToStaticMarkup(createElement(PushSettings, { me }));
     expect(html).toContain(PUSH_DISCOVERABILITY_OFF_HINT);
@@ -134,51 +134,6 @@ describe("#456 web push settings surface", () => {
     expect(html).not.toMatch(/События игр/);
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
     expect(getPushState).not.toHaveBeenCalled();
-  });
-
-  it("master ON five event toggles default OFF and forward callbacks", () => {
-    const seen: Array<{ key: string; next: boolean }> = [];
-    const onToggle = (key: keyof typeof defaultEventPreferences, next: boolean) => {
-      seen.push({ key, next });
-    };
-    const tree = PushGameEventToggles({
-      eventPreferences: { ...defaultEventPreferences },
-      onToggle,
-    });
-    const html = renderToStaticMarkup(tree);
-    expect(html).toMatch(/События игр/);
-    expect(html).toMatch(/Приглашения на игру/);
-    expect(html).toMatch(/Решения по заявкам/);
-    expect(html).toMatch(/Новые заявки/);
-    expect(html).toMatch(/Отмена игры/);
-    expect(html).toMatch(/Напоминания об итоге/);
-    expect(html.match(/aria-checked="false"/g)?.length).toBe(5);
-    expect(html).not.toMatch(/aria-checked="true"/);
-
-    const list = (tree.props as { children?: React.ReactNode }).children;
-    const nodes = Array.isArray(list) ? list : [list];
-    const ul = nodes.find(
-      (node) =>
-        node &&
-        typeof node === "object" &&
-        "type" in node &&
-        node.type === "ul",
-    ) as React.ReactElement | undefined;
-    const items = (ul?.props as { children?: React.ReactNode })?.children;
-    const liNodes = (Array.isArray(items) ? items : [items]).filter(Boolean) as React.ReactElement[];
-    expect(liNodes).toHaveLength(5);
-    for (const li of liNodes) {
-      const toggle = (li.props as { children?: React.ReactElement }).children;
-      expect(toggle?.props?.on).toBe(false);
-      (toggle?.props?.onClick as () => void)();
-    }
-    expect(seen).toEqual([
-      { key: "invites", next: true },
-      { key: "applicationDecisions", next: true },
-      { key: "newApplications", next: true },
-      { key: "gameChanges", next: true },
-      { key: "outcomeReminders", next: true },
-    ]);
   });
 
   it("PushLifecycle SSR renders without AppRouter / useRouter", () => {

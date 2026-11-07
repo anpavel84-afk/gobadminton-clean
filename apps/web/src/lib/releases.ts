@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.42" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.43" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,13 +424,13 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.42",
-  "title": "Публичные фото площадок: меньший WebP при явной поддержке",
+  "application_version": "0.1.0-alpha.43",
+  "title": "Уведомления: пояснение выбора событий и подсказка iPhone",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [
-    "Публичные фотографии площадок передаются как меньший WebP, если браузер явно поддерживает этот формат; для остальных сохраняется исходный PNG",
-    "Действующие проверки модерации и доступности и заголовок no-store для ответа обложки площадки сохранены; обложки игр и игроков не менялись"
+    "В настройках уведомлений до явного согласия поясняется, что после включения можно отдельно выбрать игровые события и «Подведите итоги»",
+    "Для iPhone указана установка приложения на экран «Домой» перед включением уведомлений"
   ],
   "fixes": [],
   "known_limitations": [
@@ -1802,6 +1802,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-07T11:13:52Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.42",
+    "title": "Публичные фото площадок: меньший WebP при явной поддержке",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "Публичные фотографии площадок передаются как меньший WebP, если браузер явно поддерживает этот формат; для остальных сохраняется исходный PNG",
+      "Действующие проверки модерации и доступности и заголовок no-store для ответа обложки площадки сохранены; обложки игр и игроков не менялись"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "a72905b82e3d82ba0c08df44da8046e7db6e31ff",
+    "version_label": "0.1.0-alpha.42",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42369478229-a1",
+        "api_digest": "sha256:cdf1783b1d1a13c207ea323d8382ec12a3129fb4e34eb73941be1ad83e0ad9b2",
+        "web_digest": "sha256:052235f38705584fb63b82095fcf5123e38be993677472e2758ce86a09652190",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T11:55:54Z",
         "kind": "pipeline"
       }
     ]
