@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.46" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.47" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,16 +424,16 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.46",
-  "title": "Площадка без фото: готовая иллюстрация вместо текстовой заглушки",
+  "application_version": "0.1.0-alpha.47",
+  "title": "Комментарии к игре: проверка текста до публикации",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
-  "fixes": [
-    "Если у площадки нет опубликованного фото, показывается готовая растровая иллюстрация из библиотеки GoBadminton с подписью «Иллюстрация»; одна площадка получает один и тот же рисунок на странице, карте и в выборе"
+  "additions": [
+    "Создание, ответ и правка публичного комментария к игре проходят проверку текста до публикации; при отклонении или временной недоступности черновик и уже опубликованный текст сохраняются"
   ],
+  "fixes": [],
   "known_limitations": [
-    "Комментарии, отзывы, текст площадок, личные сообщения и аватары провайдеров остаются в следующих логических объёмах; внешняя модерация реальных частных сообщений выключена",
+    "Отзывы о роли и площадке, широкие комментарии на страницах площадок и связанные разделы ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
     "Изменение времени и места игры и связанные push отложены и не реализованы",
     "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
@@ -1922,6 +1922,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-07T17:12:03Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.46",
+    "title": "Площадка без фото: готовая иллюстрация вместо текстовой заглушки",
+    "owner_uat": "NOT_TESTED",
+    "additions": [],
+    "fixes": [
+      "Если у площадки нет опубликованного фото, показывается готовая растровая иллюстрация из библиотеки GoBadminton с подписью «Иллюстрация»; одна площадка получает один и тот же рисунок на странице, карте и в выборе"
+    ],
+    "known_limitations": [
+      "Комментарии, отзывы, текст площадок, личные сообщения и аватары провайдеров остаются в следующих логических объёмах; внешняя модерация реальных частных сообщений выключена",
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "264d9e1cf63b4272732b2b9ad2317e9f9b9d320f",
+    "version_label": "0.1.0-alpha.46",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42400302014-a1",
+        "api_digest": "sha256:d62283d142aa89344a104e1505a5ccca01cbf57da6867919a223f07812779879",
+        "web_digest": "sha256:375944a55af9e1c16b2c08aa28d22d4fefade2dd453d36c0e29b2c286f474f97",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T18:20:21Z",
         "kind": "pipeline"
       }
     ]

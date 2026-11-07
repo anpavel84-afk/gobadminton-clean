@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.46 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.46");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.47 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.47");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,9 +64,11 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/площадк|фото|иллюстрац/i);
-    expect(currentProse).toMatch(/иллюстрац|библиотек|GoBadminton|подпис/i);
-    expect(currentProse).toMatch(/комментар|отзыв|площад|сообщен|выключен/i);
+    expect(currentProse).toMatch(/комментар.*игр|игр.*комментар/i);
+    expect(currentProse).toMatch(/проверк|публикац/i);
+    expect(currentProse).toMatch(/создан|ответ|правк/i);
+    expect(currentProse).toMatch(/отклонен|недоступн|сохран|чернов|опубликован/i);
+    expect(currentProse).toMatch(/отзыв|площад|сообщен|выключен/i);
     expect(currentProse).toMatch(/времен|мест|отложен|не реализов/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -79,19 +81,20 @@ describe("releases catalogue integrity", () => {
     expect(currentProse).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);
     expect(currentProse).not.toMatch(/134|Slow4G|5555|8656|все фото|prefetch|переписан|переписать|Изменить/i);
     expect(currentProse).not.toMatch(/новых типов уведомлен|новой модели разрешен|все файлы переименова/i);
+    expect(currentProse).not.toMatch(/nonce|claim_nonce|Idempotency|WebP|#507|Mode B/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/приёмк|НЕ выполн|iPhone|GoBad/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/площадк|фото|иллюстрац/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/иллюстрац|библиотек|подпис|фото/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/комментар|игр|проверк|публикац/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/комментар|проверк|публикац|сохран/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /комментар|отзыв|площад|сообщен|аватар|выключен/i,
+      /отзыв|площад|комментар|сообщен|выключен/i,
     );
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
@@ -245,10 +248,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(49);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(50);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(54);
+    ).toBe(55);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.46"
+      && row.source_sha === "264d9e1cf63b4272732b2b9ad2317e9f9b9d320f"
+      && row.deployments[0]?.release_id === "r42400302014-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-07T18:20:21Z"
+      && row.deployments[0]?.api_digest === "sha256:d62283d142aa89344a104e1505a5ccca01cbf57da6867919a223f07812779879"
+      && row.deployments[0]?.web_digest === "sha256:375944a55af9e1c16b2c08aa28d22d4fefade2dd453d36c0e29b2c286f474f97"
+      && row.api_contract_version === "0.37.0"
+      && row.title === "Площадка без фото: готовая иллюстрация вместо текстовой заглушки"
+      && row.additions.length === 0
+      && row.fixes.length === 1
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.45"
       && row.source_sha === "2650fcbe21976564b8b1ff90aac67ea4eca5b569"
