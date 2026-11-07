@@ -1,4 +1,4 @@
-/* global process, document, console, getComputedStyle */
+/* global process, document, console, getComputedStyle, HTMLImageElement, window */
 // Synthetic guest-only loopback regression for actual VenueGallery pointer/keyboard semantics.
 // Reuses the venue-cover.browser.mjs loopback convention. No service startup, network install,
 // credentials, authenticated user, or live writes. Run from repo root:
