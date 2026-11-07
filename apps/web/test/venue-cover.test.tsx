@@ -5,7 +5,7 @@ import { VenueCoverEditor } from "../src/components/consumer/venues/VenueCoverEd
 import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
 import { GameHero } from "../src/components/consumer/games/GameDetailComposition";
 import { VenueCoverError, venueCoverRequest } from "../src/lib/venue-cover-api";
-import { VENUE_ILLUSTRATION_ALT, VENUE_ILLUSTRATION_URLS, venueIllustrationUrl } from "../src/lib/venue-illustration";
+import { VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI, VENUE_ILLUSTRATION_ALT, VENUE_ILLUSTRATION_URLS, venueIllustrationUrl } from "../src/lib/venue-illustration";
 import type { Game } from "../src/lib/consumer-types";
 afterEach(()=>vi.unstubAllGlobals());
 const url="/v1/media/venue-covers/"+"a".repeat(64)+".png";
@@ -46,21 +46,25 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     expect(a).toContain(`src="${venueIllustrationUrl(idA)}"`);
     expect(a).toContain('data-fallback="illustration"');
     expect(a).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(a).toContain('data-pending="fallback"');
+    expect(a).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(a).toContain("opacity:0");
     expect(a).not.toContain("Бадминтонный корт");
     expect(again).toContain(`src="${venueIllustrationUrl(idA)}"`);
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idA) as typeof VENUE_ILLUSTRATION_URLS[number]);
     expect(VENUE_ILLUSTRATION_URLS).toContain(venueIllustrationUrl(idB) as typeof VENUE_ILLUSTRATION_URLS[number]);
   });
-  it("shows per-venue illustration while uploaded photo is pending before onLoad",()=>{
+  it("shows immediate inline equipment underlay while uploaded photo is pending before onLoad",()=>{
     const idA="00000037-1111-4111-8111-111111111111";
-    const illustration=venueIllustrationUrl(idA);
-    // SSR/first paint: uploaded src present but not yet cover=uploaded; illustration background fills the cell.
+    // SSR/first paint: uploaded src present but not yet cover=uploaded; inline SVG fills the cell (no webp request).
     const pending=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="Synthetic"/>);
     expect(pending).toContain(url);
     expect(pending).toContain('data-cover="default"');
     expect(pending).toContain('data-fallback="illustration"');
     expect(pending).toContain('data-pending="uploaded"');
-    expect(pending).toContain(`url(&quot;${illustration}&quot;)`);
+    expect(pending).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    expect(pending).toContain("data:image/svg+xml");
+    expect(pending).not.toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
     expect(pending).toContain("opacity:0");
     expect(pending).toContain("loading=\"lazy\"");
     // Without venueId: keep immediate uploaded paint (discovery/hero); do not invent illustration.
@@ -76,20 +80,20 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     const idB="00000037-1111-4111-8111-111111111112";
     const urlB="/v1/media/venue-covers/"+"b".repeat(64)+".png";
     const first=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:url}} name="A"/>);
-    expect(first).toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
+    expect(first).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
     const swappedVenue=renderToStaticMarkup(<VenueCover venueId={idB} cover={{uploadedUrl:url}} name="B"/>);
-    expect(swappedVenue).toContain(`url(&quot;${venueIllustrationUrl(idB)}&quot;)`);
+    expect(swappedVenue).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
     expect(swappedVenue).toContain('data-pending="uploaded"');
-    expect(swappedVenue).not.toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
     const swappedUrl=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:urlB}} name="A"/>);
     expect(swappedUrl).toContain(urlB);
     expect(swappedUrl).toContain('data-pending="uploaded"');
-    expect(swappedUrl).toContain(`url(&quot;${venueIllustrationUrl(idA)}&quot;)`);
-    // Error fallback path remains the existing illustration img (no uploaded src).
+    expect(swappedUrl).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    // Error fallback path keeps illustration img under immediate SVG underlay (no uploaded src).
     const failed=renderToStaticMarkup(<VenueCover venueId={idA} cover={{uploadedUrl:null}} name="Synthetic"/>);
     expect(failed).toContain(`src="${venueIllustrationUrl(idA)}"`);
     expect(failed).toContain('data-fallback="illustration"');
     expect(failed).toContain(`alt="${VENUE_ILLUSTRATION_ALT}"`);
+    expect(failed).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
     expect(failed).not.toContain(url);
   });
   it("does not grant an editor by venueId; no controls until scoped server access",()=>{

@@ -1,8 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as PushClientModule from "../src/lib/push-client";
-import { PushLifecycle } from "../src/components/consumer/push/PushLifecycle";
+import type * as React from "react";
 import { PushSettings } from "../src/components/consumer/push/PushSettings";
 import {
   bumpPushFenceGeneration,
@@ -12,11 +12,53 @@ import {
   unsubscribePushDevice,
   urlBase64ToUint8Array,
 } from "../src/lib/push-client";
+import {
+  markSessionPresence,
+  resetSessionPresenceForTests,
+} from "../src/lib/session-presence";
+
+const pushHooks = vi.hoisted(() => ({
+  effects: [] as Array<() => void | (() => void)>,
+  cleanups: [] as Array<(() => void) | undefined>,
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof React>();
+  return {
+    ...actual,
+    useEffect(effect: () => void | (() => void)) {
+      pushHooks.effects.push(effect);
+    },
+  };
+});
+
+import { PushLifecycle } from "../src/components/consumer/push/PushLifecycle";
 
 vi.mock("next/link", () => ({
   default: (props: { href: string; children?: unknown }) =>
     createElement("a", { href: props.href }, props.children as never),
 }));
+
+const getPushState = vi.hoisted(() =>
+  vi.fn(async () => ({
+    ok: true as const,
+    status: 200,
+    data: {
+      featureAvailable: false,
+      preferenceEnabled: false,
+      preferenceVersion: 0,
+      vapidPublicKey: null,
+      accountFence: null,
+      deviceCount: 0,
+      maxDevices: 5,
+      currentDevice: null,
+      devices: [],
+    },
+  })),
+);
+
+const clearPushLocalBinding = vi.hoisted(() => vi.fn(async () => undefined));
+const ensurePushServiceWorker = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("../src/lib/push-client", async () => {
   const actual = await vi.importActual<typeof PushClientModule>(
@@ -24,23 +66,22 @@ vi.mock("../src/lib/push-client", async () => {
   );
   return {
     ...actual,
-    getPushState: vi.fn(async () => ({
-      ok: true as const,
-      status: 200,
-      data: {
-        featureAvailable: false,
-        preferenceEnabled: false,
-        preferenceVersion: 0,
-        vapidPublicKey: null,
-        accountFence: null,
-        deviceCount: 0,
-        maxDevices: 5,
-        currentDevice: null,
-        devices: [],
-      },
-    })),
+    getPushState,
+    clearPushLocalBinding,
+    ensurePushServiceWorker,
     detectPushCapability: () => "unsupported" as const,
   };
+});
+
+afterEach(() => {
+  pushHooks.effects = [];
+  pushHooks.cleanups.forEach((fn) => fn?.());
+  pushHooks.cleanups = [];
+  getPushState.mockClear();
+  clearPushLocalBinding.mockClear();
+  ensurePushServiceWorker.mockClear();
+  resetSessionPresenceForTests();
+  vi.unstubAllGlobals();
 });
 
 describe("#456 web push settings surface", () => {
@@ -63,6 +104,31 @@ describe("#456 web push settings surface", () => {
   it("PushLifecycle SSR renders without AppRouter / useRouter", () => {
     const html = renderToStaticMarkup(createElement(PushLifecycle));
     expect(html).toBe("");
+  });
+
+  it("guest with absent session clears stale SW binding without private GET", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("navigator", {});
+    markSessionPresence("absent");
+    pushHooks.effects = [];
+    renderToStaticMarkup(createElement(PushLifecycle));
+    expect(pushHooks.effects).toHaveLength(1);
+    const cleanup = pushHooks.effects[0]!();
+    pushHooks.cleanups.push(typeof cleanup === "function" ? cleanup : undefined);
+    await vi.waitFor(() => expect(clearPushLocalBinding).toHaveBeenCalled());
+    expect(getPushState).not.toHaveBeenCalled();
+  });
+
+  it("present session still loads push state after clear", async () => {
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("navigator", {});
+    markSessionPresence("present");
+    pushHooks.effects = [];
+    renderToStaticMarkup(createElement(PushLifecycle));
+    const cleanup = pushHooks.effects[0]!();
+    pushHooks.cleanups.push(typeof cleanup === "function" ? cleanup : undefined);
+    await vi.waitFor(() => expect(getPushState).toHaveBeenCalled());
+    expect(clearPushLocalBinding).toHaveBeenCalled();
   });
 
   it("unsubscribePushDevice sends required confirm:true JSON body", () => {
