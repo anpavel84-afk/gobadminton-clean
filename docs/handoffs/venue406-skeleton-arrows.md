@@ -1,57 +1,88 @@
-# #406 Venue loader skeleton + desktop gallery arrows
+# #406 / #506 pass 13 — legacy venue access + map fixture repair
 
-- From: source author (Cursor Auto), #506 pass 11 native image drag
-- To: parent host rerun of targeted UI types/lint/tests + original browser
-  against exact candidate; then independent delta QA → CI → guarded DEV
+- From: source author (Cursor Auto), ExactEA57ae95 ProductCI42391764765
+- To: parent host — rerun exactly the 2 affected unit files + types/lint;
+  independent delta QA of changed facts; full CI again after current run finishes
 - Date: 2026-11-07
 - Status: WORKING_DRAFT / READY_FOR_PARENT_RERUN. Not ACCEPTED, not
   independent QA PASS, not CI, not DEV release, not Owner UAT.
-- Assignment: `OWNER406_ACTUAL_NATIVE_IMAGE_DRAG_POINTERCANCEL_REPAIR`,
-  attempt 11, base `43f60f8ec5eacb1eae859978cae27883a4359e0c`
-- Git writes / live runtime / DB / provider / credentials / deploy / installs:
-  not performed (forbidden in this source slice)
-- Allowed paths only: 3 media components + regression tests + this handoff.
-  No #506 text policy/fixtures, #507, API, deps, CI, or PROD changes.
+- Assignment: `OWNER406_PRODUCT_CI_LEGACY_VENUE_ACCESS_MAP_FIXTURES`,
+  attempt 13, base `ea57ae95e33765f2b6361abf9efe89a5d4bdf1f7`
+- Git writes / live runtime / DB / provider / credentials / deploy / installs
+  beyond local deps for checks: not performed (forbidden in this source slice)
+- Allowed paths only: 2 test files + optional 3 media/map files + this handoff.
+  Production media/map sources left unchanged (fixture-only repair).
 
 ## Independent inputs actually read
 
-- Pass-10 `actual-swipe-failure.json`: pointerdown IMG → pointermove DIV
-  (capture) → native HTML dragstart IMG → pointercancel DIV; no pointerup;
-  count stays 1/2 (expected 2/2). Other native arrow 390/1280 checks PASS.
-  Genuine horizontal IMAGE drag failure — not a source-regex issue.
+- `ci-42391764765-web-clean.log` (sha256
+  `1c1b159fcc3dbf18677e653774beb8571447fef5999ec63daf3b6cd170b98545`):
+  157 files / 155 PASS / 2 FAIL; 1566 tests / 1558 PASS / 8 FAIL.
+  Failures only in `venue-public-access.test.tsx` (5) and
+  `venue-sheet-integration.test.tsx` (3).
 
-## Exact repairs (this pass)
+## Precise code vs fixture finding
 
-1. `VenueGallery.tsx` — current gallery `<img>`: `draggable={false}` +
-   `onDragStart` preventDefault. Gestures/capture/interactive guard unchanged.
-2. `SelectedVenueCover.tsx` — morph `document.createElement("img")`:
-   `draggable = false` + dragstart preventDefault before src (gallery borrows).
-3. `VenueCover.tsx` — owned cover/fallback `<img>`: same draggable=false +
-   dragstart preventDefault. No controller/dimensions/pipeline/API changes.
-4. `venue-gallery.test.tsx` — bounded regression: img draggable false,
-   dragstart preventDefault, pointercancel clears drag (no late advance).
-5. `selected-venue-cover.test.tsx` — fixture requires draggable=false before src.
-6. `venue-loader-navigation.browser.mjs` — swipe starts on actual IMG; asserts
-   no dragstart/pointercancel and count 2/2. Native assertion kept (not skipped).
-7. This handoff — truthful pass-11 status only.
+### 1) `venue-public-access` — **fixture stale** (source correct)
+
+- CI received pending gallery text `Загружаем фотографию…` with uploaded img
+  present; credit (`Автор фото` / `Фото: Клуб`) appears only after
+  `settleAfterGalleryImgLoad` (matches `VenueGallery` `imageReady` gate).
+- Five assertions still required old «Иллюстрация» before load — that label is
+  no longer shown for pending/ready attributed covers (and is not invented for
+  pending/failed media).
+- Venue `b` (null cover): source renders neutral
+  `Фотографии площадки пока нет`; stale `data-cover="default"` assert removed.
+- Repair: assert pending caption + no ready credit / no «Иллюстрация» before
+  load; no-photo empty copy for venue b; keep post-load credit text; retain all
+  guest/member read-only effect checks and strict safe/unsafe/overlong credit
+  URL link assertions.
+- No production file change.
+
+### 2) `venue-sheet-integration` — **fixture stale** (source correct)
+
+- After `sheetClick("Вечерняя игра")`, `renderToStaticMarkup(sheetTree)` was
+  `''` because SSR of schedule/game rows ran real `GameCover`→`VenueCover`
+  (and `Avatar`) hooks against the **shared parent hook-array**, overwriting
+  selection/expanded slots; visit then cleared the sheet (`sheetTree = null`).
+- Same class of isolation already documented for `VenueGallery` /
+  `RoleReputationPanel` in this harness. Media pending/retry hooks made the
+  pollution fatal; not a Moscow-map / idle-poll / privacy production regression.
+- Causal proof: failures only at game-row SSR path; map instance persistence /
+  no idle poll / refresh assertions never reached; `GamesMapView` /
+  `SelectedVenueCover` / `VenueGallery` production sources unchanged.
+- Repair: stub `GameCover` + `Avatar` like existing gallery isolation mocks.
+  All existing map/instance/idle/games/venues/reject/privacy assertions kept.
+  No `GamesMapView` whole-stub, no deleted asserts, no gate reset.
+
+## Exact edits (this pass)
+
+1. `apps/web/test/venue-public-access.test.tsx` — pending vs ready credit
+   presentation; URL cases unchanged after simulated load.
+2. `apps/web/test/venue-sheet-integration.test.tsx` — GameCover + Avatar
+   harness isolation mocks.
+3. This handoff — truthful pass-13 status only.
+
+Production allowed paths **not** modified:
+`GamesMapView.tsx`, `SelectedVenueCover.tsx`, `VenueGallery.tsx`.
 
 ## Checks
 
 | Check | Result |
 | --- | --- |
-| Pass-10 swipe failure JSON read | DONE |
-| Minimal media-image drag disable | DONE |
-| Gestures / interactive guard / ownership preserved | DONE (source) |
-| Targeted unit tests (gallery + selected cover) | NOT_TESTED here — no node_modules; parent |
-| Parent loopback original browser vs candidate | NOT_TESTED here — parent |
-| Independent delta QA / Product CI / DEV | NOT_TESTED — pending |
-| Owner UAT | NOT_TESTED — do not claim PASS |
+| CI log 42391764765 read | DONE |
+| Stale «Иллюстрация» → pending/ready assertions | DONE (source) |
+| Sheet empty-string = hook pollution (not prod map bug) | DONE (source) |
+| Targeted unit tests (2 files) | PASS — author: 20/20 |
+| types / lint (web) | PASS — author `tsc --noEmit` + `eslint .` |
+| Independent delta QA / full Product CI / DEV | NOT_TESTED — pending parent |
+| Owner UAT | NOT_TESTED — do not claim PASS/DONE |
 
 ## NOT_TESTED / limits
 
-- Parent reruns targeted UI types/lint/tests and actual original browser on
-  exact candidate archive before final delta QA / CI7 → guarded DEV45.
-- Installed DEV / Owner UAT / authenticated picker: NOT_TESTED.
+- Parent reruns the 2 files + types/lint, then independent delta QA and full CI
+  after the in-flight Product CI finishes; do not interrupt receiver/database.
+- DEV release / Owner UAT / PROD: NOT_TESTED — not claimed.
+- Other #506 API/metadata / #507: untouched.
+- Prior attempts/FAIL/UNKNOWN and costs retained; no paid whole-suite replay.
 - Mode B binding / AGY READY: not claimed.
-- Prior attempts/FAIL/UNKNOWN and costs retained; no paid whole-architecture
-  reanalysis.

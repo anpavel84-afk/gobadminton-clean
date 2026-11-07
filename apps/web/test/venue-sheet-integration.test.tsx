@@ -43,6 +43,17 @@ vi.mock("../src/components/consumer/games/VenueGameActions", () => ({
 vi.mock("../src/components/consumer/venues/VenueGallery", () => ({
   VenueGallery: ({ coverSlot }: { coverSlot?: React.ReactNode }) => coverSlot ?? null,
 }));
+// Media pending/retry hooks in GameCover→VenueCover likewise consume the shared
+// harness slots when schedule/game rows are SSR'd (sheetClick + markup asserts).
+// Real cover pending/ready contract is covered by game-cover / venue-cover suites.
+vi.mock("../src/components/consumer/games/GameCover", () => ({
+  GameCover: () => <span data-game-cover="stub" />,
+  gameCoverUrl: () => null,
+}));
+// Avatar useState would also advance the parent hook cursor during sheet SSR.
+vi.mock("../src/components/consumer/players/ProfileComposition", () => ({
+  Avatar: ({ name }: { name: string }) => <span data-avatar={name} />,
+}));
 // GameTerms now nests RoleReputationPanel; its client hooks would consume the parent
 // hook-array during SSR of the sheet tree. Real panel behavior is covered separately.
 vi.mock("../src/components/consumer/games/RoleReputationPanel", () => ({
