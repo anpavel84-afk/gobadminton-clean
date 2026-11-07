@@ -22,8 +22,8 @@ export type SocialExpiryCleanupPayload =
       kind: "sweep";
     };
 
-/** #456 push deliver — message/conversation refs only; no body / endpoint / keys. */
-export type WebPushDeliverPayload =
+/** #456 message push — message/conversation refs only; no body / endpoint / keys. */
+export type WebPushMessageDeliverPayload =
   | {
       kind: "dm_message";
       messageId: string;
@@ -38,16 +38,37 @@ export type WebPushDeliverPayload =
       gameId: string;
       recipientUserId: string;
       authorUserId: string;
-    }
+    };
+
+/** #496 game business-event push — opaque refs only; no title/body/PII. */
+export type WebPushGameEventDeliverPayload = {
+  kind:
+    | "game_invitation"
+    | "participation_confirmed"
+    | "participation_rejected"
+    | "new_pending_application"
+    | "game_cancelled"
+    | "game_time_changed"
+    | "game_venue_changed"
+    | "outcome_reminder";
+  eventKey: string;
+  recipientUserId: string;
+  actorUserId: string | null;
+  gameId: string;
+  gameVersion: number;
+  invitationId?: string | null;
+  participationId?: string | null;
+  reminderId?: string | null;
+  reminderOrdinal?: number | null;
+};
+
+/** #456/#496 push deliver union — recover sweep separate. */
+export type WebPushDeliverPayload =
+  | WebPushMessageDeliverPayload
+  | WebPushGameEventDeliverPayload
   | {
       kind: "recover_intents";
     };
-
-/** Deliverable message push (excludes recover sweep). */
-export type WebPushMessageDeliverPayload = Exclude<
-  WebPushDeliverPayload,
-  { kind: "recover_intents" }
->;
 
 /** #457 internal post-game reminder sweep (no PII / game title in payload). */
 export type PostgameRemindersSweepPayload = {
@@ -78,12 +99,38 @@ export function isSocialExpiryCleanupPayload(
   return false;
 }
 
-export function isWebPushDeliverPayload(
+const GAME_EVENT_KINDS = new Set([
+  "game_invitation",
+  "participation_confirmed",
+  "participation_rejected",
+  "new_pending_application",
+  "game_cancelled",
+  "game_time_changed",
+  "game_venue_changed",
+  "outcome_reminder",
+]);
+
+export function isWebPushGameEventDeliverPayload(
   value: unknown,
-): value is WebPushDeliverPayload {
+): value is WebPushGameEventDeliverPayload {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  if (v.kind === "recover_intents") return true;
+  if (!GAME_EVENT_KINDS.has(String(v.kind))) return false;
+  if (typeof v.eventKey !== "string" || typeof v.recipientUserId !== "string") {
+    return false;
+  }
+  if (typeof v.gameId !== "string" || typeof v.gameVersion !== "number") {
+    return false;
+  }
+  if (v.actorUserId != null && typeof v.actorUserId !== "string") return false;
+  return true;
+}
+
+export function isWebPushMessageDeliverPayload(
+  value: unknown,
+): value is WebPushMessageDeliverPayload {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
   if (typeof v.messageId !== "string" || typeof v.conversationId !== "string") {
     return false;
   }
@@ -95,12 +142,15 @@ export function isWebPushDeliverPayload(
   return false;
 }
 
-export function isWebPushMessageDeliverPayload(
+export function isWebPushDeliverPayload(
   value: unknown,
-): value is WebPushMessageDeliverPayload {
+): value is WebPushDeliverPayload {
+  if (!value || typeof value !== "object") return false;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === "recover_intents") return true;
   return (
-    isWebPushDeliverPayload(value) &&
-    value.kind !== "recover_intents"
+    isWebPushMessageDeliverPayload(value) ||
+    isWebPushGameEventDeliverPayload(value)
   );
 }
 
@@ -121,6 +171,8 @@ export function sanitizeJobLogFields(input: {
   invitationId?: string;
   messageId?: string;
   recipientUserId?: string;
+  eventKey?: string;
+  gameId?: string;
 }): Record<string, string | undefined> {
   return {
     event: "job",
@@ -133,5 +185,7 @@ export function sanitizeJobLogFields(input: {
     invitationId: input.invitationId,
     messageId: input.messageId,
     recipientUserId: input.recipientUserId,
+    eventKey: input.eventKey,
+    gameId: input.gameId,
   };
 }

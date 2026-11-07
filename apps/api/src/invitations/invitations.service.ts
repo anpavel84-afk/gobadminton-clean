@@ -16,6 +16,7 @@ import {
 } from "../domain/capacity";
 import { GameAuthorityService } from "../games/game-authority.service";
 import { JobEnqueueService } from "../jobs/job-enqueue.service";
+import { invitationEventKey } from "../push/game-push-intents";
 import { DiscoveryProofHook } from "../messaging/discovery-proof.hook";
 import {
   ParticipationsService,
@@ -235,6 +236,21 @@ export class InvitationsService {
             status: inserted.status,
           },
         });
+        if (this.env.WEB_PUSH_ENABLED) {
+          try {
+            await this.jobs.enqueueGameEventWebPush(client, {
+              kind: "game_invitation",
+              eventKey: invitationEventKey(inserted.id, inserted.version),
+              recipientUserId: inviteeUserId,
+              actorUserId: actorId,
+              gameId: inserted.game_id,
+              gameVersion: game.version,
+              invitationId: inserted.id,
+            });
+          } catch {
+            /* durable intent / recover */
+          }
+        }
         const dto=await this.toDto(client,inserted);
         await this.proofHook.assertFinalProof(client,{actorId,sessionId,targetUserId:inviteeUserId,discoveryProof:normalized.discoveryProof});
         return {

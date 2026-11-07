@@ -198,6 +198,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0057_dev_qa_admin",
         "0058_venue_experience_reviews",
         "0059_regional_discovery_preferences",
+        "0060_game_event_push",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -243,6 +244,46 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.web_push_subscriptions')::text AS name")).rows[0]?.name).toBe("web_push_subscriptions");
       expect((await pool.query("SELECT to_regclass('public.web_push_delivery_claims')::text AS name")).rows[0]?.name).toBe("web_push_delivery_claims");
       expect((await pool.query("SELECT to_regclass('public.web_push_delivery_intents')::text AS name")).rows[0]?.name).toBe("web_push_delivery_intents");
+      // 0060 #496 game-event push preference columns + cancel snapshot + event_key uniqueness.
+      expect((await pool.query("SELECT to_regclass('public.web_push_game_cancel_recipients')::text AS name")).rows[0]?.name).toBe("web_push_game_cancel_recipients");
+      const pushPrefCols = await pool.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema='public' AND table_name='web_push_preferences'
+           AND column_name = ANY($1::text[])
+         ORDER BY column_name`,
+        [[
+          "notify_application_decisions",
+          "notify_game_changes",
+          "notify_invites",
+          "notify_new_applications",
+          "notify_outcome_reminders",
+        ]],
+      );
+      expect(pushPrefCols.rows.map((r) => r.column_name)).toEqual([
+        "notify_application_decisions",
+        "notify_game_changes",
+        "notify_invites",
+        "notify_new_applications",
+        "notify_outcome_reminders",
+      ]);
+      expect(
+        (
+          await pool.query(
+            `SELECT 1 FROM pg_indexes
+             WHERE tablename = 'web_push_delivery_intents'
+               AND indexname = 'web_push_delivery_intents_event_recipient_uidx'`,
+          )
+        ).rows,
+      ).toHaveLength(1);
+      expect(
+        (
+          await pool.query(
+            `SELECT 1 FROM pg_indexes
+             WHERE tablename = 'web_push_delivery_claims'
+               AND indexname = 'web_push_delivery_claims_event_sub_uidx'`,
+          )
+        ).rows,
+      ).toHaveLength(1);
       // 0056 #457 postgame organizer reminders.
       expect((await pool.query("SELECT to_regclass('public.game_outcome_reminders')::text AS name")).rows[0]?.name).toBe("game_outcome_reminders");
       expect((await pool.query("SELECT to_regclass('public.game_outcome_reminder_events')::text AS name")).rows[0]?.name).toBe("game_outcome_reminder_events");

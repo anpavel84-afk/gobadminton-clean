@@ -6,7 +6,7 @@ import {
   availablePlaces,
   validateCapacityInvariant,
 } from "../domain/capacity";
-import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { Inject, Injectable, Optional, forwardRef } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
   badRequest,
@@ -19,7 +19,12 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import { OutboxService } from "../common/outbox.service";
 import { GameChatService } from "../game-chat/game-chat.service";
 import { InvitationsService } from "../invitations/invitations.service";
+import { JobEnqueueService } from "../jobs/job-enqueue.service";
 import { ParticipationsService } from "../participations/participations.service";
+import {
+  gameChangeEventKey,
+  snapshotGameCancelRecipients,
+} from "../push/game-push-intents";
 import { TrainersService } from "../trainers/trainers.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { privateContactWebsite } from "../lib/original-http-authority";
@@ -258,7 +263,20 @@ export class GamesService {
     @Inject(forwardRef(() => InvitationsService))
     private readonly invitations: InvitationsService,
     private readonly gameChat: GameChatService,
+    @Optional() private readonly jobs?: JobEnqueueService,
   ) {}
+
+  private async enqueueGamePush(
+    client: PoolClient,
+    input: Parameters<JobEnqueueService["enqueueGameEventWebPush"]>[1],
+  ): Promise<void> {
+    if (!this.jobs || !this.env.WEB_PUSH_ENABLED) return;
+    try {
+      await this.jobs.enqueueGameEventWebPush(client, input);
+    } catch {
+      /* durable intent / recover */
+    }
+  }
 
   async createDraft(
     userId: string,
@@ -569,6 +587,11 @@ export class GamesService {
       [gameId, reason],
     );
     const body = await this.loadGameDto(client, updated.rows[0]!.id);
+    // Snapshot pending/confirmed recipients BEFORE cascade mutates membership.
+    const cancelRecipients = await snapshotGameCancelRecipients(client, {
+      gameId,
+      gameVersion: body.version,
+    });
     await this.participations.cascadeCancelInTransaction(
       client,
       gameId,
@@ -591,7 +614,121 @@ export class GamesService {
         reason: reason,
       },
     });
+    for (const recipientUserId of cancelRecipients) {
+      await this.enqueueGamePush(client, {
+        kind: "game_cancelled",
+        eventKey: gameChangeEventKey(
+          "game_cancelled",
+          body.id,
+          body.version,
+        ),
+        recipientUserId,
+        actorUserId: userId,
+        gameId: body.id,
+        gameVersion: body.version,
+      });
+    }
     return bodyAfterCascade;
+  }
+
+  /**
+   * Bounded published schedule/venue change inside an existing TX.
+   * Emits time/venue push only when the published values actually change.
+   * Title-only / no-op updates do not notify. Controllers not added here.
+   */
+  async applyPublishedScheduleChangeInTransaction(
+    client: PoolClient,
+    input: {
+      gameId: string;
+      expectedVersion: number;
+      actorUserId: string;
+      startsAt?: Date;
+      endsAt?: Date;
+      venueId?: string;
+      applicationDeadlineAt?: Date;
+    },
+  ): Promise<{ changedTime: boolean; changedVenue: boolean; version: number }> {
+    const locked = await this.lockGame(client, input.gameId);
+    if (locked.version !== input.expectedVersion) {
+      throw conflict("VERSION_CONFLICT", "Версия игры устарела");
+    }
+    if (locked.status !== "published") {
+      throw conflict("GAME_NOT_PUBLISHED", "Изменение доступно только для published игры");
+    }
+    const nextStarts = input.startsAt ?? locked.starts_at;
+    const nextEnds = input.endsAt ?? locked.ends_at;
+    const nextVenue = input.venueId ?? locked.venue_id;
+    const nextDeadline =
+      input.applicationDeadlineAt ?? locked.application_deadline_at;
+    const changedTime =
+      nextStarts.getTime() !== locked.starts_at.getTime() ||
+      nextEnds.getTime() !== locked.ends_at.getTime();
+    const changedVenue = nextVenue !== locked.venue_id;
+    if (!changedTime && !changedVenue) {
+      return { changedTime: false, changedVenue: false, version: locked.version };
+    }
+    const updated = await client.query<{ id: string; version: number }>(
+      `UPDATE games
+       SET starts_at = $2,
+           ends_at = $3,
+           venue_id = $4,
+           application_deadline_at = $5,
+           version = version + 1,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING id, version`,
+      [input.gameId, nextStarts, nextEnds, nextVenue, nextDeadline],
+    );
+    const version = updated.rows[0]!.version;
+    const recipients = await client.query<{ user_id: string }>(
+      `SELECT user_id FROM participations
+       WHERE game_id = $1 AND status IN ('pending', 'confirmed')
+       UNION
+       SELECT user_id FROM game_managers
+       WHERE game_id = $1 AND status = 'active'`,
+      [input.gameId],
+    );
+    if (changedTime) {
+      await this.outbox.enqueue(client, {
+        type: "game.time_changed",
+        aggregateType: "game",
+        aggregateId: input.gameId,
+        aggregateVersion: version,
+        payload: { gameId: input.gameId, version },
+      });
+    }
+    if (changedVenue) {
+      await this.outbox.enqueue(client, {
+        type: "game.venue_changed",
+        aggregateType: "game",
+        aggregateId: input.gameId,
+        aggregateVersion: version,
+        payload: { gameId: input.gameId, version },
+      });
+    }
+    for (const row of recipients.rows) {
+      if (changedTime) {
+        await this.enqueueGamePush(client, {
+          kind: "game_time_changed",
+          eventKey: gameChangeEventKey("game_time_changed", input.gameId, version),
+          recipientUserId: row.user_id,
+          actorUserId: input.actorUserId,
+          gameId: input.gameId,
+          gameVersion: version,
+        });
+      }
+      if (changedVenue) {
+        await this.enqueueGamePush(client, {
+          kind: "game_venue_changed",
+          eventKey: gameChangeEventKey("game_venue_changed", input.gameId, version),
+          recipientUserId: row.user_id,
+          actorUserId: input.actorUserId,
+          gameId: input.gameId,
+          gameVersion: version,
+        });
+      }
+    }
+    return { changedTime, changedVenue, version };
   }
 
   async getGame(gameId: string, viewerUserId: string | null): Promise<GameDto> {
@@ -841,6 +978,9 @@ export class GamesService {
     id: string;
     organizer_id: string | null;
     starts_at: Date;
+    ends_at: Date;
+    venue_id: string;
+    application_deadline_at: Date;
     status: string;
     version: number;
     capacity: number;
@@ -855,7 +995,10 @@ export class GamesService {
       id: string;
       organizer_id: string | null;
       starts_at: Date;
-    status: string;
+      ends_at: Date;
+      venue_id: string;
+      application_deadline_at: Date;
+      status: string;
       version: number;
       capacity: number;
       external_reserved_count: number;
@@ -863,7 +1006,8 @@ export class GamesService {
       trainer_profile_id: string | null;
     }>(
       `SELECT id, organizer_id, status, version, capacity, external_reserved_count,
-              activity_kind, trainer_profile_id, starts_at
+              activity_kind, trainer_profile_id, starts_at, ends_at, venue_id,
+              application_deadline_at
        FROM games
        WHERE id = $1
        FOR UPDATE`,

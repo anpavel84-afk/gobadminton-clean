@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.37" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.38" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,17 +424,19 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.37",
-  "title": "Общие кнопки закрытия и маркеры карты площадок",
+  "application_version": "0.1.0-alpha.38",
+  "title": "Системные уведомления о событиях игры",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
-  "fixes": [
-    "Кнопки закрытия фильтров и подсказки игроков используют общий элемент закрытия",
-    "Публичные маркеры площадок на карте появляются после создания карты, не дожидаясь полной загрузки подложки"
+  "additions": [
+    "Push о приглашении на игру, решении по заявке, новой заявке организатору, отмене и смене времени или места, напоминании об итоге",
+    "В настройках — отдельные выключатели пяти групп игровых событий; по умолчанию выключены, даже если сообщения уже включены"
   ],
+  "fixes": [],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
+    "Доставка push на физический iPhone Home Screen не проверялась",
+    "Внешняя доставка провайдеру не считается подтверждённой только по тестам с подставным транспортом",
     "Часть сведений о площадках ещё находится на проверке",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
   ],
@@ -1651,6 +1653,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "additions": [],
     "fixes": [
       "Гость без входа не вызывает личный запрос профиля на странице площадки"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "859bb6a635ad704ad0971f8a7ad748b02eda0017",
+    "application_version": "0.1.0-alpha.37",
+    "version_label": "0.1.0-alpha.37",
+    "title": "Общие кнопки закрытия и маркеры карты площадок",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42327405382-a1",
+        "accepted_at": "2026-11-07T02:10:06Z",
+        "api_digest": "sha256:aae0566a1a4f9bc9143d73765fca35776ef56e57416fa6bfc26e9dd8652921ed",
+        "web_digest": "sha256:ca74a876933daee80aa65103dae5732d851e96fefe311d319678caac209da3a0",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Кнопки закрытия фильтров и подсказки игроков используют общий элемент закрытия",
+      "Публичные маркеры площадок на карте появляются после создания карты, не дожидаясь полной загрузки подложки"
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",

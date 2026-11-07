@@ -10,6 +10,10 @@ import {
   recoverPendingWebPushIntents,
   type WebPushTransport,
 } from "../push/push-delivery";
+import {
+  deliverGameEventWebPushJob,
+  recoverPendingGamePushIntents,
+} from "../push/game-push-delivery";
 import { GameRemindersCommand } from "../games/game-reminders.command";
 import { postGameWritesEnabled } from "../games/game-outcomes.policy";
 import {
@@ -25,6 +29,7 @@ import {
   isPostgameRemindersSweepPayload,
   isSocialExpiryCleanupPayload,
   isWebPushDeliverPayload,
+  isWebPushGameEventDeliverPayload,
   isWebPushMessageDeliverPayload,
   sanitizeJobLogFields,
   type PostgameRemindersSweepPayload,
@@ -196,12 +201,26 @@ export async function startWorkerRuntime(input: {
             throw new Error("INVALID_JOB_PAYLOAD");
           }
           if (job.data.kind === "recover_intents") {
-            const recovered = await recoverPendingWebPushIntents({
+            const recoveredMessages = await recoverPendingWebPushIntents({
               pool: input.pool,
               enqueueInTx: async (client, payload) => {
                 const jobId = await boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
                   db: fromPoolClient(client),
                   singletonKey: `push:${payload.messageId}:${payload.recipientUserId}`,
+                  retryLimit: 5,
+                  retryDelay: 5,
+                  retryBackoff: true,
+                  expireInSeconds: 600,
+                });
+                return jobId != null;
+              },
+            });
+            const recoveredGames = await recoverPendingGamePushIntents({
+              pool: input.pool,
+              enqueueInTx: async (client, payload) => {
+                const jobId = await boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+                  db: fromPoolClient(client),
+                  singletonKey: `push-game:${payload.eventKey}:${payload.recipientUserId}`,
                   retryLimit: 5,
                   retryDelay: 5,
                   retryBackoff: true,
@@ -216,10 +235,47 @@ export async function startWorkerRuntime(input: {
                 queue: WEB_PUSH_DELIVER_QUEUE,
                 jobId: job.id,
                 kind: "recover_intents",
-                recovered: recovered.recovered,
-                failed: recovered.failed,
+                recovered:
+                  recoveredMessages.recovered + recoveredGames.recovered,
+                failed: recoveredMessages.failed + recoveredGames.failed,
               }),
             );
+            continue;
+          }
+          if (isWebPushGameEventDeliverPayload(job.data)) {
+            console.info(
+              JSON.stringify(
+                sanitizeJobLogFields({
+                  queue: WEB_PUSH_DELIVER_QUEUE,
+                  jobId: job.id,
+                  kind: job.data.kind,
+                  eventKey: job.data.eventKey,
+                  gameId: job.data.gameId,
+                  recipientUserId: job.data.recipientUserId,
+                }),
+              ),
+            );
+            const result = await deliverGameEventWebPushJob({
+              pool: input.pool,
+              env: pushEnv,
+              payload: job.data,
+              transport,
+            });
+            console.info(
+              JSON.stringify({
+                event: "job_completed",
+                queue: WEB_PUSH_DELIVER_QUEUE,
+                jobId: job.id,
+                kind: job.data.kind,
+                delivered: result.delivered,
+                skipped: result.skipped,
+                cleaned: result.cleaned,
+                failedTransient: result.failedTransient,
+              }),
+            );
+            if (result.failedTransient > 0) {
+              throw new Error("PUSH_TRANSPORT_TRANSIENT");
+            }
             continue;
           }
           if (!isWebPushMessageDeliverPayload(job.data)) {

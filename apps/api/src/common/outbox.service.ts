@@ -1,6 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import type { PoolClient } from "pg";
 
+/**
+ * Durable business outbox (evidence / analytics). #496 game push does **not**
+ * subscribe to historical outbox replay; allowlisted NEW events enqueue push
+ * intents in the same TX via JobEnqueueService at the mutation site.
+ */
 @Injectable()
 export class OutboxService {
   async enqueue(

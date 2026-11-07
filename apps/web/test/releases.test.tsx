@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.37 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.37");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.38 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.38");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -230,10 +230,20 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(40);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(41);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(45);
+    ).toBe(46);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.37"
+      && row.source_sha === "859bb6a635ad704ad0971f8a7ad748b02eda0017"
+      && row.deployments[0]?.release_id === "r42327405382-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-07T02:10:06Z"
+      && row.deployments[0]?.api_digest === "sha256:aae0566a1a4f9bc9143d73765fca35776ef56e57416fa6bfc26e9dd8652921ed"
+      && row.deployments[0]?.web_digest === "sha256:ca74a876933daee80aa65103dae5732d851e96fefe311d319678caac209da3a0"
+      && row.api_contract_version === "0.36.0"
+      && row.title === "Общие кнопки закрытия и маркеры карты площадок",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.36"
       && row.source_sha === "9af6482afeb0e5552c20af25a04dd6503957202d"

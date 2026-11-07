@@ -13,8 +13,17 @@ import {
   subscribeFromGesture,
   subscriptionToPayload,
   unsubscribePushDevice,
+  type PushEventPreferences,
   type PushState,
 } from "../../../lib/push-client";
+
+const EVENT_TOGGLES: Array<{ key: keyof PushEventPreferences; label: string }> = [
+  { key: "invites", label: "Приглашения на игру" },
+  { key: "applicationDecisions", label: "Решения по заявкам" },
+  { key: "newApplications", label: "Новые заявки" },
+  { key: "gameChanges", label: "Отмена и изменения игры" },
+  { key: "outcomeReminders", label: "Напоминания об итоге" },
+];
 import { Button } from "../Button";
 import { ProfileState, SectionHeader } from "../players/ProfileComposition";
 import "../../../styles/push-notifications.css";
@@ -185,6 +194,47 @@ export function PushSettings({ me }: Props) {
     }
   }
 
+  async function toggleEvent(key: keyof PushEventPreferences, value: boolean) {
+    if (retired.current || !push || mutation.current || busy || !push.preferenceEnabled) return;
+    mutation.current = true;
+    setBusy(true);
+    setNotice(null);
+    const request = epoch.current;
+    const pref = await setPushPreference(
+      {
+        enabled: true,
+        expectedVersion: push.preferenceVersion,
+        eventPreferences: { [key]: value },
+      },
+      me.csrfToken,
+    );
+    if (request !== epoch.current) return;
+    mutation.current = false;
+    setBusy(false);
+    if (!pref.ok) {
+      if (pref.status === 401) {
+        retire();
+        return;
+      }
+      setNotice(
+        pref.status === 409
+          ? "Настройка изменилась. Обновите данные перед повтором."
+          : "Не удалось сохранить группу уведомлений.",
+      );
+      return;
+    }
+    setPush((prev) =>
+      prev
+        ? {
+            ...prev,
+            preferenceEnabled: pref.data.preferenceEnabled,
+            preferenceVersion: pref.data.preferenceVersion,
+            eventPreferences: pref.data.eventPreferences,
+          }
+        : prev,
+    );
+  }
+
   async function disableCurrent() {
     if (retired.current || !push?.currentDevice || mutation.current || busy) return;
     mutation.current = true;
@@ -279,6 +329,30 @@ export function PushSettings({ me }: Props) {
                 Выключить на этом устройстве
               </Button>
             </div>
+            {push?.preferenceEnabled && (
+              <fieldset className="gb-push-settings__events" disabled={busy}>
+                <legend>События игр</legend>
+                <p className="gb-push-settings__events-note">
+                  Группы по умолчанию выключены, даже если сообщения уже включены. Мастер-выключатель и устройство всегда важнее.
+                </p>
+                <ul className="gb-push-settings__event-list">
+                  {EVENT_TOGGLES.map((item) => (
+                    <li key={item.key}>
+                      <label className="gb-push-settings__event">
+                        <input
+                          type="checkbox"
+                          checked={push.eventPreferences?.[item.key] === true}
+                          onChange={(event) =>
+                            void toggleEvent(item.key, event.target.checked)
+                          }
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </fieldset>
+            )}
             {push && push.devices.length > 0 && (
               <ul className="gb-push-settings__devices" aria-label="Подключённые устройства">
                 {push.devices.map((device) => (

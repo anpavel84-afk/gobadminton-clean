@@ -6,10 +6,19 @@ export type PushDevice = {
   createdAt: string;
 };
 
+export type PushEventPreferences = {
+  invites: boolean;
+  applicationDecisions: boolean;
+  newApplications: boolean;
+  gameChanges: boolean;
+  outcomeReminders: boolean;
+};
+
 export type PushState = {
   featureAvailable: boolean;
   preferenceEnabled: boolean;
   preferenceVersion: number;
+  eventPreferences: PushEventPreferences;
   vapidPublicKey: string | null;
   accountFence: string | null;
   deviceCount: number;
@@ -98,18 +107,23 @@ export function getPushState(signal?: AbortSignal) {
 }
 
 export function setPushPreference(
-  input: { enabled: boolean; expectedVersion: number },
+  input: {
+    enabled: boolean;
+    expectedVersion: number;
+    eventPreferences?: Partial<PushEventPreferences>;
+  },
   csrfToken: string,
 ) {
-  return apiFetch<{ preferenceEnabled: boolean; preferenceVersion: number }>(
-    "/v1/me/push/preference",
-    {
-      method: "PUT",
-      body: JSON.stringify(input),
-      csrfToken,
-      idempotent: true,
-    },
-  );
+  return apiFetch<{
+    preferenceEnabled: boolean;
+    preferenceVersion: number;
+    eventPreferences: PushEventPreferences;
+  }>("/v1/me/push/preference", {
+    method: "PUT",
+    body: JSON.stringify(input),
+    csrfToken,
+    idempotent: true,
+  });
 }
 
 export function registerPushSubscription(

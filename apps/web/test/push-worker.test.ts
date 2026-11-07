@@ -20,6 +20,16 @@ describe("#456 sw-push.js handlers", () => {
     expect(source).not.toMatch(/caches\.open\(["']gb-offline/);
   });
 
+  it("accepts safe game/results click paths and rejects foreign absolute URLs", async () => {
+    const source = readFileSync(
+      path.resolve(__dirname, "../public/sw-push.js"),
+      "utf8",
+    );
+    expect(source).toMatch(/\/games\//);
+    expect(source).toMatch(/\/my-games\//);
+    expect(source).toMatch(/includes\(":\/\/"\)/);
+  });
+
   it("shows notification only when fence matches; clears on gb-push-clear", async () => {
     const listeners = new Map<string, Array<(event: unknown) => void>>();
     const shown: Array<{ title: string; options: Record<string, unknown> }> = [];

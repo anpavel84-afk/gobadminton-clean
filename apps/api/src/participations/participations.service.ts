@@ -5,7 +5,7 @@ import {
   availablePlaces,
   validateCapacityInvariant,
 } from "../domain/capacity";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { conflict, notFound, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
@@ -13,6 +13,10 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import { OutboxService } from "../common/outbox.service";
 import { GameChatService } from "../game-chat/game-chat.service";
 import { GameAuthorityService } from "../games/game-authority.service";
+import { JobEnqueueService } from "../jobs/job-enqueue.service";
+import {
+  participationEventKey,
+} from "../push/game-push-intents";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 
 export type ParticipationStatus =
@@ -69,7 +73,34 @@ export class ParticipationsService {
     private readonly outbox: OutboxService,
     private readonly gameAuthority: GameAuthorityService,
     private readonly gameChat: GameChatService,
+    @Optional() private readonly jobs?: JobEnqueueService,
   ) {}
+
+  private async enqueueGamePush(
+    client: PoolClient,
+    input: Parameters<JobEnqueueService["enqueueGameEventWebPush"]>[1],
+  ): Promise<void> {
+    if (!this.jobs || !this.env.WEB_PUSH_ENABLED) return;
+    try {
+      await this.jobs.enqueueGameEventWebPush(client, input);
+    } catch {
+      /* durable intent may still have landed; recover worker handles pending */
+    }
+  }
+
+  private async listActiveOrganizerUserIds(
+    client: PoolClient,
+    gameId: string,
+  ): Promise<string[]> {
+    const rows = await client.query<{ user_id: string }>(
+      `SELECT user_id FROM game_managers
+       WHERE game_id = $1
+         AND status = 'active'
+         AND role IN ('owner', 'manager')`,
+      [gameId],
+    );
+    return rows.rows.map((r) => r.user_id);
+  }
 
   /** Only new regular drafts: caller inserted Game and granted owner in this transaction. */
   async initializeCreatorSeat(client: PoolClient, gameId: string, userId: string): Promise<void> {
@@ -210,6 +241,22 @@ export class ParticipationsService {
               sourceCode: normalizedSource,
             },
           });
+          const organizers = await this.listActiveOrganizerUserIds(client, body.gameId);
+          for (const organizerId of organizers) {
+            await this.enqueueGamePush(client, {
+              kind: "new_pending_application",
+              eventKey: participationEventKey(
+                "new_pending_application",
+                body.id,
+                body.version,
+              ),
+              recipientUserId: organizerId,
+              actorUserId: userId,
+              gameId: body.gameId,
+              gameVersion: game.version,
+              participationId: body.id,
+            });
+          }
         } else if (row.status === "withdrawn") {
           const updated = await client.query<ParticipationRow>(
             `UPDATE participations
@@ -252,6 +299,22 @@ export class ParticipationsService {
               reapply: true,
             },
           });
+          const organizers = await this.listActiveOrganizerUserIds(client, body.gameId);
+          for (const organizerId of organizers) {
+            await this.enqueueGamePush(client, {
+              kind: "new_pending_application",
+              eventKey: participationEventKey(
+                "new_pending_application",
+                body.id,
+                body.version,
+              ),
+              recipientUserId: organizerId,
+              actorUserId: userId,
+              gameId: body.gameId,
+              gameVersion: game.version,
+              participationId: body.id,
+            });
+          }
         } else {
           throw conflict(
             "PARTICIPATION_NOT_REOPENABLE",
@@ -368,6 +431,19 @@ export class ParticipationsService {
             status: body.status,
           },
         });
+        await this.enqueueGamePush(client, {
+          kind: "participation_confirmed",
+          eventKey: participationEventKey(
+            "participation_confirmed",
+            body.id,
+            body.version,
+          ),
+          recipientUserId: body.userId,
+          actorUserId: actorId,
+          gameId: body.gameId,
+          gameVersion,
+          participationId: body.id,
+        });
         await this.gameChat.upsertMemberInTransaction(
           client,
           body.gameId,
@@ -464,6 +540,19 @@ export class ParticipationsService {
             status: body.status,
             reason: trimmed,
           },
+        });
+        await this.enqueueGamePush(client, {
+          kind: "participation_rejected",
+          eventKey: participationEventKey(
+            "participation_rejected",
+            body.id,
+            body.version,
+          ),
+          recipientUserId: body.userId,
+          actorUserId: actorId,
+          gameId: body.gameId,
+          gameVersion: game.version,
+          participationId: body.id,
         });
         return { statusCode: 200, body };
       },
