@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
 import { IdempotencyService } from "../common/idempotency.service";
 import { coverDeleteVersion } from "../profiles/cover-command";
+import { deriveCoverWebp, resolveMediaImageResponse } from "../profiles/media-image-response";
 import { GameCoverService } from "./game-cover.service";
 @Controller()
 export class GameCoverController {
@@ -22,7 +23,10 @@ export class GameCoverController {
   }
   @Get("media/game-covers/:key")
   async read(@Req() r:FastifyRequest,@Param("key") key:string,@Res() reply:FastifyReply){
-    reply.header("Cache-Control","no-store").header("Vary","Cookie").header("X-Content-Type-Options","nosniff").header("Content-Security-Policy","default-src 'none'; sandbox");
-    return reply.type("image/png").send(await this.covers.read(key,(await this.auth.optionalSession(r))?.userId??null));
+    reply.header("Cache-Control","no-store").header("Vary","Cookie, Accept").header("X-Content-Type-Options","nosniff").header("Content-Security-Policy","default-src 'none'; sandbox");
+    // optionalSession + game access/approval checks before any derive.
+    const original = await this.covers.read(key,(await this.auth.optionalSession(r))?.userId??null);
+    const response = await resolveMediaImageResponse(original, r.headers.accept, deriveCoverWebp);
+    return reply.type(response.contentType).send(response.body);
   }
 }
