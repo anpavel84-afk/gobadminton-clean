@@ -30,7 +30,10 @@ function normalizePresence(raw: string | null | undefined): SessionPresence {
 /** Browser-only: read the SSR hint from the document element. */
 export function readDomSessionPresence(): SessionPresence {
   if (typeof document === "undefined") return "unknown";
-  return normalizePresence(document.documentElement.getAttribute(SESSION_PRESENCE_ATTR));
+  const root = document.documentElement;
+  // Minimal harness / incomplete document: missing root or attribute API → unknown (never throw).
+  if (!root || typeof root.getAttribute !== "function") return "unknown";
+  return normalizePresence(root.getAttribute(SESSION_PRESENCE_ATTR));
 }
 
 /**
@@ -46,9 +49,11 @@ export function getSessionPresence(): SessionPresence {
 /** Update client eligibility; mirrors onto the DOM attr when in a browser. */
 export function markSessionPresence(next: SessionPresence): void {
   clientOverride = next;
-  if (typeof document !== "undefined") {
-    document.documentElement.setAttribute(SESSION_PRESENCE_ATTR, next);
-  }
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  // Minimal DOM without a writable root must not throw — override still applies in memory.
+  if (!root || typeof root.setAttribute !== "function") return;
+  root.setAttribute(SESSION_PRESENCE_ATTR, next);
 }
 
 /**

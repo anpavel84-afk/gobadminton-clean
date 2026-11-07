@@ -51,6 +51,7 @@ vi.mock("next/dynamic", () => ({ default: () => function MapStub() { return <div
 import { VenuePage } from "../src/components/consumer/venues/VenuePage";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { getMe } from "../src/lib/api-client";
+import { resetSessionPresenceForTests } from "../src/lib/session-presence";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 const cover = "/v1/media/venue-covers/" + "a".repeat(64) + ".png";
 const a: Venue = { id: "a", cityId: MOSCOW_BUNDLE.cityId, name: "Зал А", address: "Адрес А", timezone: "Europe/Moscow", latitude: 55.7, longitude: 37.6, dataStatus: "verified", provenance: "PRIVATE_SENTINEL_205", cover: { uploadedUrl: cover, credit: { kind: "illustration", text: "Автор фото", url: null } }, profile: { courtCount: 4, amenities: { parking: false, showers: null }, updatedAt: "2026-10-22T12:00:00.000Z", gallery: { coverage: "cover_only", items: [] } }, publicContacts: { phone: "+79991234567", website: "https://example.org", messengers: [] } };
@@ -98,6 +99,16 @@ async function settle(root: React.ReactNode) {
   for (let round = 0; round < 8; round++) { render(root); await vi.advanceTimersByTimeAsync(1); }
   render(root);
 }
+/** Drive the actual rendered gallery img onLoad (or treat cache-complete via the same callback), then resettle. */
+async function settleAfterGalleryImgLoad(root: React.ReactNode, src = cover) {
+  const img = nodes.find(
+    (node) => node.type === "img" && node.props.src === src && typeof node.props.onLoad === "function",
+  );
+  if (!img) throw new Error(`Missing gallery img onLoad for ${src}`);
+  // Cache-complete path in production uses ref+complete; harness has no real DOM node — onLoad is the load signal.
+  (img.props.onLoad as () => void)();
+  await settle(root);
+}
 function assertPublic() {
   expect(calls.filter(path => path.startsWith("/v1/admin/"))).toEqual([]);
   expect(nodes.some(node => typeof node.type === "function" && node.type.name === "VenueCoverEditor")).toBe(false);
@@ -114,6 +125,7 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
   instances = new Map(); runtime.pending = []; calls.length = 0; games = [game]; signedIn = false; publicFailure = false; gamesReady = true;
   coverCredit = { kind: "illustration", text: "Автор фото", url: null };
+  resetSessionPresenceForTests();
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "", pathname: "/games", assign: vi.fn() } }));
   vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", querySelector: () => null }));
   vi.stubGlobal("sessionStorage", { setItem: vi.fn() });
@@ -133,6 +145,9 @@ for (const member of [false, true]) {
   it(`keeps public venue effects read-only for ${member ? "member" : "guest"}`, async () => {
     signedIn = member; expect((await getMe()).ok).toBe(member);
     let root = <VenuePage venueId="a" />; await settle(root);
+    expect(text).toContain("Иллюстрация");
+    expect(nodes.some(node => node.type === "img" && node.props.src === cover)).toBe(true);
+    await settleAfterGalleryImgLoad(root);
     expect(text).toContain("Зал А"); expect(text).toContain("Адрес А"); expect(text).toContain("Автор фото"); expect(text).toContain("Тестовая игра");
     expect(text).toContain("Количество кортов4"); expect(text).toContain("ПарковкаНет"); expect(text).toContain("ДушевыеНет данных");
     expect(nodes.some(node => node.type === "a" && node.props.href === "tel:+79991234567")).toBe(true);
@@ -257,7 +272,11 @@ it("preserves map return URL, selected day/activity and schedule props alongside
 
 it("does not link a VenuePage cover credit whose authority disagrees", async () => {
   coverCredit = { kind: "photo", text: "Фото: Клуб", url: "https:///@evil.example/phish" };
-  await settle(<VenuePage venueId="a" />);
+  const root = <VenuePage venueId="a" />;
+  await settle(root);
+  expect(text).toContain("Иллюстрация");
+  expect(text).not.toContain("Фото: Клуб");
+  await settleAfterGalleryImgLoad(root);
   expect(text).toContain("Фото: Клуб");
   expect(nodes.some(node => node.type === "a" && String(node.props.href).includes("evil.example"))).toBe(false);
   expect(nodes.some(node => node.type === "a" && node.props.href === "javascript:alert(1)")).toBe(false);
@@ -266,7 +285,11 @@ it("does not link a VenuePage cover credit whose authority disagrees", async () 
 
 it("links a safe VenuePage cover credit to its serialized href", async () => {
   coverCredit = { kind: "photo", text: "Фото: Клуб", url: "https://example.org/photos" };
-  await settle(<VenuePage venueId="a" />);
+  const root = <VenuePage venueId="a" />;
+  await settle(root);
+  expect(text).toContain("Иллюстрация");
+  expect(text).not.toContain("Фото: Клуб");
+  await settleAfterGalleryImgLoad(root);
   expect(text).toContain("Фото: Клуб");
   expect(nodes.some(node => node.type === "a" && node.props.href === "https://example.org/photos")).toBe(true);
   assertPublic();
@@ -277,7 +300,11 @@ it("rejects a VenuePage cover credit whose serialized href exceeds 300 character
   expect(bomb).toHaveLength(108);
   expect(new URL(bomb).href).toHaveLength(302);
   coverCredit = { kind: "photo", text: "Фото: Клуб", url: bomb };
-  await settle(<VenuePage venueId="a" />);
+  const root = <VenuePage venueId="a" />;
+  await settle(root);
+  expect(text).toContain("Иллюстрация");
+  expect(text).not.toContain("Фото: Клуб");
+  await settleAfterGalleryImgLoad(root);
   expect(text).toContain("Фото: Клуб");
   expect(nodes.some(node => node.type === "a" && String(node.props.href).includes("%27"))).toBe(false);
   expect(nodes.some(node => node.type === "a" && node.props.href === new URL(bomb).href)).toBe(false);

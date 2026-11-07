@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { apiFetch, logout } from "../src/lib/api-client";
+import { apiFetch, getMe, logout } from "../src/lib/api-client";
 import { foregroundUpdates } from "../src/lib/foreground-updates";
 import {
   SESSION_PRESENCE_ATTR,
@@ -59,6 +59,26 @@ describe("session presence hint", () => {
     expect(readDomSessionPresence()).toBe("present");
     setDomPresence("yes");
     expect(readDomSessionPresence()).toBe("unknown");
+  });
+
+  it("undefined document, missing documentElement, or missing attribute API → unknown; mark does not throw", () => {
+    vi.stubGlobal("document", undefined);
+    expect(readDomSessionPresence()).toBe("unknown");
+    expect(() => markSessionPresence("present")).not.toThrow();
+    expect(getSessionPresence()).toBe("present");
+
+    resetSessionPresenceForTests();
+    vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+    expect(document.documentElement).toBeUndefined();
+    expect(readDomSessionPresence()).toBe("unknown");
+    expect(() => markSessionPresence("absent")).not.toThrow();
+    expect(getSessionPresence()).toBe("absent");
+
+    resetSessionPresenceForTests();
+    vi.stubGlobal("document", { documentElement: {} });
+    expect(readDomSessionPresence()).toBe("unknown");
+    expect(() => markSessionPresence("present")).not.toThrow();
+    expect(getSessionPresence()).toBe("present");
   });
 
   it("cookie store helper is presence-only and never returns a value", () => {
@@ -151,6 +171,37 @@ describe("apiFetch session-presence transport", () => {
     expect(getSessionPresence()).toBe("unknown");
     const result = await apiFetch<{ id: string }>("/v1/me");
     expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("minimal document without DOM root: getMe/apiFetch allow unknown and still fetch; absence still skips", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ user: { id: "u" }, profile: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    // Same shape as venue-public-access harness: EventTarget document, no documentElement.
+    vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", querySelector: () => null }));
+    resetSessionPresenceForTests();
+    expect(getSessionPresence()).toBe("unknown");
+    expect(shouldSkipUnauthenticatedPrivateGet("/v1/me", "GET")).toBe(false);
+    const me = await getMe();
+    expect(me.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockClear();
+    markSessionPresence("absent");
+    expect(shouldSkipUnauthenticatedPrivateGet("/v1/me", "GET")).toBe(true);
+    const blocked = await apiFetch("/v1/me");
+    expect(blocked).toEqual({ ok: false, status: 401, error: "HTTP 401" });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fetchMock.mockClear();
+    markSessionPresence("present");
+    const allowed = await apiFetch("/v1/me");
+    expect(allowed.ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
