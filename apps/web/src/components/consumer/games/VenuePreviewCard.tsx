@@ -7,9 +7,11 @@ import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import "../../../styles/venue-popup.css";
 
-export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, onCoverRetry, galleryIndex, onGalleryIndexChange }: {
+export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number; onOpen: () => void; embedded?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
+  /** Shared SelectedVenueCover.ready — morph slot loan is not decoded readiness. */
+  coverReady?: boolean;
   /** Shared SelectedVenueCover.retry for morph main-loan failure (expanded sheet owns the visible control). */
   onCoverRetry?: () => void;
   galleryIndex?: number;
@@ -32,6 +34,7 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
         showSourceCredit={false}
         coverSlot={coverSlot}
         coverFallback={coverFallback}
+        coverReady={coverReady}
         onCoverRetry={onCoverRetry}
         className="gb-venue-preview-cover"
         index={galleryIndex}

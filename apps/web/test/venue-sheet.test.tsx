@@ -738,17 +738,19 @@ it("keeps local create open through unavailable/empty schedules and keys its dra
   expect(elements(render()).some(element => element.type === CreateGamePage)).toBe(false);
 });
 
-it("forwards morph coverFallback and onCoverRetry into VenueGallery", () => {
+it("forwards morph coverFallback, coverReady and onCoverRetry into VenueGallery", () => {
   const onCoverRetry = vi.fn();
   props = {
     ...props,
     coverSlot: <span data-testid="morph-slot" />,
     coverFallback: true,
+    coverReady: true,
     onCoverRetry,
   };
   const gallery = elements(render()).find(node => node.type === VenueGallery);
   expect(gallery).toBeTruthy();
   expect(gallery!.props.coverFallback).toBe(true);
+  expect(gallery!.props.coverReady).toBe(true);
   expect(gallery!.props.onCoverRetry).toBe(onCoverRetry);
   expect(gallery!.props.coverSlot).toBeTruthy();
 });

@@ -743,16 +743,31 @@ describe("VenueGallery", () => {
     expect(errored).not.toContain("Фото: WorldClassZhitnaya");
     expect(errored).toContain("Источник: badminton4u.ru");
 
-    // Morph main loan: reserved slot still present (credit shown via morph-ready path).
-    const morph = ssr(<VenueGallery
+    // Morph main loan: reserved slot still present; slot presence alone is NOT ready.
+    const morphPending = ssr(<VenueGallery
       venue={multi}
       size="sheet"
       showCredit
       coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" data-pending="uploaded" />}
     />);
-    expect(morph).toContain("gb-venue-gallery__photo-credit");
-    expect(morph).toContain("Фото: WorldClassZhitnaya");
-    expect(morph).toContain('data-testid="morph-slot"');
+    expect(morphPending).toContain("gb-venue-gallery__photo-credit");
+    expect(morphPending).toContain('data-state="pending"');
+    expect(morphPending).toContain("Загружаем фотографию…");
+    expect(morphPending).not.toContain("Фото: WorldClassZhitnaya");
+    expect(morphPending).toContain('data-testid="morph-slot"');
+
+    // Morph ready only when coverReady reports actual decode of the shared image.
+    const morphReady = ssr(<VenueGallery
+      venue={multi}
+      size="sheet"
+      showCredit
+      coverReady
+      coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" data-cover="uploaded" />}
+    />);
+    expect(morphReady).toContain("gb-venue-gallery__photo-credit");
+    expect(morphReady).toContain('data-state="ready"');
+    expect(morphReady).toContain("Фото: WorldClassZhitnaya");
+    expect(morphReady).toContain('data-testid="morph-slot"');
 
     // Compact hidden credit must not gain the reserved photo-credit spacing.
     const compact = ssr(<VenueGallery venue={multi} size="compact" showCredit={false} showSourceCredit={false} />);

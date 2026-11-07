@@ -176,6 +176,7 @@ export function VenueGallery({
   size = "sheet",
   coverSlot,
   coverFallback = false,
+  coverReady = false,
   showCredit = true,
   showSourceCredit = true,
   index: controlledIndex,
@@ -189,6 +190,11 @@ export function VenueGallery({
   coverSlot?: ReactNode;
   /** Shared SelectedVenueCover resource already failed the main loan. */
   coverFallback?: boolean;
+  /**
+   * Shared morph image actually decoded for the current identity.
+   * Slot loan (useMorphSlot) is not readiness — do not invent ready via !fallback / slot presence.
+   */
+  coverReady?: boolean;
   showCredit?: boolean;
   /** Catalog source credit; false in compact select-button parents that render it as a sibling footer. */
   showSourceCredit?: boolean;
@@ -425,16 +431,20 @@ export function VenueGallery({
   }
 
   const showControls = items.length > 1 && size !== "compact";
+  // Morph pending: shared resource owns the img (no framePending); still reserve caption height.
+  const morphPending = Boolean(useMorphSlot && !coverReady && !imageFailed);
+  const morphReady = Boolean(useMorphSlot && coverReady && !imageFailed);
   // Compact thumbs stay caption-free (aria-busy + skeleton only); sheet/page keep the loading line.
-  const statusText = framePending && size !== "compact"
+  const statusText = (framePending || morphPending) && size !== "compact"
     ? "Загружаем фотографию…"
     : (imageFailed && size === "compact" ? "Фото не загрузилось" : null);
   // Morph main loan never sets framePending (shared resource owns the img), so without a
   // reserved slot slide1 stays creditless until swipe reveals a non-morph credit → ~30px jump.
+  // Ready credit only when the current image is actually decoded (gallery load or morph coverReady).
   const showReadyCredit = Boolean(
-    reservePhotoCredit && current && !imageFailed && (imageReady || useMorphSlot),
+    reservePhotoCredit && current && !imageFailed && (imageReady || morphReady),
   );
-  const showPendingCredit = Boolean(reservePhotoCredit && !imageFailed && framePending);
+  const showPendingCredit = Boolean(reservePhotoCredit && !imageFailed && (framePending || morphPending));
   const showErrorCredit = Boolean(reservePhotoCredit && imageFailed);
   const photoCredit = reservePhotoCredit ? (
     <div className="gb-venue-gallery__photo-credit" data-state={

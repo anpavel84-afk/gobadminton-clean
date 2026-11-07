@@ -474,17 +474,25 @@ it("morph gallery coverSlot owns pending underlay (frame excluded); empty-galler
       size="sheet"
       coverSlot={<SelectedVenueCover slotRef={resource.compact} className="gb-venue-sheet-cover" />}
       coverFallback={resource.fallback}
+      coverReady={resource.ready}
     />;
   }
   const morph = mount(() => <Morph />);
   const image = imageAt();
   expectPendingSkeleton(image.parentNode, "uploaded");
+  expect(resource.ready).toBe(false);
+  expect(text(morph.tree[0]!)).not.toContain("Фото: Клуб");
+  expect(text(morph.tree[0]!)).toContain("Загружаем фотографию…");
   const frame = morph.nodes().find(node => node.className === "gb-venue-gallery__frame");
   expect(frame?.props["data-pending"]).toBeUndefined();
   expect(frame?.style?.backgroundImage).toBeUndefined();
   expect(image.srcWrites).toEqual([uploaded]);
   image.dispatchEvent(new Event("load"));
+  morph.render();
+  expect(resource.ready).toBe(true);
   expectReadyNeutral(image.parentNode, "uploaded");
+  expect(text(morph.tree[0]!)).toContain("Фото: Клуб");
+  expect(text(morph.tree[0]!)).not.toContain("Загружаем фотографию…");
 
   morph.unmount();
   created.length = 0;
@@ -543,6 +551,7 @@ it("F1: compact main error then expanded remount keeps morph failed state; non-m
       showCredit={expanded}
       coverSlot={slot}
       coverFallback={resource.fallback}
+      coverReady={resource.ready}
       onCoverRetry={resource.retry}
       index={galleryIndex}
     />;
@@ -586,7 +595,85 @@ it("F1: compact main error then expanded remount keeps morph failed state; non-m
   galleryIndex = 0;
   renderer.render();
   expect(resource.fallback).toBe(false);
+  expect(resource.ready).toBe(false);
   // Morph owns pending paint; gallery must not invent ready photo credit for the new venue.
   expect(text(renderer.tree[0]!)).not.toContain("Фото: Клуб");
   expect(text(renderer.tree[0]!)).not.toContain("Не удалось загрузить фотографию");
+  expect(text(renderer.tree[0]!)).toContain("Загружаем фотографию…");
+  // Reserved photo-credit row stays present (stable height) while pending.
+  expect(renderer.nodes().some((node) => node.className === "gb-venue-gallery__photo-credit")).toBe(true);
+});
+
+it("morph coverReady: real main load and cached remount show credit; failure+retry stay truthful", () => {
+  const galleryVenue = {
+    id: "a0000000-0000-4000-8000-000000000001",
+    name: "Зал",
+    cover: { uploadedUrl: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+    profile: {
+      courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+      gallery: {
+        coverage: "ordered" as const,
+        items: [
+          { id: "a0000000-0000-4000-8000-000000000011", url: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+          { id: "a0000000-0000-4000-8000-000000000012", url: uploadedB, credit: { kind: "photo" as const, text: "Фото: Второй", url: "https://club.example/2" } },
+        ],
+      },
+    },
+  };
+  venue = { id: galleryVenue.id, name: galleryVenue.name, cover: { uploadedUrl: uploaded } };
+  let expanded = false;
+  function Surfaces() {
+    resource = useSelectedVenueCover(city, venue);
+    const slot = expanded
+      ? <SelectedVenueCover slotRef={resource.info} className="gb-venue-sheet-cover" />
+      : <SelectedVenueCover slotRef={resource.compact} className="gb-venue-preview-cover" />;
+    return <VenueGallery
+      venue={galleryVenue}
+      size={expanded ? "sheet" : "compact"}
+      showCredit={expanded}
+      coverSlot={slot}
+      coverFallback={resource.fallback}
+      coverReady={resource.ready}
+      onCoverRetry={resource.retry}
+    />;
+  }
+  const renderer = mount(() => <Surfaces />);
+  const image = imageAt();
+  expect(resource.ready).toBe(false);
+  expect(resource.fallback).toBe(false);
+  // Cold pending compact: no sheet credit chrome.
+  expect(text(renderer.tree[0]!)).not.toContain("Фото: Клуб");
+  image.dispatchEvent(new Event("load"));
+  renderer.render();
+  expect(resource.ready).toBe(true);
+  // Compact→sheet remount of already-decoded main: same physical img, ready credit.
+  expanded = true;
+  renderer.render();
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
+  expect(resource.ready).toBe(true);
+  expect(text(renderer.tree[0]!)).toContain("Фото: Клуб");
+  expect(text(renderer.tree[0]!)).not.toContain("Загружаем фотографию…");
+  expect(renderer.nodes().some((node) => node.className === "gb-venue-gallery__photo-credit")).toBe(true);
+  // Failure clears ready credit; reserved error caption; retry returns to pending then ready.
+  image.dispatchEvent(new Event("error"));
+  renderer.render();
+  expect(resource.fallback).toBe(true);
+  expect(resource.ready).toBe(false);
+  expect(text(renderer.tree[0]!)).toContain("Фотография временно недоступна");
+  expect(text(renderer.tree[0]!)).not.toContain("Фото: Клуб");
+  resource.retry();
+  renderer.render();
+  expect(resource.fallback).toBe(false);
+  expect(resource.ready).toBe(false);
+  expect(text(renderer.tree[0]!)).toContain("Загружаем фотографию…");
+  expect(text(renderer.tree[0]!)).not.toContain("Фото: Клуб");
+  image.dispatchEvent(new Event("load"));
+  renderer.render();
+  expect(resource.ready).toBe(true);
+  expect(text(renderer.tree[0]!)).toContain("Фото: Клуб");
+  expect(text(renderer.tree[0]!)).not.toContain("Загружаем фотографию…");
+  // Zero/compact spacing: compact size must not reserve photo-credit row.
+  expanded = false;
+  renderer.render();
+  expect(renderer.nodes().some((node) => node.className === "gb-venue-gallery__photo-credit")).toBe(false);
 });
