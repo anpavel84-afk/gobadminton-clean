@@ -34,11 +34,13 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   let name = initialName;
   /** True when the current intended raster failed (uploaded photo or default illustration). */
   let failed = false;
-  /** Current raster src successfully decoded. */
+  /** Current raster src successfully decoded (decode() when available; else load fallback). */
   let loaded = false;
   /** Terminal decode failure for the current intended src. */
   let decodeError = false;
   let generation = 0;
+  /** Generation for which HTMLImageElement.decode() is already in flight (dedupe). */
+  let decodeEpoch = -1;
   let detach: (() => void) | undefined;
   let releaseVersion = 0;
   /** Bumps on failed/ready/retry so useSyncExternalStore re-renders; not a readiness signal itself. */
@@ -109,12 +111,34 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   const applyLoad = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
     if (decodeError || failed) return;
-    const already = loaded && !failed;
-    loaded = true;
-    failed = false;
-    paint();
-    // Notify subscribers so morph credit can appear only after real decode (not on slot loan).
-    if (!already) emit();
+    const expectedSrc = current.getAttribute("src");
+    if (!expectedSrc || expectedSrc !== intendedSrc()) return;
+
+    const finishReady = () => {
+      // Obsolete async completion after generation bump, release, new venue, or src change must not ready/poison.
+      if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
+      if (decodeError || failed) return;
+      if (current.getAttribute("src") !== expectedSrc || expectedSrc !== intendedSrc()) return;
+      const already = loaded && !failed;
+      loaded = true;
+      failed = false;
+      paint();
+      // Notify subscribers so morph credit can appear only after real decode (not on slot loan).
+      if (!already) emit();
+    };
+
+    // Strict decoded readiness when the browser exposes decode(); load/complete alone are insufficient with decoding="async".
+    if (typeof current.decode === "function") {
+      if (decodeEpoch === version) return;
+      decodeEpoch = version;
+      current.decode().then(finishReady, () => {
+        applyError(current, version);
+      });
+      return;
+    }
+
+    // No decode API (FakeDOM / older engines): honest load/complete fallback — not a strict decode guarantee.
+    finishReady();
   };
   const applyError = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;

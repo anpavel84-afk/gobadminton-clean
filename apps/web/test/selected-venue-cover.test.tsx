@@ -82,6 +82,8 @@ class Node extends EventTarget {
   draggable = true;
   srcWrites: string[] = []; source = ""; captured = new Set<number>();
   complete = false; naturalWidth = 0;
+  /** Optional HTMLImageElement.decode; absent → production load fallback. New tests install a controlled promise. */
+  decode?: () => Promise<void>;
   constructor(readonly tag = "div") { super(); }
   set src(value: string) {
     expect(this.loading).toBe("eager");
@@ -676,4 +678,160 @@ it("morph coverReady: real main load and cached remount show credit; failure+ret
   expanded = false;
   renderer.render();
   expect(renderer.nodes().some((node) => node.className === "gb-venue-gallery__photo-credit")).toBe(false);
+});
+
+it("decode API: pending until decode resolves; load alone does not mark ready", async () => {
+  const galleryVenue = {
+    id: "a0000000-0000-4000-8000-000000000001",
+    name: "Зал",
+    cover: { uploadedUrl: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+    profile: {
+      courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+      gallery: {
+        coverage: "ordered" as const,
+        items: [
+          { id: "a0000000-0000-4000-8000-000000000011", url: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+        ],
+      },
+    },
+  };
+  venue = { id: galleryVenue.id, name: galleryVenue.name, cover: { uploadedUrl: uploaded } };
+  function Morph() {
+    resource = useSelectedVenueCover(city, venue);
+    return <VenueGallery
+      venue={galleryVenue}
+      size="sheet"
+      coverSlot={<SelectedVenueCover slotRef={resource.compact} className="gb-venue-sheet-cover" />}
+      coverFallback={resource.fallback}
+      coverReady={resource.ready}
+    />;
+  }
+  const morph = mount(() => <Morph />);
+  const image = imageAt();
+  let resolveDecode!: () => void;
+  let decodeCalls = 0;
+  image.decode = () => {
+    decodeCalls += 1;
+    return new Promise<void>((resolve) => { resolveDecode = resolve; });
+  };
+  expect(resource.ready).toBe(false);
+  image.dispatchEvent(new Event("load"));
+  // Duplicate load must not start a second concurrent decode for the same generation.
+  image.dispatchEvent(new Event("load"));
+  expect(decodeCalls).toBe(1);
+  expect(resource.ready).toBe(false);
+  expectPendingSkeleton(image.parentNode, "uploaded");
+  expect(text(morph.tree[0]!)).toContain("Загружаем фотографию…");
+  expect(text(morph.tree[0]!)).not.toContain("Фото: Клуб");
+  resolveDecode();
+  await Promise.resolve();
+  morph.render();
+  expect(resource.ready).toBe(true);
+  expectReadyNeutral(image.parentNode, "uploaded");
+  expect(text(morph.tree[0]!)).toContain("Фото: Клуб");
+  expect(image.srcWrites).toEqual([uploaded]);
+});
+
+it("decode API: rejection is honest failure; retry then succeeds; src not duplicated", async () => {
+  const renderer = mount(() => <Selected />);
+  const image = imageAt();
+  image.decode = () => Promise.reject(new Error("decode failed"));
+  image.dispatchEvent(new Event("load"));
+  await Promise.resolve();
+  renderer.render();
+  expect(resource.fallback).toBe(true);
+  expect(resource.ready).toBe(false);
+  expectFailedOrEmpty(image.parentNode, "error");
+  expect(image.srcWrites).toEqual([uploaded]);
+
+  let resolveDecode!: () => void;
+  image.decode = () => new Promise<void>((resolve) => { resolveDecode = resolve; });
+  resource.retry();
+  renderer.render();
+  expect(resource.fallback).toBe(false);
+  expect(resource.ready).toBe(false);
+  expect(image.srcWrites).toEqual([uploaded, uploaded]);
+  expectPendingSkeleton(image.parentNode, "uploaded");
+  image.dispatchEvent(new Event("load"));
+  expect(resource.ready).toBe(false);
+  resolveDecode();
+  await Promise.resolve();
+  renderer.render();
+  expect(resource.ready).toBe(true);
+  expectReadyNeutral(image.parentNode, "uploaded");
+  expect(image.srcWrites).toEqual([uploaded, uploaded]);
+});
+
+it("decode API: obsolete completion after new venue / release is ignored", async () => {
+  const renderer = mount(() => <Selected />);
+  const old = imageAt();
+  let resolveOld!: () => void;
+  old.decode = () => new Promise<void>((resolve) => { resolveOld = resolve; });
+  old.dispatchEvent(new Event("load"));
+  expect(resource.ready).toBe(false);
+
+  venue = { ...venue, id: "other", cover: { uploadedUrl: uploadedB } };
+  renderer.render();
+  const next = imageAt(1);
+  let resolveNext!: () => void;
+  next.decode = () => new Promise<void>((resolve) => { resolveNext = resolve; });
+  // Stale decode from the previous resource/generation must not ready or poison the new one.
+  resolveOld();
+  await Promise.resolve();
+  expect(resource.ready).toBe(false);
+  expectPendingSkeleton(next.parentNode, "uploaded");
+  expect(next.srcWrites).toEqual([uploadedB]);
+
+  next.dispatchEvent(new Event("load"));
+  expect(resource.ready).toBe(false);
+  resolveNext();
+  await Promise.resolve();
+  expect(resource.ready).toBe(true);
+  expectReadyNeutral(next.parentNode, "uploaded");
+
+  // Release: late decode must not resurrect readiness on a detached resource.
+  let resolveReleased!: () => void;
+  next.decode = () => new Promise<void>((resolve) => { resolveReleased = resolve; });
+  resource.retry();
+  next.dispatchEvent(new Event("load"));
+  const compact = next.parentNode;
+  resource.compact(null);
+  resource.info(null);
+  await Promise.resolve();
+  expect(next.parentNode).toBeNull();
+  expect(next.src).toBe("");
+  resolveReleased();
+  await Promise.resolve();
+  expect(next.parentNode).toBeNull();
+  expect(compact?.dataset.cover).not.toBe("uploaded");
+  renderer.unmount();
+});
+
+it("decode API: cached complete path is truthful; compact→sheet keeps one node", async () => {
+  const renderer = mount(() => <Selected />);
+  const image = imageAt();
+  let decodeCalls = 0;
+  image.decode = () => {
+    decodeCalls += 1;
+    return Promise.resolve();
+  };
+  image.complete = true;
+  image.naturalWidth = 128;
+  image.dispatchEvent(new Event("load"));
+  await Promise.resolve();
+  expect(resource.ready).toBe(true);
+  expectReadyNeutral(image.parentNode, "uploaded");
+  expect(decodeCalls).toBe(1);
+  expect(image.srcWrites).toEqual([uploaded]);
+
+  info = true;
+  renderer.render();
+  await Promise.resolve();
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(resource.ready).toBe(true);
+  expectReadyNeutral(image.parentNode, "uploaded");
+  // Remount listen may re-confirm decode for the new generation; never rewrite src / second img.
+  expect(image.srcWrites).toEqual([uploaded]);
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
 });
