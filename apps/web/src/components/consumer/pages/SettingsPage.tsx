@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import { getMe, logout } from "../../../lib/api-client";
 import type { Me } from "../../../lib/consumer-types";
 import { privateViews } from "../../../lib/private-view";
+import {
+  ensureSessionPresenceListeners,
+  markSessionPresence,
+} from "../../../lib/session-presence";
 import { GameContactPreference } from "../players/GameContactPreference";
 import { PushSettings } from "../push/PushSettings";
 import { ConsumerShell } from "../ConsumerShell";
@@ -72,12 +76,21 @@ export function SettingsPage() {
     if (request !== epoch.current || controller.signal.aborted) return;
     logoutRequest.current = null;
     setBusy(false);
-    window.dispatchEvent(new Event("gb-session-changed"));
-    if (!result.ok && result.status !== 401) {
-      setNotice("Не удалось подтвердить выход. Проверьте соединение и попробуйте ещё раз.");
+    // Only authoritative finished logout proves the cookie is gone. Pin absent before consumers
+    // react — typed absence keeps the presence helper from reopening unknown guest /me+/push probes.
+    const authoritativeAbsent = result.ok || result.status === 401;
+    if (authoritativeAbsent) {
+      ensureSessionPresenceListeners();
+      markSessionPresence("absent");
+      window.dispatchEvent(
+        new CustomEvent("gb-session-changed", { detail: { sessionPresence: "absent" as const } }),
+      );
+      router.push("/games");
       return;
     }
-    router.push("/games");
+    // 500/403/network: do not claim absence/logout success; generic refresh for uncertainty.
+    window.dispatchEvent(new Event("gb-session-changed"));
+    setNotice("Не удалось подтвердить выход. Проверьте соединение и попробуйте ещё раз.");
   }
 
   return <ConsumerShell active="profile" title="Настройки" mode="local">
