@@ -103,12 +103,13 @@ describe("production venue popup presentation with real React", () => {
     expect(html).toContain('src="/discovery/badminton-courts.jpg"');
     expect(html).toContain(`src="${avatar}"`);
   });
-  it("uses neutral empty for selected create-game venue without uploaded cover", () => {
+  it("uses default illustration for selected create-game venue without uploaded cover", () => {
     const html = ssr(<CreateGamePresentation {...presentation()} />);
-    expect(html).toContain("Фотографии площадки пока нет");
-    expect(html).toContain('data-state="empty"');
-    expect(html).not.toContain("/discovery/venue-illustrations/");
-    expect(html).not.toContain('data-fallback="illustration"');
+    expect(html).toContain("/discovery/venue-illustrations/");
+    expect(html).toContain('data-pending="illustration"');
+    expect(html).toContain('data-fallback="illustration"');
+    expect(html).not.toContain("Фотографии площадки пока нет");
+    expect(html).not.toContain('data-state="empty"');
     expect(html).not.toContain("Бадминтонный корт");
   });
   it.each([null, undefined, [], {}, { phone: "123\n4567", website: "javascript:alert(1)", messengers: [{ kind: "telegram", url: "https://t.me/a/.." }] }])("renders the honest empty contact state (%j)", value => {

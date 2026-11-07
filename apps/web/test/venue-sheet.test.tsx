@@ -123,10 +123,12 @@ afterEach(() => { hooks.cleanups.forEach(fn => fn?.()); vi.useRealTimers(); vi.u
 it("renders cover, single modal, focuses close and restores overflow on cleanup", () => {
   const html = renderToStaticMarkup(render());
   expect(html.match(/role="dialog"/g)).toHaveLength(1); expect(html).toContain('aria-modal="true"'); expect(html).toContain('aria-labelledby="venue-title"');
-  // No published media → VenueGallery neutral empty (not legacy VenueCover data-cover=default).
-  expect(html).toContain("Фотографии площадки пока нет");
-  expect(html).toContain('data-state="empty"');
-  expect(html).not.toContain('data-cover="default"');
+  // No published media → VenueGallery default illustration (data-count=0, pending until decode).
+  expect(html).toContain("/discovery/venue-illustrations/");
+  expect(html).toContain('data-pending="illustration"');
+  expect(html).toContain('data-count="0"');
+  expect(html).not.toContain("Фотографии площадки пока нет");
+  expect(html).not.toContain('data-state="empty"');
   expect(focus).toHaveBeenCalled(); expect(document.body.style.overflow).toBe("hidden");
   const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" }); window.dispatchEvent(event);
   expect(collapse).toHaveBeenCalledOnce(); expect(event.defaultPrevented).toBe(true);

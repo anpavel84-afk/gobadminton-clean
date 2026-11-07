@@ -1,7 +1,11 @@
 "use client";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { CSSProperties, RefCallback } from "react";
-import { venueMediaSkeletonStyle } from "../../../lib/venue-illustration";
+import {
+  VENUE_ILLUSTRATION_ALT,
+  venueIllustrationUrl,
+  venueMediaSkeletonStyle,
+} from "../../../lib/venue-illustration";
 import { venueCoverUrl } from "./VenueCover";
 
 const court = "/discovery/badminton-courts.jpg";
@@ -28,8 +32,8 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   const slots: Record<Position, HTMLSpanElement | null> = { compact: null, info: null };
   let image: HTMLImageElement | null = null;
   let name = initialName;
-  /** True when the uploaded URL failed or there is no published media URL. */
-  let failed = !url;
+  /** True when the current intended raster failed (uploaded photo or default illustration). */
+  let failed = false;
   /** Current raster src successfully decoded. */
   let loaded = false;
   /** Terminal decode failure for the current intended src. */
@@ -39,7 +43,12 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   let releaseVersion = 0;
   const listeners = new Set<() => void>();
   const useCourtFallback = !venueId;
-  const intendedSrc = () => (url ? url : (useCourtFallback ? court : null));
+  const intendedSrc = () => {
+    if (url) return url;
+    if (venueId) return venueIllustrationUrl(venueId);
+    if (useCourtFallback) return court;
+    return null;
+  };
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
@@ -49,53 +58,61 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
   const paint = () => {
     const src = intendedSrc();
     const uploadedPending = Boolean(url && !failed && !loaded);
+    const illustrationPending = Boolean(!url && venueId && !failed && !loaded && !decodeError);
     const courtPending = Boolean(!url && useCourtFallback && !failed && !loaded && !decodeError);
     const uploadedReady = Boolean(url && !failed && loaded);
+    const illustrationReady = Boolean(!url && venueId && loaded && !decodeError && !failed);
     const courtReady = Boolean(!url && useCourtFallback && loaded && !decodeError);
-    const noMedia = Boolean(!url && venueId);
-    const showSkeleton = uploadedPending || courtPending;
+    const showSkeleton = uploadedPending || illustrationPending || courtPending;
     const underlay = showSkeleton ? venueMediaSkeletonStyle() : undefined;
     for (const slot of Object.values(slots)) {
       if (!slot) continue;
       slot.dataset.cover = uploadedReady ? "uploaded" : "default";
       if (uploadedReady) delete slot.dataset.fallback;
-      else if (courtReady || courtPending) slot.dataset.fallback = "court";
+      else if (illustrationReady || illustrationPending || (failed && !url && venueId)) {
+        slot.dataset.fallback = "illustration";
+      } else if (courtReady || courtPending) slot.dataset.fallback = "court";
       else delete slot.dataset.fallback;
       if (uploadedPending) slot.dataset.pending = "uploaded";
+      else if (illustrationPending) slot.dataset.pending = "illustration";
       else if (courtPending) slot.dataset.pending = "fallback";
       else delete slot.dataset.pending;
       if (failed && url) slot.dataset.state = "error";
-      else if (noMedia) slot.dataset.state = "empty";
+      else if (failed && !url && venueId) slot.dataset.state = "error";
+      else if (decodeError && useCourtFallback) slot.dataset.state = "error";
       else delete slot.dataset.state;
       if (underlay) Object.assign(slot.style, underlay);
-      else if (uploadedReady || courtReady) Object.assign(slot.style, NEUTRAL_READY_STYLE);
+      else if (uploadedReady || illustrationReady || courtReady) Object.assign(slot.style, NEUTRAL_READY_STYLE);
       else Object.assign(slot.style, EMPTY_STYLE);
     }
     if (image) {
-      if (!src || (failed && url) || noMedia) {
+      if (!src || failed) {
         image.style.opacity = "0";
-        image.removeAttribute("alt");
+        if (failed) image.removeAttribute("alt");
       } else {
-        image.alt = url ? `Обложка: ${name}` : "Бадминтонный корт";
+        image.alt = url
+          ? `Обложка: ${name}`
+          : (venueId ? VENUE_ILLUSTRATION_ALT : "Бадминтонный корт");
         image.style.opacity = showSkeleton ? "0" : "";
       }
     }
   };
   const applyLoad = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
-    if (decodeError || (failed && url)) return;
+    if (decodeError || failed) return;
     loaded = true;
     failed = false;
     paint();
   };
   const applyError = (current: HTMLImageElement, version: number) => {
     if (image !== current || version !== generation || (!slots.compact && !slots.info)) return;
-    if (!url && useCourtFallback) {
-      if (decodeError) return;
+    if (!url) {
+      if (decodeError && failed) return;
       decodeError = true;
       loaded = false;
       failed = true;
       paint();
+      emit();
       return;
     }
     // Uploaded photo failure — terminal failed/retry, never equipment or silent illustration fill.
@@ -146,7 +163,6 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
     else if (image.getAttribute("src")) applyError(image, generation);
   };
   const retry = () => {
-    if (!url) return;
     failed = false;
     loaded = false;
     decodeError = false;
@@ -187,11 +203,11 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
       image.draggable = false;
       image.addEventListener("dragstart", (event) => { event.preventDefault(); });
       paint();
-      // Sticky uploaded failure waits for explicit retry(); no-media has no src.
-      if (!(failed && url) && intendedSrc()) source();
+      // Sticky uploaded/illustration failure waits for explicit retry().
+      if (!failed && intendedSrc()) source();
       else paint();
     }
-    if (image && !detach && intendedSrc() && !(failed && url)) listen(true);
+    if (image && !detach && intendedSrc() && !failed) listen(true);
     paint();
     if (image && image.parentNode !== target) target.appendChild(image);
   };
@@ -212,6 +228,7 @@ function createCover(url: string | null, initialName: string, venueId?: string) 
 export function useSelectedVenueCover(cityId: string, venue?: { id: string; name: string; cover?: { uploadedUrl: string | null } }) {
   const url = venueCoverUrl(venue?.cover?.uploadedUrl);
   const id = venue?.id;
+  // Identity includes venue + intended uploaded source; default illustration follows venue id.
   const resource = useMemo(() => createCover(url, venue?.name ?? "", id), [cityId, id, url]);
   useEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
   useEffect(() => { resource.retain(); return () => resource.release(); }, [resource]);

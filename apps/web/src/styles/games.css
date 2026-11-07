@@ -662,10 +662,18 @@
 .gb-venue-cover--thumb { width:80px; height:45px; flex:0 0 80px; border-radius:8px; }
 .gb-venue-cover--thumb .gb-venue-cover__status,
 .gb-venue-picker-option .gb-venue-cover .gb-venue-cover__status,
-.gb-venue-picker-option > .gb-venue-gallery-wrap .gb-venue-cover__status {
+.gb-venue-picker-option > .gb-venue-gallery-wrap .gb-venue-cover__status,
+.gb-venue-cover.gb-venue-preview-cover .gb-venue-cover__status {
   font-size: 8px;
   padding: 2px;
   gap: 2px;
+}
+/* Compact thumbs: skeleton only while illustration loads — copy column owns the label. */
+.gb-venue-cover--thumb .gb-venue-cover__status[data-state="loading"],
+.gb-venue-picker-option .gb-venue-cover .gb-venue-cover__status[data-state="loading"],
+.gb-venue-picker-option > .gb-venue-gallery-wrap .gb-venue-cover__status[data-state="loading"],
+.gb-venue-cover.gb-venue-preview-cover .gb-venue-cover__status[data-state="loading"] {
+  display: none;
 }
 .gb-venue-cover--thumb .gb-venue-cover__retry,
 .gb-venue-picker-option .gb-venue-cover__retry { display: none; }
@@ -676,9 +684,9 @@
   background-size: 48% 6px, 32% 6px;
   background-position: center calc(50% - 6px), center calc(50% + 6px);
 }
-/* Informational badge for ready published illustration assets only (not pending/error). */
+/* Informational badge for ready default/published illustration (not pending/error). */
+.gb-venue-cover__badge,
 .gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after {
-  content: "Иллюстрация";
   pointer-events: none;
   position: absolute;
   z-index: 1;
@@ -696,23 +704,39 @@
   text-overflow: ellipsis;
   box-sizing: border-box;
 }
+.gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after {
+  content: "Иллюстрация";
+}
+/* React VenueCover paints a real badge; morph SelectedVenueCover keeps ::after only. */
+.gb-venue-cover:has(> .gb-venue-cover__badge)::after {
+  content: none;
+  display: none;
+}
+/* Compact 64px thumbs: hide on-image badge; row copy shows .gb-venue-illustration-label. */
+.gb-venue-cover.gb-venue-preview-cover > .gb-venue-cover__badge,
+.gb-venue-cover--thumb > .gb-venue-cover__badge,
+.gb-venue-picker-option .gb-venue-cover > .gb-venue-cover__badge,
 .gb-venue-cover.gb-venue-preview-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after,
 .gb-venue-picker-option .gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after,
-.gb-venue-picker-option > .gb-venue-gallery-wrap .gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after {
-  left: 3px;
-  bottom: 3px;
-  max-width: calc(100% - 6px);
-  padding: 1px 4px;
-  font-size: 8px;
-  border-radius: 6px;
-}
+.gb-venue-picker-option > .gb-venue-gallery-wrap .gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after,
 .gb-venue-cover--thumb[data-fallback="illustration"]:not([data-pending]):not([data-state])::after {
-  left: 4px;
-  bottom: 4px;
-  max-width: calc(100% - 8px);
-  padding: 2px 5px;
-  font-size: 9px;
-  border-radius: 6px;
+  display: none;
+}
+.gb-venue-illustration-label {
+  display: none;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gb-paper, #f5f6f2);
+  color: var(--gb-ink-soft, #5c6560);
+  font: 600 11px/1.2 var(--gb-font);
+  letter-spacing: 0.01em;
+}
+.gb-venue-preview-button:has(.gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])) .gb-venue-illustration-label,
+.gb-venue-picker-option:has(.gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])) .gb-venue-illustration-label {
+  display: inline-flex;
 }
 .gb-venue-media { width:100%; max-height:300px; aspect-ratio:auto; height:300px; overflow:hidden; border-radius:24px; }
 .gb-venue-page { max-width:none; width:100%; margin:0; padding:0; }
