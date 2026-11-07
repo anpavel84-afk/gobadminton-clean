@@ -8,6 +8,8 @@ export type ProblemBody = {
   code: string;
   requestId: string;
   detail?: string;
+  /** Bounded field identifiers → neutral correction hints. Never tokens/scores. */
+  fields?: Record<string, string>;
 };
 
 export class ProblemHttpException extends HttpException {
@@ -26,6 +28,7 @@ export function problem(
   title: string,
   detail?: string,
   retryAfterSeconds?: number,
+  fields?: Record<string, string>,
 ): ProblemHttpException {
   const body: ProblemBody = {
     type: "about:blank",
@@ -34,6 +37,7 @@ export function problem(
     code,
     requestId: randomUUID(),
     ...(detail ? { detail } : {}),
+    ...(fields && Object.keys(fields).length > 0 ? { fields } : {}),
   };
   return new ProblemHttpException(body, status, retryAfterSeconds);
 }

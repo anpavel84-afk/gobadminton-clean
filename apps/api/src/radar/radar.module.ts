@@ -5,6 +5,7 @@ import { SafetyModule } from "../safety/safety.module";
 import { GeographicRadarService } from "./geographic.service";
 import { GeographicRadarController } from "./geographic.controller";
 import { ProfilesModule } from "../profiles/profiles.module";
+import { ModerationModule } from "../moderation/moderation.module";
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { MeRadarController } from "./me-radar.controller";
@@ -16,7 +17,7 @@ import { RadarProofService } from "./radar-proof.service";
 import { RadarService } from "./radar.service";
 
 @Module({
-  imports: [AuthModule, ProfilesModule, SafetyModule],
+  imports: [AuthModule, ProfilesModule, SafetyModule, ModerationModule],
   controllers: [UnifiedPlayersController, MeRadarController, RadarPreviewController, GeographicRadarController],
   providers: [
     UnifiedPlayersService,

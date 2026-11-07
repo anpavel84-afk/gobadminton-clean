@@ -16,6 +16,7 @@ import {
   GAME_CHAT_PAGE_MAX,
   GAME_CHAT_TEXT_MAX_CHARS,
 } from "./constants";
+import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { GameChatFeatureService } from "./game-chat-feature";
 
 export type GameChatDto = {
@@ -596,14 +597,14 @@ export class GameChatService {
       const items: GameChatMemberDto[] = [
         ...managers.rows.map((row) => ({
           publicPlayerId: row.public_player_id,
-          displayName: row.display_name,
+          displayName: safePublicDisplayName(row.display_name),
           role: "manager" as const,
         })),
         ...participants.rows
           .filter((row) => !managerIds.has(row.user_id))
           .map((row) => ({
             publicPlayerId: row.public_player_id,
-            displayName: row.display_name,
+            displayName: safePublicDisplayName(row.display_name),
             role: "member" as const,
           })),
       ];

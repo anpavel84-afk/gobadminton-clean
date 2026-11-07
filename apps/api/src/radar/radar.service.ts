@@ -25,6 +25,11 @@ import { ActorFenceService } from "../common/actor-fence.service";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import type { AppEnv } from "../config/env";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 import { RADAR_CONSENT_POLICY_VERSION } from "../profiles/constants";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 import {
@@ -193,6 +198,7 @@ export class RadarService {
     private readonly budgets: RadarBudgetService,
     private readonly proofs: RadarProofService,
     private readonly profiles: ProfilesService,
+    private readonly moderation: ContentModerationService,
   ) {}
 
   async getStatus(userId: string, sessionId: string): Promise<RadarStatusDto> {
@@ -270,13 +276,13 @@ export class RadarService {
       consent: input.consent ?? null,
       location: privacyLocationStamp(normalized.location),
     });
-    return this.mutations.runIdempotent<RadarActivationDto>({
+    const receipt = {
       actorId: userId,
       sessionId,
       operation,
       key: idempotencyKey,
       requestHash,
-      authorizeReplay: async (client, body) => {
+      authorizeReplay: async (client: PoolClient, body: RadarActivationDto) => {
         const row = await this.lockPresence(client, userId);
         if (
           !row ||
@@ -290,11 +296,20 @@ export class RadarService {
           );
         }
       },
+    };
+    const replay = await this.mutations.findReplay<RadarActivationDto>(receipt);
+    if (replay) return replay;
+    const textApproval = await this.preflightExistingProfileText(userId);
+    return this.mutations.runIdempotent<RadarActivationDto>({
+      ...receipt,
       execute: async (client) => {
         const now = new Date();
         const refined = await client.query("SELECT 1 FROM radar_presences WHERE user_id=$1 AND policy_version=$2",[userId,UNIFIED_POLICY]);
         if(refined.rows[0]) throw conflict("RADAR_SESSION_OWNED","Используйте v2 takeover или Stop");
         await this.assertRadarEligible(client, userId, normalized.consentPolicyVersion, input.consent);
+        if (textApproval) {
+          await this.bindExistingProfileText(client, userId, textApproval);
+        }
         if (exposureMode === "synthetic_demo" && !this.env.SOCIAL_RADAR_GEOGRAPHIC_ENABLED) {
           const scope = await this.demo.requireDemoCityScope(client, userId);
           this.demo.assertFixMatchesCity(scope.cityId, normalized.location);
@@ -1202,6 +1217,73 @@ export class RadarService {
     }
   }
 
+  /** MOD-V2-A: preflight stored name/bio before Radar exposure. Trusted Игрок alone skips provider. */
+  private async preflightExistingProfileText(
+    userId: string,
+  ): Promise<TextBatchApproval | null> {
+    const row = (
+      await this.pool.query<{ display_name: string; bio: string | null; version: number }>(
+        `SELECT display_name, bio, version FROM player_social_profiles WHERE user_id = $1`,
+        [userId],
+      )
+    ).rows[0];
+    if (!row) return null;
+    const fields: TextFieldCandidate[] = [];
+    const name = row.display_name.trim();
+    if (name.length > 0 && name !== "Игрок") {
+      fields.push({
+        surface: "profile_display_name",
+        text: row.display_name,
+        fieldId: "displayName",
+      });
+    }
+    if (row.bio && row.bio.length > 0) {
+      fields.push({
+        surface: "profile_bio",
+        text: row.bio,
+        fieldId: "bio",
+      });
+    }
+    if (fields.length === 0) return null;
+    return this.moderation.approveTexts(userId, fields);
+  }
+
+  private async bindExistingProfileText(
+    client: PoolClient,
+    userId: string,
+    approval: TextBatchApproval,
+  ): Promise<void> {
+    const row = (
+      await client.query<{ display_name: string; bio: string | null; version: number }>(
+        `SELECT display_name, bio, version FROM player_social_profiles WHERE user_id = $1 FOR UPDATE`,
+        [userId],
+      )
+    ).rows[0];
+    if (!row) return;
+    const committed: Array<{ surface: "profile_display_name" | "profile_bio"; text: string }> = [];
+    for (const field of approval.fields) {
+      if (field.surface === "profile_display_name") {
+        if (field.text !== row.display_name) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        committed.push({ surface: "profile_display_name", text: row.display_name });
+      } else if (field.surface === "profile_bio") {
+        if (!row.bio || field.text !== row.bio) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        committed.push({ surface: "profile_bio", text: row.bio });
+      }
+    }
+    if (committed.length === 0) return;
+    await this.moderation.bindTexts(client, approval, committed, {
+      entityKind: "player_social_profile",
+      entityId: userId,
+      resourceVersion: row.version,
+      actorUserId: userId,
+      bindingKind: "publication",
+    });
+  }
+
   private async bootstrapMinimalRadarProfile(
     client: PoolClient,
     userId: string,
@@ -1212,8 +1294,7 @@ export class RadarService {
     display_name: string;
     directory_visible: boolean;
   } | undefined> {
-    const name = await this.accountDisplayName(client, userId);
-    if (!name) return undefined;
+    // MOD-V2-A: trusted Игрок only — never copy account/provider names.
     const inserted = await client.query<{
       radar_consented: boolean;
       radar_consent_policy_version: string | null;
@@ -1224,10 +1305,12 @@ export class RadarService {
       `INSERT INTO player_social_profiles (
          user_id, display_name, contact_policy, directory_visible,
          radar_consented, social_eligible, version
-       ) VALUES ($1, $2, 'closed', false, false, true, 1)
+       )
+       SELECT id, 'Игрок', 'closed', false, false, true, 1
+       FROM users WHERE id = $1 AND status = 'active'
        RETURNING radar_consented, radar_consent_policy_version, social_eligible,
                  display_name, directory_visible`,
-      [userId, name],
+      [userId],
     );
     return inserted.rows[0];
   }
@@ -1236,16 +1319,15 @@ export class RadarService {
     client: PoolClient,
     userId: string,
   ): Promise<string | undefined> {
-    const name = await this.accountDisplayName(client, userId);
-    if (!name) return undefined;
+    // MOD-V2-A: trusted Игрок only for empty-name repair.
     const updated = await client.query<{ display_name: string }>(
       `UPDATE player_social_profiles
-       SET display_name = $2, version = version + 1, updated_at = now()
+       SET display_name = 'Игрок', version = version + 1, updated_at = now()
        WHERE user_id = $1
          AND btrim(display_name) = ''
          AND directory_visible = false
        RETURNING display_name`,
-      [userId, name],
+      [userId],
     );
     return updated.rows[0]?.display_name;
   }

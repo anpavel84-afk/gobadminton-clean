@@ -12,6 +12,11 @@ import {
   problem,
 } from "../auth/problem";
 import { MutationRunner } from "../common/mutation-runner.service";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 import { isDemoUuid, DEMO_SPB_CITY_ID } from "../database/demo-ids";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { RadarFeatureService } from "./radar-feature";
@@ -92,6 +97,7 @@ export class UnifiedPublishingService {
     private readonly mutations: MutationRunner,
     private readonly feature: RadarFeatureService,
     private readonly budgets: RadarBudgetService,
+    private readonly moderation: ContentModerationService,
   ) {}
   async status(userId: string, sessionId: string) {
     const r = await this.pool.query<Presence>(
@@ -185,6 +191,10 @@ export class UnifiedPublishingService {
     const requestHash = createHmac("sha256", this.env.AUTH_PEPPER)
       .update(operation + JSON.stringify(input))
       .digest("hex");
+    let textApproval: TextBatchApproval | null = null;
+    if (kind === "start" || kind === "takeover") {
+      textApproval = await this.preflightExistingProfileText(userId);
+    }
     const result = await this.mutations.runIdempotent<
       ReturnType<typeof activationReceipt>
     >({
@@ -208,6 +218,9 @@ export class UnifiedPublishingService {
       },
       execute: async (client) => {
         await this.requireProfile(client, userId);
+        if (textApproval) {
+          await this.bindExistingProfileText(client, userId, textApproval);
+        }
         if (kind === "start" || kind === "takeover") {
           // First v2 ON/takeover always carries exact explicit evidence, never upgrades v1.
           const registry = await client.query(
@@ -450,9 +463,71 @@ export class UnifiedPublishingService {
       mode,
     );
   }
+  private async preflightExistingProfileText(
+    userId: string,
+  ): Promise<TextBatchApproval | null> {
+    const row = (
+      await this.pool.query<{ display_name: string; bio: string | null }>(
+        `SELECT display_name, bio FROM player_social_profiles WHERE user_id = $1`,
+        [userId],
+      )
+    ).rows[0];
+    if (!row) return null;
+    const fields: TextFieldCandidate[] = [];
+    const name = row.display_name.trim();
+    if (name.length > 0 && name !== "Игрок") {
+      fields.push({
+        surface: "profile_display_name",
+        text: row.display_name,
+        fieldId: "displayName",
+      });
+    }
+    if (row.bio && row.bio.length > 0) {
+      fields.push({ surface: "profile_bio", text: row.bio, fieldId: "bio" });
+    }
+    if (fields.length === 0) return null;
+    return this.moderation.approveTexts(userId, fields);
+  }
+
+  private async bindExistingProfileText(
+    client: PoolClient,
+    userId: string,
+    approval: TextBatchApproval,
+  ): Promise<void> {
+    const row = (
+      await client.query<{ display_name: string; bio: string | null; version: number }>(
+        `SELECT display_name, bio, version FROM player_social_profiles WHERE user_id = $1 FOR UPDATE`,
+        [userId],
+      )
+    ).rows[0];
+    if (!row) return;
+    const committed: Array<{ surface: "profile_display_name" | "profile_bio"; text: string }> = [];
+    for (const field of approval.fields) {
+      if (field.surface === "profile_display_name") {
+        if (field.text !== row.display_name) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        committed.push({ surface: "profile_display_name", text: row.display_name });
+      } else if (field.surface === "profile_bio") {
+        if (!row.bio || field.text !== row.bio) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        committed.push({ surface: "profile_bio", text: row.bio });
+      }
+    }
+    if (committed.length === 0) return;
+    await this.moderation.bindTexts(client, approval, committed, {
+      entityKind: "player_social_profile",
+      entityId: userId,
+      resourceVersion: row.version,
+      actorUserId: userId,
+      bindingKind: "publication",
+    });
+  }
+
   private async requireProfile(client: PoolClient, userId: string) {
     await client.query(
-      "INSERT INTO player_social_profiles(user_id,display_name) SELECT id,left(coalesce(nullif(btrim(display_name),''),'Игрок'),80) FROM users WHERE id=$1 ON CONFLICT(user_id) DO NOTHING",
+      "INSERT INTO player_social_profiles(user_id,display_name) SELECT id,'Игрок' FROM users WHERE id=$1 ON CONFLICT(user_id) DO NOTHING",
       [userId],
     );
     const p = await client.query<{

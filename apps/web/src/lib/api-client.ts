@@ -62,6 +62,27 @@ export type ApiResult<T> =
   | { ok: true; data: T; status: number }
   | { ok: false; error: string; status: number; problem?: Problem; retryAfterSeconds?: number };
 
+/** Neutral UX copy for public-text moderation outcomes; preserves unsent form via caller. */
+export function publicTextModerationNotice(
+  result: Extract<ApiResult<unknown>, { ok: false }>,
+): string | null {
+  const code = result.problem?.code;
+  if (code === "PUBLIC_TEXT_CONTENT_REJECTED") {
+    const fields = result.problem?.fields;
+    if (fields && Object.keys(fields).length > 0) {
+      return Object.values(fields).join(". ");
+    }
+    return result.problem?.title ?? "Измените текст и попробуйте снова";
+  }
+  if (code === "MODERATION_TEMPORARILY_UNAVAILABLE" || code === "MODERATION_POLICY_MISMATCH") {
+    return "Проверка текста временно недоступна. Попробуйте позже — прежний текст не изменён.";
+  }
+  if (code === "MODERATION_RATE_LIMITED") {
+    return "Слишком много проверок текста. Попробуйте позже.";
+  }
+  return null;
+}
+
 function browserBase(): string {
   if (typeof window !== "undefined") {
     // Same-origin /v1 via Moscow nginx (prod) or Next rewrite (local).

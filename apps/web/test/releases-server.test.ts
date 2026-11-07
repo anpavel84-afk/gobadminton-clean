@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps fifty-two confirmed seed deployments including accepted alpha.1–alpha.43 and dedupes identical live rows", () => {
+  it("keeps fifty-three confirmed seed deployments including accepted alpha.1–alpha.44 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(52);
+    expect(seedCount).toBe(53);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",

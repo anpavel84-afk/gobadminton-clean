@@ -16,10 +16,45 @@ export type ModerationImage = {
   /** Reserve every actual provider attempt, including a retry, before any network I/O. */
   beforeAttempt: () => Promise<void>;
 };
+
+/** Pinned omni-moderation text category booleans (13). Independent from image six. */
+export const TEXT_CATEGORIES = [
+  "harassment",
+  "harassment/threatening",
+  "hate",
+  "hate/threatening",
+  "illicit",
+  "illicit/violent",
+  "self-harm",
+  "self-harm/intent",
+  "self-harm/instructions",
+  "sexual",
+  "sexual/minors",
+  "violence",
+  "violence/graphic",
+] as const;
+export type TextCategory = (typeof TEXT_CATEGORIES)[number];
+export type TextItemDecision = {
+  flagged: boolean;
+  categories: Record<TextCategory, boolean>;
+};
+export type TextBatchDecision = {
+  model: string;
+  responseId: string | null;
+  results: TextItemDecision[];
+};
+export type ModerationTextBatch = {
+  texts: readonly string[];
+  signal: AbortSignal;
+  /** Reserve text budget before every actual provider attempt (including retry). */
+  beforeAttempt: () => Promise<void>;
+};
+
 export interface ContentModerationProvider {
   readonly key: "openai" | "fake";
   readonly model: string;
   moderateImage(input: ModerationImage): Promise<ImageDecision>;
+  moderateTexts(input: ModerationTextBatch): Promise<TextBatchDecision>;
 }
 export class ModerationProviderError extends Error {
   constructor(readonly kind: "unavailable" | "schema", readonly retryAfterSeconds?: number) {
@@ -29,4 +64,17 @@ export class ModerationProviderError extends Error {
 export function safeImageDecision(): ImageDecision {
   return {model: MODERATION_MODEL, responseId: null, flagged: false,
     categories: Object.fromEntries(IMAGE_CATEGORIES.map(key => [key, false])) as Record<ImageCategory, boolean>};
+}
+export function safeTextItemDecision(): TextItemDecision {
+  return {
+    flagged: false,
+    categories: Object.fromEntries(TEXT_CATEGORIES.map(key => [key, false])) as Record<TextCategory, boolean>,
+  };
+}
+export function safeTextBatchDecision(count: number): TextBatchDecision {
+  return {
+    model: MODERATION_MODEL,
+    responseId: null,
+    results: Array.from({ length: count }, () => safeTextItemDecision()),
+  };
 }

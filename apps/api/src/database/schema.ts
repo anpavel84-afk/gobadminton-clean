@@ -411,6 +411,20 @@ export const contentModerationRateBudgets = pgTable("content_moderation_rate_bud
   updatedAt: timestamp("updated_at", {withTimezone: true}).notNull().defaultNow(),
 }, (table) => [primaryKey({columns: [table.userId, table.bucket]})]);
 
+/** Typed publication/candidate binding; approval row holds exact hash/policy. No raw body. */
+export const contentModerationBindings = pgTable("content_moderation_bindings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  entityKind: text("entity_kind").notNull(),
+  entityId: uuid("entity_id").notNull(),
+  surfaceKey: text("surface_key").notNull(),
+  resourceVersion: integer("resource_version").notNull(),
+  approvalId: uuid("approval_id").notNull(),
+  actorUserId: uuid("actor_user_id").notNull(),
+  actorPrincipalId: uuid("actor_principal_id"),
+  bindingKind: text("binding_kind").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Non-geographic immutable disclosure/evidence projections; SQL migration owns FKs/indexes.
 export const radarDisclosures = pgTable("radar_disclosures", {
   policyVersion:text("policy_version").notNull(), disclosureId:text("disclosure_id").primaryKey(),

@@ -1006,7 +1006,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Create/update/reactivate own self-declared TrainerProfile Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores."
       }
     },
     "/me/trainer-profile/deactivate": {
@@ -1147,7 +1148,8 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Compatibility-only: create personal organizer + membership (not required for Create Game) Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores."
       }
     },
     "/organizers/mine": {
@@ -1510,7 +1512,7 @@
       },
       "post": {
         "operationId": "createGame",
-        "description": "New execution requires startsAt strictly after server time; 422 GAME_START_NOT_FUTURE if elapsed. Completed authorized idempotent receipts remain replayable after start. applicationDeadlineAt may equal startsAt.",
+        "description": "New execution requires startsAt strictly after server time; 422 GAME_START_NOT_FUTURE if elapsed. Completed authorized idempotent receipts remain replayable after start. applicationDeadlineAt may equal startsAt. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores.",
         "tags": [
           "Games"
         ],
@@ -1602,7 +1604,7 @@
       ],
       "post": {
         "operationId": "publishGame",
-        "description": "New execution requires startsAt strictly after server time; 422 GAME_START_NOT_FUTURE if elapsed. Completed authorized idempotent receipts remain replayable after start. applicationDeadlineAt may equal startsAt.",
+        "description": "New execution requires startsAt strictly after server time; 422 GAME_START_NOT_FUTURE if elapsed. Completed authorized idempotent receipts remain replayable after start. applicationDeadlineAt may equal startsAt. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores.",
         "tags": [
           "Games"
         ],
@@ -2332,7 +2334,7 @@
           "Profiles"
         ],
         "summary": "Create/update own SocialProfile fields and Radar consent storage",
-        "description": "A supplied non-null cityId must exist in the catalog before profile creation or update; unknown or malformed city returns 422 CITY_ID_INVALID with no committed profile or idempotency effects. Omitted/null city remains supported. Successful replay and version-conflict semantics are unchanged.",
+        "description": "A supplied non-null cityId must exist in the catalog before profile creation or update; unknown or malformed city returns 422 CITY_ID_INVALID with no committed profile or idempotency effects. Omitted/null city remains supported. Successful replay and version-conflict semantics are unchanged. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores.",
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -2471,7 +2473,8 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Opt-in/out of directory visibility (does not clear Radar consent) Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields hints); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Prior accepted text retained. No provider categories/scores."
       }
     },
     "/me/looking-for-game": {
@@ -23820,7 +23823,11 @@
               "IDEMPOTENCY_KEY_REUSED",
               "ACCOUNT_INACTIVE",
               "APPLICATION_CLOSED",
-              "RESOURCE_NOT_FOUND"
+              "RESOURCE_NOT_FOUND",
+              "PUBLIC_TEXT_CONTENT_REJECTED",
+              "PUBLIC_IMAGE_CONTENT_REJECTED",
+              "MODERATION_TEMPORARILY_UNAVAILABLE",
+              "MODERATION_RATE_LIMITED"
             ]
           },
           "requestId": {
@@ -23828,6 +23835,14 @@
           },
           "detail": {
             "type": "string"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Bounded field identifiers to neutral Russian correction hints for PUBLIC_TEXT_CONTENT_REJECTED. Never matched tokens, categories or scores."
           }
         },
         "example": {

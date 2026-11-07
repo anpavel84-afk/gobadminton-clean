@@ -25,6 +25,11 @@ import {
   gameChangeEventKey,
   snapshotGameCancelRecipients,
 } from "../push/game-push-intents";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 import { TrainersService } from "../trainers/trainers.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { privateContactWebsite } from "../lib/original-http-authority";
@@ -258,6 +263,7 @@ export class GamesService {
     private readonly trainers: TrainersService,
     private readonly gamePreferences: GamePreferencesService,
     private readonly roleReputation: RoleReputationService,
+    private readonly moderation: ContentModerationService,
     @Inject(forwardRef(() => ParticipationsService))
     private readonly participations: ParticipationsService,
     @Inject(forwardRef(() => InvitationsService))
@@ -284,17 +290,52 @@ export class GamesService {
     const normalized = normalizeCreateGame(input);
     const operation = "games.create";
     const requestHash = this.idempotency.requestHash(normalized);
-    return this.mutations.runIdempotent<GameDto>({
+    const receipt = {
       actorId: userId,
       sessionId,
       operation,
       key: idempotencyKey,
       requestHash,
-      authorizeReplay: async (client, body) => {
+      authorizeReplay: async (client: PoolClient, body: GameDto) => {
         // Cached create success references a Game; require current management.
         const locked = await this.lockGame(client, body.id);
         await this.gameAuthority.assertCanManage(client, locked.id, userId);
       },
+    };
+    const replay = await this.mutations.findReplay<GameDto>(receipt);
+    if (replay) return replay;
+
+    // Capture trainer snapshot outside catalog locks for text preflight.
+    let preTrainerId: string | null = null;
+    let preTrainerName: string | null = null;
+    if (normalized.activityKind === "trainer_led") {
+      const trainer = await this.pool.query<{ id: string; display_name: string }>(
+        `SELECT id, display_name FROM trainer_profiles
+         WHERE user_id = $1 AND status = 'active'`,
+        [userId],
+      );
+      if (!trainer.rows[0]) {
+        throw unprocessable(
+          "TRAINER_PROFILE_REQUIRED",
+          "Нужен активный профиль тренера",
+        );
+      }
+      preTrainerId = trainer.rows[0].id;
+      preTrainerName = trainer.rows[0].display_name;
+    }
+
+    const textFields = this.gameTextCandidates({
+      title: normalized.title,
+      hostDisplayName: normalized.hostDisplayName,
+      hostPublicContact: normalized.hostPublicContact,
+      trainingDescription: normalized.trainingDescription,
+      settlementTerms: normalized.settlement.terms,
+      trainerDisplayNameSnapshot: preTrainerName,
+    });
+    const textApproval = await this.moderation.approveTexts(userId, textFields);
+
+    return this.mutations.runIdempotent<GameDto>({
+      ...receipt,
       execute: async (client) => {
         assertFutureStart(new Date(normalized.startsAt));
         let trainerProfileId: string | null = null;
@@ -306,6 +347,12 @@ export class GamesService {
           );
           trainerProfileId = profile.id;
           trainerDisplayNameSnapshot = profile.displayName;
+          if (
+            trainerProfileId !== preTrainerId ||
+            trainerDisplayNameSnapshot !== preTrainerName
+          ) {
+            throw conflict("VERSION_CONFLICT", "Профиль тренера изменился");
+          }
         }
 
         await client.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
@@ -384,6 +431,19 @@ export class GamesService {
           await this.gamePreferences.saveInTransaction(client, userId,
             normalized.savePublicContactDefault.expectedVersion, normalized.hostPublicContact);
         }
+        await this.bindGameTexts(client, textApproval, {
+          title: normalized.title,
+          hostDisplayName: normalized.hostDisplayName,
+          hostPublicContact: normalized.hostPublicContact,
+          trainingDescription: normalized.trainingDescription,
+          settlementTerms: settlementFields.terms,
+          trainerDisplayNameSnapshot,
+        }, {
+          gameId,
+          resourceVersion: 1,
+          actorUserId: userId,
+          bindingKind: "candidate",
+        });
         const body = await this.loadGameDto(client, gameId);
         return { statusCode: 201, body };
       },
@@ -405,16 +465,74 @@ export class GamesService {
     }
     const operation = "games.publish";
     const requestHash = this.idempotency.requestHash({ gameId, expectedVersion });
-    return this.mutations.runIdempotent<GameDto>({
+    const receipt = {
       actorId: userId,
       sessionId,
       operation,
       key: idempotencyKey,
       requestHash,
-      authorizeReplay: async (client) => {
+      authorizeReplay: async (client: PoolClient) => {
         const locked = await this.lockGame(client, gameId);
         await this.gameAuthority.assertCanManage(client, locked.id, userId);
       },
+    };
+    const replay = await this.mutations.findReplay<GameDto>(receipt);
+    if (replay) return replay;
+
+    // Preflight stored snapshot outside publish transaction (includes unlisted).
+    const snap = await this.pool.query<{
+      version: number;
+      status: string;
+      title: string;
+      host_display_name: string;
+      host_public_contact: string;
+      training_description: string | null;
+      settlement_terms: string;
+      trainer_display_name_snapshot: string | null;
+      activity_kind: string | null;
+      trainer_profile_id: string | null;
+    }>(
+      `SELECT g.version, g.status, g.title, g.host_display_name, g.host_public_contact,
+              g.training_description, g.settlement_terms, g.trainer_display_name_snapshot,
+              g.activity_kind, g.trainer_profile_id
+       FROM games g
+       WHERE g.id = $1`,
+      [gameId],
+    );
+    const pre = snap.rows[0];
+    if (!pre) throw notFound("GAME_NOT_FOUND", "Игра не найдена");
+    if (pre.version !== expectedVersion) {
+      throw conflict("VERSION_CONFLICT", "Версия игры устарела");
+    }
+    if (pre.status !== "draft") {
+      throw conflict("GAME_NOT_DRAFT", "Публиковать можно только draft");
+    }
+    {
+      const preClient = await this.pool.connect();
+      try {
+        await preClient.query("BEGIN");
+        await this.gameAuthority.assertCanManage(preClient, gameId, userId);
+        await preClient.query("COMMIT");
+      } catch (error) {
+        await preClient.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        preClient.release();
+      }
+    }
+
+    const textFields = this.gameTextCandidates({
+      title: pre.title,
+      hostDisplayName: pre.host_display_name,
+      hostPublicContact: pre.host_public_contact,
+      trainingDescription: pre.training_description,
+      settlementTerms: pre.settlement_terms,
+      trainerDisplayNameSnapshot: pre.trainer_display_name_snapshot,
+    });
+    const textApproval = await this.moderation.approveTexts(userId, textFields);
+
+    return this.mutations.runIdempotent<GameDto>({
+      ...receipt,
       execute: async (client) => {
         const locked = await this.lockGame(client, gameId);
         await this.gameAuthority.assertCanManage(client, locked.id, userId);
@@ -446,6 +564,18 @@ export class GamesService {
           );
         }
 
+        // Fence exact stored public text against preflight evidence.
+        if (
+          locked.title !== pre.title ||
+          locked.organizer_display_name !== pre.host_display_name ||
+          locked.organizer_public_contact !== pre.host_public_contact ||
+          locked.training_description !== pre.training_description ||
+          locked.settlement_terms !== pre.settlement_terms ||
+          locked.trainer_display_name_snapshot !== pre.trainer_display_name_snapshot
+        ) {
+          throw conflict("VERSION_CONFLICT", "Версия игры устарела");
+        }
+
         assertFutureStart(locked.starts_at);
         const updated = await client.query<{ id: string; version: number; venue_id: string }>(
           `UPDATE games
@@ -458,6 +588,19 @@ export class GamesService {
           [gameId],
         );
         const published = updated.rows[0]!;
+        await this.bindGameTexts(client, textApproval, {
+          title: locked.title,
+          hostDisplayName: locked.organizer_display_name,
+          hostPublicContact: locked.organizer_public_contact,
+          trainingDescription: locked.training_description,
+          settlementTerms: locked.settlement_terms,
+          trainerDisplayNameSnapshot: locked.trainer_display_name_snapshot,
+        }, {
+          gameId: published.id,
+          resourceVersion: published.version,
+          actorUserId: userId,
+          bindingKind: "publication",
+        });
         await ensurePlayedAtVenueAttribution(client, {
           gameId: published.id,
           sourceVenueId: published.venue_id,
@@ -510,6 +653,103 @@ export class GamesService {
         });
         return { statusCode: 200, body };
       },
+    });
+  }
+
+  private gameTextCandidates(input: {
+    title: string;
+    hostDisplayName: string;
+    hostPublicContact: string;
+    trainingDescription: string | null;
+    settlementTerms: string;
+    trainerDisplayNameSnapshot: string | null;
+  }): TextFieldCandidate[] {
+    const fields: TextFieldCandidate[] = [
+      { surface: "game_title", text: input.title, fieldId: "title" },
+      {
+        surface: "game_host_display_name",
+        text: input.hostDisplayName,
+        fieldId: "hostDisplayName",
+      },
+      {
+        surface: "game_host_public_contact",
+        text: input.hostPublicContact,
+        fieldId: "hostPublicContact",
+      },
+      {
+        surface: "game_settlement_terms",
+        text: input.settlementTerms,
+        fieldId: "settlement.terms",
+      },
+    ];
+    if (input.trainingDescription) {
+      fields.push({
+        surface: "game_training_description",
+        text: input.trainingDescription,
+        fieldId: "trainingDescription",
+      });
+    }
+    if (input.trainerDisplayNameSnapshot) {
+      fields.push({
+        surface: "game_trainer_display_name_snapshot",
+        text: input.trainerDisplayNameSnapshot,
+        fieldId: "trainer.displayName",
+      });
+    }
+    return fields;
+  }
+
+  private async bindGameTexts(
+    client: PoolClient,
+    approval: TextBatchApproval,
+    values: {
+      title: string;
+      hostDisplayName: string;
+      hostPublicContact: string;
+      trainingDescription: string | null;
+      settlementTerms: string;
+      trainerDisplayNameSnapshot: string | null;
+    },
+    meta: {
+      gameId: string;
+      resourceVersion: number;
+      actorUserId: string;
+      bindingKind: "candidate" | "publication";
+    },
+  ): Promise<void> {
+    const committed: Array<{
+      surface:
+        | "game_title"
+        | "game_host_display_name"
+        | "game_host_public_contact"
+        | "game_training_description"
+        | "game_settlement_terms"
+        | "game_trainer_display_name_snapshot";
+      text: string;
+    }> = [
+      { surface: "game_title", text: values.title },
+      { surface: "game_host_display_name", text: values.hostDisplayName },
+      { surface: "game_host_public_contact", text: values.hostPublicContact },
+      { surface: "game_settlement_terms", text: values.settlementTerms },
+    ];
+    if (values.trainingDescription) {
+      committed.push({
+        surface: "game_training_description",
+        text: values.trainingDescription,
+      });
+    }
+    if (values.trainerDisplayNameSnapshot) {
+      committed.push({
+        surface: "game_trainer_display_name_snapshot",
+        text: values.trainerDisplayNameSnapshot,
+      });
+    }
+    await this.moderation.bindTexts(client, approval, committed, {
+      entityKind: "game",
+      entityId: meta.gameId,
+      resourceVersion: meta.resourceVersion,
+      actorUserId: meta.actorUserId,
+      bindingKind: meta.bindingKind,
     });
   }
 

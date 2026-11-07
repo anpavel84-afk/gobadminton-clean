@@ -18,6 +18,8 @@ export type Problem = {
   code: string;
   requestId: string;
   detail?: string;
+  /** Neutral field correction hints for PUBLIC_TEXT_CONTENT_REJECTED. */
+  fields?: Record<string, string>;
 };
 
 export type Me = {
