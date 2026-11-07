@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.38 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.38");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.39 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.39");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,20 +64,22 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/карт|площадк|опрос|прост|каталог/i);
-    expect(currentProse).toMatch(/приёмк/i);
+    expect(currentProse).toMatch(/push|приглаш|заявк|отмен|итог/i);
+    expect(currentProse).toMatch(/времен|мест|отложен|не реализов/i);
+    expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
     );
     expect(currentProse).not.toMatch(/PROD остаётся alpha\.2|не развёрнут|не установлен|DEV remains/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/приёмк|НЕ выполн/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/приёмк|НЕ выполн|iPhone|GoBad/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/кнопк|закрыт|маркер|площадк|карт/i);
+    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/приглаш|заявк|отмен|итог/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(5);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
@@ -230,10 +232,21 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(41);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(42);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(46);
+    ).toBe(47);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.38"
+      && row.source_sha === "298917fe49ccc57e8891e68a04e6408e4aa3a0d1"
+      && row.deployments[0]?.release_id === "r42338172236-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-07T04:27:56Z"
+      && row.deployments[0]?.api_digest === "sha256:0cdadb25832079fa29299750f4621354479579820abb9e4778e790870442d6b7"
+      && row.deployments[0]?.web_digest === "sha256:fadd2e445240ea6643a6bdb9c793a3c1a9a1210428ddb330e04d8d7f1a77e0ff"
+      && row.api_contract_version === "0.36.0"
+      && row.title === "Карта площадок без лишнего опроса каталога в простое"
+      && row.fixes.length === 1,
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.37"
       && row.source_sha === "859bb6a635ad704ad0971f8a7ad748b02eda0017"

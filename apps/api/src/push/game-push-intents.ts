@@ -154,17 +154,15 @@ export function participationEventKey(
 }
 
 export function gameChangeEventKey(
-  kind: "game_cancelled" | "game_time_changed" | "game_venue_changed",
+  kind: "game_cancelled",
   gameId: string,
   gameVersion: number,
 ): string {
-  const prefix =
-    kind === "game_cancelled"
-      ? "gc"
-      : kind === "game_time_changed"
-        ? "gt"
-        : "gv";
-  return `${prefix}:${gameId}:v${gameVersion}`;
+  if (kind !== "game_cancelled") {
+    // Time/venue keys were removed with Owner 6704777482 DEFERRED scope.
+    throw new Error("DEFERRED_NOT_IMPLEMENTED");
+  }
+  return `gc:${gameId}:v${gameVersion}`;
 }
 
 export function reminderEventKey(
@@ -197,7 +195,7 @@ export function eventKeyMatchesParticipation(
 
 export function eventKeyMatchesGameChange(
   eventKey: string,
-  kind: "game_cancelled" | "game_time_changed" | "game_venue_changed",
+  kind: "game_cancelled",
   gameId: string,
   gameVersion: number,
 ): boolean {

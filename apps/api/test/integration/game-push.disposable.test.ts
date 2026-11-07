@@ -13,7 +13,6 @@ import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
-import { GamesService } from "../../src/games/games.service";
 import { InvitationsModule } from "../../src/invitations/invitations.module";
 import { JobEnqueueService } from "../../src/jobs/job-enqueue.service";
 import { ParticipationsModule } from "../../src/participations/participations.module";
@@ -75,7 +74,6 @@ run("#496 game event push — disposable", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
-  let games: GamesService;
   let jobs: JobEnqueueService;
   let organizer: Actor;
   let player: Actor;
@@ -164,7 +162,6 @@ run("#496 game event push — disposable", () => {
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     sessions = app.get(SessionService);
-    games = app.get(GamesService);
     jobs = app.get(JobEnqueueService);
     organizer = await mintActor("Organizer");
     player = await mintActor("Player");
@@ -461,7 +458,7 @@ run("#496 game event push — disposable", () => {
     expect(rejectOutcome.delivered).toBeGreaterThanOrEqual(1);
   });
 
-  it("cancel snapshot qualifies recipients; time/venue change only on actual value delta; no-op skips", async () => {
+  it("cancel snapshot qualifies recipients; schema rejects deferred time/venue kinds", async () => {
     sent.length = 0;
     const game = await seedPublishedGame(organizer);
     await seedPush(player, `chg-${randomUUID().slice(0, 8)}`, { gameChanges: true });
@@ -472,37 +469,19 @@ run("#496 game event push — disposable", () => {
       [randomUUID(), game.id, player.userId],
     );
 
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const noop = await games.applyPublishedScheduleChangeInTransaction(client, {
-        gameId: game.id,
-        expectedVersion: game.version,
-        actorUserId: organizer.userId,
-      });
-      expect(noop.changedTime).toBe(false);
-      expect(noop.changedVenue).toBe(false);
-      const nextStart = new Date(game.starts_at.getTime() + 3_600_000);
-      const nextEnd = new Date(game.ends_at.getTime() + 3_600_000);
-      const changed = await games.applyPublishedScheduleChangeInTransaction(client, {
-        gameId: game.id,
-        expectedVersion: game.version,
-        actorUserId: organizer.userId,
-        startsAt: nextStart,
-        endsAt: nextEnd,
-      });
-      expect(changed.changedTime).toBe(true);
-      await client.query("COMMIT");
-    } finally {
-      client.release();
-    }
-
-    const intents = await pool.query(
-      `SELECT kind FROM web_push_delivery_intents
-       WHERE game_id = $1 AND kind = 'game_time_changed'`,
-      [game.id],
-    );
-    expect(intents.rows.length).toBeGreaterThanOrEqual(1);
+    // Owner 6704777482: time/venue kinds DEFERRED — CHECK must refuse insert.
+    await expect(
+      pool.query(
+        `INSERT INTO web_push_delivery_intents (
+           message_id, conversation_id, recipient_user_id, author_user_id,
+           kind, game_id, event_key, game_version, status
+         ) VALUES (
+           NULL, NULL, $1, NULL,
+           'game_time_changed', $2, $3, $4, 'pending'
+         )`,
+        [player.userId, game.id, `gt:${game.id}:v${game.version}`, game.version],
+      ),
+    ).rejects.toThrow();
 
     // Cancel snapshot + delivery after cancelled.
     const cancelClient = await pool.connect();

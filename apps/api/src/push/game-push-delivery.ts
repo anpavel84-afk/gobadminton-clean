@@ -306,35 +306,6 @@ export async function gameEventEligible(
       );
       return Boolean(snap.rows[0]);
     }
-    case "game_time_changed":
-    case "game_venue_changed": {
-      if (g.status !== "published") return false;
-      if (g.version < payload.gameVersion) return false;
-      if (
-        !eventKeyMatchesGameChange(
-          payload.eventKey,
-          payload.kind,
-          payload.gameId,
-          payload.gameVersion,
-        )
-      ) {
-        return false;
-      }
-      const part = await exec.query<{ n: number }>(
-        `SELECT 1 AS n FROM participations
-         WHERE game_id = $1 AND user_id = $2
-           AND status IN ('pending', 'confirmed')
-         LIMIT 1`,
-        [payload.gameId, payload.recipientUserId],
-      );
-      const manager = await exec.query<{ n: number }>(
-        `SELECT 1 AS n FROM game_managers
-         WHERE game_id = $1 AND user_id = $2 AND status = 'active'
-         LIMIT 1`,
-        [payload.gameId, payload.recipientUserId],
-      );
-      return Boolean(part.rows[0] || manager.rows[0]);
-    }
     case "outcome_reminder": {
       if (!payload.reminderId || payload.reminderOrdinal == null) return false;
       if (

@@ -14,9 +14,15 @@ export type GamePushKind =
   | "participation_rejected"
   | "new_pending_application"
   | "game_cancelled"
-  | "game_time_changed"
-  | "game_venue_changed"
   | "outcome_reminder";
+
+/** Owner 6704777482: time/venue edit + push DEFERRED NOT_IMPLEMENTED — reject at runtime. */
+export const DEFERRED_GAME_PUSH_KINDS = [
+  "game_time_changed",
+  "game_venue_changed",
+] as const;
+
+export type DeferredGamePushKind = (typeof DEFERRED_GAME_PUSH_KINDS)[number];
 
 export const GAME_PUSH_KINDS: readonly GamePushKind[] = [
   "game_invitation",
@@ -24,8 +30,6 @@ export const GAME_PUSH_KINDS: readonly GamePushKind[] = [
   "participation_rejected",
   "new_pending_application",
   "game_cancelled",
-  "game_time_changed",
-  "game_venue_changed",
   "outcome_reminder",
 ] as const;
 
@@ -35,8 +39,6 @@ export const GAME_PUSH_COPY: Record<GamePushKind, string> = {
   participation_rejected: "Заявка отклонена",
   new_pending_application: "Новая заявка на игру",
   game_cancelled: "Игра отменена",
-  game_time_changed: "Изменено время игры",
-  game_venue_changed: "Изменено место игры",
   outcome_reminder: "Напоминание об итоге игры",
 };
 
@@ -58,12 +60,19 @@ export function eventGroupForKind(kind: GamePushKind): GamePushEventGroup {
     case "new_pending_application":
       return "newApplications";
     case "game_cancelled":
-    case "game_time_changed":
-    case "game_venue_changed":
       return "gameChanges";
     case "outcome_reminder":
       return "outcomeReminders";
   }
+}
+
+export function isDeferredGamePushKind(
+  value: unknown,
+): value is DeferredGamePushKind {
+  return (
+    typeof value === "string" &&
+    (DEFERRED_GAME_PUSH_KINDS as readonly string[]).includes(value)
+  );
 }
 
 /** Neutral click targets — no title/address/PII; ordinary auth routes only. */

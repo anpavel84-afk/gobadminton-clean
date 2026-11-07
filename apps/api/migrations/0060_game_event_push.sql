@@ -45,8 +45,6 @@ ALTER TABLE web_push_delivery_intents
       'participation_rejected',
       'new_pending_application',
       'game_cancelled',
-      'game_time_changed',
-      'game_venue_changed',
       'outcome_reminder'
     )
   ),
@@ -108,7 +106,7 @@ ALTER TABLE web_push_delivery_intents
       AND reminder_ordinal IS NULL
     )
     OR (
-      kind IN ('game_cancelled', 'game_time_changed', 'game_venue_changed')
+      kind = 'game_cancelled'
       AND message_id IS NULL
       AND conversation_id IS NULL
       AND author_user_id IS NULL
@@ -168,8 +166,6 @@ ALTER TABLE web_push_delivery_claims
       'participation_rejected',
       'new_pending_application',
       'game_cancelled',
-      'game_time_changed',
-      'game_venue_changed',
       'outcome_reminder'
     )
   ),

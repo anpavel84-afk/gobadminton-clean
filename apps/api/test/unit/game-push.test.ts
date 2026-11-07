@@ -5,12 +5,15 @@ import {
   isWebPushMessageDeliverPayload,
 } from "../../src/jobs/payloads";
 import {
+  DEFERRED_GAME_PUSH_KINDS,
   GAME_PUSH_COPY,
   GAME_PUSH_DISPOSABLE_DB_NAME,
   GAME_PUSH_KINDS,
   assertSafeGamePushPath,
   eventGroupForKind,
+  isDeferredGamePushKind,
   isGamePushDisposableDatabaseUrl,
+  isGamePushKind,
   pathForGamePush,
 } from "../../src/push/game-push.policy";
 import {
@@ -25,15 +28,13 @@ import {
 } from "../../src/push/game-push-intents";
 
 describe("#496 game event push policy", () => {
-  it("covers seven business kinds with neutral Russian copy and safe paths", () => {
-    expect(GAME_PUSH_KINDS).toHaveLength(8);
+  it("covers six released business kinds with neutral Russian copy and safe paths", () => {
+    expect(GAME_PUSH_KINDS).toHaveLength(6);
     expect(GAME_PUSH_COPY.game_invitation).toBe("Приглашение на игру");
     expect(GAME_PUSH_COPY.participation_confirmed).toBe("Заявка подтверждена");
     expect(GAME_PUSH_COPY.participation_rejected).toBe("Заявка отклонена");
     expect(GAME_PUSH_COPY.new_pending_application).toBe("Новая заявка на игру");
     expect(GAME_PUSH_COPY.game_cancelled).toBe("Игра отменена");
-    expect(GAME_PUSH_COPY.game_time_changed).toBe("Изменено время игры");
-    expect(GAME_PUSH_COPY.game_venue_changed).toBe("Изменено место игры");
     expect(GAME_PUSH_COPY.outcome_reminder).toBe("Напоминание об итоге игры");
     for (const text of Object.values(GAME_PUSH_COPY)) {
       expect(text).not.toMatch(/@|\+7|http|улиц|reason|email/i);
@@ -47,8 +48,37 @@ describe("#496 game event push policy", () => {
     expect(eventGroupForKind("game_invitation")).toBe("invites");
     expect(eventGroupForKind("participation_rejected")).toBe("applicationDecisions");
     expect(eventGroupForKind("new_pending_application")).toBe("newApplications");
-    expect(eventGroupForKind("game_time_changed")).toBe("gameChanges");
+    expect(eventGroupForKind("game_cancelled")).toBe("gameChanges");
     expect(eventGroupForKind("outcome_reminder")).toBe("outcomeReminders");
+  });
+
+  it("rejects deferred time/venue kinds at policy and payload gates", () => {
+    expect(DEFERRED_GAME_PUSH_KINDS).toEqual([
+      "game_time_changed",
+      "game_venue_changed",
+    ]);
+    expect(isDeferredGamePushKind("game_time_changed")).toBe(true);
+    expect(isDeferredGamePushKind("game_venue_changed")).toBe(true);
+    expect(isGamePushKind("game_time_changed")).toBe(false);
+    expect(isGamePushKind("game_venue_changed")).toBe(false);
+    expect(isGamePushKind("game_cancelled")).toBe(true);
+    const deferredPayload = {
+      kind: "game_time_changed",
+      eventKey: "gt:g:v6",
+      recipientUserId: "r",
+      actorUserId: "a",
+      gameId: "g",
+      gameVersion: 6,
+    };
+    expect(isWebPushGameEventDeliverPayload(deferredPayload)).toBe(false);
+    expect(isWebPushDeliverPayload(deferredPayload)).toBe(false);
+    expect(
+      isWebPushGameEventDeliverPayload({
+        ...deferredPayload,
+        kind: "game_venue_changed",
+        eventKey: "gv:g:v7",
+      }),
+    ).toBe(false);
   });
 
   it("builds stable event keys and accepts game payloads separately from messages", () => {
@@ -57,8 +87,6 @@ describe("#496 game event push policy", () => {
     expect(participationEventKey("participation_rejected", "p", 3)).toBe("pr:p:v3");
     expect(participationEventKey("new_pending_application", "p", 4)).toBe("app:p:v4");
     expect(gameChangeEventKey("game_cancelled", "g", 5)).toBe("gc:g:v5");
-    expect(gameChangeEventKey("game_time_changed", "g", 6)).toBe("gt:g:v6");
-    expect(gameChangeEventKey("game_venue_changed", "g", 7)).toBe("gv:g:v7");
     expect(reminderEventKey("r", 2)).toBe("or:r:o2");
 
     const gamePayload = {
@@ -106,9 +134,6 @@ describe("#496 game event push policy", () => {
     expect(eventKeyMatchesGameChange("gc:g:v4", "game_cancelled", "g", 5)).toBe(
       false,
     );
-    expect(
-      eventKeyMatchesGameChange("gt:g:v6", "game_time_changed", "g", 6),
-    ).toBe(true);
     expect(eventKeyMatchesReminder("or:r:o2", "r", 2)).toBe(true);
     expect(eventKeyMatchesReminder("or:r:o1", "r", 2)).toBe(false);
   });

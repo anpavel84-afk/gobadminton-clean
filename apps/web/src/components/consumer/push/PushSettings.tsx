@@ -21,7 +21,7 @@ const EVENT_TOGGLES: Array<{ key: keyof PushEventPreferences; label: string }> =
   { key: "invites", label: "Приглашения на игру" },
   { key: "applicationDecisions", label: "Решения по заявкам" },
   { key: "newApplications", label: "Новые заявки" },
-  { key: "gameChanges", label: "Отмена и изменения игры" },
+  { key: "gameChanges", label: "Отмена игры" },
   { key: "outcomeReminders", label: "Напоминания об итоге" },
 ];
 import { Button } from "../Button";

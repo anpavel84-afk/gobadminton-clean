@@ -48,8 +48,6 @@ export type WebPushGameEventDeliverPayload = {
     | "participation_rejected"
     | "new_pending_application"
     | "game_cancelled"
-    | "game_time_changed"
-    | "game_venue_changed"
     | "outcome_reminder";
   eventKey: string;
   recipientUserId: string;
@@ -105,9 +103,13 @@ const GAME_EVENT_KINDS = new Set([
   "participation_rejected",
   "new_pending_application",
   "game_cancelled",
+  "outcome_reminder",
+]);
+
+/** Owner-deferred kinds — never accepted as deliverable payloads. */
+const DEFERRED_GAME_EVENT_KINDS = new Set([
   "game_time_changed",
   "game_venue_changed",
-  "outcome_reminder",
 ]);
 
 export function isWebPushGameEventDeliverPayload(
@@ -115,6 +117,7 @@ export function isWebPushGameEventDeliverPayload(
 ): value is WebPushGameEventDeliverPayload {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
+  if (DEFERRED_GAME_EVENT_KINDS.has(String(v.kind))) return false;
   if (!GAME_EVENT_KINDS.has(String(v.kind))) return false;
   if (typeof v.eventKey !== "string" || typeof v.recipientUserId !== "string") {
     return false;
