@@ -81,6 +81,95 @@ function mainIndex(items: GalleryItem[], cover?: Venue["cover"]): number {
 
 type Drag = { id: number; x: number; y: number; axis: "pending" | "x" | "y" };
 
+/**
+ * Zero-item gallery chrome: mirror the single shared cover/illustration resource into
+ * aria-busy without mounting a second image. Pending until decode, cleared on ready/error.
+ */
+function ZeroGalleryChrome({
+  className,
+  size,
+  coverFallback = false,
+  resourceKey,
+  frame,
+  emptyCredit,
+}: {
+  className: string;
+  size: "sheet" | "compact" | "page";
+  coverFallback?: boolean;
+  /** Venue + intended source identity; reset pending when it changes or after retry. */
+  resourceKey: string;
+  frame: ReactNode;
+  emptyCredit: ReactNode;
+}) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [phase, setPhase] = useState<"pending" | "ready" | "error">(() =>
+    (coverFallback ? "error" : "pending"),
+  );
+  useEffect(() => {
+    setPhase(coverFallback ? "error" : "pending");
+  }, [resourceKey, coverFallback]);
+  useEffect(() => {
+    if (coverFallback) return;
+    const root = frameRef.current;
+    if (!root) return;
+    const syncFromSharedCover = () => {
+      const cover = root.querySelector<HTMLElement>(".gb-venue-cover");
+      if (!cover) return;
+      if (cover.dataset.state === "error") {
+        setPhase("error");
+        return;
+      }
+      if (cover.dataset.pending != null) {
+        setPhase("pending");
+        return;
+      }
+      // Ready illustration/photo: fallback set and pending cleared, or uploaded cover painted.
+      if (cover.dataset.fallback === "illustration" || cover.dataset.cover === "uploaded") {
+        setPhase("ready");
+      }
+    };
+    syncFromSharedCover();
+    const observer = new MutationObserver(syncFromSharedCover);
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-pending", "data-state", "data-fallback", "data-cover"],
+    });
+    return () => observer.disconnect();
+  }, [resourceKey, coverFallback]);
+  // Parent coverFallback wins immediately (shared morph error) without waiting for effects.
+  const failed = coverFallback || phase === "error";
+  const busy = !failed && phase === "pending";
+  return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
+    <div
+      className="gb-venue-gallery"
+      data-size={size === "compact" ? "compact" : size}
+      data-count={0}
+      role="group"
+      aria-roledescription="gallery"
+      aria-busy={busy || undefined}
+    >
+      <div
+        ref={frameRef}
+        className="gb-venue-gallery__frame"
+        data-state={failed ? "error" : undefined}
+        onLoadCapture={(event) => {
+          if (!(event.target instanceof HTMLImageElement) || coverFallback) return;
+          setPhase("ready");
+        }}
+        onErrorCapture={(event) => {
+          if (!(event.target instanceof HTMLImageElement)) return;
+          setPhase("error");
+        }}
+      >
+        {frame}
+      </div>
+    </div>
+    {emptyCredit}
+  </div>;
+}
+
 export function VenueGallery({
   venue,
   className = "",
@@ -276,34 +365,27 @@ export function VenueGallery({
       // Keep the single shared morph slot. No published URL → morph loads default illustration.
       if (!legacyCoverUrl) {
         const illustrationFailed = Boolean(coverFallback);
-        return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
-          <div
-            className="gb-venue-gallery"
-            data-size={size === "compact" ? "compact" : size}
-            data-count={0}
-            role="group"
-            aria-roledescription="gallery"
-          >
-            <div
-              className="gb-venue-gallery__frame"
-              data-state={illustrationFailed ? "error" : undefined}
-            >
-              {coverSlot}
-              {illustrationFailed && size !== "compact" ? (
-                <div className="gb-venue-gallery__status" data-state="error" role="alert">
-                  <p>Не удалось загрузить иллюстрацию</p>
-                  {onCoverRetry ? (
-                    <button type="button" className="gb-venue-gallery__retry" onClick={(event) => {
-                      event.stopPropagation();
-                      onCoverRetry();
-                    }}>Повторить загрузку</button>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          {emptyCredit}
-        </div>;
+        return <ZeroGalleryChrome
+          className={className}
+          size={size}
+          coverFallback={illustrationFailed}
+          resourceKey={`${venue.id}|illustration|${illustrationFailed ? "err" : "load"}`}
+          emptyCredit={emptyCredit}
+          frame={<>
+            {coverSlot}
+            {illustrationFailed && size !== "compact" ? (
+              <div className="gb-venue-gallery__status" data-state="error" role="alert">
+                <p>Не удалось загрузить иллюстрацию</p>
+                {onCoverRetry ? (
+                  <button type="button" className="gb-venue-gallery__retry" onClick={(event) => {
+                    event.stopPropagation();
+                    onCoverRetry();
+                  }}>Повторить загрузку</button>
+                ) : null}
+              </div>
+            ) : null}
+          </>}
+        />;
       }
       return <>{coverSlot}{emptyCredit}</>;
     }
@@ -321,25 +403,21 @@ export function VenueGallery({
         {emptyCredit}
       </>;
     }
-    return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
-      <div
-        className="gb-venue-gallery"
-        data-size={size}
-        data-count={0}
-        role="group"
-        aria-roledescription="gallery"
-      >
-        <div className="gb-venue-gallery__frame">
-          <VenueCover
-            cover={venue.cover}
-            name={venue.name}
-            venueId={venue.id}
-            allowRetry={allowRetry}
-          />
-        </div>
-      </div>
-      {emptyCredit}
-    </div>;
+    const zeroCoverUrl = legacyCoverUrl ?? "illustration";
+    return <ZeroGalleryChrome
+      className={className}
+      size={size}
+      resourceKey={`${venue.id}|${zeroCoverUrl}`}
+      emptyCredit={emptyCredit}
+      frame={
+        <VenueCover
+          cover={venue.cover}
+          name={venue.name}
+          venueId={venue.id}
+          allowRetry={allowRetry}
+        />
+      }
+    />;
   }
 
   const showControls = items.length > 1 && size !== "compact";

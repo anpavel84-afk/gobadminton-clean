@@ -86,6 +86,7 @@ describe("VenueGallery", () => {
     expect(empty).toContain("/discovery/venue-illustrations/");
     expect(empty).toContain('data-pending="illustration"');
     expect(empty).toContain('data-count="0"');
+    expect(empty).toContain('aria-busy="true"');
     expect(empty).not.toContain("Фотографии площадки пока нет");
     expect(empty).not.toContain('data-state="empty"');
     expect(empty).not.toContain("data:image/svg+xml");
@@ -97,15 +98,49 @@ describe("VenueGallery", () => {
       const morphEmpty = ssr(<VenueGallery
         venue={emptyVenue}
         size={size}
-        coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" />}
+        coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" data-pending="illustration" data-fallback="illustration" />}
       />);
       expect(morphEmpty).toContain('data-testid="morph-slot"');
       expect(morphEmpty).toContain('data-count="0"');
       expect(morphEmpty).toContain("gb-venue-gallery__frame");
+      expect(morphEmpty).toContain('aria-busy="true"');
       expect(morphEmpty).not.toContain("Фотографии площадки пока нет");
       expect(morphEmpty).not.toContain('data-state="empty"');
       expect(morphEmpty).not.toContain("Предыдущее фото");
     }
+    const morphFailed = ssr(<VenueGallery
+      venue={emptyVenue}
+      coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" data-fallback="illustration" data-state="error" />}
+      coverFallback
+      onCoverRetry={() => {}}
+    />);
+    expect(morphFailed).toContain('data-state="error"');
+    expect(morphFailed).toContain("Не удалось загрузить иллюстрацию");
+    expect(morphFailed).toContain("Повторить загрузку");
+    expect(morphFailed).not.toContain("aria-busy");
+  });
+
+  it("zero-gallery aria-busy clears on illustration load and error without a second image", () => {
+    const emptyVenue = venue([], null);
+    const pending = ssr(<VenueGallery venue={emptyVenue} size="sheet" showCredit />);
+    expect(pending).toContain('aria-busy="true"');
+    expect(pending).toContain('data-pending="illustration"');
+    expect(pending.match(/<img /g)?.length ?? 0).toBe(1);
+    // ZeroGalleryChrome phase slot is the string "pending" after first paint (shared cover owns the img).
+    const phaseIdx = hooks.slots.findIndex(value => value === "pending");
+    expect(phaseIdx).toBeGreaterThanOrEqual(0);
+    hooks.slots[phaseIdx] = "ready";
+    hooks.cursor = 0;
+    const ready = renderToStaticMarkup(<VenueGallery venue={emptyVenue} size="sheet" showCredit />);
+    expect(ready).not.toContain("aria-busy");
+    expect(ready.match(/<img /g)?.length ?? 0).toBe(1);
+
+    hooks.slots[phaseIdx] = "error";
+    hooks.cursor = 0;
+    const errored = renderToStaticMarkup(<VenueGallery venue={emptyVenue} size="sheet" showCredit />);
+    expect(errored).not.toContain("aria-busy");
+    expect(errored).toContain('data-state="error"');
+    expect(errored.match(/<img /g)?.length ?? 0).toBeLessThanOrEqual(1);
   });
 
   it("renders catalog source credit independent of showCredit photo flag", () => {
@@ -571,6 +606,78 @@ describe("VenueGallery", () => {
     (next!.props.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: vi.fn() });
     (prev!.props.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: vi.fn() });
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("exposes sibling sheet retry for genuine zero-photo illustration without nested controls", () => {
+    vi.stubGlobal("document", {
+      body: { style: { overflow: "auto" } },
+      activeElement: null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    });
+    const zeroVenue = {
+      id: "a0000000-0000-4000-8000-000000000037",
+      cityId: "a0000000-0000-4000-8000-000000000001",
+      name: "Гамма",
+      address: "Москва",
+      timezone: "Europe/Moscow",
+      cover: { uploadedUrl: null as string | null, credit: null },
+      profile: {
+        courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+        gallery: { coverage: "ordered" as const, items: [] },
+      },
+    };
+    const html = ssr(<VenuePickerDialog
+      venues={[zeroVenue]}
+      selectedId=""
+      status="ready"
+      onSelect={() => {}}
+      onClose={() => {}}
+      onRetry={() => {}}
+    />);
+    expect(html).toContain("Гамма");
+    expect(html).toContain("/discovery/venue-illustrations/");
+    expect(html).toContain("gb-venue-picker-photos");
+    expect(html).toContain("Иллюстрация");
+    // Compact zero-photo thumb is VenueCover (no gallery data-size); sheet sibling owns retry.
+    expect(html).toContain("gb-venue-cover--thumb");
+    expect(html).toContain('data-size="sheet"');
+    expect(html).not.toContain("Фото · 0");
+    expect(html).not.toContain("Предыдущее фото");
+    const optionInner = html.match(/class="gb-venue-picker-option"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? "";
+    expect(optionInner).toContain("gb-venue-cover--thumb");
+    expect(optionInner).not.toContain("<button");
+    expect(optionInner).not.toContain("Повторить");
+    expect(html.indexOf("gb-venue-picker-option")).toBeLessThan(html.indexOf("gb-venue-picker-photos"));
+
+    // Sibling sheet (not compact thumb): illustration failure → reachable retry → pending again.
+    const sheetPending = ssr(<VenueGallery venue={zeroVenue as never} size="sheet" showCredit />);
+    expect(sheetPending).toContain('aria-busy="true"');
+    expect(sheetPending).toContain('data-pending="illustration"');
+    const busyPhaseIdx = hooks.slots.findIndex(value => value === "pending");
+    const coverPhaseIdx = hooks.slots.findIndex(value =>
+      Boolean(value && typeof value === "object" && "fallbackError" in (value as object)),
+    );
+    expect(busyPhaseIdx).toBeGreaterThanOrEqual(0);
+    expect(coverPhaseIdx).toBeGreaterThanOrEqual(0);
+    const coverPhase = hooks.slots[coverPhaseIdx] as {
+      key: string; loaded: string | null; failed: string | null; fallbackError: boolean;
+    };
+    hooks.slots[coverPhaseIdx] = { ...coverPhase, loaded: null, failed: null, fallbackError: true };
+    hooks.slots[busyPhaseIdx] = "error";
+    hooks.cursor = 0;
+    const sheetFailed = renderToStaticMarkup(<VenueGallery venue={zeroVenue as never} size="sheet" showCredit />);
+    expect(sheetFailed).toContain("Не удалось загрузить иллюстрацию");
+    expect(sheetFailed).toContain("Повторить");
+    expect(sheetFailed).not.toContain("Фото не загрузилось");
+    expect(sheetFailed).not.toContain("aria-busy");
+    hooks.slots[coverPhaseIdx] = { ...coverPhase, loaded: null, failed: null, fallbackError: false };
+    hooks.slots[busyPhaseIdx] = "pending";
+    hooks.cursor = 0;
+    const sheetRetried = renderToStaticMarkup(<VenueGallery venue={zeroVenue as never} size="sheet" showCredit />);
+    expect(sheetRetried).toContain("/discovery/venue-illustrations/");
+    expect(sheetRetried).toContain('data-pending="illustration"');
+    expect(sheetRetried).toContain('aria-busy="true"');
   });
 
   it("scopes VenuePage media CSS so image+credit flow without clipping credit", () => {

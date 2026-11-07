@@ -1,51 +1,73 @@
-# #406 pass 15 — true no-photo visual illustration (alpha.46)
+# #406 attempt 17 — illustration retry / aria-busy / ImgProps type repair
 
 - From: source author (Cursor Auto), assignment
-  `OWNER406_TRUE_NO_PHOTO_VISUAL_ILLUSTRATION_AFTER45`, attempt 15,
-  base `2650fcbe21976564b8b1ff90aac67ea4eca5b569`
-- To: independent QA → full CI → guarded DEV46 → API/native 390/1280 smoke
+  `OWNER406_ILLUSTRATION46_QA_RETRY_BUSY_TYPE_REPAIR`, attempt 17,
+  base `f73d3fd58450be843481d5464926de20aa8d9cb6`
+- To: independent QA (parent reuses full 1566 / browser where unchanged)
 - Date: 2026-11-07
 - Status: WORKING_DRAFT / READY_FOR_INDEPENDENT_QA. Not ACCEPTED, not
   independent QA PASS, not CI, not DEV release, not Owner UAT.
 - Git writes / live runtime / DB / provider / credentials / deploy: not performed
-  (forbidden in this source slice). No `.evidence` scratch in repo.
+  (forbidden in this source slice). No release metadata / backend / M1 / #506.
 
-## Owner correction implemented
+## Owner / Sol Medium findings addressed
 
-Text-only «Фотографии площадки пока нет» replaced with the accepted Astra High v2
-default illustration path:
+Independent Sol Medium reported TWO MEDIUM on completed pass15 `f73d3fd`:
 
-- Genuine no published photo/media → `venueIllustrationUrl(venueId)` (FNV-1a,
-  one of 4 checked-in WebP). Same venue ⇒ same asset across page/map/compact/picker.
-- Ready: raster + visible «Иллюстрация» + alt `Иллюстрация: бадминтон`.
-- Pending: static skeleton + `data-pending="illustration"` (no equipment SVG).
-- Failed illustration: honest error + bounded retry of the same asset.
-- Known uploaded photo failure stays photo error/retry — never disguised as
-  illustration. Gallery `data-count` / arrows follow real items only (0 for default).
+1. **Picker zero-photo retry** — `VenuePickerDialog` sibling sheet expander was
+   gated on `photos >= 1`, so compact (retry hidden) left genuine no-photo
+   illustration with no reachable retry when default WebP failed. Fix: also open
+   the existing `gb-venue-picker-photos` details for `showDefaultIllustrationLabel`
+   with summary «Иллюстрация» and sheet `VenueGallery` (allowRetry). No nested
+   buttons inside the select row, no fake gallery items, no fourth grid child.
+   Real-photo `Фото · N` path unchanged.
+
+2. **Zero-gallery aria-busy** — empty `VenueGallery` sheet/page and morph
+   `coverSlot` (no legacy URL) now mirror shared cover/illustration
+   pending/ready/error into `aria-busy` via `ZeroGalleryChrome` (capture +
+   MutationObserver on the existing cover node; `coverFallback` wins for morph
+   error). No second image request.
+
+3. **Typecheck** — previous handoff claimed clean `tsc` on changed surfaces; actual
+   full web typecheck failed:
+   `test/venue-cover.test.tsx(222,29) TS2339 Property 'alt' does not exist on type 'ImgProps'`.
+   Fix: add `alt?: string` to the test `ImgProps` mock typing (no `any` / cast hide).
+
+Preserved: Astra v2 choices, existing 4 WebP, real-photo vs illustration error
+distinction, native mouse guard / `draggable={false}`, keyboard/touch/map
+gestures contract, release46 seed (untouched).
 
 ## Files touched (allowed paths only)
 
-- `VenueCover.tsx`, `SelectedVenueCover.tsx`, `VenueGallery.tsx`
-- `VenuePreviewCard.tsx`, `VenuePickerDialog.tsx` (row label outside 64px thumb)
-- `games.css` (badge / compact label via `:has`)
-- Tests listed in assignment + release catalogue
-- `releases.ts` → current `0.1.0-alpha.46` / API `0.37.0`; append alpha.45 from
-  trusted seed `2650fcbe…` / `r42393881246-a1` / `2026-11-07T17:12:03Z`
-- This handoff
+- `apps/web/src/components/consumer/games/VenuePickerDialog.tsx`
+- `apps/web/src/components/consumer/venues/VenueGallery.tsx`
+- `apps/web/test/venue-cover.test.tsx`
+- `apps/web/test/venue-gallery.test.tsx`
+- `apps/web/test/venue-preview-card.test.tsx` (unchanged content; in scope)
+- `apps/web/test/venue-loader-navigation.browser.mjs` (aria-busy clear after ready)
+- `docs/handoffs/venue406-default-illustration.md` (this file)
 
 ## Author checks run locally
 
-- Vitest (10 files / 206 tests): venue-cover, selected-venue-cover, venue-gallery,
-  venue-public-access, venue-popup-owner-fixes, venue-sheet, venue-preview-card,
-  venue-sheet-integration, releases.test.tsx, releases-server.test.ts — PASS
-- `tsc --noEmit` — no errors on changed venue/release surfaces
-- Deterministic check: venue `c64190f9-…` → `racket-v1.webp`
-- Browser loopback `venue-loader-navigation.browser.mjs` not executed here
-  (needs parent Playwright loopback host); assertions updated for default
-  illustration / `data-count=0` / no fake arrows
+- Vitest targeted: `venue-cover`, `venue-gallery`, `venue-preview-card` —
+  3 files / 65 tests PASS (includes picker zero-photo failure→retry and
+  aria-busy pending→ready/error regressions; original native mouse/touch
+  gallery gesture tests preserved PASS)
+- `tsc -p tsconfig.json --noEmit --incremental false` (apps/web) — PASS
+  (previous ImgProps.alt FAIL corrected)
+- `eslint .` (apps/web) — PASS
+- Full host Vitest 157/1566 and actual browser loopback — not re-executed here;
+  parent reuses unchanged suites and re-runs browser if relevant. Browser file
+  asserts `aria-busy` is not `"true"` after default illustration ready.
 
-## Known limits (honest)
+## Honest corrections vs prior handoff
 
-- `CURRENT_NAMED_RELEASE.source_sha` remains null until acceptance; UAT=NOT_TESTED
-- B1 #506 / moderation #507 not implemented in this slice
+- Pass15 handoff types claim was incorrect: full typecheck had TS2339 on
+  `ImgProps.alt`; recorded here and fixed in the test mock.
+- Not claiming independent QA, Product CI, DEV ACCEPTED, or Owner UAT.
+
+## Known limits
+
+- `CURRENT_NAMED_RELEASE` / release catalogue not modified in this repair
+- B1 #506 / moderation not in scope
 - PROD / main product integration not authorized

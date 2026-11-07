@@ -146,14 +146,15 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                     <VenueSourceCredit catalogSource={catalogSource} />
                   </div>
                 ) : null}
-                {photos >= 1 ? (
+                {photos >= 1 || showDefaultIllustrationLabel ? (
                   <details className="gb-venue-picker-photos">
                     <summary tabIndex={0} className="gb-venue-picker-photos__summary">
-                      Фото · {photos}
+                      {photos >= 1 ? `Фото · ${photos}` : "Иллюстрация"}
                     </summary>
                     <div className="gb-venue-picker-photos__body">
-                      {/* Sibling sheet gallery: arrows (when 2+), counter, retry — outside the select button.
-                          Single failed thumb still gets a reachable retry here (compact has none). */}
+                      {/* Sibling sheet gallery: arrows (when 2+), counter, photo/illustration retry —
+                          outside the select button. Compact thumbs hide retry; genuine zero-photo
+                          still gets a reachable illustration retry here (no nested controls). */}
                       <VenueGallery venue={venue} size="sheet" showCredit />
                     </div>
                   </details>

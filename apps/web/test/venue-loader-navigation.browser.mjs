@@ -183,6 +183,7 @@ try {
   assert.equal(await illustration.getAttribute("alt"), "Иллюстрация: бадминтон");
   assert.equal(await illustration.evaluate((node) => node instanceof HTMLImageElement && node.draggable === false), true);
   await page.locator(".gb-venue-media .gb-venue-cover[data-fallback='illustration']:not([data-pending])").waitFor();
+  assert.notEqual(await emptyGallery.getAttribute("aria-busy"), "true", "aria-busy clears after default illustration ready");
   assert.equal(await page.getByText("Фотографии площадки пока нет", { exact: true }).count(), 0);
   assert.match(await page.locator(".gb-venue-media .gb-venue-cover__badge").textContent() || "", /Иллюстрация/);
 

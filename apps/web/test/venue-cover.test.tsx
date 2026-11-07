@@ -46,6 +46,7 @@ const venueId="00000037-1111-4111-8111-111111111111";
 
 type ImgProps = {
   src?: string;
+  alt?: string;
   style?: { opacity?: number };
   onLoad?: () => void;
   onError?: () => void;
