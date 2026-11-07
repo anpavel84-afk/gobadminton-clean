@@ -2,22 +2,25 @@
 
 Refs: Owner remaining-backlog train assignment `OWNER_REMAINING_TRAIN_MAP498_RECOVER_LATE_VALID_LOAD`; visual-qa / Go Bad report on DEV `298917fe` (alpha.38); PMA Chromium diagnosis.
 
-## Point 3 — fixed (source)
+## Point 3 — pass 1 FAIL → pass 2 repair (source)
 
-**Fault:** Startup uses a bounded 20s timeout. When `style-dev.json` (or init) finishes after that budget, MapLibre still reaches a real `load` for the current city/attempt (`ready`/`settled`/markers), but `fatal` from the timeout left the error card («Карта не загрузилась / Карта не ответила вовремя»), list fallback, and disabled filters in place until manual «Повторить».
+**Pass 1 (reviewed `9263ed0c`, independent QA FAIL P1):** Startup timeout set `fatal=true` + `timeoutPending`, so a later genuine fatal (`error` kind style, or WebGL after grace) was ignored by `fail()`. A subsequent `load` of the same attempt still saw `timeoutPending` and cleared the banner / restored availability, erasing the real failure.
 
-**Repair (small control-flow only):** Keep showing the existing timeout card while style/init is still pending. When the **current** attempt’s MapLibre `load` fires for that same effect lifecycle, clear a prior **timeout** failure and restore availability. Genuine fatal style-hash / origin / resource-policy, WebGL/init/module failure, retry, unmount/city fences, and radar-on-real-ready are unchanged. Markers alone do not clear failure. The 20s budget is not increased; the warning is not hidden in CSS.
+**Repair (control-flow only):**
+- Real fatal after a pending startup timeout **replaces/supersedes** the timeout (`timeoutPending` cleared; diagnostic updated).
+- Late `load` recovers **only** a timeout-only pending failure with **no** active WebGL context-restore grace (`deadline` unset) and no superseding fatal.
+- Context loss after timeout still opens the existing 4s restore grace; load during grace does not stale-set availability true; restore within grace re-enables timeout→load recovery; grace expiry becomes sticky webgl fatal.
+- Unchanged: genuine fatal / retry / city / unmount fences; markers alone do not clear failure; 20s budget unchanged.
 
-**Regression:** `apps/web/test/games-venue-map-lifecycle.test.tsx` — 20s timeout → late current `load` → banner removed + availability restored. Existing true-fatal / retry / context-loss / city-switch / unmount cases retained.
+**Regression:** `apps/web/test/games-venue-map-lifecycle.test.tsx` — timeout→late load (recover); timeout→style→load (stay fatal); timeout→webglcontextlost→late load during grace (no recover) + restore-within-grace then load (recover); timeout→webgl grace expiry→late load (stay fatal). Prior true-fatal / retry / city / unmount cases retained.
 
 **Files:** `GamesVenueMap.tsx`, `games-venue-map-lifecycle.test.tsx`, this handoff.
 
-## Points 1 / 2 / 4 — not claimed PASS
+## Points 1 / 2 / 4 — remain OPEN (Go Bad)
 
 PMA cold Chromium on DEV38/`298917fe` did **not** reproduce idle venue polling bursts, multi-request focus coalescing defects, or a separate fullscreen city selector in the current DOM. Go Bad findings for 1/2/4 remain open / auth-pending; this pass does **not** rewrite polling, coalescing, or city selection, and does not declare those PASS.
 
 ## Evidence limits
 
-- Fix targets the confirmed timeout→late-valid-`load` state stickiness (fault injection in the lifecycle harness + PMA late style observation). It does **not** claim identity with every genuine network latency profile beyond that control-flow path.
-- No release-catalogue / alpha.39–40 metadata in this pass; follow-up release notes must use the actual DEV39 receipt only.
-- No LIVE deploy/API/DB/Git/model calls in this author pass. Independent QA + Product CI + DEV smoke remain required before DONE.
+- No release-catalogue / alpha.39–40 acceptance files in this pass; alpha.39 images still building, no actual server receipt — keep release.40 metadata for trusted actual.39 input when available. No fake acceptance/source SHA/date.
+- No LIVE deploy/API/DB/Git/model/network calls in this author pass. Independent QA + Product CI + DEV smoke remain required before DONE.

@@ -145,6 +145,63 @@ it("clears the 20s timeout banner when the current attempt later loads and resto
   expect(availability).toHaveBeenCalledWith(true);
   expect(errorCard).toHaveBeenLastCalledWith(false);
 });
+
+it("timeout then style fatal is not cleared by a late load of the same attempt", async () => {
+  const map = await constructMap();
+  await vi.advanceTimersByTimeAsync(20000);
+  expect(renderToStaticMarkup(render())).toContain("Карта не ответила вовремя");
+  expect(availability).toHaveBeenCalledWith(false);
+  const availabilityAfterTimeout = availability.mock.calls.length;
+  map.emit("error", { kind: "style" });
+  const afterStyle = render();
+  expect(renderToStaticMarkup(afterStyle)).toContain("Не удалось загрузить оформление");
+  expect(availability).toHaveBeenCalledWith(false);
+  map.emit("load");
+  const afterLoad = render();
+  expect(renderToStaticMarkup(afterLoad)).toContain("Карта не загрузилась");
+  expect(renderToStaticMarkup(afterLoad)).toContain("Не удалось загрузить оформление");
+  expect(renderToStaticMarkup(afterLoad)).toContain('data-map-ready="true"');
+  expect(availability.mock.calls.slice(availabilityAfterTimeout).some(([value]) => value === true)).toBe(false);
+  expect(errorCard).toHaveBeenLastCalledWith(true);
+});
+
+it("timeout then webglcontextlost blocks late-load recovery during grace; restore within grace still recovers", async () => {
+  const map = await constructMap();
+  await vi.advanceTimersByTimeAsync(20000);
+  expect(renderToStaticMarkup(render())).toContain("Карта не ответила вовремя");
+  map.getCanvas().dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+  const availabilityAfterTimeout = availability.mock.calls.length;
+  map.emit("load");
+  const duringGrace = render();
+  expect(renderToStaticMarkup(duringGrace)).toContain("Карта не загрузилась");
+  expect(renderToStaticMarkup(duringGrace)).toContain("Карта не ответила вовремя");
+  expect(renderToStaticMarkup(duringGrace)).toContain('data-map-ready="true"');
+  expect(availability.mock.calls.slice(availabilityAfterTimeout).some(([value]) => value === true)).toBe(false);
+  map.getCanvas().dispatchEvent(new Event("webglcontextrestored"));
+  expect(map.triggerRepaint).toHaveBeenCalledOnce();
+  // Grace cleared: timeout-only pending may recover on a later load of this attempt.
+  map.emit("load");
+  const recovered = render();
+  expect(renderToStaticMarkup(recovered)).not.toContain("Карта не загрузилась");
+  expect(availability).toHaveBeenCalledWith(true);
+  expect(errorCard).toHaveBeenLastCalledWith(false);
+});
+
+it("timeout then webglcontextlost that expires grace stays fatal through a late load", async () => {
+  const map = await constructMap();
+  await vi.advanceTimersByTimeAsync(20000);
+  map.getCanvas().dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+  await vi.advanceTimersByTimeAsync(4000);
+  const failed = render();
+  expect(renderToStaticMarkup(failed)).toContain("Карта не загрузилась");
+  expect(availability).toHaveBeenCalledWith(false);
+  const availabilityAfterFatal = availability.mock.calls.length;
+  map.emit("load");
+  const afterLoad = render();
+  expect(renderToStaticMarkup(afterLoad)).toContain("Карта не загрузилась");
+  expect(availability.mock.calls.slice(availabilityAfterFatal).some(([value]) => value === true)).toBe(false);
+  expect(errorCard).toHaveBeenLastCalledWith(true);
+});
 it("does not construct a map in a zero-width container", async () => {
   h.width = 0; render(); await Promise.resolve(); expect(h.maps).toHaveLength(0); expect(fetch).not.toHaveBeenCalled();
 });
