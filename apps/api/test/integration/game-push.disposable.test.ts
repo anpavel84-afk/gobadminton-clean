@@ -674,15 +674,18 @@ run("#496 game event push — disposable", () => {
     const pairId = randomUUID();
     const low = organizer.userId < player.userId ? organizer.userId : player.userId;
     const high = organizer.userId < player.userId ? player.userId : organizer.userId;
-    await pool.query(
-      `INSERT INTO social_pairs (id, user_low, user_high) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+    const pairRow = await pool.query<{ id: string }>(
+      `INSERT INTO social_pairs (id, user_low, user_high) VALUES ($1,$2,$3)
+       ON CONFLICT (user_low, user_high) DO UPDATE SET updated_at = now()
+       RETURNING id`,
       [pairId, low, high],
     );
+    const actualPairId = pairRow.rows[0]!.id;
     await pool.query(
       `INSERT INTO game_invitations (
          id, game_id, inviter_user_id, invitee_user_id, pair_id, status, version, expires_at
        ) VALUES ($1,$2,$3,$4,$5,'pending',1, now() + interval '1 day')`,
-      [invitationId, game.id, organizer.userId, player.userId, pairId],
+      [invitationId, game.id, organizer.userId, player.userId, actualPairId],
     );
     const staleInvite = await deliverGameEventWebPushJob({
       pool,

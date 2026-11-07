@@ -47,7 +47,10 @@ describe("#456 sw-push.js handlers", () => {
 
     const cachesMock = {
       open: async () => ({
-        match: async (key: string) => cacheStore.get(key) ?? null,
+        match: async (key: string) => {
+          const cached = cacheStore.get(key);
+          return cached ? cached.clone() : null;
+        },
         put: async (key: string, value: Response) => {
           cacheStore.set(key, value);
         },
