@@ -1,31 +1,51 @@
-# Handoff · Issue #506 · MOD-V2-A public text (author pass 2 repair)
+# Handoff · Issue #506 · MOD-V2-A public text (author pass 3 · two HIGH repair)
 
-Source-only candidate after pass-1 `da034129a54d7d3191b54eb492e0900af9955d92`. No DONE / QA / DEV / UAT claims.
+Source-only candidate after independent Codex Sol Medium FAIL on
+`e754e499f693488813bc7fa174cea57691d04cbb`. No DONE / QA / CI / DEV / UAT claims.
 
-## Pass-2 concrete repairs
+## Pass-3 concrete repairs (exactly two HIGH)
 
-1. `games.service.ts` — extend `lockGame` typed row + `FOR UPDATE` SELECT with stored `title`, `host_display_name`, `host_public_contact`, `training_description`, `settlement_terms`, `trainer_display_name_snapshot`; publish fence/bind uses those storage names (not DTO aliases). Preflight stays outside the transaction.
-2. `releases-server.test.ts` — whitelist adds explicit `0.1.0-alpha.44` between 43 and CURRENT 45; seed count/dates unchanged.
-3. `releases.test.tsx` — alpha.45 additions assert public-text moderation prose; fixes length 0; limitations stay strict; no WebP invented for 45; historical 44 assertions untouched.
-4. `public-text-moderation.test.ts` — `setGlobalPrefix('v1')` + `ProblemExceptionFilter`; AUTH override array; assert callback HTTP 302+location before parse; loopback + `RUN_DB_INTEGRATION`/`GMAP1_DISPOSABLE_DB` before migrate; small HTTP coverage for draft/unlisted publish, reject/version/idempotent, visibility promotion, trainer reactivation. Fake provider only.
-5. `ProfilePage.tsx` `failed()` — recognized moderation notice (incl. provider 503) keeps edit mode and `needsRefresh=false`; auth 401 / social-disabled / network 0 / version 409 unchanged.
+1. `games.service.ts` `publish` — assertCanManage runs inside the short preflight
+   transaction **before** reading/emitting version or draft-status outcomes. Snapshot
+   select follows authority; transaction ends before text provider. Final
+   runIdempotent actor/resource/version/content fences and stored host field names
+   from pass 2 unchanged. Foreign private/unlisted targets keep privacy `404`
+   `GAME_NOT_FOUND` for multiple expectedVersion/status probes.
 
-## Unchanged from pass 1 (not re-architected)
+2. `unified-publishing.service.ts` `command` start/takeover — shared receipt +
+   `authorizeReplay`; `findReplay` before any text provider; accepted same-key replay
+   skips provider and still reprojects ephemeral wire metadata (not durable receipt
+   alone). On miss: read-only eligibility preflight (no bootstrap write / budget /
+   consent / presence mutation) then text provider; locks end before provider await;
+   `runIdempotent` repeats full fences.
 
-- Common policy/adapter/M1; Mode B/C/D not started
-- Application `0.1.0-alpha.45` notes already present; API contract `0.37.0`
-- Migration `0061_content_moderation_text.sql`
-- `api-client.ts` `publicTextModerationNotice` reused as-is (no edit this pass)
+## Regressions added
 
-## Parent recheck scope
+- `public-text-moderation.test.ts` — foreign organizer HTTP publish probes across
+  several expectedVersion values and published status: always privacy 404;
+  `fake.textCalls` unchanged by foreign probes; owner publish/stale/replay path kept.
+- `radar.unified.test.ts` — revoked session (service fence) and ineligible profile
+  → 0 text provider calls; allowed start works with wire metadata; same-key
+  start/takeover replay → 0 additional calls.
 
-- API typecheck (publish path)
-- Target integration `public-text-moderation.test.ts`
-- Release 2 tests (`releases-server.test.ts`, `releases.test.tsx`)
-- Unchanged 28 unit/API lint/web types reusable unless related source changed
-- Then independent Codex Sol Medium + Product CI/DEV
+## Author sandbox status
+
+- Edits limited to allowed paths only.
+- Full disposable DB integration / Product CI / DEV45 not run in this sandbox
+  (parent owns pinned disposable DB + gates). Sandbox gate test remains for
+  `RUN_DB_INTEGRATION≠1`.
+- Prior pass-2 unit/HTTP/release/types/lint PASS evidence reused for unrelated
+  surfaces; this repair does not re-architect M1 / Mode B/C/D / release notes /
+  schema.
+
+## Parent next
+
+- Affected types/lint + target integration (`public-text-moderation`, unified radar delta)
+- Independent delta QA for the two findings
+- Then full Product CI / real DEV45
 
 ## Still not claimed
 
 - Overall PASS/DONE from source author
+- QA / CI / DEV ACCEPTED
 - Mode B binding / AGY author / PROD

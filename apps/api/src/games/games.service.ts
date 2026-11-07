@@ -479,8 +479,9 @@ export class GamesService {
     const replay = await this.mutations.findReplay<GameDto>(receipt);
     if (replay) return replay;
 
-    // Preflight stored snapshot outside publish transaction (includes unlisted).
-    const snap = await this.pool.query<{
+    // Authorized short preflight: manage authority before any version/status egress.
+    // Snapshot select runs after assertCanManage; transaction ends before provider I/O.
+    type PublishPreflightRow = {
       version: number;
       status: string;
       title: string;
@@ -491,27 +492,24 @@ export class GamesService {
       trainer_display_name_snapshot: string | null;
       activity_kind: string | null;
       trainer_profile_id: string | null;
-    }>(
-      `SELECT g.version, g.status, g.title, g.host_display_name, g.host_public_contact,
-              g.training_description, g.settlement_terms, g.trainer_display_name_snapshot,
-              g.activity_kind, g.trainer_profile_id
-       FROM games g
-       WHERE g.id = $1`,
-      [gameId],
-    );
-    const pre = snap.rows[0];
-    if (!pre) throw notFound("GAME_NOT_FOUND", "Игра не найдена");
-    if (pre.version !== expectedVersion) {
-      throw conflict("VERSION_CONFLICT", "Версия игры устарела");
-    }
-    if (pre.status !== "draft") {
-      throw conflict("GAME_NOT_DRAFT", "Публиковать можно только draft");
-    }
+    };
+    let pre: PublishPreflightRow;
     {
       const preClient = await this.pool.connect();
       try {
         await preClient.query("BEGIN");
         await this.gameAuthority.assertCanManage(preClient, gameId, userId);
+        const snap = await preClient.query<PublishPreflightRow>(
+          `SELECT g.version, g.status, g.title, g.host_display_name, g.host_public_contact,
+                  g.training_description, g.settlement_terms, g.trainer_display_name_snapshot,
+                  g.activity_kind, g.trainer_profile_id
+           FROM games g
+           WHERE g.id = $1`,
+          [gameId],
+        );
+        const row = snap.rows[0];
+        if (!row) throw notFound("GAME_NOT_FOUND", "Игра не найдена");
+        pre = row;
         await preClient.query("COMMIT");
       } catch (error) {
         await preClient.query("ROLLBACK").catch(() => undefined);
@@ -519,6 +517,12 @@ export class GamesService {
       } finally {
         preClient.release();
       }
+    }
+    if (pre.version !== expectedVersion) {
+      throw conflict("VERSION_CONFLICT", "Версия игры устарела");
+    }
+    if (pre.status !== "draft") {
+      throw conflict("GAME_NOT_DRAFT", "Публиковать можно только draft");
     }
 
     const textFields = this.gameTextCandidates({

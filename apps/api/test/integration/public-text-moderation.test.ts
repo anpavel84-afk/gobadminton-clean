@@ -10,16 +10,19 @@ import {
 } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildTestCoreModule } from "./test-core.module";
 import { uniqueSuffix } from "./unique";
 import { AuthModule } from "../../src/auth/auth.module";
+import { SESSION_COOKIE } from "../../src/auth/constants";
 import { AUTH_PROVIDER_OVERRIDES } from "../../src/auth/providers/registry";
 import type {
   AuthProviderAdapter,
   VerifiedIdentity,
 } from "../../src/auth/providers/types";
+import { SessionService } from "../../src/auth/session.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv } from "../../src/config/env";
 import { createDatabase } from "../../src/database/client";
@@ -114,6 +117,7 @@ describeIntegration("MOD-V2-A public text moderation", () => {
   let app: NestFastifyApplication;
   let pool: ReturnType<typeof createDatabase>["pool"];
   let fake: FakeModerationProvider;
+  let sessions: SessionService;
   let owner: { cookies: Record<string, string>; csrf: string; cookie: string };
 
   const identity: VerifiedIdentity = {
@@ -170,6 +174,7 @@ describeIntegration("MOD-V2-A public text moderation", () => {
       .overrideProvider(MODERATION_PROVIDER)
       .useValue(fake)
       .compile();
+    sessions = moduleRef.get(SessionService);
     app = moduleRef.createNestApplication<NestFastifyApplication>(
       new FastifyAdapter({ logger: false }),
     );
@@ -469,6 +474,95 @@ describeIntegration("MOD-V2-A public text moderation", () => {
     });
     expect(reactivated.statusCode).toBeLessThan(300);
     expect(reactivated.json().status).toBe("active");
+  });
+
+  it("foreign organizer publish keeps privacy 404 across expectedVersion/status; no text provider", async () => {
+    fake.textFixture = async (input) => safeTextBatchDecision(input.texts.length);
+    const venueId = await createVenue();
+    const draft = await app.inject({
+      method: "POST",
+      url: "/v1/games",
+      headers: headers(uniqueSuffix("priv-draft")),
+      payload: gamePayload(venueId, {
+        visibility: "unlisted",
+        title: "Чужая приватная черновая",
+      }),
+    });
+    expect(draft.statusCode).toBe(201);
+    const gameId = draft.json().id as string;
+    const version = draft.json().version as number;
+
+    const foreignUserId = randomUUID();
+    await pool.query("INSERT INTO users(id, display_name) VALUES($1, $2)", [
+      foreignUserId,
+      "Foreign Organizer",
+    ]);
+    const foreignIssued = await sessions.createConsumerSession(foreignUserId);
+    const foreignHeaders = {
+      cookie: `${SESSION_COOKIE}=${foreignIssued.sessionToken}`,
+      "x-csrf-token": foreignIssued.csrfToken,
+      origin: webOrigin,
+      "content-type": "application/json",
+    };
+
+    const beforeCalls = fake.textCalls;
+    const probes: Array<{ expectedVersion: number; note: string }> = [
+      { expectedVersion: version, note: "matching-draft" },
+      { expectedVersion: version + 1, note: "stale-high" },
+      { expectedVersion: 1, note: "stale-low" },
+      { expectedVersion: 999_999, note: "far-stale" },
+    ];
+    for (const probe of probes) {
+      const denied = await app.inject({
+        method: "POST",
+        url: `/v1/games/${gameId}/publish`,
+        headers: {
+          ...foreignHeaders,
+          "idempotency-key": uniqueSuffix(`foreign-pub-${probe.note}`),
+        },
+        payload: { expectedVersion: probe.expectedVersion },
+      });
+      expect(denied.statusCode, probe.note).toBe(404);
+      expect(denied.json().code, probe.note).toBe("GAME_NOT_FOUND");
+    }
+
+    // Promote to published as owner, then foreign still sees privacy 404 (not GAME_NOT_DRAFT).
+    const published = await app.inject({
+      method: "POST",
+      url: `/v1/games/${gameId}/publish`,
+      headers: headers(uniqueSuffix("owner-pub-priv")),
+      payload: { expectedVersion: version },
+    });
+    expect(published.statusCode).toBe(200);
+    const afterOwnerPublishCalls = fake.textCalls;
+    expect(afterOwnerPublishCalls).toBeGreaterThan(beforeCalls);
+
+    const foreignOnPublished = await app.inject({
+      method: "POST",
+      url: `/v1/games/${gameId}/publish`,
+      headers: {
+        ...foreignHeaders,
+        "idempotency-key": uniqueSuffix("foreign-pub-published"),
+      },
+      payload: { expectedVersion: published.json().version as number },
+    });
+    expect(foreignOnPublished.statusCode).toBe(404);
+    expect(foreignOnPublished.json().code).toBe("GAME_NOT_FOUND");
+
+    const foreignStaleOnPublished = await app.inject({
+      method: "POST",
+      url: `/v1/games/${gameId}/publish`,
+      headers: {
+        ...foreignHeaders,
+        "idempotency-key": uniqueSuffix("foreign-pub-published-stale"),
+      },
+      payload: { expectedVersion: version },
+    });
+    expect(foreignStaleOnPublished.statusCode).toBe(404);
+    expect(foreignStaleOnPublished.json().code).toBe("GAME_NOT_FOUND");
+
+    // Foreign probes never reached the text provider; only owner publish did.
+    expect(fake.textCalls).toBe(afterOwnerPublishCalls);
   });
 });
 
