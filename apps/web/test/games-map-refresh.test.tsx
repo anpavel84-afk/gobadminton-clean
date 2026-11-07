@@ -373,6 +373,8 @@ it("recalculates eligibility immediately on a successful response inside the sam
 });
 
 it("keeps the local 30s eligibility clock without a catalog refetch and retries after error via focus", async () => {
+  const transportFailure =
+    "Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.";
   render();
   await vi.advanceTimersByTimeAsync(40000);
   const settled = requests.length;
@@ -382,11 +384,11 @@ it("keeps the local 30s eligibility clock without a catalog refetch and retries 
   failResource = "reject";
   window.dispatchEvent(new Event("focus"));
   await vi.advanceTimersByTimeAsync(40000);
-  expect(html()).toContain('role="alert"');
+  expect(html()).toContain(transportFailure);
   failResource = undefined;
   await vi.advanceTimersByTimeAsync(1000); // past refresh coalesce cooldown
   window.dispatchEvent(new Event("focus"));
   await vi.advanceTimersByTimeAsync(40000);
   expect(html()).toContain("Venue · 1");
-  expect(html()).not.toContain('role="alert"');
+  expect(html()).not.toContain(transportFailure);
 });
