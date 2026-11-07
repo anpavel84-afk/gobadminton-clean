@@ -83,13 +83,18 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       }).catch(() => { if (!signal.aborted) { setError(true); setSnapshot(previous => previous?.cityId === cityId ? { ...previous, gamesReady: false, venuesFulfilled: false } : null); setLoading(false); } });
     });
     const reload = () => polling.refresh();
-    // A session change invalidates permissions immediately, even during a load.
-    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, gamesReady: false, venuesFulfilled: false } : null); setRefresh(n => n + 1); };
+    // Tab return: catalog refresh; twin window focus is coalesced inside startVenueMapRefresh.
+    const onVisibility = () => { if (document.visibilityState === "visible") polling.refresh(); };
+    // A session change invalidates permissions immediately, even during a load — never coalesce away.
+    // Drop permission-bearing games immediately; keep public venue geometry until the replacement settles.
+    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, games: [], gamesReady: false, venuesFulfilled: false } : null); setRefresh(n => n + 1); };
     window.addEventListener("focus", reload); window.addEventListener("online", reload);
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("gb-session-changed", sessionChanged);
     return () => {
       polling.stop();
       window.removeEventListener("focus", reload); window.removeEventListener("online", reload);
+      document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("gb-session-changed", sessionChanged);
     };
   }, [cityId, day, refresh]);

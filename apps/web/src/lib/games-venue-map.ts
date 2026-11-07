@@ -52,25 +52,32 @@ export function reconcileVenueMarkers<Entry>(entries: Map<string, Entry>, venues
   }
 }
 
-/** One complete load at a time; the quiet polling interval starts after settlement. */
-export function startVenueMapRefresh(load: (signal: AbortSignal) => Promise<void>) {
+/** One complete load at a time. No idle full-catalog poll — callers refresh on focus/online/visibility.
+ * Focus+visibility twins share one in-flight load; a short cooldown drops a duplicate after a fast refresh settle.
+ * Hidden-document refresh is rejected; the explicit initial load always runs and does not arm that cooldown. */
+export function startVenueMapRefresh(load: (signal: AbortSignal) => Promise<void>, options?: { cooldownMs?: number }) {
   const controller = new AbortController();
   let pending = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const refresh = async () => {
+  let lastRefreshStartedAt = 0;
+  const cooldownMs = options?.cooldownMs ?? 750;
+  const run = async () => {
     if (controller.signal.aborted || pending) return;
-    clearTimeout(timer);
     pending = true;
     try { await load(controller.signal); }
-    finally {
-      pending = false;
-      if (!controller.signal.aborted) timer = setTimeout(() => { void refresh(); }, 30000);
-    }
+    catch { /* load owns UI errors; avoid unhandled rejection from void run/refresh */ }
+    finally { pending = false; }
   };
-  void refresh();
+  const refresh = () => {
+    if (controller.signal.aborted || pending) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (lastRefreshStartedAt !== 0 && Date.now() - lastRefreshStartedAt < cooldownMs) return;
+    lastRefreshStartedAt = Date.now();
+    void run();
+  };
+  void run();
   return {
-    refresh: () => { void refresh(); },
-    stop: () => { controller.abort(); clearTimeout(timer); },
+    refresh: () => { refresh(); },
+    stop: () => { controller.abort(); },
   };
 }
 
