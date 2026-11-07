@@ -11,6 +11,7 @@ import {
 import { fromPoolClient } from "./from-pool-client";
 import type {
   SocialExpiryCleanupPayload,
+  WebPushGameEventDeliverPayload,
   WebPushMessageDeliverPayload,
 } from "./payloads";
 import {
@@ -18,6 +19,10 @@ import {
   ensureSocialExpiryQueues,
   ensureWebPushQueues,
 } from "./pg-boss.factory";
+import {
+  persistGameEventPushIntentOptional,
+  type GamePushIntentInput,
+} from "../push/game-push-intents";
 
 /** Persist durable push intent in the caller's message transaction. */
 export async function persistWebPushDeliveryIntent(
@@ -28,7 +33,7 @@ export async function persistWebPushDeliveryIntent(
     `INSERT INTO web_push_delivery_intents (
        message_id, conversation_id, recipient_user_id, author_user_id, kind, game_id, status
      ) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-     ON CONFLICT (message_id, recipient_user_id) DO NOTHING`,
+     ON CONFLICT (message_id, recipient_user_id) WHERE message_id IS NOT NULL DO NOTHING`,
     [
       payload.messageId,
       payload.conversationId,
@@ -219,6 +224,41 @@ export class JobEnqueueService implements OnModuleDestroy {
   }
 
   /**
+   * Same physical TX as business mutation: durable game-event intent lands when
+   * possible (isolated via SAVEPOINT so a failed INSERT cannot abort domain).
+   * PgBoss enqueue isolated via its own SAVEPOINT. Excludes actor/self.
+   * Never throws into the caller business TX.
+   */
+  async enqueueGameEventWebPush(
+    client: PoolClient,
+    input: GamePushIntentInput,
+  ): Promise<string | null> {
+    try {
+      if (!this.env.WEB_PUSH_ENABLED) return null;
+      if (input.actorUserId && input.recipientUserId === input.actorUserId) {
+        return null;
+      }
+      const persisted = await persistGameEventPushIntentOptional(client, input);
+      if (!persisted) return null;
+      const payload: WebPushGameEventDeliverPayload = {
+        kind: input.kind,
+        eventKey: input.eventKey,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId ?? null,
+        gameId: input.gameId,
+        gameVersion: input.gameVersion,
+        invitationId: input.invitationId ?? null,
+        participationId: input.participationId ?? null,
+        reminderId: input.reminderId ?? null,
+        reminderOrdinal: input.reminderOrdinal ?? null,
+      };
+      return await this.tryEnqueueGameEventWebPushJob(client, payload);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Attempt same-TX pg-boss send. On queue SQL / boss failure, rolls back only
    * the savepoint and leaves the durable intent pending for worker recovery.
    */
@@ -256,6 +296,46 @@ export class JobEnqueueService implements OnModuleDestroy {
       return jobId;
     } catch {
       await client.query("ROLLBACK TO SAVEPOINT web_push_enqueue");
+      return null;
+    }
+  }
+
+  async tryEnqueueGameEventWebPushJob(
+    client: PoolClient,
+    payload: WebPushGameEventDeliverPayload,
+  ): Promise<string | null> {
+    if (!this.env.WEB_PUSH_ENABLED) return null;
+    if (payload.actorUserId && payload.recipientUserId === payload.actorUserId) {
+      return null;
+    }
+    let boss: PgBoss;
+    try {
+      boss = await this.ensureStarted();
+    } catch {
+      return null;
+    }
+    await client.query("SAVEPOINT web_push_game_enqueue");
+    try {
+      const jobId = await boss.send(WEB_PUSH_DELIVER_QUEUE, payload, {
+        db: fromPoolClient(client),
+        singletonKey: `push-game:${payload.eventKey}:${payload.recipientUserId}`,
+        retryLimit: 5,
+        retryDelay: 5,
+        retryBackoff: true,
+        expireInSeconds: 600,
+      });
+      await client.query(
+        `UPDATE web_push_delivery_intents
+         SET status = 'queued', updated_at = now()
+         WHERE event_key = $1
+           AND recipient_user_id = $2
+           AND status = 'pending'`,
+        [payload.eventKey, payload.recipientUserId],
+      );
+      await client.query("RELEASE SAVEPOINT web_push_game_enqueue");
+      return jobId;
+    } catch {
+      await client.query("ROLLBACK TO SAVEPOINT web_push_game_enqueue");
       return null;
     }
   }

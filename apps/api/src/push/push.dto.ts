@@ -4,10 +4,19 @@ export type PushDeviceDto = {
   createdAt: string;
 };
 
+export type PushEventPreferencesDto = {
+  invites: boolean;
+  applicationDecisions: boolean;
+  newApplications: boolean;
+  gameChanges: boolean;
+  outcomeReminders: boolean;
+};
+
 export type PushStateDto = {
   featureAvailable: boolean;
   preferenceEnabled: boolean;
   preferenceVersion: number;
+  eventPreferences: PushEventPreferencesDto;
   vapidPublicKey: string | null;
   accountFence: string | null;
   deviceCount: number;
@@ -19,6 +28,7 @@ export type PushStateDto = {
 export type PushPreferenceBody = {
   enabled?: unknown;
   expectedVersion?: unknown;
+  eventPreferences?: unknown;
 };
 
 export type PushRegisterBody = {
@@ -29,6 +39,7 @@ export type PushRegisterBody = {
 export type PushPreferenceResultDto = {
   preferenceEnabled: boolean;
   preferenceVersion: number;
+  eventPreferences: PushEventPreferencesDto;
 };
 
 export type PushRegisterResultDto = {

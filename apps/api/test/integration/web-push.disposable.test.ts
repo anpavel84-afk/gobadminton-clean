@@ -240,6 +240,13 @@ run("#456 web push — disposable", () => {
     expect(stateOff.statusCode).toBe(200);
     expect(stateOff.json().featureAvailable).toBe(true);
     expect(stateOff.json().preferenceEnabled).toBe(false);
+    expect(stateOff.json().eventPreferences).toEqual({
+      invites: false,
+      applicationDecisions: false,
+      newApplications: false,
+      gameChanges: false,
+      outcomeReminders: false,
+    });
 
     const pref = await app.inject({
       method: "PUT",
@@ -249,6 +256,13 @@ run("#456 web push — disposable", () => {
     });
     expect(pref.statusCode).toBe(200);
     expect(pref.json().preferenceEnabled).toBe(true);
+    expect(pref.json().eventPreferences).toEqual({
+      invites: false,
+      applicationDecisions: false,
+      newApplications: false,
+      gameChanges: false,
+      outcomeReminders: false,
+    });
 
     const endpoint = "https://fcm.googleapis.com/fcm/send/own-device-token-aaaa";
     const reg = await app.inject({

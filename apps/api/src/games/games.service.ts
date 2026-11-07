@@ -6,7 +6,7 @@ import {
   availablePlaces,
   validateCapacityInvariant,
 } from "../domain/capacity";
-import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { Inject, Injectable, Optional, forwardRef } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
   badRequest,
@@ -19,7 +19,12 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import { OutboxService } from "../common/outbox.service";
 import { GameChatService } from "../game-chat/game-chat.service";
 import { InvitationsService } from "../invitations/invitations.service";
+import { JobEnqueueService } from "../jobs/job-enqueue.service";
 import { ParticipationsService } from "../participations/participations.service";
+import {
+  gameChangeEventKey,
+  snapshotGameCancelRecipients,
+} from "../push/game-push-intents";
 import { TrainersService } from "../trainers/trainers.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { privateContactWebsite } from "../lib/original-http-authority";
@@ -258,7 +263,17 @@ export class GamesService {
     @Inject(forwardRef(() => InvitationsService))
     private readonly invitations: InvitationsService,
     private readonly gameChat: GameChatService,
+    @Optional() private readonly jobs?: JobEnqueueService,
   ) {}
+
+  private async enqueueGamePush(
+    client: PoolClient,
+    input: Parameters<JobEnqueueService["enqueueGameEventWebPush"]>[1],
+  ): Promise<void> {
+    if (!this.jobs || !this.env.WEB_PUSH_ENABLED) return;
+    // SAVEPOINT-isolated persist+enqueue; must not swallow bare SQL errors.
+    await this.jobs.enqueueGameEventWebPush(client, input);
+  }
 
   async createDraft(
     userId: string,
@@ -569,6 +584,11 @@ export class GamesService {
       [gameId, reason],
     );
     const body = await this.loadGameDto(client, updated.rows[0]!.id);
+    // Snapshot pending/confirmed recipients BEFORE cascade mutates membership.
+    const cancelRecipients = await snapshotGameCancelRecipients(client, {
+      gameId,
+      gameVersion: body.version,
+    });
     await this.participations.cascadeCancelInTransaction(
       client,
       gameId,
@@ -591,6 +611,20 @@ export class GamesService {
         reason: reason,
       },
     });
+    for (const recipientUserId of cancelRecipients) {
+      await this.enqueueGamePush(client, {
+        kind: "game_cancelled",
+        eventKey: gameChangeEventKey(
+          "game_cancelled",
+          body.id,
+          body.version,
+        ),
+        recipientUserId,
+        actorUserId: userId,
+        gameId: body.id,
+        gameVersion: body.version,
+      });
+    }
     return bodyAfterCascade;
   }
 
@@ -841,6 +875,9 @@ export class GamesService {
     id: string;
     organizer_id: string | null;
     starts_at: Date;
+    ends_at: Date;
+    venue_id: string;
+    application_deadline_at: Date;
     status: string;
     version: number;
     capacity: number;
@@ -855,7 +892,10 @@ export class GamesService {
       id: string;
       organizer_id: string | null;
       starts_at: Date;
-    status: string;
+      ends_at: Date;
+      venue_id: string;
+      application_deadline_at: Date;
+      status: string;
       version: number;
       capacity: number;
       external_reserved_count: number;
@@ -863,7 +903,8 @@ export class GamesService {
       trainer_profile_id: string | null;
     }>(
       `SELECT id, organizer_id, status, version, capacity, external_reserved_count,
-              activity_kind, trainer_profile_id, starts_at
+              activity_kind, trainer_profile_id, starts_at, ends_at, venue_id,
+              application_deadline_at
        FROM games
        WHERE id = $1
        FOR UPDATE`,

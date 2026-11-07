@@ -1,0 +1,153 @@
+import { badRequest } from "../auth/problem";
+
+/** Preference column / API group for a game-event push kind. */
+export type GamePushEventGroup =
+  | "invites"
+  | "applicationDecisions"
+  | "newApplications"
+  | "gameChanges"
+  | "outcomeReminders";
+
+export type GamePushKind =
+  | "game_invitation"
+  | "participation_confirmed"
+  | "participation_rejected"
+  | "new_pending_application"
+  | "game_cancelled"
+  | "outcome_reminder";
+
+/** Owner 6704777482: time/venue edit + push DEFERRED NOT_IMPLEMENTED — reject at runtime. */
+export const DEFERRED_GAME_PUSH_KINDS = [
+  "game_time_changed",
+  "game_venue_changed",
+] as const;
+
+export type DeferredGamePushKind = (typeof DEFERRED_GAME_PUSH_KINDS)[number];
+
+export const GAME_PUSH_KINDS: readonly GamePushKind[] = [
+  "game_invitation",
+  "participation_confirmed",
+  "participation_rejected",
+  "new_pending_application",
+  "game_cancelled",
+  "outcome_reminder",
+] as const;
+
+export const GAME_PUSH_COPY: Record<GamePushKind, string> = {
+  game_invitation: "Приглашение на игру",
+  participation_confirmed: "Заявка подтверждена",
+  participation_rejected: "Заявка отклонена",
+  new_pending_application: "Новая заявка на игру",
+  game_cancelled: "Игра отменена",
+  outcome_reminder: "Напоминание об итоге игры",
+};
+
+export const GAME_PUSH_PREF_COLUMN: Record<GamePushEventGroup, string> = {
+  invites: "notify_invites",
+  applicationDecisions: "notify_application_decisions",
+  newApplications: "notify_new_applications",
+  gameChanges: "notify_game_changes",
+  outcomeReminders: "notify_outcome_reminders",
+};
+
+export function eventGroupForKind(kind: GamePushKind): GamePushEventGroup {
+  switch (kind) {
+    case "game_invitation":
+      return "invites";
+    case "participation_confirmed":
+    case "participation_rejected":
+      return "applicationDecisions";
+    case "new_pending_application":
+      return "newApplications";
+    case "game_cancelled":
+      return "gameChanges";
+    case "outcome_reminder":
+      return "outcomeReminders";
+  }
+}
+
+export function isDeferredGamePushKind(
+  value: unknown,
+): value is DeferredGamePushKind {
+  return (
+    typeof value === "string" &&
+    (DEFERRED_GAME_PUSH_KINDS as readonly string[]).includes(value)
+  );
+}
+
+/** Neutral click targets — no title/address/PII; ordinary auth routes only. */
+export function pathForGamePush(
+  kind: GamePushKind,
+  gameId: string,
+): string {
+  if (kind === "outcome_reminder") {
+    return assertSafeGamePushPath(`/my-games/${gameId}/results`, kind);
+  }
+  return assertSafeGamePushPath(`/games/${gameId}`, kind);
+}
+
+export function assertSafeGamePushPath(
+  path: string,
+  kind: GamePushKind,
+): string {
+  if (
+    !path.startsWith("/") ||
+    path.includes("://") ||
+    path.includes("\\") ||
+    path.includes("#")
+  ) {
+    throw badRequest("PUSH_PATH_INVALID", "Некорректный путь уведомления");
+  }
+  if (kind === "outcome_reminder") {
+    if (!/^\/my-games\/[0-9a-f-]{36}\/results$/i.test(path)) {
+      return "/my-games";
+    }
+    return path;
+  }
+  if (!/^\/games\/[0-9a-f-]{36}$/i.test(path)) {
+    return "/games";
+  }
+  return path;
+}
+
+export function isGamePushKind(value: unknown): value is GamePushKind {
+  return (
+    typeof value === "string" &&
+    (GAME_PUSH_KINDS as readonly string[]).includes(value)
+  );
+}
+
+/** Dedicated local DB or strict Actions ephemeral recipe — never arbitrary/live. */
+export const GAME_PUSH_DISPOSABLE_DB_NAME = "gobadminton_game_push_disposable";
+
+export function isGamePushDisposableDatabaseUrl(input: {
+  databaseUrl: string;
+  nodeEnv: string | undefined;
+  githubActions?: string;
+  gmap1DisposableDb?: string;
+  pgContainer?: string;
+  ciDbPort?: string;
+}): boolean {
+  let url: URL;
+  try {
+    url = new URL(input.databaseUrl);
+  } catch {
+    return false;
+  }
+  const dedicated =
+    decodeURIComponent(url.pathname) === `/${GAME_PUSH_DISPOSABLE_DB_NAME}`;
+  const hosted =
+    decodeURIComponent(url.pathname) === "/gobadminton" &&
+    input.githubActions === "true" &&
+    input.gmap1DisposableDb === "1" &&
+    /^gb-ci-\d+-\d+-\d+$/.test(input.pgContainer ?? "") &&
+    url.port === input.ciDbPort;
+  return (
+    input.nodeEnv === "test" &&
+    ["postgres:", "postgresql:"].includes(url.protocol) &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+    !url.search &&
+    !url.hash &&
+    (dedicated || hosted)
+  );
+}

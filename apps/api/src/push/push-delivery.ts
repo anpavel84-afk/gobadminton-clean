@@ -463,9 +463,9 @@ export async function deliverWebPushJob(input: {
       // unknown — provider may have accepted before crash/sent write (UNKNOWN).
       const claimed = await exec.query<{ id: string; status: string; attempt_count: number }>(
         `INSERT INTO web_push_delivery_claims (
-           message_id, subscription_id, recipient_user_id, kind, status, attempt_count
-         ) VALUES ($1, $2, $3, $4, 'claimed', 1)
-         ON CONFLICT (message_id, subscription_id) DO UPDATE
+           message_id, event_key, subscription_id, recipient_user_id, kind, status, attempt_count
+         ) VALUES ($1, NULL, $2, $3, $4, 'claimed', 1)
+         ON CONFLICT (message_id, subscription_id) WHERE message_id IS NOT NULL DO UPDATE
            SET status = 'claimed',
                attempt_count = web_push_delivery_claims.attempt_count + 1,
                updated_at = now()
@@ -605,6 +605,7 @@ export async function recoverPendingWebPushIntents(input: {
     `SELECT id, message_id, conversation_id, recipient_user_id, author_user_id, kind, game_id
      FROM web_push_delivery_intents
      WHERE status = 'pending'
+       AND message_id IS NOT NULL
        AND created_at > now() - interval '7 days'
      ORDER BY created_at ASC
      LIMIT $1`,

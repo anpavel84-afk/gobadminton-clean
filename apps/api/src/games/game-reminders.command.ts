@@ -1,5 +1,9 @@
 import type { Pool, PoolClient } from "pg";
 import type { AppEnv } from "../config/env";
+import {
+  persistGameEventPushIntentOptional,
+  reminderEventKey,
+} from "../push/game-push-intents";
 import { unrestrictedSql } from "../restrictions/policy";
 import {
   REMINDER_MAX_ORDINAL,
@@ -681,6 +685,28 @@ export class GameRemindersCommand {
       detail: input.detail,
       at: input.now,
     });
+    // Durable push intent in same worker TX; recover worker enqueues when push on.
+    // Deduped by reminder+ordinal so Later/reactivation cannot resend one ordinal.
+    if (this.env.WEB_PUSH_ENABLED) {
+      const game = await db.query<{ version: number }>(
+        `SELECT version FROM games WHERE id = $1`,
+        [input.gameId],
+      );
+      const gameVersion = game.rows[0]?.version;
+      if (typeof gameVersion === "number") {
+        // Optional: SAVEPOINT so push intent failure cannot abort markVisible.
+        await persistGameEventPushIntentOptional(db, {
+          kind: "outcome_reminder",
+          eventKey: reminderEventKey(input.reminderId, input.ordinal),
+          recipientUserId: input.organizerUserId,
+          actorUserId: null,
+          gameId: input.gameId,
+          gameVersion,
+          reminderId: input.reminderId,
+          reminderOrdinal: input.ordinal,
+        });
+      }
+    }
   }
 
   private async accountGate(

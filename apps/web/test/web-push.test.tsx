@@ -47,6 +47,13 @@ const getPushState = vi.hoisted(() =>
       featureAvailable: false,
       preferenceEnabled: false,
       preferenceVersion: 0,
+      eventPreferences: {
+        invites: false,
+        applicationDecisions: false,
+        newApplications: false,
+        gameChanges: false,
+        outcomeReminders: false,
+      },
       vapidPublicKey: null,
       accountFence: null,
       deviceCount: 0,

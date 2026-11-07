@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.38" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.39" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,17 +424,21 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.38",
-  "title": "Карта площадок без лишнего опроса каталога в простое",
+  "application_version": "0.1.0-alpha.39",
+  "title": "Push по шести событиям игры",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [],
-  "fixes": [
-    "Карта игр не повторяет полную загрузку каталога площадок, пока вкладка просто открыта без действий"
+  "additions": [
+    "Web Push: приглашение на игру",
+    "Web Push: новая заявка активному организатору",
+    "Web Push: подтверждение или отклонение заявки игроку",
+    "Web Push: отмена игры связанным участникам",
+    "Web Push: напоминание об итоге игры организатору (до трёх раз, с Later)"
   ],
+  "fixes": [],
   "known_limitations": [
-    "Приёмка владельцем ещё не выполнена",
-    "Часть сведений о площадках ещё находится на проверке",
+    "Изменение времени и места игры и связанные push отложены и не реализованы",
+    "Физический iPhone, GoBad и приёмка владельцем ещё не выполнены",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
   ],
   "feature_catalogue": "delta"
@@ -1679,6 +1683,34 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "fixes": [
       "Кнопки закрытия фильтров и подсказки игроков используют общий элемент закрытия",
       "Публичные маркеры площадок на карте появляются после создания карты, не дожидаясь полной загрузки подложки"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "298917fe49ccc57e8891e68a04e6408e4aa3a0d1",
+    "application_version": "0.1.0-alpha.38",
+    "version_label": "0.1.0-alpha.38",
+    "title": "Карта площадок без лишнего опроса каталога в простое",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42338172236-a1",
+        "accepted_at": "2026-11-07T04:27:56Z",
+        "api_digest": "sha256:0cdadb25832079fa29299750f4621354479579820abb9e4778e790870442d6b7",
+        "web_digest": "sha256:fadd2e445240ea6643a6bdb9c793a3c1a9a1210428ddb330e04d8d7f1a77e0ff",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "Карта игр не повторяет полную загрузку каталога площадок, пока вкладка просто открыта без действий"
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",

@@ -37,9 +37,15 @@ async function clearLocalNotifications() {
 }
 
 function safePath(value) {
-  return typeof value === "string" && value.startsWith("/messages")
-    ? value
-    : "/messages";
+  if (typeof value !== "string" || !value.startsWith("/") || value.includes("://") || value.includes("\\") || value.includes("#")) {
+    return "/messages";
+  }
+  if (value.startsWith("/messages")) return value;
+  // Game/results click targets — ordinary same-origin routes only.
+  if (/^\/games\/[0-9a-f-]{36}$/i.test(value)) return value;
+  if (/^\/my-games\/[0-9a-f-]{36}\/results$/i.test(value)) return value;
+  if (value === "/games" || value === "/my-games") return value;
+  return "/messages";
 }
 
 self.addEventListener("push", (event) => {
@@ -56,12 +62,13 @@ self.addEventListener("push", (event) => {
       const title =
         typeof data.title === "string" && data.title.length > 0
           ? data.title
-          : "Новое сообщение";
+          : "Уведомление GoBadminton";
       const path = safePath(data.path);
       const tag =
-        typeof data.tag === "string" && data.tag.startsWith("gb-msg-")
+        typeof data.tag === "string" &&
+        (data.tag.startsWith("gb-msg-") || data.tag.startsWith("gb-game-"))
           ? data.tag
-          : "gb-msg";
+          : "gb-push";
       const fence = typeof data.fence === "string" ? data.fence : null;
       const local = await activeFence();
       if (!fence || !local || fence !== local) {

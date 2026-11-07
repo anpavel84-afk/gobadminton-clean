@@ -12,6 +12,7 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import type { AppEnv } from "../config/env";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
 import type {
+  PushEventPreferencesDto,
   PushPreferenceBody,
   PushPreferenceResultDto,
   PushRegisterBody,
@@ -24,6 +25,66 @@ import {
   validatePushEndpoint,
   validatePushKeys,
 } from "./push.policy";
+
+const EVENT_PREF_OFF: PushEventPreferencesDto = {
+  invites: false,
+  applicationDecisions: false,
+  newApplications: false,
+  gameChanges: false,
+  outcomeReminders: false,
+};
+
+type PrefRow = {
+  enabled: boolean;
+  version: number;
+  notify_invites: boolean;
+  notify_application_decisions: boolean;
+  notify_new_applications: boolean;
+  notify_game_changes: boolean;
+  notify_outcome_reminders: boolean;
+};
+
+function mapEventPrefs(row: PrefRow | undefined): PushEventPreferencesDto {
+  if (!row) return { ...EVENT_PREF_OFF };
+  return {
+    invites: row.notify_invites === true,
+    applicationDecisions: row.notify_application_decisions === true,
+    newApplications: row.notify_new_applications === true,
+    gameChanges: row.notify_game_changes === true,
+    outcomeReminders: row.notify_outcome_reminders === true,
+  };
+}
+
+function parseEventPreferences(
+  raw: unknown,
+): Partial<PushEventPreferencesDto> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw unprocessable("PUSH_EVENT_PREFERENCE_INVALID", "Некорректные группы уведомлений");
+  }
+  const body = raw as Record<string, unknown>;
+  const allowed = new Set([
+    "invites",
+    "applicationDecisions",
+    "newApplications",
+    "gameChanges",
+    "outcomeReminders",
+  ]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      throw unprocessable("PUSH_EVENT_PREFERENCE_INVALID", "Некорректные группы уведомлений");
+    }
+  }
+  const out: Partial<PushEventPreferencesDto> = {};
+  for (const key of allowed) {
+    if (!(key in body)) continue;
+    if (typeof body[key] !== "boolean") {
+      throw unprocessable("PUSH_EVENT_PREFERENCE_INVALID", "Некорректные группы уведомлений");
+    }
+    out[key as keyof PushEventPreferencesDto] = body[key] as boolean;
+  }
+  return out;
+}
 
 export const WEB_PUSH_TRANSPORT = Symbol("WEB_PUSH_TRANSPORT");
 
@@ -61,6 +122,7 @@ export class PushService {
         featureAvailable: false,
         preferenceEnabled: false,
         preferenceVersion: 0,
+        eventPreferences: { ...EVENT_PREF_OFF },
         vapidPublicKey: null,
         accountFence: null,
         deviceCount: 0,
@@ -71,8 +133,12 @@ export class PushService {
     }
     const client = await this.pool.connect();
     try {
-      const pref = await client.query<{ enabled: boolean; version: number }>(
-        `SELECT enabled, version FROM web_push_preferences WHERE user_id = $1`,
+      const pref = await client.query<PrefRow>(
+        `SELECT enabled, version,
+                notify_invites, notify_application_decisions,
+                notify_new_applications, notify_game_changes,
+                notify_outcome_reminders
+         FROM web_push_preferences WHERE user_id = $1`,
         [userId],
       );
       const devices = await client.query<{
@@ -96,6 +162,7 @@ export class PushService {
         featureAvailable: true,
         preferenceEnabled: pref.rows[0]?.enabled === true,
         preferenceVersion: pref.rows[0]?.version ?? 0,
+        eventPreferences: mapEventPrefs(pref.rows[0]),
         vapidPublicKey: this.env.VAPID_PUBLIC_KEY ?? null,
         accountFence: accountFence(this.env.AUTH_PEPPER, userId),
         deviceCount: list.length,
@@ -125,10 +192,12 @@ export class PushService {
     if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
       throw unprocessable("EXPECTED_VERSION_INVALID", "Некорректный expectedVersion");
     }
+    const eventPatch = parseEventPreferences(body.eventPreferences);
     const operation = "push.preference.set";
     const requestHash = this.idempotency.requestHash({
       enabled: body.enabled,
       expectedVersion,
+      eventPreferences: eventPatch ?? null,
     });
     return this.mutations.runIdempotent<PushPreferenceResultDto>({
       actorId,
@@ -141,8 +210,12 @@ export class PushService {
         await client.query(`SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, [
           actorId,
         ]);
-        const existing = await client.query<{ enabled: boolean; version: number }>(
-          `SELECT enabled, version FROM web_push_preferences WHERE user_id = $1 FOR UPDATE`,
+        const existing = await client.query<PrefRow>(
+          `SELECT enabled, version,
+                  notify_invites, notify_application_decisions,
+                  notify_new_applications, notify_game_changes,
+                  notify_outcome_reminders
+           FROM web_push_preferences WHERE user_id = $1 FOR UPDATE`,
           [actorId],
         );
         const currentVersion = existing.rows[0]?.version ?? 0;
@@ -152,42 +225,90 @@ export class PushService {
             "Настройка уведомлений изменилась. Обновите данные.",
           );
         }
+        const nextEvents = {
+          ...mapEventPrefs(existing.rows[0]),
+          ...(eventPatch ?? {}),
+        };
         if (!existing.rows[0]) {
-          const inserted = await client.query<{ enabled: boolean; version: number }>(
-            `INSERT INTO web_push_preferences (user_id, enabled, version, updated_at)
-             VALUES ($1, $2, 1, now())
-             RETURNING enabled, version`,
-            [actorId, body.enabled],
+          const inserted = await client.query<PrefRow>(
+            `INSERT INTO web_push_preferences (
+               user_id, enabled, version, updated_at,
+               notify_invites, notify_application_decisions,
+               notify_new_applications, notify_game_changes,
+               notify_outcome_reminders
+             ) VALUES ($1, $2, 1, now(), $3, $4, $5, $6, $7)
+             RETURNING enabled, version,
+                       notify_invites, notify_application_decisions,
+                       notify_new_applications, notify_game_changes,
+                       notify_outcome_reminders`,
+            [
+              actorId,
+              body.enabled,
+              nextEvents.invites,
+              nextEvents.applicationDecisions,
+              nextEvents.newApplications,
+              nextEvents.gameChanges,
+              nextEvents.outcomeReminders,
+            ],
           );
           return {
             statusCode: 200,
             body: {
               preferenceEnabled: inserted.rows[0]!.enabled,
               preferenceVersion: inserted.rows[0]!.version,
+              eventPreferences: mapEventPrefs(inserted.rows[0]),
             },
           };
         }
-        if (existing.rows[0].enabled === body.enabled) {
+        const cur = existing.rows[0];
+        const sameMaster = cur.enabled === body.enabled;
+        const sameEvents =
+          cur.notify_invites === nextEvents.invites &&
+          cur.notify_application_decisions === nextEvents.applicationDecisions &&
+          cur.notify_new_applications === nextEvents.newApplications &&
+          cur.notify_game_changes === nextEvents.gameChanges &&
+          cur.notify_outcome_reminders === nextEvents.outcomeReminders;
+        if (sameMaster && sameEvents) {
           return {
             statusCode: 200,
             body: {
-              preferenceEnabled: existing.rows[0].enabled,
-              preferenceVersion: existing.rows[0].version,
+              preferenceEnabled: cur.enabled,
+              preferenceVersion: cur.version,
+              eventPreferences: mapEventPrefs(cur),
             },
           };
         }
-        const updated = await client.query<{ enabled: boolean; version: number }>(
+        const updated = await client.query<PrefRow>(
           `UPDATE web_push_preferences
-           SET enabled = $2, version = version + 1, updated_at = now()
+           SET enabled = $2,
+               notify_invites = $3,
+               notify_application_decisions = $4,
+               notify_new_applications = $5,
+               notify_game_changes = $6,
+               notify_outcome_reminders = $7,
+               version = version + 1,
+               updated_at = now()
            WHERE user_id = $1
-           RETURNING enabled, version`,
-          [actorId, body.enabled],
+           RETURNING enabled, version,
+                     notify_invites, notify_application_decisions,
+                     notify_new_applications, notify_game_changes,
+                     notify_outcome_reminders`,
+          [
+            actorId,
+            body.enabled,
+            nextEvents.invites,
+            nextEvents.applicationDecisions,
+            nextEvents.newApplications,
+            nextEvents.gameChanges,
+            nextEvents.outcomeReminders,
+          ],
         );
         return {
           statusCode: 200,
           body: {
             preferenceEnabled: updated.rows[0]!.enabled,
             preferenceVersion: updated.rows[0]!.version,
+            eventPreferences: mapEventPrefs(updated.rows[0]),
           },
         };
       },
