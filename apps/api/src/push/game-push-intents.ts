@@ -17,14 +17,14 @@ export type GamePushIntentInput = {
   participationId?: string | null;
   reminderId?: string | null;
   reminderOrdinal?: number | null;
-  /** Snapshot of game_managers.updated_at for new_pending_application epoch fence. */
-  managerUpdatedAt?: Date | string | null;
 };
 
 /**
  * Persist a durable game-event push intent in the caller's business TX.
  * Never carries title/body/PII. Idempotent on (event_key, recipient).
  * Does not enqueue PgBoss — caller uses JobEnqueueService SAVEPOINT path.
+ * For new_pending_application, manager_updated_at is captured server-side from
+ * game_managers.updated_at (exact timestamptz) — never via JS Date/ISO.
  */
 export async function persistGameEventPushIntent(
   client: GamePushSql,
@@ -40,7 +40,19 @@ export async function persistGameEventPushIntent(
        NULL, NULL, $1, NULL,
        $2, $3, $4, $5, $6,
        $7, $8, $9, $10,
-       $11, 'pending'
+       CASE
+         WHEN $2::text = 'new_pending_application' THEN (
+           SELECT gm.updated_at
+           FROM game_managers gm
+           WHERE gm.game_id = $3
+             AND gm.user_id = $1
+             AND gm.status = 'active'
+             AND gm.role IN ('owner', 'manager')
+           LIMIT 1
+         )
+         ELSE NULL
+       END,
+       'pending'
      )
      ON CONFLICT (event_key, recipient_user_id) WHERE event_key IS NOT NULL
      DO NOTHING`,
@@ -55,7 +67,6 @@ export async function persistGameEventPushIntent(
       input.reminderOrdinal ?? null,
       input.gameVersion,
       input.actorUserId ?? null,
-      input.managerUpdatedAt ?? null,
     ],
   );
 }

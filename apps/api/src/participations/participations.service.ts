@@ -89,18 +89,15 @@ export class ParticipationsService {
   private async listActiveOrganizers(
     client: PoolClient,
     gameId: string,
-  ): Promise<Array<{ userId: string; updatedAt: Date }>> {
-    const rows = await client.query<{ user_id: string; updated_at: Date }>(
-      `SELECT user_id, updated_at FROM game_managers
+  ): Promise<string[]> {
+    const rows = await client.query<{ user_id: string }>(
+      `SELECT user_id FROM game_managers
        WHERE game_id = $1
          AND status = 'active'
          AND role IN ('owner', 'manager')`,
       [gameId],
     );
-    return rows.rows.map((r) => ({
-      userId: r.user_id,
-      updatedAt: r.updated_at,
-    }));
+    return rows.rows.map((r) => r.user_id);
   }
 
   /** Only new regular drafts: caller inserted Game and granted owner in this transaction. */
@@ -243,7 +240,7 @@ export class ParticipationsService {
             },
           });
           const organizers = await this.listActiveOrganizers(client, body.gameId);
-          for (const organizer of organizers) {
+          for (const organizerUserId of organizers) {
             await this.enqueueGamePush(client, {
               kind: "new_pending_application",
               eventKey: participationEventKey(
@@ -251,12 +248,11 @@ export class ParticipationsService {
                 body.id,
                 body.version,
               ),
-              recipientUserId: organizer.userId,
+              recipientUserId: organizerUserId,
               actorUserId: userId,
               gameId: body.gameId,
               gameVersion: game.version,
               participationId: body.id,
-              managerUpdatedAt: organizer.updatedAt,
             });
           }
         } else if (row.status === "withdrawn") {
@@ -302,7 +298,7 @@ export class ParticipationsService {
             },
           });
           const organizers = await this.listActiveOrganizers(client, body.gameId);
-          for (const organizer of organizers) {
+          for (const organizerUserId of organizers) {
             await this.enqueueGamePush(client, {
               kind: "new_pending_application",
               eventKey: participationEventKey(
@@ -310,12 +306,11 @@ export class ParticipationsService {
                 body.id,
                 body.version,
               ),
-              recipientUserId: organizer.userId,
+              recipientUserId: organizerUserId,
               actorUserId: userId,
               gameId: body.gameId,
               gameVersion: game.version,
               participationId: body.id,
-              managerUpdatedAt: organizer.updatedAt,
             });
           }
         } else {

@@ -266,28 +266,24 @@ export async function gameEventEligible(
       ) {
         return false;
       }
-      const manager = await exec.query<{ updated_at: Date }>(
-        `SELECT updated_at FROM game_managers
-         WHERE game_id = $1 AND user_id = $2
-           AND status = 'active' AND role IN ('owner', 'manager')
+      // Exact timestamptz epoch fence: missing intent/snapshot always denies.
+      // Compare in SQL only — JS Date.getTime truncates Postgres microseconds.
+      const proof = await exec.query<{ n: number }>(
+        `SELECT 1 AS n
+         FROM web_push_delivery_intents i
+         INNER JOIN game_managers gm
+           ON gm.game_id = $3
+          AND gm.user_id = $2
+          AND gm.status = 'active'
+          AND gm.role IN ('owner', 'manager')
+          AND i.manager_updated_at IS NOT NULL
+          AND i.manager_updated_at = gm.updated_at
+         WHERE i.event_key = $1
+           AND i.recipient_user_id = $2
          LIMIT 1`,
-        [payload.gameId, payload.recipientUserId],
+        [payload.eventKey, payload.recipientUserId, payload.gameId],
       );
-      const m = manager.rows[0];
-      if (!m) return false;
-      const intent = await exec.query<{ manager_updated_at: Date | null }>(
-        `SELECT manager_updated_at FROM web_push_delivery_intents
-         WHERE event_key = $1 AND recipient_user_id = $2
-         LIMIT 1`,
-        [payload.eventKey, payload.recipientUserId],
-      );
-      const snap = intent.rows[0]?.manager_updated_at;
-      if (snap) {
-        const snapMs = new Date(snap).getTime();
-        const curMs = new Date(m.updated_at).getTime();
-        if (snapMs !== curMs) return false;
-      }
-      return true;
+      return Boolean(proof.rows[0]);
     }
     case "game_cancelled": {
       if (g.status !== "cancelled") return false;

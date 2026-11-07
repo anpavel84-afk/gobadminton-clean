@@ -781,4 +781,215 @@ run("#496 game event push — disposable", () => {
     });
     expect(denied.delivered).toBe(0);
   });
+
+  it("new_pending_application epoch: microsecond-exact SQL proof; null/absent denies; +1µs suppresses", async () => {
+    sent.length = 0;
+    const game = await seedPublishedGame(organizer);
+    await seedPush(organizer, `epoch-${randomUUID().slice(0, 8)}`, {
+      newApplications: true,
+    });
+
+    // Fixed epoch with non-zero microseconds (JS Date.getTime cannot preserve µs).
+    const epochLiteral = "2026-03-15 10:20:30.123456+00";
+    await pool.query(
+      `UPDATE game_managers
+       SET updated_at = $3::timestamptz
+       WHERE game_id = $1 AND user_id = $2
+         AND status = 'active' AND role IN ('owner', 'manager')`,
+      [game.id, organizer.userId, epochLiteral],
+    );
+
+    // Unique (game_id, user_id) — one applicant actor per participation fixture.
+    async function seedPendingForNewApplicant() {
+      const applicant = await mintActor(`EpochApp-${randomUUID().slice(0, 8)}`);
+      const participationId = randomUUID();
+      await pool.query(
+        `INSERT INTO participations (id, game_id, user_id, status, attempt_number, version, requested_at)
+         VALUES ($1,$2,$3,'pending',1,1,now())`,
+        [participationId, game.id, applicant.userId],
+      );
+      const eventKey = participationEventKey(
+        "new_pending_application",
+        participationId,
+        1,
+      );
+      return { applicant, participationId, eventKey };
+    }
+
+    // Absent intent/snapshot → deny.
+    const absentCase = await seedPendingForNewApplicant();
+    const absent = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "new_pending_application",
+        eventKey: absentCase.eventKey,
+        recipientUserId: organizer.userId,
+        actorUserId: absentCase.applicant.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId: absentCase.participationId,
+      },
+    });
+    expect(absent.delivered).toBe(0);
+
+    // Intent present but manager_updated_at NULL → deny.
+    const nullCase = await seedPendingForNewApplicant();
+    await pool.query(
+      `INSERT INTO web_push_delivery_intents (
+         message_id, conversation_id, recipient_user_id, author_user_id,
+         kind, game_id, event_key, invitation_id, participation_id,
+         reminder_id, reminder_ordinal, game_version, actor_user_id,
+         manager_updated_at, status
+       ) VALUES (
+         NULL, NULL, $1, NULL,
+         'new_pending_application', $2, $3, NULL, $4,
+         NULL, NULL, $5, $6,
+         NULL, 'pending'
+       )`,
+      [
+        organizer.userId,
+        game.id,
+        nullCase.eventKey,
+        nullCase.participationId,
+        game.version,
+        nullCase.applicant.userId,
+      ],
+    );
+    const nullProof = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "new_pending_application",
+        eventKey: nullCase.eventKey,
+        recipientUserId: organizer.userId,
+        actorUserId: nullCase.applicant.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId: nullCase.participationId,
+      },
+    });
+    expect(nullProof.delivered).toBe(0);
+
+    // Server-side persist captures exact timestamptz (incl. microseconds) → deliver.
+    const positiveCase = await seedPendingForNewApplicant();
+    const persistClient = await pool.connect();
+    try {
+      await persistClient.query("BEGIN");
+      await persistGameEventPushIntent(persistClient, {
+        kind: "new_pending_application",
+        eventKey: positiveCase.eventKey,
+        recipientUserId: organizer.userId,
+        actorUserId: positiveCase.applicant.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId: positiveCase.participationId,
+      });
+      await persistClient.query("COMMIT");
+    } finally {
+      persistClient.release();
+    }
+
+    const snap = await pool.query<{
+      epoch_text: string;
+      equal_exact: boolean;
+    }>(
+      `SELECT i.manager_updated_at::text AS epoch_text,
+              (i.manager_updated_at = $3::timestamptz) AS equal_exact
+       FROM web_push_delivery_intents i
+       WHERE i.event_key = $1 AND i.recipient_user_id = $2`,
+      [positiveCase.eventKey, organizer.userId, epochLiteral],
+    );
+    expect(snap.rows[0]?.equal_exact).toBe(true);
+    expect(snap.rows[0]?.epoch_text).toContain("123456");
+
+    const positive = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "new_pending_application",
+        eventKey: positiveCase.eventKey,
+        recipientUserId: organizer.userId,
+        actorUserId: positiveCase.applicant.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId: positiveCase.participationId,
+      },
+    });
+    expect(positive.delivered).toBeGreaterThanOrEqual(1);
+
+    // +1µs on role updated_at shares JS millisecond but must SQL-suppress.
+    await pool.query(
+      `UPDATE game_managers
+       SET updated_at = $3::timestamptz
+       WHERE game_id = $1 AND user_id = $2
+         AND status = 'active' AND role IN ('owner', 'manager')`,
+      [game.id, organizer.userId, epochLiteral],
+    );
+    const microCase = await seedPendingForNewApplicant();
+    const persistClient2 = await pool.connect();
+    try {
+      await persistClient2.query("BEGIN");
+      await persistGameEventPushIntent(persistClient2, {
+        kind: "new_pending_application",
+        eventKey: microCase.eventKey,
+        recipientUserId: organizer.userId,
+        actorUserId: microCase.applicant.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId: microCase.participationId,
+      });
+      await persistClient2.query("COMMIT");
+    } finally {
+      persistClient2.release();
+    }
+
+    await pool.query(
+      `UPDATE game_managers
+       SET updated_at = updated_at + interval '1 microsecond'
+       WHERE game_id = $1 AND user_id = $2
+         AND status = 'active' AND role IN ('owner', 'manager')`,
+      [game.id, organizer.userId],
+    );
+
+    const afterBump = await pool.query<{
+      sql_eq: boolean;
+      js_ms_equal: boolean;
+    }>(
+      `SELECT
+         (i.manager_updated_at = gm.updated_at) AS sql_eq,
+         (
+           (EXTRACT(EPOCH FROM i.manager_updated_at) * 1000)::bigint
+           = (EXTRACT(EPOCH FROM gm.updated_at) * 1000)::bigint
+         ) AS js_ms_equal
+       FROM web_push_delivery_intents i
+       JOIN game_managers gm
+         ON gm.game_id = $2 AND gm.user_id = $3
+        AND gm.status = 'active' AND gm.role IN ('owner', 'manager')
+       WHERE i.event_key = $1 AND i.recipient_user_id = $3`,
+      [microCase.eventKey, game.id, organizer.userId],
+    );
+    expect(afterBump.rows[0]?.js_ms_equal).toBe(true);
+    expect(afterBump.rows[0]?.sql_eq).toBe(false);
+
+    sent.length = 0;
+    const suppressed = await deliverGameEventWebPushJob({
+      pool,
+      env,
+      transport,
+      payload: {
+        kind: "new_pending_application",
+        eventKey: microCase.eventKey,
+        recipientUserId: organizer.userId,
+        actorUserId: microCase.applicant.userId,
+        gameId: game.id,
+        gameVersion: game.version,
+        participationId: microCase.participationId,
+      },
+    });
+    expect(suppressed.delivered).toBe(0);
+  });
 });
