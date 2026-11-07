@@ -1,41 +1,47 @@
-# Handoff — #506 MOD-V2-B1b · role review/reply human-case gate (attempt 21)
+# Handoff — #506 MOD-V2-B1b · role review/reply human-case gate (attempt 22)
 
 ## Assignment
 
-- Issue: #506 continuation (`OWNER506_MOD_V2_B1B_ROLE_REVIEW_AND_REPLY_EXACT_HUMAN_CASE_GATE`)
+- Issue: #506 continuation (`OWNER506_ROLE_REVIEW_QA_ADMIN_PREPARE_FENCES_AND_TYPE_FIX`)
 - Author: Cursor Auto (sole app source writer)
-- Base (task): `a579213898a3f78b4f0bf35660dd3ad03b8bfc50` (independently QA-PASS B1a candidate47 / PR #511 / Product CI `42402270957`, not yet DEV.47)
-- CURRENT actual DEV.46 SHA `264d9e1c` ACCEPTED with A+#406 illustrations remains parent/runtime fact — this staged WT does not claim DEV.47 or release metadata
-- Scope: coherent public organizer/trainer review text + reply moderation only (existing RoleReputation public submission + Admin exact approve/restore paths)
-- Not in this pass: venue reviews (B1c), venueAdmin/import (B2), private C, avatars/Admin metadata D, #507 I1 open, PROD, deploy, release metadata, architecture rewrite
+- Base (task): `33baf0d3839c73750bec6195343b173abcc2dc4e` (Sol Medium FAIL: TS2322 narrowing + admin assess-before-version/receipt)
+- CURRENT actual DEV.46 SHA `264d9e1c` ACCEPTED remains parent/runtime fact — this staged WT does not claim DEV.47/48 or release metadata
+- Comment release merged `cf0349ad` and deploying in existing guarded workflow is parent fact; actual still 46 until receipt
+- Scope: bounded B1b repair only (type narrowing + admin approve/restore preflight fences + web partial mock)
+- Not in this pass: venue B1c/B2/C/D/#507, PROD, deploy, release metadata, architecture rewrite, fake CI/DEV.48
+
+## Independent QA findings fixed (Sol Medium / attempt 21)
+
+1. **BLOCKING TS2322** `admin/role-reputation.service.ts`: closure lost narrowing of `input.decision` into `assertCurrentPublishGates`. Fixed with explicit `const publishDecision: "approve" | "restore"` (no `any` / unsafe cast).
+2. **HIGH** Admin approve/restore called assess before `expectedCaseVersion` and before existing command receipt — stale/duplicate same-key could pay. Fixed via bounded `AdminService.privilegedRunWithExternalPrepare`: authorize + case/revision/consent/independence + same-key claim **before** provider; completed receipt replay / fingerprint mismatch / processing CIP / unknown seal with **zero** paid I/O; concurrent same-key ≤1 paid attempt without DB/advisory locks across network.
+3. **PARENT web 2/6**: `vi.mock('../src/lib/api-client')` omitted `publicTextModerationNotice` required by `games-api` helper. Fixed with partial mock keeping the real export; 422 `fields.text` / 503 notice tests retained.
 
 ## What changed (source)
 
-- Migration **0063** (additive): `role_review_body` / `role_reply_body` surfaces; `role_review_revision` / `role_reply_revision` entity kinds; nullable `content_moderation_bindings.role_reputation_decision_id` FK to exact human `role_reputation_decisions` (publication only). 0061/0062 untouched. Rollback retains history/expanded CHECKs.
-- `assessReviewTexts` + `bindReviewTexts`: hard-safety categories → 422; soft/ambiguous → persisted `decision=review` (never forged allow); clean classifier ALLOW still creates **real human pending intake** + candidate binding (no auto-publish).
-- Consumer `RoleReputationService` create/resubmit/reply submit use `runWithExternalPrepare` (authorize → provider outside locks → final version/consent/fences + candidate bind). Withdraw/appeal/reject paths stay provider-independent; prior approved tip retained on 422/503.
-- Admin approve/restore: authorize + consent/independence preflight; assess exact consented public text outside privileged TX when needed; inside TX revalidate and bind publication with human decision FK. Read/reject/withdraw: no provider. Provider `review` stays `review` on human allow.
-- Ordinary A/B1a `approveTexts` rejecting semantics unchanged. Image M1 alias/cache untouched. Broad venue comments remain runtime-closed pending #507 (not permanent policy). Role-only paths do not open venue/player comments.
-- UI: RoleReviewComposer + Admin RoleReputationCases surface moderation errors without logging private content. OpenAPI create/command/reply descriptions updated for B1b errors.
-- Tests: `public-role-review-moderation.test.ts` (parent own DB); targeted unit/migration/web/admin extensions. No `.evidence` scratch in repo.
+- Migration **0063** additive: `admin_command_receipts.reservation_state|claim_nonce|expires_at`; `response_ciphertext` nullable only for processing/unknown; completed rows keep ciphertext. 0061/0062 untouched. Rollback retains history/columns.
+- `AdminService.privilegedRunWithExternalPrepare` + replay/command readers honor processing/unknown (no TTL reclaim / paid replay). Nonces / exact claim owner / unknown no-TTL semantics aligned with QA-accepted consumer `MutationRunner`. Admin session/step-up/origin/CSRF/RBAC/assigned-case scope unchanged — not replaced by consumer ActorFence.
+- `AdminRoleReputationService.decide`: reject/remove/retain/request_correction stay provider-independent via `privilegedCommand`; approve/restore use external prepare + narrowed publish decision.
+- Web role-reputation test: partial `api-client` mock.
+- Integration tests added: stale `expectedCaseVersion` → 0 provider; authorized receipt replay → 0 provider; concurrent same-key legacy pending delayed → one attempt + TTL non-reclaim; unknown seal survives TTL + wrong `claim_nonce` cannot complete.
 
 ## Coverage honesty
 
 | Scope | Status this pass |
 | --- | --- |
-| A | SOURCE/PASS CI pending (parent DEV ACCEPTED separately) — not re-claimed here |
-| B1a comments | Independently QA-PASS candidate47 / PR #511 / CI `42402270957` per Owner task; **not yet DEV.47** |
-| B1b role review/reply | **SOURCE_CANDIDATE** — not DEV, not READY/ACTIVE |
-| B1c venue reviews / B2 / C / D / #507 | pending |
+| A | parent/runtime — not re-claimed |
+| B1a comments | Independently QA-PASS candidate47 / PR #511 — **not yet DEV.47** |
+| B1b role review/reply | **SOURCE_CANDIDATE repair22** — not DEV, not READY/ACTIVE |
+| B1c / B2 / C / D / #507 | pending |
 
 ## Checks run by author
 
-- Targeted unit text-policy B1b surfaces; TypeScript/lint on touched paths where feasible in this environment.
-- Full isolated DB integration + independent Codex QA + Product CI + DEV release: **parent**.
+- Targeted API typecheck on touched admin/role paths; web role-reputation tests; related unit/lint where feasible.
+- Full isolated DB integration of `public-role-review-moderation.test.ts` (+ related disposable suites): **parent**.
+- No `.evidence` scratch in repo. Existing Astra reconciliation reused (complete).
 
 ## Remaining / next (parent)
 
-1. Isolated DB run of `public-role-review-moderation.test.ts` + related disposable role-reputation suites.
-2. Independent Codex Sol Medium QA → Product CI → trusted merge/DEV after frozen47 boundary + accepted47 integration.
+1. Isolated DB run of new fence cases + existing public-role / disposable role-reputation suites.
+2. Independent Codex Sol Medium QA → Product CI → trusted merge/DEV after frozen47 boundary.
 3. No fake DEV/UAT claims. UAT stays NOT_TESTED until Owner tests after DEV ACCEPTED.
 4. B1c venue reviews next within #506 when admitted.

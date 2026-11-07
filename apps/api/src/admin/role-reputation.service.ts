@@ -570,23 +570,18 @@ export class AdminRoleReputationService {
   ) {
     this.enabled();
     // Read/reject/withdraw/retain/request_correction never call the provider.
-    // Approve/restore: authorize first; if old pending lacks classifier binding,
-    // assess exact consented public text outside the privileged command TX.
-    let preparedAssessment: ReviewTextBatchAssessment | null = null;
-    let preparedRevisionMeta: {
-      text: string;
-      resourceVersion: number;
-      actorUserId: string;
-    } | null = null;
-    if (input.decision === "approve" || input.decision === "restore") {
-      const preflight = await this.admin.privilegedMutationPreflight(
+    if (input.decision !== "approve" && input.decision !== "restore") {
+      return this.admin.privilegedCommand(
         request,
+        key,
         "user.lookup",
+        true,
+        "role_reputation.decide",
+        { caseId, ...input },
+        async (client, actor, keyHash) =>
+          this.executeDecideMutation(client, actor, keyHash, caseId, input, null, null),
         async (client, actor) => {
           await this.requireInstalled(client);
-          if (!canReadAssignedEvidence(actor)) {
-            throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
-          }
           const caze = await this.scopedCase(client, actor, caseId);
           if (caze.assigned_to !== actor.principalId) {
             throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
@@ -605,56 +600,41 @@ export class AdminRoleReputationService {
             actor,
             await this.independenceForBound(client, slot, bound.pending, gameIds),
           );
-          const rev = await this.consumerReputation.loadRevisionPublicText(client, {
-            targetKind: input.targetKind,
-            revisionId: input.exactRevisionId,
-          });
-          if (!rev || rev.resourceVersion !== input.expectedResourceVersion) {
-            throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
-          }
-          // Revalidate consent/hash/independence gates on the exact revision (outside provider).
-          await this.consumerReputation.assertCurrentPublishGates(client, {
-            decision: input.decision,
-            targetKind: input.targetKind,
-            revisionId: input.exactRevisionId,
-            slot: {
-              id: slot.id,
-              author_user_id: slot.author_user_id,
-              subject_user_id: slot.subject_user_id,
-              role: slot.role as "organization" | "training",
-              public_handle: slot.public_handle,
-              status: slot.status,
-              version: slot.version,
-              approved_revision_id: slot.approved_revision_id,
-              pending_revision_id: slot.pending_revision_id,
-              basis_under_review: false,
-            },
-          });
-          // Assess outside TX reuses cached fingerprint evidence when candidate already exists
-          // (no second paid call). Missing binding still classifies the exact consented text.
-          return {
-            userId: actor.principal.user_id,
-            revision: rev,
-          };
         },
       );
-      preparedRevisionMeta = preflight.revision;
-      // Provider outside admin DB/advisory locks; only exact public-consented projection.
-      preparedAssessment = await this.consumerReputation.assessPublicRoleText(
-        preflight.userId,
-        input.targetKind,
-        preflight.revision.text,
-      );
     }
-    return this.admin.privilegedCommand(
+
+    // Narrowed publish decision — closures must not widen back to remove|retain|…
+    const publishDecision: "approve" | "restore" = input.decision;
+    let assessActorUserId: string | null = null;
+    let preparedRevisionMeta: {
+      text: string;
+      resourceVersion: number;
+      actorUserId: string;
+    } | null = null;
+
+    // Authorize + expectedCaseVersion + consent/independence + same-key receipt claim
+    // BEFORE paid assess. Concurrent same-key losers get CIP with zero provider I/O.
+    return this.admin.privilegedRunWithExternalPrepare<
+      ReviewTextBatchAssessment,
+      {
+        caseId: string;
+        caseVersion: number;
+        decision: RoleReviewDecide["decision"];
+        auditId: string;
+      }
+    >(
       request,
       key,
       "user.lookup",
       true,
       "role_reputation.decide",
       { caseId, ...input },
-      async (client, actor, keyHash) => {
+      async (client, actor) => {
         await this.requireInstalled(client);
+        if (!canReadAssignedEvidence(actor)) {
+          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+        }
         const caze = await this.scopedCase(client, actor, caseId);
         if (caze.version !== input.expectedCaseVersion) {
           throw conflict("VERSION_CONFLICT", "Версия обращения устарела");
@@ -662,21 +642,12 @@ export class AdminRoleReputationService {
         if (caze.assigned_to !== actor.principalId) {
           throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
         }
-        // Approve/restore need evidence.assigned.read — IDs alone must not bypass qualification.
-        if (
-          (input.decision === "approve" || input.decision === "restore") &&
-          !canReadAssignedEvidence(actor)
-        ) {
-          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
-        }
-        // Generic case status=resolved alone never publishes.
         const bound = await this.loadBoundLink(client, caseId);
         this.assertBoundRevision(bound.pending, input);
         const slot = (
-          await client.query<SlotRow>(
-            `SELECT * FROM role_review_slots WHERE id=$1 FOR UPDATE`,
-            [bound.slot_id],
-          )
+          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [
+            bound.slot_id,
+          ])
         ).rows[0];
         if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
         const gameIds = await this.gameIdsForSlot(client, slot.id);
@@ -685,281 +656,348 @@ export class AdminRoleReputationService {
           actor,
           await this.independenceForBound(client, slot, bound.pending, gameIds),
         );
-        if (input.targetKind === "review") {
-          const rev = (
-            await client.query<{
-              id: string;
-              resource_version: number;
-              lifecycle: string;
-              projection_hash: string;
-              slot_id: string;
-            }>(`SELECT * FROM role_review_revisions WHERE id=$1`, [input.exactRevisionId])
-          ).rows[0];
-          if (!rev || rev.slot_id !== slot.id) {
-            throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
-          }
-          if (rev.resource_version !== input.expectedResourceVersion) {
-            throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
-          }
-          if (slot.status === "withdrawn" && input.decision === "approve") {
-            throw unprocessableWithdrawn();
-          }
-          if (input.decision === "approve" || input.decision === "restore") {
-            await this.consumerReputation.assertCurrentPublishGates(client, {
-              decision: input.decision,
-              targetKind: "review",
-              revisionId: rev.id,
-              slot: {
-                id: slot.id,
-                author_user_id: slot.author_user_id,
-                subject_user_id: slot.subject_user_id,
-                role: slot.role as "organization" | "training",
-                public_handle: slot.public_handle,
-                status: slot.status,
-                version: slot.version,
-                approved_revision_id: slot.approved_revision_id,
-                pending_revision_id: slot.pending_revision_id,
-                basis_under_review: false,
-              },
-            });
-          }
-          if (input.decision === "approve") {
-            // Only the current pending revision may be approved. Reports about already
-            // approved text must use retain — never clear a newer pending via old id.
-            if (slot.pending_revision_id !== rev.id) {
-              throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
-            }
-            await client.query(
-              `UPDATE role_review_slots
-               SET status='published',
-                   approved_revision_id=$2,
-                   pending_revision_id=NULL,
-                   version=version+1,
-                   updated_at=clock_timestamp()
-               WHERE id=$1`,
-              [slot.id, rev.id],
-            );
-          } else if (input.decision === "remove") {
-            await client.query(
-              `UPDATE role_review_slots
-               SET status='removed', version=version+1, updated_at=clock_timestamp()
-               WHERE id=$1`,
-              [slot.id],
-            );
-          } else if (input.decision === "restore") {
-            if (slot.status !== "removed" || !slot.approved_revision_id) {
-              throw conflict("RESTORE_DENIED", "Восстановление недоступно");
-            }
-            await client.query(
-              `UPDATE role_review_slots
-               SET status='published', version=version+1, updated_at=clock_timestamp()
-               WHERE id=$1`,
-              [slot.id],
-            );
-          } else if (input.decision === "request_correction") {
-            await client.query(
-              `UPDATE role_review_slots
-               SET status='needs_correction', version=version+1, updated_at=clock_timestamp()
-               WHERE id=$1`,
-              [slot.id],
-            );
-          } else if (input.decision === "retain") {
-            // keep published visible after report — does not clear pending_revision_id
-            await client.query(
-              `UPDATE role_review_slots
-               SET version=version+1, updated_at=clock_timestamp()
-               WHERE id=$1`,
-              [slot.id],
-            );
-          }
-        } else {
-          const rev = (
-            await client.query<{
-              id: string;
-              resource_version: number;
-              slot_id: string;
-            }>(`SELECT * FROM role_review_reply_revisions WHERE id=$1`, [input.exactRevisionId])
-          ).rows[0];
-          if (!rev || rev.slot_id !== slot.id) {
-            throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
-          }
-          if (rev.resource_version !== input.expectedResourceVersion) {
-            throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
-          }
-          const reply = (
-            await client.query<{
-              pending_revision_id: string | null;
-              approved_revision_id: string | null;
-              status: string;
-            }>(`SELECT pending_revision_id, approved_revision_id, status FROM role_review_replies WHERE slot_id=$1 FOR UPDATE`, [
-              slot.id,
-            ])
-          ).rows[0];
-          if (!reply) throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
-          if (input.decision === "approve" || input.decision === "restore") {
-            await this.consumerReputation.assertCurrentPublishGates(client, {
-              decision: input.decision,
-              targetKind: "reply",
-              revisionId: rev.id,
-              slot: {
-                id: slot.id,
-                author_user_id: slot.author_user_id,
-                subject_user_id: slot.subject_user_id,
-                role: slot.role as "organization" | "training",
-                public_handle: slot.public_handle,
-                status: slot.status,
-                version: slot.version,
-                approved_revision_id: slot.approved_revision_id,
-                pending_revision_id: slot.pending_revision_id,
-                basis_under_review: false,
-              },
-            });
-          }
-          if (input.decision === "approve") {
-            if (reply.pending_revision_id !== rev.id) {
-              throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
-            }
-            await client.query(
-              `UPDATE role_review_replies
-               SET status='published',
-                   approved_revision_id=$2,
-                   pending_revision_id=NULL,
-                   version=version+1,
-                   updated_at=clock_timestamp()
-               WHERE slot_id=$1`,
-              [slot.id, rev.id],
-            );
-          } else if (input.decision === "remove") {
-            await client.query(
-              `UPDATE role_review_replies
-               SET status='removed', version=version+1, updated_at=clock_timestamp()
-               WHERE slot_id=$1`,
-              [slot.id],
-            );
-          } else if (input.decision === "restore") {
-            await client.query(
-              `UPDATE role_review_replies
-               SET status='published', version=version+1, updated_at=clock_timestamp()
-               WHERE slot_id=$1`,
-              [slot.id],
-            );
-          } else if (input.decision === "request_correction") {
-            await client.query(
-              `UPDATE role_review_replies
-               SET status='needs_correction', version=version+1, updated_at=clock_timestamp()
-               WHERE slot_id=$1`,
-              [slot.id],
-            );
-          } else if (input.decision === "retain") {
-            await client.query(
-              `UPDATE role_review_replies
-               SET version=version+1, updated_at=clock_timestamp()
-               WHERE slot_id=$1`,
-              [slot.id],
-            );
-          }
-        }
-        const decisionRow = (
-          await client.query<{ id: string }>(
-            `INSERT INTO role_reputation_decisions
-               (case_id, slot_id, decision, target_kind, exact_revision_id,
-                expected_case_version, expected_resource_version, rationale, actor_principal_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             RETURNING id`,
-            [
-              caseId,
-              slot.id,
-              input.decision,
-              input.targetKind,
-              input.exactRevisionId,
-              input.expectedCaseVersion,
-              input.expectedResourceVersion,
-              input.rationale,
-              actor.principalId,
-            ],
-          )
-        ).rows[0]!;
-        // Human allow on provider review: keep approval.decision=review; bind exact human FK.
-        if (
-          (input.decision === "approve" || input.decision === "restore") &&
-          preparedAssessment &&
-          preparedRevisionMeta
-        ) {
-          const freshRev = await this.consumerReputation.loadRevisionPublicText(client, {
-            targetKind: input.targetKind,
-            revisionId: input.exactRevisionId,
-          });
-          if (
-            !freshRev ||
-            freshRev.resourceVersion !== preparedRevisionMeta.resourceVersion ||
-            freshRev.text !== preparedRevisionMeta.text
-          ) {
-            throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
-          }
-          await this.consumerReputation.bindHumanPublication(client, {
-            targetKind: input.targetKind,
-            revisionId: input.exactRevisionId,
-            resourceVersion: freshRev.resourceVersion,
-            text: freshRev.text,
-            actorUserId: freshRev.actorUserId,
-            actorPrincipalId: actor.principalId,
-            roleReputationDecisionId: decisionRow.id,
-            assessment: preparedAssessment,
-          });
-        }
-        const nextCaseVersion = caze.version + 1;
-        await client.query(
-          `UPDATE support_cases SET version=$2, updated_at=clock_timestamp() WHERE id=$1`,
-          [caseId, nextCaseVersion],
-        );
-        const auditId = await appendAudit(client, {
-          actor,
-          action: "admin.role_reputation.decide",
-          targetType: "case",
-          targetId: caseId,
-          permission: "case.manage",
-          reason: input.reasonCode,
-          after: { decision: input.decision, targetKind: input.targetKind },
-          keyHash,
+        const rev = await this.consumerReputation.loadRevisionPublicText(client, {
+          targetKind: input.targetKind,
+          revisionId: input.exactRevisionId,
         });
-        await client.query(
-          `INSERT INTO support_case_actions(case_id, case_version, audit_id, action)
-           VALUES ($1,$2,$3,'note')`,
-          [caseId, nextCaseVersion, auditId],
-        );
-        return {
-          caseId,
-          caseVersion: nextCaseVersion,
-          decision: input.decision,
-          auditId,
-        };
+        if (!rev || rev.resourceVersion !== input.expectedResourceVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+        }
+        await this.consumerReputation.assertCurrentPublishGates(client, {
+          decision: publishDecision,
+          targetKind: input.targetKind,
+          revisionId: input.exactRevisionId,
+          slot: {
+            id: slot.id,
+            author_user_id: slot.author_user_id,
+            subject_user_id: slot.subject_user_id,
+            role: slot.role as "organization" | "training",
+            public_handle: slot.public_handle,
+            status: slot.status,
+            version: slot.version,
+            approved_revision_id: slot.approved_revision_id,
+            pending_revision_id: slot.pending_revision_id,
+            basis_under_review: false,
+          },
+        });
+        assessActorUserId = actor.principal.user_id;
+        preparedRevisionMeta = rev;
       },
-      async (client, actor) => {
-        await this.requireInstalled(client);
-        if (
-          (input.decision === "approve" || input.decision === "restore") &&
-          !canReadAssignedEvidence(actor)
-        ) {
-          throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
-        }
-        const caze = await this.scopedCase(client, actor, caseId);
-        if (caze.assigned_to !== actor.principalId) {
-          throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
-        }
-        const bound = await this.loadBoundLink(client, caseId);
-        this.assertBoundRevision(bound.pending, input);
-        const slot = (
-          await client.query<SlotRow>(`SELECT * FROM role_review_slots WHERE id=$1`, [bound.slot_id])
-        ).rows[0];
-        if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
-        const gameIds = await this.gameIdsForSlot(client, slot.id);
-        await this.assertIndependent(
+      async () => {
+        // Provider outside admin DB/advisory locks; cache reuse when candidate exists.
+        return this.consumerReputation.assessPublicRoleText(
+          assessActorUserId!,
+          input.targetKind,
+          preparedRevisionMeta!.text,
+        );
+      },
+      async (client, actor, keyHash, preparedAssessment) =>
+        this.executeDecideMutation(
           client,
           actor,
-          await this.independenceForBound(client, slot, bound.pending, gameIds),
-        );
-      },
+          keyHash,
+          caseId,
+          input,
+          preparedAssessment,
+          preparedRevisionMeta,
+        ),
     );
+  }
+
+  private async executeDecideMutation(
+    client: PoolClient,
+    actor: AuditActor,
+    keyHash: string,
+    caseId: string,
+    input: RoleReviewDecide,
+    preparedAssessment: ReviewTextBatchAssessment | null,
+    preparedRevisionMeta: {
+      text: string;
+      resourceVersion: number;
+      actorUserId: string;
+    } | null,
+  ) {
+    await this.requireInstalled(client);
+    const caze = await this.scopedCase(client, actor, caseId);
+    if (caze.version !== input.expectedCaseVersion) {
+      throw conflict("VERSION_CONFLICT", "Версия обращения устарела");
+    }
+    if (caze.assigned_to !== actor.principalId) {
+      throw forbidden("ADMIN_PERMISSION_DENIED", "Нужно текущее назначение");
+    }
+    // Approve/restore need evidence.assigned.read — IDs alone must not bypass qualification.
+    if (
+      (input.decision === "approve" || input.decision === "restore") &&
+      !canReadAssignedEvidence(actor)
+    ) {
+      throw forbidden("ADMIN_PERMISSION_DENIED", "Нет разрешения");
+    }
+    // Generic case status=resolved alone never publishes.
+    const bound = await this.loadBoundLink(client, caseId);
+    this.assertBoundRevision(bound.pending, input);
+    const slot = (
+      await client.query<SlotRow>(
+        `SELECT * FROM role_review_slots WHERE id=$1 FOR UPDATE`,
+        [bound.slot_id],
+      )
+    ).rows[0];
+    if (!slot) throw notFound("CASE_UNAVAILABLE", "Обращение недоступно");
+    const gameIds = await this.gameIdsForSlot(client, slot.id);
+    await this.assertIndependent(
+      client,
+      actor,
+      await this.independenceForBound(client, slot, bound.pending, gameIds),
+    );
+    if (input.targetKind === "review") {
+      const rev = (
+        await client.query<{
+          id: string;
+          resource_version: number;
+          lifecycle: string;
+          projection_hash: string;
+          slot_id: string;
+        }>(`SELECT * FROM role_review_revisions WHERE id=$1`, [input.exactRevisionId])
+      ).rows[0];
+      if (!rev || rev.slot_id !== slot.id) {
+        throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+      }
+      if (rev.resource_version !== input.expectedResourceVersion) {
+        throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+      }
+      if (slot.status === "withdrawn" && input.decision === "approve") {
+        throw unprocessableWithdrawn();
+      }
+      if (input.decision === "approve" || input.decision === "restore") {
+        const publishDecision: "approve" | "restore" = input.decision;
+        await this.consumerReputation.assertCurrentPublishGates(client, {
+          decision: publishDecision,
+          targetKind: "review",
+          revisionId: rev.id,
+          slot: {
+            id: slot.id,
+            author_user_id: slot.author_user_id,
+            subject_user_id: slot.subject_user_id,
+            role: slot.role as "organization" | "training",
+            public_handle: slot.public_handle,
+            status: slot.status,
+            version: slot.version,
+            approved_revision_id: slot.approved_revision_id,
+            pending_revision_id: slot.pending_revision_id,
+            basis_under_review: false,
+          },
+        });
+      }
+      if (input.decision === "approve") {
+        // Only the current pending revision may be approved. Reports about already
+        // approved text must use retain — never clear a newer pending via old id.
+        if (slot.pending_revision_id !== rev.id) {
+          throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
+        }
+        await client.query(
+          `UPDATE role_review_slots
+           SET status='published',
+               approved_revision_id=$2,
+               pending_revision_id=NULL,
+               version=version+1,
+               updated_at=clock_timestamp()
+           WHERE id=$1`,
+          [slot.id, rev.id],
+        );
+      } else if (input.decision === "remove") {
+        await client.query(
+          `UPDATE role_review_slots
+           SET status='removed', version=version+1, updated_at=clock_timestamp()
+           WHERE id=$1`,
+          [slot.id],
+        );
+      } else if (input.decision === "restore") {
+        if (slot.status !== "removed" || !slot.approved_revision_id) {
+          throw conflict("RESTORE_DENIED", "Восстановление недоступно");
+        }
+        await client.query(
+          `UPDATE role_review_slots
+           SET status='published', version=version+1, updated_at=clock_timestamp()
+           WHERE id=$1`,
+          [slot.id],
+        );
+      } else if (input.decision === "request_correction") {
+        await client.query(
+          `UPDATE role_review_slots
+           SET status='needs_correction', version=version+1, updated_at=clock_timestamp()
+           WHERE id=$1`,
+          [slot.id],
+        );
+      } else if (input.decision === "retain") {
+        // keep published visible after report — does not clear pending_revision_id
+        await client.query(
+          `UPDATE role_review_slots
+           SET version=version+1, updated_at=clock_timestamp()
+           WHERE id=$1`,
+          [slot.id],
+        );
+      }
+    } else {
+      const rev = (
+        await client.query<{
+          id: string;
+          resource_version: number;
+          slot_id: string;
+        }>(`SELECT * FROM role_review_reply_revisions WHERE id=$1`, [input.exactRevisionId])
+      ).rows[0];
+      if (!rev || rev.slot_id !== slot.id) {
+        throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+      }
+      if (rev.resource_version !== input.expectedResourceVersion) {
+        throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+      }
+      const reply = (
+        await client.query<{
+          pending_revision_id: string | null;
+          approved_revision_id: string | null;
+          status: string;
+        }>(`SELECT pending_revision_id, approved_revision_id, status FROM role_review_replies WHERE slot_id=$1 FOR UPDATE`, [
+          slot.id,
+        ])
+      ).rows[0];
+      if (!reply) throw notFound("REVISION_UNAVAILABLE", "Редакция недоступна");
+      if (input.decision === "approve" || input.decision === "restore") {
+        const publishDecision: "approve" | "restore" = input.decision;
+        await this.consumerReputation.assertCurrentPublishGates(client, {
+          decision: publishDecision,
+          targetKind: "reply",
+          revisionId: rev.id,
+          slot: {
+            id: slot.id,
+            author_user_id: slot.author_user_id,
+            subject_user_id: slot.subject_user_id,
+            role: slot.role as "organization" | "training",
+            public_handle: slot.public_handle,
+            status: slot.status,
+            version: slot.version,
+            approved_revision_id: slot.approved_revision_id,
+            pending_revision_id: slot.pending_revision_id,
+            basis_under_review: false,
+          },
+        });
+      }
+      if (input.decision === "approve") {
+        if (reply.pending_revision_id !== rev.id) {
+          throw conflict("REVISION_NOT_CURRENT", "Редакция не является текущей ожидающей");
+        }
+        await client.query(
+          `UPDATE role_review_replies
+           SET status='published',
+               approved_revision_id=$2,
+               pending_revision_id=NULL,
+               version=version+1,
+               updated_at=clock_timestamp()
+           WHERE slot_id=$1`,
+          [slot.id, rev.id],
+        );
+      } else if (input.decision === "remove") {
+        await client.query(
+          `UPDATE role_review_replies
+           SET status='removed', version=version+1, updated_at=clock_timestamp()
+           WHERE slot_id=$1`,
+          [slot.id],
+        );
+      } else if (input.decision === "restore") {
+        await client.query(
+          `UPDATE role_review_replies
+           SET status='published', version=version+1, updated_at=clock_timestamp()
+           WHERE slot_id=$1`,
+          [slot.id],
+        );
+      } else if (input.decision === "request_correction") {
+        await client.query(
+          `UPDATE role_review_replies
+           SET status='needs_correction', version=version+1, updated_at=clock_timestamp()
+           WHERE slot_id=$1`,
+          [slot.id],
+        );
+      } else if (input.decision === "retain") {
+        await client.query(
+          `UPDATE role_review_replies
+           SET version=version+1, updated_at=clock_timestamp()
+           WHERE slot_id=$1`,
+          [slot.id],
+        );
+      }
+    }
+    const decisionRow = (
+      await client.query<{ id: string }>(
+        `INSERT INTO role_reputation_decisions
+           (case_id, slot_id, decision, target_kind, exact_revision_id,
+            expected_case_version, expected_resource_version, rationale, actor_principal_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id`,
+        [
+          caseId,
+          slot.id,
+          input.decision,
+          input.targetKind,
+          input.exactRevisionId,
+          input.expectedCaseVersion,
+          input.expectedResourceVersion,
+          input.rationale,
+          actor.principalId,
+        ],
+      )
+    ).rows[0]!;
+    // Human allow on provider review: keep approval.decision=review; bind exact human FK.
+    if (
+      (input.decision === "approve" || input.decision === "restore") &&
+      preparedAssessment &&
+      preparedRevisionMeta
+    ) {
+      const freshRev = await this.consumerReputation.loadRevisionPublicText(client, {
+        targetKind: input.targetKind,
+        revisionId: input.exactRevisionId,
+      });
+      if (
+        !freshRev ||
+        freshRev.resourceVersion !== preparedRevisionMeta.resourceVersion ||
+        freshRev.text !== preparedRevisionMeta.text
+      ) {
+        throw conflict("VERSION_CONFLICT", "Версия редакции устарела");
+      }
+      await this.consumerReputation.bindHumanPublication(client, {
+        targetKind: input.targetKind,
+        revisionId: input.exactRevisionId,
+        resourceVersion: freshRev.resourceVersion,
+        text: freshRev.text,
+        actorUserId: freshRev.actorUserId,
+        actorPrincipalId: actor.principalId,
+        roleReputationDecisionId: decisionRow.id,
+        assessment: preparedAssessment,
+      });
+    }
+    const nextCaseVersion = caze.version + 1;
+    await client.query(
+      `UPDATE support_cases SET version=$2, updated_at=clock_timestamp() WHERE id=$1`,
+      [caseId, nextCaseVersion],
+    );
+    const auditId = await appendAudit(client, {
+      actor,
+      action: "admin.role_reputation.decide",
+      targetType: "case",
+      targetId: caseId,
+      permission: "case.manage",
+      reason: input.reasonCode,
+      after: { decision: input.decision, targetKind: input.targetKind },
+      keyHash,
+    });
+    await client.query(
+      `INSERT INTO support_case_actions(case_id, case_version, audit_id, action)
+       VALUES ($1,$2,$3,'note')`,
+      [caseId, nextCaseVersion, auditId],
+    );
+    return {
+      caseId,
+      caseVersion: nextCaseVersion,
+      decision: input.decision,
+      auditId,
+    };
   }
 
   async resolveBasis(

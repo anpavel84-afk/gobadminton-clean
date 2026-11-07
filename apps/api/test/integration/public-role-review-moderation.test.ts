@@ -653,6 +653,16 @@ describeIntegration("MOD-V2-B1b public role-review moderation", () => {
     );
     expect(surfaces.rows[0]?.consrc).toMatch(/role_review_body/);
     expect(surfaces.rows[0]?.consrc).toMatch(/role_reply_body/);
+    const receiptCols = await pool.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='admin_command_receipts'
+         AND column_name IN ('reservation_state','claim_nonce','expires_at')`,
+    );
+    expect(receiptCols.rows.map((r) => r.column_name).sort()).toEqual([
+      "claim_nonce",
+      "expires_at",
+      "reservation_state",
+    ]);
     // Source must not open new public venue/player comments in this pass.
     const venueWrite = await app.inject({
       method: "POST",
@@ -661,5 +671,343 @@ describeIntegration("MOD-V2-B1b public role-review moderation", () => {
       payload: { text: "не должно открыться", parentCommentId: null },
     });
     expect([403, 404, 422]).toContain(venueWrite.statusCode);
+  });
+
+  async function intakeAssignedCase(slotId: string) {
+    const pendingIntakeId = (
+      await pool.query<{ id: string }>(
+        `SELECT id FROM role_reputation_pending_intakes
+         WHERE slot_id=$1 AND status='waiting_intake' ORDER BY created_at DESC LIMIT 1`,
+        [slotId],
+      )
+    ).rows[0]!.id;
+    const intake = await app.inject({
+      method: "POST",
+      url: "/v1/admin/cases/role-reputation-intake",
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        pendingIntakeId,
+        expectedIntakeVersion: 1,
+        reasonCode: "operations_review",
+        assignToSelf: true,
+      },
+    });
+    expect(intake.statusCode).toBe(200);
+    const caseId = intake.json().caseId as string;
+    const source = await app.inject({
+      method: "GET",
+      url: `/v1/admin/cases/${caseId}/role-review-source`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: { origin: adminOrigin, "x-csrf-token": reviewer.csrf },
+    });
+    expect(source.statusCode).toBe(200);
+    return { caseId, source: source.json() as {
+      caseVersion: number;
+      reviewRevision: { id: string; resourceVersion: number };
+    } };
+  }
+
+  async function stripClassifierEvidence(revisionId: string) {
+    await pool.query(
+      `DELETE FROM content_moderation_bindings WHERE entity_id=$1::uuid`,
+      [revisionId],
+    );
+    await pool.query(
+      `DELETE FROM content_moderation_approvals
+       WHERE surface_key IN ('role_review_body','role_reply_body')
+         AND id NOT IN (SELECT approval_id FROM content_moderation_bindings)`,
+    );
+  }
+
+  it("stale expectedCaseVersion before provider: zero paid calls on legacy pending", async () => {
+    const text = "Слабая организация: опоздание и смена корта без уведомления участников";
+    const { res } = await submitReview(text);
+    expect(res.statusCode).toBe(200);
+    const revisionId = (
+      await pool.query<{ pending_revision_id: string }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [res.json().id],
+      )
+    ).rows[0]!.pending_revision_id;
+    await stripClassifierEvidence(revisionId);
+    const { caseId, source } = await intakeAssignedCase(res.json().id);
+    fake.textCalls = 0;
+    const stale = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": randomUUID(),
+      },
+      payload: {
+        action: "role_review_decide",
+        expectedCaseVersion: source.caseVersion + 1,
+        expectedResourceVersion: source.reviewRevision.resourceVersion,
+        targetKind: "review",
+        exactRevisionId: source.reviewRevision.id,
+        decision: "approve",
+        rationale: "stale case version must not pay",
+        reasonCode: "operations_review",
+      },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe("VERSION_CONFLICT");
+    expect(fake.textCalls).toBe(0);
+  });
+
+  it("authorized completed receipt replays approve with zero provider", async () => {
+    const text = "Поток встречи сбился: перерывы дольше договорённого без согласования";
+    const { res } = await submitReview(text);
+    expect(res.statusCode).toBe(200);
+    const revisionId = (
+      await pool.query<{ pending_revision_id: string }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [res.json().id],
+      )
+    ).rows[0]!.pending_revision_id;
+    await stripClassifierEvidence(revisionId);
+    const { caseId, source } = await intakeAssignedCase(res.json().id);
+    const idem = randomUUID();
+    fake.textCalls = 0;
+    const payload = {
+      action: "role_review_decide",
+      expectedCaseVersion: source.caseVersion,
+      expectedResourceVersion: source.reviewRevision.resourceVersion,
+      targetKind: "review",
+      exactRevisionId: source.reviewRevision.id,
+      decision: "approve",
+      rationale: "Допустимая критика после ручной проверки",
+      reasonCode: "operations_review",
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(fake.textCalls).toBe(1);
+    const afterFirst = fake.textCalls;
+    const replay = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({
+      caseId: first.json().caseId,
+      caseVersion: first.json().caseVersion,
+      decision: "approve",
+      auditId: first.json().auditId,
+    });
+    expect(fake.textCalls).toBe(afterFirst);
+  });
+
+  it("concurrent same-key legacy pending: one paid attempt; loser CIP then safe replay", async () => {
+    const text = "Коммуникация организатора была путаной, ответы приходили слишком поздно";
+    const { res } = await submitReview(text);
+    expect(res.statusCode).toBe(200);
+    const revisionId = (
+      await pool.query<{ pending_revision_id: string }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [res.json().id],
+      )
+    ).rows[0]!.pending_revision_id;
+    await stripClassifierEvidence(revisionId);
+    const { caseId, source } = await intakeAssignedCase(res.json().id);
+    const idem = randomUUID();
+    let releaseProvider!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    let enteredProvider = 0;
+    fake.textFixture = async (input) => {
+      enteredProvider += 1;
+      await blocked;
+      return safeTextBatchDecision(input.texts.length);
+    };
+    fake.textCalls = 0;
+    const payload = {
+      action: "role_review_decide",
+      expectedCaseVersion: source.caseVersion,
+      expectedResourceVersion: source.reviewRevision.resourceVersion,
+      targetKind: "review",
+      exactRevisionId: source.reviewRevision.id,
+      decision: "approve",
+      rationale: "Параллельный один ключ",
+      reasonCode: "operations_review",
+    };
+    const first = app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    for (let i = 0; i < 100 && enteredProvider === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(enteredProvider).toBe(1);
+    const second = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(enteredProvider).toBe(1);
+    expect(second.statusCode).toBe(409);
+    expect(second.json().code).toBe("COMMAND_IN_PROGRESS");
+    // Soft TTL advance must not reclaim processing for a second paid call.
+    await pool.query(
+      `UPDATE admin_command_receipts
+       SET expires_at = clock_timestamp() - interval '1 hour'
+       WHERE actor_id=$1 AND reservation_state='processing'`,
+      [reviewer.id],
+    );
+    const afterTtl = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(enteredProvider).toBe(1);
+    expect(afterTtl.statusCode).toBe(409);
+    expect(afterTtl.json().code).toBe("COMMAND_IN_PROGRESS");
+    releaseProvider();
+    const firstResult = await first;
+    expect(firstResult.statusCode).toBe(200);
+    expect(fake.textCalls).toBe(1);
+    const replay = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(fake.textCalls).toBe(1);
+  });
+
+  it("unknown seal survives TTL; late wrong claim_nonce cannot complete", async () => {
+    const text = "Организатор сорвал договорённости по времени начала и составу";
+    const { res } = await submitReview(text);
+    expect(res.statusCode).toBe(200);
+    const revisionId = (
+      await pool.query<{ pending_revision_id: string }>(
+        `SELECT pending_revision_id FROM role_review_slots WHERE id=$1`,
+        [res.json().id],
+      )
+    ).rows[0]!.pending_revision_id;
+    await stripClassifierEvidence(revisionId);
+    const { caseId, source } = await intakeAssignedCase(res.json().id);
+    const idem = randomUUID();
+    fake.textFixture = async () => {
+      throw new ModerationProviderError("unavailable", 3);
+    };
+    fake.textCalls = 0;
+    const payload = {
+      action: "role_review_decide",
+      expectedCaseVersion: source.caseVersion,
+      expectedResourceVersion: source.reviewRevision.resourceVersion,
+      targetKind: "review",
+      exactRevisionId: source.reviewRevision.id,
+      decision: "approve",
+      rationale: "provider unavailable seals unknown",
+      reasonCode: "operations_review",
+    };
+    const failed = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(failed.statusCode).toBe(503);
+    expect(fake.textCalls).toBe(1);
+    const sealed = await pool.query<{
+      reservation_state: string;
+      claim_nonce: string | null;
+    }>(
+      `SELECT reservation_state, claim_nonce FROM admin_command_receipts
+       WHERE actor_id=$1 AND reservation_state='unknown'`,
+      [reviewer.id],
+    );
+    expect(sealed.rows[0]?.reservation_state).toBe("unknown");
+    const ownerNonce = sealed.rows[0]!.claim_nonce!;
+    await pool.query(
+      `UPDATE admin_command_receipts
+       SET expires_at = clock_timestamp() - interval '2 days'
+       WHERE actor_id=$1 AND reservation_state='unknown'`,
+      [reviewer.id],
+    );
+    const afterTtl = await app.inject({
+      method: "POST",
+      url: `/v1/admin/cases/${caseId}/commands`,
+      cookies: { [ADMIN_COOKIE]: reviewer.token },
+      headers: {
+        origin: adminOrigin,
+        "x-csrf-token": reviewer.csrf,
+        "idempotency-key": idem,
+      },
+      payload,
+    });
+    expect(afterTtl.statusCode).toBe(503);
+    expect(fake.textCalls).toBe(1);
+    // Late wrong-owner completion denied: forged claim_nonce cannot flip unknown→completed.
+    const wrong = await pool.query(
+      `UPDATE admin_command_receipts
+       SET reservation_state='completed',
+           response_ciphertext='forged',
+           claim_nonce=$2
+       WHERE actor_id=$1 AND claim_nonce=$3 AND reservation_state='unknown'`,
+      [reviewer.id, randomUUID(), randomUUID()],
+    );
+    expect(wrong.rowCount).toBe(0);
+    const still = await pool.query<{ reservation_state: string; claim_nonce: string }>(
+      `SELECT reservation_state, claim_nonce FROM admin_command_receipts
+       WHERE actor_id=$1 AND key_hash IS NOT NULL AND reservation_state='unknown'`,
+      [reviewer.id],
+    );
+    expect(still.rows.some((r) => r.claim_nonce === ownerNonce)).toBe(true);
   });
 });

@@ -88,3 +88,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS content_moderation_bindings_role_decision_uidx
 
 COMMENT ON COLUMN content_moderation_bindings.role_reputation_decision_id IS
   '#506 B1b nullable FK to exact role_reputation_decisions row for human publication allow; provider classification remains on approval.decision (allow|review). Never forges provider ALLOW.';
+
+-- Bounded admin external-prepare claim for approve/restore classifier work.
+-- Additive only: historical completed receipts stay reservation_state=completed
+-- with intact response_ciphertext. Never reclaim processing/unknown after TTL.
+ALTER TABLE admin_command_receipts
+  ADD COLUMN IF NOT EXISTS reservation_state text NOT NULL DEFAULT 'completed';
+
+ALTER TABLE admin_command_receipts
+  DROP CONSTRAINT IF EXISTS admin_command_receipts_reservation_state_chk;
+
+ALTER TABLE admin_command_receipts
+  ADD CONSTRAINT admin_command_receipts_reservation_state_chk
+  CHECK (reservation_state IN ('completed', 'processing', 'unknown'));
+
+ALTER TABLE admin_command_receipts
+  ADD COLUMN IF NOT EXISTS claim_nonce text NULL;
+
+ALTER TABLE admin_command_receipts
+  ADD COLUMN IF NOT EXISTS expires_at timestamptz NULL;
+
+-- processing rows reserve before paid I/O and may lack a final sealed response.
+ALTER TABLE admin_command_receipts
+  ALTER COLUMN response_ciphertext DROP NOT NULL;
+
+ALTER TABLE admin_command_receipts
+  DROP CONSTRAINT IF EXISTS admin_command_receipts_response_state_chk;
+
+ALTER TABLE admin_command_receipts
+  ADD CONSTRAINT admin_command_receipts_response_state_chk
+  CHECK (
+    (reservation_state = 'completed' AND response_ciphertext IS NOT NULL)
+    OR (reservation_state IN ('processing', 'unknown'))
+  );
+
+COMMENT ON COLUMN admin_command_receipts.reservation_state IS
+  '#506 B1b admin external-prepare: completed|processing|unknown. Unknown/processing are never TTL-reclaimed for a second paid provider attempt. Old rows default completed.';
+COMMENT ON COLUMN admin_command_receipts.claim_nonce IS
+  '#506 B1b opaque owner token for processing→complete/release/unknown; wrong-owner finalization denied.';
+COMMENT ON COLUMN admin_command_receipts.expires_at IS
+  '#506 B1b soft marker only for processing/unknown observability; never authorizes paid replay reclaim.';

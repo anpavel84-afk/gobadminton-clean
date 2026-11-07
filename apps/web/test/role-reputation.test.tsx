@@ -10,7 +10,16 @@ const api = vi.hoisted(() => ({
   getPlayerRoleReputation: vi.fn(),
 }));
 
-vi.mock("../src/lib/api-client", () => api);
+// Partial mock: keep real publicTextModerationNotice for games-api B1b helper.
+vi.mock("../src/lib/api-client", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getRoleReputation: (...args: unknown[]) => api.getRoleReputation(...args),
+    getGameRoleReputation: (...args: unknown[]) => api.getGameRoleReputation(...args),
+    getPlayerRoleReputation: (...args: unknown[]) => api.getPlayerRoleReputation(...args),
+  };
+});
 
 vi.mock("../src/components/consumer/games/RoleReviewsDialog", () => ({
   RoleReviewsDialog: (props: { roleHandle: string; role: string }) =>

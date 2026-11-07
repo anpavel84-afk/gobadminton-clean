@@ -596,7 +596,10 @@ export const adminCommandReceipts = pgTable("admin_command_receipts", {
   actorId: uuid("actor_id").notNull(),
   keyHash: text("key_hash").notNull(),
   fingerprint: text("fingerprint").notNull(),
-  responseCiphertext: text("response_ciphertext").notNull(),
+  responseCiphertext: text("response_ciphertext"),
+  reservationState: text("reservation_state").notNull().default("completed"),
+  claimNonce: text("claim_nonce"),
+  expiresAt: timestamp("expires_at", {withTimezone:true}),
   createdAt: timestamp("created_at", {withTimezone:true}).notNull(),
 }, t=>[primaryKey({columns:[t.actorId,t.keyHash]})]);
 export const adminRateWindows = pgTable("admin_rate_windows", {
