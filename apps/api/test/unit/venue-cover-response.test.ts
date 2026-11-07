@@ -45,6 +45,26 @@ describe("clientAcceptsVenueCoverWebp", () => {
     expect(clientAcceptsVenueCoverWebp(undefined)).toBe(false);
     expect(clientAcceptsVenueCoverWebp("")).toBe(false);
   });
+
+  it("rejects malformed / out-of-range / nonfinite / duplicate q instead of defaulting to 1", () => {
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=NaN")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=2")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=-1")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=Infinity")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=garbage")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=0.1234")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=1.1")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=0.5;q=0.8")).toBe(false);
+
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=0")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=0.5")).toBe(true);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=0.000")).toBe(false);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=1.000")).toBe(true);
+
+    // A separate valid image/webp token may still win; invalid sibling does not default to 1.
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=NaN, image/webp;q=0.5")).toBe(true);
+    expect(clientAcceptsVenueCoverWebp("image/webp;q=2, image/png")).toBe(false);
+  });
 });
 
 describe("deriveVenueCoverWebp / resolveVenueCoverResponse", () => {

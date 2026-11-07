@@ -12,9 +12,14 @@ export type VenueCoverBody = {
   contentType: "image/png" | "image/webp";
 };
 
+/** RFC 9110 qvalue: 0[.ddd] | 1[.000], at most 3 fractional digits. */
+const VENUE_COVER_ACCEPT_Q = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+
 /**
  * True only when Accept explicitly lists image/webp with a positive weight.
- * Wildcards (* / *, image/*) do not imply WebP. Honour image/webp;q=0 (case/whitespace; finite valid q).
+ * Wildcards (* / *, image/*) do not imply WebP. Honour image/webp;q=0.
+ * Malformed, out-of-range, nonfinite, or duplicate q on that media item is rejected
+ * (no fallback to default weight 1).
  */
 export function clientAcceptsVenueCoverWebp(accept: string | string[] | undefined): boolean {
   if (accept == null) return false;
@@ -30,19 +35,29 @@ export function clientAcceptsVenueCoverWebp(accept: string | string[] | undefine
     const media = mediaRaw.toLowerCase();
     if (media !== "image/webp") continue;
 
-    let q = 1;
+    const qValues: string[] = [];
     for (const param of params) {
       const eq = param.indexOf("=");
       if (eq <= 0) continue;
       const name = param.slice(0, eq).trim().toLowerCase();
       if (name !== "q") continue;
-      const value = param.slice(eq + 1).trim();
-      // Finite valid q in [0, 1]; malformed q is ignored (default weight 1 for explicit type).
-      if (/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(value)) {
-        const parsed = Number(value);
-        if (Number.isFinite(parsed)) q = parsed;
-      }
+      qValues.push(param.slice(eq + 1).trim());
     }
+
+    let q: number;
+    if (qValues.length === 0) {
+      q = 1;
+    } else if (qValues.length === 1) {
+      const value = qValues[0]!;
+      if (!VENUE_COVER_ACCEPT_Q.test(value)) continue;
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) continue;
+      q = parsed;
+    } else {
+      // Duplicate q is ambiguous; do not guess a positive weight.
+      continue;
+    }
+
     bestQ = Number.isNaN(bestQ) ? q : Math.max(bestQ, q);
   }
   return Number.isFinite(bestQ) && bestQ > 0;
