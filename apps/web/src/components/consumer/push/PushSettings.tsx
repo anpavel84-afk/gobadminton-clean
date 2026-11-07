@@ -16,6 +16,9 @@ import {
   type PushEventPreferences,
   type PushState,
 } from "../../../lib/push-client";
+import { Button } from "../Button";
+import { ProfileState, SectionHeader, Toggle } from "../players/ProfileComposition";
+import "../../../styles/push-notifications.css";
 
 const EVENT_TOGGLES: Array<{ key: keyof PushEventPreferences; label: string }> = [
   { key: "invites", label: "Приглашения на игру" },
@@ -24,11 +27,51 @@ const EVENT_TOGGLES: Array<{ key: keyof PushEventPreferences; label: string }> =
   { key: "gameChanges", label: "Отмена игры" },
   { key: "outcomeReminders", label: "Напоминания об итоге" },
 ];
-import { Button } from "../Button";
-import { ProfileState, SectionHeader, Toggle } from "../players/ProfileComposition";
-import "../../../styles/push-notifications.css";
+
+/** Option B (#501): general block; separate game/postgame choices only after master consent. */
+export const PUSH_DISCOVERABILITY_OFF_HINT =
+  "После включения уведомлений вы сможете отдельно выбрать приглашения, заявки и отмены, а также «Подведите итоги».";
+
+/** Canonical iPhone Home Screen helper before the permission gesture (no new flow). */
+export const PUSH_IPHONE_HOMESCREEN_HINT =
+  "На iPhone добавьте GoBadminton на экран «Домой» и откройте приложение оттуда, затем включите уведомления.";
+
+export const PUSH_MESSAGE_ENABLE_LABEL = "Включить уведомления о сообщениях";
 
 type Props = { me: Me };
+
+type EventTogglesProps = {
+  eventPreferences: PushEventPreferences;
+  disabled?: boolean;
+  onToggle: (key: keyof PushEventPreferences, next: boolean) => void;
+};
+
+/** Master-ON event groups; defaults remain OFF until explicit toggle. */
+export function PushGameEventToggles({ eventPreferences, disabled, onToggle }: EventTogglesProps) {
+  return (
+    <fieldset className="gb-push-settings__events" disabled={disabled}>
+      <legend className="gb-push-settings__events-legend">События игр</legend>
+      <p className="gb-push-settings__events-note">
+        Выберите, какие уведомления об играх получать.
+      </p>
+      <ul className="gb-push-settings__event-list">
+        {EVENT_TOGGLES.map((item) => {
+          const on = eventPreferences[item.key] === true;
+          return (
+            <li key={item.key}>
+              <Toggle
+                label={item.label}
+                on={on}
+                disabled={disabled}
+                onClick={() => onToggle(item.key, !on)}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    </fieldset>
+  );
+}
 
 export function PushSettings({ me }: Props) {
   const [state, setState] = useState<"loading" | "ready" | "error" | "retired">("loading");
@@ -295,11 +338,26 @@ export function PushSettings({ me }: Props) {
     return "Уведомления о сообщениях выключены. Включение только по вашему действию; системный запрос появится сразу после нажатия.";
   })();
 
+  // Loading (push null) and master-OFF with feature available: explain separate game/postgame choices + iPhone Home Screen.
+  const showMasterOffHints =
+    capability !== "denied" &&
+    (push == null || (push.featureAvailable && !push.preferenceEnabled));
+
   return (
-    <section className="profile-section" data-surface="push-settings" aria-label="Уведомления о сообщениях">
-      <SectionHeader title="Уведомления о сообщениях" eyebrow="Сообщения" />
+    <section className="profile-section" data-surface="push-settings" aria-label="Уведомления">
+      <SectionHeader title="Уведомления" eyebrow="Настройки" />
       <div className="gb-push-settings">
         <p className="gb-push-settings__status">{statusText}</p>
+        {showMasterOffHints && (
+          <>
+            <p className="gb-push-settings__status" data-surface="push-discoverability">
+              {PUSH_DISCOVERABILITY_OFF_HINT}
+            </p>
+            <p className="gb-push-settings__status" data-surface="push-iphone-homescreen">
+              {PUSH_IPHONE_HOMESCREEN_HINT}
+            </p>
+          </>
+        )}
         {state === "loading" ? (
           <ProfileState title="Загружаем настройки уведомлений…" state="loading" />
         ) : state === "error" ? (
@@ -318,7 +376,7 @@ export function PushSettings({ me }: Props) {
                 disabled={busy || !push?.featureAvailable || capability === "denied"}
                 onClick={(event) => void enable(event)}
               >
-                {busy ? "Включаем…" : "Включить уведомления о сообщениях"}
+                {busy ? "Включаем…" : PUSH_MESSAGE_ENABLE_LABEL}
               </Button>
               <Button
                 type="button"
@@ -329,28 +387,12 @@ export function PushSettings({ me }: Props) {
                 Выключить на этом устройстве
               </Button>
             </div>
-            {push?.preferenceEnabled && (
-              <fieldset className="gb-push-settings__events" disabled={busy}>
-                <legend className="gb-push-settings__events-legend">События игр</legend>
-                <p className="gb-push-settings__events-note">
-                  Выберите, какие уведомления об играх получать.
-                </p>
-                <ul className="gb-push-settings__event-list">
-                  {EVENT_TOGGLES.map((item) => {
-                    const on = push.eventPreferences?.[item.key] === true;
-                    return (
-                      <li key={item.key}>
-                        <Toggle
-                          label={item.label}
-                          on={on}
-                          disabled={busy || !push.preferenceEnabled}
-                          onClick={() => void toggleEvent(item.key, !on)}
-                        />
-                      </li>
-                    );
-                  })}
-                </ul>
-              </fieldset>
+            {push?.preferenceEnabled && push.eventPreferences && (
+              <PushGameEventToggles
+                eventPreferences={push.eventPreferences}
+                disabled={busy || !push.preferenceEnabled}
+                onToggle={(key, next) => void toggleEvent(key, next)}
+              />
             )}
             {push && push.devices.length > 0 && (
               <ul className="gb-push-settings__devices" aria-label="Подключённые устройства">

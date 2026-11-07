@@ -141,11 +141,12 @@
 .fr3 .own-profile-layout { margin-top: 24px; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
 .fr3 .own-profile-main { display: grid; gap: 16px; }
 .fr3 .profile-section, .fr3 .account-panel { padding: 26px; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-md); background: var(--gb-white); }
-.fr3 .editable-section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.fr3 .editable-section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; min-width: 0; }
+.fr3 .editable-section-header > span { min-width: 0; flex: 1 1 auto; }
 .fr3 .editable-section-header small, .fr3 .editable-section-header h2 { display: block; margin: 0; }
 .fr3 .editable-section-header small { color: var(--gb-purple); font: 600 10px var(--gb-font); text-transform: uppercase; letter-spacing: .08em; }
-.fr3 .editable-section-header h2 { margin-top: 5px; font: 700 25px var(--gb-font); }
-.fr3 .editable-section-header > button { padding: 0; border: 0; color: var(--gb-purple); background: transparent; font-family: var(--gb-font); cursor: pointer; }
+.fr3 .editable-section-header h2 { margin-top: 5px; font: 700 25px var(--gb-font); overflow-wrap: anywhere; }
+.fr3 .editable-section-header > button { padding: 0; border: 0; color: var(--gb-purple); background: transparent; font-family: var(--gb-font); cursor: pointer; flex: 0 0 auto; white-space: nowrap; }
 .fr3 .profile-info-list { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .fr3 .profile-info-list > div {
   min-height: 76px; padding: 16px; border: 0; border-radius: var(--gb-radius-sm);

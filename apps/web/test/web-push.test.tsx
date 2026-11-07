@@ -3,7 +3,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as PushClientModule from "../src/lib/push-client";
 import type * as React from "react";
-import { PushSettings } from "../src/components/consumer/push/PushSettings";
+import {
+  PushGameEventToggles,
+  PushSettings,
+  PUSH_DISCOVERABILITY_OFF_HINT,
+  PUSH_IPHONE_HOMESCREEN_HINT,
+  PUSH_MESSAGE_ENABLE_LABEL,
+} from "../src/components/consumer/push/PushSettings";
 import {
   bumpPushFenceGeneration,
   detectPushCapability,
@@ -39,6 +45,14 @@ vi.mock("next/link", () => ({
     createElement("a", { href: props.href }, props.children as never),
 }));
 
+const defaultEventPreferences = {
+  invites: false,
+  applicationDecisions: false,
+  newApplications: false,
+  gameChanges: false,
+  outcomeReminders: false,
+};
+
 const getPushState = vi.hoisted(() =>
   vi.fn(async () => ({
     ok: true as const,
@@ -47,13 +61,7 @@ const getPushState = vi.hoisted(() =>
       featureAvailable: false,
       preferenceEnabled: false,
       preferenceVersion: 0,
-      eventPreferences: {
-        invites: false,
-        applicationDecisions: false,
-        newApplications: false,
-        gameChanges: false,
-        outcomeReminders: false,
-      },
+      eventPreferences: { ...defaultEventPreferences },
       vapidPublicKey: null,
       accountFence: null,
       deviceCount: 0,
@@ -66,6 +74,9 @@ const getPushState = vi.hoisted(() =>
 
 const clearPushLocalBinding = vi.hoisted(() => vi.fn(async () => undefined));
 const ensurePushServiceWorker = vi.hoisted(() => vi.fn(async () => null));
+const detectPushCapabilityMock = vi.hoisted(() =>
+  vi.fn(() => "unsupported" as const),
+);
 
 vi.mock("../src/lib/push-client", async () => {
   const actual = await vi.importActual<typeof PushClientModule>(
@@ -76,9 +87,17 @@ vi.mock("../src/lib/push-client", async () => {
     getPushState,
     clearPushLocalBinding,
     ensurePushServiceWorker,
-    detectPushCapability: () => "unsupported" as const,
+    detectPushCapability: detectPushCapabilityMock,
   };
 });
+
+const me = {
+  id: "11111111-1111-4111-8111-111111111111",
+  displayName: "Тест",
+  locale: "ru",
+  linkedProviders: [] as string[],
+  csrfToken: "csrf-token-for-test-only",
+};
 
 afterEach(() => {
   pushHooks.effects = [];
@@ -87,25 +106,79 @@ afterEach(() => {
   getPushState.mockClear();
   clearPushLocalBinding.mockClear();
   ensurePushServiceWorker.mockClear();
+  detectPushCapabilityMock.mockReset();
+  detectPushCapabilityMock.mockReturnValue("unsupported");
   resetSessionPresenceForTests();
   vi.unstubAllGlobals();
 });
 
 describe("#456 web push settings surface", () => {
   it("renders Russian settings copy without prompting on mount", () => {
-    const html = renderToStaticMarkup(
-      createElement(PushSettings, {
-        me: {
-          id: "11111111-1111-4111-8111-111111111111",
-          displayName: "Тест",
-          locale: "ru",
-          linkedProviders: [],
-          csrfToken: "csrf-token-for-test-only",
-        },
-      }),
-    );
-    expect(html).toMatch(/Уведомления о сообщениях/);
+    const html = renderToStaticMarkup(createElement(PushSettings, { me }));
+    expect(html).toMatch(/aria-label="Уведомления"/);
+    expect(html).toMatch(/<h2>Уведомления<\/h2>/);
+    expect(PUSH_MESSAGE_ENABLE_LABEL).toBe("Включить уведомления о сообщениях");
     expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
+  });
+
+  it("master OFF supported capability mentions games, postgame choices, and iPhone Home Screen", () => {
+    detectPushCapabilityMock.mockReturnValue("ready");
+    const html = renderToStaticMarkup(createElement(PushSettings, { me }));
+    expect(html).toContain(PUSH_DISCOVERABILITY_OFF_HINT);
+    expect(html).toContain(PUSH_IPHONE_HOMESCREEN_HINT);
+    expect(html).toMatch(/приглашения/);
+    expect(html).toMatch(/заявки и отмены/);
+    expect(html).toMatch(/Подведите итоги/);
+    expect(html).toMatch(/экран «Домой»/);
+    expect(PUSH_MESSAGE_ENABLE_LABEL).toBe("Включить уведомления о сообщениях");
+    expect(html).not.toMatch(/События игр/);
+    expect(html).not.toMatch(/requestPermission|PushManager\.subscribe/);
+    expect(getPushState).not.toHaveBeenCalled();
+  });
+
+  it("master ON five event toggles default OFF and forward callbacks", () => {
+    const seen: Array<{ key: string; next: boolean }> = [];
+    const onToggle = (key: keyof typeof defaultEventPreferences, next: boolean) => {
+      seen.push({ key, next });
+    };
+    const tree = PushGameEventToggles({
+      eventPreferences: { ...defaultEventPreferences },
+      onToggle,
+    });
+    const html = renderToStaticMarkup(tree);
+    expect(html).toMatch(/События игр/);
+    expect(html).toMatch(/Приглашения на игру/);
+    expect(html).toMatch(/Решения по заявкам/);
+    expect(html).toMatch(/Новые заявки/);
+    expect(html).toMatch(/Отмена игры/);
+    expect(html).toMatch(/Напоминания об итоге/);
+    expect(html.match(/aria-checked="false"/g)?.length).toBe(5);
+    expect(html).not.toMatch(/aria-checked="true"/);
+
+    const list = (tree.props as { children?: React.ReactNode }).children;
+    const nodes = Array.isArray(list) ? list : [list];
+    const ul = nodes.find(
+      (node) =>
+        node &&
+        typeof node === "object" &&
+        "type" in node &&
+        node.type === "ul",
+    ) as React.ReactElement | undefined;
+    const items = (ul?.props as { children?: React.ReactNode })?.children;
+    const liNodes = (Array.isArray(items) ? items : [items]).filter(Boolean) as React.ReactElement[];
+    expect(liNodes).toHaveLength(5);
+    for (const li of liNodes) {
+      const toggle = (li.props as { children?: React.ReactElement }).children;
+      expect(toggle?.props?.on).toBe(false);
+      (toggle?.props?.onClick as () => void)();
+    }
+    expect(seen).toEqual([
+      { key: "invites", next: true },
+      { key: "applicationDecisions", next: true },
+      { key: "newApplications", next: true },
+      { key: "gameChanges", next: true },
+      { key: "outcomeReminders", next: true },
+    ]);
   });
 
   it("PushLifecycle SSR renders without AppRouter / useRouter", () => {
