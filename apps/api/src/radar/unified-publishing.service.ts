@@ -22,7 +22,13 @@ import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { RadarFeatureService } from "./radar-feature";
 import { RadarBudgetService } from "./radar-budget.service";
 import { resolveRadarRegion } from "./coarse-location";
-import { RADAR_REGION_MOSCOW, RADAR_REGION_SPB } from "./constants";
+import {
+  RADAR_FIX_FUTURE_TOLERANCE_SECONDS,
+  RADAR_FIX_MAX_AGE_SECONDS,
+  RADAR_REGION_MOSCOW,
+  RADAR_REGION_SPB,
+  type RadarExposureMode,
+} from "./constants";
 import { quantizeUnified } from "./unified-location";
 import {
   UNIFIED_WIRE,
@@ -225,7 +231,7 @@ export class UnifiedPublishingService {
       if (replay) {
         return this.presentWireActivation(userId, sessionId, replay);
       }
-      await this.preflightEligibleBeforeTextProvider(userId, kind, input);
+      await this.preflightEligibleBeforeTextProvider(userId, kind, mode, input);
       textApproval = await this.preflightExistingProfileText(userId);
     }
 
@@ -468,14 +474,17 @@ export class UnifiedPublishingService {
   /**
    * Read-only eligibility before external text I/O for start/takeover.
    * No bootstrap write, budget consume, consent publish, or presence mutation.
+   * Location region/time eligibility is pure (no PostGIS / geo-budget) and still
+   * revalidated by fix() under the final mutation race fences.
    */
   private async preflightEligibleBeforeTextProvider(
     userId: string,
     kind: "start" | "takeover",
+    mode: RadarExposureMode,
     input: {
       activationId?: string;
       expectedVersion?: number;
-      location?: unknown;
+      location?: Parameters<typeof quantizeUnified>[1];
     },
   ): Promise<void> {
     const client = await this.pool.connect();
@@ -534,6 +543,8 @@ export class UnifiedPublishingService {
         throw conflict("VERSION_CONFLICT", "Конфликт поколения Radar");
       if (!input.location)
         throw unprocessable("LOCATION_INVALID", "Требуется геолокация");
+      // Pure eligibility only — never consumeGeo / PostGIS inside this txn.
+      this.assertFixEligibleBeforeTextProvider(input.location, mode);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -543,11 +554,45 @@ export class UnifiedPublishingService {
     }
   }
 
+  /**
+   * Mirror fix()/quantizeFix/quantizeUnified rejection gates that do not need
+   * PostGIS or geo budget, so unsupported/stale fixes never reach text I/O.
+   */
+  private assertFixEligibleBeforeTextProvider(
+    location: Parameters<typeof quantizeUnified>[1],
+    mode: RadarExposureMode,
+  ): void {
+    const capturedMs = Date.parse(location.capturedAt);
+    if (!Number.isFinite(capturedMs)) {
+      throw unprocessable("LOCATION_INVALID", "Некорректное время фиксации");
+    }
+    const nowMs = Date.now();
+    const ageSec = (nowMs - capturedMs) / 1000;
+    if (ageSec > RADAR_FIX_MAX_AGE_SECONDS) {
+      throw unprocessable("LOCATION_TOO_OLD", "Геолокация устарела");
+    }
+    if (ageSec < -RADAR_FIX_FUTURE_TOLERANCE_SECONDS) {
+      throw unprocessable("LOCATION_INVALID", "Некорректное время фиксации");
+    }
+    // quantizeUnified also rejects age>=60s after PostGIS; mirror before provider I/O.
+    if (capturedMs + 60_000 <= nowMs) {
+      throw unprocessable("LOCATION_TOO_OLD", "Геолокация устарела");
+    }
+    // Same live/synthetic allowlist as fix() — pure, no geo budget.
+    resolveRadarRegion(
+      location.latitude,
+      location.longitude,
+      mode === "synthetic_demo"
+        ? [RADAR_REGION_MOSCOW, RADAR_REGION_SPB]
+        : [RADAR_REGION_MOSCOW],
+    );
+  }
+
   private async fix(
     client: PoolClient,
     userId: string,
     location: Parameters<typeof quantizeUnified>[1],
-    mode: "live" | "synthetic_demo",
+    mode: RadarExposureMode,
   ) {
     await this.budgets.consumeGeo(client, userId, new Date());
     const region = resolveRadarRegion(

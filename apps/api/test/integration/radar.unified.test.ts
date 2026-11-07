@@ -1695,4 +1695,89 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     expect(fake.textCalls).toBe(afterTakeoverCalls);
   });
 
+  it("valid-shape unsupported/stale fixes never reach text provider on start/takeover", async () => {
+    const fake = app.get<FakeModerationProvider>(MODERATION_PROVIDER);
+    const unsupportedFix = fix(10, 20, 10); // valid schema shape, outside Moscow live region
+    const staleFix = {
+      ...fix(),
+      capturedAt: new Date(Date.now() - 120_000).toISOString(),
+    };
+
+    for (const [label, badLocation, code] of [
+      ["unsupported-region", unsupportedFix, "RADAR_REGION_UNSUPPORTED"],
+      ["stale", staleFix, "LOCATION_TOO_OLD"],
+    ] as const) {
+      const starter = await person(`Loc Gate Start ${label}`);
+      const beforeStart = fake.textCalls;
+      const deniedStart = await app.inject({
+        method: "POST",
+        url: "/v1/me/radar/activations",
+        headers: headers(starter),
+        payload: startBody(badLocation),
+      });
+      expect(deniedStart.statusCode, deniedStart.body).toBe(422);
+      expect(deniedStart.json().code).toBe(code);
+      expect(fake.textCalls).toBe(beforeStart);
+      expect(
+        (
+          await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [
+            starter.id,
+          ])
+        ).rowCount,
+      ).toBe(0);
+
+      const owner = await person(`Loc Gate Takeover ${label}`);
+      const active = await start(owner);
+      const replacement = {
+        ...owner,
+        issued: await sessions.createConsumerSession(owner.id),
+      };
+      const beforeTakeover = fake.textCalls;
+      const deniedTakeover = await app.inject({
+        method: "POST",
+        url: "/v1/me/radar/activations/current/takeover",
+        headers: headers(replacement),
+        payload: {
+          ...startBody(badLocation),
+          activationId: active.activationId,
+          expectedVersion: active.version,
+          confirm: true,
+        },
+      });
+      expect(deniedTakeover.statusCode, deniedTakeover.body).toBe(422);
+      expect(deniedTakeover.json().code).toBe(code);
+      expect(fake.textCalls).toBe(beforeTakeover);
+      const stillOwned = await pool.query<{ version: string }>(
+        "SELECT version::text AS version FROM radar_presences WHERE user_id=$1 AND activation_id=$2",
+        [owner.id, active.activationId],
+      );
+      expect(stillOwned.rowCount).toBe(1);
+      expect(Number(stillOwned.rows[0]!.version)).toBe(active.version);
+    }
+
+    // Allowed activation/replay path remains intact after the location gate cases.
+    const allowed = await person("Loc Gate Allowed Replay");
+    const startKey = randomUUID();
+    const startPayload = startBody();
+    const beforeAllowed = fake.textCalls;
+    const started = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: { ...headers(allowed), "idempotency-key": startKey },
+      payload: startPayload,
+    });
+    expect(started.statusCode, started.body).toBe(201);
+    expect(fake.textCalls).toBeGreaterThan(beforeAllowed);
+    const afterStart = fake.textCalls;
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/me/radar/activations",
+      headers: { ...headers(allowed), "idempotency-key": startKey },
+      payload: startPayload,
+    });
+    expect(replay.statusCode, replay.body).toBe(201);
+    expect(replay.json().activationId).toBe(started.json().activationId);
+    expect(fake.textCalls).toBe(afterStart);
+  });
+
 });

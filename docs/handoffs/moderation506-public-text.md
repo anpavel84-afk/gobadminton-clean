@@ -1,45 +1,68 @@
-# Handoff · Issue #506 · MOD-V2-A public text (author pass 4 · test-fixture only)
+# Handoff · Issue #506 · MOD-V2-A public text (author pass 5 · location eligibility)
 
-Source-only test correction after independent FAIL on disposable PG suites
-(pass-3 QA logs). Production patch from pass 3 unchanged. No DONE / QA / CI /
-DEV / UAT claims.
+Bounded repair for independent delta QA HIGH on frozen HEAD
+`90ce3fcebbc69044d19d011400ab7074e695ef8c`. Prior game-authority and
+actor/session/caps/replay preflight repairs remain accepted. No DONE / QA /
+CI / DEV / UAT claims from this source pass.
 
-## Pass-4 concrete repairs (exactly two fixture corrections)
+## Delta QA finding (actual FAIL)
 
-1. `public-text-moderation.test.ts` — foreign-publish case: draft create already
-   approved the exact host fields, so owner publish must **reuse** the decision
-   cache (`afterOwnerPublishCalls === beforeCalls`). Replaced obsolete
-   `toBeGreaterThan(beforeCalls)` with strict cache equality plus publication
-   binding assertions that link exact `game` / current published
-   `resource_version` / `PUBLIC_TEXT_POLICY_VERSION` / `allow` for the four host
-   surfaces. Foreign private/unlisted 404 / version / no-egress assertions kept.
+`preflightEligibleBeforeTextProvider` only required location non-null. A
+validly shaped unsupported-region or stale fix reached external text
+moderation; later `fix()` rejected it and the mutation rolled back without
+binding, so retries could burn further provider I/O for an unactivatable
+request.
 
-2. `radar.unified.test.ts` — start/takeover text-provider gate: freeze the
-   original `startBody()` payload once and reuse that exact object for genuine
-   same-key start replay (and takeover payload derived from it). Calling
-   `startBody()` again minted a new `capturedAt`, changed `requestHash`, and
-   correctly returned 409 — not an idempotency production bug. Status assertions
-   include response body diagnostics. Strict 201/wire metadata / 0 new text calls
-   / revoked+ineligible 0-provider / allowed activation preserved; suite still
-   69 cases.
+## Pass-5 concrete repair
+
+1. `unified-publishing.service.ts` — before any text-provider I/O on
+   start/takeover, preflight now runs pure location eligibility that mirrors
+   source `fix()` / `quantizeFix` / `quantizeUnified` gates:
+   - time bounds (`RADAR_FIX_MAX_AGE_SECONDS`, future tolerance, and the
+     `capturedAt + 60s` stale check)
+   - live/synthetic region allowlist via existing `resolveRadarRegion`
+     (Moscow only live; Moscow+SPB synthetic)
+   - no `consumeGeo`, no PostGIS/network under the preflight transaction
+   - final mutation still revalidates via `fix()`; consent/activation/
+     resource/freshness fences unchanged; preflight is not a substitute
+
+2. `radar.unified.test.ts` — meaningful cases: valid-shape unsupported region
+   and stale fixes never increment `textCalls`, create no presence, and do
+   not mutate an existing activation on both start and takeover; allowed
+   activation + exact-hash replay still works.
 
 ## Author sandbox status
 
-- Edits limited to allowed paths only (two integration tests + this handoff).
-- Full disposable DB integration / Product CI / DEV45 not run in this sandbox
-  (parent owns pinned disposable DB + gates). Sandbox gate test remains for
-  `RUN_DB_INTEGRATION≠1`.
-- No production / architecture / metadata / skip / relax / full-matrix rewrite.
-- Separate 507 Astra High design artifacts out of scope.
+- Edits limited to allowed paths only (service + radar unified test + this
+  handoff).
+- No actual provider transport, live DB, credentials, Git, runtime, or root
+  used here.
+- Full disposable PostgreSQL suites / Product CI / DEV45 not run in this
+  sandbox (parent owns pinned disposable DB + gates).
+- No broader refactor, deps, #507 writer, or release changes.
+- Attempts / FAIL history preserved; no PASS/DONE claim.
 
-## Parent next
+## Parent next (exact)
 
-- Parent re-runs only these two PG suites
-- Independent delta QA
-- Then full Product CI / real DEV45 (live DEV still 44)
+```bash
+# From CLEAN repo at this source SHA (after trusted integrate of pass-5 paths):
+cd apps/api
+RUN_DB_INTEGRATION=1 pnpm exec vitest run test/integration/radar.unified.test.ts
+# Own PG / Radar / types / lint as previously for #506 A
+# Then independent delta QA on location-eligibility preflight
+# Then Product CI + DEV45 (NOT_TESTED UAT)
+```
+
+Focus checks for delta QA:
+
+- Unsupported-region and stale start/takeover reject with
+  `RADAR_REGION_UNSUPPORTED` / `LOCATION_TOO_OLD` before any text provider call
+- No presence/mutation/binding on those denies; allowed activation/replay intact
+- Preflight still does not consume geo budget or run PostGIS; final `fix()`
+  race fences remain
 
 ## Still not claimed
 
 - Overall PASS/DONE from source author
-- QA / CI / DEV ACCEPTED
+- Independent QA / Product CI / DEV ACCEPTED
 - Mode B binding / AGY author / PROD
