@@ -330,9 +330,35 @@ it.each(["games", "venues", "reject"] as const)("invalidates counts after %s fai
 });
 it("invalidates session counts before a replacement request resolves", async () => {
   render(); await vi.advanceTimersByTimeAsync(40000); expect(html()).toContain("Venue · 1");
+  const clickVenue = (node: React.ReactNode): void => {
+    if (!isValidElement<{ children?: React.ReactNode; onClick?: () => void }>(node)) return;
+    if (node.type === "button" && Children.toArray(node.props.children).join("") === "Venue · 1") node.props.onClick?.();
+    Children.forEach(node.props.children, clickVenue);
+  };
+  const elements = (node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] => {
+    if (!isValidElement<Record<string, unknown>>(node)) return [];
+    if (node.type === VenuePopup) return [node, ...elements((node.props.expanded ? node.props.children : node.props.preview) as React.ReactNode)];
+    return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
+  };
+  clickVenue(render());
+  const previewBefore = elements(render()).find(node => node.type === VenuePreviewCard) as React.ReactElement<React.ComponentProps<typeof VenuePreviewCard>> | undefined;
+  if (!previewBefore) throw new Error("Expected selected venue preview before session invalidation");
+  expect(previewBefore.props.games.map(item => item.id)).toEqual([game.id]);
+  expect(previewBefore.props.gamesReady).toBe(true);
+  const settled = requests.length;
   window.dispatchEvent(new Event("gb-session-changed"));
+  // Replacement pages are still in flight (20s); games must already be empty — no stale permissions.
+  const invalidated = render();
   expect(html()).toContain("Venue · ?");
   expect(html()).not.toContain("Venue · 0"); // invalidation must not fabricate a checked empty schedule
+  expect(html()).toContain("Venue"); // public venue geometry retained
+  const previewAfter = elements(invalidated).find(node => node.type === VenuePreviewCard) as React.ReactElement<React.ComponentProps<typeof VenuePreviewCard>> | undefined;
+  if (!previewAfter) throw new Error("Expected selected venue preview after session invalidation");
+  expect(previewAfter.props.games).toEqual([]);
+  expect(previewAfter.props.gamesReady).toBe(false);
+  expect(requests.length).toBeGreaterThan(settled); // replacement started
+  expect(inFlight).toBeGreaterThan(0);
+  expect(html()).not.toContain("Delayed game");
 });
 
 it.each(["visible", "minute"])("expires eligibility on %s independently of the pending transport", async trigger => {

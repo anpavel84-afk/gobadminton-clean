@@ -86,7 +86,8 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     // Tab return: catalog refresh; twin window focus is coalesced inside startVenueMapRefresh.
     const onVisibility = () => { if (document.visibilityState === "visible") polling.refresh(); };
     // A session change invalidates permissions immediately, even during a load — never coalesce away.
-    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, gamesReady: false, venuesFulfilled: false } : null); setRefresh(n => n + 1); };
+    // Drop permission-bearing games immediately; keep public venue geometry until the replacement settles.
+    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, games: [], gamesReady: false, venuesFulfilled: false } : null); setRefresh(n => n + 1); };
     window.addEventListener("focus", reload); window.addEventListener("online", reload);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("gb-session-changed", sessionChanged);
