@@ -72,6 +72,7 @@ run("venue public data import: disposable PostGIS", () => {
     if (root) await rm(root, { recursive: true, force: true });
   });
 
+  /** Each ordinary fixture owns a unique physical identity key (name+address+discriminator). */
   async function venue(opts?: {
     lifecycle?: string;
     coverKey?: string | null;
@@ -80,8 +81,9 @@ run("venue public data import: disposable PostGIS", () => {
     identityDiscriminator?: string;
   }) {
     const id = randomUUID();
-    const name = opts?.name ?? "Synthetic Hall";
-    const address = opts?.address ?? "Synthetic Address 1";
+    const tag = id.slice(0, 8);
+    const name = opts?.name ?? `Synthetic Arena ${tag}`;
+    const address = opts?.address ?? `Synthetic Street ${tag}`;
     const discriminator = opts?.identityDiscriminator ?? "";
     const normalizedName = normalizeVenueText(name);
     const normalizedAddress = normalizeVenueText(address);
@@ -100,19 +102,22 @@ run("venue public data import: disposable PostGIS", () => {
       "INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1)",
       [key, id],
     );
-    return id;
+    return { id, name, address };
   }
 
-  function manifestFor(id: string, patch: Record<string, unknown> = {}): PublicDataManifest {
+  function manifestFor(
+    fixture: { id: string; name: string; address: string },
+    patch: Record<string, unknown> = {},
+  ): PublicDataManifest {
     return validatePublicDataManifest({
       schema: "VENUE_PUBLIC_DATA_BATCH_V1",
       batch: "synthetic-public",
       count: 1,
       items: [{
-        venueId: id,
+        venueId: fixture.id,
         expectedVersion: 1,
-        expectedName: "Synthetic Hall",
-        expectedAddress: "Synthetic Address 1",
+        expectedName: fixture.name,
+        expectedAddress: fixture.address,
         publicContacts: {
           phone: "+7 999 111-22-33",
           website: "https://example.com/hall",
@@ -146,8 +151,8 @@ run("venue public data import: disposable PostGIS", () => {
   }
 
   it("dry-run has zero writes; apply patches public fields only; exact replay is SKIPPED", async () => {
-    const id = await venue({ coverKey: null });
-    const input = manifestFor(id, {
+    const v = await venue({ coverKey: null });
+    const input = manifestFor(v, {
       profile: { courtCount: 2, amenities: { parking: true, showers: false } },
     });
     const counts = async () => (await db().query(
@@ -156,15 +161,15 @@ run("venue public data import: disposable PostGIS", () => {
               (SELECT count(*)::int FROM outbox_events) outbox`,
     )).rows[0];
     const before = await counts();
-    const beforeRow = await snapshot(id);
+    const beforeRow = await snapshot(v.id);
     const lines: object[] = [];
     expect(await importVenuePublicData(db(), input, actor, false, (l) => lines.push(l))).toBe(0);
     expect(await counts()).toEqual(before);
-    expect(await snapshot(id)).toEqual(beforeRow);
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: id, action: "READY" }));
+    expect(await snapshot(v.id)).toEqual(beforeRow);
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: v.id, action: "READY" }));
 
     expect(await importVenuePublicData(db(), input, actor, true, (l) => lines.push(l))).toBe(0);
-    const after = await snapshot(id);
+    const after = await snapshot(v.id);
     expect(after).toMatchObject({
       version: 2,
       contact_phone: "private-phone",
@@ -175,30 +180,30 @@ run("venue public data import: disposable PostGIS", () => {
       court_count: 2,
       amenity_parking: true,
       amenity_showers: false,
-      name: "Synthetic Hall",
-      address: "Synthetic Address 1",
+      name: v.name,
+      address: v.address,
       lifecycle_state: "unverified",
       public_contacts: input.items[0]!.publicContacts,
     });
     expect((await db().query(
       "SELECT 1 FROM venue_admin_actions WHERE venue_id=$1 AND action='edit'",
-      [id],
+      [v.id],
     )).rowCount).toBe(1);
     const audit = (await db().query<{ after_diff: Record<string, unknown> }>(
       "SELECT after_diff FROM privileged_audit_events WHERE target_id=$1 AND reason_code='venue_public_data_batch_import'",
-      [id],
+      [v.id],
     )).rows[0];
     expect(audit?.after_diff.sources).toEqual(input.items[0]!.sources);
     expect(audit?.after_diff.fingerprint).toEqual(expect.any(String));
 
     const mid = await counts();
-    const midRow = await snapshot(id);
+    const midRow = await snapshot(v.id);
     const replayLines: object[] = [];
     // Identical replay keeps ORIGINAL expectedVersion and is SKIPPED before version gate.
     expect(await importVenuePublicData(db(), input, actor, true, (l) => replayLines.push(l))).toBe(0);
     expect(await counts()).toEqual(mid);
-    expect(await snapshot(id)).toEqual(midRow);
-    expect(replayLines).toContainEqual(expect.objectContaining({ venueId: id, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY" }));
+    expect(await snapshot(v.id)).toEqual(midRow);
+    expect(replayLines).toContainEqual(expect.objectContaining({ venueId: v.id, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY" }));
     expect(JSON.stringify(lines)).not.toContain("private-phone");
     expect(JSON.stringify(replayLines)).not.toContain("private-note");
   });
@@ -208,7 +213,7 @@ run("venue public data import: disposable PostGIS", () => {
     const sourceOnly = await venue();
     const drift = await venue();
     const conflict = await venue();
-    const missing = randomUUID();
+    const missing = { id: randomUUID(), name: "Missing", address: "Missing" };
     const retired = await venue({ lifecycle: "retired" });
 
     expect(await importVenuePublicData(db(), manifestFor(versionOnly), actor, true, () => undefined)).toBe(0);
@@ -217,7 +222,7 @@ run("venue public data import: disposable PostGIS", () => {
     expect(await importVenuePublicData(db(), manifestFor(conflict), actor, true, () => undefined)).toBe(0);
     await db().query(
       "UPDATE venues SET public_contacts=$2::jsonb, version=version+1, updated_at=now() WHERE id=$1",
-      [drift, JSON.stringify({ phone: "+7 111 000-00-00", website: null, messengers: [] })],
+      [drift.id, JSON.stringify({ phone: "+7 111 000-00-00", website: null, messengers: [] })],
     );
 
     const mixed = validatePublicDataManifest({
@@ -230,7 +235,7 @@ run("venue public data import: disposable PostGIS", () => {
         // Source-only change under same key ⇒ CONFLICT.
         {
           ...manifestFor(sourceOnly).items[0]!,
-          venueId: sourceOnly,
+          venueId: sourceOnly.id,
           sources: [{
             url: "https://example.com/other-page",
             checkedAt: "2026-10-28T08:00:00.000Z",
@@ -238,10 +243,10 @@ run("venue public data import: disposable PostGIS", () => {
           }],
         },
         // Same accepted item fingerprint; external field change ⇒ DRIFT (not version-only rewrite).
-        { ...manifestFor(drift).items[0]!, venueId: drift },
+        { ...manifestFor(drift).items[0]!, venueId: drift.id },
         {
           ...manifestFor(conflict).items[0]!,
-          venueId: conflict,
+          venueId: conflict.id,
           publicContacts: {
             phone: "+7 222 333-44-55",
             website: "https://example.com/other",
@@ -250,41 +255,41 @@ run("venue public data import: disposable PostGIS", () => {
         },
         {
           ...manifestFor(missing).items[0]!,
-          venueId: missing,
+          venueId: missing.id,
           expectedName: "Missing",
           expectedAddress: "Missing",
         },
-        { ...manifestFor(retired).items[0]!, venueId: retired },
+        { ...manifestFor(retired).items[0]!, venueId: retired.id },
       ],
     });
 
     const lines: object[] = [];
     expect(await importVenuePublicData(db(), mixed, actor, true, (l) => lines.push(l))).toBe(1);
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: versionOnly, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: sourceOnly, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: drift, action: "FAILED", reason: "PUBLIC_DATA_DRIFT" }));
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: conflict, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: missing, action: "FAILED", reason: "VENUE_NOT_FOUND" }));
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: retired, action: "SKIPPED", reason: "VENUE_INELIGIBLE" }));
-    expect((await snapshot(conflict)).public_contacts).toEqual(manifestFor(conflict).items[0]!.publicContacts);
-    expect((await snapshot(versionOnly)).version).toBe(2);
-    expect((await snapshot(sourceOnly)).version).toBe(2);
-    expect((await snapshot(sourceOnly)).public_contacts).toEqual(manifestFor(sourceOnly).items[0]!.publicContacts);
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: versionOnly.id, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: sourceOnly.id, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: drift.id, action: "FAILED", reason: "PUBLIC_DATA_DRIFT" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: conflict.id, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: missing.id, action: "FAILED", reason: "VENUE_NOT_FOUND" }));
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: retired.id, action: "SKIPPED", reason: "VENUE_INELIGIBLE" }));
+    expect((await snapshot(conflict.id)).public_contacts).toEqual(manifestFor(conflict).items[0]!.publicContacts);
+    expect((await snapshot(versionOnly.id)).version).toBe(2);
+    expect((await snapshot(sourceOnly.id)).version).toBe(2);
+    expect((await snapshot(sourceOnly.id)).public_contacts).toEqual(manifestFor(sourceOnly).items[0]!.publicContacts);
   });
 
   it("CAS mismatch fails without writes; identity mismatch fails; actor guards refuse before writes", async () => {
-    const id = await venue();
-    const stale = manifestFor(id, { expectedVersion: 99 });
-    const before = await snapshot(id);
+    const v = await venue();
+    const stale = manifestFor(v, { expectedVersion: 99 });
+    const before = await snapshot(v.id);
     const lines: object[] = [];
     expect(await importVenuePublicData(db(), stale, actor, true, (l) => lines.push(l))).toBe(1);
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: id, action: "FAILED", reason: "VENUE_VERSION_CONFLICT" }));
-    expect(await snapshot(id)).toEqual(before);
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: v.id, action: "FAILED", reason: "VENUE_VERSION_CONFLICT" }));
+    expect(await snapshot(v.id)).toEqual(before);
 
-    const renamed = manifestFor(id, { expectedName: "Wrong Name" });
+    const renamed = manifestFor(v, { expectedName: "Wrong Name" });
     expect(await importVenuePublicData(db(), renamed, actor, true, (l) => lines.push(l))).toBe(1);
-    expect(lines).toContainEqual(expect.objectContaining({ venueId: id, action: "FAILED", reason: "VENUE_IDENTITY_MISMATCH" }));
-    expect(await snapshot(id)).toEqual(before);
+    expect(lines).toContainEqual(expect.objectContaining({ venueId: v.id, action: "FAILED", reason: "VENUE_IDENTITY_MISMATCH" }));
+    expect(await snapshot(v.id)).toEqual(before);
 
     const dir = await mkdtemp(path.join(tmpdir(), "venue-public-cli-"));
     try {
@@ -321,12 +326,12 @@ run("venue public data import: disposable PostGIS", () => {
   });
 
   it("renames/addresses existing UUID; keeps geometry/private/lifecycle/keys; exact replay SKIPPED", async () => {
-    const id = await venue({ identityDiscriminator: "hall:2" });
-    const before = await snapshot(id);
-    const oldKeys = await identityKeys(id);
+    const v = await venue({ identityDiscriminator: "hall:2" });
+    const before = await snapshot(v.id);
+    const oldKeys = await identityKeys(v.id);
     expect(oldKeys).toHaveLength(1);
 
-    const rename = manifestFor(id, {
+    const rename = manifestFor(v, {
       identity: { name: "ЦЕХ №1 «Старая деревня»" },
       publicContacts: {
         phone: "+7 999 111-22-33",
@@ -336,16 +341,16 @@ run("venue public data import: disposable PostGIS", () => {
     });
     const dryLines: object[] = [];
     expect(await importVenuePublicData(db(), rename, actor, false, (l) => dryLines.push(l))).toBe(0);
-    expect(dryLines).toContainEqual(expect.objectContaining({ venueId: id, action: "READY" }));
-    expect(await snapshot(id)).toEqual(before);
-    expect(await identityKeys(id)).toEqual(oldKeys);
+    expect(dryLines).toContainEqual(expect.objectContaining({ venueId: v.id, action: "READY" }));
+    expect(await snapshot(v.id)).toEqual(before);
+    expect(await identityKeys(v.id)).toEqual(oldKeys);
 
     expect(await importVenuePublicData(db(), rename, actor, true, () => undefined)).toBe(0);
-    const afterRename = await snapshot(id);
+    const afterRename = await snapshot(v.id);
     expect(afterRename).toMatchObject({
       version: 2,
       name: "ЦЕХ №1 «Старая деревня»",
-      address: "Synthetic Address 1",
+      address: v.address,
       identity_discriminator: "hall:2",
       lifecycle_state: "unverified",
       contact_phone: "private-phone",
@@ -354,11 +359,11 @@ run("venue public data import: disposable PostGIS", () => {
       location_wkt: before.location_wkt,
       public_contacts: rename.items[0]!.publicContacts,
     });
-    const keysAfterRename = await identityKeys(id);
+    const keysAfterRename = await identityKeys(v.id);
     expect(keysAfterRename).toContain(oldKeys[0]);
     const renamedIdentity = resolvePublicDataIdentity({
-      name: "Synthetic Hall",
-      address: "Synthetic Address 1",
+      name: v.name,
+      address: v.address,
       city_id: city,
       identity_discriminator: "hall:2",
     }, { name: "ЦЕХ №1 «Старая деревня»" });
@@ -366,24 +371,24 @@ run("venue public data import: disposable PostGIS", () => {
     expect(keysAfterRename.length).toBeGreaterThanOrEqual(2);
 
     const replayLines: object[] = [];
-    const mid = await snapshot(id);
-    const midKeys = await identityKeys(id);
+    const mid = await snapshot(v.id);
+    const midKeys = await identityKeys(v.id);
     expect(await importVenuePublicData(db(), rename, actor, true, (l) => replayLines.push(l))).toBe(0);
     expect(replayLines).toContainEqual(expect.objectContaining({
-      venueId: id, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY",
+      venueId: v.id, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY",
     }));
-    expect(await snapshot(id)).toEqual(mid);
-    expect(await identityKeys(id)).toEqual(midKeys);
+    expect(await snapshot(v.id)).toEqual(mid);
+    expect(await identityKeys(v.id)).toEqual(midKeys);
 
     const addressOnly = validatePublicDataManifest({
       schema: "VENUE_PUBLIC_DATA_BATCH_V1",
       batch: "synthetic-public-address",
       count: 1,
       items: [{
-        venueId: id,
+        venueId: v.id,
         expectedVersion: 2,
         expectedName: "ЦЕХ №1 «Старая деревня»",
-        expectedAddress: "Synthetic Address 1",
+        expectedAddress: v.address,
         identity: { address: "пр. Динамо, 44А" },
         sources: [{
           url: "https://example.com/nord",
@@ -393,7 +398,7 @@ run("venue public data import: disposable PostGIS", () => {
       }],
     });
     expect(await importVenuePublicData(db(), addressOnly, actor, true, () => undefined)).toBe(0);
-    const afterAddress = await snapshot(id);
+    const afterAddress = await snapshot(v.id);
     expect(afterAddress).toMatchObject({
       version: 3,
       name: "ЦЕХ №1 «Старая деревня»",
@@ -403,51 +408,57 @@ run("venue public data import: disposable PostGIS", () => {
       location_wkt: before.location_wkt,
       public_contacts: rename.items[0]!.publicContacts,
     });
-    const keysAfterAddress = await identityKeys(id);
+    const keysAfterAddress = await identityKeys(v.id);
     expect(keysAfterAddress).toEqual(expect.arrayContaining(midKeys));
     expect(keysAfterAddress.length).toBeGreaterThan(midKeys.length);
   });
 
   it("refuses foreign identity collision and changed identity manifest atomically", async () => {
-    const target = await venue({ name: "Target Hall", address: "Target Address 1" });
-    const foreign = await venue({ name: "Foreign Hall", address: "Foreign Address 1" });
-    const foreignSnap = await snapshot(foreign);
-    const foreignKeys = await identityKeys(foreign);
+    // Same preserved unit discriminator on both UUIDs so a rename of foreign onto
+    // target's physical name+address derives the SAME dedupe key target already owns.
+    // (Empty-disc "… Hall …" names extract hall:<token> and would miss the stored "" key.)
+    const sharedDisc = "hall:2";
+    const target = await venue({
+      name: "Target Arena Nord",
+      address: "Target Street 10",
+      identityDiscriminator: sharedDisc,
+    });
+    const foreign = await venue({
+      name: "Foreign Arena South",
+      address: "Foreign Street 20",
+      identityDiscriminator: sharedDisc,
+    });
+    const foreignSnap = await snapshot(foreign.id);
+    const foreignKeys = await identityKeys(foreign.id);
 
     const collide = manifestFor(foreign, {
-      expectedName: "Foreign Hall",
-      expectedAddress: "Foreign Address 1",
-      identity: { name: "Target Hall", address: "Target Address 1" },
+      identity: { name: target.name, address: target.address },
     });
     const collideLines: object[] = [];
     expect(await importVenuePublicData(db(), collide, actor, true, (l) => collideLines.push(l))).toBe(1);
     expect(collideLines).toContainEqual(expect.objectContaining({
-      venueId: foreign, action: "FAILED", reason: "VENUE_IDENTITY_CONFLICT",
+      venueId: foreign.id, action: "FAILED", reason: "VENUE_IDENTITY_CONFLICT",
     }));
-    expect(await snapshot(foreign)).toEqual(foreignSnap);
-    expect(await identityKeys(foreign)).toEqual(foreignKeys);
-    expect(await identityKeys(target)).toHaveLength(1);
+    expect(await snapshot(foreign.id)).toEqual(foreignSnap);
+    expect(await identityKeys(foreign.id)).toEqual(foreignKeys);
+    expect(await identityKeys(target.id)).toHaveLength(1);
 
     expect(await importVenuePublicData(db(), manifestFor(target, {
-      expectedName: "Target Hall",
-      expectedAddress: "Target Address 1",
       identity: { name: "Renamed Target" },
     }), actor, true, () => undefined)).toBe(0);
 
     const changed = manifestFor(target, {
-      expectedName: "Target Hall",
-      expectedAddress: "Target Address 1",
       expectedVersion: 1,
       identity: { name: "Other New Name" },
     });
-    const beforeConflict = await snapshot(target);
-    const keysBeforeConflict = await identityKeys(target);
+    const beforeConflict = await snapshot(target.id);
+    const keysBeforeConflict = await identityKeys(target.id);
     const conflictLines: object[] = [];
     expect(await importVenuePublicData(db(), changed, actor, true, (l) => conflictLines.push(l))).toBe(1);
     expect(conflictLines).toContainEqual(expect.objectContaining({
-      venueId: target, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT",
+      venueId: target.id, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT",
     }));
-    expect(await snapshot(target)).toEqual(beforeConflict);
-    expect(await identityKeys(target)).toEqual(keysBeforeConflict);
+    expect(await snapshot(target.id)).toEqual(beforeConflict);
+    expect(await identityKeys(target.id)).toEqual(keysBeforeConflict);
   });
 });

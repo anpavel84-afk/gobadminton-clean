@@ -2,8 +2,9 @@
 
 From: source author (`cursor:auto`). To: independent QA / PM / trusted integrator.
 Date: 2026-11-07. Status: WORKING_DRAFT, NOT INDEPENDENTLY VERIFIED. No QA/DEV/UAT PASS.
-Assignment: `OWNER_SPB422_MINIMAL_COMPATIBLE_IDENTITY_REPAIR_EXISTING_IMPORTER` attempt 1.
-Base: `a592511c0838de49ae1fad071f5c1defdc61f41d`. No Git/network/deploy/secrets in this pass.
+Assignment: `OWNER_SPB422_MINIMAL_COMPATIBLE_IDENTITY_REPAIR_EXISTING_IMPORTER` attempt 2 (fixtures).
+Base: `fe236a8c365b74f55d6c9f1470d9b1868eace49a`. No Git/network/deploy/secrets in this pass.
+Attempt 1 native API unit+types+lint PASS; isolated PostGIS suite 2 PASS / 3 FAIL retained.
 New SPB venue creation, B4 UID forging, 11-city importer/source attribution, release files,
 and actual40 receipt are out of scope (next 41 metadata). PROD not authorized.
 
@@ -64,10 +65,39 @@ projects `identity` when present.
   address) and a new source-backed manifest; replaying an old successful identity receipt
   only SKIPs, it does not restore a later drift.
 
+## Attempt 2 — integration fixture repair only
+
+Allowed paths: `apps/api/test/integration/venue-public-data-import.test.ts` + this handoff.
+No production/security/normalization/idempotency weakening; no ON CONFLICT DO NOTHING on
+fixture key inserts to hide ownership.
+
+Pass-1 PostGIS FAILs (retained history):
+
+1. `venue()` now inserts real `venue_identity_keys`, but ordinary metadata tests reused the
+   same default name/address/`""` discriminator → `venue_identity_keys_pkey` collision before
+   assertions (fingerprint/drift + CAS/actor cases).
+2. Foreign-collision case used `"Target Hall"` / `"Foreign Hall"` with empty stored
+   discriminator. Resolve on empty disc extracts `hall:target` from `"Target Hall Target…"`,
+   so the claim key differed from the target's stored `""` key and import returned 0 instead
+   of `VENUE_IDENTITY_CONFLICT`. Different unit/hall aliases stay distinct by design — not a
+   production merge bug; fixtures must own the **same** physical normal identity including
+   the preserved discriminator.
+
+Fixture fixes:
+
+- Ordinary independent fixtures get unique physical name/address (UUID tag); manifest
+  `expectedName`/`expectedAddress` match the actual fixture. All original CAS / fingerprint /
+  actor / dry-run / rollback / replay assertions preserved.
+- Collision fixtures share explicit `identityDiscriminator: "hall:2"` and rename foreign onto
+  target's name+address so the derived dedupe key is the one the other UUID already owns.
+  Negative assertions stay `FAILED` / `VENUE_IDENTITY_CONFLICT` with unchanged
+  row/alias/audit/outbox; changed-manifest refuse assertions unchanged.
+
 ## Checks (author, not independent QA)
 
 Unit coverage extended in `venue-public-data-import.test.ts` (schema, fingerprint stability,
-discriminator preserve, replay/drift, collision helper). Integration coverage extended for
-rename/address success + key retention + exact replay SKIP + foreign collision / changed
-manifest atomic refuse. Live PostGIS and full CI are for PM/independent QA; author pass did
-not claim DEV ACCEPTED and did not run against live DB.
+discriminator preserve, replay/drift, collision helper) — attempt 1 PASS retained.
+Integration coverage: rename/address success + key retention + exact replay SKIP + foreign
+collision / changed manifest atomic refuse; attempt 2 repairs disposable PostGIS fixtures
+only. Live PostGIS and full CI are for PM/independent QA; author pass does not claim
+DEV ACCEPTED.
