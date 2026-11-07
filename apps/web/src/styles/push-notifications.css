@@ -84,6 +84,11 @@
   list-style: none;
 }
 
+/* #496 — installed alpha.40: event toggle rows must span full list width. */
+.fr3 .gb-push-settings__event-list .toggle-row {
+  width: 100%;
+}
+
 @media (max-width: 430px) {
   .gb-push-settings__actions {
     flex-direction: column;

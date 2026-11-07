@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { publicContactUrl, publicVenueContactsSchema, readPublicVenueContacts, type PublicVenueContacts } from "./public-venue-contacts";
+import { extractIdentityDiscriminator, normalizeVenueText, venueDedupeKey } from "./venue-normalize";
 import { venueProfileEditSchema } from "./venue-profile";
 
 const sourceUrl = z.string().transform((value, ctx) => {
@@ -22,16 +23,26 @@ const sourceSchema = z.object({
   note: z.string().min(1).max(240),
 }).strict();
 
+const identityPatchSchema = z.object({
+  name: z.string().trim().min(1).max(160).optional(),
+  address: z.string().trim().min(1).max(500).optional(),
+}).strict().superRefine((identity, ctx) => {
+  if (identity.name === undefined && identity.address === undefined) {
+    ctx.addIssue({ code: "custom", message: "EMPTY_IDENTITY_PATCH" });
+  }
+});
+
 const itemSchema = z.object({
   venueId: z.string().uuid(),
   expectedVersion: z.number().int().positive(),
   expectedName: z.string().trim().min(1).max(160),
   expectedAddress: z.string().trim().min(1).max(500),
+  identity: identityPatchSchema.optional(),
   publicContacts: publicVenueContactsSchema.optional(),
   profile: venueProfileEditSchema.optional(),
   sources: z.array(sourceSchema).min(1).max(10),
 }).strict().superRefine((item, ctx) => {
-  if (item.publicContacts === undefined && item.profile === undefined) {
+  if (item.publicContacts === undefined && item.profile === undefined && item.identity === undefined) {
     ctx.addIssue({ code: "custom", message: "MISSING_PATCH_FIELD" });
   }
 });
@@ -50,12 +61,15 @@ const manifestSchema = z.object({
 
 export type PublicDataManifest = z.infer<typeof manifestSchema>;
 export type PublicDataItem = PublicDataManifest["items"][number];
+export type PublicDataIdentityPatch = NonNullable<PublicDataItem["identity"]>;
 export type PublicDataVenueRow = {
   name: string;
   address: string;
   lifecycle_state: string;
   version: number;
   canonical_venue_id: string | null;
+  city_id: string;
+  identity_discriminator: string;
   public_contacts: unknown;
   court_count: number | null;
   amenity_parking: boolean | null;
@@ -64,6 +78,15 @@ export type PublicDataVenueRow = {
 };
 
 export type PublicDataPlan = { action: "READY" | "SKIPPED" | "FAILED"; reason: string };
+
+export type ResolvedPublicDataIdentity = {
+  name: string;
+  address: string;
+  normalizedName: string;
+  normalizedAddress: string;
+  identityDiscriminator: string;
+  dedupeKey: string;
+};
 
 const NAMESPACE = "venue_public_data_v1";
 
@@ -97,6 +120,7 @@ export function publicDataPatchFingerprint(item: PublicDataItem): string {
     expectedVersion: item.expectedVersion,
     expectedName: item.expectedName,
     expectedAddress: item.expectedAddress,
+    identity: item.identity,
     publicContacts: item.publicContacts,
     profile: item.profile,
     sources: item.sources,
@@ -130,10 +154,26 @@ export function profileFactsEqual(
     && descriptionMatches;
 }
 
+export function identityPatchMatches(
+  row: Pick<PublicDataVenueRow, "name" | "address">,
+  identity: PublicDataIdentityPatch,
+): boolean {
+  if (identity.name !== undefined && row.name !== identity.name) return false;
+  if (identity.address !== undefined && row.address !== identity.address) return false;
+  return true;
+}
+
 export function appliedPublicFieldsMatch(
   row: PublicDataVenueRow,
-  applied: { publicContacts?: PublicVenueContacts | null; profile?: z.infer<typeof venueProfileEditSchema> },
+  applied: {
+    publicContacts?: PublicVenueContacts | null;
+    profile?: z.infer<typeof venueProfileEditSchema>;
+    identity?: PublicDataIdentityPatch;
+  },
 ): boolean {
+  if ("identity" in applied && applied.identity !== undefined) {
+    if (!identityPatchMatches(row, applied.identity)) return false;
+  }
   if ("publicContacts" in applied) {
     if (!contactsEqual(readPublicVenueContacts(row.public_contacts), applied.publicContacts ?? null)) return false;
   }
@@ -143,14 +183,28 @@ export function appliedPublicFieldsMatch(
   return true;
 }
 
-/** Identity/lifecycle gate used by dry-run and apply before CAS / idempotent replay. */
-export function planPublicDataRow(row: PublicDataVenueRow | undefined, item: PublicDataItem): PublicDataPlan {
+/** Lifecycle/existence gate; identity expectation is checked only when no own receipt. */
+export function planPublicDataEligibility(row: PublicDataVenueRow | undefined): PublicDataPlan {
   if (!row) return { action: "FAILED", reason: "VENUE_NOT_FOUND" };
-  if (!["unverified", "verified"].includes(row.lifecycle_state)) return { action: "SKIPPED", reason: "VENUE_INELIGIBLE" };
+  if (!["unverified", "verified"].includes(row.lifecycle_state)) {
+    return { action: "SKIPPED", reason: "VENUE_INELIGIBLE" };
+  }
+  return { action: "READY", reason: "PUBLIC_DATA_READY" };
+}
+
+/** Exact expected old name/address precondition for a first-time apply. */
+export function planPublicDataIdentityMatch(row: PublicDataVenueRow, item: PublicDataItem): PublicDataPlan {
   if (row.name !== item.expectedName || row.address !== item.expectedAddress) {
     return { action: "FAILED", reason: "VENUE_IDENTITY_MISMATCH" };
   }
   return { action: "READY", reason: "PUBLIC_DATA_READY" };
+}
+
+/** Combined eligibility + expected identity (unit helper; importer checks receipt first). */
+export function planPublicDataRow(row: PublicDataVenueRow | undefined, item: PublicDataItem): PublicDataPlan {
+  const eligibility = planPublicDataEligibility(row);
+  if (eligibility.action !== "READY" || !row) return eligibility;
+  return planPublicDataIdentityMatch(row, item);
 }
 
 export function planPublicDataVersion(row: PublicDataVenueRow, item: PublicDataItem): PublicDataPlan {
@@ -158,10 +212,54 @@ export function planPublicDataVersion(row: PublicDataVenueRow, item: PublicDataI
   return { action: "READY", reason: "PUBLIC_DATA_READY" };
 }
 
+/**
+ * Resolve post-patch name/address. Only supplied identity fields change.
+ * Non-empty identity_discriminator is preserved so a name-only fix keeps unit boundaries.
+ */
+export function resolvePublicDataIdentity(
+  row: Pick<PublicDataVenueRow, "name" | "address" | "city_id" | "identity_discriminator">,
+  identity: PublicDataIdentityPatch,
+): ResolvedPublicDataIdentity {
+  const name = identity.name !== undefined ? identity.name : row.name;
+  const address = identity.address !== undefined ? identity.address : row.address;
+  const normalizedName = normalizeVenueText(name);
+  const normalizedAddress = normalizeVenueText(address);
+  // Keep stored discriminator bytes when present; do not re-normalize through the
+  // explicit path (ё/punct rules would rewrite "hall:2" and change the unit key).
+  const preserved = row.identity_discriminator.trim();
+  const identityDiscriminator = preserved.length > 0
+    ? row.identity_discriminator
+    : extractIdentityDiscriminator(name, address);
+  return {
+    name,
+    address,
+    normalizedName,
+    normalizedAddress,
+    identityDiscriminator,
+    dedupeKey: venueDedupeKey({
+      cityId: row.city_id,
+      normalizedName,
+      normalizedAddress,
+      identityDiscriminator,
+    }),
+  };
+}
+
+export function planPublicDataIdentityCollision(
+  claimantVenueId: string | undefined,
+  venueId: string,
+): PublicDataPlan {
+  if (claimantVenueId !== undefined && claimantVenueId !== venueId) {
+    return { action: "FAILED", reason: "VENUE_IDENTITY_CONFLICT" };
+  }
+  return { action: "READY", reason: "PUBLIC_DATA_READY" };
+}
+
 export type AcceptedPublicDataReceipt = {
   fingerprint: string;
   publicContacts?: PublicVenueContacts | null;
   profile?: z.infer<typeof venueProfileEditSchema>;
+  identity?: PublicDataIdentityPatch;
   sources: PublicDataItem["sources"];
 };
 
@@ -180,6 +278,7 @@ export function buildAppliedPatch(item: PublicDataItem): AcceptedPublicDataRecei
     fingerprint: publicDataPatchFingerprint(item),
     sources: item.sources,
   };
+  if (item.identity !== undefined) applied.identity = item.identity;
   if (item.publicContacts !== undefined) applied.publicContacts = item.publicContacts;
   if (item.profile !== undefined) applied.profile = item.profile;
   return applied;

@@ -20,16 +20,22 @@ import { manifestDigest, planCover, validateImage, validateManifest, type CoverM
 import {
   appliedPublicFieldsMatch,
   buildAppliedPatch,
+  planPublicDataEligibility,
+  planPublicDataIdentityCollision,
+  planPublicDataIdentityMatch,
   planPublicDataReplay,
-  planPublicDataRow,
   planPublicDataVersion,
   publicDataDigest,
   publicDataKeyHash,
   publicDataPatchFingerprint,
+  resolvePublicDataIdentity,
   validatePublicDataManifest,
   type AcceptedPublicDataReceipt,
+  type PublicDataItem,
   type PublicDataManifest,
+  type PublicDataPlan,
   type PublicDataVenueRow,
+  type ResolvedPublicDataIdentity,
 } from "../venues/venue-public-data-import";
 import {
   buildAcceptedGalleryReceipt,
@@ -99,7 +105,7 @@ export async function requireImportActor(
   return row.user_id;
 }
 
-const publicDataSelect = `SELECT name,address,lifecycle_state,version,canonical_venue_id,public_contacts,court_count,amenity_parking,amenity_showers,public_description
+const publicDataSelect = `SELECT name,address,lifecycle_state,version,canonical_venue_id,city_id,identity_discriminator,public_contacts,court_count,amenity_parking,amenity_showers,public_description
   FROM venues WHERE id=$1`;
 
 async function loadAcceptedPublicDataReceipt(
@@ -118,6 +124,9 @@ async function loadAcceptedPublicDataReceipt(
     fingerprint: after.fingerprint,
     sources: after.sources as AcceptedPublicDataReceipt["sources"],
   };
+  if ("identity" in after) {
+    receipt.identity = after.identity as AcceptedPublicDataReceipt["identity"];
+  }
   if ("publicContacts" in after) {
     receipt.publicContacts = after.publicContacts as AcceptedPublicDataReceipt["publicContacts"];
   }
@@ -125,6 +134,61 @@ async function loadAcceptedPublicDataReceipt(
     receipt.profile = after.profile as AcceptedPublicDataReceipt["profile"];
   }
   return receipt;
+}
+
+async function loadIdentityKeyClaimant(
+  c: Pick<PoolClient, "query">,
+  dedupeKey: string,
+): Promise<string | undefined> {
+  return (await c.query<{ venue_id: string }>(
+    "SELECT venue_id FROM venue_identity_keys WHERE dedupe_key=$1",
+    [dedupeKey],
+  )).rows[0]?.venue_id;
+}
+
+/**
+ * Legacy items (no identity): expectedName/address before receipt — external identity
+ * drift must FAIL as VENUE_IDENTITY_MISMATCH, not false PUBLIC_DATA_REPLAY.
+ * Identity-patch items: receipt first so own rename/address replay can SKIP.
+ */
+async function planPublicDataItemState(
+  c: Pick<PoolClient, "query">,
+  batch: string,
+  item: PublicDataItem,
+  row: PublicDataVenueRow | undefined,
+): Promise<{ name: string; result: PublicDataPlan; nextIdentity?: ResolvedPublicDataIdentity }> {
+  const name = row?.name ?? "";
+  const eligibility = planPublicDataEligibility(row);
+  if (eligibility.action !== "READY" || !row) return { name, result: eligibility };
+
+  const keyHash = publicDataKeyHash(batch, item.venueId);
+  const fingerprint = publicDataPatchFingerprint(item);
+  const legacyPublicOnly = item.identity === undefined;
+  if (legacyPublicOnly) {
+    const identityMatch = planPublicDataIdentityMatch(row, item);
+    if (identityMatch.action !== "READY") return { name, result: identityMatch };
+  }
+
+  const receipt = await loadAcceptedPublicDataReceipt(c, keyHash);
+  if (receipt) {
+    return { name, result: planPublicDataReplay(row, fingerprint, receipt) };
+  }
+
+  if (!legacyPublicOnly) {
+    const identityMatch = planPublicDataIdentityMatch(row, item);
+    if (identityMatch.action !== "READY") return { name, result: identityMatch };
+  }
+
+  const versionPlan = planPublicDataVersion(row, item);
+  if (versionPlan.action !== "READY") return { name, result: versionPlan };
+
+  if (legacyPublicOnly) return { name, result: { action: "READY", reason: "PUBLIC_DATA_READY" } };
+
+  const nextIdentity = resolvePublicDataIdentity(row, item.identity!);
+  const claimant = await loadIdentityKeyClaimant(c, nextIdentity.dedupeKey);
+  const collision = planPublicDataIdentityCollision(claimant, item.venueId);
+  if (collision.action !== "READY") return { name, result: collision };
+  return { name, result: { action: "READY", reason: "PUBLIC_DATA_READY" }, nextIdentity };
 }
 
 type Services = {media:Pick<AvatarService,"stage"|"verifyStage"|"releaseStage">; moderation:Pick<ContentModerationService,"approveImage"|"bindImage">};
@@ -692,20 +756,9 @@ export async function importVenuePublicData(
         let result: { action: keyof typeof totals; reason: string };
         try {
           const row = (await client.query<PublicDataVenueRow>(publicDataSelect, [item.venueId])).rows[0];
-          name = row?.name ?? "";
-          const gate = planPublicDataRow(row, item);
-          if (gate.action !== "READY" || !row) {
-            result = gate;
-          } else {
-            const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
-            const fingerprint = publicDataPatchFingerprint(item);
-            const receipt = await loadAcceptedPublicDataReceipt(client, keyHash);
-            if (receipt) {
-              result = planPublicDataReplay(row, fingerprint, receipt);
-            } else {
-              result = planPublicDataVersion(row, item);
-            }
-          }
+          const planned = await planPublicDataItemState(client, manifest.batch, item, row);
+          name = planned.name;
+          result = planned.result;
         } catch {
           result = { action: "FAILED", reason: "IMPORT_ROW_FAILED" };
         }
@@ -735,18 +788,15 @@ export async function importVenuePublicData(
         await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
         const current = (await c.query<PublicDataVenueRow>(`${publicDataSelect} FOR UPDATE`, [item.venueId])).rows[0];
         name = current?.name ?? name;
-        const gate = planPublicDataRow(current, item);
-        if (gate.action !== "READY" || !current) return gate;
+        const planned = await planPublicDataItemState(c, manifest.batch, item, current);
+        name = planned.name || name;
+        if (planned.result.action !== "READY" || !current) return planned.result;
 
         const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
-        const fingerprint = publicDataPatchFingerprint(item);
-        const receipt = await loadAcceptedPublicDataReceipt(c, keyHash);
-        if (receipt) {
-          return planPublicDataReplay(current, fingerprint, receipt);
-        }
-
-        const versionPlan = planPublicDataVersion(current, item);
-        if (versionPlan.action !== "READY") return versionPlan;
+        const touchIdentity = item.identity !== undefined;
+        const nextIdentity = touchIdentity
+          ? (planned.nextIdentity ?? resolvePublicDataIdentity(current, item.identity!))
+          : undefined;
 
         const touchContacts = item.publicContacts !== undefined;
         const touchProfile = item.profile !== undefined;
@@ -756,24 +806,40 @@ export async function importVenuePublicData(
         const touchDescription = touchProfile && item.profile !== null
           && Object.prototype.hasOwnProperty.call(item.profile, "description");
         const clearProfile = touchProfile && item.profile === null;
+        // Row CAS first so a version miss cannot leave a new identity key committed alone.
         const updated = (await c.query<{
           version: number;
+          name: string;
+          address: string;
+          identity_discriminator: string;
           public_contacts: unknown;
           court_count: number | null;
           amenity_parking: boolean | null;
           amenity_showers: boolean | null;
           public_description: string | null;
         }>(`UPDATE venues SET
-            public_contacts=CASE WHEN $2::boolean THEN $3::jsonb ELSE public_contacts END,
-            court_count=CASE WHEN $4::boolean THEN $5::integer ELSE court_count END,
-            amenity_parking=CASE WHEN $4::boolean THEN $6::boolean ELSE amenity_parking END,
-            amenity_showers=CASE WHEN $4::boolean THEN $7::boolean ELSE amenity_showers END,
-            public_description=CASE WHEN $8::boolean THEN $9::text WHEN $10::boolean THEN NULL ELSE public_description END,
+            name=CASE WHEN $2::boolean THEN $3::text ELSE name END,
+            address=CASE WHEN $2::boolean THEN $4::text ELSE address END,
+            normalized_name=CASE WHEN $2::boolean THEN $5::text ELSE normalized_name END,
+            normalized_address=CASE WHEN $2::boolean THEN $6::text ELSE normalized_address END,
+            identity_discriminator=CASE WHEN $2::boolean THEN $7::text ELSE identity_discriminator END,
+            public_contacts=CASE WHEN $8::boolean THEN $9::jsonb ELSE public_contacts END,
+            court_count=CASE WHEN $10::boolean THEN $11::integer ELSE court_count END,
+            amenity_parking=CASE WHEN $10::boolean THEN $12::boolean ELSE amenity_parking END,
+            amenity_showers=CASE WHEN $10::boolean THEN $13::boolean ELSE amenity_showers END,
+            public_description=CASE WHEN $14::boolean THEN $15::text WHEN $16::boolean THEN NULL ELSE public_description END,
             version=version+1, updated_at=now()
-          WHERE id=$1 AND version=$11
-          RETURNING version, public_contacts, court_count, amenity_parking, amenity_showers, public_description`,
+          WHERE id=$1 AND version=$17
+          RETURNING version, name, address, identity_discriminator, public_contacts,
+                    court_count, amenity_parking, amenity_showers, public_description`,
         [
           item.venueId,
+          touchIdentity,
+          nextIdentity?.name ?? current.name,
+          nextIdentity?.address ?? current.address,
+          nextIdentity?.normalizedName ?? null,
+          nextIdentity?.normalizedAddress ?? null,
+          nextIdentity?.identityDiscriminator ?? current.identity_discriminator,
           touchContacts,
           contactsJson,
           touchProfile,
@@ -787,10 +853,26 @@ export async function importVenuePublicData(
         ])).rows[0];
         if (!updated) return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
 
+        if (touchIdentity && nextIdentity) {
+          // Retain historical keys; foreign claim after row write must roll back the txn.
+          await c.query(
+            "INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1) ON CONFLICT(dedupe_key) DO NOTHING",
+            [nextIdentity.dedupeKey, item.venueId],
+          );
+          const claimant = await loadIdentityKeyClaimant(c, nextIdentity.dedupeKey);
+          const collision = planPublicDataIdentityCollision(claimant, item.venueId);
+          if (collision.action !== "READY") {
+            throw new Error("VENUE_IDENTITY_CONFLICT");
+          }
+        }
+
         const applied = buildAppliedPatch(item);
         const afterRow: PublicDataVenueRow = {
           ...current,
           version: updated.version,
+          name: updated.name,
+          address: updated.address,
+          identity_discriminator: updated.identity_discriminator,
           public_contacts: updated.public_contacts,
           court_count: updated.court_count,
           amenity_parking: updated.amenity_parking,
@@ -810,6 +892,10 @@ export async function importVenuePublicData(
           // Same transactional after_diff: validated sources for operator provenance.
           sources: applied.sources,
         };
+        if (touchIdentity) {
+          before.identity = { name: current.name, address: current.address };
+          after.identity = applied.identity;
+        }
         if (touchContacts) {
           before.publicContacts = current.public_contacts ?? null;
           after.publicContacts = applied.publicContacts ?? null;
