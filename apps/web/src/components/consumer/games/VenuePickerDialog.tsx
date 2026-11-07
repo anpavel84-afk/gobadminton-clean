@@ -2,6 +2,7 @@
 import { CloseButton } from "../CloseButton";
 
 import { VenueGallery } from "../venues/VenueGallery";
+import { venueCoverUrl } from "../venues/VenueCover";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -118,6 +119,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
             const photos = galleryItemCount(venue);
             const catalogSource = venue.profile?.catalogSource;
             const hasSource = Boolean(safeCatalogSource(catalogSource));
+            const showDefaultIllustrationLabel = !venueCoverUrl(venue.cover?.uploadedUrl) && photos === 0;
             return (
               <div key={venue.id} className="gb-venue-picker-option-block">
                 <button
@@ -133,6 +135,9 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                   <span className="gb-venue-picker-option-copy">
                     <span className="gb-venue-picker-option-name">{venue.name}</span>
                     <span className="gb-venue-picker-option-address">{venue.address}</span>
+                    {showDefaultIllustrationLabel
+                      ? <span className="gb-venue-illustration-label">Иллюстрация</span>
+                      : null}
                   </span>
                   {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
                 </button>

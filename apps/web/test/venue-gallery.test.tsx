@@ -76,21 +76,23 @@ beforeEach(() => { resetHooks(); });
 afterEach(() => { resetHooks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("VenueGallery", () => {
-  it("hides navigation for a single image and keeps honest no-photo when empty", () => {
+  it("hides navigation for a single image and shows default illustration when empty", () => {
     const one = ssr(<VenueGallery venue={venue([{ id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Клуб", url: "https://club.example" } }])} />);
     expect(one).not.toContain("Предыдущее фото");
     expect(one).not.toContain("Следующее фото");
     expect(one).toContain(url("a"));
     const emptyVenue = venue([], null);
     const empty = ssr(<VenueGallery venue={emptyVenue} />);
-    expect(empty).toContain("Фотографии площадки пока нет");
-    expect(empty).toContain('data-state="empty"');
-    expect(empty).not.toContain("venue-illustrations");
+    expect(empty).toContain("/discovery/venue-illustrations/");
+    expect(empty).toContain('data-pending="illustration"');
+    expect(empty).toContain('data-count="0"');
+    expect(empty).not.toContain("Фотографии площадки пока нет");
+    expect(empty).not.toContain('data-state="empty"');
     expect(empty).not.toContain("data:image/svg+xml");
     expect(empty).not.toContain("/discovery/badminton-courts.jpg");
     expect(empty).not.toContain("Предыдущее фото");
     expect(empty).not.toContain("Фото: Клуб");
-    // Zero-gallery morph slot: keep the single shared cover slot and paint neutral no-photo text.
+    // Zero-gallery morph slot: keep the single shared cover slot (resource paints illustration).
     for (const size of ["compact", "sheet"] as const) {
       const morphEmpty = ssr(<VenueGallery
         venue={emptyVenue}
@@ -98,11 +100,11 @@ describe("VenueGallery", () => {
         coverSlot={<span data-testid="morph-slot" className="gb-venue-cover" />}
       />);
       expect(morphEmpty).toContain('data-testid="morph-slot"');
-      expect(morphEmpty).toContain("Фотографии площадки пока нет");
-      expect(morphEmpty).toContain('data-state="empty"');
+      expect(morphEmpty).toContain('data-count="0"');
       expect(morphEmpty).toContain("gb-venue-gallery__frame");
-      expect(morphEmpty).not.toContain("<img");
-      expect(morphEmpty).not.toContain("venue-illustrations");
+      expect(morphEmpty).not.toContain("Фотографии площадки пока нет");
+      expect(morphEmpty).not.toContain('data-state="empty"');
+      expect(morphEmpty).not.toContain("Предыдущее фото");
     }
   });
 

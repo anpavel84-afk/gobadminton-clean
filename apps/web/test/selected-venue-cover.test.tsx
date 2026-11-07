@@ -228,7 +228,7 @@ afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount
 
 import { SelectedVenueCover, useSelectedVenueCover } from "../src/components/consumer/venues/SelectedVenueCover";
 import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
-import { venueMediaSkeletonStyle } from "../src/lib/venue-illustration";
+import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl, venueMediaSkeletonStyle } from "../src/lib/venue-illustration";
 import { useEffect, useMemo, useState } from "react";
 const uploaded = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
 const uploadedB = `/v1/media/venue-covers/${"b".repeat(64)}.png`;
@@ -240,7 +240,7 @@ function Selected() {
   return <><SelectedVenueCover slotRef={resource.compact} className="gb-venue-preview-cover" />{info && <SelectedVenueCover slotRef={resource.info} className="gb-venue-sheet-cover" />}</>;
 }
 function imageAt(index = 0) { const node = created.filter(node => node.tag === "img")[index]; if (!node) throw new Error("Missing image"); return node; }
-function expectPendingSkeleton(slot: Node | null | undefined, pending: "uploaded" | "fallback") {
+function expectPendingSkeleton(slot: Node | null | undefined, pending: "uploaded" | "fallback" | "illustration") {
   if (!slot) throw new Error("Missing slot");
   expect(slot.dataset.pending).toBe(pending);
   expect(slot.dataset.cover).toBe("default");
@@ -248,7 +248,9 @@ function expectPendingSkeleton(slot: Node | null | undefined, pending: "uploaded
   expect(String(slot.style.backgroundImage)).toContain("linear-gradient");
   expect(String(slot.style.backgroundSize)).toBe(String(skeleton.backgroundSize));
   expect(String(slot.style.backgroundImage)).not.toContain("data:image/svg+xml");
-  expect(String(slot.style.backgroundImage)).not.toContain("/discovery/venue-illustrations/");
+  if (pending !== "illustration") {
+    expect(String(slot.style.backgroundImage)).not.toContain("/discovery/venue-illustrations/");
+  }
 }
 function expectReadyNeutral(slot: Node | null | undefined, cover: "uploaded" | "default") {
   if (!slot) throw new Error("Missing slot");
@@ -292,23 +294,34 @@ it("initializes the same image from the info slot without a compact preview", as
   expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
   expectPendingSkeleton(image.parentNode, "uploaded");
   venue = { ...venue, cover: { uploadedUrl: null } };
-  // Identity change via city/venue/url remounts resource; info-only null cover is genuine no-media.
+  // Identity change via city/venue/url remounts resource; info-only null cover loads default illustration.
   renderer.unmount();
   await Promise.resolve();
   venue = { id: "venue", name: "Зал", cover: { uploadedUrl: null } };
   mount(() => <InfoOnly />);
   const empty = imageAt(1);
-  expect(empty.srcWrites).toEqual([]);
-  expectFailedOrEmpty(empty.parentNode, "empty");
+  const asset = venueIllustrationUrl("venue");
+  expect(empty.srcWrites).toEqual([asset]);
+  expectPendingSkeleton(empty.parentNode, "illustration");
+  expect(empty.alt).toBe(VENUE_ILLUSTRATION_ALT);
   expect(empty.style.opacity).toBe("0");
+  empty.dispatchEvent(new Event("load"));
+  expectReadyNeutral(empty.parentNode, "default");
+  expect(empty.parentNode?.dataset.fallback).toBe("illustration");
+  expect(empty.style.opacity).toBe("");
 });
-it.each([null, "invalid", "https://external.invalid/photo.png"])("uses neutral no-media for %s when venue id is present", value => {
+it.each([null, "invalid", "https://external.invalid/photo.png"])("loads deterministic default illustration for %s when venue id is present", value => {
   venue.cover.uploadedUrl = value; mount(() => <Selected />);
   const image = imageAt();
-  expect(image.srcWrites).toEqual([]);
-  expectFailedOrEmpty(image.parentNode, "empty");
+  const asset = venueIllustrationUrl("venue");
+  expect(image.srcWrites).toEqual([asset]);
+  expectPendingSkeleton(image.parentNode, "illustration");
+  expect(image.alt).toBe(VENUE_ILLUSTRATION_ALT);
   expect(image.style.opacity).toBe("0");
   expect(String(image.parentNode?.style.backgroundImage)).not.toContain("data:image/svg+xml");
+  image.dispatchEvent(new Event("load"));
+  expectReadyNeutral(image.parentNode, "default");
+  expect(image.parentNode?.dataset.fallback).toBe("illustration");
 });
 it.each([false, true])("fails once in info=%s without illustration filler; rejects stale callbacks", async expanded => {
   info = expanded;

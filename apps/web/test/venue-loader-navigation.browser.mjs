@@ -171,11 +171,20 @@ try {
   assert.equal(await page.getByRole("button", { name: "Следующее фото" }).count(), 0);
   assert.equal(await page.getByRole("button", { name: "Предыдущее фото" }).count(), 0);
 
-  // Zero gallery / no cover: neutral no-photo text from the real component.
+  // Zero gallery / no cover: real default illustration, no fake count/arrows.
   await page.goto(`${origin}/venues/${idEmpty}`);
   await page.getByRole("heading", { name: "Synthetic venue", exact: true }).waitFor();
-  await page.getByText("Фотографии площадки пока нет", { exact: true }).waitFor();
-  assert.equal(await page.locator(".gb-venue-media .gb-venue-gallery__frame[data-state='empty']").count(), 1);
+  const emptyGallery = page.locator(".gb-venue-media .gb-venue-gallery[data-count='0']");
+  await emptyGallery.waitFor();
+  assert.equal(await page.getByRole("button", { name: "Следующее фото" }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Предыдущее фото" }).count(), 0);
+  const illustration = page.locator(".gb-venue-media img[src*='/discovery/venue-illustrations/']");
+  await illustration.waitFor();
+  assert.equal(await illustration.getAttribute("alt"), "Иллюстрация: бадминтон");
+  assert.equal(await illustration.evaluate((node) => node instanceof HTMLImageElement && node.draggable === false), true);
+  await page.locator(".gb-venue-media .gb-venue-cover[data-fallback='illustration']:not([data-pending])").waitFor();
+  assert.equal(await page.getByText("Фотографии площадки пока нет", { exact: true }).count(), 0);
+  assert.match(await page.locator(".gb-venue-media .gb-venue-cover__badge").textContent() || "", /Иллюстрация/);
 
   console.log("Venue loader skeleton + desktop gallery pointer regression completed (actual VenueGallery loopback; not product UAT)");
 } finally {

@@ -72,6 +72,10 @@ it("renders the real cover and region with named keyboard buttons; opens once", 
   expect(html.match(/<button /g)).toHaveLength(2);
   expect(html).toContain('aria-label="Открыть площадку Зал А"');
   expect(html).toContain("Улица 1"); expect(html).toContain('data-cover="default"');
+  expect(html).toContain("/discovery/venue-illustrations/");
+  expect(html).toContain('data-pending="illustration"');
+  expect(html).toContain('data-fallback="illustration"');
+  expect(html).toContain("Иллюстрация");
   function activate(node: ReactNode): void {
     if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return;
     if (node.type === "button") node.props.onClick?.();

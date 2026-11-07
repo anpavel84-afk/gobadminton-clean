@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.45" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.46" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
@@ -424,15 +424,13 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.45",
-  "title": "Проверка публичного текста; состояния и стрелки галереи площадки",
+  "application_version": "0.1.0-alpha.46",
+  "title": "Площадка без фото: готовая иллюстрация вместо текстовой заглушки",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "Публичные имена и описания профиля, тренера, организатора и полей игры проходят локальную и модельную проверку до публикации; при отклонении или временной недоступности прежний принятый текст сохраняется"
-  ],
+  "additions": [],
   "fixes": [
-    "Галерея площадки показывает спокойные состояния загрузки, ошибки и отсутствия фото; на компьютере работают стрелки перелистывания"
+    "Если у площадки нет опубликованного фото, показывается готовая растровая иллюстрация из библиотеки GoBadminton с подписью «Иллюстрация»; одна площадка получает один и тот же рисунок на странице, карте и в выборе"
   ],
   "known_limitations": [
     "Комментарии, отзывы, текст площадок, личные сообщения и аватары провайдеров остаются в следующих логических объёмах; внешняя модерация реальных частных сообщений выключена",
@@ -1893,6 +1891,37 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-07T13:41:23Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.45",
+    "title": "Проверка публичного текста; состояния и стрелки галереи площадки",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "Публичные имена и описания профиля, тренера, организатора и полей игры проходят локальную и модельную проверку до публикации; при отклонении или временной недоступности прежний принятый текст сохраняется"
+    ],
+    "fixes": [
+      "Галерея площадки показывает спокойные состояния загрузки, ошибки и отсутствия фото; на компьютере работают стрелки перелистывания"
+    ],
+    "known_limitations": [
+      "Комментарии, отзывы, текст площадок, личные сообщения и аватары провайдеров остаются в следующих логических объёмах; внешняя модерация реальных частных сообщений выключена",
+      "Изменение времени и места игры и связанные push отложены и не реализованы",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "2650fcbe21976564b8b1ff90aac67ea4eca5b569",
+    "version_label": "0.1.0-alpha.45",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42393881246-a1",
+        "api_digest": "sha256:7d36c35471bbef9162414311781644f31fbba79f6e4444ed1fdb108cd2d47882",
+        "web_digest": "sha256:ce8562e9d36d2c5e929412c7185fdb7270c6d6e64dab50344bc1bbe04161d29e",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-07T17:12:03Z",
         "kind": "pipeline"
       }
     ]

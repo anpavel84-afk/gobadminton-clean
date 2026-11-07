@@ -269,12 +269,13 @@ export function VenueGallery({
   if (items.length === 0) {
     // Preserve parent morph/fallback slot when gallery has no items; do not invent photo credit.
     // Source attribution still renders for every presented venue (including empty media).
+    // Counts stay 0 — default illustration is cover paint, not a synthetic gallery item.
     const emptyCredit = sourceCredit ? <div className="gb-venue-gallery__credit">{sourceCredit}</div> : null;
     const legacyCoverUrl = venueCoverUrl(venue.cover?.uploadedUrl);
     if (coverSlot) {
-      // Keep the single shared morph slot. When there is no published URL, overlay the
-      // same neutral no-photo copy used by non-morph empty frames (compact + expanded).
+      // Keep the single shared morph slot. No published URL → morph loads default illustration.
       if (!legacyCoverUrl) {
+        const illustrationFailed = Boolean(coverFallback);
         return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
           <div
             className="gb-venue-gallery"
@@ -283,11 +284,22 @@ export function VenueGallery({
             role="group"
             aria-roledescription="gallery"
           >
-            <div className="gb-venue-gallery__frame" data-state="empty">
+            <div
+              className="gb-venue-gallery__frame"
+              data-state={illustrationFailed ? "error" : undefined}
+            >
               {coverSlot}
-              <div className="gb-venue-gallery__status" data-state="empty" role="status">
-                <p>Фотографии площадки пока нет</p>
-              </div>
+              {illustrationFailed && size !== "compact" ? (
+                <div className="gb-venue-gallery__status" data-state="error" role="alert">
+                  <p>Не удалось загрузить иллюстрацию</p>
+                  {onCoverRetry ? (
+                    <button type="button" className="gb-venue-gallery__retry" onClick={(event) => {
+                      event.stopPropagation();
+                      onCoverRetry();
+                    }}>Повторить загрузку</button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
           {emptyCredit}
@@ -295,30 +307,39 @@ export function VenueGallery({
       }
       return <>{coverSlot}{emptyCredit}</>;
     }
-    // Unattributed legacy cover still paints through VenueCover (pending → ready / failed).
-    // Genuine no published media → neutral text (sheet/page) or neutral thumb (compact).
-    if (!legacyCoverUrl && size !== "compact") {
-      return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
-        <div className="gb-venue-gallery" data-size={size} data-count={0} role="group" aria-roledescription="gallery">
-          <div className="gb-venue-gallery__frame" data-state="empty">
-            <div className="gb-venue-gallery__status" data-state="empty" role="status">
-              <p>Фотографии площадки пока нет</p>
-            </div>
-          </div>
-        </div>
+    // Unattributed legacy cover or genuine no-media → VenueCover (uploaded / default illustration).
+    // Sheet/page keep gallery chrome with data-count=0; compact reuses the thumb className.
+    if (size === "compact") {
+      return <>
+        <VenueCover
+          cover={venue.cover}
+          name={venue.name}
+          className={className}
+          venueId={venue.id}
+          allowRetry={false}
+        />
         {emptyCredit}
-      </div>;
+      </>;
     }
-    return <>
-      <VenueCover
-        cover={venue.cover}
-        name={venue.name}
-        className={className}
-        venueId={venue.id}
-        allowRetry={size !== "compact"}
-      />
+    return <div className={`gb-venue-gallery-wrap ${className}`.trim()}>
+      <div
+        className="gb-venue-gallery"
+        data-size={size}
+        data-count={0}
+        role="group"
+        aria-roledescription="gallery"
+      >
+        <div className="gb-venue-gallery__frame">
+          <VenueCover
+            cover={venue.cover}
+            name={venue.name}
+            venueId={venue.id}
+            allowRetry={allowRetry}
+          />
+        </div>
+      </div>
       {emptyCredit}
-    </>;
+    </div>;
   }
 
   const showControls = items.length > 1 && size !== "compact";
