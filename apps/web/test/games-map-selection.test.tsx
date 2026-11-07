@@ -127,7 +127,8 @@ it("clears selection on city change and venue removal; unavailable snapshot is n
   let tree = await load(); mapProps(tree).onSelect(a); render();
   gamesReady = false; window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(1);
   tree = render(); expect(renderToStaticMarkup(preview(tree))).toContain("Расписание временно недоступно");
-  venues = [b]; window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(1);
+  venues = [b]; await vi.advanceTimersByTimeAsync(751); // past bounded focus-refresh cooldown
+  window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(1);
   tree = render(); render(); expect(elements(tree).some(node => node.type === VenuePreviewCard)).toBe(false);
   mapProps(tree).onSelect(b); render(); tree = render({ cityId: "other" });
   expect(elements(tree).some(node => node.type === VenuePreviewCard)).toBe(false);

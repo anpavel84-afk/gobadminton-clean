@@ -92,7 +92,7 @@ beforeEach(() => {
 afterEach(() => { h.cleanups.forEach(fn => fn?.()); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // Separate hook storage for parent and child models React component identity.
-it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map through initial failure, automatic polling and %s refresh failure", async resource => {
+it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map through initial failure, idle without catalog poll and %s refresh failure", async resource => {
   const child = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
   let childMounted = false;
   const countsSeen: (Map<string, number> | null)[] = [];
@@ -134,9 +134,13 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   const button = h.buttons[0]!; button.focus();
   h.lngLat.mockClear(); h.replace.mockClear();
   const calls = transport.games.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(30000); cycle(); cycle();
+  await vi.advanceTimersByTimeAsync(75000); cycle(); cycle();
+  expect(transport.games.mock.calls.length).toBe(calls);
+  expect(countsSeen.at(-1)).toBe(verified);
+  expect(h.buttons).toEqual([button]); expect(document.activeElement).toBe(button);
+  expect(h.lngLat).not.toHaveBeenCalled(); expect(h.replace).not.toHaveBeenCalled();
+  window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(0); cycle(); cycle();
   expect(transport.games.mock.calls.length).toBeGreaterThan(calls);
-  await vi.advanceTimersByTimeAsync(30000); cycle(); cycle();
   expect(countsSeen.at(-1)).toBe(verified);
   expect(h.buttons).toEqual([button]); expect(document.activeElement).toBe(button);
   expect(h.lngLat).not.toHaveBeenCalled(); expect(h.replace).not.toHaveBeenCalled();

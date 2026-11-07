@@ -5,7 +5,7 @@
 export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.38" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -425,19 +425,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
   "application_version": "0.1.0-alpha.38",
-  "title": "Системные уведомления о событиях игры",
+  "title": "Карта площадок без лишнего опроса каталога в простое",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "Push о приглашении на игру, решении по заявке, новой заявке организатору, отмене игры и напоминании об итоге",
-    "В настройках — отдельные выключатели пяти групп игровых событий; по умолчанию выключены, даже если сообщения уже включены"
+  "additions": [],
+  "fixes": [
+    "Карта игр не повторяет полную загрузку каталога площадок, пока вкладка просто открыта без действий"
   ],
-  "fixes": [],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
-    "Доставка push на физический iPhone Home Screen не проверялась",
-    "Внешняя доставка провайдеру не считается подтверждённой только по тестам с подставным транспортом",
-    "Смена времени или места игры: доставка push UNCONNECTED/BLOCKED — нет HTTP/UI редактирования опубликованной игры до решения Owner",
     "Часть сведений о площадках ещё находится на проверке",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
   ],

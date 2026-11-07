@@ -10,9 +10,9 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.38 with API 0.37.0", () => {
+  it("bumps current descriptor to alpha.38 with API 0.36.0", () => {
     expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.38");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(CURRENT_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
@@ -25,9 +25,8 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/уведомлен|приглашен|заявк|отмен|итог/i);
-    expect(prose).toMatch(/приёмк|iPhone|транспорт/i);
-    expect(prose).toMatch(/UNCONNECTED|BLOCKED|времен|места/i);
+    expect(prose).toMatch(/карт|площадк|опрос|прост|каталог/i);
+    expect(prose).toMatch(/приёмк/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
@@ -36,6 +35,15 @@ describe("releases current descriptor literals", () => {
           row.source_sha === "859bb6a635ad704ad0971f8a7ad748b02eda0017" &&
           row.deployments[0]?.release_id === "r42327405382-a1" &&
           row.deployments[0]?.accepted_at === "2026-11-07T02:10:06Z",
+      ),
+    ).toBe(true);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.36" &&
+          row.source_sha === "9af6482afeb0e5552c20af25a04dd6503957202d" &&
+          row.deployments[0]?.release_id === "r42325229441-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-07T01:45:38Z",
       ),
     ).toBe(true);
     expect(

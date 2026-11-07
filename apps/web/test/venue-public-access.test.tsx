@@ -172,7 +172,8 @@ for (const member of [false, true]) {
     await settle(root); assertPublic();
     games = []; window.dispatchEvent(new Event("focus")); await settle(root);
     expect(text).toContain("Нет предстоящих доступных игр"); assertPublic();
-    gamesReady = false; window.dispatchEvent(new Event("focus")); await settle(root);
+    gamesReady = false; await vi.advanceTimersByTimeAsync(1000); // past refresh coalesce cooldown
+    window.dispatchEvent(new Event("focus")); await settle(root);
     expect(text).toContain("Расписание временно недоступно"); expect(text).not.toContain("Нет предстоящих доступных игр"); assertPublic();
     root = <VenuePage venueId="b" />; await settle(root);
     expect(text).toContain("Зал Б"); expect(nodes.some(node => node.props["data-cover"] === "default")).toBe(true); assertPublic();

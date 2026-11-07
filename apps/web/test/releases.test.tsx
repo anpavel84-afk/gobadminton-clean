@@ -49,7 +49,7 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 describe("releases catalogue integrity", () => {
   it("keeps first alpha.1 baseline literal while current descriptor is alpha.38 delta", () => {
     expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.38");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,9 +64,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/уведомлен|приглашен|заявк|отмен|итог/i);
-    expect(currentProse).toMatch(/приёмк|iPhone|транспорт/i);
-    expect(currentProse).toMatch(/UNCONNECTED|BLOCKED|времен|места/i);
+    expect(currentProse).toMatch(/карт|площадк|опрос|прост|каталог/i);
+    expect(currentProse).toMatch(/приёмк/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
@@ -78,7 +77,7 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(/приглашен|заявк|отмен|итог/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/кнопк|закрыт|маркер|площадк|карт/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
@@ -243,7 +242,8 @@ describe("releases catalogue integrity", () => {
       && row.deployments[0]?.api_digest === "sha256:aae0566a1a4f9bc9143d73765fca35776ef56e57416fa6bfc26e9dd8652921ed"
       && row.deployments[0]?.web_digest === "sha256:ca74a876933daee80aa65103dae5732d851e96fefe311d319678caac209da3a0"
       && row.api_contract_version === "0.36.0"
-      && row.title === "Общие кнопки закрытия и маркеры карты площадок",
+      && row.title === "Общие кнопки закрытия и маркеры карты площадок"
+      && row.fixes.length === 2,
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.36"
