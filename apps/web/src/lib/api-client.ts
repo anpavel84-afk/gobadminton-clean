@@ -52,6 +52,11 @@ import type {
 } from "./consumer-types";
 import { resolveApiBaseUrl } from "./api";
 import { avatarAbortable } from "./avatar-preprocess";
+import {
+  ensureSessionPresenceListeners,
+  markSessionPresence,
+  shouldSkipUnauthenticatedPrivateGet,
+} from "./session-presence";
 
 export type ApiResult<T> =
   | { ok: true; data: T; status: number }
@@ -105,6 +110,11 @@ export async function apiFetch<T>(
   // Public reads and auth-provider failures do not establish session expiry.
   const privateRequest = path === "/v1/me" || path.startsWith("/v1/me/") ||
     (!!csrfToken && !path.startsWith("/v1/auth/"));
+  // Guest/no-cookie: skip exact GET /v1/me and /v1/me/push when SSR hint is explicitly absent.
+  // Local ApiResult 401 — same shape as HTTP 401 for existing guest branches; no fetch.
+  if (shouldSkipUnauthenticatedPrivateGet(path, rest.method)) {
+    return { ok: false, status: 401, error: "HTTP 401" };
+  }
   try {
     const response = await fetch(`${browserBase()}${path}`, {
       ...rest,
@@ -508,7 +518,21 @@ export async function logout(csrfToken: string, options: { signal?: AbortSignal;
     idempotent: true,
     signal: options.signal,
   });
-  if (options.notifySession !== false && !options.signal?.aborted && generation === foregroundUpdates.currentGeneration && typeof window !== "undefined") window.dispatchEvent(new Event("gb-session-changed"));
+  const mayNotify =
+    options.notifySession !== false
+    && !options.signal?.aborted
+    && generation === foregroundUpdates.currentGeneration
+    && typeof window !== "undefined";
+  // Only authoritative finished logout proves the cookie is gone. 500/403/network must not lock out.
+  const authoritativeAbsent = result.ok || result.status === 401;
+  if (mayNotify && authoritativeAbsent) {
+    ensureSessionPresenceListeners();
+    // Pin absent before consumers react — no transient unknown /me+/push guest-probe window.
+    markSessionPresence("absent");
+    window.dispatchEvent(
+      new CustomEvent("gb-session-changed", { detail: { sessionPresence: "absent" as const } }),
+    );
+  }
   return result;
 }
 

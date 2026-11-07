@@ -34,7 +34,7 @@ import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { VenuePickerDialog } from "../src/components/consumer/games/VenuePickerDialog";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
-import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
+import { VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI, VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
 
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("react-dom", async (importOriginal) => {
@@ -132,29 +132,41 @@ describe("VenueGallery", () => {
     expect(html).toContain('data-cover="default"');
   });
 
-  it("preserves honest legacy cover credit on empty-gallery fallback (plain text when URL unsafe)", () => {
-    const legacyIllustration = ssr(<VenueGallery venue={venue([], url("a"), {
+  it("preserves honest legacy cover credit on empty-gallery fallback after load (plain text when URL unsafe)", () => {
+    // Legacy cover becomes a one-item gallery; pending shows placeholder credit, loaded shows real credit.
+    const afterLoad = (node: ReactNode, src: string) => {
+      resetHooks();
+      renderToStaticMarkup(node);
+      let loadedSlot = -1;
+      for (let i = hooks.slots.length - 1; i >= 0; i--) {
+        if (hooks.slots[i] === null) { loadedSlot = i; break; }
+      }
+      expect(loadedSlot).toBeGreaterThanOrEqual(0);
+      hooks.slots[loadedSlot] = src;
+      hooks.cursor = 0;
+      return renderToStaticMarkup(node);
+    };
+    const legacyIllustration = afterLoad(<VenueGallery venue={venue([], url("a"), {
       uploadedUrl: url("a"),
       credit: { kind: "illustration", text: "Автор фото", url: null },
-    })} />);
+    })} />, url("a"));
     expect(legacyIllustration).toContain(url("a"));
     expect(legacyIllustration).toContain("Автор фото");
     expect(legacyIllustration).not.toContain("<a ");
-    expect(legacyIllustration).not.toContain("Иллюстрация");
 
-    const unsafePhoto = ssr(<VenueGallery venue={venue([], url("a"), {
+    const unsafePhoto = afterLoad(<VenueGallery venue={venue([], url("a"), {
       uploadedUrl: url("a"),
       credit: { kind: "photo", text: "Фото: Клуб", url: "https:///@evil.example/phish" },
-    })} />);
+    })} />, url("a"));
     expect(unsafePhoto).toContain(url("a"));
     expect(unsafePhoto).toContain("Фото: Клуб");
     expect(unsafePhoto).not.toContain("evil.example");
     expect(unsafePhoto).not.toContain("<a ");
 
-    const hidden = ssr(<VenueGallery venue={venue([], url("a"), {
+    const hidden = afterLoad(<VenueGallery venue={venue([], url("a"), {
       uploadedUrl: url("a"),
       credit: { kind: "illustration", text: "Автор фото", url: null },
-    })} showCredit={false} />);
+    })} showCredit={false} />, url("a"));
     expect(hidden).toContain(url("a"));
     expect(hidden).not.toContain("Автор фото");
   });
@@ -164,10 +176,31 @@ describe("VenueGallery", () => {
       { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
       { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "logo", text: "Логотип: Клуб", url: "https://club.example/logo" } },
     ], url("b"));
-    const html = ssr(<VenueGallery venue={multi} />);
+    // Pending first paint: main index + url, honest illustration credit until load.
+    const pending = ssr(<VenueGallery venue={multi} />);
+    expect(pending).toContain(url("b"));
+    expect(pending).not.toContain(`src="${url("a")}"`);
+    expect(pending).toContain("2/2");
+    expect(pending).toContain("Иллюстрация");
+    expect(pending).not.toContain("Логотип: Клуб");
+    // After load of the main (index 1) image: logo credit returns.
+    resetHooks();
+    hooks.cursor = 0;
+    renderToStaticMarkup(<VenueGallery venue={multi} />);
+    // uncontrolledIndex is initialized to mainIndex (1); loadedSrc is the last null useState.
+    expect(hooks.slots[0]).toBe(1);
+    let loadedSlot = -1;
+    for (let i = hooks.slots.length - 1; i >= 0; i--) {
+      if (hooks.slots[i] === null) { loadedSlot = i; break; }
+    }
+    expect(loadedSlot).toBeGreaterThan(0);
+    hooks.slots[loadedSlot] = url("b");
+    hooks.cursor = 0;
+    const html = renderToStaticMarkup(<VenueGallery venue={multi} />);
     expect(html).toContain(url("b"));
     expect(html).toContain("2/2");
     expect(html).toContain("Логотип: Клуб");
+    expect(html).not.toContain('data-pending="uploaded"');
   });
 
   it("shows controls for multi-image sheet and resets when venue id changes", () => {
@@ -175,10 +208,20 @@ describe("VenueGallery", () => {
       { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
       { id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "logo", text: "Логотип: Клуб", url: "https://club.example/logo" } },
     ]);
-    const html = ssr(<VenueGallery venue={multi} />);
-    expect(html).toContain("Предыдущее фото");
-    expect(html).toContain("Следующее фото");
-    expect(html).toContain("1/2");
+    const pending = ssr(<VenueGallery venue={multi} />);
+    expect(pending).toContain("Предыдущее фото");
+    expect(pending).toContain("Следующее фото");
+    expect(pending).toContain("1/2");
+    expect(pending).toContain("Иллюстрация");
+    hooks.cursor = 0;
+    renderToStaticMarkup(<VenueGallery venue={multi} />);
+    let loadedSlot = -1;
+    for (let i = hooks.slots.length - 1; i >= 0; i--) {
+      if (hooks.slots[i] === null) { loadedSlot = i; break; }
+    }
+    hooks.slots[loadedSlot] = url("a");
+    hooks.cursor = 0;
+    const html = renderToStaticMarkup(<VenueGallery venue={multi} />);
     expect(html).toContain("Фото: Один");
     const next = ssr(<VenueGallery venue={{ ...multi, id: "a0000000-0000-4000-8000-000000000099" }} />);
     expect(next).toContain("1/2");
@@ -193,18 +236,27 @@ describe("VenueGallery", () => {
     expect(html).not.toContain("Предыдущее фото");
   });
 
-  it("compact frame shows per-venue illustration while uploaded photo is pending, then clears after load", () => {
+  it("compact/page frames show immediate inline equipment underlay while uploaded photo is pending, then clear after load", () => {
     const target = venue([
       { id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
     ]);
-    const illustration = venueIllustrationUrl(target.id);
-    const pending = ssr(<VenueGallery venue={target} size="compact" showCredit={false} />);
-    expect(pending).toContain('data-size="compact"');
-    expect(pending).toContain('data-pending="uploaded"');
-    expect(pending).toContain(`url(&quot;${illustration}&quot;)`);
-    expect(pending).toContain(url("a"));
-    expect(pending).toContain("opacity:0");
-    expect(pending).not.toContain("Иллюстрация"); // showCredit=false; do not invent illustration attribution
+    for (const size of ["compact", "page", "sheet"] as const) {
+      const pending = ssr(<VenueGallery venue={target} size={size} showCredit={size !== "compact"} />);
+      expect(pending).toContain(`data-size="${size === "compact" ? "compact" : size}"`);
+      expect(pending).toContain('data-pending="uploaded"');
+      expect(pending).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+      expect(pending).toContain("data:image/svg+xml");
+      expect(pending).not.toContain(`url(&quot;${venueIllustrationUrl(target.id)}&quot;)`);
+      expect(pending).toContain(url("a"));
+      expect(pending).toContain("opacity:0");
+      if (size === "compact") {
+        expect(pending).not.toContain("Иллюстрация"); // showCredit=false
+      } else {
+        // Pending placeholder is not a photo — honest illustration credit until load.
+        expect(pending).toContain("Иллюстрация");
+        expect(pending).not.toContain("Фото: Один");
+      }
+    }
     // Reuse harness slots: loadedSrc is the last null useState after index/failed.
     hooks.cursor = 0;
     renderToStaticMarkup(<VenueGallery venue={target} size="compact" showCredit={false} />);
@@ -217,24 +269,26 @@ describe("VenueGallery", () => {
     hooks.cursor = 0;
     const ready = renderToStaticMarkup(<VenueGallery venue={target} size="compact" showCredit={false} />);
     expect(ready).not.toContain('data-pending="uploaded"');
-    expect(ready).not.toContain(`url(&quot;${illustration}&quot;)`);
+    expect(ready).not.toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
     expect(ready).toContain(url("a"));
     expect(ready).not.toContain("opacity:0");
   });
 
-  it("compact pending illustration resets when venue id changes without old photo flash", () => {
+  it("pending equipment underlay resets when venue id changes without old photo flash", () => {
     const a = venue([{ id: "a0000000-0000-4000-8000-000000000011", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } }]);
     const b = {
       ...venue([{ id: "a0000000-0000-4000-8000-000000000012", url: url("b"), credit: { kind: "photo", text: "Фото: Два", url: "https://club.example/2" } }]),
       id: "a0000000-0000-4000-8000-000000000002",
     };
     const first = ssr(<VenueGallery venue={a} size="compact" showCredit={false} />);
-    expect(first).toContain(`url(&quot;${venueIllustrationUrl(a.id)}&quot;)`);
-    const second = ssr(<VenueGallery venue={b} size="compact" showCredit={false} />);
-    expect(second).toContain(`url(&quot;${venueIllustrationUrl(b.id)}&quot;)`);
+    expect(first).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
+    const second = ssr(<VenueGallery venue={b} size="page" showCredit />);
+    expect(second).toContain(`url(&quot;${VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI}&quot;)`);
     expect(second).toContain(url("b"));
     expect(second).not.toContain(url("a"));
     expect(second).toContain('data-pending="uploaded"');
+    expect(second).toContain("Иллюстрация");
+    expect(second).not.toContain("Фото: Два");
   });
 
   it("integrates gallery with morph slot in preview instead of bypassing", () => {
@@ -312,7 +366,8 @@ describe("VenueGallery", () => {
     expect(html).toContain("Предыдущее фото");
     expect(html).toContain("Следующее фото");
     expect(html).toContain("1/2");
-    expect(html).toContain("Фото: Один");
+    // Sheet credit stays illustration while the photo is still pending (placeholder ≠ photo).
+    expect(html).toContain("Иллюстрация");
     expect(html).toContain("Альфа");
     // Compact thumb stays inside the select button; sheet nav/credits stay outside (no nested buttons).
     const optionInner = html.match(/class="gb-venue-picker-option"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? "";

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Onest } from "next/font/google";
 import "../styles/account.css";
 import "../styles/consumer.css";
@@ -17,6 +18,7 @@ import "../styles/mobile-controls.css";
 import { RadarSessionProvider } from "../components/consumer/radar/RadarSessionProvider";
 
 import { DiscoveryCityProvider } from "../components/consumer/discovery/DiscoveryCityProvider";
+import { sessionCookiePresenceFromStore } from "../lib/session-presence";
 
 const onest = Onest({
   subsets: ["latin", "cyrillic"],
@@ -49,9 +51,12 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Presence-only hint: never expose cookie value/CSRF. Eligibility ≠ authentication.
+  const cookieStore = await cookies();
+  const sessionPresence = sessionCookiePresenceFromStore(cookieStore);
   return (
-    <html lang="ru" className={onest.variable}>
+    <html lang="ru" className={onest.variable} data-gb-session-presence={sessionPresence}>
       <body className={`gb-consumer-body ${onest.className}`}>
         <ViewportLock />
         <RadarSessionProvider><DiscoveryCityProvider>{children}</DiscoveryCityProvider></RadarSessionProvider>

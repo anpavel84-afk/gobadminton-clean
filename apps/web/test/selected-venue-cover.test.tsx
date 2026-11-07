@@ -79,8 +79,9 @@ class Node extends EventTarget {
   style: Record<string, unknown> = {};
   className = ""; textContent = ""; alt = ""; loading = ""; decoding = "";
   srcWrites: string[] = []; source = ""; captured = new Set<number>();
+  complete = false; naturalWidth = 0;
   constructor(readonly tag = "div") { super(); }
-  set src(value: string) { expect(this.loading).toBe("eager"); expect(this.decoding).toBe("async"); this.srcWrites.push(value); this.source = value; }
+  set src(value: string) { expect(this.loading).toBe("eager"); expect(this.decoding).toBe("async"); this.srcWrites.push(value); this.source = value; this.attributes.set("src", value); }
   get src() { return this.source; }
   setAttribute(key: string, value: string) { this.attributes.set(key, value); }
   getAttribute(key: string) { return this.attributes.get(key) ?? null; }
@@ -164,7 +165,8 @@ class Renderer {
         if (typeof value.type !== "string") throw new Error(`Unsupported element ${String(value.type)}`);
         const node = this.hosts.get(key)?.node ?? new Node(value.type);
         node.props = value.props; node.className = String(value.props.className ?? "");
-        node.style = { ...(value.props.style as Record<string, unknown> | undefined) };
+        // Preserve imperative slot styles (SelectedVenueCover resource paint) when React omits style.
+        if (value.props.style) node.style = { ...(value.props.style as Record<string, unknown>) };
         node.rendered = walk(value.props.children as ReactNode, `${key}.children`, depth + 1);
         node.rendered.forEach(child => { child.parentNode = node; });
         next.set(key, { node, ref: value.props.ref }); return [node];
@@ -219,7 +221,7 @@ afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount
 
 import { SelectedVenueCover, useSelectedVenueCover } from "../src/components/consumer/venues/SelectedVenueCover";
 import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
-import { VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
+import { VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI, VENUE_ILLUSTRATION_ALT, venueIllustrationUrl } from "../src/lib/venue-illustration";
 import { useEffect, useMemo, useState } from "react";
 const uploaded = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
 const uploadedB = `/v1/media/venue-covers/${"b".repeat(64)}.png`;
@@ -232,13 +234,31 @@ function Selected() {
   return <><SelectedVenueCover slotRef={resource.compact} className="gb-venue-preview-cover" />{info && <SelectedVenueCover slotRef={resource.info} className="gb-venue-sheet-cover" />}</>;
 }
 function imageAt(index = 0) { const node = created.filter(node => node.tag === "img")[index]; if (!node) throw new Error("Missing image"); return node; }
+function expectPendingUnderlay(slot: Node | null | undefined, pending: "uploaded" | "fallback") {
+  if (!slot) throw new Error("Missing slot");
+  expect(slot.dataset.pending).toBe(pending);
+  expect(slot.dataset.cover).toBe("default");
+  expect(String(slot.style.backgroundImage)).toContain(VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI);
+  expect(String(slot.style.backgroundImage)).toContain("data:image/svg+xml");
+  expect(String(slot.style.backgroundImage)).not.toContain("/discovery/venue-illustrations/");
+}
+function expectReadyNeutral(slot: Node | null | undefined, cover: "uploaded" | "default") {
+  if (!slot) throw new Error("Missing slot");
+  expect(slot.dataset.pending).toBeUndefined();
+  expect(slot.dataset.cover).toBe(cover);
+  expect(slot.style.backgroundImage).toBe("none");
+  expect(slot.style.backgroundColor).toBe("var(--c23-surface)");
+}
 beforeEach(() => { city = "city"; venue = { id: "venue", name: "Зал", cover: { uploadedUrl: uploaded } }; info = false; });
 it("creates eager/async before src and moves the same image through load/open/close/open/name refresh", () => {
   const renderer = mount(() => <Selected />); const image = imageAt();
   expect(image.srcWrites).toEqual([uploaded]); expect(image.alt).toBe("Обложка: Зал");
   expect(image.parentNode?.className).toBe("gb-venue-cover gb-venue-preview-cover");
-  expect(image.parentNode?.dataset).toEqual({ cover: "uploaded" });
+  expectPendingUnderlay(image.parentNode, "uploaded");
+  expect(image.style.opacity).toBe("0");
   image.dispatchEvent(new Event("load"));
+  expectReadyNeutral(image.parentNode, "uploaded");
+  expect(image.style.opacity).toBe("");
   info = true; renderer.render(); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
   info = false; renderer.render(); expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   info = true; renderer.render(); venue = { ...venue, name: "Новое имя" }; renderer.render();
@@ -254,7 +274,7 @@ it("initializes the same image from the info slot without a compact preview", as
   const image = imageAt();
   expect(image.srcWrites).toEqual([uploaded]);
   expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
-  expect(image.parentNode?.dataset).toEqual({ cover: "uploaded" });
+  expectPendingUnderlay(image.parentNode, "uploaded");
   venue = { ...venue, cover: { uploadedUrl: null } };
   // Identity change via city/venue/url remounts resource; info-only null cover uses illustration by venue id.
   renderer.unmount();
@@ -263,14 +283,20 @@ it("initializes the same image from the info slot without a compact preview", as
   mount(() => <InfoOnly />);
   const fallback = imageAt(1);
   expect(fallback.srcWrites).toEqual([illustration()]);
-  expect(fallback.parentNode?.dataset).toEqual({ cover: "default", fallback: "illustration" });
+  expectPendingUnderlay(fallback.parentNode, "fallback");
   expect(fallback.alt).toBe(VENUE_ILLUSTRATION_ALT);
+  fallback.dispatchEvent(new Event("load"));
+  expectReadyNeutral(fallback.parentNode, "default");
+  expect(fallback.parentNode?.dataset.fallback).toBe("illustration");
 });
 it.each([null, "invalid", "https://external.invalid/photo.png"])("uses stable illustration for %s when venue id is present", value => {
   venue.cover.uploadedUrl = value; mount(() => <Selected />);
   const image = imageAt(); expect(image.srcWrites).toEqual([illustration()]); expect(image.alt).toBe(VENUE_ILLUSTRATION_ALT);
-  expect(image.parentNode?.dataset).toEqual({ cover: "default", fallback: "illustration" });
+  expectPendingUnderlay(image.parentNode, "fallback");
   image.dispatchEvent(new Event("error")); expect(image.srcWrites).toEqual([illustration()]);
+  expect(image.parentNode?.dataset.pending).toBeUndefined();
+  expect(String(image.parentNode?.style.backgroundImage)).toContain(VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI);
+  expect(image.style.opacity).toBe("0");
 });
 it.each([false, true])("falls back once in info=%s, rejects stale fallback and cleanup callbacks", async expanded => {
   info = expanded;
@@ -280,9 +306,14 @@ it.each([false, true])("falls back once in info=%s, rejects stale fallback and c
   const fireStale = () => { if (typeof stale === "function") stale.call(image, new Event("error")); };
   image.dispatchEvent(new Event("error")); fireStale(); image.dispatchEvent(new Event("error"));
   expect(image.srcWrites).toEqual([uploaded, illustration()]); expect(image.parentNode?.dataset.fallback).toBe("illustration");
+  // First photo error → fallback pending underlay; second error keeps SVG (no revive / no loop).
+  expect(String(image.parentNode?.style.backgroundImage)).toContain(VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI);
+  expect(image.style.opacity).toBe("0");
   renderer.unmount(); await Promise.resolve(); fireStale(); image.dispatchEvent(new Event("load")); image.dispatchEvent(new Event("error"));
   expect(image.src).toBe(""); expect(image.parentNode).toBeNull(); expect(image.srcWrites).toEqual([uploaded, illustration()]);
+  // One error + one load per listen generation (initial + fallback), then dispose.
   expect(remove.mock.calls.filter(([type]) => type === "error")).toHaveLength(2);
+  expect(remove.mock.calls.filter(([type]) => type === "load")).toHaveLength(2);
 });
 it.each(["city", "venue", "url"])("invalidates %s identity, including identical URLs", async identity => {
   const add = vi.spyOn(Node.prototype, "addEventListener");
@@ -299,6 +330,8 @@ it.each(["city", "venue", "url"])("invalidates %s identity, including identical 
   if (typeof stale === "function") stale.call(old, new Event("error"));
   old.dispatchEvent(new Event("load")); old.dispatchEvent(new Event("error"));
   expect(imageAt(1).srcWrites).toEqual([venue.cover.uploadedUrl]);
+  expectPendingUnderlay(imageAt(1).parentNode, "uploaded");
+  imageAt(1).dispatchEvent(new Event("load"));
   expect(imageAt(1).parentNode?.dataset.cover).toBe("uploaded");
 });
 it("repeated refs are safe, info detaches to compact, final null removes src and listeners", async () => {
@@ -354,6 +387,106 @@ it("preserves one image/source across StrictMode ref and passive-effect replay",
   renderer.unmount();
   await Promise.resolve();
   expect(image.parentNode).toBeNull(); expect(image.src).toBe("");
+});
+
+it("pending slot underlay before load, cache/load clear, fallback chain, compact↔info same img", () => {
+  const renderer = mount(() => <Selected />);
+  const image = imageAt();
+  expectPendingUnderlay(image.parentNode, "uploaded");
+  expect(image.style.opacity).toBe("0");
+  // Cache-complete path: mark complete before synthetic load ownership via resource probe.
+  image.complete = true;
+  image.naturalWidth = 128;
+  image.dispatchEvent(new Event("load"));
+  expectReadyNeutral(image.parentNode, "uploaded");
+  expect(image.srcWrites).toEqual([uploaded]);
+  // Compact → info keeps the single physical img across the already-loaded paint.
+  info = true;
+  renderer.render();
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expectReadyNeutral(image.parentNode, "uploaded");
+  expect(image.srcWrites).toEqual([uploaded]);
+  // First photo error → fallback pending → fallback success (no revive of uploaded).
+  image.complete = false;
+  image.naturalWidth = 0;
+  image.dispatchEvent(new Event("error"));
+  renderer.render();
+  expect(image.srcWrites).toEqual([uploaded, illustration()]);
+  expect(resource.fallback).toBe(true);
+  expectPendingUnderlay(image.parentNode, "fallback");
+  image.dispatchEvent(new Event("load"));
+  expectReadyNeutral(image.parentNode, "default");
+  expect(image.parentNode?.dataset.fallback).toBe("illustration");
+  expect(image.srcWrites).toEqual([uploaded, illustration()]);
+  // Fallback secondary error keeps inline SVG + hidden broken raster.
+  image.dispatchEvent(new Event("error"));
+  expect(image.srcWrites).toEqual([uploaded, illustration()]);
+  expect(String(image.parentNode?.style.backgroundImage)).toContain(VENUE_EQUIPMENT_PLACEHOLDER_DATA_URI);
+  expect(image.style.opacity).toBe("0");
+  expect(image.parentNode?.dataset.pending).toBeUndefined();
+});
+
+it("morph gallery coverSlot owns pending underlay (frame excluded); empty-gallery bare slot too", () => {
+  const galleryVenue = {
+    id: "a0000000-0000-4000-8000-000000000001",
+    name: "Зал",
+    cover: { uploadedUrl: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+    profile: {
+      courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+      gallery: {
+        coverage: "ordered" as const,
+        items: [
+          { id: "a0000000-0000-4000-8000-000000000011", url: uploaded, credit: { kind: "photo" as const, text: "Фото: Клуб", url: "https://club.example" } },
+        ],
+      },
+    },
+  };
+  venue = { id: galleryVenue.id, name: galleryVenue.name, cover: { uploadedUrl: uploaded } };
+  function Morph() {
+    resource = useSelectedVenueCover(city, venue);
+    return <VenueGallery
+      venue={galleryVenue}
+      size="sheet"
+      coverSlot={<SelectedVenueCover slotRef={resource.compact} className="gb-venue-sheet-cover" />}
+      coverFallback={resource.fallback}
+    />;
+  }
+  const morph = mount(() => <Morph />);
+  const image = imageAt();
+  expectPendingUnderlay(image.parentNode, "uploaded");
+  const frame = morph.nodes().find(node => node.className === "gb-venue-gallery__frame");
+  expect(frame?.props["data-pending"]).toBeUndefined();
+  expect(frame?.style?.backgroundImage).toBeUndefined();
+  expect(image.srcWrites).toEqual([uploaded]);
+  image.dispatchEvent(new Event("load"));
+  expectReadyNeutral(image.parentNode, "uploaded");
+
+  morph.unmount();
+  created.length = 0;
+  const emptyVenue = {
+    id: galleryVenue.id,
+    name: "Зал",
+    cover: { uploadedUrl: uploaded },
+    profile: {
+      courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+      gallery: { coverage: "ordered" as const, items: [] },
+    },
+  };
+  function EmptyMorph() {
+    resource = useSelectedVenueCover(city, venue);
+    return <VenueGallery
+      venue={emptyVenue}
+      size="sheet"
+      coverSlot={<SelectedVenueCover slotRef={resource.compact} className="gb-venue-sheet-cover" />}
+      coverFallback={resource.fallback}
+    />;
+  }
+  mount(() => <EmptyMorph />);
+  const emptyImage = imageAt();
+  expectPendingUnderlay(emptyImage.parentNode, "uploaded");
+  expect(emptyImage.srcWrites).toEqual([uploaded]);
+  expect(created.filter(node => node.tag === "img")).toEqual([emptyImage]);
 });
 
 it("F1: compact main error then expanded remount keeps morph illustration credit; non-main and new venue isolated", () => {
@@ -413,8 +546,12 @@ it("F1: compact main error then expanded remount keeps morph illustration credit
   expect(image.alt).toBe(VENUE_ILLUSTRATION_ALT);
   expect(text(renderer.tree[0]!)).toContain("Иллюстрация");
   expect(text(renderer.tree[0]!)).not.toContain("Фото: Клуб");
-  // Healthy non-main keeps its own credit even when main loan failed.
+  // Healthy non-main keeps its own credit even when main loan failed (after that photo loads).
   galleryIndex = 1;
+  renderer.render();
+  const nonMain = renderer.nodes().find((node) => node.tag === "img" && node.props.src === uploadedB);
+  if (!nonMain) throw new Error("Missing non-main gallery img");
+  (nonMain.props.onLoad as () => void)();
   renderer.render();
   expect(text(renderer.tree[0]!)).toContain("Логотип: Клуб");
   expect(text(renderer.tree[0]!)).not.toContain("Иллюстрация");

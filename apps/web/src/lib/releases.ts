@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.34" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.35" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.36.0" as const;
@@ -424,13 +424,14 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.34",
-  "title": "Имя тренера на телефоне",
+  "application_version": "0.1.0-alpha.35",
+  "title": "Мгновенная заглушка обложки и гостевые запросы",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "На телефоне имя тренера и отзывы отображаются отдельными читаемыми блоками"
+    "Пока грузится фото или иллюстрация площадки сразу виден нейтральный рисунок ракетки и сетки",
+    "Гость без входа не вызывает личные запросы профиля на странице игры"
   ],
   "known_limitations": [
     "Приёмка владельцем ещё не выполнена",
@@ -1565,6 +1566,34 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
     "fixes": [
       "Закрытые и приватные функции игры запрашиваются только там, где они доступны",
       "В выборе площадки обложки больше не показывают пустые ячейки во время загрузки"
+    ],
+    "known_limitations": [
+      "Приёмка владельцем ещё не выполнена",
+      "Часть сведений о площадках ещё находится на проверке",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ]
+  },
+  {
+    "source_sha": "d96df8096a0b4c6394fa5ab1f3e6e26ad378710e",
+    "application_version": "0.1.0-alpha.34",
+    "version_label": "0.1.0-alpha.34",
+    "title": "Имя тренера на телефоне",
+    "api_contract_version": "0.36.0",
+    "owner_uat": "NOT_TESTED",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42293392235-a1",
+        "accepted_at": "2026-11-06T21:08:02Z",
+        "api_digest": "sha256:f46169694bfdc138db9e19b3109b5caf54c45ea2f1ab9ebb1ee94c9b6b9affdd",
+        "web_digest": "sha256:42ddb11df947961a339235afa0ef53f82efa9651ed1c2e4f02d4deeb47776186",
+        "kind": "pipeline"
+      }
+    ],
+    "additions": [],
+    "fixes": [
+      "На телефоне имя тренера и отзывы отображаются отдельными читаемыми блоками"
     ],
     "known_limitations": [
       "Приёмка владельцем ещё не выполнена",

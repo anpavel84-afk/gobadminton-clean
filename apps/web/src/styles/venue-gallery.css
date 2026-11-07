@@ -127,6 +127,10 @@
   height: 100%;
   position: relative;
   overflow: hidden;
+  background-color: var(--gb-paper, #f3f4f1);
+}
+.gb-venue-gallery__frame[data-pending="uploaded"] {
+  background-color: var(--gb-paper, #f3f4f1);
 }
 .gb-venue-gallery__frame > img,
 .gb-venue-gallery__frame > .gb-venue-cover {

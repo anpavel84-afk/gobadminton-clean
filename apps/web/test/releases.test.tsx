@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.34 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.34");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.35 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.35");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.36.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,7 +64,7 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/телефон|тренер|отзыв/i);
+    expect(currentProse).toMatch(/заглушк|ракетк|гост|обложк/i);
     expect(currentProse).toMatch(/приёмк/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
@@ -77,7 +77,7 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/телефон|тренер|отзыв/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/ракетк|сетк|гост|профиль/i);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
       /электронной почте недоступен|после игры не запущен|push-уведомления не активны/i,
@@ -230,10 +230,20 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(37);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(38);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(42);
+    ).toBe(43);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.34"
+      && row.source_sha === "d96df8096a0b4c6394fa5ab1f3e6e26ad378710e"
+      && row.deployments[0]?.release_id === "r42293392235-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-06T21:08:02Z"
+      && row.deployments[0]?.api_digest === "sha256:f46169694bfdc138db9e19b3109b5caf54c45ea2f1ab9ebb1ee94c9b6b9affdd"
+      && row.deployments[0]?.web_digest === "sha256:42ddb11df947961a339235afa0ef53f82efa9651ed1c2e4f02d4deeb47776186"
+      && row.api_contract_version === "0.36.0"
+      && row.title === "Имя тренера на телефоне",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.33"
       && row.source_sha === "ebebea18f216260f8ecd7de8e4c450d157b21a5b"

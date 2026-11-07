@@ -9,6 +9,7 @@ import {
   getPushState,
   setServiceWorkerFence,
 } from "../../../lib/push-client";
+import { getSessionPresence } from "../../../lib/session-presence";
 
 /** Same-origin /messages* only — never protocol-relative or absolute URLs. */
 function sanitizePushNavigatePath(raw: unknown): string {
@@ -54,6 +55,8 @@ export function PushLifecycle() {
       void (async () => {
         await clearPushLocalBinding(generation);
         if (!live || generation !== getPushFenceGeneration()) return;
+        // Guest without session cookie: clear stale SW binding only — no private GET.
+        if (getSessionPresence() === "absent") return;
         await ensurePushServiceWorker().catch(() => undefined);
         if (!live || generation !== getPushFenceGeneration()) return;
         const result = await getPushState();
