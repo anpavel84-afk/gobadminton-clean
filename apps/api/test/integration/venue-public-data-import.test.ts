@@ -5,7 +5,12 @@ import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { importVenuePublicData, main } from "../../src/database/import-venue-covers";
-import { validatePublicDataManifest, type PublicDataManifest } from "../../src/venues/venue-public-data-import";
+import {
+  resolvePublicDataIdentity,
+  validatePublicDataManifest,
+  type PublicDataManifest,
+} from "../../src/venues/venue-public-data-import";
+import { normalizeVenueText, venueDedupeKey } from "../../src/venues/venue-normalize";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 run("venue public data import: disposable PostGIS", () => {
@@ -67,12 +72,33 @@ run("venue public data import: disposable PostGIS", () => {
     if (root) await rm(root, { recursive: true, force: true });
   });
 
-  async function venue(opts?: { lifecycle?: string; coverKey?: string | null }) {
+  async function venue(opts?: {
+    lifecycle?: string;
+    coverKey?: string | null;
+    name?: string;
+    address?: string;
+    identityDiscriminator?: string;
+  }) {
     const id = randomUUID();
+    const name = opts?.name ?? "Synthetic Hall";
+    const address = opts?.address ?? "Synthetic Address 1";
+    const discriminator = opts?.identityDiscriminator ?? "";
+    const normalizedName = normalizeVenueText(name);
+    const normalizedAddress = normalizeVenueText(address);
     await db().query(
-      `INSERT INTO venues(id,city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,contact_phone,contact_website,booking_note,cover_key)
-       VALUES($1,$2,'Synthetic Hall','Synthetic Address 1','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$3,$4,$5,$6,'private-phone','https://private.invalid','private-note',$7)`,
-      [id, city, userId, opts?.lifecycle ?? "unverified", id, id, opts?.coverKey ?? null],
+      `INSERT INTO venues(id,city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,identity_discriminator,contact_phone,contact_website,booking_note,cover_key)
+       VALUES($1,$2,$8,$9,'Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$3,$4,$5,$6,$10,'private-phone','https://private.invalid','private-note',$7)`,
+      [id, city, userId, opts?.lifecycle ?? "unverified", normalizedName, normalizedAddress, opts?.coverKey ?? null, name, address, discriminator],
+    );
+    const key = venueDedupeKey({
+      cityId: city,
+      normalizedName,
+      normalizedAddress,
+      identityDiscriminator: discriminator,
+    });
+    await db().query(
+      "INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1)",
+      [key, id],
     );
     return id;
   }
@@ -104,11 +130,19 @@ run("venue public data import: disposable PostGIS", () => {
 
   async function snapshot(id: string) {
     return (await db().query(
-      `SELECT version,name,address,lifecycle_state,contact_phone,contact_website,booking_note,public_contacts,
-              court_count,amenity_parking,amenity_showers,cover_key,cover_credit_kind
+      `SELECT version,name,address,lifecycle_state,identity_discriminator,contact_phone,contact_website,booking_note,public_contacts,
+              court_count,amenity_parking,amenity_showers,cover_key,cover_credit_kind,
+              ST_AsText(location::geometry) AS location_wkt
        FROM venues WHERE id=$1`,
       [id],
     )).rows[0];
+  }
+
+  async function identityKeys(id: string) {
+    return (await db().query<{ dedupe_key: string }>(
+      "SELECT dedupe_key FROM venue_identity_keys WHERE venue_id=$1 ORDER BY created_at, dedupe_key",
+      [id],
+    )).rows.map((row) => row.dedupe_key);
   }
 
   it("dry-run has zero writes; apply patches public fields only; exact replay is SKIPPED", async () => {
@@ -284,5 +318,136 @@ run("venue public data import: disposable PostGIS", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("renames/addresses existing UUID; keeps geometry/private/lifecycle/keys; exact replay SKIPPED", async () => {
+    const id = await venue({ identityDiscriminator: "hall:2" });
+    const before = await snapshot(id);
+    const oldKeys = await identityKeys(id);
+    expect(oldKeys).toHaveLength(1);
+
+    const rename = manifestFor(id, {
+      identity: { name: "ЦЕХ №1 «Старая деревня»" },
+      publicContacts: {
+        phone: "+7 999 111-22-33",
+        website: "https://ceh1-badm.ru",
+        messengers: [],
+      },
+    });
+    const dryLines: object[] = [];
+    expect(await importVenuePublicData(db(), rename, actor, false, (l) => dryLines.push(l))).toBe(0);
+    expect(dryLines).toContainEqual(expect.objectContaining({ venueId: id, action: "READY" }));
+    expect(await snapshot(id)).toEqual(before);
+    expect(await identityKeys(id)).toEqual(oldKeys);
+
+    expect(await importVenuePublicData(db(), rename, actor, true, () => undefined)).toBe(0);
+    const afterRename = await snapshot(id);
+    expect(afterRename).toMatchObject({
+      version: 2,
+      name: "ЦЕХ №1 «Старая деревня»",
+      address: "Synthetic Address 1",
+      identity_discriminator: "hall:2",
+      lifecycle_state: "unverified",
+      contact_phone: "private-phone",
+      contact_website: "https://private.invalid",
+      booking_note: "private-note",
+      location_wkt: before.location_wkt,
+      public_contacts: rename.items[0]!.publicContacts,
+    });
+    const keysAfterRename = await identityKeys(id);
+    expect(keysAfterRename).toContain(oldKeys[0]);
+    const renamedIdentity = resolvePublicDataIdentity({
+      name: "Synthetic Hall",
+      address: "Synthetic Address 1",
+      city_id: city,
+      identity_discriminator: "hall:2",
+    }, { name: "ЦЕХ №1 «Старая деревня»" });
+    expect(keysAfterRename).toContain(renamedIdentity.dedupeKey);
+    expect(keysAfterRename.length).toBeGreaterThanOrEqual(2);
+
+    const replayLines: object[] = [];
+    const mid = await snapshot(id);
+    const midKeys = await identityKeys(id);
+    expect(await importVenuePublicData(db(), rename, actor, true, (l) => replayLines.push(l))).toBe(0);
+    expect(replayLines).toContainEqual(expect.objectContaining({
+      venueId: id, action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY",
+    }));
+    expect(await snapshot(id)).toEqual(mid);
+    expect(await identityKeys(id)).toEqual(midKeys);
+
+    const addressOnly = validatePublicDataManifest({
+      schema: "VENUE_PUBLIC_DATA_BATCH_V1",
+      batch: "synthetic-public-address",
+      count: 1,
+      items: [{
+        venueId: id,
+        expectedVersion: 2,
+        expectedName: "ЦЕХ №1 «Старая деревня»",
+        expectedAddress: "Synthetic Address 1",
+        identity: { address: "пр. Динамо, 44А" },
+        sources: [{
+          url: "https://example.com/nord",
+          checkedAt: "2026-11-07T09:00:00.000Z",
+          note: "official address correction",
+        }],
+      }],
+    });
+    expect(await importVenuePublicData(db(), addressOnly, actor, true, () => undefined)).toBe(0);
+    const afterAddress = await snapshot(id);
+    expect(afterAddress).toMatchObject({
+      version: 3,
+      name: "ЦЕХ №1 «Старая деревня»",
+      address: "пр. Динамо, 44А",
+      identity_discriminator: "hall:2",
+      contact_phone: "private-phone",
+      location_wkt: before.location_wkt,
+      public_contacts: rename.items[0]!.publicContacts,
+    });
+    const keysAfterAddress = await identityKeys(id);
+    expect(keysAfterAddress).toEqual(expect.arrayContaining(midKeys));
+    expect(keysAfterAddress.length).toBeGreaterThan(midKeys.length);
+  });
+
+  it("refuses foreign identity collision and changed identity manifest atomically", async () => {
+    const target = await venue({ name: "Target Hall", address: "Target Address 1" });
+    const foreign = await venue({ name: "Foreign Hall", address: "Foreign Address 1" });
+    const foreignSnap = await snapshot(foreign);
+    const foreignKeys = await identityKeys(foreign);
+
+    const collide = manifestFor(foreign, {
+      expectedName: "Foreign Hall",
+      expectedAddress: "Foreign Address 1",
+      identity: { name: "Target Hall", address: "Target Address 1" },
+    });
+    const collideLines: object[] = [];
+    expect(await importVenuePublicData(db(), collide, actor, true, (l) => collideLines.push(l))).toBe(1);
+    expect(collideLines).toContainEqual(expect.objectContaining({
+      venueId: foreign, action: "FAILED", reason: "VENUE_IDENTITY_CONFLICT",
+    }));
+    expect(await snapshot(foreign)).toEqual(foreignSnap);
+    expect(await identityKeys(foreign)).toEqual(foreignKeys);
+    expect(await identityKeys(target)).toHaveLength(1);
+
+    expect(await importVenuePublicData(db(), manifestFor(target, {
+      expectedName: "Target Hall",
+      expectedAddress: "Target Address 1",
+      identity: { name: "Renamed Target" },
+    }), actor, true, () => undefined)).toBe(0);
+
+    const changed = manifestFor(target, {
+      expectedName: "Target Hall",
+      expectedAddress: "Target Address 1",
+      expectedVersion: 1,
+      identity: { name: "Other New Name" },
+    });
+    const beforeConflict = await snapshot(target);
+    const keysBeforeConflict = await identityKeys(target);
+    const conflictLines: object[] = [];
+    expect(await importVenuePublicData(db(), changed, actor, true, (l) => conflictLines.push(l))).toBe(1);
+    expect(conflictLines).toContainEqual(expect.objectContaining({
+      venueId: target, action: "FAILED", reason: "PUBLIC_DATA_CONFLICT",
+    }));
+    expect(await snapshot(target)).toEqual(beforeConflict);
+    expect(await identityKeys(target)).toEqual(keysBeforeConflict);
   });
 });

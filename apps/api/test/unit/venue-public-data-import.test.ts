@@ -4,15 +4,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 import {
+  planPublicDataIdentityCollision,
   planPublicDataReplay,
   planPublicDataRow,
   planPublicDataVersion,
   publicDataDigest,
   publicDataKeyHash,
   publicDataPatchFingerprint,
+  resolvePublicDataIdentity,
   validatePublicDataManifest,
 } from "../../src/venues/venue-public-data-import";
 import { guardImportEnv, main, readBatchFile } from "../../src/database/import-venue-covers";
+import { venueDedupeKey } from "../../src/venues/venue-normalize";
 
 function contacts() {
   return {
@@ -88,6 +91,100 @@ describe("venue public data batch validation", () => {
     })).toThrow();
   });
 
+  it("accepts identity-only name/address patch; empty identity and extras fail", () => {
+    const renameRaw = fixture({ identity: { name: "Corrected Hall" } });
+    delete (renameRaw.items[0] as { publicContacts?: unknown }).publicContacts;
+    const renamed = validatePublicDataManifest(renameRaw);
+    expect(renamed.items[0]!.identity).toEqual({ name: "Corrected Hall" });
+    expect(renamed.items[0]!.publicContacts).toBeUndefined();
+
+    const moveRaw = fixture({ identity: { address: "Corrected Address 2" } });
+    delete (moveRaw.items[0] as { publicContacts?: unknown }).publicContacts;
+    const moved = validatePublicDataManifest(moveRaw);
+    expect(moved.items[0]!.identity).toEqual({ address: "Corrected Address 2" });
+
+    const emptyRaw = fixture({ identity: {} });
+    delete (emptyRaw.items[0] as { publicContacts?: unknown }).publicContacts;
+    expect(() => validatePublicDataManifest(emptyRaw)).toThrow();
+    expect(() => validatePublicDataManifest(fixture({
+      identity: { name: "X", cityId: randomUUID() },
+    }))).toThrow();
+  });
+
+  it("omitted identity keeps legacy fingerprint; identity patch changes it", () => {
+    const legacy = validatePublicDataManifest(fixture()).items[0]!;
+    const legacyFp = publicDataPatchFingerprint(legacy);
+    const again = validatePublicDataManifest(fixture({
+      venueId: legacy.venueId,
+      publicContacts: legacy.publicContacts,
+      sources: legacy.sources,
+    })).items[0]!;
+    expect(publicDataPatchFingerprint(again)).toBe(legacyFp);
+    const withIdentity = validatePublicDataManifest(fixture({
+      venueId: legacy.venueId,
+      publicContacts: legacy.publicContacts,
+      sources: legacy.sources,
+      identity: { name: "PushkaBadm" },
+    })).items[0]!;
+    expect(publicDataPatchFingerprint(withIdentity)).not.toBe(legacyFp);
+  });
+
+  it("resolves identity patch preserving discriminator and refuses foreign key claim", () => {
+    const cityId = randomUUID();
+    const resolved = resolvePublicDataIdentity({
+      name: "PushkaBadm",
+      address: "ул. Оптиков, 4",
+      city_id: cityId,
+      identity_discriminator: "hall:2",
+    }, { name: "ЦЕХ №1 «Старая деревня»" });
+    expect(resolved.name).toBe("ЦЕХ №1 «Старая деревня»");
+    expect(resolved.address).toBe("ул. Оптиков, 4");
+    expect(resolved.identityDiscriminator).toBe("hall:2");
+    expect(resolved.dedupeKey).toBe(venueDedupeKey({
+      cityId,
+      normalizedName: resolved.normalizedName,
+      normalizedAddress: resolved.normalizedAddress,
+      identityDiscriminator: "hall:2",
+    }));
+    const other = randomUUID();
+    expect(planPublicDataIdentityCollision(other, randomUUID()).reason).toBe("VENUE_IDENTITY_CONFLICT");
+    expect(planPublicDataIdentityCollision(other, other).action).toBe("READY");
+    expect(planPublicDataIdentityCollision(undefined, other).action).toBe("READY");
+  });
+
+  it("replay matches post-patch identity without requiring old expectedName", () => {
+    const item = validatePublicDataManifest(fixture({
+      identity: { name: "Corrected Hall" },
+    })).items[0]!;
+    const fingerprint = publicDataPatchFingerprint(item);
+    const row = {
+      name: "Corrected Hall",
+      address: item.expectedAddress,
+      lifecycle_state: "verified",
+      version: 2,
+      canonical_venue_id: null as string | null,
+      city_id: randomUUID(),
+      identity_discriminator: "",
+      public_contacts: item.publicContacts,
+      court_count: null,
+      amenity_parking: null,
+      amenity_showers: null,
+      public_description: null,
+    };
+    expect(planPublicDataReplay(row, fingerprint, {
+      fingerprint,
+      identity: { name: "Corrected Hall" },
+      publicContacts: item.publicContacts ?? null,
+      sources: item.sources,
+    }).action).toBe("SKIPPED");
+    expect(planPublicDataReplay({ ...row, name: "Drifted" }, fingerprint, {
+      fingerprint,
+      identity: { name: "Corrected Hall" },
+      publicContacts: item.publicContacts ?? null,
+      sources: item.sources,
+    }).reason).toBe("PUBLIC_DATA_DRIFT");
+  });
+
   it("rejects duplicates, empty sources and bad source URLs", () => {
     const raw = fixture();
     const first = raw.items[0]!;
@@ -133,6 +230,8 @@ describe("venue public data batch validation", () => {
       lifecycle_state: "verified",
       version: 1,
       canonical_venue_id: null as string | null,
+      city_id: randomUUID(),
+      identity_discriminator: "",
       public_contacts: item.publicContacts,
       court_count: null,
       amenity_parking: null,
@@ -184,6 +283,8 @@ describe("venue public data batch validation", () => {
       lifecycle_state: "verified",
       version: 2,
       canonical_venue_id: null as string | null,
+      city_id: randomUUID(),
+      identity_discriminator: "",
       public_contacts: item.publicContacts,
       court_count: null,
       amenity_parking: null,
