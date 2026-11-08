@@ -1,11 +1,11 @@
 #!/usr/bin/python3
-"""Reviewed root-only AGY author install (OD-014A). Dry by default; never activates.
+"""Reviewed root-only AGY author install and proof-bound qualification (OD-014A).
 
 Chosen accepted Git commit → exact Git blobs. Installs ONLY native_antigravity_author.py
 plus protected author marker and OD-020 author=unlimited budget. Does not rewrite
 core/stage/cost_policy, old backup.json gates, or QA-ready N/Guard modules.
 Reuses stage5 quiet_v5 resource checks for dead historical 113/119 occupancy;
-preserves journals/counters. C5 stays disabled. READY is a separate accepted OPS step.
+preserves journals/counters. C5 stays disabled. READY is a separate proof-bound OPS action; C5 launch policy stays disabled.
 """
 import argparse
 import copy
@@ -289,7 +289,7 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
 
 def put(path, raw, mode=0o644):
     """Exact bytes, same-directory atomic replace; only the fixed target allowlist."""
-    allowed = {INSTALL / AUTHOR_MODULE, MARKER, BUDGET}
+    allowed = {INSTALL / AUTHOR_MODULE, MARKER, BUDGET, READY_PROOF, PROMOTION_JOURNAL}
     under_backup = path == BACKUP or path.parent == BACKUP or BACKUP in path.parents
     need(path in allowed or path == JOURNAL or under_backup, 'out-of-scope upgrade write')
     r.trusted_tree(path.parent)
@@ -520,9 +520,194 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
     return dict(phase=j['phase'], verified=True, no_activation=True, ready=False)
 
 
+# Root-protected qualification material; no caller-supplied booleans grant READY.
+QUALIFICATION_ROOT = STATE / 'antigravity-author-qualification'
+READY_PROOF = CONFIG / 'product-author-role-ready.json'
+PROMOTION_JOURNAL = STATE / 'antigravity-author-promotion.json'
+
+
+def qualification_artifacts(operation):
+    need(re.fullmatch('[a-f0-9]{64}', operation or ''), 'exact qualification operation required')
+    folder = QUALIFICATION_ROOT / operation
+    manifest_raw = read(folder / 'manifest.json')
+    manifest = loads(manifest_raw)
+    names = {'native.json', 'route.json', 'qa.json', 'ci.json', 'acceptance.json', 'transcript.raw'}
+    need(manifest.get('schema') == 'GB_AGY_AUTHOR_QUALIFICATION_V1'
+         and manifest.get('kind') == 'isolated_ops_canary'
+         and manifest.get('operation') == operation
+         and set(manifest.get('artifacts', {})) == names,
+         'invalid qualification manifest')
+    artifacts = {}
+    for name in names:
+        raw = read(folder / name)
+        need(sha(raw) == manifest['artifacts'][name], 'qualification artifact drift')
+        artifacts[name] = raw if name.endswith('.raw') else loads(raw)
+    return manifest, artifacts, sha(manifest_raw)
+
+
+def verify_qualification_ci(ci, candidate):
+    """Read GitHub as the existing trusted publisher; never infer CI from a label."""
+    import subprocess
+    need(type(ci.get('run_id')) is int and ci['run_id'] > 0, 'CI run identity missing')
+    prefix = 'repos/anpavel84-afk/gobadminton-clean/actions/runs/' + str(ci['run_id'])
+    def api(path):
+        proc = subprocess.run(['/usr/bin/gh', 'api', path], capture_output=True,
+            timeout=30, check=False, user=1002, group=1002, extra_groups=[],
+            env={'PATH': '/usr/bin:/bin', 'HOME': '/home/agentagency-dev',
+                 'GH_CONFIG_DIR': '/home/agentagency-dev/.config/gh'})
+        need(proc.returncode == 0 and len(proc.stdout) <= 2 << 20, 'CI readback failed')
+        return loads(proc.stdout)
+    run = api(prefix)
+    need(run.get('head_sha') == candidate and run.get('path') == '.github/workflows/ci.yml'
+         and run.get('status') == 'completed' and run.get('conclusion') == 'success'
+         and run.get('repository', {}).get('full_name') == 'anpavel84-afk/gobadminton-clean'
+         and run.get('event') in ('pull_request', 'push'), 'exact candidate CI not accepted')
+    jobs = api(prefix + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100').get('jobs')
+    expected = {'foundation', 'source (api)', 'source (web)', 'source (admin)',
+                'source (contracts)', 'database', 'receiver'}
+    need(isinstance(jobs, list) and len(jobs) == 7
+         and {job.get('name') for job in jobs} == expected
+         and all(job.get('conclusion') == 'success' for job in jobs), 'mandatory CI 7/7 missing')
+    return {'run_id': run['id'], 'run_attempt': run['run_attempt'], 'head_sha': candidate}
+
+
+def promotion_plan(bundle, commit, task_hash, operation):
+    prior = read_prior_journal()
+    need(prior is not None and prior['bundle_commit'] == commit
+         and prior['task_sha256'] == task_hash, 'promotion install identity differs')
+    validate_prior_installed(prior)
+    quiet(canary_task_sha256=task_hash)
+    material = git_blobs(bundle, commit)
+    task = validate_canary_task(bundle, commit,
+        'scripts/chatops/tests/fixtures/antigravity-author-canary.json', task_hash)
+    manifest, artifacts, manifest_sha = qualification_artifacts(operation)
+    need(manifest.get('adapter_commit') == commit and manifest.get('task_sha256') == task_hash,
+         'qualification admission differs')
+    candidate = manifest.get('candidate_sha')
+    need(re.fullmatch('[a-f0-9]{40}', candidate or ''), 'candidate SHA missing')
+    native, route, qa, ci, acceptance = (artifacts[n] for n in
+        ('native.json', 'route.json', 'qa.json', 'ci.json', 'acceptance.json'))
+    need(native.get('schema') == 'GB_AGY_AUTHOR_RECEIPT_V1'
+         and native.get('phase') == 'imported' and native.get('exit_code') == 0
+         and native.get('executor_uid') == 978 and native.get('executor_gid') == 968
+         and native.get('task_sha256') == task_hash
+         and native.get('requested_model') == native.get('effective_model') == MODEL
+         and native.get('requested_route') == 'agy:' + MODEL
+         and native.get('qualification_phase') == 'canary'
+         and native.get('charge_state') == 'charged'
+         and native.get('native_finish') is True
+         and native.get('changed_paths') == task['allowed_paths']
+         and native.get('executor_reap') in ('cgroup-absent', 'cgroup-quiet'),
+         'native canary not accepted')
+    from native_antigravity_author import parse_stream
+    parsed = parse_stream(artifacts['transcript.raw'], MODEL)
+    need(parsed['transcript_sha256'] == native.get('transcript_sha256')
+         and parsed['provider_reported_usage'] == native.get('provider_reported_usage')
+         and {'view_file', 'run_command'} <= set(parsed['executed_tools'])
+         and any(t in parsed['executed_tools'] for t in
+                 ('write_to_file', 'replace_file_content', 'multi_replace_file_content')),
+         'real read/edit/command/finish transcript missing')
+    need(route.get('phase') == 'completed'
+         and route.get('provider') == route.get('effective_provider') == 'agy_author'
+         and route.get('effective_model') == MODEL
+         and route.get('operation_fingerprint') == operation
+         and route.get('candidate_sha') == candidate
+         and route.get('revision') == task['revision']
+         and route.get('fallback_provider') is None, 'native route not proven')
+    need(qa.get('provider') == 'codex' and qa.get('model') == 'gpt-6.1-sol'
+         and qa.get('verdict') == 'PASS' and qa.get('reviewed_sha') == candidate,
+         'independent exact Codex Sol QA missing')
+    source_head = native.get('source_head')
+    need(re.fullmatch('[a-f0-9]{40}', source_head or '')
+         and subprocess_git(bundle, 'rev-parse', candidate + '^') == source_head,
+         'candidate source parent differs')
+    need(subprocess_git(bundle, 'diff', '--name-only', source_head, candidate).splitlines()
+         == task['allowed_paths'], 'candidate effects differ from native canary')
+    payload = subprocess_git_bytes(bundle, 'show', candidate + ':' + task['allowed_paths'][0])
+    from core import digest
+    need(digest({task['allowed_paths'][0]: sha(payload)}) == native.get('imported_payload_sha256'),
+         'candidate payload differs from trusted import')
+    ci_proof = verify_qualification_ci(ci, candidate)
+    need(acceptance.get('schema') == 'GB_AGY_AUTHOR_OPS_ACCEPTANCE_V1'
+         and acceptance.get('operation') == operation
+         and acceptance.get('candidate_sha') == candidate
+         and acceptance.get('task_sha256') == task_hash
+         and acceptance.get('checker_exit_code') == 0
+         and acceptance.get('checker_stdout') == 'ANTIGRAVITY_AUTHOR_CANARY_TESTS_PASS'
+         and acceptance.get('scope') == 'isolated_ops_canary', 'isolated OPS acceptance missing')
+    marker = loads(read(MARKER))
+    pins = {n: sha(read(INSTALL / n)) for n in (AUTHOR_MODULE, *PINS)}
+    need(marker.get('modules') == pins
+         and all(read(INSTALL / n) == material[REPO_PREFIX + n] for n in pins),
+         'promotion module drift')
+    marker = dict(marker, phase='ready', qualification_operation=operation)
+    proof = dict(schema='GB_PRODUCT_AUTHOR_ROLE_READY_V1', phase='ready',
+        verdict='PASS', model=MODEL, executor_uid=978, modules=pins,
+        operation=operation, qualification_kind='isolated_ops_canary',
+        candidate_sha=candidate, adapter_commit=commit, task_sha256=task_hash,
+        manifest_sha256=manifest_sha, ci=ci_proof,
+        product_feature_dev_acceptance=False)
+    return marker, proof
+
+
+def promote(action, bundle, commit, task_hash, operation):
+    """Install proof first, marker last: readiness changes at one atomic replace.
+
+    Demotion reverses the grant first. Backups/history remain; no provider call,
+    service restart, source lease takeover or policy activation happens here.
+    """
+    need(os.geteuid() == 0, 'root OPS only')
+    need(action in ('promote-dry', 'promote', 'demote'), 'invalid promotion action')
+    if action == 'demote':
+        journal = loads(read(PROMOTION_JOURNAL))
+        need(journal.get('operation') == operation and journal.get('commit') == commit
+             and journal.get('task_sha256') == task_hash, 'demotion identity differs')
+        quiet(canary_task_sha256=task_hash)
+        backup = BACKUP / 'promotions' / operation
+        for target, saved in ((MARKER, 'marker'), (READY_PROOF, 'proof')):
+            current = optional(target)
+            need((sha(current) if current is not None else None)
+                 in (journal['before'][str(target)], journal['after'][str(target)]),
+                 'foreign readiness drift')
+        put(MARKER, read(backup / 'marker'))
+        if journal['before'][str(READY_PROOF)] is None:
+            if READY_PROOF.exists():
+                READY_PROOF.unlink()
+        else:
+            put(READY_PROOF, read(backup / 'proof'))
+        journal['phase'] = 'demoted-canary'
+        put(PROMOTION_JOURNAL, encoded(journal), 0o600)
+        return {'phase': journal['phase'], 'ready': False}
+    marker, proof = promotion_plan(bundle, commit, task_hash, operation)
+    need(optional(PROMOTION_JOURNAL) is None and optional(READY_PROOF) is None,
+         'prior readiness must be reconciled')
+    if action == 'promote-dry':
+        return {'phase': 'qualification-verified', 'ready': False, 'dry': True}
+    parent = BACKUP / 'promotions'
+    if not parent.exists(): _mkdir_backup(parent)
+    backup = parent / operation
+    if not backup.exists(): _mkdir_backup(backup)
+    before_marker = read(MARKER)
+    put(backup / 'marker', before_marker, 0o600)
+    journal = dict(schema='GB_AGY_AUTHOR_PROMOTION_V1', phase='prepared', operation=operation,
+        commit=commit, task_sha256=task_hash,
+        before={str(MARKER): sha(before_marker), str(READY_PROOF): None},
+        after={str(MARKER): sha(encoded(marker)), str(READY_PROOF): sha(encoded(proof))})
+    put(PROMOTION_JOURNAL, encoded(journal), 0o600)
+    put(READY_PROOF, encoded(proof))
+    put(MARKER, encoded(marker))
+    need(read(MARKER) == encoded(marker) and read(READY_PROOF) == encoded(proof),
+         'readiness readback failed')
+    journal['phase'] = 'ready'
+    put(PROMOTION_JOURNAL, encoded(journal), 0o600)
+    return {'phase': 'ready', 'ready': True, 'operation': operation,
+            'qualification_kind': 'isolated_ops_canary'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--action', choices=('dry', 'apply', 'verify', 'rollback'), default='dry')
+    parser.add_argument('--action', choices=('dry', 'apply', 'verify', 'rollback', 'promote-dry', 'promote', 'demote'), default='dry')
+    parser.add_argument('--operation', default=None)
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--commit', required=True, help='accepted Git commit (OD-014A)')
     parser.add_argument('--canary-task-sha256', required=True)
@@ -543,11 +728,15 @@ def main():
     fd = os.open(STATE / 'controller.lock', os.O_RDWR | os.O_NOFOLLOW)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        print(json.dumps(execute(
-            args.action, args.bundle, args.commit, args.canary_task_sha256,
-            base_controller=args.base_controller, legacy_finite=legacy,
-            manifest_hash=args.manifest_sha256,
-            canary_task_path=args.canary_task_path), sort_keys=True))
+        if args.action in ('promote-dry', 'promote', 'demote'):
+            result = promote(args.action, args.bundle, args.commit,
+                             args.canary_task_sha256, args.operation)
+        else:
+            result = execute(
+                args.action, args.bundle, args.commit, args.canary_task_sha256,
+                base_controller=args.base_controller, legacy_finite=legacy,
+                manifest_hash=args.manifest_sha256, canary_task_path=args.canary_task_path)
+        print(json.dumps(result, sort_keys=True))
     finally:
         os.close(fd)
 
