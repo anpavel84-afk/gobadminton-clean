@@ -391,13 +391,27 @@ export type AbuseReportReasonCode =
   | "inappropriate"
   | "other";
 
-export type CreateAbuseReportInput = {
+export type CreatePlayerAbuseReportInput = {
   targetKind: "player";
   targetPublicPlayerId: string;
   reasonCode: AbuseReportReasonCode;
   detail?: string | null;
   evidenceRefs?: string[];
 };
+
+export type CreateMessageAbuseReportInput = {
+  targetKind: "message";
+  messageId: string;
+  conversationId?: string;
+  gameId?: string;
+  reasonCode: AbuseReportReasonCode;
+  detail?: string | null;
+  shareMessageWithSupport: true;
+};
+
+export type CreateAbuseReportInput =
+  | CreatePlayerAbuseReportInput
+  | CreateMessageAbuseReportInput;
 
 export type AbuseReportReceipt = {
   reportId: string;

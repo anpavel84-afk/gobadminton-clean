@@ -1,6 +1,17 @@
 import { apiFetch } from "./api-client";
+import type { CreateAbuseReportInput } from "./consumer-types";
 import type { Conversation, DirectMessage, GameInvitation, Page, GameChat, GameChatMember, InboxFilter, InboxPage, ContactState } from "./messaging-types";
 const id = encodeURIComponent;
+
+/** Typed POST /v1/reports helper for player or exact selected-message consent reports. */
+export function createAbuseReport(input: CreateAbuseReportInput, csrfToken: string, idempotencyKey: string) {
+  return apiFetch<{ reportId: string; status: string; createdAt: string }>("/v1/reports", {
+    method: "POST",
+    csrfToken,
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
 export function listConversations(cursor?: string) {
   return apiFetch<Page<Conversation>>(`/v1/conversations?limit=50${cursor ? `&cursor=${id(cursor)}` : ""}`);
 }

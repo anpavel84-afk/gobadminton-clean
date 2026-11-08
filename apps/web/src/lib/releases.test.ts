@@ -10,9 +10,9 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.54 with API 0.37.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.54");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
+  it("bumps current descriptor to alpha.55 with API 0.38.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.55");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.38.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(CURRENT_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
@@ -25,21 +25,36 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/личн.*сообщен|чат.*игр/i);
-    expect(prose).toMatch(/локальн|проверк/i);
-    expect(prose).toMatch(/черновик|ссыл|угроз|повтор/i);
-    expect(prose).toMatch(/жалоб|внешн/i);
+    expect(prose).toMatch(/жалоб|сообщен/i);
+    expect(prose).toMatch(/согласи|выбранн/i);
+    expect(prose).toMatch(/обращен|источник/i);
+    expect(prose).toMatch(/внешн/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/личн|сообщен|черновик|защит/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|сообщен|согласи/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);
     expect(prose).not.toMatch(/134|138|140|Slow4G|5555|8656|все фото|prefetch|переписан|переписать|Изменить/i);
     expect(prose).not.toMatch(/новых типов уведомлен|новой модели разрешен|массовое переименование на диске уже|все файлы переименова/i);
     expect(prose).not.toMatch(/nonce|claim_nonce|Idempotency|MutationRunner|OpenAPI|Mode B|WebP|#507|\bB2b\b|\bB2a\b|RBAC|SQL/i);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.54" &&
+          row.source_sha === "cce49ce72daed8c81f89ddc845deabbb8ac5d7aa" &&
+          row.deployments[0]?.release_id === "r42449222181-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:03cdab10c3c780b0bcd69b12bf8fbc013742e21f017fa2b076acd1c77b00bf3c" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:fbc040efc941c25dc238ab51b986962f818d901e17a797a7e232193a51754896" &&
+          row.title === "Локальная защита личных сообщений и сохранение черновика при отказе" &&
+          row.api_contract_version === "0.37.0",
+      ),
+    ).toBe(true);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
         (row) =>

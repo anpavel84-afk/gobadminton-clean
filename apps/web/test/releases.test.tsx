@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.54 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.54");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.55 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.55");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.38.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,10 +64,10 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/личн.*сообщен|чат.*игр/i);
-    expect(currentProse).toMatch(/локальн|проверк/i);
-    expect(currentProse).toMatch(/черновик|ссыл|угроз|повтор/i);
-    expect(currentProse).toMatch(/жалоб|внешн/i);
+    expect(currentProse).toMatch(/жалоб|сообщен/i);
+    expect(currentProse).toMatch(/согласи|выбранн/i);
+    expect(currentProse).toMatch(/обращен|источник/i);
+    expect(currentProse).toMatch(/внешн/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -252,10 +252,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(57);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(58);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(62);
+    ).toBe(63);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.54"
+      && row.source_sha === "cce49ce72daed8c81f89ddc845deabbb8ac5d7aa"
+      && row.deployments[0]?.release_id === "r42449222181-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z"
+      && row.deployments[0]?.api_digest === "sha256:03cdab10c3c780b0bcd69b12bf8fbc013742e21f017fa2b076acd1c77b00bf3c"
+      && row.deployments[0]?.web_digest === "sha256:fbc040efc941c25dc238ab51b986962f818d901e17a797a7e232193a51754896"
+      && row.api_contract_version === "0.37.0"
+      && row.title === "Локальная защита личных сообщений и сохранение черновика при отказе"
+      && row.additions.length === 1
+      && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.53"
       && row.source_sha === "79e51ff2b0b4846a9fee3be0f429f3f3d6c822ab"
