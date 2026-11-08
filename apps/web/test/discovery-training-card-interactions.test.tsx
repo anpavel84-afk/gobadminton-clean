@@ -208,7 +208,8 @@ describe("#521 discovery compact role review interactions", () => {
 
     expect(screen.queryByRole("button", { name: /Отзывы о тренировках/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Отзывы об организации/ })).toBeNull();
-    expect(screen.getByText("Тренер · самостоятельно указано")).toBeTruthy();
+    expect(screen.getByText("Тренер")).toBeTruthy();
+    expect(screen.queryByText("Тренер · самостоятельно указано")).toBeNull();
     expect(screen.getByText("Alexey Morozov (demo trainer)")).toBeTruthy();
     expect(screen.getByText("Организатор")).toBeTruthy();
     expect(screen.getByText("Other Organizer")).toBeTruthy();

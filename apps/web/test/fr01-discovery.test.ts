@@ -66,7 +66,8 @@ describe("FR-01 API-backed card semantics", () => {
     const regular = renderToStaticMarkup(createElement(DiscoveryGameCard, { game }));
     expect(html).toContain("С тренером"); expect(html).toContain("Ирина Т."); expect(html).toContain("Мест нет");
     expect(html).toContain(game.organizer.displayName);
-    expect(html).toContain("Тренер · самостоятельно указано");
+    expect(html).toContain(">Тренер<");
+    expect(html).not.toMatch(/<small>Тренер · самостоятельно указано<\/small>/);
     expect(html).toContain("Организатор");
     expect(html).toContain('data-trainer-profile="trainer"');
     expect(html).toContain('data-role="trainer"');

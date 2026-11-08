@@ -545,8 +545,9 @@ describe("#394 comments private boundary", () => {
     hooks.cursor = 0;
     const html = renderToStaticMarkup(VenuePage({ venueId }));
     expect(html).toContain("Оценки сообщества");
-    expect(html).toContain("Обсуждение и фотографии");
-    expect(html).toContain("Добавление фотографий к публикациям появится позже");
+    expect(html).toContain("Обсуждение площадки");
+    expect(html).not.toContain("Обсуждение и фотографии");
+    expect(html).not.toContain("Добавление фотографий к публикациям появится позже");
     expect(html).toMatch(/отзыв|опыт|посещен/i);
     expect(html).not.toMatch(/отметьте посещение|самостоятельно отметь/i);
   });

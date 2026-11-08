@@ -55,7 +55,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
     const root = dialogRef.current;
     if (!root) return;
     const controls = [...root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
     )].filter(el => {
       const sealed = el.closest("details:not([open])");
       if (!sealed) return true;
@@ -124,57 +124,66 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
             const catalogSource = venue.profile?.catalogSource;
             const hasSource = Boolean(safeCatalogSource(catalogSource));
             const showDefaultIllustrationLabel = !venueCoverUrl(venue.cover?.uploadedUrl) && photos === 0;
+            const ratingsPath = `/venues/${encodeURIComponent(venue.id)}#ratings`;
             return (
               <div key={venue.id} className="gb-venue-picker-option-block">
-                <button
-                  type="button"
-                  className="gb-venue-picker-option"
-                  aria-pressed={selectedId === venue.id}
-                  onClick={() => onSelect(venue)}
-                >
-                  {/* Compact gallery: no nav / no retry controls inside the select button.
-                      Horizontal swipe is click-suppressed so it does not select.
-                      Source credit and sheet retry stay outside (no nested anchors/controls). */}
-                  <VenueGallery venue={venue} size="compact" showCredit={false} showSourceCredit={false} className="gb-venue-cover--thumb" />
-                  <span className="gb-venue-picker-option-copy">
-                    <span className="gb-venue-picker-option-name">{venue.name}</span>
-                    <span className="gb-venue-picker-option-address">{venue.address}</span>
-                    {showDefaultIllustrationLabel
-                      ? <span className="gb-venue-illustration-label">Иллюстрация</span>
-                      : null}
-                  </span>
-                  {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
-                </button>
-                <div className="gb-venue-picker-option-community">
-                  <VenueCommunityRating
-                    venueId={venue.id}
-                    variant="compact"
-                    signedIn={false}
-                    csrfToken={null}
-                    authReturnPath={`/venues/${venue.id}`}
-                    href={`/venues/${encodeURIComponent(venue.id)}#ratings`}
-                    summary={community.summaries[venue.id] ?? null}
-                    summaryLoadState={community.state === "idle" ? "loading" : community.state}
-                    linkToRatings
-                  />
+                {/* Shared padded hover row: select button owns title+plain summary;
+                    community link and photo expander are sibling controls (no nested buttons). */}
+                <div className="gb-venue-picker-option-row">
+                  <button
+                    type="button"
+                    className="gb-venue-picker-option"
+                    aria-pressed={selectedId === venue.id}
+                    onClick={() => onSelect(venue)}
+                  >
+                    {/* Compact gallery: no nav / no retry controls inside the select button.
+                        Horizontal swipe is click-suppressed so it does not select. */}
+                    <VenueGallery venue={venue} size="compact" showCredit={false} showSourceCredit={false} className="gb-venue-cover--thumb" />
+                    <span className="gb-venue-picker-option-copy">
+                      <span className="gb-venue-picker-option-name">{venue.name}</span>
+                      <span className="gb-venue-picker-option-address">{venue.address}</span>
+                      <VenueCommunityRating
+                        venueId={venue.id}
+                        variant="compact"
+                        signedIn={false}
+                        csrfToken={null}
+                        authReturnPath={`/venues/${venue.id}`}
+                        href={ratingsPath}
+                        summary={community.summaries[venue.id] ?? null}
+                        summaryLoadState={community.state === "idle" ? "loading" : community.state}
+                        linkToRatings={false}
+                      />
+                      {showDefaultIllustrationLabel
+                        ? <span className="gb-venue-illustration-label">Иллюстрация</span>
+                        : null}
+                    </span>
+                    {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
+                  </button>
+                  <a
+                    className="gb-venue-picker-option-community-link"
+                    href={ratingsPath}
+                    data-testid="venue-picker-community-link"
+                  >
+                    Оценки и обсуждение
+                  </a>
+                  {photos >= 1 || showDefaultIllustrationLabel ? (
+                    <details className="gb-venue-picker-photos">
+                      <summary tabIndex={0} className="gb-venue-picker-photos__summary">
+                        {photos >= 1 ? `Фото · ${photos}` : "Иллюстрация"}
+                      </summary>
+                      <div className="gb-venue-picker-photos__body">
+                        {/* Sibling sheet gallery: arrows (when 2+), counter, photo/illustration retry —
+                            outside the select button. Compact thumbs hide retry; genuine zero-photo
+                            still gets a reachable illustration retry here (no nested controls). */}
+                        <VenueGallery venue={venue} size="sheet" showCredit />
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
                 {hasSource ? (
                   <div className="gb-venue-picker-option-source">
                     <VenueSourceCredit catalogSource={catalogSource} />
                   </div>
-                ) : null}
-                {photos >= 1 || showDefaultIllustrationLabel ? (
-                  <details className="gb-venue-picker-photos">
-                    <summary tabIndex={0} className="gb-venue-picker-photos__summary">
-                      {photos >= 1 ? `Фото · ${photos}` : "Иллюстрация"}
-                    </summary>
-                    <div className="gb-venue-picker-photos__body">
-                      {/* Sibling sheet gallery: arrows (when 2+), counter, photo/illustration retry —
-                          outside the select button. Compact thumbs hide retry; genuine zero-photo
-                          still gets a reachable illustration retry here (no nested controls). */}
-                      <VenueGallery venue={venue} size="sheet" showCredit />
-                    </div>
-                  </details>
                 ) : null}
               </div>
             );

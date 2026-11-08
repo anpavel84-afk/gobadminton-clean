@@ -56,7 +56,9 @@ async function ssrExactCards() {
   assert.match(payload.trainerMissingHtml, /data-trainer-unavailable/);
   assert.doesNotMatch(payload.trainerHtml, /data-layout/);
   assert.match(payload.trainerHtml, /gb-discovery-card__people/);
-  assert.match(payload.trainerTypicalHtml, /gb-discovery-card__footer/);
+  assert.match(payload.trainerTypicalHtml, /gb-discovery-card__people/);
+  assert.match(payload.trainerTypicalHtml, /gb-discovery-card__actions/);
+  assert.doesNotMatch(payload.trainerTypicalHtml, /gb-discovery-card__footer/);
   await rm(dir, { recursive: true, force: true });
   return payload;
 }
@@ -232,10 +234,15 @@ await withChrome(async ({ call, evaluate }) => {
         }));
         const roles = [...card.querySelectorAll('.gb-discovery-host')].map((h) => h.getAttribute('data-role'));
         const people = [...card.querySelectorAll('.gb-discovery-card__people > .gb-discovery-host')].map(rect);
-        const footer = card.querySelector('.gb-discovery-card__footer');
+        const peopleBand = card.querySelector('.gb-discovery-card__people');
+        const peopleActions = peopleBand?.querySelector('.gb-discovery-card__actions');
         const slot = rect(imageSlot);
         const image = rect(imageEl?.tagName === 'IMG' ? imageEl : (imageEl?.querySelector('img') || imageEl));
         const cardBox = rect(card);
+        const peopleBandRect = peopleBand ? rect(peopleBand) : null;
+        const unusedUnderPhoto = peopleBandRect && slot
+          ? Math.max(0, peopleBandRect.y - slot.bottom)
+          : null;
         return {
           index,
           activity: card.getAttribute('data-activity'),
@@ -248,7 +255,9 @@ await withChrome(async ({ call, evaluate }) => {
           strongs,
           roles,
           people,
-          footer: footer ? rect(footer) : null,
+          peopleBand: peopleBandRect,
+          peopleActions: peopleActions ? rect(peopleActions) : null,
+          unusedUnderPhoto,
           crop: imgStyle ? { fit: imgStyle.objectFit, position: imgStyle.objectPosition } : null,
           overflowX: card.scrollWidth > card.clientWidth + 1,
           viewportWidth,
@@ -332,8 +341,14 @@ await withChrome(async ({ call, evaluate }) => {
       // Card wraps image + content; geometry nonnegative / contained (no clip). No extra-height requirement.
       assert.ok(typical.card.height >= typical.imageSlot.height - 1, `${width}: typical card must wrap image slot`);
       assert.ok(typical.content.bottom <= typical.card.bottom + 1, `${width}: typical content must stay in card`);
-      if (typical.footer) {
-        assert.ok(typical.footer.bottom <= typical.card.bottom + 1, `${width}: typical footer must stay in card`);
+      assert.ok(typical.peopleBand, `${width}: typical people band`);
+      assert.ok(typical.peopleActions, `${width}: typical details/share in people band`);
+      assert.ok(typical.peopleBand.bottom <= typical.card.bottom + 1, `${width}: typical people band must stay in card`);
+      if (typical.unusedUnderPhoto != null) {
+        assert.ok(
+          typical.unusedUnderPhoto <= 1,
+          `${width}: typical unused gap under photo before people=${typical.unusedUnderPhoto}`,
+        );
       }
       for (const person of typical.people || []) {
         assert.ok(person.width >= 0 && person.height >= 0, `${width}: typical people geometry nonnegative`);

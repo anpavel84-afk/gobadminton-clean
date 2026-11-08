@@ -48,6 +48,15 @@
   white-space: normal;
   text-align: left;
   font-size: 13px;
+  min-height: 44px;
+}
+
+.gb-venue-community__own-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 /* Known community anchors: clear sticky topbar (72 mobile / 84 desktop tokens). */
@@ -215,17 +224,27 @@
   color: var(--gb-ink-soft, #536159);
 }
 
-.gb-venue-community__limitation {
-  font-size: 12px;
-  color: var(--gb-ink-soft, #536159);
-  margin: 0 0 12px;
+/* Venue discussion uses CommentsSection as the single card shell. */
+.gb-venue-community > .gb-comments {
+  margin-top: 0;
+  scroll-margin-top: calc(var(--gb-header-height-desktop, 84px) + 12px);
 }
 
 @media (max-width: 720px) {
   .gb-venue-community #ratings,
   .gb-venue-community #discussion,
-  .gb-venue-community #reviews {
+  .gb-venue-community #reviews,
+  .gb-venue-community > .gb-comments {
     scroll-margin-top: calc(var(--gb-header-height-mobile, 72px) + 12px);
+  }
+
+  .gb-venue-community__heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .gb-venue-community__report-trigger {
+    align-self: flex-start;
   }
 }
 

@@ -72,9 +72,11 @@ describe("#394 CommentsSection", () => {
     expect(venueSrc).toContain("VenueCommunityRating");
     expect(venueSrc).toContain("CommentsSection");
     expect(venueSrc).toContain('kind="venue"');
-    expect(venueSrc).toContain("Обсуждение и фотографии");
+    expect(venueSrc).toContain("Обсуждение площадки");
+    expect(venueSrc).toContain('sectionId="discussion"');
     expect(venueSrc).toMatch(/SurfacePanel/);
-    expect(venueSrc).toContain("Добавление фотографий к публикациям появится позже");
+    expect(venueSrc).not.toContain("Обсуждение и фотографии");
+    expect(venueSrc).not.toContain("Добавление фотографий к публикациям появится позже");
 
     const gameHtml = renderToStaticMarkup(
       createElement(CommentsSection, {

@@ -32,6 +32,10 @@ type Props = {
   authReturnPath: string;
   /** Parent currently public/available — host gate; do not mount otherwise. */
   parentPublic: boolean;
+  /** Optional section heading; default «Комментарии». */
+  title?: string;
+  /** Optional DOM id for page anchors (e.g. venue #discussion). */
+  sectionId?: string;
 };
 
 /** In-memory actor+csrf identity — never logged or written to storage keys/DOM. */
@@ -89,6 +93,8 @@ export function CommentsSection({
   description,
   authReturnPath,
   parentPublic,
+  title = "Комментарии",
+  sectionId,
 }: Props) {
   const headingId = useId();
   const [authOpen, setAuthOpen] = useState(false);
@@ -449,10 +455,15 @@ export function CommentsSection({
   }
 
   return (
-    <section className="gb-comments" aria-labelledby={headingId} data-entity-kind={kind}>
+    <section
+      className="gb-comments"
+      id={sectionId}
+      aria-labelledby={headingId}
+      data-entity-kind={kind}
+    >
       <header className="gb-comments__header">
         <div className="gb-comments__title-row">
-          <h2 id={headingId} tabIndex={-1}>Комментарии</h2>
+          <h2 id={headingId} tabIndex={-1}>{title}</h2>
           {typeof count === "number" && pageReady ? (
             <span className="gb-comments__count" aria-label={`${count} комментариев`}>{count}</span>
           ) : null}
@@ -487,7 +498,7 @@ export function CommentsSection({
             admitMutation(createEntityCommentPath(kind, entityId), { text, parentCommentId: null });
           }}
         >
-          <Avatar name={me.displayName || "Вы"} tone="lime" />
+          <Avatar name={me.displayName || "Вы"} tone="lime" className="avatar avatar--lime gb-comments__avatar" />
           <label className="gb-comments__field">
             <span>Ваш комментарий</span>
             <textarea
@@ -750,7 +761,12 @@ function CommentArticle({
       ) : (
         <>
           <header className="gb-comment__meta">
-            <Avatar name={author.displayName} avatar={author.avatar} tone="yellow" />
+            <Avatar
+              name={author.displayName}
+              avatar={author.avatar}
+              tone="yellow"
+              className="avatar avatar--yellow gb-comments__avatar"
+            />
             <div className="gb-comment__identity">
               {author.profilePublic && author.publicPlayerId ? (
                 <Link href={`/players/${encodeURIComponent(author.publicPlayerId)}`}>{author.displayName}</Link>
