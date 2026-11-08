@@ -2672,7 +2672,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
     from providers import (
         prepare_cursor_author_intent, mark_intent_phase, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
-        agy_author_canary_admitted,
+        agy_author_canary_admitted, cursor_fallback_authorized,
     )
     from types import SimpleNamespace
 
@@ -2686,6 +2686,17 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'prepared', provider='agy_author', role='author',
                           requested_provider='agy_author', effective_model=AGY_MODEL)
 
+    def cursor_fallback():
+        # Direct live bindings enforce the same authorization as routing.
+        if not cursor_fallback_authorized(task):
+            mark_intent_phase(intent_path, 'HOLD_no_authorized_fallback',
+                              error='agy_author_unavailable_no_fallback',
+                              fallback_provider=None, no_model_launched=True)
+            raise ProviderError('agy_author_unavailable_no_fallback', charge='none')
+        return cursor_author_live(
+            task=task, worktree=worktree, evidence_dir=evidence,
+            intent_path=intent_path, parent_lease=parent_lease)
+
     ok, reason = role_ready('agy_author')
     canary_ok, canary_meta = (False, None)
     if not ok:
@@ -2695,9 +2706,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'agy_author_not_ready_fallback',
                           error='agy_author_not_ready', reason=reason,
                           canary=canary_meta, fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     avail, why, _rec = agy_quota_available(int(task['issue']))
     if not avail:
@@ -2708,9 +2717,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
                           error=why or 'agy_quota_unavailable',
                           fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     try:
         native = _load_native('native_antigravity_author')
@@ -2718,9 +2725,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'agy_author_not_ready_fallback',
                           error='native_author_missing', detail=err.detail,
                           fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     base_sha = (
         task.get('runtime_base_sha') or task.get('base') or task.get('source_base')
@@ -2754,16 +2759,12 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
             mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
                               error='shared_budget_ineligible', left=repr(left),
                               fallback_provider='cursor_auto')
-            return cursor_author_live(
-                task=task, worktree=worktree, evidence_dir=evidence,
-                intent_path=intent_path, parent_lease=parent_lease)
+            return cursor_fallback()
     except (LiveError, OSError, ValueError) as err:
         mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
                           error='shared_budget_unavailable', detail=type(err).__name__,
                           fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     # Fresh 978 staging from current HEAD; frozen base retained for full review diff.
     try:

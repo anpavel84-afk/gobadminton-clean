@@ -469,6 +469,12 @@ class Invocation(unittest.TestCase):
     def test_nonzero(self):
         with self.assertRaises(N.ReviewError): self.invoke('exit')
         self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['processing_stage'], 'streams_retained')
+        self.assertEqual(receipt['exit_code'], 7)
+        self.assertIsNotNone(receipt['stdout_sha256'])
+        self.assertEqual((self.outbox/'agy-author-evidence'/receipt['evidence_id']/'stdout').read_bytes(),
+                         wire(rows()))
 
     def test_timeout(self):
         with self.assertRaises(N.ReviewError): self.invoke('timeout')

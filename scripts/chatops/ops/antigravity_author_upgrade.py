@@ -206,8 +206,28 @@ def preserved():
     return result
 
 
+def validate_canary_task(bundle, commit, path, task_hash):
+    """A new isolated admission replaces no historical assignment or operation."""
+    need(path == 'scripts/chatops/tests/fixtures/antigravity-author-canary.json',
+         'unreviewed canary task path')
+    raw = read(bundle / path)
+    need(raw == subprocess_git_bytes(bundle, 'show', commit + ':' + path),
+         'canary task differs from accepted Git blob')
+    task = loads(raw)
+    need(isinstance(task, dict) and task.get('issue') == 199
+         and task.get('authorroute') == ['agy_author']
+         and task.get('qaroute') == ['codex_sol_medium']
+         and task.get('target') == 'dev', 'invalid isolated canary identity')
+    allowed = task.get('allowed_paths')
+    need(allowed == ['docs/handoffs/antigravity-author-canary/count_completed.py'],
+         'canary scope must stay isolated')
+    from native_antigravity_author import canonical_task_digest
+    need(canonical_task_digest(task) == task_hash, 'prospective task digest mismatch')
+    return task
+
+
 def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
-         prior_journal=None):
+         prior_journal=None, canary_task_path=None):
     need(re.fullmatch('[a-f0-9]{64}', task_hash or ''), 'exact canary task hash required')
     quiet(base_controller, canary_task_sha256=task_hash)
     material = git_blobs(bundle, commit)
@@ -224,8 +244,11 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
              'AGY QA marker pins stale; separate reviewed re-pin required')
     if prior_journal is not None:
         validate_prior_installed(prior_journal)
-        need(prior_journal.get('task_sha256') == task_hash,
-             'sequential upgrade must keep the same canary task')
+        if prior_journal.get('task_sha256') != task_hash:
+            need(canary_task_path is not None,
+                 'new canary requires reviewed prospective task blob')
+            validate_canary_task(bundle, commit, canary_task_path, task_hash)
+            quiet(base_controller, canary_task_sha256=prior_journal['task_sha256'])
         need(prior_journal.get('bundle_commit') != commit,
              'sequential upgrade requires a distinct accepted Git commit')
         installed_author = optional(INSTALL / AUTHOR_MODULE)
@@ -239,7 +262,7 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
              and old_marker.get('phase') == 'canary'
              and old_marker.get('slot') == 'slot2'
              and old_marker.get('executor_uid') == 978
-             and old_marker.get('canary_task_sha256') == task_hash
+             and old_marker.get('canary_task_sha256') == prior_journal['task_sha256']
              and old_marker.get('model') == MODEL
              and old_marker.get('admitted_models') == [MODEL],
              'prior canary author marker identity differs')
@@ -377,7 +400,7 @@ def archive_prior_transaction(j):
 
 
 def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
-            manifest_hash=None, calls=None):
+            manifest_hash=None, calls=None, canary_task_path=None):
     """Caller holds existing controller.lock; main acquires it, fixture caller isolates it.
 
     commit = accepted Git SHA (OD-014A). manifest_hash/calls kept as legacy kwargs for
@@ -391,7 +414,8 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
         prior = read_prior_journal()
         payload, history, marker = plan(
             bundle, commit, task_hash, base_controller=base_controller,
-            legacy_finite=legacy_finite, prior_journal=prior)
+            legacy_finite=legacy_finite, prior_journal=prior,
+            canary_task_path=canary_task_path)
         changes = {
             str(p): dict(
                 before=sha(raw) if (raw := optional(p)) is not None else None,
@@ -436,6 +460,8 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
             bundle_commit=commit, task_sha256=task_hash, history=history,
             base_controller=base_controller, marker_phase='canary',
             prior_bundle_commit=(prior or {}).get('bundle_commit'),
+            prior_task_sha256=(prior or {}).get('task_sha256'),
+            canary_task_path=canary_task_path,
             **({'backup_dir': str(backup)} if prior is not None else {}),
             metadata={str(p): (stat.S_IMODE(p.stat().st_mode) if p.exists() else 0o644)
                       for p in payload})
@@ -500,6 +526,8 @@ def main():
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--commit', required=True, help='accepted Git commit (OD-014A)')
     parser.add_argument('--canary-task-sha256', required=True)
+    parser.add_argument('--canary-task-path', default=None,
+                        help='reviewed isolated task Git blob for prospective rebind')
     parser.add_argument('--base-controller', default=None)
     parser.add_argument('--author-budget', default='unlimited',
                         help='unlimited (OD-020 default) or finite int for legacy fixtures')
@@ -518,7 +546,8 @@ def main():
         print(json.dumps(execute(
             args.action, args.bundle, args.commit, args.canary_task_sha256,
             base_controller=args.base_controller, legacy_finite=legacy,
-            manifest_hash=args.manifest_sha256), sort_keys=True))
+            manifest_hash=args.manifest_sha256,
+            canary_task_path=args.canary_task_path), sort_keys=True))
     finally:
         os.close(fd)
 

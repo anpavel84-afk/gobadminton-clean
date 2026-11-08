@@ -125,6 +125,27 @@ class Upgrade(unittest.TestCase):
             base_controller=kw.get('base', self.commit),
             legacy_finite=kw.get('legacy_finite'))
 
+    def test_prospective_rebind_preserves_old_transaction_and_rollback(self):
+        self.call('apply')
+        prior = U.read_prior_journal()
+        old_marker = U.read(U.MARKER)
+        old_task = self.task_hash
+        self.task_hash = 'b' * 64
+        commit = 'd' * 40
+        with self.assertRaises(core.Refused):
+            self.call('dry', commit=commit)
+        with patch.object(U, 'validate_canary_task') as validate:
+            result = U.execute('apply', self.bundle, commit, self.task_hash,
+                               canary_task_path='reviewed.json')
+            validate.assert_called_once_with(self.bundle, commit, 'reviewed.json', self.task_hash)
+        self.assertEqual(result['phase'], 'installed-canary-disabled')
+        journal = U.read_prior_journal()
+        self.assertEqual(journal['prior_task_sha256'], old_task)
+        archive = U.BACKUP / 'revisions' / prior['bundle_commit'] / 'antigravity-author-upgrade.json'
+        self.assertEqual(json.loads(archive.read_bytes()), prior)
+        U.execute('rollback', self.bundle, commit, self.task_hash)
+        self.assertEqual(U.read(U.MARKER), old_marker)
+
     def test_dry_writes_nothing(self):
         result = self.call()
         self.assertTrue(result['dry'])

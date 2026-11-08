@@ -248,9 +248,10 @@ def agy_quota_path(issue, day_utc):
     return RESULTS_ROOT / 'agy-quota' / f'issue-{int(issue)}-{day_utc}.json'
 
 
-def read_agy_quota(issue, day_utc=None, *, lock_path=QUOTA_LOCK):
+def read_agy_quota(issue, day_utc=None, *, lock_path=QUOTA_LOCK, results_root=None):
     day = day_utc or time.strftime('%Y-%m-%d', time.gmtime())
-    path = agy_quota_path(issue, day)
+    root = Path(results_root) if results_root is not None else RESULTS_ROOT
+    path = root / 'agy-quota' / f'issue-{int(issue)}-{day}.json'
     record = {'schema': 'GB_LEAN_AGY_QUOTA_V1', 'issue': int(issue), 'day_utc': day,
               'charged_calls': 0, 'unknown_calls': 0, 'receipts': []}
     if path.is_file():
@@ -299,11 +300,7 @@ def record_agy_charge(issue, receipt, *, charge='charged', day_utc=None, results
     fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o660)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        rec = read_agy_quota(issue, day)
-        if results_root:
-            alt = path
-            if alt.is_file():
-                rec = loads(alt.read_bytes())
+        rec = read_agy_quota(issue, day, results_root=root)
         receipts = list(rec.get('receipts') or [])
         receipts.append({'charge': charge, 'receipt': receipt, 'recorded_at': int(time.time())})
         if charge == 'charged':
@@ -492,64 +489,73 @@ def agy_author_canary_admitted(task):
     }
 
 
-def select_author_provider(task, *, issue=None):
-    """Author routing via task.authorroute / author_route.
-
-    Cursor Auto is the default. Explicit ['agy_author','cursor_auto'] selects
-    actually qualified READY AGY author, or exact native CANARY for this task
-    digest, else pre-launch Cursor fallback (before charge). CANARY is never
-    role_ready. Codex Author is NOT QUALIFIED — never route to it or fake READY.
-    """
-    routes = (
-        task.get('authorroute') or task.get('author_route')
-        or task.get('author_routes') or ['cursor_auto']
-    )
+def author_routes(task):
+    """Explicit author routes are authorization; only absent policy uses default."""
+    for key in ('authorroute', 'author_route', 'author_routes'):
+        if key in task:
+            routes = task[key]
+            break
+    else:
+        return ['cursor_auto']
     if isinstance(routes, str):
         routes = [routes]
+    if not isinstance(routes, list) or not routes:
+        raise ProviderError('invalid_author_routes', charge='none')
+    aliases = {
+        'agy': 'agy_author', 'agy_author': 'agy_author',
+        'antigravity_author': 'agy_author', 'cursor': 'cursor_auto',
+        'cursor_auto': 'cursor_auto', 'cursor_author': 'cursor_auto',
+        'codex': None, 'codex_author': None,
+    }
     normalized = []
-    for r in routes:
-        key = str(r).split(':')[0].strip().lower().replace('-', '_')
-        if key in ('agy', 'agy_author', 'antigravity_author'):
-            normalized.append('agy_author')
-        elif key in ('cursor', 'cursor_auto', 'cursor_author'):
-            normalized.append('cursor_auto')
-        elif key in ('codex', 'codex_author'):
-            # Explicitly not qualified — skip, never fake READY.
-            continue
-        else:
-            normalized.append(key)
+    for route in routes:
+        if not isinstance(route, str):
+            raise ProviderError('invalid_author_routes', charge='none')
+        key = route.split(':')[0].strip().lower().replace('-', '_')
+        if key not in aliases:
+            raise ProviderError('unsupported_author_route', charge='none')
+        if aliases[key] is not None:
+            normalized.append(aliases[key])
     if not normalized:
+        raise ProviderError('unsupported_author_route', charge='none')
+    return normalized
+
+
+def cursor_fallback_authorized(task):
+    return 'cursor_auto' in author_routes(task)
+
+
+def select_author_provider(task, *, issue=None):
+    """Select qualified AGY or an explicitly authorized precharge fallback."""
+    routes = author_routes(task)
+    if routes[0] == 'cursor_auto':
         return 'cursor_auto', 'default_cursor', None
-    if normalized[0] == 'agy_author':
-        ok, reason = role_ready('agy_author')
-        if ok:
-            if issue is not None:
-                avail, why, rec = agy_quota_available(int(issue))
-                if not avail:
-                    if why == 'agy_quota_unknown_pending_reconcile':
-                        raise ProviderError(
-                            'agy_quota_unknown_pending_reconcile', why, charge='none')
-                    return 'cursor_auto', 'agy_author_unavailable_fallback', why
-                return 'agy_author', 'agy_author_selected', rec
-            return 'agy_author', 'agy_author_selected', reason
-        canary_ok, canary_meta = agy_author_canary_admitted(task)
-        if canary_ok:
-            if issue is not None:
-                avail, why, rec = agy_quota_available(int(issue))
-                if not avail:
-                    if why == 'agy_quota_unknown_pending_reconcile':
-                        raise ProviderError(
-                            'agy_quota_unknown_pending_reconcile', why, charge='none')
-                    return 'cursor_auto', 'agy_author_unavailable_fallback', why
-                return 'agy_author', 'agy_author_canary_selected', {
-                    **(canary_meta if isinstance(canary_meta, dict) else {}),
-                    'quota': rec,
-                }
-            return 'agy_author', 'agy_author_canary_selected', canary_meta
-        if 'cursor_auto' in normalized:
-            return 'cursor_auto', 'agy_author_not_ready_fallback', reason
-        return 'cursor_auto', 'agy_author_not_ready_fallback', reason
-    return 'cursor_auto', 'default_cursor', None
+
+    def fallback(reason, detail):
+        if not cursor_fallback_authorized(task):
+            raise ProviderError('agy_author_unavailable_no_fallback', reason,
+                                charge='none')
+        return 'cursor_auto', reason, detail
+
+    ok, meta = role_ready('agy_author')
+    reason = 'agy_author_selected'
+    if not ok:
+        ok, canary_meta = agy_author_canary_admitted(task)
+        if not ok:
+            return fallback('agy_author_not_ready_fallback', meta)
+        meta = canary_meta
+        reason = 'agy_author_canary_selected'
+    if issue is not None:
+        avail, why, rec = agy_quota_available(int(issue))
+        if not avail:
+            if why == 'agy_quota_unknown_pending_reconcile':
+                raise ProviderError(why, why, charge='none')
+            return fallback('agy_author_unavailable_fallback', why)
+        if reason == 'agy_author_canary_selected':
+            meta = {**(meta if isinstance(meta, dict) else {}), 'quota': rec}
+        else:
+            meta = rec
+    return 'agy_author', reason, meta
 
 
 def build_agy_landlock_roots(source_ro, private_home, private_scratch, runtime_dirs=None,
@@ -740,7 +746,8 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     mark_intent_phase(
         intent_path, 'prepared', requested_provider=provider,
         effective_provider=provider, route_reason=route_reason,
-        fallback_provider=('cursor_auto' if provider == 'agy_author' else None))
+        fallback_provider=('cursor_auto' if provider == 'agy_author'
+                           and cursor_fallback_authorized(task) else None))
     if launcher is None:
         try:
             if provider == 'agy_author':

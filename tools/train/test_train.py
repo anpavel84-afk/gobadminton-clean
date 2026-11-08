@@ -2190,6 +2190,36 @@ class AgyNativeTransportTests(unittest.TestCase):
         self.assertEqual(prov4, 'cursor_auto')
         self.assertEqual(reason4, 'default_cursor')
 
+    def test_explicit_agy_only_never_falls_back_to_cursor(self):
+        task = {'issue': 199, 'authorroute': ['agy_author']}
+        for ready, canary, quota in ((False, False, True), (True, False, False),
+                                     (False, True, False)):
+            with self.subTest(ready=ready, canary=canary, quota=quota), \
+                    mock.patch.object(providers, 'role_ready', return_value=(ready, 'ready')), \
+                    mock.patch.object(providers, 'agy_author_canary_admitted',
+                                      return_value=(canary, {})), \
+                    mock.patch.object(providers, 'agy_quota_available',
+                                      return_value=(quota, 'exhausted', {})):
+                with self.assertRaises(providers.ProviderError) as error:
+                    providers.select_author_provider(task, issue=199)
+                self.assertEqual(error.exception.code, 'agy_author_unavailable_no_fallback')
+                self.assertEqual(error.exception.charge, 'none')
+        for routes in ([], ['unknown'], ['codex_author']):
+            with self.assertRaises(providers.ProviderError):
+                providers.select_author_provider({'authorroute': routes})
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(lean_live, 'require_executor_uid', return_value=1002), \
+                mock.patch.object(providers, 'role_ready', return_value=(False, 'no')), \
+                mock.patch.object(providers, 'agy_author_canary_admitted', return_value=(False, {})), \
+                mock.patch.object(lean_live, 'cursor_author_live') as cursor:
+            with self.assertRaises(providers.ProviderError):
+                lean_live.agy_author_live(task=task, worktree=Path(td),
+                                          evidence_dir=Path(td) / 'evidence')
+            cursor.assert_not_called()
+            intent = json.loads((Path(td) / 'evidence' / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'HOLD_no_authorized_fallback')
+            self.assertIsNone(intent['fallback_provider'])
+
     def test_agy_author_live_prelaunch_fallback_no_charge(self):
         with tempfile.TemporaryDirectory() as td:
             work = Path(td) / 'work'
