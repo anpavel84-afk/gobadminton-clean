@@ -1100,6 +1100,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     model_result = None
     import_done = False
     retention = None
+    source_rejected = False
     try:
         for name in CURSOR_PRIVATE_DIRS:
             (base / name).mkdir(mode=0o700)
@@ -1355,6 +1356,12 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 f'{type(err).__name__}:{err}'[:400],
                 charge='charged',
             ) from err
+    except ProviderError as err:
+        source_rejected = err.code in {
+            'token_leak_in_stream', 'token_leak_in_source',
+            'author_empty_or_oos', 'symlink_import_refused',
+        }
+        raise
     finally:
         if retention is not None and retention.result is not None and not import_done:
             try:
@@ -1368,8 +1375,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                     checkpoint='source-checkpoint/manifest.json', unvalidated=True)
             except Exception:
                 pass  # Native raw/error/charge receipt remains authoritative.
-        keep_private = False
-        if model_result is not None and not import_done:
+        checkpoint_invalid = source_rejected or (retention is not None and retention.failure is not None)
+        if model_result is not None and not import_done and not source_rejected:
             try:
                 # Revalidate current bytes even when the new observer failed.
                 # Never preserve from a live writer or bypass scope/secret checks.
@@ -1381,12 +1388,16 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                     baseline=before, allowed=set(task.get('allowed_paths') or []),
                     native=native, token=token)
             except Exception:
-                keep_private = True
+                checkpoint_invalid = True
         # Paid model completed but technical import failed: keep allowed sources
         # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
-        if p is not None and p.poll() is None:
-            _kill_owned_process_group(p)
-        if not keep_private:
+        try:
+            if checkpoint_invalid:
+                mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                                  checkpoint='INVALID', unvalidated=True)
+        finally:
+            if p is not None and p.poll() is None:
+                _kill_owned_process_group(p)
             shutil.rmtree(base, ignore_errors=True)
 
 

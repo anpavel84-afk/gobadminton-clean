@@ -322,6 +322,62 @@ class CodexCheckpoint(unittest.TestCase):
 
 
 class Retention(unittest.TestCase):
+    def test_cursor_unsafe_output_holds_and_cleans_only_own_sandbox(self):
+        for kind in ('secret', 'oos'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                root = Path(td)
+                private = root / 'private'; private.mkdir()
+                evidence = root / 'evidence'; evidence.mkdir()
+                historical = root / 'historical-UNKNOWN'; historical.mkdir()
+                (historical / 'raw').write_bytes(b'previous receipt')
+                intent = evidence / 'intent.json'
+                intent.write_text('{"phase":"running"}')
+                def export(bridge, work):
+                    (work / 'x.py').write_bytes(b'old')
+                    return {'x.py': hashlib.sha256(b'old').hexdigest()}
+                proc = SimpleNamespace(returncode=0, pid=12345,
+                    communicate=lambda **kw: None, poll=lambda: 0, wait=lambda **kw: 0)
+                def launch(*args, **kw):
+                    (private / 'home' / 'private-data').write_bytes(b'private')
+                    (private / 'work' / ('x.py' if kind == 'secret' else 'outside.py')).write_bytes(
+                        b'TEST_SECRET' if kind == 'secret' else b'outside scope')
+                    kw['stdout'].write(b'completed')
+                    return proc
+                native = SimpleNamespace(export=export, author_config=lambda work: {'permissions': {'allow': []}},
+                    source_name=lambda name: True, CURSOR_PIN=root, AUTHOR_TOOLS='tools',
+                    _stop=lambda process: None, parse_stream=lambda raw: {'completed': True})
+                patches = [
+                    patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'TEST_SECRET'}),
+                    patch.object(live, 'require_executor_uid'),
+                    patch.object(live, '_load_native', return_value=native),
+                    patch.object(live.tempfile, 'mkdtemp', return_value=str(private)),
+                    patch.object(live, 'git_env', return_value={}),
+                    patch.object(live, 'git', return_value='a' * 40),
+                    patch.object(live, 'materialize_inputs', return_value=[]),
+                    patch.object(live, 'load_short_rules', return_value=('rules', 'a' * 64, root)),
+                    patch.object(live.os, 'geteuid', return_value=1002),
+                    patch.object(live, '_ensure_cursor_private_root'),
+                    patch.object(live, '_cursor_namespace_argv_uid1002', return_value=['injected']),
+                    patch.object(live, 'uid1002_preexec', return_value=None),
+                    patch.object(live, 'run_argv', return_value=SimpleNamespace(returncode=1)),
+                    patch.object(live.subprocess, 'Popen', side_effect=launch),
+                    patch.object(live.os, 'killpg'),
+                    patch.object(h, 'owned_group_gone', return_value=True),
+                    patch.object(live, '_native_snapshot_uid1002', side_effect=providers.ProviderError('unsafe_source')),
+                ]
+                for entry in patches: stack.enter_context(entry)
+                with self.assertRaises(providers.ProviderError) as raised:
+                    live.cursor_author_live(task=task(), worktree=root, evidence_dir=evidence, intent_path=intent)
+                self.assertEqual(raised.exception.code, 'unsafe_source')
+                receipt = json.loads(intent.read_text())
+                self.assertEqual(receipt['phase'], 'HOLD_no_automatic_replay')
+                self.assertEqual(receipt['checkpoint'], 'INVALID')
+                self.assertFalse(private.exists())
+                self.assertFalse((evidence / 'unpublished-source').exists())
+                self.assertFalse((evidence / 'source-checkpoint').exists())
+                self.assertEqual((historical / 'raw').read_bytes(), b'previous receipt')
+                self.assertEqual((evidence / 'stream.jsonl').read_bytes(), b'completed')
+
     def make(self, root, **kw):
         baseline = {'x.py': hashlib.sha256(b'old').hexdigest()}
         return h.SourceRetention(baseline=baseline, allowed=['x.py'], ignored=lambda n: n.endswith('.tmp'),
