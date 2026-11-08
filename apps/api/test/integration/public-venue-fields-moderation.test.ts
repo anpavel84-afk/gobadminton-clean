@@ -755,6 +755,12 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
 
     // Hold catalog lock so execute blocks after readonly reuse prep.
     const locker = await pool.connect();
+    const driftTag = randomUUID().slice(0, 8);
+    const driftedName = `Изолят Drifted ${driftTag}`;
+    const driftedAddress = `ул. Сдвинутая ${driftTag}`;
+    const driftedLat = Number(payload.latitude) + 1.5;
+    const driftedLon = Number(payload.longitude) + 1.5;
+    let textCallsBeforeRace = fake.textCalls;
     try {
       await locker.query("BEGIN");
       await locker.query(
@@ -782,7 +788,22 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
         await new Promise((r) => setTimeout(r, 25));
       }
       expect(blocked).toBe(true);
-      // Identity evaporates after reuse prep → final would INSERT without create prep.
+      // Lawful concurrent identity/location drift after readonly reuse prep:
+      // remove the prepared exact key AND move the row off fuzzy reach so execute
+      // must attempt INSERT (create-without-prepared-text) → VENUE_TEXT_PREPARE_STALE.
+      // Deleting keys alone leaves same geo/name/address → fuzzy VENUE_POSSIBLE_DUPLICATE.
+      textCallsBeforeRace = fake.textCalls;
+      await locker.query(
+        `UPDATE venues
+         SET name = $2,
+             address = $3,
+             normalized_name = venue_normalize_v1($2),
+             normalized_address = venue_normalize_v1($3),
+             location = ST_SetSRID(ST_MakePoint($4,$5),4326)::geography,
+             identity_discriminator = ''
+         WHERE id = $1`,
+        [seededId, driftedName, driftedAddress, driftedLon, driftedLat],
+      );
       await locker.query(`DELETE FROM venue_identity_keys WHERE venue_id = $1`, [
         seededId,
       ]);
@@ -790,6 +811,7 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
       const raced = await racePromise;
       expect(raced.statusCode).toBe(409);
       expect(raced.json().code).toBe("VENUE_TEXT_PREPARE_STALE");
+      expect(fake.textCalls).toBe(textCallsBeforeRace);
     } finally {
       try {
         await locker.query("ROLLBACK");
@@ -798,13 +820,22 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
       }
       locker.release();
     }
-    const afterCount = (
+    // Seed lawfully drifted off the racing payload identity; INSERT rolled back.
+    const originalIdentityCount = (
       await pool.query<{ c: number }>(
         `SELECT count(*)::int AS c FROM venues WHERE name = $1 AND address = $2`,
         [payload.name, payload.address],
       )
     ).rows[0]!.c;
-    expect(afterCount).toBe(beforeCount);
+    expect(beforeCount).toBe(1);
+    expect(originalIdentityCount).toBe(0);
+    const driftedSeed = await pool.query<{ name: string; address: string }>(
+      `SELECT name, address FROM venues WHERE id = $1`,
+      [seededId],
+    );
+    expect(driftedSeed.rows).toHaveLength(1);
+    expect(driftedSeed.rows[0]!.name).toBe(driftedName);
+    expect(driftedSeed.rows[0]!.address).toBe(driftedAddress);
     const orphanBindings = await pool.query<{ c: number }>(
       `SELECT count(*)::int AS c
        FROM content_moderation_bindings b
