@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.59 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.59");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.60 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.60");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,12 +64,10 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/жалоб|сводк/i);
-    expect(currentProse).toMatch(/якор|раздел/i);
-    expect(currentProse).toMatch(/площадк|шапк/i);
-    expect(currentProse).toMatch(/личн|аватар|Профиль|переход/i);
+    expect(currentProse).toMatch(/площадк|выбор|сводк/i);
+    expect(currentProse).toMatch(/обсужден|аватар|upsert|тренер/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
-    expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
+    expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
@@ -87,16 +85,15 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк|шапк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/узк|перенос|жалоб|якор|шапк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/личн|аватар|Профиль|переход/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/площадк|обсужден|тренер|Astra/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(4);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/выбор|сводк|жалоб|upsert|тренер/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф/i,
+      /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
-      /#507|\bB2b\b|\bB2a\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
+      /\bB2b\b|\bB2a\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
     );
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
@@ -250,10 +247,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(62);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(63);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(67);
+    ).toBe(68);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -321,6 +318,25 @@ describe("releases catalogue integrity", () => {
       && row.title === "Оценки сообщества площадки и открытое обсуждение"
       && row.additions.length === 3
       && row.fixes.length === 1
+      && row.known_limitations.length === 4
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.59"
+      && row.version_label === "0.1.0-alpha.59"
+      && row.source_sha === "360e308199da1fd58afda631cef9e432c427ff07"
+      && row.deployments[0]?.release_id === "r42521707427-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T20:50:15Z"
+      && row.deployments[0]?.api_digest === "sha256:981251536f36cdc169412b7c21a02cd366d87a422e4be1072155cb577574a80e"
+      && row.deployments[0]?.web_digest === "sha256:5bba49aff868559292c91740d294eda69a492b7e7da5a6be812fb05caf35f47e"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.40.0"
+      && row.title === "Перенос жалобы на сводку на узком экране, якоря разделов площадки и стабильная личность в шапке"
+      && row.additions.length === 0
+      && row.fixes.length === 3
       && row.known_limitations.length === 4
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);

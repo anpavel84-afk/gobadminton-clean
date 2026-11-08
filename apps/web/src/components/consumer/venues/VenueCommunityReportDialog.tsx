@@ -203,7 +203,12 @@ export function VenueCommunityReportDialog({
   const formVisible = authMatches && !done;
 
   return (
-    <ProfileDialog title={subjectTitle(subject)} onClose={requestClose}>
+    <ProfileDialog
+      title={subjectTitle(subject)}
+      onClose={requestClose}
+      className="profile-dialog--community"
+      lockBodyScroll
+    >
       {done ? (
         <p role="status" data-testid="venue-community-report-success">
           Жалоба принята к рассмотрению. Оценка и публикация не меняются автоматически.
@@ -218,7 +223,7 @@ export function VenueCommunityReportDialog({
         >
           <p className="gb-venue-community__help">{subjectHelp(subject)}</p>
           <label className="profile-field">
-            Причина
+            <span>Причина</span>
             <select
               value={reasonCode}
               disabled={mutation.busy || mutation.pending}
@@ -232,7 +237,7 @@ export function VenueCommunityReportDialog({
             </select>
           </label>
           <label className="profile-field">
-            Подробности
+            <span>Подробности</span>
             <textarea
               rows={4}
               maxLength={1000}
