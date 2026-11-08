@@ -44,6 +44,7 @@ describe("FR-04 backend-driven state projections", () => {
   });
   it("keeps server diagnostics out of consumer copy", () => {
     expect(socialError({ ok: false, status: 409, error: "internal", problem: { code: "GAME_FULL", title: "internal", status: 409, type: "", requestId: "" } })).toContain("Участие не подтверждено");
+    expect(socialError({ ok: false, status: 422, error: "internal", problem: { code: "PRIVATE_TEXT_CONTENT_REJECTED", title: "internal", status: 422, type: "", requestId: "" } })).toMatch(/не отправлено/i);
     for (const status of [0, 401, 403, 404, 409, 422, 429, 500]) expect(socialError({ ok: false, status, error: "INTERNAL GET /v1" })).not.toContain("INTERNAL");
   });
   it("uses the accepted member/list pagination endpoints, cookies and no-store", async () => {

@@ -3647,6 +3647,7 @@
           "Messaging"
         ],
         "summary": "Open or continue a 1:1 text DM; first message creates an accepted conversation when eligible",
+        "description": "#506 C1. After contact/access fences, deterministic local private-text policy runs before conversation/message INSERT. 422 PRIVATE_TEXT_CONTENT_REJECTED (unsafe URL / basic spam / obvious direct threat / identical flood); 429 PRIVATE_TEXT_RATE_LIMITED with Retry-After. No conversation, message, sequence, preview or push on reject. clientMessageId binds exact live body + destination + optional gameContext; purged/unprovable → 409 CLIENT_MESSAGE_ID_UNAVAILABLE. Plain profanity/criticism alone are not rejected. No external private provider. No new request fields.",
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -3679,7 +3680,7 @@
         },
         "responses": {
           "200": {
-            "description": "Idempotent replay",
+            "description": "Idempotent replay or exact clientMessageId duplicate",
             "content": {
               "application/json": {
                 "schema": {
@@ -3714,6 +3715,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -4036,6 +4040,7 @@
           "Messaging"
         ],
         "summary": "Send text in accepted conversation",
+        "description": "#506 C1. Local private-text policy after membership/block/eligibility and before INSERT/sequence/preview/push. 422 PRIVATE_TEXT_CONTENT_REJECTED; 429 PRIVATE_TEXT_RATE_LIMITED. Reject leaves seq/preview/push unchanged. Exact live clientMessageId payload match + fresh send-scope auth for duplicates; purged → 409 CLIENT_MESSAGE_ID_UNAVAILABLE. No external private provider. No new request fields.",
         "parameters": [
           {
             "name": "conversationId",
@@ -4112,6 +4117,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -4870,6 +4878,7 @@
           "GameChat"
         ],
         "summary": "Send text in an active Game Chat",
+        "description": "#506 C1. Same local private-text policy as DM after game membership/lifecycle and before INSERT/sequence/preview/push. 422 PRIVATE_TEXT_CONTENT_REJECTED; 429 PRIVATE_TEXT_RATE_LIMITED. Exact live clientMessageId binding; cross-DM reuse conflicts. No external private provider. No new request fields.",
         "parameters": [
           {
             "name": "gameId",
@@ -4911,7 +4920,7 @@
         },
         "responses": {
           "200": {
-            "description": "Idempotent replay",
+            "description": "Idempotent replay or exact clientMessageId duplicate",
             "content": {
               "application/json": {
                 "schema": {
@@ -4946,6 +4955,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }

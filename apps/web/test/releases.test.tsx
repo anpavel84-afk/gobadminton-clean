@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.53 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.53");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.54 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.54");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,11 +64,10 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/площадк/i);
-    expect(currentProse).toMatch(/описан|подпис/i);
-    expect(currentProse).toMatch(/проверк/i);
-    expect(currentProse).toMatch(/импорт|галере|обложк/i);
-    expect(currentProse).toMatch(/комментар|личн.*сообщен/i);
+    expect(currentProse).toMatch(/личн.*сообщен|чат.*игр/i);
+    expect(currentProse).toMatch(/локальн|проверк/i);
+    expect(currentProse).toMatch(/черновик|ссыл|угроз|повтор/i);
+    expect(currentProse).toMatch(/жалоб|внешн/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -88,15 +87,15 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/площадк|описан|подпис|галере|импорт/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/личн|сообщен|черновик|защит/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(
-      /площадк|описан|подпис|импорт|галере|проверк/i,
+      /личн|сообщен|чат|локальн|черновик|проверк/i,
     );
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce|138|140|PROD|DEV/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /модерац|комментари|сообщен|аватар|приёмк|юридическ|2027/i,
+      /модерац|жалоб|сообщен|внешн|приёмк|юридическ|2027/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /#507|\bB2b\b|\bB2a\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
@@ -253,10 +252,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(56);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(57);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(61);
+    ).toBe(62);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.53"
+      && row.source_sha === "79e51ff2b0b4846a9fee3be0f429f3f3d6c822ab"
+      && row.deployments[0]?.release_id === "r42441987882-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T03:29:11Z"
+      && row.deployments[0]?.api_digest === "sha256:fb05d669436562d669059604d9a4c7d1a4624d78a840d3a1891e95e4fba21f68"
+      && row.deployments[0]?.web_digest === "sha256:7f80fa109b4695188b7f7c7ff4dc8bdc633d82c75c2c462f61c8a0950470450c"
+      && row.api_contract_version === "0.37.0"
+      && row.title === "Проверка описания площадки при импорте и подписей к фото галереи"
+      && row.additions.length === 1
+      && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.52"
       && row.source_sha === "aa222e469c4125abf1e8fe08eaba4e05575ead72"

@@ -13,6 +13,12 @@ import {
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import { JobEnqueueService } from "../jobs/job-enqueue.service";
+import {
+  assertExactLivePayloadMatch,
+  assertPrivateMessageSendable,
+  throwClientMessageIdReused,
+  type StoredMessagePayloadRow,
+} from "../moderation/private-text-policy";
 import { ProfilesService } from "../profiles/profiles.service";
 import { PairFenceService } from "../safety/pair-fence.service";
 import type { AppEnv } from "../config/env";
@@ -208,10 +214,60 @@ export class MessagingService {
       key: idempotencyKey,
       requestHash,
       authorizeReplay: async (client, body) => {
-        await this.assertMember(client, actorId, body.conversation.id);
+        await this.assertFreshDmSendScope(client, actorId, body.conversation.id);
       },
       execute: async (client) => {
         const now = new Date();
+        // Global clientMessageId fence before conversation creation.
+        const prior = await client.query<StoredMessagePayloadRow>(
+          `SELECT m.id, m.conversation_id, m.seq, m.created_at, m.kind,
+                  m.body_text, m.content_state
+           FROM messages m
+           WHERE m.author_user_id = $1 AND m.client_message_id = $2`,
+          [actorId, normalized.clientMessageId],
+        );
+        if (prior.rows[0]) {
+          const row = prior.rows[0];
+          assertExactLivePayloadMatch(row, { text: normalized.text, kind: "text" });
+          const conv = await this.lockConversation(client, row.conversation_id);
+          if (conv.kind !== "direct") {
+            throwClientMessageIdReused();
+          }
+          const storedContext = conv.context_game_id ?? null;
+          if (storedContext !== (normalized.gameContextId ?? null)) {
+            throwClientMessageIdReused();
+          }
+          const peers = requireDirectPeers(conv);
+          const peerUserId =
+            peers.initiator === actorId ? peers.recipient : peers.initiator;
+          const peerPublic = await client.query<{ public_player_id: string }>(
+            `SELECT public_player_id FROM player_social_profiles WHERE user_id = $1`,
+            [peerUserId],
+          );
+          if (
+            !peerPublic.rows[0] ||
+            peerPublic.rows[0].public_player_id !==
+              normalized.targetPublicPlayerId
+          ) {
+            throwClientMessageIdReused();
+          }
+          await this.assertFreshDmSendScope(client, actorId, conv.id);
+          const dto = await this.toConversationDto(client, actorId, conv);
+          return {
+            statusCode: 200,
+            body: {
+              conversation: dto,
+              receipt: {
+                messageId: row.id,
+                conversationId: row.conversation_id,
+                seq: String(row.seq),
+                createdAt: row.created_at.toISOString(),
+                outcome: "duplicate",
+              },
+            },
+          };
+        }
+
         const targetUserId = await this.profiles.resolveUserIdByPublicPlayerId(
           client,
           normalized.targetPublicPlayerId,
@@ -267,6 +323,13 @@ export class MessagingService {
           sessionId,
           targetUserId,
           discoveryProof: normalized.discoveryProof,
+        });
+        // Local safety after access/proof, before first conversation/message INSERT.
+        await assertPrivateMessageSendable(client, {
+          authorUserId: actorId,
+          text: normalized.text,
+          now,
+          conversationId: null,
         });
         // Immediate DM: first message opens accepted direct chat; no pending gate/expiry job.
         const inserted = await client.query<ConversationRow>(
@@ -752,18 +815,13 @@ export class MessagingService {
       key: idempotencyKey,
       requestHash,
       authorizeReplay: async (client, body) => {
-        await this.assertMember(client, actorId, body.conversationId);
+        await this.assertFreshDmSendScope(client, actorId, body.conversationId);
       },
       execute: async (client) => {
         const now = new Date();
         // Durable clientMessageId fence before conversation lock.
-        const prior = await client.query<{
-          id: string;
-          conversation_id: string;
-          seq: string | number;
-          created_at: Date;
-        }>(
-          `SELECT id, conversation_id, seq, created_at
+        const prior = await client.query<StoredMessagePayloadRow>(
+          `SELECT id, conversation_id, seq, created_at, kind, body_text, content_state
            FROM messages
            WHERE author_user_id = $1 AND client_message_id = $2`,
           [actorId, normalized.clientMessageId],
@@ -771,12 +829,13 @@ export class MessagingService {
         if (prior.rows[0]) {
           const row = prior.rows[0];
           if (row.conversation_id !== conversationId) {
-            throw conflict(
-              "CLIENT_MESSAGE_ID_REUSED",
-              "clientMessageId уже использован",
-            );
+            throwClientMessageIdReused();
           }
-          await this.assertMember(client, actorId, conversationId);
+          assertExactLivePayloadMatch(row, {
+            text: normalized.text,
+            kind: "text",
+          });
+          await this.assertFreshDmSendScope(client, actorId, conversationId);
           return {
             statusCode: 200,
             body: {
@@ -836,6 +895,13 @@ export class MessagingService {
             ? conv.recipient_user_id
             : conv.initiator_user_id;
         await this.assertReceiverAllowsIncoming(client, receiverUserId);
+
+        await assertPrivateMessageSendable(client, {
+          authorUserId: actorId,
+          text: normalized.text,
+          now,
+          conversationId,
+        });
 
         const seq = Number(conv.next_message_seq);
         const purgeAt = this.feature.purgeEligibleAt(now);
@@ -1094,6 +1160,38 @@ export class MessagingService {
     if (!result.rows[0]) {
       throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     }
+  }
+
+  /**
+   * Fresh send-scope for DM send receipts / duplicates / same-key replay.
+   * History reads keep their own weaker membership rules.
+   */
+  private async assertFreshDmSendScope(
+    client: PoolClient,
+    actorId: string,
+    conversationId: string,
+  ): Promise<void> {
+    const conv = await this.lockConversation(client, conversationId);
+    if (conv.kind !== "direct") {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    const peers = requireDirectPeers(conv);
+    await this.lockAccounts(client, [peers.initiator, peers.recipient]);
+    await this.pairs.lockOrCreate(client, peers.initiator, peers.recipient);
+    await this.assertMember(client, actorId, conversationId);
+    const now = new Date();
+    if (effectiveRequestState(conv, now) !== "accepted") {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    await this.assertNoBilateralBlock(client, peers.initiator, peers.recipient);
+    await this.assertCurrentSocialEligible(
+      client,
+      peers.initiator,
+      peers.recipient,
+    );
+    const receiverUserId =
+      actorId === peers.initiator ? peers.recipient : peers.initiator;
+    await this.assertReceiverAllowsIncoming(client, receiverUserId);
   }
 
   private async lockAccounts(

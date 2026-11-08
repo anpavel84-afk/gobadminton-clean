@@ -28,8 +28,48 @@ export function GameConversation({ id, me, changed }: { id: string; me: Me; chan
   const [reload, setReload] = useState(0), [text, setText] = useState(""), [showMembers, setShowMembers] = useState(false);
   const epoch = useRef(0), readSeq = useRef("0"), initialRead = useRef<string | null>(null), historyLoaded = useRef(false);
   const body = useRef<HTMLDivElement>(null);
-  function clearAccess(next: string) { ++epoch.current; historyLoaded.current = false; setChat(null); setGame(null); setMessages([]); setMembers([]); setCursor(null); setShowMembers(false); setText(""); setState(next); }
-  const mutation = useSocialMutation<SendReceipt>(`${me.id}:game-chat:${id}`, me.csrfToken, () => { setText(""); setReload(n => n + 1); changed(); }, () => { clearAccess("loading"); setReload(n => n + 1); changed(); });
+  function clearAccess(next: string, options?: { retainDraft?: boolean }) {
+    ++epoch.current;
+    historyLoaded.current = false;
+    setChat(null);
+    setGame(null);
+    setMessages([]);
+    setMembers([]);
+    setCursor(null);
+    setShowMembers(false);
+    if (!options?.retainDraft) setText("");
+    setState(next);
+  }
+  const mutation = useSocialMutation<SendReceipt>(
+    `${me.id}:game-chat:${id}`,
+    me.csrfToken,
+    () => { setText(""); setReload(n => n + 1); changed(); },
+    (failure) => {
+      const policyRetain =
+        failure != null &&
+        (failure.code === "PRIVATE_TEXT_CONTENT_REJECTED" ||
+          failure.code === "PRIVATE_TEXT_RATE_LIMITED");
+      const accessLoss =
+        failure != null &&
+        (failure.status === 401 || failure.status === 403 || failure.status === 404);
+      if (policyRetain) {
+        // Keep composer draft for local policy/rate refusal; soft-reload thread.
+        setReload(n => n + 1);
+        changed();
+        return;
+      }
+      clearAccess(
+        accessLoss
+          ? failure.status === 401
+            ? "guest"
+            : "unavailable"
+          : "loading",
+        { retainDraft: false },
+      );
+      setReload(n => n + 1);
+      changed();
+    },
+  );
   const mutating = useRef(false); mutating.current = mutation.busy;
   useEffect(() => {
     let live = true;

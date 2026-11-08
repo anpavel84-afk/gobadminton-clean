@@ -35,7 +35,12 @@ export function useSocialMutation<T>(
    * Old single-arg callbacks remain valid.
    */
   onSuccess: (data: T, pending?: Pending) => void,
-  onRefresh: () => void,
+  /**
+   * Called on definitive 4xx after pending clears. Optional failure lets hosts
+   * retain drafts on policy 422/429 while clearing on real access loss.
+   * Existing zero-arg callers remain valid.
+   */
+  onRefresh: (failure?: { status: number; code: string }) => void,
   persist = true,
   options?: SocialMutationOptions<T>,
 ) {
@@ -185,7 +190,10 @@ export function useSocialMutation<T>(
       setCode(result.problem?.code ?? String(result.status));
       if (result.status !== 0 && result.status < 500) {
         save(null);
-        onRefresh();
+        onRefresh({
+          status: result.status,
+          code: result.problem?.code ?? String(result.status),
+        });
       }
     }
   }
