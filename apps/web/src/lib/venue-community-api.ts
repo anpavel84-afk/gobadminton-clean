@@ -184,10 +184,38 @@ function isSummary(value: unknown): value is CommunityRatingSummary {
   );
 }
 
+function isCommunityOwnVote(value: unknown): value is CommunityOwnVote {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  const actions = row.allowedActions;
+  if (!actions || typeof actions !== "object") return false;
+  const allowed = actions as Record<string, unknown>;
+  return (
+    typeof row.venueId === "string"
+    && typeof row.canonicalVenueId === "string"
+    && (row.value === null || typeof row.value === "number")
+    && typeof row.version === "number"
+    && Number.isInteger(row.version)
+    && typeof row.withdrawn === "boolean"
+    && (row.moderationState === "clear" || row.moderationState === "withheld")
+    && typeof allowed.upsert === "boolean"
+    && typeof allowed.update === "boolean"
+    && typeof allowed.withdraw === "boolean"
+  );
+}
+
 export function isCommunityOwnVoteResponse(value: unknown): value is CommunityOwnVoteResponse {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
-  return isSummary(row.summary) && (row.own === null || typeof row.own === "object");
+  return isSummary(row.summary) && (row.own === null || isCommunityOwnVote(row.own));
+}
+
+async function readMutationJson(response: Response, label: string): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new CommunityRatingMutationError(label, response.status, "invalid");
+  }
 }
 
 /** Coalesce concurrent compact/card summary reads into one ≤200-id batch request. */
@@ -357,7 +385,7 @@ export async function upsertCommunityRating(input: {
   if (!response.ok) {
     throw new CommunityRatingMutationError("community_upsert_failed", response.status, "http");
   }
-  const body = await response.json();
+  const body = await readMutationJson(response, "community_upsert_invalid");
   if (!isCommunityOwnVoteResponse(body)) {
     throw new CommunityRatingMutationError("community_upsert_invalid", response.status, "invalid");
   }
@@ -395,7 +423,7 @@ export async function withdrawCommunityRating(input: {
   if (!response.ok) {
     throw new CommunityRatingMutationError("community_withdraw_failed", response.status, "http");
   }
-  const body = await response.json();
+  const body = await readMutationJson(response, "community_withdraw_invalid");
   if (!isCommunityOwnVoteResponse(body)) {
     throw new CommunityRatingMutationError("community_withdraw_invalid", response.status, "invalid");
   }

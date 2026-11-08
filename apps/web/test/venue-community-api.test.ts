@@ -5,14 +5,35 @@ import {
   fetchCommunitySummaries,
   formatCommunityAverage,
   isCommunityOwnVoteResponse,
+  isCommunityRatingMutationError,
   isVenueCommunityReportReceipt,
+  upsertCommunityRating,
   venueCommunityReportSubjectMatchesBody,
   voteCountLabel,
+  withdrawCommunityRating,
 } from "../src/lib/venue-community-api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+const OWN = {
+  venueId: "10000000-0000-4000-8000-000000000001",
+  canonicalVenueId: "10000000-0000-4000-8000-000000000001",
+  value: 4,
+  version: 2,
+  withdrawn: false,
+  moderationState: "clear" as const,
+  allowedActions: { upsert: true, update: true, withdraw: true },
+};
+
+const SUMMARY = {
+  venueId: OWN.venueId,
+  canonicalVenueId: OWN.canonicalVenueId,
+  average: 4.0,
+  count: 2,
+  state: "available" as const,
+};
 
 describe("#507 I1 venue-community-api", () => {
   it("formats averages and empty/unavailable compact text honestly", () => {
@@ -64,6 +85,54 @@ describe("#507 I1 venue-community-api", () => {
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain("/v1/venue-community-summaries?venueIds=");
     expect(isCommunityOwnVoteResponse({ summary: page.items[0], own: null })).toBe(true);
     expect(isCommunityOwnVoteResponse({ summary: page.items[0] })).toBe(false);
+  });
+
+  it("rejects incomplete own objects so mutation helpers cannot cast them as saved", () => {
+    expect(isCommunityOwnVoteResponse({ summary: SUMMARY, own: null })).toBe(true);
+    expect(isCommunityOwnVoteResponse({ summary: SUMMARY, own: OWN })).toBe(true);
+    expect(isCommunityOwnVoteResponse({ summary: SUMMARY, own: { value: 4 } })).toBe(false);
+    expect(isCommunityOwnVoteResponse({
+      summary: SUMMARY,
+      own: { ...OWN, allowedActions: { upsert: true } },
+    })).toBe(false);
+    expect(isCommunityOwnVoteResponse({
+      summary: SUMMARY,
+      own: { ...OWN, version: 1.5 },
+    })).toBe(false);
+    expect(isCommunityOwnVoteResponse({ summary: SUMMARY, own: { ...OWN, moderationState: "open" } })).toBe(false);
+  });
+
+  it("marks body-read and malformed 2xx mutation payloads as invalid mutation errors", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    })));
+    await expect(upsertCommunityRating({
+      venueId: OWN.venueId,
+      value: 4,
+      expectedVersion: 1,
+      csrfToken: "csrf",
+      idempotencyKey: "k1",
+    })).rejects.toSatisfy((error: unknown) => (
+      isCommunityRatingMutationError(error) && error.kind === "invalid" && error.status === 200
+    ));
+
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ summary: SUMMARY, own: { value: 4 } }),
+    })));
+    await expect(withdrawCommunityRating({
+      venueId: OWN.venueId,
+      expectedVersion: 1,
+      csrfToken: "csrf",
+      idempotencyKey: "k2",
+    })).rejects.toSatisfy((error: unknown) => (
+      isCommunityRatingMutationError(error) && error.kind === "invalid"
+    ));
   });
 
   it("builds exact venue_community report bodies for aggregate/own_vote/comment", () => {

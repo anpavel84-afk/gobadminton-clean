@@ -225,7 +225,7 @@ export function VenueCommunityRating({
     );
   }
 
-  /** Own-read proves the frozen mutation only when value/withdraw + version advance match the request. */
+  /** Own-read proves the frozen mutation only with exact expectedVersion+1 and matching value/withdraw. */
   function ownProvesPendingEffect(
     pending: VotePending,
     mine: { own: CommunityOwnVote | null },
@@ -234,13 +234,12 @@ export function VenueCommunityRating({
     if (pending.kind === "upsert") {
       if (!current || current.withdrawn) return false;
       if (current.value !== pending.value) return false;
-      // Version must advance past the expectedVersion we sent with this key.
-      return current.version > pending.expectedVersion;
+      // Unrelated higher revision with the same value is not proof of this key.
+      return current.version === pending.expectedVersion + 1;
     }
-    // withdraw
-    if (!current) return true;
-    if (!current.withdrawn) return false;
-    return current.version > pending.expectedVersion;
+    // withdraw: null own is never proof; require an explicit withdrawn row at exact +1.
+    if (!current || !current.withdrawn) return false;
+    return current.version === pending.expectedVersion + 1;
   }
 
   function applyVoteResult(result: { own: CommunityOwnVote | null; summary: CommunityRatingSummary }) {
@@ -255,14 +254,20 @@ export function VenueCommunityRating({
   }
 
   function isAmbiguousMutationFailure(error: unknown): boolean {
-    if (!isCommunityRatingMutationError(error)) return false;
-    if (error.kind === "network") return true;
-    // 503 and similar transport ambiguity stay UNKNOWN; terminal 409 is handled below.
-    return error.status === 503;
+    // Ordinary Error / body-read throw may follow commit — keep frozen UNKNOWN.
+    if (!isCommunityRatingMutationError(error)) return true;
+    if (error.kind === "network" || error.kind === "invalid") return true;
+    // Ambiguous 5xx may have committed; terminal 4xx/409 clear below.
+    return error.status === 500
+      || error.status === 502
+      || error.status === 503
+      || error.status === 504;
   }
 
   async function runPending(pending: VotePending, isRetry: boolean) {
     if (!contextMatches(pending) || saveState === "pending") return;
+    // Retain frozen packet through the round-trip; clear only after validated success/terminal reject.
+    pendingRef.current = pending;
     setSaveState("pending");
     setStatus(pending.kind === "withdraw" ? "Убираем оценку…" : "Сохраняем оценку…");
     const gen = generation.current;
@@ -282,8 +287,8 @@ export function VenueCommunityRating({
           idempotencyKey: pending.key,
         });
       if (gen !== generation.current || !contextMatches(pending)) return;
-      pendingRef.current = null;
       applyVoteResult(result);
+      pendingRef.current = null;
       setSaveState("saved");
       setStatus(pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена");
     } catch (error) {
@@ -299,7 +304,7 @@ export function VenueCommunityRating({
         );
         return;
       }
-      // Terminal known conflict (e.g. 409) or other HTTP/invalid — clear pending; no fresh key auto-send.
+      // Trustworthy terminal rejection (e.g. 409) — clear pending; no fresh key auto-send.
       pendingRef.current = null;
       setSaveState("error");
       setStatus(
