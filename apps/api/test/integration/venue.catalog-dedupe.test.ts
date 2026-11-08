@@ -121,6 +121,9 @@ describeIntegration("Venue A1a catalog / exact-dedupe", () => {
     process.env.YANDEX_REDIRECT_URI =
       "http://127.0.0.1:3000/v1/auth/yandex/callback";
     process.env.GIT_SHA = "integration-venue-a1a";
+    process.env.CONTENT_MODERATION_PROVIDER = "fake";
+    process.env.CONTENT_MODERATION_FINGERPRINT_SECRET =
+      "venue-catalog-dedupe-synthetic-fingerprint!!";
 
     execFileSync("pnpm", ["exec", "tsx", "src/database/migrate.ts"], {
       cwd: apiRoot,

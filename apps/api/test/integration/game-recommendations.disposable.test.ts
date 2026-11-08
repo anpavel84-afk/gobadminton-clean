@@ -90,11 +90,16 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     }finally{await client.query("ROLLBACK");client.release();}
     // Independent additive venue gallery for current venues API (does not enable 0042).
     await migrate("0045_venue_gallery.sql");
-    // Current GamesModule text publication requires 0061 bindings (outside the N-1 recommendations cut).
+    // Current Venues text publication needs independent deps outside the N-1 recommendations cut:
+    // 0061 bindings, 0062 external-prepare claim_nonce, 0065 venue public-field surfaces.
     await migrate("0061_content_moderation_text.sql");
-    expect((await pool.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(43);
+    await migrate("0062_content_moderation_comments.sql");
+    await migrate("0065_moderation_venue_public_fields.sql");
+    expect((await pool.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(45);
     expect((await pool.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
     expect((await pool.query("SELECT 1 FROM schema_migrations WHERE id='0061_content_moderation_text'")).rowCount).toBe(1);
+    expect((await pool.query("SELECT 1 FROM schema_migrations WHERE id='0062_content_moderation_comments'")).rowCount).toBe(1);
+    expect((await pool.query("SELECT 1 FROM schema_migrations WHERE id='0065_moderation_venue_public_fields'")).rowCount).toBe(1);
     // After 0041 + Friends admission, FR-3B capability follows friends eligibility.
     expect((await get(old,"/v1/me/social-capabilities")).json()).toEqual({
       friends:true,gameRecommendations:true,gameAttention:false,socialPush:false});

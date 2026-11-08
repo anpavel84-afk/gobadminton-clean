@@ -5,9 +5,14 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { DATABASE_POOL } from "../tokens";
-import { notFound, unprocessable } from "../auth/problem";
+import { conflict, notFound, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 import {
   VENUE_NORMALIZATION_VERSION,
   extractIdentityDiscriminator,
@@ -18,6 +23,12 @@ import {
   venueDedupeKey,
   venueProposalFingerprint,
 } from "./venue-normalize";
+
+/** Durable external-prepare outcome for consumer venue publication. */
+type VenuePublicTextPrep =
+  | { mode: "reuse" }
+  | { mode: "prompt" }
+  | { mode: "create"; approval: TextBatchApproval };
 
 /** #485 regional discovery centers — mirrors packages/contracts/src/regional-cities.ts. */
 export const REGIONAL_CITY_RADIUS_METERS = 40000;
@@ -130,6 +141,7 @@ export class VenuesService {
     @Inject(DATABASE_POOL) private readonly pool: Pool,
     private readonly idempotency: IdempotencyService,
     private readonly mutations: MutationRunner,
+    private readonly moderation: ContentModerationService,
   ) {}
 
   async listCities(): Promise<{ items: CityDto[] }> {
@@ -299,15 +311,23 @@ export class VenuesService {
       identityDiscriminator: parsed.identityDiscriminator,
       confirmDistinctToken: parsed.confirmDistinctToken ?? "",
     });
-    return this.mutations.runIdempotent<VenueDto | VenuePossibleDuplicateBody>({
+    return this.mutations.runWithExternalPrepare<
+      VenuePublicTextPrep,
+      VenueDto | VenuePossibleDuplicateBody
+    >({
       actorId: userId,
       sessionId,
       operation,
       key: idempotencyKey,
       requestHash,
       authorizeReplay: async () => undefined,
-      execute: async (client) =>
-        this.findOrPropose(client, {
+      prepare: async () =>
+        this.prepareConsumerVenueText(userId, sessionId, parsed, {
+          allowFuzzyPrompt: true,
+          requireConfirmToken: false,
+        }),
+      execute: async (client, prep) =>
+        this.finishConsumerVenueMutation(client, prep, {
           userId,
           sessionId,
           parsed,
@@ -339,15 +359,20 @@ export class VenuesService {
       identityDiscriminator: parsed.identityDiscriminator,
       confirmationToken: parsed.confirmDistinctToken,
     });
-    return this.mutations.runIdempotent<VenueDto>({
+    return this.mutations.runWithExternalPrepare<VenuePublicTextPrep, VenueDto>({
       actorId: userId,
       sessionId,
       operation: "venues.confirmDistinct",
       key: idempotencyKey,
       requestHash,
       authorizeReplay: async () => undefined,
-      execute: async (client) => {
-        const result = await this.findOrPropose(client, {
+      prepare: async () =>
+        this.prepareConsumerVenueText(userId, sessionId, parsed, {
+          allowFuzzyPrompt: false,
+          requireConfirmToken: true,
+        }),
+      execute: async (client, prep) => {
+        const result = await this.finishConsumerVenueMutation(client, prep, {
           userId,
           sessionId,
           parsed,
@@ -391,6 +416,183 @@ export class VenuesService {
       dto.resolvedFromVenueId = venueId;
     }
     return dto;
+  }
+
+  /**
+   * Fresh readonly preflight: city / identity / optional confirm token / fuzzy neighbors.
+   * Releases the client (and any row locks) before provider I/O. Exact reuse, legacy
+   * empty-discriminator reuse, and fuzzy prompt skip approveTexts. Token is validated
+   * without consumption; keys/locks are never mutated here.
+   */
+  private async prepareConsumerVenueText(
+    userId: string,
+    sessionId: string,
+    parsed: ParsedVenueInput,
+    opts: { allowFuzzyPrompt: boolean; requireConfirmToken: boolean },
+  ): Promise<VenuePublicTextPrep> {
+    const identity = buildIdentity(parsed);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        const city = await client.query(`SELECT id FROM cities WHERE id = $1`, [
+          parsed.cityId,
+        ]);
+        if (!city.rows[0]) {
+          throw unprocessable("CITY_NOT_FOUND", "Город не найден");
+        }
+        if (opts.requireConfirmToken || parsed.confirmDistinctToken) {
+          await this.assertConfirmTokenPresent(client, userId, sessionId, parsed, identity);
+        }
+        const existingKey = await lookupIdentityVenueId(client, identity.dedupeKey);
+        if (existingKey) {
+          await client.query("COMMIT");
+          return { mode: "reuse" };
+        }
+        // Mirror findOrPropose legacy-empty path so confirm-token / extracted-hall
+        // requests that ultimately REUSE do not pay classification.
+        if (await this.canReuseLegacyEmptyIdentityReadonly(client, parsed, identity)) {
+          await client.query("COMMIT");
+          return { mode: "reuse" };
+        }
+        if (
+          opts.allowFuzzyPrompt &&
+          !parsed.confirmDistinctToken &&
+          (await this.findFuzzyNeighbors(client, parsed, identity)).length > 0
+        ) {
+          await client.query("COMMIT");
+          return { mode: "prompt" };
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
+    const approval = await this.moderation.approveTexts(
+      userId,
+      venueCreateTextCandidates(parsed.name, parsed.address),
+    );
+    return { mode: "create", approval };
+  }
+
+  /** Readonly identity decision only — no key promote, lock, or token consume. */
+  private async canReuseLegacyEmptyIdentityReadonly(
+    client: PoolClient,
+    parsed: ParsedVenueInput,
+    identity: BuiltIdentity,
+  ): Promise<boolean> {
+    if (identity.identityDiscriminator.length === 0) return false;
+    const emptyDiscriminatorKey = venueDedupeKey({
+      cityId: parsed.cityId,
+      normalizedName: identity.normalizedName,
+      normalizedAddress: identity.normalizedAddress,
+      identityDiscriminator: "",
+    });
+    const legacyId = await lookupIdentityVenueId(client, emptyDiscriminatorKey);
+    if (!legacyId) return false;
+    const legacy = await loadVenue(client, legacyId);
+    return (
+      legacy.city_id === parsed.cityId &&
+      legacy.normalized_name === identity.normalizedName &&
+      legacy.normalized_address === identity.normalizedAddress &&
+      legacy.identity_discriminator === ""
+    );
+  }
+
+  private async finishConsumerVenueMutation(
+    client: PoolClient,
+    prep: VenuePublicTextPrep,
+    input: {
+      userId: string;
+      sessionId: string;
+      parsed: ParsedVenueInput;
+      allowFuzzyPrompt: boolean;
+      consumeConfirmToken?: boolean;
+    },
+  ): Promise<{ statusCode: number; body: VenueDto | VenuePossibleDuplicateBody }> {
+    const result = await this.findOrPropose(client, input);
+    if (result.statusCode === 201) {
+      if (prep.mode !== "create") {
+        throw conflict(
+          "VENUE_TEXT_PREPARE_STALE",
+          "Состояние площадки изменилось. Повторите запрос.",
+        );
+      }
+      const created = result.body as VenueDto;
+      await this.bindVenuePublication(
+        client,
+        prep.approval,
+        [
+          { surface: "venue_name", text: input.parsed.name },
+          { surface: "venue_address", text: input.parsed.address },
+        ],
+        {
+          venueId: created.id,
+          resourceVersion: 1,
+          actorUserId: input.userId,
+        },
+      );
+      return result;
+    }
+    if (result.statusCode === 200 || result.statusCode === 409) {
+      return result;
+    }
+    return result;
+  }
+
+  private async assertConfirmTokenPresent(
+    client: PoolClient,
+    userId: string,
+    sessionId: string,
+    parsed: ParsedVenueInput,
+    identity: BuiltIdentity,
+  ): Promise<void> {
+    const token = parsed.confirmDistinctToken;
+    if (!token || !/^[a-f0-9]{64}$/.test(token)) {
+      throw unprocessable("CONFIRM_TOKEN_INVALID", "Некорректный confirmationToken");
+    }
+    const row = await client.query<{ id: string }>(
+      `SELECT id FROM venue_proposal_confirm_tokens
+       WHERE token_hash = $1
+         AND user_id = $2
+         AND session_id = $3
+         AND purpose = 'confirm_distinct'
+         AND proposal_fingerprint = $4
+         AND used_at IS NULL
+         AND expires_at > now()`,
+      [tokenHash(token), userId, sessionId, identity.fingerprint],
+    );
+    if (!row.rows[0]) {
+      throw unprocessable(
+        "CONFIRM_TOKEN_INVALID",
+        "Токен подтверждения недействителен, истёк или принадлежит другой сессии",
+      );
+    }
+  }
+
+  private async bindVenuePublication(
+    client: PoolClient,
+    approval: TextBatchApproval,
+    committed: ReadonlyArray<{ surface: "venue_name" | "venue_address" | "venue_description"; text: string }>,
+    meta: {
+      venueId: string;
+      resourceVersion: number;
+      actorUserId: string;
+      actorPrincipalId?: string | null;
+    },
+  ): Promise<void> {
+    if (approval.fields.length === 0 || committed.length === 0) return;
+    await this.moderation.bindTexts(client, approval, committed, {
+      entityKind: "venue",
+      entityId: meta.venueId,
+      resourceVersion: meta.resourceVersion,
+      actorUserId: meta.actorUserId,
+      actorPrincipalId: meta.actorPrincipalId ?? null,
+      bindingKind: "publication",
+    });
   }
 
   private async findOrPropose(
@@ -722,6 +924,13 @@ type BuiltIdentity = {
   dedupeKey: string;
   fingerprint: string;
 };
+
+function venueCreateTextCandidates(name: string, address: string): TextFieldCandidate[] {
+  return [
+    { surface: "venue_name", text: name, fieldId: "name" },
+    { surface: "venue_address", text: address, fieldId: "address" },
+  ];
+}
 
 function parseVenueInput(input: CreateVenueInput): ParsedVenueInput {
   const name = input.name?.trim() ?? "";

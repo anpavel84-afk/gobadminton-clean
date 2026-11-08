@@ -7,16 +7,40 @@ import { conflict, notFound } from "../auth/problem";
 import { AdminService, type AdminActor } from "../admin/admin.service";
 import { appendAudit } from "../admin/admin-db";
 import type { VenueFields, VenueCommand } from "../admin/venues.dto";
+import {
+  ContentModerationService,
+  type TextBatchApproval,
+} from "../moderation/moderation.service";
+import type { TextFieldCandidate } from "../moderation/text-policy";
 import { extractIdentityDiscriminator, normalizeVenueText, venueDedupeKey } from "./venue-normalize";
 import { effectiveVenueCtes } from "./effective-venue.query";
 
-type Row = VenueProfileRow & {public_contacts?:unknown;contact_phone:string|null;contact_website:string|null;booking_note:string|null;id:string;city_id:string;city_name?:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
+type Row = VenueProfileRow & {public_contacts?:unknown;public_description:string|null;contact_phone:string|null;contact_website:string|null;booking_note:string|null;id:string;city_id:string;city_name?:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
 const select = `SELECT v.*, venue_cover_url(v.id) AS cover_url, ${venueGallerySelectSql("v")}, (SELECT name_ru FROM cities WHERE id=v.city_id) AS city_name, ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude FROM venues v`;
 const dto = (r:Row) => ({profile:readVenueProfile(r),publicContacts:readPublicVenueContacts(r.public_contacts),id:r.id,cityId:r.city_id,cityName:r.city_name,name:r.name,address:r.address,timezone:r.timezone,latitude:Number(r.latitude),longitude:Number(r.longitude),lifecycleState:r.lifecycle_state,canonicalVenueId:r.canonical_venue_id,identityDiscriminator:r.identity_discriminator,version:r.version});
+
+type AdminVenueTextPrep = {
+  approval: TextBatchApproval;
+  /** Exact public strings classified (empty when no public textual change / clear-only). */
+  committed: Array<{ surface: "venue_name" | "venue_address" | "venue_description"; text: string }>;
+};
+
+/**
+ * DTO groups verify|retire|restore in one enum variant, so Extract<{action:"restore"}> is never.
+ * Narrow action after the command() restore branch without rewriting venues.dto.
+ */
+type VenueRestoreCommand = Extract<
+  VenueCommand,
+  { action: "verify" | "retire" | "restore" }
+> & { action: "restore" };
+
 /** Venue-owned writes. Admin supplies current authorization and one transaction. */
 @Injectable()
 export class AdminVenuesService {
-  constructor(private readonly admin:AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly moderation: ContentModerationService,
+  ) {}
   private async catalog(c:PoolClient) { await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))"); }
   private async row(c:PoolClient,id:string) { const r=(await c.query<Row>(select+" WHERE v.id=$1 FOR UPDATE",[id])).rows[0];if(!r)throw notFound("VENUE_NOT_FOUND","Площадка не найдена");return r; }
   private version(r:Row,v:number) {if(r.version!==v)throw conflict("VENUE_VERSION_CONFLICT","Площадка изменилась. Обновите данные.");}
@@ -67,18 +91,101 @@ export class AdminVenuesService {
     await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,$3,$4,$5)",[row.id,row.version,action,a.principalId,auditId]);
     await c.query("INSERT INTO outbox_events(type,aggregate_type,aggregate_id,aggregate_version,payload) VALUES($1,'venue',$2,$3,$4::jsonb)",["venue."+action,row.id,row.version,JSON.stringify({venueId:row.id,canonicalVenueId:row.canonical_venue_id})]);
   }
-  async create(request:FastifyRequest,key:string|undefined,input:VenueFields & {reasonCode:string}) {
-    return this.admin.privilegedCommand(request,key,"venue.manage",true,"venue.create",input,async(c,a,keyHash)=>{
-      await this.catalog(c);const n=this.identity(input);
-      const existing=(await c.query("SELECT venue_id FROM venue_identity_keys WHERE dedupe_key=$1",[n.key])).rows[0];
-      if(existing)throw conflict("VENUE_IDENTITY_CONFLICT","Такая площадка уже существует. Откройте каталог.");
-      if(!(await c.query("SELECT id FROM cities WHERE id=$1",[input.cityId])).rowCount)throw notFound("CITY_NOT_FOUND","Город не найден");
-      const id=(await c.query<{id:string}>(`INSERT INTO venues(city_id,name,address,timezone,location,data_status,provenance,lifecycle_state,normalized_name,normalized_address,identity_discriminator,created_by_user_id) VALUES($1,$2,$3,$4,ST_SetSRID(ST_MakePoint($5,$6),4326)::geography,'verified','admin_created','verified',$7,$8,$9,$10) RETURNING id`,[input.cityId,input.name,input.address,input.timezone,input.longitude,input.latitude,n.normalizedName,n.normalizedAddress,n.identityDiscriminator,a.principal.user_id])).rows[0]!.id;
-      await c.query("INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1)",[n.key,id]);
-      const row=await this.row(c,id);await this.record(c,a,row,"create",input.reasonCode,keyHash);return dto(row);
+
+  private emptyPrep(): AdminVenueTextPrep {
+    return { approval: Object.freeze({ fields: Object.freeze([]) }) as TextBatchApproval, committed: [] };
+  }
+
+  private async approvePublicFields(
+    actorUserId: string,
+    candidates: TextFieldCandidate[],
+  ): Promise<AdminVenueTextPrep> {
+    if (candidates.length === 0) return this.emptyPrep();
+    const approval = await this.moderation.approveTexts(actorUserId, candidates);
+    return {
+      approval,
+      committed: candidates.map((c) => ({
+        surface: c.surface as "venue_name" | "venue_address" | "venue_description",
+        text: c.text,
+      })),
+    };
+  }
+
+  private async bindPublication(
+    client: PoolClient,
+    prep: AdminVenueTextPrep,
+    meta: {
+      venueId: string;
+      resourceVersion: number;
+      actorUserId: string;
+      actorPrincipalId: string;
+    },
+  ): Promise<void> {
+    if (prep.committed.length === 0 || prep.approval.fields.length === 0) return;
+    await this.moderation.bindTexts(client, prep.approval, prep.committed, {
+      entityKind: "venue",
+      entityId: meta.venueId,
+      resourceVersion: meta.resourceVersion,
+      actorUserId: meta.actorUserId,
+      actorPrincipalId: meta.actorPrincipalId,
+      bindingKind: "publication",
     });
   }
+
+  async create(request:FastifyRequest,key:string|undefined,input:VenueFields & {reasonCode:string}) {
+    let actorUserId = "";
+    return this.admin.privilegedRunWithExternalPrepare<AdminVenueTextPrep, ReturnType<typeof dto>>(
+      request,
+      key,
+      "venue.manage",
+      true,
+      "venue.create",
+      input,
+      async () => undefined,
+      async (c, a) => {
+        const n = this.identity(input);
+        const existing = (await c.query("SELECT venue_id FROM venue_identity_keys WHERE dedupe_key=$1", [n.key])).rows[0];
+        if (existing) throw conflict("VENUE_IDENTITY_CONFLICT", "Такая площадка уже существует. Откройте каталог.");
+        if (!(await c.query("SELECT id FROM cities WHERE id=$1", [input.cityId])).rowCount) {
+          throw notFound("CITY_NOT_FOUND", "Город не найден");
+        }
+        actorUserId = a.principal.user_id;
+      },
+      async () =>
+        this.approvePublicFields(actorUserId, [
+          { surface: "venue_name", text: input.name, fieldId: "name" },
+          { surface: "venue_address", text: input.address, fieldId: "address" },
+        ]),
+      async (c, a, keyHash, prep) => {
+        await this.catalog(c);
+        const n = this.identity(input);
+        const existing = (await c.query("SELECT venue_id FROM venue_identity_keys WHERE dedupe_key=$1", [n.key])).rows[0];
+        if (existing) throw conflict("VENUE_IDENTITY_CONFLICT", "Такая площадка уже существует. Откройте каталог.");
+        if (!(await c.query("SELECT id FROM cities WHERE id=$1", [input.cityId])).rowCount) {
+          throw notFound("CITY_NOT_FOUND", "Город не найден");
+        }
+        const id = (await c.query<{id:string}>(`INSERT INTO venues(city_id,name,address,timezone,location,data_status,provenance,lifecycle_state,normalized_name,normalized_address,identity_discriminator,created_by_user_id) VALUES($1,$2,$3,$4,ST_SetSRID(ST_MakePoint($5,$6),4326)::geography,'verified','admin_created','verified',$7,$8,$9,$10) RETURNING id`,[input.cityId,input.name,input.address,input.timezone,input.longitude,input.latitude,n.normalizedName,n.normalizedAddress,n.identityDiscriminator,a.principal.user_id])).rows[0]!.id;
+        await c.query("INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1)",[n.key,id]);
+        const row = await this.row(c, id);
+        await this.bindPublication(c, prep, {
+          venueId: id,
+          resourceVersion: row.version,
+          actorUserId: a.principal.user_id,
+          actorPrincipalId: a.principalId,
+        });
+        await this.record(c, a, row, "create", input.reasonCode, keyHash);
+        return dto(row);
+      },
+    );
+  }
+
   async command(request:FastifyRequest,key:string|undefined,id:string,input:VenueCommand) {
+    if (input.action === "edit") {
+      return this.editWithTextGate(request, key, id, input);
+    }
+    if (input.action === "restore") {
+      return this.restoreWithTextGate(request, key, id, { ...input, action: "restore" });
+    }
     return this.admin.privilegedCommand(request,key,input.action==="merge"?"venue.merge":"venue.manage",true,"venue."+input.action,{id,...input},async(c,a,keyHash)=>{
       await this.catalog(c);
       // Resolve the final target under the common catalog fence, then lock in UUID order.
@@ -105,31 +212,264 @@ export class AdminVenuesService {
         await c.query("UPDATE venues SET lifecycle_state='merged',canonical_venue_id=$2,version=version+1,updated_at=now() WHERE id=$1",[id,target.id]);
         await c.query("UPDATE venues SET version=version+1,updated_at=now() WHERE id=$1",[target.id]);
         await c.query("INSERT INTO venue_merge_history(source_venue_id,target_venue_id,reason) VALUES($1,$2,$3)",[id,target.id,input.reasonCode]);
-      } else if(input.action==="edit") {
-        const f=input.fields,n=this.identity(f);
-        const profile = f.profile === undefined ? undefined : venueProfileEditSchema.parse(f.profile);
-        if(f.cityId!==before.city_id)throw conflict("VENUE_CITY_IMMUTABLE","Город существующей площадки не меняется");
-        const existing=(await c.query("SELECT venue_id FROM venue_identity_keys WHERE dedupe_key=$1",[n.key])).rows[0];
-        if(existing && existing.venue_id!==id) {
-          const pair=[id,existing.venue_id as string].sort();
-          await c.query("INSERT INTO venue_duplicate_candidates(left_venue_id,right_venue_id,source) VALUES($1,$2,'legacy_exact_collision') ON CONFLICT(left_venue_id,right_venue_id,source) DO UPDATE SET status='open',version=venue_duplicate_candidates.version+1",pair);
-          await appendAudit(c,{actor:a,action:"venue.edit_collision_review",targetType:"venue",targetId:id,permission:"venue.manage",reason:input.reasonCode,keyHash});
-          return {...dto(before),reviewRequired:true};
-        }
-        const phone = f.contactPhone === undefined ? before.contact_phone : f.contactPhone || null;
-        const website = f.contactWebsite === undefined ? before.contact_website : f.contactWebsite || null;
-        const note = f.bookingNote === undefined ? before.booking_note : f.bookingNote || null;
-        // Retain historical reservations so proposals using old keys resolve canonically.
-        await c.query("INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1) ON CONFLICT(dedupe_key) DO NOTHING",[n.key,id]);
-        const touchDescription = profile !== undefined && profile !== null && Object.prototype.hasOwnProperty.call(profile, "description");
-        const clearProfile = profile === null;
-        await c.query("UPDATE venues SET name=$2,address=$3,timezone=$4,location=ST_SetSRID(ST_MakePoint($5,$6),4326)::geography,normalized_name=$7,normalized_address=$8,identity_discriminator=$9,contact_updated_at=CASE WHEN contact_phone IS DISTINCT FROM $10::text OR contact_website IS DISTINCT FROM $11::text OR booking_note IS DISTINCT FROM $12::text THEN now() ELSE contact_updated_at END,contact_phone=$10,contact_website=$11,booking_note=$12,public_contacts=CASE WHEN $13::boolean THEN $14::jsonb ELSE public_contacts END,court_count=CASE WHEN $15::boolean THEN $16::integer ELSE court_count END,amenity_parking=CASE WHEN $15::boolean THEN $17::boolean ELSE amenity_parking END,amenity_showers=CASE WHEN $15::boolean THEN $18::boolean ELSE amenity_showers END,public_description=CASE WHEN $19::boolean THEN $20::text WHEN $21::boolean THEN NULL ELSE public_description END,provenance='admin_corrected',version=version+1,updated_at=now() WHERE id=$1",[id,f.name,f.address,f.timezone,f.longitude,f.latitude,n.normalizedName,n.normalizedAddress,n.identityDiscriminator,phone,website,note,f.publicContacts !== undefined,f.publicContacts == null ? null : JSON.stringify(publicVenueContactsSchema.parse(f.publicContacts)),profile !== undefined,profile?.courtCount ?? null,profile?.amenities.parking ?? null,profile?.amenities.showers ?? null,touchDescription,touchDescription ? (profile?.description ?? null) : null,clearProfile]);
       } else {
-        const next=input.action==="retire"?"retired":input.action==="verify"?"verified":"unverified";
-        if(input.action==="restore" ? before.lifecycle_state!=="retired" : !["unverified","verified"].includes(before.lifecycle_state))throw conflict("VENUE_STATE_CONFLICT","Действие недоступно в текущем состоянии");
+        // verify | retire — no public textual change; available during provider outage.
+        const next=input.action==="retire"?"retired":"verified";
+        if(!["unverified","verified"].includes(before.lifecycle_state))throw conflict("VENUE_STATE_CONFLICT","Действие недоступно в текущем состоянии");
         await c.query("UPDATE venues SET lifecycle_state=$2,data_status=$3,version=version+1,updated_at=now() WHERE id=$1",[id,next,next==="verified"?"verified":"unverified"]);
       }
       const row=await this.row(c,id);await this.record(c,a,row,input.action,input.reasonCode,keyHash,before);return dto(row);
     });
+  }
+
+  private async editWithTextGate(
+    request: FastifyRequest,
+    key: string | undefined,
+    id: string,
+    input: Extract<VenueCommand, { action: "edit" }>,
+  ) {
+    let actorUserId = "";
+    let snapshot: {
+      version: number;
+      name: string;
+      address: string;
+      description: string | null;
+      lifecycle: string;
+    } | null = null;
+    let candidates: TextFieldCandidate[] = [];
+
+    return this.admin.privilegedRunWithExternalPrepare<
+      AdminVenueTextPrep,
+      ReturnType<typeof dto> & { reviewRequired?: boolean }
+    >(
+      request,
+      key,
+      "venue.manage",
+      true,
+      "venue.edit",
+      { id, ...input },
+      async () => undefined,
+      async (c, a) => {
+        const before = await this.row(c, id);
+        this.version(before, input.expectedVersion);
+        if (before.lifecycle_state === "merged") {
+          throw conflict("VENUE_MERGE_CONFLICT", "Площадка уже объединена");
+        }
+        // Retired remains publicly readable by id — edits to its public text also gate.
+        const f = input.fields;
+        if (f.cityId !== before.city_id) {
+          throw conflict("VENUE_CITY_IMMUTABLE", "Город существующей площадки не меняется");
+        }
+        const profile = f.profile === undefined ? undefined : venueProfileEditSchema.parse(f.profile);
+        const touchDescription =
+          profile !== undefined &&
+          profile !== null &&
+          Object.prototype.hasOwnProperty.call(profile, "description");
+        const clearProfile = profile === null;
+        const nextDescription = clearProfile
+          ? null
+          : touchDescription
+            ? (profile?.description ?? null)
+            : before.public_description;
+        candidates = [];
+        if (f.name !== before.name) {
+          candidates.push({ surface: "venue_name", text: f.name, fieldId: "name" });
+        }
+        if (f.address !== before.address) {
+          candidates.push({ surface: "venue_address", text: f.address, fieldId: "address" });
+        }
+        if (
+          (touchDescription || clearProfile) &&
+          nextDescription !== null &&
+          nextDescription !== before.public_description &&
+          nextDescription.length > 0
+        ) {
+          candidates.push({
+            surface: "venue_description",
+            text: nextDescription,
+            fieldId: "profile.description",
+          });
+        }
+        snapshot = {
+          version: before.version,
+          name: before.name,
+          address: before.address,
+          description: before.public_description,
+          lifecycle: before.lifecycle_state,
+        };
+        actorUserId = a.principal.user_id;
+      },
+      async () => this.approvePublicFields(actorUserId, candidates),
+      async (c, a, keyHash, prep) => {
+        await this.catalog(c);
+        const before = await this.row(c, id);
+        this.version(before, input.expectedVersion);
+        if (before.lifecycle_state === "merged") {
+          throw conflict("VENUE_MERGE_CONFLICT", "Площадка уже объединена");
+        }
+        if (
+          !snapshot ||
+          before.version !== snapshot.version ||
+          before.name !== snapshot.name ||
+          before.address !== snapshot.address ||
+          before.public_description !== snapshot.description
+        ) {
+          throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
+        }
+        const f = input.fields;
+        const n = this.identity(f);
+        const profile = f.profile === undefined ? undefined : venueProfileEditSchema.parse(f.profile);
+        if (f.cityId !== before.city_id) {
+          throw conflict("VENUE_CITY_IMMUTABLE", "Город существующей площадки не меняется");
+        }
+        const existing = (await c.query("SELECT venue_id FROM venue_identity_keys WHERE dedupe_key=$1", [n.key])).rows[0];
+        if (existing && existing.venue_id !== id) {
+          const pair = [id, existing.venue_id as string].sort();
+          await c.query(
+            "INSERT INTO venue_duplicate_candidates(left_venue_id,right_venue_id,source) VALUES($1,$2,'legacy_exact_collision') ON CONFLICT(left_venue_id,right_venue_id,source) DO UPDATE SET status='open',version=venue_duplicate_candidates.version+1",
+            pair,
+          );
+          await appendAudit(c, {
+            actor: a,
+            action: "venue.edit_collision_review",
+            targetType: "venue",
+            targetId: id,
+            permission: "venue.manage",
+            reason: input.reasonCode,
+            keyHash,
+          });
+          // Collision returns prior row; never invent publication binding for the candidate.
+          return { ...dto(before), reviewRequired: true };
+        }
+        const phone = f.contactPhone === undefined ? before.contact_phone : f.contactPhone || null;
+        const website = f.contactWebsite === undefined ? before.contact_website : f.contactWebsite || null;
+        const note = f.bookingNote === undefined ? before.booking_note : f.bookingNote || null;
+        await c.query(
+          "INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1) ON CONFLICT(dedupe_key) DO NOTHING",
+          [n.key, id],
+        );
+        const touchDescription =
+          profile !== undefined &&
+          profile !== null &&
+          Object.prototype.hasOwnProperty.call(profile, "description");
+        const clearProfile = profile === null;
+        await c.query(
+          "UPDATE venues SET name=$2,address=$3,timezone=$4,location=ST_SetSRID(ST_MakePoint($5,$6),4326)::geography,normalized_name=$7,normalized_address=$8,identity_discriminator=$9,contact_updated_at=CASE WHEN contact_phone IS DISTINCT FROM $10::text OR contact_website IS DISTINCT FROM $11::text OR booking_note IS DISTINCT FROM $12::text THEN now() ELSE contact_updated_at END,contact_phone=$10,contact_website=$11,booking_note=$12,public_contacts=CASE WHEN $13::boolean THEN $14::jsonb ELSE public_contacts END,court_count=CASE WHEN $15::boolean THEN $16::integer ELSE court_count END,amenity_parking=CASE WHEN $15::boolean THEN $17::boolean ELSE amenity_parking END,amenity_showers=CASE WHEN $15::boolean THEN $18::boolean ELSE amenity_showers END,public_description=CASE WHEN $19::boolean THEN $20::text WHEN $21::boolean THEN NULL ELSE public_description END,provenance='admin_corrected',version=version+1,updated_at=now() WHERE id=$1",
+          [
+            id,
+            f.name,
+            f.address,
+            f.timezone,
+            f.longitude,
+            f.latitude,
+            n.normalizedName,
+            n.normalizedAddress,
+            n.identityDiscriminator,
+            phone,
+            website,
+            note,
+            f.publicContacts !== undefined,
+            f.publicContacts == null ? null : JSON.stringify(publicVenueContactsSchema.parse(f.publicContacts)),
+            profile !== undefined,
+            profile?.courtCount ?? null,
+            profile?.amenities.parking ?? null,
+            profile?.amenities.showers ?? null,
+            touchDescription,
+            touchDescription ? (profile?.description ?? null) : null,
+            clearProfile,
+          ],
+        );
+        const row = await this.row(c, id);
+        await this.bindPublication(c, prep, {
+          venueId: id,
+          resourceVersion: row.version,
+          actorUserId: a.principal.user_id,
+          actorPrincipalId: a.principalId,
+        });
+        await this.record(c, a, row, "edit", input.reasonCode, keyHash, before);
+        return dto(row);
+      },
+    );
+  }
+
+  private async restoreWithTextGate(
+    request: FastifyRequest,
+    key: string | undefined,
+    id: string,
+    input: VenueRestoreCommand,
+  ) {
+    let actorUserId = "";
+    let snapshot: {
+      version: number;
+      name: string;
+      address: string;
+      description: string | null;
+    } | null = null;
+    let candidates: TextFieldCandidate[] = [];
+
+    return this.admin.privilegedRunWithExternalPrepare<AdminVenueTextPrep, ReturnType<typeof dto>>(
+      request,
+      key,
+      "venue.manage",
+      true,
+      "venue.restore",
+      { id, ...input },
+      async () => undefined,
+      async (c, a) => {
+        const before = await this.row(c, id);
+        this.version(before, input.expectedVersion);
+        if (before.lifecycle_state !== "retired") {
+          throw conflict("VENUE_STATE_CONFLICT", "Действие недоступно в текущем состоянии");
+        }
+        candidates = [
+          { surface: "venue_name", text: before.name, fieldId: "name" },
+          { surface: "venue_address", text: before.address, fieldId: "address" },
+        ];
+        if (before.public_description && before.public_description.length > 0) {
+          candidates.push({
+            surface: "venue_description",
+            text: before.public_description,
+            fieldId: "profile.description",
+          });
+        }
+        snapshot = {
+          version: before.version,
+          name: before.name,
+          address: before.address,
+          description: before.public_description,
+        };
+        actorUserId = a.principal.user_id;
+      },
+      async () => this.approvePublicFields(actorUserId, candidates),
+      async (c, a, keyHash, prep) => {
+        await this.catalog(c);
+        const before = await this.row(c, id);
+        this.version(before, input.expectedVersion);
+        if (before.lifecycle_state !== "retired") {
+          throw conflict("VENUE_STATE_CONFLICT", "Действие недоступно в текущем состоянии");
+        }
+        if (
+          !snapshot ||
+          before.name !== snapshot.name ||
+          before.address !== snapshot.address ||
+          before.public_description !== snapshot.description
+        ) {
+          throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
+        }
+        await c.query(
+          "UPDATE venues SET lifecycle_state=$2,data_status=$3,version=version+1,updated_at=now() WHERE id=$1",
+          [id, "unverified", "unverified"],
+        );
+        const row = await this.row(c, id);
+        await this.bindPublication(c, prep, {
+          venueId: id,
+          resourceVersion: row.version,
+          actorUserId: a.principal.user_id,
+          actorPrincipalId: a.principalId,
+        });
+        await this.record(c, a, row, "restore", input.reasonCode, keyHash, before);
+        return dto(row);
+      },
+    );
   }
 }

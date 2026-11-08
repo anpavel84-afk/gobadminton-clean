@@ -135,6 +135,22 @@ describe("text moderation adapter", () => {
     ).toBe("contextual");
   });
 
+  it("B2a venue public surfaces: identity / factual / prose; not review", () => {
+    expect(isReviewTextSurface("venue_name")).toBe(false);
+    expect(isReviewTextSurface("venue_address")).toBe(false);
+    expect(isReviewTextSurface("venue_description")).toBe(false);
+    expect(TEXT_SURFACE_KIND.venue_name).toBe("identity");
+    expect(TEXT_SURFACE_KIND.venue_address).toBe("factual");
+    expect(TEXT_SURFACE_KIND.venue_description).toBe("prose");
+    expect(TEXT_FIELD_HINTS.venue_name).toMatch(/назван/i);
+    expect(TEXT_FIELD_HINTS.venue_address).toMatch(/адрес/i);
+    expect(TEXT_FIELD_HINTS.venue_description).toMatch(/описание/i);
+    expect(evaluateLocalText("Клуб Бадминтон Псков", "identity").kind).toBe("clean");
+    expect(evaluateLocalText("ул. Ленина, 10 корпус 2", "factual").kind).toBe("clean");
+    expect(evaluateLocalText("José García Court 3", "factual").kind).toBe("clean");
+    expect(evaluateLocalText("хуй", "factual").kind).toBe("reject");
+  });
+
   it("B1b/B1c review surfaces stay prose; soft vs hard category split", () => {
     expect(isReviewTextSurface("role_review_body")).toBe(true);
     expect(isReviewTextSurface("role_reply_body")).toBe(true);

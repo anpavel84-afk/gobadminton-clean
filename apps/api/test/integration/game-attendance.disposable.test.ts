@@ -57,8 +57,12 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql") && f < "0047").sort()) {
       await migrate(file);
     }
-    // Current GamesModule text publication requires 0061 bindings (outside the N-1 attendance cut).
+    // Current Venues/Games text publication needs independent deps outside the N-1 attendance cut:
+    // 0061 bindings, 0062 external-prepare claim_nonce, 0065 venue_name/address/description surfaces.
+    // Do not mass-apply 0063/0064 (admin/venue-review) onto this historical cut.
     await migrate("0061_content_moderation_text.sql");
+    await migrate("0062_content_moderation_comments.sql");
+    await migrate("0065_moderation_venue_public_fields.sql");
     env = loadEnv({
       NODE_ENV: "test",
       APP_ENV: "local",

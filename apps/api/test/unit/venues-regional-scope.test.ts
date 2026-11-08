@@ -40,6 +40,7 @@ describe("regional city catalog scope", () => {
       } as unknown as Pool,
       {} as IdempotencyService,
       {} as MutationRunner,
+      {} as import("../../src/moderation/moderation.service").ContentModerationService,
     );
     const regionalId = "1775016f-373e-5a15-958b-1305770b2b16";
     await service.searchCatalog({ cityId: regionalId, limit: 10 });

@@ -9,6 +9,7 @@ import type { AdminService, AdminActor } from "../../src/admin/admin.service";
 import { venueCommand, venueCreate } from "../../src/admin/venues.dto";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
+import type { ContentModerationService } from "../../src/moderation/moderation.service";
 import { AdminVenuesService } from "../../src/venues/admin-venues.service";
 import { VenuesService } from "../../src/venues/venues.service";
 import { readVenueProfile, venueProfileEditSchema, venueProfileSelectSql } from "../../src/venues/venue-profile";
@@ -56,8 +57,22 @@ const request = {} as FastifyRequest;
 function command(profile?: unknown) {
   return { action: "edit", expectedVersion: 1, reasonCode: "synthetic_review", fields: { ...fields, ...(profile === undefined ? {} : { profile }) } };
 }
+const moderationStub = {
+  approveTexts: async () => ({ fields: [] }),
+  bindTexts: async () => undefined,
+} as unknown as ContentModerationService;
+
 function publicService(query: Pool["query"]) {
-  return new VenuesService({ query } as Pool, {} as IdempotencyService, {} as MutationRunner);
+  return new VenuesService(
+    { query } as Pool,
+    {} as IdempotencyService,
+    {} as MutationRunner,
+    moderationStub,
+  );
+}
+
+function adminService(admin: AdminService) {
+  return new AdminVenuesService(admin, moderationStub);
 }
 
 describe("venue profile production validation and safe mapping", () => {
@@ -132,7 +147,7 @@ describe("production service bindings and runtime responses against actual OpenA
       const admin: Pick<AdminService, "privilegedRead"> = {
         privilegedRead: async (_r, _permission, read) => read({ query: (async () => result([row])) as PoolClient["query"] } as PoolClient, actor),
       };
-      const adminPage = await new AdminVenuesService(admin as AdminService).list(request, { limit: 20 });
+      const adminPage = await adminService(admin as AdminService).list(request, { limit: 20 });
       expect(adminPage.items[0]?.profile.gallery.items).toEqual([]);
       matches(validAdmin, adminPage.items[0]);
     }
@@ -172,18 +187,56 @@ describe("production service bindings and runtime responses against actual OpenA
       const sqls: string[] = [];
       const query = (async (sql: string) => {
         sqls.push(sql);
+        if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return result([]);
         if (sql.includes("SELECT id FROM cities")) return result([{ id: cityId }]);
         if (sql.includes("SELECT venue_id FROM venue_identity_keys")) return result(mode === "reuse" ? [{ venue_id: id }] : []);
         if (sql.includes("FROM venues v")) return result([base]);
         if (sql.includes("AS distance_m")) return result(mode === "fuzzy" ? [{ ...base, distance_m: 0 }] : []);
         if (sql.includes("INSERT INTO venues (")) return result([base]);
         if (sql.includes("INSERT INTO venue_identity_keys")) return result([{ venue_id: id }]);
+        if (sql.includes("pg_advisory_xact_lock")) return result([]);
+        if (sql.includes("INSERT INTO venue_proposal_confirm_tokens")) return result([]);
         return result([]);
       }) as PoolClient["query"];
       const client = { query } as PoolClient;
-      const runner: Pick<MutationRunner, "runIdempotent"> = { runIdempotent: async input => input.execute(client) };
+      const pool = {
+        connect: async () => ({
+          query,
+          release: () => undefined,
+        }),
+      } as unknown as Pool;
+      const runner: Pick<MutationRunner, "runWithExternalPrepare"> = {
+        runWithExternalPrepare: async (input) => {
+          const prep = await input.prepare();
+          return input.execute(client, prep);
+        },
+      };
       const hash: Pick<IdempotencyService, "requestHash"> = { requestHash: () => "synthetic" };
-      const response = await new VenuesService({} as Pool, hash as IdempotencyService, runner as MutationRunner).propose(id, id, "synthetic-key", fields);
+      const moderation: Pick<ContentModerationService, "approveTexts" | "bindTexts"> = {
+        approveTexts: async (_actor, fields) => ({
+          fields: fields.map((field) => ({
+            surface: field.surface,
+            fieldId: field.fieldId,
+            text: field.text,
+            fingerprint: "synthetic",
+            providerKey: "fake" as const,
+            providerModel: "synthetic",
+            policy: "public-text-v1",
+            localPolicy: "ru-profanity-v1",
+            checkedAt: new Date(date),
+            decision: { flagged: false, categories: {} as never },
+            classification: "allow" as const,
+            responseId: null,
+          })),
+        }),
+        bindTexts: async () => undefined,
+      };
+      const response = await new VenuesService(
+        pool,
+        hash as IdempotencyService,
+        runner as MutationRunner,
+        moderation as ContentModerationService,
+      ).propose(id, id, "synthetic-key", fields);
       const venues = "candidates" in response.body ? response.body.candidates : [response.body];
       expect(response.statusCode).toBe(mode === "fuzzy" ? 409 : mode === "reuse" ? 200 : 201);
       for (const venue of venues) { matches(validVenue, venue); expect(venue.profile).toEqual(readVenueProfile(base)); }
@@ -208,12 +261,19 @@ describe("production service bindings and runtime responses against actual OpenA
         if (sql.includes("INSERT INTO privileged_audit_events")) return result([{ id }]);
         return result([]);
       }) as PoolClient["query"] } as PoolClient;
-      const admin: Pick<AdminService, "privilegedCommand" | "privilegedRead"> = {
+      const admin: Pick<AdminService, "privilegedCommand" | "privilegedRead" | "privilegedRunWithExternalPrepare"> = {
         privilegedCommand: async (_r, _k, permission, stepUp, _op, _body, execute) => {
           expect(permission).toBe("venue.manage"); expect(stepUp).toBe(true); return execute(client, actor, "hash");
-        }, privilegedRead: async (_r, permission, read) => { expect(permission).toBe("venue.manage"); return read(client, actor); },
+        },
+        privilegedRunWithExternalPrepare: async (_r, _k, permission, stepUp, _op, _body, _ar, authorizeNew, prepare, execute) => {
+          expect(permission).toBe("venue.manage"); expect(stepUp).toBe(true);
+          await authorizeNew(client, actor);
+          const prep = await prepare();
+          return execute(client, actor, "hash", prep);
+        },
+        privilegedRead: async (_r, permission, read) => { expect(permission).toBe("venue.manage"); return read(client, actor); },
       };
-      const service = new AdminVenuesService(admin as AdminService);
+      const service = adminService(admin as AdminService);
       const input = venueCommand.parse({ ...command(mode === "omit" ? undefined : mode === "clear" ? null : facts), expectedVersion: mode === "stale" ? 2 : 1 });
       if (mode === "stale") { await expect(service.command(request, "synthetic-key", id, input)).rejects.toMatchObject({ status: 409 }); }
       else {

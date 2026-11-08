@@ -61,7 +61,7 @@ function row(url: string) {
 }
 function mapped(url: string) {
   const query = (async () => ({ rows: [row(url)], rowCount: 1, command: "SELECT", oid: 0, fields: [] })) as Pool["query"];
-  return new VenuesService({ query } as Pool, {} as IdempotencyService, {} as MutationRunner).getById(id);
+  return new VenuesService({ query } as Pool, {} as IdempotencyService, {} as MutationRunner, {} as import("../../src/moderation/moderation.service").ContentModerationService).getById(id);
 }
 
 describe("public URL authority class", () => {

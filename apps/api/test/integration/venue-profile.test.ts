@@ -16,6 +16,8 @@ import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv } from "../../src/config/env";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
+import { FakeModerationProvider } from "../../src/moderation/fake-provider";
+import { MODERATION_PROVIDER } from "../../src/moderation/provider";
 import { VenuesModule } from "../../src/venues/venues.module";
 import { VenuesService, type VenueDto } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
@@ -60,15 +62,45 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     pool = new Pool({ connectionString: url.href, max: 10 });
     // Current AdminService requires 0057 auth_method; historical upgrade DBs below keep their bounds.
     await apply(pool, "0058");
+    // Current Admin external-prepare + public venue text (outside the <0058 harness cut):
+    // 0061 text bindings, 0062 idempotency claim_nonce, 0063 admin receipt reservation_state/claim,
+    // 0065 venue_name/address/description surfaces. Skip 0064 (needs 0058 venue_review_decisions).
+    for (const file of [
+      "0061_content_moderation_text.sql",
+      "0062_content_moderation_comments.sql",
+      "0063_moderation_role_review_bindings.sql",
+      "0065_moderation_venue_public_fields.sql",
+    ]) {
+      const mid = file.replace(/\.sql$/, "");
+      if ((await pool.query("SELECT 1 FROM schema_migrations WHERE id=$1", [mid])).rowCount) continue;
+      const c = await pool.connect();
+      try {
+        await c.query("BEGIN");
+        await c.query(await readFile(path.join(dir, file), "utf8"));
+        await c.query("INSERT INTO schema_migrations(id) VALUES($1)", [mid]);
+        await c.query("COMMIT");
+      } catch (error) {
+        await c.query("ROLLBACK");
+        throw error;
+      } finally {
+        c.release();
+      }
+    }
     const env = loadEnv({ ...process.env, DATABASE_URL: url.href, PUBLIC_API_ORIGIN: "http://127.0.0.1:19441",
       PUBLIC_WEB_ORIGIN: "http://127.0.0.1:19442", ALLOWED_WEB_ORIGINS: "http://127.0.0.1:19442",
-      ADMIN_INTERNAL_ENABLED: "1", ADMIN_ORIGIN: origin, ADMIN_AUTH_PEPPER: pepper });
+      ADMIN_INTERNAL_ENABLED: "1", ADMIN_ORIGIN: origin, ADMIN_AUTH_PEPPER: pepper,
+      CONTENT_MODERATION_PROVIDER: "fake",
+      CONTENT_MODERATION_FINGERPRINT_SECRET: "venue-profile-synthetic-fingerprint!!!!" });
     const mod = await Test.createTestingModule({ imports: [buildTestCoreModule(env, pool), AdminModule, VenuesModule] }).compile();
     app = mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter({ logger: false }));
     await app.register(cookie); app.setGlobalPrefix("v1"); app.useGlobalFilters(new ProblemExceptionFilter());
     await app.init(); await app.getHttpAdapter().getInstance().ready(); manager = await actor("content_manager");
   }, 120000);
-  beforeEach(async () => { await pool.query("DELETE FROM admin_rate_windows"); });
+  // Disposable fixture only: isolate synthetic admin/text budgets between unrelated cases (p4 pattern).
+  beforeEach(async () => {
+    await pool.query("DELETE FROM admin_rate_windows");
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
+  });
   afterAll(async () => {
     try { await app?.close(); } finally {
       try { await pool?.end(); } finally {
@@ -157,7 +189,7 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
       expect((await db.query("SELECT * FROM venues WHERE id=$1", [id])).rows[0]).toEqual({ ...populated, public_description: null });
       expect((await db.query("SELECT public_contacts,contact_phone FROM venues WHERE id=$1", [id])).rows[0]).toEqual({ public_contacts: contacts, contact_phone: "private" });
       expect((await db.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
-      const service = new VenuesService(db, {} as IdempotencyService, {} as MutationRunner);
+      const service = new VenuesService(db, {} as IdempotencyService, {} as MutationRunner, {} as import("../../src/moderation/moderation.service").ContentModerationService);
       expect((await service.getById(id)).profile).toMatchObject({ courtCount: 0, amenities: { parking: false, showers: true }, updatedAt: expect.any(String), gallery: { coverage: "ordered", items: [] } });
       expect(JSON.stringify(await service.getById(id))).not.toContain("private");
     } finally { try { await db.end(); } finally { await adminPool.query(`DROP DATABASE IF EXISTS "${upgradeName}"`); } }
@@ -305,20 +337,75 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     expect(JSON.stringify(await detail(x.v.id))).not.toMatch(/private|cover_key|actor_id|approval_id|rating|reviewCount/);
   });
   it("command/audit/history/outbox/receipt failure rolls back facts, contacts and DB date atomically", async () => {
+    if (!app) throw new Error("Missing app");
+    // Narrow FakeModerationProvider access only — never claim real OpenAI transport.
+    const fake = app.get<FakeModerationProvider>(MODERATION_PROVIDER);
     const x = await fixture();
+    const ledgerCounts = async () => (await pool.query(
+      "SELECT (SELECT count(*) FROM privileged_audit_events) AS audit,(SELECT count(*) FROM venue_admin_actions) AS history,(SELECT count(*) FROM outbox_events) AS outbox,(SELECT count(*) FROM admin_command_receipts) AS receipts,(SELECT count(*) FROM admin_command_receipts WHERE reservation_state='completed') AS completed",
+    )).rows[0]!;
+    const receiptByKey = async (keyHash: string) => (await pool.query<{
+      reservation_state: string;
+      response_ciphertext: string | null;
+      claim_nonce: string | null;
+    }>(
+      "SELECT reservation_state, response_ciphertext, claim_nonce FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
+      [manager.id, keyHash],
+    )).rows;
     for (const table of ["privileged_audit_events", "venue_admin_actions", "outbox_events", "admin_command_receipts"]) {
       const before = await stored(x.v.id);
-      const counts = async () => (await pool.query("SELECT (SELECT count(*) FROM privileged_audit_events) AS audit,(SELECT count(*) FROM venue_admin_actions) AS history,(SELECT count(*) FROM outbox_events) AS outbox,(SELECT count(*) FROM admin_command_receipts) AS receipts")).rows[0];
-      const totals = await counts();
+      const totals = await ledgerCounts();
+      const key = randomUUID();
+      const keyHash = hashSecret(pepper, key);
+      // Public text change so prepare pays once when the durable claim is reserved.
+      const fields = { ...x.f, name: `${x.f.name} atomic-${randomUUID()}`, profile: facts, publicContacts: contacts };
+      const textCallsBefore = fake.textCalls;
       // Synthetic throw lives only in this random database, never in runtime source.
       await pool.query("CREATE FUNCTION synthetic_profile_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$");
       await pool.query(`CREATE TRIGGER synthetic_profile_failure BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION synthetic_profile_failure()`);
+      let triggerLive = true;
       try {
-        const response = await edit(x.v.id, { ...x.f, profile: facts, publicContacts: contacts }, 1);
+        const response = await edit(x.v.id, fields, before.version, key);
         expect(response.statusCode).toBeGreaterThanOrEqual(500);
-        expect(await stored(x.v.id)).toEqual(before); expect(await counts()).toEqual(totals);
+        expect(await stored(x.v.id)).toEqual(before);
+        if (table === "admin_command_receipts") {
+          // Claim INSERT itself failed: no reservation, prepare never ran, all ledgers unchanged.
+          expect(await ledgerCounts()).toEqual(totals);
+          expect(await receiptByKey(keyHash)).toEqual([]);
+          expect(fake.textCalls).toBe(textCallsBefore);
+        } else {
+          // Business TX rolled back; durable external-prepare claim must remain noncommitted
+          // (ambiguous non-HTTP → leave processing; prevents paid-call replay).
+          const after = await ledgerCounts();
+          expect(after).toMatchObject({ audit: totals.audit, history: totals.history, outbox: totals.outbox, completed: totals.completed });
+          expect(Number(after.receipts)).toBe(Number(totals.receipts) + 1);
+          const claims = await receiptByKey(keyHash);
+          expect(claims).toHaveLength(1);
+          expect(claims[0]).toMatchObject({
+            reservation_state: "processing",
+            response_ciphertext: null,
+          });
+          expect(typeof claims[0]!.claim_nonce).toBe("string");
+          expect(claims[0]!.claim_nonce!.length).toBeGreaterThan(0);
+          expect(fake.textCalls).toBe(textCallsBefore + 1);
+          // Drop trigger before same-key replay so CIP comes from the durable claim, not the synthetic RAISE.
+          await pool.query(`DROP TRIGGER synthetic_profile_failure ON ${table}`);
+          await pool.query("DROP FUNCTION synthetic_profile_failure()");
+          triggerLive = false;
+          const textCallsAfterFail = fake.textCalls;
+          const replay = await edit(x.v.id, fields, before.version, key);
+          expect(replay.statusCode).toBe(409);
+          expect(replay.json()).toMatchObject({ code: "COMMAND_IN_PROGRESS" });
+          expect(await stored(x.v.id)).toEqual(before);
+          expect(await ledgerCounts()).toEqual(after);
+          expect(await receiptByKey(keyHash)).toEqual(claims);
+          expect(fake.textCalls).toBe(textCallsAfterFail);
+        }
       } finally {
-        await pool.query(`DROP TRIGGER synthetic_profile_failure ON ${table}`); await pool.query("DROP FUNCTION synthetic_profile_failure()");
+        if (triggerLive) {
+          await pool.query(`DROP TRIGGER IF EXISTS synthetic_profile_failure ON ${table}`);
+          await pool.query("DROP FUNCTION IF EXISTS synthetic_profile_failure()");
+        }
       }
     }
   });

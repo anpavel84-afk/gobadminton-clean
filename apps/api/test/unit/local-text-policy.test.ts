@@ -38,6 +38,20 @@ describe("local-text-policy ru-profanity-v1", () => {
     expect(evaluateLocalText(criticism, "prose").kind).toBe("clean");
   });
 
+  it("factual addresses keep sports/street numbers/international names; short obscenity rejects", () => {
+    for (const sample of [
+      "ул. Ленина, 10",
+      "корты Москвы, дом 5",
+      "Псков, хутор 3",
+      "José García 12",
+      "бадминтон клуб, 2",
+    ]) {
+      expect(evaluateLocalText(sample, "factual").kind).toBe("clean");
+    }
+    expect(evaluateLocalText("хуй", "factual").kind).toBe("reject");
+    expect(evaluateLocalText("пизда", "factual").kind).toBe("reject");
+  });
+
   it("normalizes ё/case/homoglyphs without flattening all whitespace", () => {
     expect(normalizeForLocalPolicy("Ёлка")).toContain("елка");
     const tokens = tokenizeNormalized(normalizeForLocalPolicy("привет   мир"));
