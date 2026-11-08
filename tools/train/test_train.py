@@ -15,26 +15,54 @@ from __future__ import annotations
 import json
 import os
 import sys
+from contextlib import contextmanager
 import tempfile
 import textwrap
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from unittest.mock import patch
 
 import base64
 import hashlib
 import inspect
 
-import providers
-import run as lean_run
-import host as lean_host
-import client as lean_client
-import monitor as lean_mon
-import live as lean_live
-import install as lean_install
+_TRAIN_DIR = Path(__file__).resolve().parent
+# Generic Lean import names also exist in legacy actions_train. Restore the
+# complete import cache and path after discovery and after this module's tests.
+_LEAN_NAMES = {p.stem for p in _TRAIN_DIR.glob('*.py')
+               if not p.stem.startswith('test') and p.stem != '__init__'}
+
+
+@contextmanager
+def _lean_import_scope(modules=None):
+    with patch.dict(sys.modules), patch.object(sys, 'path', [str(_TRAIN_DIR), *sys.path]):
+        for name in list(sys.modules):
+            if name.split('.')[0] in _LEAN_NAMES:
+                sys.modules.pop(name)
+        sys.modules.update(modules or {})
+        yield
+
+
+with _lean_import_scope():
+    import providers
+    import run as lean_run
+    import host as lean_host
+    import client as lean_client
+    import monitor as lean_mon
+    import live as lean_live
+    import install as lean_install
+    _LEAN_MODULES = {name: sys.modules[name] for name in _LEAN_NAMES if name in sys.modules}
+
+
+def setUpModule():
+    # Methods under test use absolute imports lazily as well as at load time.
+    scope = _lean_import_scope(_LEAN_MODULES)
+    scope.__enter__()
+    unittest.addModuleCleanup(scope.__exit__, None, None, None)
+
+
 
 
 OWNER = 318610566
@@ -968,14 +996,17 @@ class LiveBindingsTests(unittest.TestCase):
     def test_host_entry_default_uses_live_adapters_mock_boundary(self):
         """Deterministic mock subprocess boundary — no live model/gh calls."""
         with tempfile.TemporaryDirectory() as td:
-            adapters, state = make_flow_adapters(td, shas=[_sha(3)])
+            host_sha = _sha(100)  # Synthetic installed identity, same as fixture base.
+            adapters, state = make_flow_adapters(td, shas=[_sha(3)], frozen_base=host_sha)
             admissions = []
             comment, _ = owner_task_comment(issue=720, priority=5)
             adm = lean_run.admit_comment(
                 comment, {'number': 720, 'state': 'open'}, {'id': REPO_ID})
             admissions.append(adm)
             adapters.fetch_admissions = lambda: admissions
-            with mock.patch.object(lean_run, 'default_live_adapters', return_value=adapters):
+            with mock.patch.object(lean_run, 'default_live_adapters', return_value=adapters), \
+                    mock.patch.object(lean_host, 'read_config', return_value={}), \
+                    mock.patch.object(lean_host, 'installed_release_sha', return_value=host_sha):
                 # wake_budget must cover AUTHOR_TIMEOUT+margin and QA_TIMEOUT+margin
                 out = lean_run.run_once(
                     {'event_name': 'schedule', 'wake_budget_s': 2400},
@@ -1132,8 +1163,17 @@ class LiveBindingsTests(unittest.TestCase):
         self.assertNotIn("checkout', '--detach'", src)
         self.assertIn("HOME': str(AGENT_HOME)", src)
         self.assertIn('NATIVE_CODEX_HOME', src)
-        self.assertIn("str(NATIVE_CODEX_HOME): 'deny'", src)
-        self.assertIn("str(AGENT_HOME / '.ssh'): 'deny'", src)
+        factory = inspect.getsource(lean_live._qa_launch)
+        self.assertIn("str(NATIVE_CODEX_HOME): 'deny'", factory)
+        self.assertIn("str(AGENT_HOME / '.ssh'): 'deny'", factory)
+        self.assertIn('_qa_launch(source, tmpdir, qa_model, qa_effort)', src)
+        self.assertIn('codex_qa_live(', inspect.getsource(lean_live.codex_qa_probe_live))
+        with patch.object(lean_live, '_git_common_dir', return_value=None), \
+                patch.object(lean_live, 'load_short_rules', return_value=('', '', Path('/rules'))), \
+                patch.object(lean_live, '_qa_native_binary', return_value=Path('/codex')):
+            _, permissions = lean_live._qa_launch('/source', '/private', 'gpt-6-sol', 'medium')
+        self.assertEqual(permissions[str(lean_live.NATIVE_CODEX_HOME)], 'deny')
+        self.assertEqual(permissions[str(lean_live.AGENT_HOME / '.ssh')], 'deny')
         # umask 077 Root evidence: CLI -o final under private 1002 TMPDIR, parent collects.
         self.assertIn('final_private', src)
         self.assertIn("tmpdir / 'final.txt'", src)
@@ -1467,6 +1507,47 @@ class HostRequestTests(unittest.TestCase):
         self.assertEqual(polls[1]['dispatch_action'], 'advance')
         self.assertEqual(lean_client.DEFAULT_SSH_TIMEOUT_S, 2520)
         self.assertGreater(lean_client.DEFAULT_SSH_TIMEOUT_S, 2400)
+
+
+class RuntimeUpgradeTests(unittest.TestCase):
+    def test_runtime_upgrade_preserves_config_and_refuses_busy_admission(self):
+        from contextlib import nullcontext
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);current=root/'current';config=root/'config.json'
+            current.write_text('a'*40+'\n');config.write_bytes(b'{"enabled":true,"keep":"unchanged"}\n')
+            original=config.read_bytes();dest=root/'release';dest.mkdir()
+            target=dest/'tools/train/live.py';target.parent.mkdir(parents=True)
+            target.write_bytes(b'reviewed runtime')
+            blobs={'tools/train/live.py':{'data':target.read_bytes()}}
+            def read(path):
+                if str(path)=='/etc/gobadminton-actions-train/policy.json':
+                    return b'{"mode":"disabled"}',{}
+                return Path(path).read_bytes(),{}
+            with mock.patch.multiple(lean_install,CURRENT=current,CONFIG=config,STATE_ROOT=root), \
+                    mock.patch.object(lean_install.os,'geteuid',return_value=0), \
+                    mock.patch.object(lean_install.os,'chown'), \
+                    mock.patch.object(lean_install,'_regular_root_bytes',side_effect=read), \
+                    mock.patch.object(lean_install,'collect_blobs',return_value=blobs), \
+                    mock.patch.object(lean_install,'write_release',return_value=(dest,True)), \
+                    mock.patch.object(lean_install,'runtime_upgrade_fences',side_effect=BlockingIOError):
+                with self.assertRaises(BlockingIOError):
+                    lean_install.upgrade_runtime(root,'b'*40)
+                self.assertEqual(current.read_text(),'a'*40+'\n')
+                self.assertEqual(config.read_bytes(),original)
+                self.assertFalse((root/'state').exists())
+            with mock.patch.multiple(lean_install,CURRENT=current,CONFIG=config,STATE_ROOT=root), \
+                    mock.patch.object(lean_install.os,'geteuid',return_value=0), \
+                    mock.patch.object(lean_install.os,'chown'), \
+                    mock.patch.object(lean_install,'_regular_root_bytes',side_effect=read), \
+                    mock.patch.object(lean_install,'collect_blobs',return_value=blobs), \
+                    mock.patch.object(lean_install,'write_release',return_value=(dest,True)), \
+                    mock.patch.object(lean_install,'runtime_upgrade_fences',return_value=nullcontext()):
+                result=lean_install.upgrade_runtime(root,'b'*40)
+            self.assertEqual(current.read_text(),'b'*40+'\n')
+            self.assertEqual(config.read_bytes(),original)
+            self.assertEqual(result['previous_sha'],'a'*40)
+            self.assertEqual(result['phase'],'accepted')
+            self.assertFalse(result['services_restarted'])
 
 
 class InstallPointerTests(unittest.TestCase):
@@ -2189,6 +2270,36 @@ class AgyNativeTransportTests(unittest.TestCase):
         prov4, reason4, _ = providers.select_author_provider({'issue': 1})
         self.assertEqual(prov4, 'cursor_auto')
         self.assertEqual(reason4, 'default_cursor')
+
+    def test_explicit_agy_only_never_falls_back_to_cursor(self):
+        task = {'issue': 199, 'authorroute': ['agy_author']}
+        for ready, canary, quota in ((False, False, True), (True, False, False),
+                                     (False, True, False)):
+            with self.subTest(ready=ready, canary=canary, quota=quota), \
+                    mock.patch.object(providers, 'role_ready', return_value=(ready, 'ready')), \
+                    mock.patch.object(providers, 'agy_author_canary_admitted',
+                                      return_value=(canary, {})), \
+                    mock.patch.object(providers, 'agy_quota_available',
+                                      return_value=(quota, 'exhausted', {})):
+                with self.assertRaises(providers.ProviderError) as error:
+                    providers.select_author_provider(task, issue=199)
+                self.assertEqual(error.exception.code, 'agy_author_unavailable_no_fallback')
+                self.assertEqual(error.exception.charge, 'none')
+        for routes in ([], ['unknown'], ['codex_author']):
+            with self.assertRaises(providers.ProviderError):
+                providers.select_author_provider({'authorroute': routes})
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(lean_live, 'require_executor_uid', return_value=1002), \
+                mock.patch.object(providers, 'role_ready', return_value=(False, 'no')), \
+                mock.patch.object(providers, 'agy_author_canary_admitted', return_value=(False, {})), \
+                mock.patch.object(lean_live, 'cursor_author_live') as cursor:
+            with self.assertRaises(providers.ProviderError):
+                lean_live.agy_author_live(task=task, worktree=Path(td),
+                                          evidence_dir=Path(td) / 'evidence')
+            cursor.assert_not_called()
+            intent = json.loads((Path(td) / 'evidence' / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'HOLD_no_authorized_fallback')
+            self.assertIsNone(intent['fallback_provider'])
 
     def test_agy_author_live_prelaunch_fallback_no_charge(self):
         with tempfile.TemporaryDirectory() as td:
@@ -4026,9 +4137,16 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             proc.returncode = 0
             proc.pid = 4242
             proc.poll.return_value = 0
+            proc.wait.return_value = 0
             proc.communicate.return_value = (b'', b'')
 
-            with mock.patch.object(lean_live, 'require_executor_uid'), \
+            # Simulate an already-reaped owned group for this post-model fixture.
+            # Never signal or look up the fake pid on the host.
+            with mock.patch.object(lean_live, '_kill_owned_process_group',
+                                   return_value=None), \
+                    mock.patch.object(lean_live.os, 'killpg',
+                                      side_effect=ProcessLookupError), \
+                    mock.patch.object(lean_live, 'require_executor_uid'), \
                     mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
                         native if n == 'native_cursor' else guard)), \
                     mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
@@ -4272,9 +4390,16 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             proc.returncode = 0
             proc.pid = 4242
             proc.poll.return_value = 0
+            proc.wait.return_value = 0
             proc.communicate.return_value = (b'', b'')
 
-            with mock.patch.object(lean_live, 'require_executor_uid'), \
+            # Simulate an already-reaped owned group for this post-model fixture.
+            # Never signal or look up the fake pid on the host.
+            with mock.patch.object(lean_live, '_kill_owned_process_group',
+                                   return_value=None), \
+                    mock.patch.object(lean_live.os, 'killpg',
+                                      side_effect=ProcessLookupError), \
+                    mock.patch.object(lean_live, 'require_executor_uid'), \
                     mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
                         native if n == 'native_cursor' else guard)), \
                     mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(

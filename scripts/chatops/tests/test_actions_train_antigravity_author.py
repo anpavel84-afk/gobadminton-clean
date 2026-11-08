@@ -48,6 +48,19 @@ class Parser(unittest.TestCase):
         self.assertIn('--dangerously-skip-permissions', argv)
         for tool in N.AUTHOR_TOOLS: self.assertIn('  - '+tool+'\n', N.AGENT_DEF)
 
+    def test_native_finish_closes_only_matching_active_finish_tool(self):
+        events=rows()
+        events.insert(3,dict(event='step_update',step_update=dict(conversation_id=CID,
+            step_index=2,step_type='tool',tool_name='finish',state='ACTIVE')))
+        result=N.parse_stream(wire(events))
+        self.assertTrue(result['native_finish'])
+        self.assertIn('finish',result['executed_tools'])
+        for field,value in (('step_index',99),('step_index',True),('state','ACTIVE')):
+            bad=copy.deepcopy(events);bad[4]['step_update'][field]=value
+            with self.assertRaises(Exception):N.parse_stream(wire(bad))
+        bad=copy.deepcopy(events);bad[3]['step_update']['tool_name']='run_command'
+        with self.assertRaises(Exception):N.parse_stream(wire(bad))
+
     def test_author_landlock_uses_private_workspace_and_scoped_pty(self):
         # Root selection is deterministic and must not include the real source,
         # arbitrary /tmp, /home, /srv, /etc root or project credentials.
@@ -469,6 +482,12 @@ class Invocation(unittest.TestCase):
     def test_nonzero(self):
         with self.assertRaises(N.ReviewError): self.invoke('exit')
         self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['processing_stage'], 'streams_retained')
+        self.assertEqual(receipt['exit_code'], 7)
+        self.assertIsNotNone(receipt['stdout_sha256'])
+        self.assertEqual((self.outbox/'agy-author-evidence'/receipt['evidence_id']/'stdout').read_bytes(),
+                         wire(rows()))
 
     def test_timeout(self):
         with self.assertRaises(N.ReviewError): self.invoke('timeout')

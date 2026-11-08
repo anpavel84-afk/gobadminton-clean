@@ -97,6 +97,9 @@ class Upgrade(unittest.TestCase):
         self.stack.enter_context(patch.multiple(
             U, INSTALL=self.install, CONFIG=self.config, STATE=self.state,
             JOURNAL=self.state / 'upgrade.json', BACKUP=self.state / 'upgrade-backup',
+            QUALIFICATION_ROOT=self.state/'qualification',
+            READY_PROOF=self.config/'product-author-role-ready.json',
+            PROMOTION_JOURNAL=self.state/'promotion.json',
             MARKER=self.config / 'antigravity-author.json',
             BUDGET=self.config / 'budgets.json',
             QA_MARKER=self.config / 'antigravity-qa.json'))
@@ -124,6 +127,158 @@ class Upgrade(unittest.TestCase):
             action, self.bundle, kw.get('commit', self.commit), self.task_hash,
             base_controller=kw.get('base', self.commit),
             legacy_finite=kw.get('legacy_finite'))
+
+    def test_prospective_rebind_preserves_old_transaction_and_rollback(self):
+        self.call('apply')
+        prior = U.read_prior_journal()
+        old_marker = U.read(U.MARKER)
+        old_task = self.task_hash
+        self.task_hash = 'b' * 64
+        commit = 'd' * 40
+        with self.assertRaises(core.Refused):
+            self.call('dry', commit=commit)
+        with patch.object(U, 'validate_canary_task') as validate:
+            result = U.execute('apply', self.bundle, commit, self.task_hash,
+                               canary_task_path='reviewed.json')
+            validate.assert_called_once_with(self.bundle, commit, 'reviewed.json', self.task_hash)
+        self.assertEqual(result['phase'], 'installed-canary-disabled')
+        journal = U.read_prior_journal()
+        self.assertEqual(journal['prior_task_sha256'], old_task)
+        archive = U.BACKUP / 'revisions' / prior['bundle_commit'] / 'antigravity-author-upgrade.json'
+        self.assertEqual(json.loads(archive.read_bytes()), prior)
+        U.execute('rollback', self.bundle, commit, self.task_hash)
+        self.assertEqual(U.read(U.MARKER), old_marker)
+
+    def test_readiness_promotion_is_atomic_and_demotes_without_history_reset(self):
+        self.call('apply')
+        old = U.read(U.MARKER)
+        operation = 'f' * 64
+        marker = dict(json.loads(old), phase='ready')
+        proof = dict(schema='GB_PRODUCT_AUTHOR_ROLE_READY_V1', phase='ready',
+                     operation=operation, verdict='PASS')
+        with patch.object(U, 'promotion_plan', return_value=(marker, proof)) as checked:
+            dry = U.promote('promote-dry', self.bundle, self.commit, self.task_hash, operation)
+            self.assertFalse(dry['ready'])
+            self.assertFalse(U.READY_PROOF.exists())
+            result = U.promote('promote', self.bundle, self.commit, self.task_hash, operation)
+            self.assertTrue(result['ready'])
+            self.assertEqual(checked.call_count, 2)
+        self.assertEqual(json.loads(U.read(U.MARKER))['phase'], 'ready')
+        self.assertEqual(json.loads(U.read(U.READY_PROOF)), proof)
+        self.assertFalse(U.promote('demote', self.bundle, self.commit,
+                                   self.task_hash, operation)['ready'])
+        self.assertEqual(U.read(U.MARKER), old)
+        self.assertFalse(U.READY_PROOF.exists())
+        self.assertTrue(U.read_prior_journal())
+
+    def test_new_qualification_after_demote_preserves_previous_proof_and_journal(self):
+        self.call('apply')
+        marker=dict(json.loads(U.read(U.MARKER)),phase='ready')
+        proof=dict(schema='GB_PRODUCT_AUTHOR_ROLE_READY_V1',phase='ready',verdict='PASS')
+        old,new='e'*64,'f'*64
+        with patch.object(U,'promotion_plan',return_value=(marker,proof)):
+            U.promote('promote',self.bundle,self.commit,self.task_hash,old)
+            U.promote('demote',self.bundle,self.commit,self.task_hash,old)
+            prior=U.read(U.PROMOTION_JOURNAL)
+            self.assertEqual(json.loads(U.read(U.BACKUP/'promotions'/old/'ready-proof.json')),proof)
+            with self.assertRaises(core.Refused):
+                U.promote('promote',self.bundle,self.commit,self.task_hash,old)
+            U.promote('promote',self.bundle,self.commit,self.task_hash,new)
+        self.assertEqual(U.read(U.BACKUP/'promotions'/old/'promotion-demoted.json'),prior)
+        self.assertEqual(json.loads(U.read(U.PROMOTION_JOURNAL))['previous_operation'],old)
+        U.promote('demote',self.bundle,self.commit,self.task_hash,new)
+        before=self.files()
+        with patch.object(U,'promotion_plan',return_value=(marker,proof)):
+            with self.assertRaisesRegex(core.Refused,'already promoted'):
+                U.promote('promote',self.bundle,self.commit,self.task_hash,old)
+        self.assertEqual(self.files(),before)
+
+    def test_promotion_requires_bound_native_route_qa_ci_and_acceptance(self):
+        from test_actions_train_antigravity_author import N, rows, wire, CID
+        task = json.loads((ROOT/'scripts/chatops/tests/fixtures/antigravity-author-canary.json').read_bytes())
+        self.task_hash = N.canonical_task_digest(task)
+        self.call('apply')
+        fixture_path = self.bundle/'scripts/chatops/tests/fixtures/antigravity-author-canary.json'
+        fixture_path.parent.mkdir(parents=True)
+        fixture_path.write_text(json.dumps(task))
+        operation, candidate, parent = 'f' * 64, 'e' * 40, 'c' * 40
+        events = rows()
+        events[3:3] = [dict(event='step_update', step_update=dict(
+            conversation_id=CID, step_index=index, step_type='tool', tool_name=name, state='DONE'))
+            for index, name in ((3, 'view_file'), (4, 'run_command'))]
+        raw = wire(events)
+        parsed = N.parse_stream(raw)
+        payload = b'def count_completed(values): return sum(x is True for x in values)\n'
+        native = dict(parsed, schema='GB_AGY_AUTHOR_RECEIPT_V1', phase='imported',
+            exit_code=0, executor_uid=978, executor_gid=968, task_sha256=self.task_hash,
+            requested_route='agy:'+U.MODEL, qualification_phase='canary',
+            charge_state='charged', changed_paths=task['allowed_paths'],
+            executor_reap='cgroup-quiet', source_head=parent,
+            imported_payload_sha256=core.digest({task['allowed_paths'][0]:U.sha(payload)}))
+        artifacts = {
+            'native.json':native,
+            'route.json':dict(phase='completed',provider='agy_author',effective_provider='agy_author',
+                effective_model=U.MODEL,operation_fingerprint=operation,candidate_sha=candidate,
+                revision=task['revision'],fallback_provider=None),
+            'qa.json':dict(provider='codex',model='gpt-6.1-sol',verdict='PASS',reviewed_sha=candidate),
+            'ci.json':dict(run_id=123),
+            'acceptance.json':dict(schema='GB_AGY_AUTHOR_OPS_ACCEPTANCE_V1',operation=operation,
+                candidate_sha=candidate,task_sha256=self.task_hash,checker_exit_code=0,
+                checker_stdout='ANTIGRAVITY_AUTHOR_CANARY_TESTS_PASS',scope='isolated_ops_canary'),
+            'transcript.raw':raw,
+        }
+        manifest = dict(adapter_commit=self.commit,task_sha256=self.task_hash,candidate_sha=candidate)
+        def git_bytes(bundle, *args):
+            if args[0]=='show' and args[1].startswith(self.commit+':'):
+                return fixture_path.read_bytes()
+            return payload
+        def git_text(bundle, *args):
+            return parent if args[0]=='rev-parse' else task['allowed_paths'][0]
+        with patch.object(U, 'subprocess_git_bytes', side_effect=git_bytes), \
+                patch.object(U, 'subprocess_git', side_effect=git_text), \
+                patch.object(U, 'qualification_artifacts', return_value=(manifest,artifacts,'a'*64)), \
+                patch.object(U, 'verify_qualification_ci', return_value={'run_id':123}):
+            marker, proof = U.promotion_plan(self.bundle,self.commit,self.task_hash,operation)
+            self.assertEqual(marker['phase'],'ready')
+            self.assertFalse(proof['product_feature_dev_acceptance'])
+            for name, key, bad in (('native.json','effective_model','wrong'),
+                    ('route.json','fallback_provider','cursor_auto'),
+                    ('qa.json','provider','agy'),('qa.json','reviewed_sha','d'*40),
+                    ('acceptance.json','checker_exit_code',1)):
+                with self.subTest(artifact=name,key=key):
+                    old=artifacts[name][key];artifacts[name][key]=bad
+                    with self.assertRaises(core.Refused):
+                        U.promotion_plan(self.bundle,self.commit,self.task_hash,operation)
+                    artifacts[name][key]=old
+
+    def test_admission_fences_refuse_busy_registry_integration_or_lease(self):
+        import fcntl
+        locks=self.autonomy/'locks';locks.mkdir()
+        for name in ('integration.lock','registry.lock'):
+            (locks/name).touch()
+        live=self.install/'live';live.mkdir()
+        (live/'slots.py').write_bytes((ROOT/'scripts/chatops/actions_train/live/slots.py').read_bytes())
+        for name in ('integration.lock','registry.lock','slot1.lease'):
+            path=locks/name
+            path.write_text(json.dumps(dict(issue=523,writer=True,allowed_paths=['apps/web/'])))
+            fd=os.open(path,os.O_RDONLY)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with self.assertRaises((BlockingIOError,core.Refused)):
+                    with U.operation_fences():
+                        self.fail('must not enter while PMA resource is busy')
+            finally:
+                os.close(fd)
+        with U.operation_fences():
+            # Stale file stays intact; no takeover, deletion or lease mutation.
+            self.assertTrue((locks/'slot1.lease').exists())
+
+    def test_missing_qualification_cannot_promote(self):
+        self.call('apply')
+        before = self.files()
+        with self.assertRaises(FileNotFoundError):
+            U.promote('promote', self.bundle, self.commit, self.task_hash, 'f' * 64)
+        self.assertEqual(self.files(), before)
 
     def test_dry_writes_nothing(self):
         result = self.call()

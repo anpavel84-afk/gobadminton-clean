@@ -1,13 +1,14 @@
 #!/usr/bin/python3
-"""Reviewed root-only AGY author install (OD-014A). Dry by default; never activates.
+"""Reviewed root-only AGY author install and proof-bound qualification (OD-014A).
 
 Chosen accepted Git commit → exact Git blobs. Installs ONLY native_antigravity_author.py
 plus protected author marker and OD-020 author=unlimited budget. Does not rewrite
 core/stage/cost_policy, old backup.json gates, or QA-ready N/Guard modules.
 Reuses stage5 quiet_v5 resource checks for dead historical 113/119 occupancy;
-preserves journals/counters. C5 stays disabled. READY is a separate accepted OPS step.
+preserves journals/counters. C5 stays disabled. READY is a separate proof-bound OPS action; C5 launch policy stays disabled.
 """
 import argparse
+from contextlib import contextmanager
 import copy
 import hashlib
 import importlib.util
@@ -206,8 +207,28 @@ def preserved():
     return result
 
 
+def validate_canary_task(bundle, commit, path, task_hash):
+    """A new isolated admission replaces no historical assignment or operation."""
+    need(path == 'scripts/chatops/tests/fixtures/antigravity-author-canary.json',
+         'unreviewed canary task path')
+    raw = read(bundle / path)
+    need(raw == subprocess_git_bytes(bundle, 'show', commit + ':' + path),
+         'canary task differs from accepted Git blob')
+    task = loads(raw)
+    need(isinstance(task, dict) and task.get('issue') == 199
+         and task.get('authorroute') == ['agy_author']
+         and task.get('qaroute') == ['codex_sol_medium']
+         and task.get('target') == 'dev', 'invalid isolated canary identity')
+    allowed = task.get('allowed_paths')
+    need(allowed == ['docs/handoffs/antigravity-author-canary/count_completed.py'],
+         'canary scope must stay isolated')
+    from native_antigravity_author import canonical_task_digest
+    need(canonical_task_digest(task) == task_hash, 'prospective task digest mismatch')
+    return task
+
+
 def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
-         prior_journal=None):
+         prior_journal=None, canary_task_path=None):
     need(re.fullmatch('[a-f0-9]{64}', task_hash or ''), 'exact canary task hash required')
     quiet(base_controller, canary_task_sha256=task_hash)
     material = git_blobs(bundle, commit)
@@ -224,8 +245,11 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
              'AGY QA marker pins stale; separate reviewed re-pin required')
     if prior_journal is not None:
         validate_prior_installed(prior_journal)
-        need(prior_journal.get('task_sha256') == task_hash,
-             'sequential upgrade must keep the same canary task')
+        if prior_journal.get('task_sha256') != task_hash:
+            need(canary_task_path is not None,
+                 'new canary requires reviewed prospective task blob')
+            validate_canary_task(bundle, commit, canary_task_path, task_hash)
+            quiet(base_controller, canary_task_sha256=prior_journal['task_sha256'])
         need(prior_journal.get('bundle_commit') != commit,
              'sequential upgrade requires a distinct accepted Git commit')
         installed_author = optional(INSTALL / AUTHOR_MODULE)
@@ -239,7 +263,7 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
              and old_marker.get('phase') == 'canary'
              and old_marker.get('slot') == 'slot2'
              and old_marker.get('executor_uid') == 978
-             and old_marker.get('canary_task_sha256') == task_hash
+             and old_marker.get('canary_task_sha256') == prior_journal['task_sha256']
              and old_marker.get('model') == MODEL
              and old_marker.get('admitted_models') == [MODEL],
              'prior canary author marker identity differs')
@@ -266,7 +290,7 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
 
 def put(path, raw, mode=0o644):
     """Exact bytes, same-directory atomic replace; only the fixed target allowlist."""
-    allowed = {INSTALL / AUTHOR_MODULE, MARKER, BUDGET}
+    allowed = {INSTALL / AUTHOR_MODULE, MARKER, BUDGET, READY_PROOF, PROMOTION_JOURNAL}
     under_backup = path == BACKUP or path.parent == BACKUP or BACKUP in path.parents
     need(path in allowed or path == JOURNAL or under_backup, 'out-of-scope upgrade write')
     r.trusted_tree(path.parent)
@@ -377,7 +401,7 @@ def archive_prior_transaction(j):
 
 
 def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
-            manifest_hash=None, calls=None):
+            manifest_hash=None, calls=None, canary_task_path=None):
     """Caller holds existing controller.lock; main acquires it, fixture caller isolates it.
 
     commit = accepted Git SHA (OD-014A). manifest_hash/calls kept as legacy kwargs for
@@ -391,7 +415,8 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
         prior = read_prior_journal()
         payload, history, marker = plan(
             bundle, commit, task_hash, base_controller=base_controller,
-            legacy_finite=legacy_finite, prior_journal=prior)
+            legacy_finite=legacy_finite, prior_journal=prior,
+            canary_task_path=canary_task_path)
         changes = {
             str(p): dict(
                 before=sha(raw) if (raw := optional(p)) is not None else None,
@@ -436,6 +461,8 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
             bundle_commit=commit, task_sha256=task_hash, history=history,
             base_controller=base_controller, marker_phase='canary',
             prior_bundle_commit=(prior or {}).get('bundle_commit'),
+            prior_task_sha256=(prior or {}).get('task_sha256'),
+            canary_task_path=canary_task_path,
             **({'backup_dir': str(backup)} if prior is not None else {}),
             metadata={str(p): (stat.S_IMODE(p.stat().st_mode) if p.exists() else 0o644)
                       for p in payload})
@@ -494,12 +521,259 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
     return dict(phase=j['phase'], verified=True, no_activation=True, ready=False)
 
 
+# Root-protected qualification material; no caller-supplied booleans grant READY.
+QUALIFICATION_ROOT = STATE / 'antigravity-author-qualification'
+READY_PROOF = CONFIG / 'product-author-role-ready.json'
+PROMOTION_JOURNAL = STATE / 'antigravity-author-promotion.json'
+
+
+def qualification_artifacts(operation):
+    need(re.fullmatch('[a-f0-9]{64}', operation or ''), 'exact qualification operation required')
+    folder = QUALIFICATION_ROOT / operation
+    manifest_raw = read(folder / 'manifest.json')
+    manifest = loads(manifest_raw)
+    names = {'native.json', 'route.json', 'qa.json', 'ci.json', 'acceptance.json', 'transcript.raw'}
+    need(manifest.get('schema') == 'GB_AGY_AUTHOR_QUALIFICATION_V1'
+         and manifest.get('kind') == 'isolated_ops_canary'
+         and manifest.get('operation') == operation
+         and set(manifest.get('artifacts', {})) == names,
+         'invalid qualification manifest')
+    artifacts = {}
+    for name in names:
+        raw = read(folder / name)
+        need(sha(raw) == manifest['artifacts'][name], 'qualification artifact drift')
+        artifacts[name] = raw if name.endswith('.raw') else loads(raw)
+    return manifest, artifacts, sha(manifest_raw)
+
+
+def verify_qualification_ci(ci, candidate):
+    """Read GitHub as the existing trusted publisher; never infer CI from a label."""
+    import subprocess
+    need(type(ci.get('run_id')) is int and ci['run_id'] > 0, 'CI run identity missing')
+    prefix = 'repos/anpavel84-afk/gobadminton-clean/actions/runs/' + str(ci['run_id'])
+    def api(path):
+        proc = subprocess.run(['/usr/bin/gh', 'api', path], capture_output=True,
+            timeout=30, check=False, user=1002, group=1002, extra_groups=[],
+            env={'PATH': '/usr/bin:/bin', 'HOME': '/home/agentagency-dev',
+                 'GH_CONFIG_DIR': '/home/agentagency-dev/.config/gh'})
+        need(proc.returncode == 0 and len(proc.stdout) <= 2 << 20, 'CI readback failed')
+        return loads(proc.stdout)
+    run = api(prefix)
+    need(run.get('head_sha') == candidate and run.get('path') == '.github/workflows/ci.yml'
+         and run.get('status') == 'completed' and run.get('conclusion') == 'success'
+         and run.get('repository', {}).get('full_name') == 'anpavel84-afk/gobadminton-clean'
+         and run.get('event') in ('pull_request', 'push'), 'exact candidate CI not accepted')
+    jobs = api(prefix + '/attempts/' + str(run['run_attempt']) + '/jobs?per_page=100').get('jobs')
+    expected = {'foundation', 'source (api)', 'source (web)', 'source (admin)',
+                'source (contracts)', 'database', 'receiver'}
+    need(isinstance(jobs, list) and len(jobs) == 7
+         and {job.get('name') for job in jobs} == expected
+         and all(job.get('conclusion') == 'success' for job in jobs), 'mandatory CI 7/7 missing')
+    return {'run_id': run['id'], 'run_attempt': run['run_attempt'], 'head_sha': candidate}
+
+
+def promotion_plan(bundle, commit, task_hash, operation):
+    prior = read_prior_journal()
+    need(prior is not None and prior['bundle_commit'] == commit
+         and prior['task_sha256'] == task_hash, 'promotion install identity differs')
+    validate_prior_installed(prior)
+    quiet(canary_task_sha256=task_hash)
+    material = git_blobs(bundle, commit)
+    task = validate_canary_task(bundle, commit,
+        'scripts/chatops/tests/fixtures/antigravity-author-canary.json', task_hash)
+    manifest, artifacts, manifest_sha = qualification_artifacts(operation)
+    need(manifest.get('adapter_commit') == commit and manifest.get('task_sha256') == task_hash,
+         'qualification admission differs')
+    candidate = manifest.get('candidate_sha')
+    need(re.fullmatch('[a-f0-9]{40}', candidate or ''), 'candidate SHA missing')
+    native, route, qa, ci, acceptance = (artifacts[n] for n in
+        ('native.json', 'route.json', 'qa.json', 'ci.json', 'acceptance.json'))
+    need(native.get('schema') == 'GB_AGY_AUTHOR_RECEIPT_V1'
+         and native.get('phase') == 'imported' and native.get('exit_code') == 0
+         and native.get('executor_uid') == 978 and native.get('executor_gid') == 968
+         and native.get('task_sha256') == task_hash
+         and native.get('requested_model') == native.get('effective_model') == MODEL
+         and native.get('requested_route') == 'agy:' + MODEL
+         and native.get('qualification_phase') == 'canary'
+         and native.get('charge_state') == 'charged'
+         and native.get('native_finish') is True
+         and native.get('changed_paths') == task['allowed_paths']
+         and native.get('executor_reap') in ('cgroup-absent', 'cgroup-quiet'),
+         'native canary not accepted')
+    from native_antigravity_author import parse_stream
+    parsed = parse_stream(artifacts['transcript.raw'], MODEL)
+    need(parsed['transcript_sha256'] == native.get('transcript_sha256')
+         and parsed['provider_reported_usage'] == native.get('provider_reported_usage')
+         and {'view_file', 'run_command'} <= set(parsed['executed_tools'])
+         and any(t in parsed['executed_tools'] for t in
+                 ('write_to_file', 'replace_file_content', 'multi_replace_file_content')),
+         'real read/edit/command/finish transcript missing')
+    need(route.get('phase') == 'completed'
+         and route.get('provider') == route.get('effective_provider') == 'agy_author'
+         and route.get('effective_model') == MODEL
+         and route.get('operation_fingerprint') == operation
+         and route.get('candidate_sha') == candidate
+         and route.get('revision') == task['revision']
+         and route.get('fallback_provider') is None, 'native route not proven')
+    need(qa.get('provider') == 'codex' and qa.get('model') == 'gpt-6.1-sol'
+         and qa.get('verdict') == 'PASS' and qa.get('reviewed_sha') == candidate,
+         'independent exact Codex Sol QA missing')
+    source_head = native.get('source_head')
+    need(re.fullmatch('[a-f0-9]{40}', source_head or '')
+         and subprocess_git(bundle, 'rev-parse', candidate + '^') == source_head,
+         'candidate source parent differs')
+    need(subprocess_git(bundle, 'diff', '--name-only', source_head, candidate).splitlines()
+         == task['allowed_paths'], 'candidate effects differ from native canary')
+    payload = subprocess_git_bytes(bundle, 'show', candidate + ':' + task['allowed_paths'][0])
+    from core import digest
+    need(digest({task['allowed_paths'][0]: sha(payload)}) == native.get('imported_payload_sha256'),
+         'candidate payload differs from trusted import')
+    ci_proof = verify_qualification_ci(ci, candidate)
+    need(acceptance.get('schema') == 'GB_AGY_AUTHOR_OPS_ACCEPTANCE_V1'
+         and acceptance.get('operation') == operation
+         and acceptance.get('candidate_sha') == candidate
+         and acceptance.get('task_sha256') == task_hash
+         and acceptance.get('checker_exit_code') == 0
+         and acceptance.get('checker_stdout') == 'ANTIGRAVITY_AUTHOR_CANARY_TESTS_PASS'
+         and acceptance.get('scope') == 'isolated_ops_canary', 'isolated OPS acceptance missing')
+    marker = loads(read(MARKER))
+    pins = {n: sha(read(INSTALL / n)) for n in (AUTHOR_MODULE, *PINS)}
+    need(marker.get('modules') == pins
+         and all(read(INSTALL / n) == material[REPO_PREFIX + n] for n in pins),
+         'promotion module drift')
+    marker = dict(marker, phase='ready', qualification_operation=operation)
+    proof = dict(schema='GB_PRODUCT_AUTHOR_ROLE_READY_V1', phase='ready',
+        verdict='PASS', model=MODEL, executor_uid=978, modules=pins,
+        operation=operation, qualification_kind='isolated_ops_canary',
+        candidate_sha=candidate, adapter_commit=commit, task_sha256=task_hash,
+        manifest_sha256=manifest_sha, ci=ci_proof,
+        product_feature_dev_acceptance=False)
+    return marker, proof
+
+
+def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
+    """Install proof first, marker last: readiness changes at one atomic replace.
+
+    Demotion reverses the grant first. Backups/history remain; no provider call,
+    service restart, source lease takeover or policy activation happens here.
+    """
+    need(os.geteuid() == 0, 'root OPS only')
+    need(action in ('promote-dry', 'promote', 'demote'), 'invalid promotion action')
+    if action == 'demote':
+        journal = loads(read(PROMOTION_JOURNAL))
+        need(journal.get('operation') == operation and journal.get('commit') == commit
+             and journal.get('task_sha256') == task_hash, 'demotion identity differs')
+        quiet(canary_task_sha256=task_hash)
+        backup = BACKUP / 'promotions' / operation
+        for target, saved in ((MARKER, 'marker'), (READY_PROOF, 'proof')):
+            current = optional(target)
+            need((sha(current) if current is not None else None)
+                 in (journal['before'][str(target)], journal['after'][str(target)]),
+                 'foreign readiness drift')
+        current_proof = optional(READY_PROOF)
+        if current_proof is not None:
+            saved_proof = backup / 'ready-proof.json'
+            if saved_proof.exists():
+                need(read(saved_proof) == current_proof, 'archived ready proof differs')
+            else:
+                put(saved_proof, current_proof, 0o600)
+        put(MARKER, read(backup / 'marker'))
+        if journal['before'][str(READY_PROOF)] is None:
+            if READY_PROOF.exists():
+                READY_PROOF.unlink()
+        else:
+            put(READY_PROOF, read(backup / 'proof'))
+        journal['phase'] = 'demoted-canary'
+        put(PROMOTION_JOURNAL, encoded(journal), 0o600)
+        return {'phase': journal['phase'], 'ready': False}
+    marker, proof = prepared or promotion_plan(bundle, commit, task_hash, operation)
+    if prepared is not None:
+        # No network under the brief admission fence; recheck all immutable input.
+        prior = read_prior_journal()
+        need(prior['bundle_commit'] == commit and prior['task_sha256'] == task_hash,
+             'promotion install changed during CI readback')
+        validate_prior_installed(prior)
+        quiet(canary_task_sha256=task_hash)
+        _, _, current_manifest = qualification_artifacts(operation)
+        need(current_manifest == proof['manifest_sha256'], 'qualification changed during CI readback')
+        need(all(sha(read(INSTALL / name)) == value for name,value in proof['modules'].items()),
+             'promotion module changed during CI readback')
+    previous_raw = optional(PROMOTION_JOURNAL)
+    previous = loads(previous_raw) if previous_raw is not None else None
+    need(optional(READY_PROOF) is None, 'prior readiness proof must be revoked')
+    if previous is not None:
+        need(previous.get('schema') == 'GB_AGY_AUTHOR_PROMOTION_V1'
+             and previous.get('phase') == 'demoted-canary'
+             and re.fullmatch('[a-f0-9]{64}', previous.get('operation') or '')
+             and previous['operation'] != operation,
+             'prior readiness must be demoted; qualification operation must be new')
+    need(not os.path.lexists(BACKUP / 'promotions' / operation),
+         'qualification operation already promoted; never replay')
+    if action == 'promote-dry':
+        return {'phase': 'qualification-verified', 'ready': False, 'dry': True}
+    if previous is not None:
+        archive = BACKUP / 'promotions' / previous['operation'] / 'promotion-demoted.json'
+        if archive.exists():
+            need(read(archive) == previous_raw, 'prior demotion archive differs')
+        else:
+            put(archive, previous_raw, 0o600)
+    parent = BACKUP / 'promotions'
+    if not parent.exists(): _mkdir_backup(parent)
+    backup = parent / operation
+    _mkdir_backup(backup)
+    before_marker = read(MARKER)
+    put(backup / 'marker', before_marker, 0o600)
+    journal = dict(schema='GB_AGY_AUTHOR_PROMOTION_V1', phase='prepared', operation=operation,
+        commit=commit, task_sha256=task_hash,
+        previous_operation=(previous or {}).get('operation'),
+        before={str(MARKER): sha(before_marker), str(READY_PROOF): None},
+        after={str(MARKER): sha(encoded(marker)), str(READY_PROOF): sha(encoded(proof))})
+    put(PROMOTION_JOURNAL, encoded(journal), 0o600)
+    put(READY_PROOF, encoded(proof))
+    put(MARKER, encoded(marker))
+    need(read(MARKER) == encoded(marker) and read(READY_PROOF) == encoded(proof),
+         'readiness readback failed')
+    journal['phase'] = 'ready'
+    put(PROMOTION_JOURNAL, encoded(journal), 0o600)
+    return {'phase': 'ready', 'ready': True, 'operation': operation,
+            'qualification_kind': 'isolated_ops_canary'}
+
+
+@contextmanager
+def operation_fences():
+    """Brief existing integration/registry fences; never wait on a busy PMA."""
+    import fcntl
+    descriptors = []
+    try:
+        for name in ('integration.lock', 'registry.lock'):
+            path = r.AUTONOMY / 'locks' / name
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptors.append(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Use the same live-lease definition while registry.lock is held.
+        path = INSTALL / 'live' / 'slots.py'
+        r.trusted_tree(path)
+        spec = importlib.util.spec_from_file_location('agy_upgrade_slots', path)
+        slots = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(slots)
+        registry = slots.LockRegistry(str(r.AUTONOMY / 'locks'),
+                                      str(r.AUTONOMY / 'locks' / 'registry.lock'))
+        need(not registry._live(), 'executor lease busy; zero changes')
+        yield
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--action', choices=('dry', 'apply', 'verify', 'rollback'), default='dry')
+    parser.add_argument('--action', choices=('dry', 'apply', 'verify', 'rollback', 'promote-dry', 'promote', 'demote'), default='dry')
+    parser.add_argument('--operation', default=None)
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--commit', required=True, help='accepted Git commit (OD-014A)')
     parser.add_argument('--canary-task-sha256', required=True)
+    parser.add_argument('--canary-task-path', default=None,
+                        help='reviewed isolated task Git blob for prospective rebind')
     parser.add_argument('--base-controller', default=None)
     parser.add_argument('--author-budget', default='unlimited',
                         help='unlimited (OD-020 default) or finite int for legacy fixtures')
@@ -515,10 +789,29 @@ def main():
     fd = os.open(STATE / 'controller.lock', os.O_RDWR | os.O_NOFOLLOW)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        print(json.dumps(execute(
-            args.action, args.bundle, args.commit, args.canary_task_sha256,
-            base_controller=args.base_controller, legacy_finite=legacy,
-            manifest_hash=args.manifest_sha256), sort_keys=True))
+        # Expensive GH readback happens before shared admission fences.
+        prepared = None
+        if args.action in ('promote-dry', 'promote'):
+            prepared = promotion_plan(args.bundle, args.commit,
+                                      args.canary_task_sha256, args.operation)
+        if args.action in ('dry', 'promote-dry'):
+            if args.action == 'dry':
+                result = execute(args.action, args.bundle, args.commit,
+                    args.canary_task_sha256, base_controller=args.base_controller,
+                    legacy_finite=legacy, canary_task_path=args.canary_task_path)
+            else:
+                result = {'phase':'qualification-verified','ready':False,'dry':True}
+        else:
+            with operation_fences():
+                if args.action in ('promote', 'demote'):
+                    result = promote(args.action, args.bundle, args.commit,
+                        args.canary_task_sha256, args.operation, prepared=prepared)
+                else:
+                    result = execute(args.action, args.bundle, args.commit,
+                        args.canary_task_sha256, base_controller=args.base_controller,
+                        legacy_finite=legacy, manifest_hash=args.manifest_sha256,
+                        canary_task_path=args.canary_task_path)
+        print(json.dumps(result, sort_keys=True))
     finally:
         os.close(fd)
 

@@ -432,6 +432,14 @@ def parse_stream(raw, model=MODEL, *, tokens=()):
         else:
             need(state in ('ACTIVE', 'DONE'), 'invalid author step')
             need(_tool_error(step) is None, 'unexpected author step error')
+            # CLI 1.4.5 emits tool finish ACTIVE, then native finish DONE at
+            # the same index. Only that exact handoff closes the pending tool.
+            index = step.get('step_index')
+            if (kind == 'finish' and state == 'DONE' and type(index) is int
+                    and steps.get(index) == ('finish', 'ACTIVE')):
+                steps[index] = ('finish', 'DONE')
+                if 'finish' not in executed_tools:
+                    executed_tools.append('finish')
         inference |= kind == 'agent_response' and state == 'DONE'
         finish |= kind == 'finish' and state == 'DONE'
     out = events[-1].get('result')
@@ -994,8 +1002,6 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                 receipt['exit_code'] = process.returncode if process is not None else None
         need(receipt['executor_reap'] != 'cgroup-busy', 'AGY_CANDIDATE_CHANGED')
         need(_candidate_state(bridge.work) == candidate_before, 'AGY_CANDIDATE_CHANGED')
-        need(process.returncode == 0 and getattr(process, '_input_offset', None) == len(wire),
-             'author exit or stdin delivery failed')
         # Retain a possible refresh before scanning ANY provider-controlled output.
         retain_oauth_refresh(auth, original)
         original = trusted(AUTH, owner=EXECUTOR_UID); tokens += _credentials(original)
@@ -1013,6 +1019,9 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         for name, raw in streams.items():
             ev.write(name, raw)
         receipt['processing_stage'] = 'streams_retained'
+        # Failed exits retain credential-scanned diagnostics, never import.
+        need(process.returncode == 0 and getattr(process, '_input_offset', None) == len(wire),
+             'author exit or stdin delivery failed')
         result = parse_stream(streams['stdout'], model, tokens=tokens)
         # Validate in private memory BEFORE touching the receipt shared with stage.
         _decoded_credentials(result, tokens)

@@ -69,6 +69,7 @@ CI_POLL_S = 30
 CI_WAIT_BUDGET_S = 1200
 DEPLOY_WAIT_BUDGET_S = 900
 AUTHOR_TIMEOUT_S = 1200
+QA_OUTPUT_MAX = 2 << 20  # Equality is possible truncation, never accepted.
 QA_TIMEOUT_S = 1800
 
 
@@ -162,6 +163,8 @@ def uid1002_preexec():
     Parent trusted Root retains controller/publisher and the global writer lease.
     Model/Git/GH never keep root. Matches working Mode A drop boundary.
     """
+    import ctypes
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
     def _drop():
         euid = os.geteuid()
         if euid == 0:
@@ -171,13 +174,135 @@ def uid1002_preexec():
         elif euid != CURSOR_UID:
             os._exit(125)
         try:
-            import ctypes
-            libc = ctypes.CDLL(None, use_errno=True)
-            if libc.prctl(38, 1, 0, 0, 0) != 0:
+            if prctl(38, 1, 0, 0, 0) != 0:
                 os._exit(126)
         except Exception:
             os._exit(126)
     return _drop
+
+
+def _qa_output_policy():
+    return dict(fsize_soft=QA_OUTPUT_MAX, fsize_hard=QA_OUTPUT_MAX,
+                core_soft=0, core_hard=0, guard='uid1002+nnp+rlimit-v1')
+
+
+# Fixed packet is below Linux PIPE_BUF; only trusted preexec owns the writer.
+_QA_IDENTITY_MAX = 512
+
+
+def _qa_preexec(identity_fd=None, binding=None):
+    """Preload everything before fork; child never imports or waits for parent."""
+    import ctypes
+    import resource
+    import struct
+    drop = uid1002_preexec()
+    policy = _qa_output_policy()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    pack = struct.Struct('!9Q').pack
+    open_fd, read_fd, write_fd, close_fd = os.open, os.read, os.write, os.close
+    def child():
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (policy['fsize_soft'], policy['fsize_hard']))
+        drop()
+        if identity_fd is not None:
+            try:
+                fd = open_fd('/proc/self/stat', os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                try:
+                    raw = read_fd(fd, 4096)
+                finally:
+                    close_fd(fd)
+                if len(raw) >= 4096 or not raw.endswith(b'\n'):
+                    os._exit(126)
+                fields = raw.rsplit(b')', 1)[1].split()
+                packet = binding + pack(os.getpid(), os.getpgrp(), int(fields[19]),
+                    os.geteuid(), *resource.getrlimit(resource.RLIMIT_FSIZE),
+                    *resource.getrlimit(resource.RLIMIT_CORE), prctl(39, 0, 0, 0, 0))
+                if len(packet) > _QA_IDENTITY_MAX or write_fd(identity_fd, packet) != len(packet):
+                    os._exit(126)
+            finally:
+                close_fd(identity_fd)  # No identity FD reaches untrusted exec.
+    return child
+
+
+def _qa_cleanup_identity(process, fd, binding):
+    """Consume private preexec proof, never an approval or model-authored claim."""
+    import struct
+    layout = struct.Struct('!9Q')
+    try:
+        raw = os.read(fd, _QA_IDENTITY_MAX + 1)
+        if (len(raw) != len(binding) + layout.size or raw[:len(binding)] != binding
+                or os.read(fd, 1) != b''):
+            raise ValueError('packet')
+        pid, pgrp, ticks, uid, soft, hard, core_soft, core_hard, nnp = layout.unpack(raw[len(binding):])
+        if (pid != process.pid or pid <= 1 or pgrp != pid or ticks <= 0
+                or uid != CURSOR_UID or (soft, hard) != (QA_OUTPUT_MAX, QA_OUTPUT_MAX)
+                or (core_soft, core_hard, nnp) != (0, 0, 1)):
+            raise ValueError('identity')
+        identity = dict(pid=pid, pgrp=pgrp, start_ticks=str(ticks), uid=uid,
+                        output_policy=_qa_output_policy(), cleanup_only=True)
+        proc = Path('/proc') / str(pid) / 'stat'
+        try:
+            fields = proc.read_text().rsplit(')', 1)[1].split()
+        except FileNotFoundError:
+            fields = None  # Trusted pre-exec proof survives an already reaped leader.
+        if fields is not None and (fields[19] != str(ticks) or int(fields[2]) != pid):
+            raise ValueError('reused')
+        process._lean_owned_identity = identity
+        return identity
+    except (OSError, ValueError, IndexError) as err:
+        raise LiveError('qa_preexec_identity_hold') from err
+
+
+def _qa_output_bytes(path, *, scope=None, private=False):
+    """Stable bounded output snapshot; private UID1002 output is never authority."""
+    import stat
+    path = Path(path).absolute()
+    scope = Path(scope).absolute() if scope is not None else path.parent
+    if '..' in path.parts or not path.is_relative_to(scope) or path == scope:
+        raise LiveError('qa_output_scope_hold')
+    owners = {CURSOR_UID} if private else {os.geteuid()}
+    for ancestor in scope.parents:
+        if not stat.S_ISDIR(ancestor.lstat().st_mode):
+            raise LiveError('qa_output_scope_hold')
+    parent = path.parent
+    directories = []
+    while True:
+        info = parent.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in owners
+                or info.st_mode & 0o022):
+            raise LiveError('qa_output_scope_hold')
+        directories.append((parent, info))
+        if parent == scope:
+            break
+        parent = parent.parent
+    identity = lambda st: (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid,
+        st.st_nlink, st.st_size, st.st_blocks, st.st_mtime_ns, st.st_ctime_ns)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid not in owners
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or not 0 <= before.st_size < QA_OUTPUT_MAX
+                or before.st_blocks * 512 < before.st_size):
+            raise LiveError('qa_output_metadata_hold')
+        chunks, remaining = [], before.st_size + 1
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(fd)
+        raw = b''.join(chunks)
+        if (identity(before) != identity(after)
+                or identity(path.lstat()) != identity(after) or len(raw) != before.st_size
+                or any(identity(directory.lstat()) != identity(info)
+                       for directory, info in directories)):
+            raise LiveError('qa_output_unstable_hold')
+        return raw
+    finally:
+        os.close(fd)
 
 
 def require_executor_uid():
@@ -1099,6 +1224,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     before = None
     model_result = None
     import_done = False
+    retention = None
+    source_rejected = False
     try:
         for name in CURSOR_PRIVATE_DIRS:
             (base / name).mkdir(mode=0o700)
@@ -1192,6 +1319,17 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 f'{err.code}:{err.detail or ""}',
                 charge='none',
             ) from err
+        from author_handoff import SourceRetention
+        def ignored(name):
+            checked = run_argv(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
+                cwd=str(worktree), env=env_git, timeout=15, check=False)
+            if checked.returncode not in (0, 1):
+                raise ValueError('ignore check failed')
+            return checked.returncode == 0
+        retention = SourceRetention(baseline=before, allowed=task['allowed_paths'],
+            ignored=ignored, source_name=native.source_name, secrets=lambda: (token,))
+        retention.prepare(base / 'work')
         mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
         stream = evidence / 'stream.jsonl'
         errf = evidence / 'stderr'
@@ -1222,6 +1360,22 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                     _kill_owned_process_group(p)
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
                 raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
+            finally:
+                def reap_owned(process):
+                    if callable(getattr(native, '_stop', None)):
+                        native._stop(process)
+                    else:
+                        _kill_owned_process_group(process)
+                    # _stop alone does not kill an exited parent's descendants.
+                    try:
+                        os.killpg(process.pid, 9)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
+                retention.observe(base / 'work', p, reap_owned)
+                from author_handoff import owned_group_gone
+                if not owned_group_gone(p):
+                    raise ProviderError('cursor_owned_reap_hold', charge='unknown')
         if p.returncode != 0:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', exit=p.returncode)
             raise ProviderError('cursor_exit_nonzero', str(p.returncode))
@@ -1327,45 +1481,81 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 f'{type(err).__name__}:{err}'[:400],
                 charge='charged',
             ) from err
+    except ProviderError as err:
+        source_rejected = err.code in {
+            'token_leak_in_stream', 'token_leak_in_source',
+            'author_empty_or_oos', 'symlink_import_refused',
+        }
+        raise
     finally:
+        if retention is not None and retention.result is not None and not import_done:
+            try:
+                from author_handoff import operation
+                retention.persist(evidence, operation(dict(task,
+                    _author_operation=task.get('_author_operation') or hashlib.sha256(str(intent_path).encode()).hexdigest(),
+                    runtime_base_sha=task.get('runtime_base_sha') or task.get('base') or git(worktree, 'rev-parse', 'HEAD')),
+                    'cursor_auto', git(worktree, 'rev-parse', 'HEAD')))
+                current_intent = loads(Path(intent_path).read_bytes())
+                mark_intent_phase(intent_path, current_intent['phase'],
+                    checkpoint='source-checkpoint/manifest.json', unvalidated=True)
+            except Exception:
+                pass  # Native raw/error/charge receipt remains authoritative.
+        checkpoint_invalid = source_rejected or (retention is not None and retention.failure is not None)
+        if model_result is not None and not import_done and not source_rejected:
+            try:
+                # Revalidate current bytes even when the new observer failed.
+                # Never preserve from a live writer or bypass scope/secret checks.
+                from author_handoff import owned_group_gone
+                if retention is None or p is None or not owned_group_gone(p):
+                    raise ValueError('unpublished source safety unavailable')
+                retention.capture(base / 'work')
+                _preserve_unpublished_author_sources(evidence, work=base / 'work',
+                    baseline=before, allowed=set(task.get('allowed_paths') or []),
+                    native=native, token=token)
+            except Exception:
+                checkpoint_invalid = True
         # Paid model completed but technical import failed: keep allowed sources
         # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
-        if (
-            model_result is not None and not import_done
-            and native is not None and before is not None
-        ):
-            try:
-                _preserve_unpublished_author_sources(
-                    evidence,
-                    work=base / 'work',
-                    baseline=before,
-                    allowed=set(task.get('allowed_paths') or []),
-                    native=native,
-                    token=token,
-                )
-            except Exception:
-                pass
-        if p is not None and p.poll() is None:
-            _kill_owned_process_group(p)
-        shutil.rmtree(base, ignore_errors=True)
+        try:
+            if checkpoint_invalid:
+                mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                                  checkpoint='INVALID', unvalidated=True)
+        finally:
+            if p is not None and p.poll() is None:
+                _kill_owned_process_group(p)
+            shutil.rmtree(base, ignore_errors=True)
 
 
 def _kill_owned_process_group(p):
     """Kill/reap only the owned process group on timeout — no blind paid replay."""
     if p is None:
         return
-    if p.poll() is None:
-        try:
-            os.killpg(p.pid, 9)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                p.kill()
-            except (ProcessLookupError, OSError):
-                pass
-    try:
-        p.wait(timeout=5)
-    except Exception:
-        pass
+    # Popen must belong to our new session. Retain identity before the leader
+    # exits; an exited leader alone is never proof that its children stopped.
+    identity = getattr(p, '_lean_owned_identity', None)
+    if identity is None:
+        if getattr(p, '_lean_owned_identity_required', False):
+            raise LiveError('owned_process_identity_missing')
+        if p.poll() is not None or os.getpgid(p.pid) != p.pid:
+            raise LiveError('owned_process_identity_missing')
+        fields = (Path('/proc') / str(p.pid) / 'stat').read_text().rsplit(')', 1)[1].split()
+        identity = dict(pid=p.pid, pgrp=p.pid, start_ticks=fields[19])
+        p._lean_owned_identity = identity
+    if identity['pid'] != p.pid or identity['pgrp'] != p.pid:
+        raise LiveError('owned_process_identity_mismatch')
+    proc = Path('/proc') / str(p.pid) / 'stat'
+    if proc.exists():
+        fields = proc.read_text().rsplit(')', 1)[1].split()
+        if fields[19] != identity['start_ticks'] or int(fields[2]) != p.pid:
+            raise LiveError('owned_process_identity_reused')
+    from providers import _import_native
+    native = _import_native('native_antigravity')
+    if hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() != '0a6ff52152b652d1d925513ea1f53e1fce597750d863c64fbac70575599ff779':
+        raise LiveError('owned_reap_primitive_changed')
+    native.reap(p)
+    from author_handoff import owned_group_gone
+    if not owned_group_gone(p):
+        raise LiveError('owned_process_stop_unreconciled')
 
 
 def _git_common_dir(source):
@@ -1396,9 +1586,11 @@ AGY_IPC_FIELDS = frozenset({
 def _codex_turn_completed(events_path):
     """Require a valid JSONL event with type exactly turn.completed — no heuristics."""
     path = Path(events_path)
-    if not path.is_file():
+    try:
+        raw = _qa_output_bytes(path)
+    except FileNotFoundError:
         return False
-    for line in path.read_text(errors='replace').splitlines():
+    for line in raw.decode(errors='replace').splitlines():
         if not line.strip():
             continue
         try:
@@ -1421,17 +1613,21 @@ def _codex_capacity_technical(evidence_dir):
     blobs = []
     for name in ('events.jsonl', 'stderr', 'final.txt'):
         path = evidence / name
-        if path.is_file():
-            blobs.append(path.read_text(errors='replace'))
+        try:
+            blobs.append(_qa_output_bytes(path).decode(errors='replace'))
+        except FileNotFoundError:
+            pass
     text = '\n'.join(blobs)
     if CODEX_CAPACITY_MSG not in text:
         return False
     if _codex_turn_completed(evidence / 'events.jsonl'):
         return False
     events = evidence / 'events.jsonl'
-    if not events.is_file():
+    try:
+        raw = _qa_output_bytes(events)
+    except FileNotFoundError:
         return CODEX_CAPACITY_MSG in text
-    for line in events.read_text(errors='replace').splitlines():
+    for line in raw.decode(errors='replace').splitlines():
         if not line.strip():
             continue
         try:
@@ -2016,8 +2212,9 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
         payload_ok=bool(payload.get('ok')), payload=payload)
 
 
-def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
-    """Actual Codex Sol Medium read-only QA (Mode A gpt-6.1-sol effort=medium).
+def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
+                  reviewer_authority=None, qa_effort='medium', _probe=None, protected_reviewer=None):
+    """Actual protected Codex read-only QA; Lean routing uses gpt-6-sol.
 
     Match working launch_medium_qa: UID1002 real HOME + native CODEX_HOME,
     private TMPDIR, explicit short rules on stdin, deny model FS .codex/.ssh.
@@ -2025,7 +2222,25 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     worktree checkout on HEAD mismatch — precise HOLD. Timeout kills owned pg.
     """
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
+    from author_handoff import fingerprint
     require_executor_uid()
+    routing_qa = task.get('_bound_author', {}).get('mode') == 'on'
+    if routing_qa and _probe is None:
+        from providers import accepted_qa_effort
+        qa_effort = accepted_qa_effort(reviewer_authority, protected_reviewer)
+    authority_meta = None
+    if _probe is not None:
+        if os.geteuid() != 0 or _probe != _qa_probe_admission():
+            raise ProviderError('qa_probe_root_admission_hold', charge='none')
+        if (_probe['candidate_sha'] != candidate_sha or _probe['task'] != task
+                or _probe['evidence_dir'] != str(evidence_dir)):
+            raise ProviderError('qa_probe_binding_hold', charge='none')
+    if routing_qa and _probe is None:
+        from providers import role_ready
+        ready, authority_meta = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=qa_effort)
+        if not ready or (protected_reviewer is not None and authority_meta != protected_reviewer):
+            raise ProviderError('independent_qa_unavailable_hold', charge='none')
+    qa_model = 'gpt-6-sol' if routing_qa or _probe is not None else 'gpt-6.1-sol'
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
         raise ProviderError('invalid_candidate_sha')
     evidence_root = Path(evidence_dir)
@@ -2064,10 +2279,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     (evidence / 'prompt.md').write_text(prompt)
     # Prompt/events/stderr stay Root-opened FDs (inherited). CLI -o final must NOT
     # target Root 0700 evidence ancestors — use private 1002 TMPDIR tree instead.
-    codex = AGENT_HOME / '.local' / 'bin' / 'codex'
-    if not codex.is_file():
-        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='codex_absent')
-        raise ProviderError('codex_absent')
+    codex = _qa_native_binary()
     common = _git_common_dir(source)
     # Match launch_medium_qa: real HOME + native ~/.codex for CLI OAuth; private TMPDIR only.
     # Never Root HOME, never copy/print credentials, never empty private HOME without CODEX_HOME.
@@ -2079,37 +2291,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         if os.geteuid() == 0:
             chown_private_tree(private)
         final_private = tmpdir / 'final.txt'
-        fs = {
-            ':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny', ':tmpdir': 'write',
-            str(source): 'read', str(source / '.git'): 'read',
-            str(tmpdir): 'write',
-            str(AGENT_HOME / 'train-execution-evidence-20261027'): 'read',
-            str(AGENT_HOME / '.local' / 'lib' / 'node_modules' / '@openai'): 'read',
-            str(AGENT_HOME / '.local' / 'node-v24.21.0'): 'read',
-            str(NATIVE_CODEX_HOME): 'deny',
-            str(AGENT_HOME / '.ssh'): 'deny',
-            '/srv/gb-slots': 'deny',
-            '/var/lib/gobadminton-actions-train': 'deny',
-            '/var/lib/gobadminton-autonomy': 'deny',
-            '/etc/gobadminton-slots': 'deny',
-        }
-        if common:
-            fs[common] = 'read'
-        fs[str(rules_path)] = 'read'
-        fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
-        cmd = [
-            '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
-            str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
-            '--ephemeral', '--skip-git-repo-check', '-C', str(source),
-            '-c', 'approval_policy="never"',
-            '-c', 'default_permissions="gb-task"',
-            '-c', 'permissions.gb-task=' + ('{extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}'),
-            '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
-            '-c', 'web_search="disabled"',
-            '--model', 'gpt-6.1-sol',
-            '-c', 'model_reasoning_effort="medium"',
-            '--json', '-o', str(final_private), '-',
-        ]
+        cmd, fs = _qa_launch(source, tmpdir, qa_model, qa_effort)
         # Codex shebang is #!/usr/bin/env node — include the already-qualified
         # Node 24.21 bin (same FS allowlist). Do not mutate global uid1002_env.
         child_env = {
@@ -2122,15 +2304,67 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             'HOME': str(AGENT_HOME),
             'TMPDIR': str(tmpdir),
         }
-        mark_intent_phase(intent_path, 'launching', model='gpt-6.1-sol', effort='medium',
+        mark_intent_phase(intent_path, 'launching', model=qa_model, effort=qa_effort,
                           rules_sha256=rules_sha, root_model=False,
                           home=str(AGENT_HOME), codex_home=str(NATIVE_CODEX_HOME))
+        recipe = None
+        if routing_qa or _probe is not None:
+            from author_handoff import fingerprint
+            import host
+            recipe = _qa_recipe(qa_effort)
+            if _probe is None:
+                # Frozen metadata is not a grant: fresh callback immediately before effect.
+                ready, fresh = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
+                                          effort=qa_effort)
+                if not ready or fresh != authority_meta or any(fresh.get(k) != v for k, v in recipe.items()):
+                    raise ProviderError('qa_authority_changed_hold', charge='none')
+            author_executor = ((_probe or {}).get('author_executor') or
+                task.get('_bound_author', {}).get('route_proofs', {}).get(
+                    task.get('_bound_author', {}).get('decision', {}).get('provider'), {}).get('executor'))
+            if not author_executor or author_executor == recipe['executor']:
+                raise ProviderError('qa_independence_hold', charge='none')
+            source_bytes_before = _qa_source_bytes(source)
+            mark_intent_phase(intent_path, 'launching', **recipe,
+                author_executor=author_executor,
+                probe_admission=(_qa_root_config()['codex_qa_probe'] if _probe else None),
+                author_receipt=(_probe or {}).get('author_receipt'),
+                author_operation_id=(_probe or {}).get('author_operation_id'),
+                intent_path=str(intent_path), source_path=str(source), private_tmpdir=str(tmpdir),
+                authority_metadata=authority_meta, actual_argv=cmd, argv_sha256=fingerprint(cmd),
+                argv_permissions_sha256=fingerprint(fs), actual_permissions=fs,
+                operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'),
+                pipeline_revision=host.installed_release_sha(), source_before=head,
+                readonly_bytes_before=source_bytes_before)
         with (evidence / 'prompt.md').open() as i, \
                 (evidence / 'events.jsonl').open('w') as o, \
                 (evidence / 'stderr').open('w') as e:
-            p = subprocess.Popen(
-                cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
-                umask=0o022, close_fds=True, env=child_env, preexec_fn=uid1002_preexec())
+            # Freeze parent intent + trusted Root/shared recipe identity before fork.
+            # Packet bytes never become runtime approval; only the parent reads them.
+            launch_binding = os.urandom(32) + hashlib.sha256(json.dumps(dict(
+                intent=loads(Path(intent_path).read_bytes()), argv=cmd, permissions=fs,
+                root_uid=os.geteuid(), config=str(_QA_CONFIG), native=str(NATIVE_TRAIN),
+                authority=authority_meta, shared_recipe=recipe, output_policy=_qa_output_policy()),
+                sort_keys=True).encode()).digest()
+            identity_read, identity_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                try:
+                    p = subprocess.Popen(
+                        cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
+                        umask=0o022, close_fds=True, pass_fds=(identity_write,), env=child_env,
+                        preexec_fn=_qa_preexec(identity_write, launch_binding))
+                finally:
+                    os.close(identity_write)
+                p._lean_owned_identity_required = True
+                _qa_cleanup_identity(p, identity_read, launch_binding)
+            finally:
+                os.close(identity_read)
+            try:
+                process_identity = _qa_process_identity(p, cmd)
+            except (OSError, ValueError, StopIteration, IndexError) as err:
+                mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                                  error='qa_runtime_identity_hold', no_blind_replay=True)
+                raise ProviderError('qa_runtime_identity_hold', charge='unknown') from err
             try:
                 p.wait(timeout=QA_TIMEOUT_S + 30)
             except subprocess.TimeoutExpired as err:
@@ -2139,10 +2373,22 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout',
                                   no_blind_replay=True)
                 raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
-        # Parent securely collects regular non-symlink final into Root evidence AFTER exit.
+        # Reap exact owned descendants even after leader exit, before collection.
+        _kill_owned_process_group(p)
         final = evidence / 'final.txt'
-        if final_private.is_file() and not final_private.is_symlink():
-            final.write_bytes(final_private.read_bytes())
+        try:
+            _qa_output_bytes(evidence / 'events.jsonl', scope=evidence)
+            _qa_output_bytes(evidence / 'stderr', scope=evidence)
+            try:
+                final_bytes = _qa_output_bytes(final_private, scope=tmpdir, private=True)
+            except FileNotFoundError:
+                final_bytes = None
+            if final_bytes is not None:
+                final.write_bytes(final_bytes)
+        except (LiveError, OSError) as err:
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                              error='qa_output_boundary_hold', no_blind_replay=True)
+            raise ProviderError('qa_output_boundary_hold', charge='unknown') from err
         # Persist raw completion envelope before parse (no automatic paid replay).
         completion = {
             'exit': p.returncode,
@@ -2150,6 +2396,10 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             'candidate_sha': candidate_sha,
             'rules_sha256': rules_sha,
         }
+        if routing_qa or _probe is not None:
+            completion['operator'] = dict(process_identity, actual_argv=cmd, actual_permissions=fs,
+                source_before=source_bytes_before, operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'), evidence_dir=str(evidence))
         (evidence / 'completion.json').write_text(json.dumps(completion, indent=2) + '\n')
         # Exact capacity + turn.failed/error without completed verdict = technical failure.
         if _codex_capacity_technical(evidence):
@@ -2165,21 +2415,68 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         if not completion['turn_completed']:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='turn_completed_missing')
             raise ProviderError('codex_turn_completed_missing')
-        if not final.is_file():
+        if final_bytes is None:
             raise ProviderError('codex_final_missing')
-        raw_final = final.read_text()
-        (evidence / 'final.raw.txt').write_text(raw_final)
+        raw_final = _qa_output_bytes(final, scope=evidence).decode('utf-8')
         parsed = parse_codex_final(raw_final, candidate_sha)
         if parsed.get('reviewed_sha') != candidate_sha:
             raise ProviderError('stale_sha_verdict', str(parsed.get('reviewed_sha')))
         parsed['charge'] = 'charged'
         parsed['turn_completed'] = True
         parsed['exit'] = 0
+        if routing_qa or _probe is not None:
+            # Reap any surviving members of the owned group even after leader exit.
+            _kill_owned_process_group(p)
+            from author_handoff import owned_group_gone
+            after = _qa_source_bytes(source)
+            if (not owned_group_gone(p) or after != source_bytes_before
+                    or git(source, 'rev-parse', 'HEAD') != candidate_sha):
+                raise ProviderError('qa_readonly_or_stop_hold')
+            def proof(path):
+                return dict(path=str(path), sha256=hashlib.sha256(_qa_output_bytes(path, scope=evidence)).hexdigest())
+            stop_record = dict(process_identity, reaped=p.returncode is not None,
+                group_gone=owned_group_gone(p), exit=p.returncode,
+                operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'), evidence_dir=str(evidence))
+            completion['stop_record'] = stop_record
+            (evidence / 'completion.json').write_text(json.dumps(completion, indent=2) + '\n')
+            mark_intent_phase(intent_path, 'completed', source_after=candidate_sha,
+                readonly_bytes_after=after, owned_stop_proof=dict(process_identity,
+                    reaped=p.returncode is not None, group_gone=owned_group_gone(p), exit=p.returncode,
+                    operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                    admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'),
+                    evidence_dir=str(evidence)),
+                completion_proof=proof(evidence / 'completion.json'),
+                raw_proof=proof(evidence / 'events.jsonl'), final_proof=proof(final))
         mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
         return parsed
+    except LiveError as err:
+        if not err.code.startswith('qa_output_'):
+            raise
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error=err.code, no_blind_replay=True)
+        raise ProviderError('qa_output_boundary_hold', charge='unknown') from err
     finally:
-        if p is not None and p.poll() is None:
-            _kill_owned_process_group(p)
+        if p is not None:
+            failed = sys.exc_info()[0] is not None
+            try:
+                _kill_owned_process_group(p)
+            except Exception:
+                mark_intent_phase(intent_path, 'UNKNOWN', error='owned_stop_unreconciled',
+                                  no_blind_replay=True)
+                raise
+            if failed:
+                identity = getattr(p, '_lean_owned_identity', {})
+                stop = dict(identity, reaped=p.returncode is not None,
+                    group_gone=True, exit=p.returncode,
+                    operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                    admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'),
+                    evidence_dir=str(evidence))
+                # Keep the failure/UNKNOWN classification; cleanup is no PASS.
+                current = loads(_qa_output_bytes(intent_path, scope=evidence)) if intent_path else {}
+                mark_intent_phase(intent_path, current.get('phase', 'HOLD_no_automatic_replay'),
+                                  owned_stop_proof=stop)
+                (evidence / 'failure-stop.json').write_text(json.dumps(stop, indent=2) + '\n')
         shutil.rmtree(private, ignore_errors=True)
 
 
@@ -2672,7 +2969,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
     from providers import (
         prepare_cursor_author_intent, mark_intent_phase, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
-        agy_author_canary_admitted,
+        agy_author_canary_admitted, cursor_fallback_authorized,
     )
     from types import SimpleNamespace
 
@@ -2686,6 +2983,19 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'prepared', provider='agy_author', role='author',
                           requested_provider='agy_author', effective_model=AGY_MODEL)
 
+    def cursor_fallback():
+        if task.get('_bound_author', {}).get('mode') == 'on':
+            raise ProviderError('bound_agy_local_governance_hold', charge='none')
+        # Direct live bindings enforce the same authorization as routing.
+        if not cursor_fallback_authorized(task):
+            mark_intent_phase(intent_path, 'HOLD_no_authorized_fallback',
+                              error='agy_author_unavailable_no_fallback',
+                              fallback_provider=None, no_model_launched=True)
+            raise ProviderError('agy_author_unavailable_no_fallback', charge='none')
+        return cursor_author_live(
+            task=task, worktree=worktree, evidence_dir=evidence,
+            intent_path=intent_path, parent_lease=parent_lease)
+
     ok, reason = role_ready('agy_author')
     canary_ok, canary_meta = (False, None)
     if not ok:
@@ -2695,9 +3005,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'agy_author_not_ready_fallback',
                           error='agy_author_not_ready', reason=reason,
                           canary=canary_meta, fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     avail, why, _rec = agy_quota_available(int(task['issue']))
     if not avail:
@@ -2708,9 +3016,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
                           error=why or 'agy_quota_unavailable',
                           fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     try:
         native = _load_native('native_antigravity_author')
@@ -2718,9 +3024,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         mark_intent_phase(intent_path, 'agy_author_not_ready_fallback',
                           error='native_author_missing', detail=err.detail,
                           fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     base_sha = (
         task.get('runtime_base_sha') or task.get('base') or task.get('source_base')
@@ -2754,16 +3058,12 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
             mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
                               error='shared_budget_ineligible', left=repr(left),
                               fallback_provider='cursor_auto')
-            return cursor_author_live(
-                task=task, worktree=worktree, evidence_dir=evidence,
-                intent_path=intent_path, parent_lease=parent_lease)
+            return cursor_fallback()
     except (LiveError, OSError, ValueError) as err:
         mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
                           error='shared_budget_unavailable', detail=type(err).__name__,
                           fallback_provider='cursor_auto')
-        return cursor_author_live(
-            task=task, worktree=worktree, evidence_dir=evidence,
-            intent_path=intent_path, parent_lease=parent_lease)
+        return cursor_fallback()
 
     # Fresh 978 staging from current HEAD; frozen base retained for full review diff.
     try:
@@ -2913,16 +3213,58 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 try:
                     if os.geteuid() == 0:
                         _agy_drop_to_executor()
-                    native.invoke(
-                        bridge, rt, prompt, choice,
-                        popen=subprocess.Popen,
-                        atomic=lambda path, value: (
-                            Path(path).write_text(
-                                json.dumps(value, sort_keys=True) + '\n')
-                        ),
-                        permitted=lambda n, allowed: n in set(allowed or []),
-                        evidence_dir=native_ev,
-                    )
+                    from author_handoff import SourceRetention, operation
+                    retention = None
+                    launch = subprocess.Popen
+                    try:
+                        baseline = {n: hashlib.sha256(native._source(staging / n, staging)).hexdigest()
+                            for n in staging_git('ls-files', '-z').split('\0')
+                            if n and native._source_name(n)}
+                        old_tokens = native._credentials(native.trusted(native.AUTH, owner=AGY_UID))
+                        observed_work = {}
+                        def retention_secrets():
+                            tokens = list(old_tokens)
+                            tokens += native._credentials(native.trusted(native.AUTH, owner=AGY_UID))
+                            if observed_work.get('home'):
+                                tokens += native._credentials(native.trusted(
+                                    Path(observed_work['home']) / '.gemini/antigravity-cli/antigravity-oauth-token',
+                                    owner=AGY_UID))
+                            return tokens
+                        def original_ignored(name):
+                            result = subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                                '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
+                                cwd=staging, env=env_git, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                            if result.returncode not in (0, 1):
+                                raise ValueError('ignore check failed')
+                            return result.returncode == 0
+                        retention = SourceRetention(baseline=baseline, allowed=task['allowed_paths'],
+                            ignored=original_ignored, source_name=native._source_name, secrets=retention_secrets,
+                            control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()))
+                        observed_popen = retention.popen(subprocess.Popen, native.reap)
+                        def launch(*a, **k):
+                            observed_work['home'] = k['env']['HOME']
+                            return observed_popen(*a, **k)
+                    except Exception:
+                        retention = None
+                        launch = subprocess.Popen
+                    try:
+                        native.invoke(
+                            bridge, rt, prompt, choice,
+                            popen=launch,
+                            atomic=lambda path, value: (
+                                Path(path).write_text(
+                                    json.dumps(value, sort_keys=True) + '\n')
+                            ),
+                            permitted=lambda n, allowed: n in set(allowed or []),
+                            evidence_dir=native_ev,
+                        )
+                    finally:
+                        # Native final receipt/cleanup is separate from UNVALIDATED bytes.
+                        if retention is not None and retention.result is not None and retention.failure is None:
+                            try:
+                                retention.persist(native_ev, operation(dict(task, _author_operation=task.get('_author_operation') or fingerprint, runtime_base_sha=base_sha), 'agy_author', head_before))
+                            except Exception:
+                                pass  # No checkpoint => HOLD; never change native outcome.
                     charged_flag = _agy_read_charge_receipt(charge_receipt)[0]
                     payload = {'ok': True, 'charged': charged_flag}
                 except BaseException as err:
@@ -3791,7 +4133,7 @@ def _qa_resume_agy_capacity(claim, task, evidence, *, deadline=None):
         evidence_dir=fallback, capacity_alternative_only=True)
 
 
-def qa_dispatch(claim, *, deadline=None):
+def qa_dispatch(claim, *, deadline=None, reviewer_authority=None):
     """Route QA: AGY when READY+admitted+quota else Codex Medium.
 
     Uses immutable claim.runtime worktree/base/evidence — never recreate from raw task.
@@ -3818,19 +4160,26 @@ def qa_dispatch(claim, *, deadline=None):
         or claim.get('evidence_root')
         or EVIDENCE_ROOT
     )
+    if claim.get('bound_author', {}).get('mode') == 'on':
+        task['_bound_author'] = claim['bound_author']
+        task['revision'] = claim['revision']
+        from providers import accepted_qa_effort
+        qa_effort = accepted_qa_effort(reviewer_authority, claim.get('reviewer_authority'))
+        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'], evidence_dir=evidence, reviewer_authority=reviewer_authority,
+                             protected_reviewer=claim.get('reviewer_authority'), qa_effort=qa_effort)
     # Persisted capacity-fallback resume: skip already-completed Codex entirely.
     resume = claim.get('resume_provider') or runtime.get('resume_provider')
     if resume == 'agy_qa' or claim.get('wake') == 'capacity_fallback_budget':
         return _qa_resume_agy_capacity(
             claim, task, evidence, deadline=deadline)
     # Explicit task provider routes remain authoritative — do not override prohibited.
-    provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
+    provider, reason, _meta = select_qa_provider(task, issue=claim['issue'], reviewer_authority=reviewer_authority)
     if provider == 'agy_qa':
         return agy_qa_live(task=task, candidate_sha=claim['candidate_sha'],
                            evidence_dir=evidence)
     try:
         return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'],
-                             evidence_dir=evidence)
+                             evidence_dir=evidence, reviewer_authority=reviewer_authority)
     except ProviderError as err:
         if err.code != 'codex_capacity_technical':
             raise
@@ -3875,6 +4224,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
                         deadline=None, repo=None):
     """Trusted LIVE default adapters for host run_once. Tests must inject fakes."""
     import run as lean_run
+    reviewer_authority = build_reviewer_authority()
 
     def fetch_admissions():
         result = fetch_project_admissions(config=None)
@@ -3904,10 +4254,15 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         """Route by task.authorroute; Cursor default; AGY only when actually qualified."""
         from providers import select_author_provider
         task = kwargs.get('task') or {}
+        protected_reviewer = kwargs.pop('protected_reviewer', None)
         provider, _reason, _meta = select_author_provider(
-            task, issue=task.get('issue'))
+            task, issue=task.get('issue'), reviewer_authority=reviewer_authority,
+            protected_reviewer=protected_reviewer)
         if provider == 'agy_author':
             return agy_author_live(**kwargs)
+        if provider == 'codex_author':
+            return codex_author_live(**kwargs, reviewer_authority=reviewer_authority,
+                                     protected_reviewer=protected_reviewer)
         return cursor_author_live(**kwargs)
 
     def qa(claim):
@@ -3915,7 +4270,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         # Prefer claim-scoped evidence_dir (attempt/candidate) over host default.
         if not claim.get('evidence_dir') and evidence_dir:
             claim['evidence_dir'] = evidence_dir
-        return qa_dispatch(claim, deadline=deadline)
+        return qa_dispatch(claim, deadline=deadline, reviewer_authority=reviewer_authority)
 
     def publish(**kwargs):
         return publish_push_pr(**kwargs)
@@ -3936,6 +4291,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         return wait_dev_deploy(claim, budget_s=remaining)
 
     return lean_run.Adapters(
+        reviewer_authority=reviewer_authority,
         fetch_admissions=fetch_admissions,
         gh_api=gh_api,
         author=author,
@@ -3969,3 +4325,566 @@ def live_self_check():
         'agy_author_ready': False,
         'note': 'Native AGY author binding present; READY only after real acceptance gates',
     }
+
+
+def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True, reviewer_authority=None, protected_reviewer=None):
+    """Qualified exact author via pinned native model_command in private source.
+
+    Only a separately admitted capacity successor may reach this transport.
+    No chat-author qualification assumptions, external hook, or QA self-PASS.
+    """
+    from providers import ProviderError, role_ready, mark_intent_phase
+    from author_handoff import bound_provider, SourceRetention, operation, owned_group_gone
+    if (bound_provider(task) or (None,))[0] != 'codex_author' or not task.get('_capacity_successor'):
+        raise ProviderError('codex_capacity_admission_required', charge='none')
+    from providers import accepted_qa_effort
+    accepted_qa_effort(reviewer_authority, protected_reviewer)
+    if not role_ready('codex_author')[0]:
+        raise ProviderError('codex_role_unqualified', charge='none')
+    require_executor_uid()
+    issues, slots = _load_native('core').live()
+    native = _load_native('native_cursor')
+    evidence = Path(evidence_dir)
+    worktree = Path(worktree)
+    private = Path(tempfile.mkdtemp(prefix='gb-codex-author-', dir='/tmp'))
+    process = None
+    retention = None
+    import_done = False
+    source_sha = git(worktree, 'rev-parse', 'HEAD')
+    try:
+        source = private / 'source'; source.mkdir()
+        job = private / 'job'; job.mkdir()
+        from types import SimpleNamespace
+        bridge = SimpleNamespace(work=worktree, git=lambda *a, **k: git(worktree, *a), env=git_env())
+        before = native.export(bridge, source)
+        if os.geteuid() == 0:
+            chown_private_tree(private)
+        # The existing secure constructor supplies permission/fs/network policy.
+        cmd = issues.model_command(AGENT_HOME / '.local/bin/codex', source, job,
+            _git_common_dir(worktree), Path('/var/lib/gobadminton-autonomy'), qa=False,
+            denied=(AGENT_HOME / '.ssh', '/srv/gb-slots', '/etc/gobadminton-slots',
+                    '/var/lib/gobadminton-actions-train', worktree))
+        cmd += ['--model', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="medium"',
+                '--json', '-o', str(job / 'final.txt'), '-']
+        rules, rules_sha, _ = load_short_rules()
+        prompt = rules + '\nAuthor only. No commit/push/deploy. TASK DATA:\n' + json.dumps({
+            k: v for k, v in task.items() if not k.startswith('_')})
+        def ignored(name):
+            r = run_argv(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
+                cwd=str(worktree), env=git_env(), timeout=15, check=False)
+            if r.returncode not in (0, 1): raise ValueError('ignore check failed')
+            return r.returncode == 0
+        retention = SourceRetention(baseline=before, allowed=task['allowed_paths'],
+            ignored=ignored, source_name=native.source_name, secrets=lambda: ())
+        budget = shared_agy_budget(int(task['issue']))
+        if not budget_left_eligible(budget.remaining('codex', 'author', 'slot1')):
+            raise ProviderError('codex_local_governance_hold', charge='none')
+        with (evidence / 'events.jsonl').open('xb') as out, (evidence / 'stderr').open('xb') as err:
+            accepted_qa_effort(reviewer_authority, protected_reviewer)
+            budget.charge('slot1', 'codex', 'author')
+            mark_intent_phase(intent_path, 'launching', provider='codex_author',
+                model='gpt-6.1-sol', effort='medium', calls_charged=1, usage=None,
+                rules_sha256=rules_sha, root_model=False)
+            process = subprocess.Popen(cmd, cwd=source, env=issues.clean_env() | {'TMPDIR': str(job)},
+                stdin=subprocess.PIPE, stdout=out, stderr=err, start_new_session=True,
+                close_fds=True, preexec_fn=uid1002_preexec())
+            try:
+                process.communicate(input=prompt.encode(), timeout=AUTHOR_TIMEOUT_S)
+            finally:
+                def stop(p):
+                    native._stop(p)
+                    try: os.killpg(p.pid, 9)
+                    except ProcessLookupError: pass
+                    p.wait(timeout=5)
+                retention.observe(source, process, stop)
+        events = [loads(line) for line in (evidence / 'events.jsonl').read_bytes().splitlines() if line.strip()]
+        if (process.returncode != 0 or not owned_group_gone(process)
+                or not any(e.get('type') == 'turn.completed' for e in events)
+                or any(e.get('type') in ('error', 'turn.failed') for e in events)
+                or retention.failure or not retention.result):
+            raise ProviderError('codex_author_hold', charge='unknown')
+        changed = retention.result['changed_paths']
+        if not changed: raise ProviderError('author_empty_or_oos', charge='unknown')
+        owner_safe_atomic_import(worktree=worktree, payloads=retention.result['payloads'],
+                                deleted=retention.result['deleted'])
+        git(worktree, 'add', '--', *changed)
+        git(worktree, '-c', 'user.name=agentagency-dev', '-c', 'user.email=agentagency-dev@localhost',
+            '-c', 'commit.gpgsign=false', 'commit', '-m', f'lean: issue-{task["issue"]} codex author')
+        sha = git(worktree, 'rev-parse', 'HEAD')
+        import_done = True
+        return dict(candidate_sha=sha, changed_paths=changed, provider='codex_author',
+                    effective_model='gpt-6.1-sol:medium', root_model=False, uid=1002)
+    finally:
+        if process is not None and process.poll() is None:
+            _kill_owned_process_group(process)
+        if not import_done and retention and retention.result and not retention.failure:
+            try: retention.persist(evidence, operation(task, 'codex_author', source_sha))
+            except Exception: pass
+        shutil.rmtree(private, ignore_errors=True)
+
+# Root-only authority delivery. None of these inputs comes from an event/task.
+_QA_RESULTS = Path('/var/lib/gobadminton-lean/results')
+_QA_CONFIG = Path('/etc/gobadminton-lean/config.json')
+
+
+def _qa_protected_bytes(path, *, results=False):
+    """Bounded stable read, no links at any component, including ancestors."""
+    import stat
+    path = Path(path)
+    if not path.is_absolute() or '..' in path.parts:
+        raise ValueError('qa authority path')
+    if results and (not path.is_relative_to(_QA_RESULTS) or path == _QA_RESULTS):
+        raise ValueError('qa authority outside results')
+    for parent in reversed(path.parents):
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('qa authority ancestor')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or not 0 < before.st_size <= 2 << 20):
+            raise ValueError('qa authority metadata')
+        raw = os.read(fd, (2 << 20) + 1)
+        after = os.fstat(fd)
+        identity = lambda st: (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid,
+                               st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        if identity(before) != identity(after) or identity(path.lstat()) != identity(after) or len(raw) != after.st_size:
+            raise ValueError('qa authority unstable')
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _qa_root_config():
+    import host
+    raw = _qa_protected_bytes(_QA_CONFIG)
+    cfg = host.read_config()
+    if host.loads(raw) != cfg or _qa_protected_bytes(_QA_CONFIG) != raw:
+        raise ValueError('qa config changed')
+    host.installed_release_sha()  # accepted installed pipeline, never task SHA
+    return cfg
+
+
+def _qa_receipt(pointer):
+    import host
+    raw = _qa_protected_bytes(pointer['path'], results=True)
+    if hashlib.sha256(raw).hexdigest() != pointer['sha256']:
+        raise ValueError('qa receipt hash')
+    return host.loads(raw)
+
+
+def _qa_native_binary():
+    # Resolver only; never a QA registry grant.
+    from providers import _import_native
+    issues, _ = _import_native('core').live()
+    path = Path(issues.NATIVE_CODEX)
+    expected = AGENT_HOME / '.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'
+    if path != expected or not path.is_file() or path.is_symlink():
+        raise ValueError('qa pinned native CLI missing')
+    if hashlib.sha256(path.read_bytes()).hexdigest() != 'f34a4d2301892ae96c90097786bfe5dc269f187b6f69faf42a7b357b8c081e35':
+        raise ValueError('qa native CLI changed')
+    return path
+
+
+def _qa_recipe(effort='medium'):
+    """Complete OPS byte closure, independent of product candidate SHA."""
+    from author_handoff import fingerprint
+    if effort not in ('medium', 'high'):
+        raise ValueError('qa effort')
+    binary = _qa_native_binary()
+    modules = sorted(Path(__file__).resolve().parent.glob('*.py'))
+    native_modules = sorted(NATIVE_TRAIN.rglob('*.py'))
+    if not native_modules:
+        raise ValueError('qa installed native closure missing')
+    # Explicit effective executables, including symlink resolution and identity.
+    executables = [Path('/usr/bin/git'), Path(sys.executable)]
+    exec_identity = {str(p): dict(resolved=str(p.resolve(strict=True)),
+        uid=p.stat().st_uid, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+        for p in executables}
+    closure = fingerprint(dict(executables=exec_identity, modules={str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in modules + native_modules + [binary, Path('/usr/bin/timeout'), AGENT_HOME / '.local/node-v24.21.0/bin/node']}))
+    _, rules_sha, rules_path = load_short_rules()
+    constants = dict(uid=CURSOR_UID, gid=CURSOR_GID, registry_gid=REGISTRY_GID, home=str(AGENT_HOME),
+        codex_home=str(NATIVE_CODEX_HOME), results=str(_QA_RESULTS), config=str(_QA_CONFIG),
+        native=str(NATIVE_TRAIN), timeout=QA_TIMEOUT_S, rules=str(rules_path),
+        effective_uid=os.geteuid(), effective_gid=os.getegid(), output_policy=_qa_output_policy())
+    return dict(role='qa', model='gpt-6-sol', effort=effort, executor_uid=CURSOR_UID,
+        executor='native:codex:1002:qa', output_policy=_qa_output_policy(), cli_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+        security_closure=closure, recipe_fingerprint=fingerprint(dict(closure=closure,
+            constants=constants, effort=effort, model='gpt-6-sol', rules_sha256=rules_sha)))
+
+
+def _qa_launch(source, tmpdir, model, effort):
+    source, tmpdir = Path(source), Path(tmpdir)
+    common = _git_common_dir(source)
+    _, _, rules_path = load_short_rules()
+    fs = {
+        ':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny', ':tmpdir': 'write',
+        str(source): 'read', str(source / '.git'): 'read',
+        str(tmpdir): 'write',
+        str(AGENT_HOME / 'train-execution-evidence-20261027'): 'read',
+        str(AGENT_HOME / '.local' / 'lib' / 'node_modules' / '@openai'): 'read',
+        str(AGENT_HOME / '.local' / 'node-v24.21.0'): 'read',
+        str(NATIVE_CODEX_HOME): 'deny',
+        str(AGENT_HOME / '.ssh'): 'deny',
+        '/srv/gb-slots': 'deny',
+        '/var/lib/gobadminton-actions-train': 'deny',
+        '/var/lib/gobadminton-autonomy': 'deny',
+        '/etc/gobadminton-slots': 'deny',
+    }
+    if common:
+        fs[common] = 'read'
+    fs[str(rules_path)] = 'read'
+    fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
+    return _qa_command(_qa_native_binary(), source, fs_expr, tmpdir / 'final.txt', model, effort), fs
+
+
+def _qa_command(codex, source, fs_expr, final_private, model, effort):
+    return [
+        '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
+        str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
+        '--ephemeral', '--skip-git-repo-check', '-C', str(source),
+        '-c', 'approval_policy="never"', '-c', 'default_permissions="gb-task"',
+        '-c', 'permissions.gb-task={extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}',
+        '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
+        '-c', 'web_search="disabled"', '--model', model,
+        '-c', 'model_reasoning_effort=' + json.dumps(effort),
+        '--json', '-o', str(final_private), '-',
+    ]
+
+
+def _qa_initial_author_binding(claim, admission):
+    """Protected factual Mode A origin; never a normal V3 or READY grant.
+
+    Root must independently reconcile the original operation before sealing
+    these existing RESULTS artifacts. Client fields and a bare Root assertion
+    cannot substitute for the hash-bound completed operation evidence.
+    """
+    from author_handoff import fingerprint
+    import host
+    def proof(name):
+        pointer = claim[name]
+        raw = _qa_protected_bytes(pointer['path'], results=True)
+        if hashlib.sha256(raw).hexdigest() != pointer['sha256']:
+            raise ValueError('initial author evidence hash')
+        return raw
+    origin = host.loads(proof('source_receipt'))
+    original_task = host.loads(proof('task_proof'))
+    completion = host.loads(proof('completion_proof'))
+    operator = host.loads(proof('operator_proof'))
+    stop = host.loads(proof('stop_proof'))
+    source = host.loads(proof('source_proof'))
+    raw = proof('raw_proof')
+    final = proof('final_proof')
+    events = [host.loads(line) for line in raw.decode().splitlines() if line.strip()]
+    provenance = claim.get('author_provenance') or {}
+    task = dict(admission['task'])
+    revision = task.pop('revision', None)
+    # The actual Mode A task is frozen in its own protected proof, not inferred
+    # from a new probe or normal V3 task. Only the computed probe revision differs.
+    expected = dict(operation_id=admission.get('author_operation_id'),
+        candidate_sha=admission.get('candidate_sha'), role='author',
+        executor='native:codex:1002:author', model='gpt-6.1-sol', effort='medium',
+        executor_uid=1002, mode='A')
+    if (admission.get('schema') != 'GB_LEAN_QA_PROBE_ADMISSION_V1'
+            or admission.get('revoked') is not False or not admission.get('operation_id')
+            or claim.get('revoked') is not False or claim.get('root_verified') is not True
+            or not expected['operation_id'] or not SHA40.fullmatch(expected['candidate_sha'] or '')
+            or revision != admission.get('admission_ref')
+            or claim.get('revision') != revision
+            or admission.get('author_executor') != expected['executor']
+            or task != original_task or claim.get('task') != original_task
+            or claim.get('scope_sha256') != fingerprint(sorted(task.get('allowed_paths', [])))
+            or any(record.get(k) != v for record in (claim, completion, operator, stop, source)
+                   for k, v in expected.items())
+            or origin.get('phase') != 'IMPORTED_COMMITTED_SOURCE_ONLY'
+            or origin.get('candidate') != expected['candidate_sha']
+            or origin.get('executor_uid') != 1002
+            or origin.get('requested_model') != expected['model']
+            or origin.get('requested_effort') != 'medium'
+            or origin.get('new_model_calls') != 1
+            or completion.get('exit') != 0 or completion.get('turn_completed') is not True
+            or completion.get('stop_record') != stop or completion.get('operator') != operator
+            or stop.get('reaped') is not True or stop.get('group_gone') is not True
+            or stop.get('exit') != 0 or stop.get('pgrp') != stop.get('pid')
+            or not isinstance(stop.get('pid'), int) or stop['pid'] <= 1
+            or not str(stop.get('start_ticks', '')).isdigit()
+            or any(operator.get(k) != stop.get(k) for k in ('pid','pgrp','start_ticks','argv_sha256'))
+            or not operator.get('actual_argv') or not operator.get('actual_permissions')
+            or fingerprint(operator['actual_argv']) != operator.get('argv_sha256')
+            or fingerprint(operator['actual_permissions']) != operator.get('permission_config_sha256')
+            or any(origin.get(k) != operator.get(k) for k in
+                   ('argv_sha256', 'permission_config_sha256', 'cli_sha256', 'prompt_sha256'))
+            or operator.get('cli_sha256') != 'f34a4d2301892ae96c90097786bfe5dc269f187b6f69faf42a7b357b8c081e35'
+            or not operator.get('prompt_sha256')
+            or source.get('task_sha256') != fingerprint(original_task)
+            or not source.get('source_bytes') or source.get('scope_sha256') != claim['scope_sha256']
+            or provenance.get('source_bytes') != source.get('source_bytes')
+            or provenance.get('candidate_sha') != expected['candidate_sha']
+            or any(e.get('type') in ('error', 'turn.failed') for e in events)
+            or sum(e.get('type') == 'turn.completed' for e in events) != 1
+            or not final.strip() or completion.get('final_sha256') != hashlib.sha256(final).hexdigest()
+            or completion.get('raw_sha256') != hashlib.sha256(raw).hexdigest()
+            or origin.get('status') in ('UNKNOWN', 'partial')
+            or completion.get('pending_unknown') is not False):
+        raise ValueError('qa initial Mode A author origin hold')
+    return expected['executor']
+
+
+def _qa_author_binding(admission):
+    claim = _qa_receipt(admission['author_receipt'])
+    task = admission['task']
+    if claim.get('schema') == 'GB_LEAN_INITIAL_MODE_A_AUTHOR_V1':
+        return _qa_initial_author_binding(claim, admission)
+    provenance = claim.get('author_provenance') or {}
+    if task.get('revision') != claim.get('revision') or admission.get('admission_ref') != claim.get('revision'):
+        raise ValueError('qa runtime revision binding')
+    runtime_keys = {'worktree', 'runtime_base_sha', '_author_operation', '_bound_author', '_capacity_successor',
+                    'author_attempt', 'repair_findings', 'findings'}
+    # Only runtime's computed revision is removed; any original revision remains
+    # an Owner requirement and must match. Unknown underscore fields survive.
+    runtime_task = dict(task)
+    if 'revision' not in (claim.get('task') or {}):
+        runtime_task.pop('revision', None)
+    runtime_keys -= set(claim.get('task') or {})
+    canonical = lambda value: {k: v for k, v in value.items() if k not in runtime_keys}
+    known = {'cursor_auto': ('native:cursor:1002', 'auto'),
+             'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
+             'codex_author': ('native:codex:1002:author', 'gpt-6.1-sol:medium')}
+    expected = known.get(claim.get('author_provider'))
+    if (not expected or claim.get('schema') != 'GB_LEAN_CLAIM_V1'
+            or claim.get('candidate_sha') != admission['candidate_sha']
+            or claim.get('revision') != admission['admission_ref']
+            or not provenance.get('source_bytes')
+            or canonical(claim.get('task') or {}) != canonical(runtime_task)
+            or claim.get('worktree') != task.get('worktree')
+            or claim.get('issue') != task.get('issue')
+            or provenance.get('candidate_sha') != admission['candidate_sha']
+            or provenance.get('revision') != admission['admission_ref']
+            or provenance.get('role') != 'author'
+            or (provenance.get('executor'), provenance.get('model')) != expected
+            or provenance.get('operation_id') != admission.get('author_operation_id')
+            or not provenance.get('operation_id')
+            or admission.get('author_executor') != expected[0]):
+        raise ValueError('qa protected author binding')
+    return expected[0]
+
+
+def _qa_process_identity(process, argv):
+    from author_handoff import fingerprint
+    proc = Path('/proc') / str(process.pid)
+    fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+    status = (proc / 'status').read_text().splitlines()
+    uid = int(next(line for line in status if line.startswith('Uid:')).split()[2])
+    limits = (proc / 'limits').read_text().splitlines()
+    for label, expected in (('Max file size', QA_OUTPUT_MAX), ('Max core file size', 0)):
+        line = next(line for line in limits if line.startswith(label)).split()
+        if line[-3:-1] != [str(expected), str(expected)]:
+            raise ValueError('qa process output limits mismatch')
+    if next(line for line in status if line.startswith('NoNewPrivs:')).split()[1] != '1':
+        raise ValueError('qa process NNP mismatch')
+    actual = (proc / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
+    if uid != CURSOR_UID or actual != [str(x).encode() for x in argv] or int(fields[2]) != process.pid:
+        raise ValueError('qa process identity mismatch')
+    identity = dict(pid=process.pid, pgrp=int(fields[2]), start_ticks=fields[19], uid=uid,
+                    argv_sha256=fingerprint(argv), output_policy=_qa_output_policy())
+    cleanup = getattr(process, '_lean_owned_identity', None)
+    if cleanup is not None and any(cleanup.get(k) != identity[k]
+                                   for k in ('pid', 'pgrp', 'start_ticks', 'uid', 'output_policy')):
+        raise ValueError('qa preexec/runtime identity mismatch')
+    process._lean_owned_identity = identity
+    return identity
+
+
+def _qa_validate_completed(intent):
+    """Validate the historical SAMPLE, never bind future reviews to its SHA."""
+    from author_handoff import fingerprint
+    from providers import parse_codex_final
+    recipe = _qa_recipe(intent['effort'])
+    if (any(intent.get(k) != v for k, v in recipe.items())
+            or intent.get('phase') != 'completed'
+            or not SHA40.fullmatch(intent.get('candidate_sha', ''))
+            or not intent.get('operation_id') or not intent.get('admission_ref')
+            or not SHA40.fullmatch(intent.get('pipeline_revision', ''))
+            or not isinstance(intent.get('owned_stop_proof'), dict)
+            or intent.get('source_before') != intent.get('source_after')
+            or intent.get('source_before') != intent['candidate_sha']
+            or not intent.get('readonly_bytes_before')
+            or intent.get('readonly_bytes_before') != intent.get('readonly_bytes_after')
+            or fingerprint(intent.get('actual_permissions')) != intent.get('argv_permissions_sha256')
+            or fingerprint(intent.get('actual_argv')) != intent.get('argv_sha256')):
+        raise ValueError('qa completion provenance')
+    parent = Path(intent['completion_proof']['path']).parent
+    if (Path(intent['completion_proof']['path']).name != 'completion.json'
+            or Path(intent['final_proof']['path']) != parent / 'final.txt'
+            or Path(intent['raw_proof']['path']) != parent / 'events.jsonl'
+            or not intent.get('author_executor')
+            or intent.get('author_executor') == recipe['executor']):
+        raise ValueError('qa evidence binding')
+    admission = _qa_receipt(intent['probe_admission'])
+    _qa_author_binding(admission)
+    if (admission.get('schema') != 'GB_LEAN_QA_PROBE_ADMISSION_V1'
+            or admission.get('revoked') is not False or admission.get('recipe') != recipe
+            or admission.get('pipeline_revision') != intent.get('pipeline_revision')
+            or _qa_receipt(admission['author_receipt']).get('author_provenance', {}).get('source_bytes') != intent.get('readonly_bytes_before')
+            or any(intent.get(k) != admission.get(k) for k in
+                ('candidate_sha', 'operation_id', 'admission_ref', 'author_executor', 'author_operation_id', 'author_receipt'))
+            or str(parent) != admission.get('evidence_dir')
+            or Path(intent['intent_path']) != parent / 'qa-intent-codex_sol_medium.json'
+            or intent.get('source_path') != admission['task'].get('worktree')):
+        raise ValueError('qa protected operation binding')
+    tmpdir = Path(intent['private_tmpdir'])
+    if (tmpdir.parent.parent != Path('/tmp') or not tmpdir.parent.name.startswith('gb-codex-lean-')
+            or tmpdir.name != 'tmp'):
+        raise ValueError('qa private output path')
+    argv, permissions = _qa_launch(intent['source_path'], tmpdir, recipe['model'], recipe['effort'])
+    stop = intent['owned_stop_proof']
+    if (intent['actual_argv'] != argv or intent['actual_permissions'] != permissions
+            or stop.get('argv_sha256') != fingerprint(argv)
+            or stop.get('output_policy') != recipe.get('output_policy')
+            or stop.get('uid') != recipe['executor_uid'] or stop.get('pgrp') != stop.get('pid')
+            or not isinstance(stop.get('pid'), int) or stop['pid'] <= 1
+            or not str(stop.get('start_ticks', '')).isdigit()
+            or stop.get('reaped') is not True or stop.get('group_gone') is not True
+            or stop.get('exit') != 0
+            or any(stop.get(k) != intent.get(k) for k in ('operation_id', 'admission_ref'))
+            or stop.get('evidence_dir') != str(parent)):
+        raise ValueError('qa actual launch or process proof')
+    completion = _qa_receipt(intent['completion_proof'])
+    if completion.get('stop_record') != stop:
+        raise ValueError('qa protected stop record mismatch')
+    operator = completion.get('operator') or {}
+    if (any(operator.get(k) != stop.get(k) for k in ('pid', 'pgrp', 'uid', 'start_ticks', 'argv_sha256', 'operation_id', 'admission_ref', 'evidence_dir'))
+            or operator.get('actual_argv') != argv or operator.get('actual_permissions') != permissions
+            or operator.get('source_before') != intent.get('readonly_bytes_before')):
+        raise ValueError('qa protected operator completion mismatch')
+    final_raw = _qa_protected_bytes(intent['final_proof']['path'], results=True)
+    if hashlib.sha256(final_raw).hexdigest() != intent['final_proof']['sha256']:
+        raise ValueError('qa final bytes')
+    # Raw is hash-bound, not logged or parsed as an authority grant.
+    _qa_receipt_bytes = _qa_protected_bytes(intent['raw_proof']['path'], results=True)
+    if hashlib.sha256(_qa_receipt_bytes).hexdigest() != intent['raw_proof']['sha256']:
+        raise ValueError('qa raw bytes')
+    import host
+    events = [host.loads(line) for line in _qa_receipt_bytes.decode().splitlines() if line.strip()]
+    if any(isinstance(e, dict) and e.get('type') in ('error', 'turn.failed') for e in events):
+        raise ValueError('qa raw failure')
+    if not any(isinstance(event, dict) and event.get('type') == 'turn.completed' for event in events):
+        raise ValueError('qa raw turn missing')
+    if (completion.get('exit') != 0 or completion.get('turn_completed') is not True
+            or completion.get('candidate_sha') != intent['candidate_sha']):
+        raise ValueError('qa completion failed')
+    parse_codex_final(final_raw.decode(), intent['candidate_sha'])
+    return recipe
+
+
+def build_reviewer_authority():
+    """Constructed by normal Root adapters; re-read authority on EVERY use."""
+    def authority(*, model, effort, role, executor):
+        if os.geteuid() != 0:
+            return None
+        try:
+            cfg = _qa_root_config()
+            pointer = cfg['codex_qa_authority'][effort]
+            if Path(pointer['path']).name != 'qa-intent-codex_sol_medium.json':
+                return None
+            intent = _qa_receipt(pointer)
+            if intent.get('intent_path') != pointer['path']:
+                return None
+            recipe = _qa_validate_completed(intent)
+            if (intent.get('root_acceptance') != 'accepted'
+                    or intent.get('revoked') is not False
+                    or (model, role, executor) != (recipe['model'], 'qa', recipe['executor'])):
+                return None
+            from author_handoff import fingerprint
+            return dict(recipe, admitted=True, qualified=True, secured=True,
+                        independent_executor=True, accepted_intent_path_sha256=pointer,
+                        sample_candidate_sha=intent['candidate_sha'],
+                        sample_operation_id=intent['operation_id'],
+                        admission_ref=intent.get('admission_ref'),
+                        pipeline_revision=intent.get('pipeline_revision'),
+                        argv_permissions_sha256=intent.get('argv_permissions_sha256'),
+                        source_before_after_sha256=fingerprint([intent.get('readonly_bytes_before'), intent.get('readonly_bytes_after')]),
+                        raw_final_completion_sha256=fingerprint([intent.get(k) for k in ('raw_proof', 'final_proof', 'completion_proof')]),
+                        owned_stop_proof=intent.get('owned_stop_proof'))
+        except Exception:
+            return None
+    return authority
+
+
+def _qa_probe_admission():
+    """One Root-admitted probe, no task/event toggle and no automatic acceptance.
+
+    Same operator/factory as normal QA. The prepared intent is the idempotency
+    guard; every outcome, including UNKNOWN, consumes this exact admission.
+    """
+    from providers import ProviderError
+    if os.geteuid() != 0:
+        raise ProviderError('qa_probe_root_required', charge='none')
+    cfg = _qa_root_config()
+    admission = _qa_receipt(cfg['codex_qa_probe'])
+    from author_handoff import fingerprint
+    if (admission.get('schema') != 'GB_LEAN_QA_PROBE_ADMISSION_V1'
+            or admission.get('revoked') is not False
+            or admission.get('recipe') != _qa_recipe(admission.get('effort'))):
+        raise ProviderError('qa_probe_admission_hold', charge='none')
+    admission_path = Path(cfg['codex_qa_probe']['path'])
+    if (admission_path.name != 'qa-intent-codex_sol_medium.json'
+            or Path(admission['evidence_dir']).parent != admission_path.parent):
+        raise ProviderError('qa_probe_receipt_family_hold', charge='none')
+    task = admission['task']
+    if (task.get('_bound_author') or task.get('author_executor') == 'native:codex:1002:qa'
+            or not admission.get('author_executor')
+            or admission.get('author_executor') == 'native:codex:1002:qa'
+            or not admission.get('operation_id')
+            or admission.get('scope_sha256') != fingerprint(sorted(task.get('allowed_paths', [])))
+            or not SHA40.fullmatch(admission.get('candidate_sha', ''))
+            or admission.get('admission_ref') != task.get('revision')):
+        raise ProviderError('qa_probe_scope_hold', charge='none')
+    _qa_author_binding(admission)
+    # No callable or authority data is taken from task. Admission is Root bytes.
+    return admission
+
+
+def codex_qa_probe_live():
+    admission = _qa_probe_admission()
+    task = admission['task']
+    return codex_qa_live(task=task, candidate_sha=admission['candidate_sha'],
+        evidence_dir=admission['evidence_dir'], _probe=admission,
+        qa_effort=admission['effort'])
+
+
+def accept_codex_qa_intent(pointer):
+    """Explicit trusted Root acceptance only; PMA later CAS-updates config pointer."""
+    from providers import atomic_write
+    if os.geteuid() != 0:
+        raise ValueError('qa acceptance Root required')
+    if Path(pointer['path']).name != 'qa-intent-codex_sol_medium.json':
+        raise ValueError('qa acceptance intent family')
+    intent = _qa_receipt(pointer)
+    if intent.get('intent_path') != pointer['path']:
+        raise ValueError('qa intent pointer binding')
+    _qa_validate_completed(intent)
+    if intent.get('root_acceptance') or intent.get('revoked'):
+        raise ValueError('qa acceptance already resolved')
+    intent.update(root_acceptance='accepted', revoked=False)
+    atomic_write(pointer['path'], intent, 0o600)
+    return dict(path=pointer['path'], sha256=hashlib.sha256(
+        _qa_protected_bytes(pointer['path'], results=True)).hexdigest())
+
+
+def _qa_source_bytes(source):
+    from author_handoff import fingerprint
+    names = git(source, 'ls-files', '-z').split('\0')
+    result = {}
+    for name in names:
+        if not name:
+            continue
+        path = Path(source) / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('qa source irregular')
+        result[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return fingerprint(result)
