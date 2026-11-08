@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { managerRosterRowStatusLabel } from "../src/components/consumer/games/GameResultsComposition";
 import {
   attendanceLabel,
   canOfferAttendanceWrites,
@@ -194,6 +195,107 @@ describe("PG-1b game results helpers", () => {
     expect(summary).toContain("Участники / Итоги");
     expect(summary).not.toContain("ManageGamePage");
     expect(summary).not.toContain("MyGameDetailPage");
+  });
+
+  it("manager roster status: own self_attested stays neutral; external wait and dispute preserved", () => {
+    const baseActions = {
+      canSetAttendance: true,
+      canAcknowledge: false,
+      canDispute: false,
+      canWithdrawDispute: false,
+      canRespondDispute: true,
+    };
+    const ownSelf: AttendanceRecord = {
+      contextId: "20000000-0000-4000-8000-000000000010",
+      value: "present",
+      version: 1,
+      late: false,
+      assertion: {
+        actorDisplay: "Я",
+        source: "self_attested",
+        at: "2026-11-08T12:00:00.000Z",
+      },
+      acknowledgedVersion: null,
+      dispute: null,
+      displayName: "Я (организатор)",
+      allowedActions: baseActions,
+    };
+    const externalPending: AttendanceRecord = {
+      contextId: "20000000-0000-4000-8000-000000000011",
+      value: "present",
+      version: 2,
+      late: false,
+      assertion: {
+        actorDisplay: "Mgr",
+        source: "manager_explicit",
+        at: "2026-11-08T12:05:00.000Z",
+      },
+      acknowledgedVersion: null,
+      dispute: null,
+      displayName: "Анна",
+      allowedActions: baseActions,
+    };
+    const disputed: AttendanceRecord = {
+      contextId: "20000000-0000-4000-8000-000000000012",
+      value: "absent",
+      version: 2,
+      late: false,
+      assertion: {
+        actorDisplay: "Mgr",
+        source: "manager_explicit",
+        at: "2026-11-08T12:10:00.000Z",
+      },
+      acknowledgedVersion: null,
+      dispute: {
+        id: "30000000-0000-4000-8000-000000000012",
+        status: "open",
+        challengedVersion: 1,
+        version: 1,
+      },
+      displayName: "Борис",
+      allowedActions: baseActions,
+    };
+    const externalAgreed: AttendanceRecord = {
+      ...externalPending,
+      contextId: "20000000-0000-4000-8000-000000000013",
+      displayName: "Вера",
+      acknowledgedVersion: 2,
+    };
+    const disputedSelf: AttendanceRecord = {
+      ...ownSelf,
+      contextId: "20000000-0000-4000-8000-000000000014",
+      displayName: "Самоспор",
+      dispute: {
+        id: "30000000-0000-4000-8000-000000000014",
+        status: "open",
+        challengedVersion: 1,
+        version: 1,
+      },
+    };
+
+    expect(managerRosterRowStatusLabel(ownSelf)).toBe("Сами отметили");
+    expect(managerRosterRowStatusLabel(ownSelf)).not.toBe("Ждёт ответа участника");
+    expect(managerRosterRowStatusLabel(ownSelf)).not.toBe("Участник подтвердил");
+    expect(managerRosterRowStatusLabel(externalPending)).toBe("Ждёт ответа участника");
+    expect(managerRosterRowStatusLabel(disputed)).toBe("На уточнении");
+    expect(managerRosterRowStatusLabel(disputedSelf)).toBe("На уточнении");
+    expect(managerRosterRowStatusLabel(externalAgreed)).toBe("Участник подтвердил");
+    expect(
+      managerRosterRowStatusLabel({
+        ...ownSelf,
+        value: "unknown",
+        version: 0,
+        assertion: { actorDisplay: null, source: null, at: null },
+      }),
+    ).toBe("Ещё без отметки");
+
+    const composition = readFileSync(
+      path.resolve(__dirname, "../src/components/consumer/games/GameResultsComposition.tsx"),
+      "utf8",
+    );
+    expect(composition).toContain("managerRosterRowStatusLabel(row)");
+    expect(composition).toContain('"Сами отметили"');
+    expect(composition).toContain('"Ждёт ответа участника"');
   });
 
   it("manager open-dispute list exposes two concurrent roster disputes without closing the first", () => {

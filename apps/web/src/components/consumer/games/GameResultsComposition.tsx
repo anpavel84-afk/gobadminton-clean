@@ -43,6 +43,20 @@ type Tab = ResultsSection;
 type MarkTarget = { record: AttendanceRecord; mode: "single" | "bulk-review" } | null;
 
 /**
+ * Manager roster status line. Dispute first; self_attested known rows stay neutral
+ * (not «ждёт ответа»); real external ack-pending copy is preserved.
+ */
+export function managerRosterRowStatusLabel(row: AttendanceRecord): string {
+  if (row.dispute?.status === "open") return "На уточнении";
+  if (row.acknowledgedVersion === row.version && row.value !== "unknown") {
+    return "Участник подтвердил";
+  }
+  if (row.value === "unknown") return "Ещё без отметки";
+  if (row.assertion.source === "self_attested") return "Сами отметили";
+  return "Ждёт ответа участника";
+}
+
+/**
  * Immutable actor+game operation host: one useGameResultsMutation instance for this
  * mount only. Parent keys by `${actorId}:${gameId}` so A→B / game change remounts
  * (live=false + generation bump) and cannot retry or clear across hosts.
@@ -590,15 +604,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                             <Avatar name={row.displayName} />
                             <div>
                               <strong>{row.displayName}</strong>
-                              <small>
-                                {row.dispute?.status === "open"
-                                  ? "На уточнении"
-                                  : row.acknowledgedVersion === row.version && row.value !== "unknown"
-                                    ? "Участник подтвердил"
-                                    : row.value === "unknown"
-                                      ? "Ещё без отметки"
-                                      : "Ждёт ответа участника"}
-                              </small>
+                              <small>{managerRosterRowStatusLabel(row)}</small>
                             </div>
                           </div>
                           <span className="gb-postgame__pill" data-value={row.value}>
