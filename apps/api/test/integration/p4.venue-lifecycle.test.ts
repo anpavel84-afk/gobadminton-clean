@@ -34,7 +34,9 @@ run("P4 venue lifecycle on current P3",()=>{
   app=mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter({logger:false}));await app.register(cookie);app.setGlobalPrefix("v1");app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
   content=await actor("content_manager");other=await actor("superadmin");support=await actor("support");games=mod.get(GamesService);sessions=mod.get(SessionService);venues=mod.get(VenuesService);
  },120000);
- beforeEach(async()=>{await pool.query("DELETE FROM admin_rate_windows");});
+ // Disposable fixture only: isolate synthetic text budgets between unrelated cases.
+ // Does not touch live/DEV counters; production quantity caps stay enforced.
+ beforeEach(async()=>{await pool.query("DELETE FROM admin_rate_windows");await pool.query("DELETE FROM content_moderation_rate_budgets");});
  afterAll(async()=>{await app?.close();await pool?.end();});
  async function user(){return (await pool.query<{id:string}>("INSERT INTO users(display_name) VALUES('P4 synthetic') RETURNING id")).rows[0]!.id;}
  async function actor(role:AdminRole):Promise<Actor>{const uid=await user(),id=(await pool.query<{id:string}>("INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",[uid])).rows[0]!.id;await pool.query("INSERT INTO admin_role_grants(principal_id,role,reason_code) VALUES($1,$2,'synthetic_fixture')",[id,role]);const credential=randomUUID(),token=randomUUID()+randomUUID(),csrf=randomUUID();await pool.query("INSERT INTO admin_webauthn_credentials(credential_id,principal_id,public_key) VALUES($1,$2,$3)",[credential,id,Buffer.from('synthetic-command-fixture')]);await pool.query("INSERT INTO admin_sessions(principal_id,credential_id,token_hash,csrf_ciphertext) VALUES($1,$2,$3,$4)",[id,credential,hashSecret(pepper,token),sealSecret(pepper,csrf)]);return {id,token,csrf};}

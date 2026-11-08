@@ -420,8 +420,9 @@ export class VenuesService {
 
   /**
    * Fresh readonly preflight: city / identity / optional confirm token / fuzzy neighbors.
-   * Releases the client (and any row locks) before provider I/O. Exact reuse and fuzzy
-   * prompt skip approveTexts. Token is validated without consumption.
+   * Releases the client (and any row locks) before provider I/O. Exact reuse, legacy
+   * empty-discriminator reuse, and fuzzy prompt skip approveTexts. Token is validated
+   * without consumption; keys/locks are never mutated here.
    */
   private async prepareConsumerVenueText(
     userId: string,
@@ -448,6 +449,12 @@ export class VenuesService {
           await client.query("COMMIT");
           return { mode: "reuse" };
         }
+        // Mirror findOrPropose legacy-empty path so confirm-token / extracted-hall
+        // requests that ultimately REUSE do not pay classification.
+        if (await this.canReuseLegacyEmptyIdentityReadonly(client, parsed, identity)) {
+          await client.query("COMMIT");
+          return { mode: "reuse" };
+        }
         if (
           opts.allowFuzzyPrompt &&
           !parsed.confirmDistinctToken &&
@@ -469,6 +476,30 @@ export class VenuesService {
       venueCreateTextCandidates(parsed.name, parsed.address),
     );
     return { mode: "create", approval };
+  }
+
+  /** Readonly identity decision only — no key promote, lock, or token consume. */
+  private async canReuseLegacyEmptyIdentityReadonly(
+    client: PoolClient,
+    parsed: ParsedVenueInput,
+    identity: BuiltIdentity,
+  ): Promise<boolean> {
+    if (identity.identityDiscriminator.length === 0) return false;
+    const emptyDiscriminatorKey = venueDedupeKey({
+      cityId: parsed.cityId,
+      normalizedName: identity.normalizedName,
+      normalizedAddress: identity.normalizedAddress,
+      identityDiscriminator: "",
+    });
+    const legacyId = await lookupIdentityVenueId(client, emptyDiscriminatorKey);
+    if (!legacyId) return false;
+    const legacy = await loadVenue(client, legacyId);
+    return (
+      legacy.city_id === parsed.cityId &&
+      legacy.normalized_name === identity.normalizedName &&
+      legacy.normalized_address === identity.normalizedAddress &&
+      legacy.identity_discriminator === ""
+    );
   }
 
   private async finishConsumerVenueMutation(

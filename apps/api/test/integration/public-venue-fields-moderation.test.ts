@@ -32,6 +32,7 @@ import {
   safeTextBatchDecision,
   TEXT_CATEGORIES,
 } from "../../src/moderation/provider";
+import { PUBLIC_TEXT_POLICY_VERSION } from "../../src/moderation/text-policy";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
 import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 import { VenuesModule } from "../../src/venues/venues.module";
@@ -269,6 +270,42 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
        ORDER BY surface_key, resource_version`,
       [venueId],
     );
+  }
+
+  async function publicationEvidence(venueId: string, resourceVersion: number) {
+    return pool.query<{
+      surface_key: string;
+      resource_version: number;
+      binding_kind: string;
+      decision: string;
+      content_fingerprint: string;
+      policy_version: string;
+    }>(
+      `SELECT b.surface_key, b.resource_version, b.binding_kind,
+              a.decision, a.content_fingerprint, a.policy_version
+       FROM content_moderation_bindings b
+       JOIN content_moderation_approvals a ON a.id = b.approval_id
+       WHERE b.entity_id = $1::uuid
+         AND b.entity_kind = 'venue'
+         AND b.binding_kind = 'publication'
+         AND b.resource_version = $2
+       ORDER BY b.surface_key`,
+      [venueId, resourceVersion],
+    );
+  }
+
+  /** Far from the shared 55.75/37.62 cluster so fuzzy neighbors do not false-409. */
+  function isolatedVenuePayload(extra: Record<string, unknown> = {}) {
+    const suffix = randomUUID().slice(0, 8);
+    return {
+      cityId: MOSCOW_CITY_ID,
+      name: `Изолят Race ${suffix}`,
+      address: `пр. Изолированный, ${suffix}`,
+      timezone: "Europe/Moscow",
+      latitude: 55.12 + (Math.random() * 0.04),
+      longitude: 37.12 + (Math.random() * 0.04),
+      ...extra,
+    };
   }
 
   it("0065 migration admits venue surfaces and entity kind; rollback keeps catalogue", async () => {
@@ -576,8 +613,65 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
       payload: { action: "restore", expectedVersion: version, reasonCode: "synthetic_review" },
     });
     expect(restored.statusCode).toBe(201);
-    expect(fake.textCalls).toBe(1);
+    // Same exact public text already approved at edit → provider cache may zero-egress.
+    expect(fake.textCalls).toBe(0);
     version = restored.json().version as number;
+    const restoreEvidence = await publicationEvidence(venueId, version);
+    expect(restoreEvidence.rows.map((r) => r.surface_key).sort()).toEqual([
+      "venue_address",
+      "venue_description",
+      "venue_name",
+    ]);
+    expect(
+      restoreEvidence.rows.every(
+        (r) =>
+          r.binding_kind === "publication" &&
+          r.decision === "allow" &&
+          r.policy_version === PUBLIC_TEXT_POLICY_VERSION &&
+          typeof r.content_fingerprint === "string" &&
+          r.content_fingerprint.length === 64 &&
+          r.resource_version === version,
+      ),
+    ).toBe(true);
+
+    // Cold path: mutate public snapshot under retirement without prior allow cache.
+    const retiredAgain = await app.inject({
+      method: "POST",
+      url: `/v1/admin/venues/${venueId}/commands`,
+      headers: adminHeaders(),
+      cookies: { [ADMIN_COOKIE]: admin.token },
+      payload: { action: "retire", expectedVersion: version, reasonCode: "synthetic_review" },
+    });
+    expect(retiredAgain.statusCode).toBe(201);
+    version = retiredAgain.json().version as number;
+    const coldName = `Cold restore ${randomUUID().slice(0, 8)}`;
+    const coldDesc = `Cold description ${randomUUID().slice(0, 8)}`;
+    await pool.query(
+      `UPDATE venues
+       SET name = $2,
+           public_description = $3,
+           normalized_name = venue_normalize_v1($2)
+       WHERE id = $1`,
+      [venueId, coldName, coldDesc],
+    );
+    fake.textCalls = 0;
+    const coldRestore = await app.inject({
+      method: "POST",
+      url: `/v1/admin/venues/${venueId}/commands`,
+      headers: adminHeaders(),
+      cookies: { [ADMIN_COOKIE]: admin.token },
+      payload: { action: "restore", expectedVersion: version, reasonCode: "synthetic_review" },
+    });
+    expect(coldRestore.statusCode).toBe(201);
+    expect(fake.textCalls).toBe(1);
+    version = coldRestore.json().version as number;
+    const coldEvidence = await publicationEvidence(venueId, version);
+    expect(coldEvidence.rows.map((r) => r.surface_key).sort()).toEqual([
+      "venue_address",
+      "venue_description",
+      "venue_name",
+    ]);
+    expect(coldEvidence.rows.every((r) => r.decision === "allow")).toBe(true);
 
     fake.textCalls = 0;
     const verified = await app.inject({
@@ -591,23 +685,199 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
     expect(fake.textCalls).toBe(0);
   });
 
+  it("legacy empty-discriminator hall reuse is zero-egress (prepare mirrors findOrPropose)", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const name = `QA Спортзал зал 2 ${suffix}`;
+    const address = `ул. LegacyEmpty ${suffix}`;
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO venues (
+         city_id, name, address, timezone, location,
+         data_status, provenance, created_by_user_id,
+         lifecycle_state, normalized_name, normalized_address,
+         identity_discriminator
+       ) VALUES (
+         $1,$2,$3,'Europe/Moscow',
+         ST_SetSRID(ST_MakePoint(37.05,55.05),4326)::geography,
+         'unverified','legacy',$4,
+         'unverified', venue_normalize_v1($2), venue_normalize_v1($3), ''
+       )
+       RETURNING id`,
+      [MOSCOW_CITY_ID, name, address, consumer.userId],
+    );
+    const legacyId = inserted.rows[0]!.id;
+    await pool.query(`SELECT venue_backfill_identity_keys()`);
+    const keyRow = await pool.query<{ dedupe_key: string }>(
+      `SELECT dedupe_key FROM venue_identity_keys WHERE venue_id = $1`,
+      [legacyId],
+    );
+    expect(keyRow.rows[0]?.dedupe_key).toBeTruthy();
+
+    fake.textCalls = 0;
+    const reused = await app.inject({
+      method: "POST",
+      url: "/v1/venue-proposals",
+      headers: consumerHeaders(consumer),
+      payload: {
+        cityId: MOSCOW_CITY_ID,
+        name,
+        address,
+        timezone: "Europe/Moscow",
+        latitude: 55.05,
+        longitude: 37.05,
+      },
+    });
+    expect(reused.statusCode).toBe(200);
+    expect(reused.json().id).toBe(legacyId);
+    expect(fake.textCalls).toBe(0);
+    const count = await pool.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM venues WHERE id = $1 OR (name = $2 AND address = $3)`,
+      [legacyId, name, address],
+    );
+    expect(count.rows[0]!.c).toBe(1);
+  });
+
   it("race: reuse prep cannot unchecked INSERT; stale confirm token does not replay", async () => {
-    const payload = venuePayload();
-    const first = await app.inject({
+    const payload = isolatedVenuePayload();
+    const seeded = await app.inject({
       method: "POST",
       url: "/v1/venues",
       headers: consumerHeaders(consumer),
       payload,
     });
-    expect([200, 201]).toContain(first.statusCode);
+    expect(seeded.statusCode).toBe(201);
+    const seededId = seeded.json().id as string;
+    const beforeCount = (
+      await pool.query<{ c: number }>(
+        `SELECT count(*)::int AS c FROM venues WHERE name = $1 AND address = $2`,
+        [payload.name, payload.address],
+      )
+    ).rows[0]!.c;
+
+    // Hold catalog lock so execute blocks after readonly reuse prep.
+    const locker = await pool.connect();
+    try {
+      await locker.query("BEGIN");
+      await locker.query(
+        "SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))",
+      );
+      const racePromise = app.inject({
+        method: "POST",
+        url: "/v1/venues",
+        headers: consumerHeaders(consumer),
+        payload,
+      });
+      // Wait until the racing execute is blocked on the catalog advisory lock
+      // (proves readonly reuse prep finished while the identity key still existed).
+      let blocked = false;
+      for (let i = 0; i < 80; i++) {
+        const waiting = await locker.query<{ n: number }>(
+          `SELECT count(*)::int AS n
+           FROM pg_locks
+           WHERE locktype = 'advisory' AND NOT granted AND pid <> pg_backend_pid()`,
+        );
+        if ((waiting.rows[0]?.n ?? 0) > 0) {
+          blocked = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(blocked).toBe(true);
+      // Identity evaporates after reuse prep → final would INSERT without create prep.
+      await locker.query(`DELETE FROM venue_identity_keys WHERE venue_id = $1`, [
+        seededId,
+      ]);
+      await locker.query("COMMIT");
+      const raced = await racePromise;
+      expect(raced.statusCode).toBe(409);
+      expect(raced.json().code).toBe("VENUE_TEXT_PREPARE_STALE");
+    } finally {
+      try {
+        await locker.query("ROLLBACK");
+      } catch {
+        /* already committed/released */
+      }
+      locker.release();
+    }
+    const afterCount = (
+      await pool.query<{ c: number }>(
+        `SELECT count(*)::int AS c FROM venues WHERE name = $1 AND address = $2`,
+        [payload.name, payload.address],
+      )
+    ).rows[0]!.c;
+    expect(afterCount).toBe(beforeCount);
+    const orphanBindings = await pool.query<{ c: number }>(
+      `SELECT count(*)::int AS c
+       FROM content_moderation_bindings b
+       WHERE b.entity_kind = 'venue'
+         AND b.binding_kind = 'publication'
+         AND b.entity_id <> $1::uuid
+         AND EXISTS (
+           SELECT 1 FROM venues v
+           WHERE v.id = b.entity_id AND v.name = $2 AND v.address = $3
+         )`,
+      [seededId, payload.name, payload.address],
+    );
+    expect(orphanBindings.rows[0]!.c).toBe(0);
+
+    // Stale confirm-token path (title claims it): force a fuzzy neighbor pair.
+    const tokenActor = await actor("Venue fields stale-token");
+    const tokenTag = randomUUID().slice(0, 8);
+    const tokenBase = isolatedVenuePayload({
+      name: `Изолят База ${tokenTag}`,
+      address: `улица ${tokenTag}`,
+    });
+    const base = await app.inject({
+      method: "POST",
+      url: "/v1/venue-proposals",
+      headers: consumerHeaders(tokenActor),
+      payload: tokenBase,
+    });
+    expect(base.statusCode).toBe(201);
+    const neighbor = {
+      ...tokenBase,
+      name: `Изолят База сосед ${tokenTag}`,
+      latitude: tokenBase.latitude + 0.00015,
+      longitude: tokenBase.longitude + 0.00015,
+    };
+    const fuzzy = await app.inject({
+      method: "POST",
+      url: "/v1/venue-proposals",
+      headers: consumerHeaders(tokenActor),
+      payload: neighbor,
+    });
+    expect(fuzzy.statusCode).toBe(409);
+    const token = fuzzy.json().confirmationToken as string;
+    expect(token).toMatch(/^[a-f0-9]{64}$/);
+    await pool.query(
+      `UPDATE venue_proposal_confirm_tokens
+       SET expires_at = now() - interval '1 minute'
+       WHERE token_hash = encode(digest($1, 'sha256'), 'hex')`,
+      [token],
+    );
+    fake.textCalls = 0;
+    const stale = await app.inject({
+      method: "POST",
+      url: "/v1/venue-proposals/confirm-distinct",
+      headers: consumerHeaders(tokenActor),
+      payload: { ...neighbor, confirmationToken: token },
+    });
+    expect(stale.statusCode).toBe(422);
+    expect(fake.textCalls).toBe(0);
+    const used = await pool.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM venue_proposal_confirm_tokens
+       WHERE token_hash = encode(digest($1, 'sha256'), 'hex') AND used_at IS NOT NULL`,
+      [token],
+    );
+    expect(used.rows[0]!.c).toBe(0);
 
     // Same-key success replay after revoke is denied by session fences in MutationRunner.
     const idem = key();
+    const secondPayload = isolatedVenuePayload();
     const second = await app.inject({
       method: "POST",
       url: "/v1/venues",
       headers: consumerHeaders(consumer, idem),
-      payload: venuePayload(),
+      payload: secondPayload,
     });
     expect([200, 201]).toContain(second.statusCode);
     await pool.query("UPDATE consumer_sessions SET revoked_at = now() WHERE id = $1", [
@@ -617,7 +887,7 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
       method: "POST",
       url: "/v1/venues",
       headers: consumerHeaders(consumer, idem),
-      payload: venuePayload(),
+      payload: secondPayload,
     });
     expect([401, 403]).toContain(replay.statusCode);
   });

@@ -25,6 +25,15 @@ type AdminVenueTextPrep = {
   committed: Array<{ surface: "venue_name" | "venue_address" | "venue_description"; text: string }>;
 };
 
+/**
+ * DTO groups verify|retire|restore in one enum variant, so Extract<{action:"restore"}> is never.
+ * Narrow action after the command() restore branch without rewriting venues.dto.
+ */
+type VenueRestoreCommand = Extract<
+  VenueCommand,
+  { action: "verify" | "retire" | "restore" }
+> & { action: "restore" };
+
 /** Venue-owned writes. Admin supplies current authorization and one transaction. */
 @Injectable()
 export class AdminVenuesService {
@@ -175,7 +184,7 @@ export class AdminVenuesService {
       return this.editWithTextGate(request, key, id, input);
     }
     if (input.action === "restore") {
-      return this.restoreWithTextGate(request, key, id, input);
+      return this.restoreWithTextGate(request, key, id, { ...input, action: "restore" });
     }
     return this.admin.privilegedCommand(request,key,input.action==="merge"?"venue.merge":"venue.manage",true,"venue."+input.action,{id,...input},async(c,a,keyHash)=>{
       await this.catalog(c);
@@ -387,7 +396,7 @@ export class AdminVenuesService {
     request: FastifyRequest,
     key: string | undefined,
     id: string,
-    input: Extract<VenueCommand, { action: "restore" }>,
+    input: VenueRestoreCommand,
   ) {
     let actorUserId = "";
     let snapshot: {
