@@ -1,8 +1,8 @@
 # #506 MOD-V2-D handoff — provider avatar quarantine + bounded Admin metadata
 
-Attempt 56. Author: Cursor Auto. Base: actual DEV alpha.55 `edc6744ce0f96dcaa922dafcd373fdab8e482bf8`. One candidate: D1 then D2. No push/merge/deploy by author. Whole #506 not DONE solely by this source.
+Attempt 59. Author: Cursor Auto. Frozen base `cef05ed3e188b48bfdf7a30998c410ac0afb5ddf`. Coverage-repair only (no product/architecture change). Assignment `OWNER506_D_REAL_ENTRYPOINTS_AND_SEALED_LEGACY_HTTP_REPLAY_REGRESSION`. No push/merge/deploy by author. Whole #506 not DONE solely by this source.
 
-## D1 — public providerUrl quarantine
+## D1 — public providerUrl quarantine (product already landed)
 
 Unreviewed VK/Yandex `providerUrl` is null at all four public projection branches:
 
@@ -11,7 +11,7 @@ Unreviewed VK/Yandex `providerUrl` is null at all four public projection branche
 3. Unified/batched Radar — `unified.service.ts` avatarMap.
 4. Geographic Radar — `geographic.service.ts` player.avatar.
 
-Presentation helper: `profiles/public-avatar-projection.ts` (DTO/replay boundaries only — not a recursive idempotency sanitizer).
+Presentation helper: `profiles/public-avatar-projection.ts` (DTO/replay boundaries only — not a recursive idempotency sanitizer). Pure helper shape tests remain in `test/unit/provider-avatar-projection.test.ts` and are not a substitute for HTTP.
 
 Preserved:
 
@@ -21,7 +21,21 @@ Preserved:
 - Historical receipt bytes untouched; HTTP/DTO presentation returns `providerUrl=null` while status/IDs/uploadedUrl preserved.
 - No remote download/classification/copy; no mass identity rewrite.
 
-## D2 — bounded Admin metadata
+## Attempt 59 — disposable integration coverage repair
+
+File: `apps/api/test/integration/provider-avatar-projection.disposable.test.ts` (gated `RUN_DB_INTEGRATION=1`).
+
+Gap fixed (d58): labels no longer assert locally constructed `{providerUrl:null}` constants or pure-helper DTO calls as projection proof; empty-cookie 401 is not used as the access-loss control.
+
+Now asserts:
+
+1. **Four projections via real entrypoints** — own/public GET; published-game comment create+list; `POST /v1/players/query`; geographic activation + `POST /v1/radar/results/query`; plus `avatarForGameCreator` on a real published game. Stored `external_identities.avatar_url` + `safeProviderAvatar` ingest usability retained. Real OAuth provider login remains **NOT_TESTED**.
+2. **Sealed legacy HTTP replay** — real `PUT /v1/me/avatar` and `POST /v1/conversations/requests` complete receipts; disposable-DB embed of safe VK/Yandex `providerUrl` into stored `response_body` while preserving key/hash/status/outcome; same-key/body HTTP replay returns `providerUrl=null` with original resource IDs/status/version/uploadedUrl/receipt fields; stored legacy bytes not rewritten by projection.
+3. **Access loss** — session revoke after avatar receipt denies same-key replay; logout after DM receipt denies same-key replay (not empty-cookie-on-first-request).
+
+Allowed paths only for this attempt: the disposable test + this handoff. Product code / versions / contracts elsewhere unchanged.
+
+## D2 — bounded Admin metadata (unchanged product claim)
 
 - `GET /v1/admin/audit/moderation` sibling of `audit/security`.
 - Permission: existing `audit.security.read` + fresh step-up + `privilegedRead`/`appendAudit`.
@@ -34,27 +48,19 @@ Preserved:
 
 ## Contracts / version
 
-- Admin operation inventory 51→52 (`check-admin-protocol.mjs`).
-- API additive minor `0.39.0`; app `0.1.0-alpha.56`.
-- Trusted alpha.55 seed preserved in `TRUSTED_HISTORICAL_SEED` (deployments 64). No fake acceptance for 56 (`source_sha: null`).
-- No migrations / schema / worker / SMTP / quota changes. Quantity-only DEV pause51 unchanged until 2027-01-01 UTC.
+- Unchanged by attempt 59 (test + handoff only). Prior product slice already raised Admin inventory / API minor / app alpha as recorded historically; this attempt does not retouch them.
 
-## Inventory reference (NOT fresh eligibility proof)
+## Checks run / NOT_TESTED
 
-current55 SELECT-only: uploaded refs avatars10 / profilecovers9 / gamecover1 / venuecovers103 / activegallery184, missing matching OpenAI ALLOW 0; stored unreviewed provider metadata VK2 / Yandex1. alpha44/53 counts HISTORICAL — no mass recheck.
-
-## Checks run / NOT_RUN
-
-- `packages/contracts/scripts/check-admin-protocol.mjs` — **PASS** (52 Admin operations; moderation GET present).
-- Unit/integration/package test suites — **NOT_RUN** (sandbox lacks installed `node_modules` / PostGIS; parent CI owns full matrix).
-- Disposable tests present: `provider-avatar-projection.disposable.test.ts`, `admin-moderation-metadata.disposable.test.ts` (gated on `RUN_DB_INTEGRATION=1`).
-
-Parent owns: independent QA → full CI 7 → guarded DEV 56 → smoke. Author does not push/merge/deploy.
+- Author sandbox: **no** installed `node_modules`, **no** `DATABASE_URL` / loopback PostgreSQL → disposable HTTP suite **NOT_RUN** here.
+- Parent owns: `RUN_DB_INTEGRATION=1` disposable suite for this file + reused API types/lint + prior unmodified checks, then independent full D QA.
+- Unit helper shapes (`provider-avatar-projection.test.ts`) reused as unit coverage, not as HTTP proof.
 
 ## Remaining NOT_TESTED / open
 
-- Independent QA, Product CI, guarded DEV.56 smoke, Owner UAT.
-- Admin UI / GoBad visual for D2 journal.
+- Independent QA, Product CI, guarded DEV smoke, Owner UAT.
+- Real OAuth provider login (not claimed from synthetic session).
+- Admin UI / Go Bad visual for D2 journal.
 - Legacy C2 NULL expiry raw unavailable — Owner question unanswered.
 - Private external processing OFF; no legal/retention policy invented.
 - #507 venue discussion remains separate.
