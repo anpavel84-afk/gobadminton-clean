@@ -497,7 +497,10 @@ export class SafetyService {
     };
   }
 
-  /** Current game-chat read gates (published, now < ends_at, manager or confirmed). */
+  /**
+   * Current game-chat read gates (published ∧ before ends_at, then the same
+   * active-manager / confirmed-participation predicate as GameChatService.assertChatAccess).
+   */
   private async assertGameChatReadAccess(
     client: PoolClient,
     actorId: string,
@@ -520,23 +523,23 @@ export class SafetyService {
       throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     }
     const manager = (
-      await client.query(
-        `SELECT 1 FROM game_managers
-         WHERE game_id = $1 AND user_id = $2 AND role IN ('owner','manager')
-         LIMIT 1`,
+      await client.query<{ role: string; status: string }>(
+        `SELECT role, status FROM game_managers
+         WHERE game_id = $1 AND user_id = $2`,
         [gameId, actorId],
       )
     ).rows[0];
-    if (manager) return;
+    if (manager?.status === "active") return;
     const participant = (
-      await client.query(
-        `SELECT 1 FROM participations
-         WHERE game_id = $1 AND user_id = $2 AND status = 'confirmed'
-         LIMIT 1`,
+      await client.query<{ status: string }>(
+        `SELECT status FROM participations
+         WHERE game_id = $1 AND user_id = $2`,
         [gameId, actorId],
       )
     ).rows[0];
-    if (!participant) throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    if (participant?.status !== "confirmed") {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
   }
 }
 

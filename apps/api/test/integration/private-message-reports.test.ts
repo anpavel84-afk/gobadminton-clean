@@ -343,6 +343,86 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
     };
   }
 
+  async function publishGame(owner: Session, title: string) {
+    await pool.query(
+      "DELETE FROM content_moderation_rate_budgets WHERE user_id=$1",
+      [owner.userId],
+    );
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    const venueRes = await app.inject({
+      method: "POST",
+      url: "/v1/venues",
+      headers: mutationHeaders(owner, `idem-venue-${suffix}-abcdefgh`),
+      payload: {
+        cityId: MOSCOW_CITY_ID,
+        name: "C2 Report Court",
+        address: "Moscow",
+        timezone: "Europe/Moscow",
+        latitude: 55.75,
+        longitude: 37.62,
+      },
+    });
+    expect([200, 201]).toContain(venueRes.statusCode);
+    const venue = venueRes.json() as { id: string };
+    const starts = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const ends = new Date(starts.getTime() + 2 * 60 * 60 * 1000);
+    const deadline = new Date(starts.getTime() - 24 * 60 * 60 * 1000);
+    const draftRes = await app.inject({
+      method: "POST",
+      url: "/v1/games",
+      headers: mutationHeaders(owner, `idem-game-${suffix}-abcdefgh`),
+      payload: {
+        hostDisplayName: `Host C2 ${suffix}`,
+        hostPublicContact: "telegram:@c2report",
+        venueId: venue.id,
+        title,
+        startsAt: starts.toISOString(),
+        endsAt: ends.toISOString(),
+        timezone: "Europe/Moscow",
+        applicationDeadlineAt: deadline.toISOString(),
+        capacity: 4,
+        externalReservedCount: 0,
+        visibility: "public",
+        formatKey: "doubles",
+        activityKind: "regular",
+        levelRule: {
+          scaleId: "ntrp",
+          scaleVersion: 1,
+          allowedLevelIds: ["3.0", "3.5"],
+        },
+        settlement: {
+          mode: "external",
+          purpose: "no_trainer_fee",
+          priceMinor: null,
+          currency: null,
+          terms: "Court terms arranged outside the platform",
+        },
+      },
+    });
+    expect(draftRes.statusCode).toBe(201);
+    const draft = draftRes.json() as { id: string; version: number };
+    const creatorSeat = await pool.query<{ id: string }>(
+      "SELECT id FROM participations WHERE game_id=$1 AND user_id=$2",
+      [draft.id, owner.userId],
+    );
+    const withdrawn = await app.inject({
+      method: "POST",
+      url: `/v1/participations/${creatorSeat.rows[0]!.id}/withdraw`,
+      headers: mutationHeaders(owner, uniqueSuffix("c2-owner-withdraw")),
+      payload: { expectedVersion: 1 },
+    });
+    expect(withdrawn.statusCode).toBe(200);
+    draft.version += 1;
+    const publishedRes = await app.inject({
+      method: "POST",
+      url: `/v1/games/${draft.id}/publish`,
+      headers: mutationHeaders(owner, `idem-pub-${suffix}-abcdefgh`),
+      payload: { expectedVersion: draft.version },
+    });
+    expect(publishedRes.statusCode).toBe(200);
+    return publishedRes.json() as { id: string; version: number };
+  }
+
   it("requires consent, exact selected incoming message, idempotency, block-history and Cases source gates", async () => {
     const a = await login("vk");
     const b = await login("yandex");
@@ -630,6 +710,194 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
         })
       ).statusCode,
     ).toBe(404);
+
+    expect(fetchSpy?.mock.calls.length ?? 0).toBe(0);
+  });
+
+  it("revoked manager without confirmed participation cannot report game chat; active manager and confirmed still can", async () => {
+    const owner = await login("vk");
+    const peer = await login("yandex");
+    await ensureProfile(owner, "C2 Game Owner");
+    await ensureProfile(peer, "C2 Game Peer");
+
+    const game = await publishGame(owner, "C2 revoked manager gate");
+
+    const apply = await app.inject({
+      method: "POST",
+      url: `/v1/games/${game.id}/participations`,
+      headers: mutationHeaders(peer, randomUUID()),
+      payload: { expectedGameVersion: game.version },
+    });
+    expect([200, 201], apply.body).toContain(apply.statusCode);
+    const participation = apply.json() as { id: string; version: number };
+
+    await pool.query(
+      `INSERT INTO game_managers (game_id, user_id, role, status)
+       VALUES ($1, $2, 'manager', 'active')
+       ON CONFLICT (game_id, user_id) DO UPDATE
+         SET role = 'manager', status = 'active', revoked_at = NULL, updated_at = now()`,
+      [game.id, peer.userId],
+    );
+
+    const peerChat = await app.inject({
+      method: "GET",
+      url: `/v1/games/${game.id}/chat`,
+      cookies: peer.cookies,
+    });
+    expect(peerChat.statusCode, peerChat.body).toBe(200);
+
+    const ownerSend = await app.inject({
+      method: "POST",
+      url: `/v1/games/${game.id}/chat/messages`,
+      headers: mutationHeaders(owner, randomUUID()),
+      payload: {
+        text: "C2_OWNER_INCOMING_FOR_PEER",
+        clientMessageId: randomUUID(),
+      },
+    });
+    expect(ownerSend.statusCode, ownerSend.body).toBe(201);
+    const ownerMessageId = ownerSend.json().messageId as string;
+
+    const peerSend = await app.inject({
+      method: "POST",
+      url: `/v1/games/${game.id}/chat/messages`,
+      headers: mutationHeaders(peer, randomUUID()),
+      payload: {
+        text: "C2_PEER_INCOMING_FOR_OWNER",
+        clientMessageId: randomUUID(),
+      },
+    });
+    expect(peerSend.statusCode, peerSend.body).toBe(201);
+    const peerMessageId = peerSend.json().messageId as string;
+
+    const membership = await pool.query(
+      `SELECT 1 FROM conversation_members cm
+       JOIN conversations c ON c.id = cm.conversation_id
+       WHERE c.kind = 'game' AND c.game_id = $1 AND cm.user_id = $2`,
+      [game.id, peer.userId],
+    );
+    expect(membership.rowCount).toBe(1);
+
+    await pool.query(
+      `UPDATE game_managers
+       SET status = 'revoked', revoked_at = now(), updated_at = now()
+       WHERE game_id = $1 AND user_id = $2`,
+      [game.id, peer.userId],
+    );
+    const peerParticipation = await pool.query<{ status: string }>(
+      `SELECT status FROM participations WHERE game_id = $1 AND user_id = $2`,
+      [game.id, peer.userId],
+    );
+    expect(peerParticipation.rows[0]?.status).not.toBe("confirmed");
+
+    const readDenied = await app.inject({
+      method: "GET",
+      url: `/v1/games/${game.id}/chat`,
+      cookies: peer.cookies,
+    });
+    expect(readDenied.statusCode).toBe(404);
+
+    const bindingsBefore = await pool.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM message_report_bindings`,
+    );
+    const reportsBefore = await pool.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM abuse_reports`,
+    );
+
+    const deniedKey = randomUUID();
+    const deniedFresh = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      headers: mutationHeaders(peer, deniedKey),
+      payload: {
+        targetKind: "message",
+        messageId: ownerMessageId,
+        gameId: game.id,
+        reasonCode: "harassment",
+        shareMessageWithSupport: true,
+      },
+    });
+    expect(deniedFresh.statusCode).toBe(404);
+
+    const deniedReplay = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      headers: mutationHeaders(peer, deniedKey),
+      payload: {
+        targetKind: "message",
+        messageId: ownerMessageId,
+        gameId: game.id,
+        reasonCode: "harassment",
+        shareMessageWithSupport: true,
+      },
+    });
+    expect(deniedReplay.statusCode).toBe(404);
+
+    const deniedOtherKey = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      headers: mutationHeaders(peer, randomUUID()),
+      payload: {
+        targetKind: "message",
+        messageId: ownerMessageId,
+        gameId: game.id,
+        reasonCode: "spam",
+        shareMessageWithSupport: true,
+      },
+    });
+    expect(deniedOtherKey.statusCode).toBe(404);
+
+    expect(
+      (await pool.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM message_report_bindings`))
+        .rows[0]!.n,
+    ).toBe(bindingsBefore.rows[0]!.n);
+    expect(
+      (await pool.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM abuse_reports`))
+        .rows[0]!.n,
+    ).toBe(reportsBefore.rows[0]!.n);
+
+    const ownerReport = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      headers: mutationHeaders(owner, randomUUID()),
+      payload: {
+        targetKind: "message",
+        messageId: peerMessageId,
+        gameId: game.id,
+        reasonCode: "harassment",
+        shareMessageWithSupport: true,
+      },
+    });
+    expect(ownerReport.statusCode, ownerReport.body).toBe(201);
+
+    const confirm = await app.inject({
+      method: "POST",
+      url: `/v1/participations/${participation.id}/confirm`,
+      headers: mutationHeaders(owner, randomUUID()),
+      payload: { expectedVersion: participation.version },
+    });
+    expect(confirm.statusCode, confirm.body).toBe(200);
+
+    const peerChatAfter = await app.inject({
+      method: "GET",
+      url: `/v1/games/${game.id}/chat`,
+      cookies: peer.cookies,
+    });
+    expect(peerChatAfter.statusCode, peerChatAfter.body).toBe(200);
+
+    const peerReport = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      headers: mutationHeaders(peer, randomUUID()),
+      payload: {
+        targetKind: "message",
+        messageId: ownerMessageId,
+        gameId: game.id,
+        reasonCode: "harassment",
+        shareMessageWithSupport: true,
+      },
+    });
+    expect(peerReport.statusCode, peerReport.body).toBe(201);
 
     expect(fetchSpy?.mock.calls.length ?? 0).toBe(0);
   });
