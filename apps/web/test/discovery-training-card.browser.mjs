@@ -374,13 +374,27 @@ await withChrome(async ({ call, evaluate }) => {
           measuredWidth >= 48,
           `${width}:${name.role} role name width ${measuredWidth}px too narrow for "${name.text.slice(0, 32)}"`,
         );
-        const maxNameHeight = Math.max(56, (name.lineHeight || 18) * 3 + 4);
-        assert.ok(
-          measuredHeight <= maxNameHeight,
-          `${width}:${name.role} role name height ${measuredHeight}px looks vertical/stacked (max ${maxNameHeight}) for "${name.text.slice(0, 32)}"`,
-        );
+        // Long role names (>40) may wrap past 3 lines — same long-content exemption as people-band height.
+        // Normal names keep the 3-line cap (reject one-character-wide vertical stacking).
+        if (name.text.length <= 40) {
+          const maxNameHeight = Math.max(56, (name.lineHeight || 18) * 3 + 4);
+          assert.ok(
+            measuredHeight <= maxNameHeight,
+            `${width}:${name.role} role name height ${measuredHeight}px looks vertical/stacked (max ${maxNameHeight}) for "${name.text.slice(0, 32)}"`,
+          );
+        }
         assert.notEqual(name.whiteSpace, "nowrap", `${width}:${name.role} must wrap`);
         assert.notEqual(name.textOverflow, "ellipsis", `${width}:${name.role} must not ellipsis`);
+        if (name.rect && trainerCard.peopleBand) {
+          assert.ok(
+            name.rect.right <= trainerCard.peopleBand.right + 1,
+            `${width}:${name.role} name rect.right ${name.rect.right} outside people band (band.right=${trainerCard.peopleBand.right})`,
+          );
+          assert.ok(
+            name.rect.bottom <= trainerCard.peopleBand.bottom + 1,
+            `${width}:${name.role} name rect.bottom ${name.rect.bottom} outside people band (band.bottom=${trainerCard.peopleBand.bottom})`,
+          );
+        }
       }
       if (trainerCard.history && trainerCard.people?.[0] && width > 390) {
         assert.ok(
