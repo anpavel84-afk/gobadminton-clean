@@ -429,16 +429,16 @@ describe("private message safety UX", () => {
     ).toBe(false);
     expect(nodes.some((n) => n.props.className === "composer-restricted")).toBe(true);
 
-    // Restore ready + draft, then 401 access loss also clears draft.
-    hooks.slots = [];
-    hooks.cursor = 0;
-    hooks.effects = [];
-    hooks.cleanups = [];
+    // Same component state: restore access and prove draft was cleared (not only hidden).
     tree = await settleReady();
     nodes = walk(tree);
     input = nodes.find(
       (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
     );
+    expect(input).toBeTruthy();
+    expect(input?.props.value).toBe("");
+
+    // Re-seed draft on the same renderer, then 401 access loss also clears draft.
     callChange(input!.props, draft);
     tree = await submitWithFailure(401, "UNAUTHORIZED");
     nodes = walk(tree);
@@ -450,17 +450,15 @@ describe("private message safety UX", () => {
     expect(nodes.some((n) => n.props["data-auth"] === "1" || n.props["data-profile-state"])).toBe(
       true,
     );
-
-    // 404 path: draft cleared + private access loss surface.
-    hooks.slots = [];
-    hooks.cursor = 0;
-    hooks.effects = [];
-    hooks.cleanups = [];
     tree = await settleReady();
     nodes = walk(tree);
     input = nodes.find(
       (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
     );
+    expect(input).toBeTruthy();
+    expect(input?.props.value).toBe("");
+
+    // 404 path: same renderer, draft cleared + private access loss surface.
     callChange(input!.props, draft);
     tree = await submitWithFailure(404, "RESOURCE_UNAVAILABLE");
     nodes = walk(tree);
@@ -470,5 +468,12 @@ describe("private message safety UX", () => {
         (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
       ),
     ).toBe(false);
+    tree = await settleReady();
+    nodes = walk(tree);
+    input = nodes.find(
+      (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
+    );
+    expect(input).toBeTruthy();
+    expect(input?.props.value).toBe("");
   });
 });
