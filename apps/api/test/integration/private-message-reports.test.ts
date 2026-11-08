@@ -76,7 +76,11 @@ function fakeAdapter(identity: VerifiedIdentity): AuthProviderAdapter {
       return { accessToken: "test-access" };
     },
     async fetchVerifiedIdentity() {
-      return { ...identity };
+      // Per-login unique subject (p2 fixture pattern) — isolate without wiping immutable history.
+      return {
+        ...identity,
+        subject: uniqueSuffix(`c2-${identity.provider}`),
+      };
     },
   };
 }
@@ -196,19 +200,7 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
   beforeEach(async () => {
     fetchSpy?.mockRestore();
     fetchSpy = vi.spyOn(globalThis, "fetch");
-    await pool.query("DELETE FROM message_report_bindings").catch(() => undefined);
-    await pool.query("DELETE FROM support_case_actions").catch(() => undefined);
-    await pool.query("DELETE FROM support_case_links").catch(() => undefined);
-    await pool.query("DELETE FROM support_cases").catch(() => undefined);
-    await pool.query("DELETE FROM abuse_reports");
-    await pool.query("DELETE FROM message_hidden_for");
-    await pool.query("DELETE FROM messages");
-    await pool.query("DELETE FROM conversation_members");
-    await pool.query("DELETE FROM conversations");
-    await pool.query("DELETE FROM user_blocks");
-    await pool.query("DELETE FROM social_pairs");
-    await pool.query("DELETE FROM player_looking_intents");
-    await pool.query("DELETE FROM player_social_profiles");
+    // Do not DELETE immutable bindings/cases/reports (or messages they FK); actors stay unique per login.
   });
 
   async function login(provider: "vk" | "yandex"): Promise<Session> {
