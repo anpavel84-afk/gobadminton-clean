@@ -99,6 +99,14 @@ async function refresh(store: HeaderIdentityStore) {
     const me = await getMe();
     if (!current() || store.dirty) return;
     if (!me.ok) {
+      // Network / timeout / 5xx: keep last confirmed display in the same session.
+      // Definitive 401 (and other non-transient) still clears immediately.
+      if (
+        store.confirmed &&
+        (me.status === 0 || me.status === 408 || me.status >= 500)
+      ) {
+        return;
+      }
       store.confirmed = undefined;
       paint(store, null);
       return;

@@ -151,28 +151,65 @@ describe("header identity navigation / remount", () => {
     expect(screen.getByTestId("header").querySelector("img")?.getAttribute("src")).toBe(uploadedA);
   });
 
-  it("shows previous identity immediately while a deferred remount does not accept a stale guest read", async () => {
-    const firstMe = deferred<{ ok: true; status: number; data: Me }>();
-    const firstSocial = deferred<{ ok: true; status: number; data: OwnSocialProfile }>();
-    transport.getMe.mockImplementationOnce(() => firstMe.promise);
-    transport.getMySocialProfile.mockImplementationOnce(() => firstSocial.promise);
+  it("remounts before pending me/social resolve and keeps one coalesced operation", async () => {
+    const pendingMe = deferred<{ ok: true; status: number; data: Me }>();
+    const pendingSocial = deferred<{ ok: true; status: number; data: OwnSocialProfile }>();
+    transport.getMe.mockImplementationOnce(() => pendingMe.promise);
+    transport.getMySocialProfile.mockImplementationOnce(() => pendingSocial.promise);
 
     const view = render(createElement(KeyedRoute, { path: "/games" }));
     await flushCoalesce();
     expect(screen.getByTestId("header").textContent).toBe("Профиль");
+    expect(transport.meCalls).toBe(1);
+    expect(transport.socialCalls).toBe(0);
+
+    // Remount while /me is still outstanding — must reuse the in-flight operation.
+    view.rerender(createElement(KeyedRoute, { path: "/my-games" }));
+    expect(screen.getByTestId("header").textContent).toBe("Профиль");
+    expect(transport.meCalls).toBe(1);
+    expect(transport.socialCalls).toBe(0);
 
     await act(async () => {
-      firstMe.resolve({ ok: true, status: 200, data: me("u1", "Анна") });
+      pendingMe.resolve({ ok: true, status: 200, data: me("u1", "Анна") });
       await Promise.resolve();
     });
+    expect(screen.getByTestId("header").textContent).toBe("Профиль");
+    expect(transport.meCalls).toBe(1);
+    expect(transport.socialCalls).toBe(1);
+
     await act(async () => {
-      firstSocial.resolve({
+      pendingSocial.resolve({
         ok: true,
         status: 200,
         data: social("Анна", { uploadedUrl: uploadedA, providerUrl: null }),
       });
       await Promise.resolve();
     });
+    await waitFor(() => expect(screen.getByTestId("header").textContent).toBe("Профиль: Анна"));
+    expect(screen.getByTestId("header").querySelector("img")?.getAttribute("src")).toBe(uploadedA);
+    expect(transport.meCalls).toBe(1);
+    expect(transport.socialCalls).toBe(1);
+
+    // After-resolved navigation still keeps the confirmed paint without a new pair.
+    const generation = screen.getByTestId("header").getAttribute("data-generation");
+    view.rerender(createElement(KeyedRoute, { path: "/players" }));
+    expect(screen.getByTestId("header").textContent).toBe("Профиль: Анна");
+    expect(screen.getByTestId("header").getAttribute("data-generation")).toBe(generation);
+    await flushCoalesce();
+    expect(transport.meCalls).toBe(1);
+    expect(transport.socialCalls).toBe(1);
+  });
+
+  it("rejects a stale guest read after session switch without painting over the new actor", async () => {
+    transport.getMe.mockResolvedValue({ ok: true, status: 200, data: me("u1", "Анна") });
+    transport.getMySocialProfile.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: social("Анна", { uploadedUrl: uploadedA, providerUrl: null }),
+    });
+
+    const view = render(createElement(KeyedRoute, { path: "/games" }));
+    await flushCoalesce();
     await waitFor(() => expect(screen.getByTestId("header").textContent).toBe("Профиль: Анна"));
 
     const lateGuest = deferred<{ ok: false; status: number; error: string }>();
@@ -199,6 +236,57 @@ describe("header identity navigation / remount", () => {
 
     view.rerender(createElement(KeyedRoute, { path: "/my-games" }));
     expect(screen.getByTestId("header").textContent).toBe("Профиль: Борис");
+  });
+
+  it("preserves confirmed identity on temporary getMe failure and clears on 401 / session invalidation", async () => {
+    transport.getMe.mockResolvedValue({ ok: true, status: 200, data: me("u1", "Анна") });
+    transport.getMySocialProfile.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: social("Анна", { uploadedUrl: uploadedA, providerUrl: null }),
+    });
+
+    render(createElement(HeaderProbe));
+    await flushCoalesce();
+    await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("Профиль: Анна"));
+    const generation = screen.getByTestId("probe").getAttribute("data-generation");
+    const meBefore = transport.meCalls;
+
+    for (const status of [0, 408, 503] as const) {
+      transport.getMe.mockResolvedValueOnce({ ok: false, status, error: `HTTP ${status}` });
+      await act(async () => {
+        window.dispatchEvent(new Event("gb-profile-changed"));
+      });
+      await flushCoalesce();
+      expect(screen.getByTestId("probe").textContent).toBe("Профиль: Анна");
+      expect(screen.getByTestId("probe").getAttribute("data-generation")).toBe(generation);
+      expect(screen.getByTestId("probe").querySelector("img")?.getAttribute("src")).toBe(uploadedA);
+      expect(transport.socialCalls).toBe(1);
+    }
+    expect(transport.meCalls).toBe(meBefore + 3);
+
+    transport.getMe.mockResolvedValueOnce({ ok: false, status: 401, error: "HTTP 401" });
+    await act(async () => {
+      window.dispatchEvent(new Event("gb-profile-changed"));
+    });
+    await flushCoalesce();
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль");
+    expect(screen.getByTestId("probe").querySelector("img")).toBeNull();
+
+    transport.getMe.mockResolvedValue({ ok: true, status: 200, data: me("u1", "Анна") });
+    transport.getMySocialProfile.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: social("Анна", { uploadedUrl: uploadedA, providerUrl: null }),
+    });
+    window.dispatchEvent(new Event("gb-session-changed"));
+    await flushCoalesce();
+    await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("Профиль: Анна"));
+
+    await act(async () => {
+      window.dispatchEvent(new Event("gb-private-expired"));
+    });
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль");
   });
 
   it("coalesces simultaneous subscribers into one /me + social pair", async () => {
