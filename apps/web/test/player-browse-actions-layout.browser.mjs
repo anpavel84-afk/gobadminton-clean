@@ -184,7 +184,8 @@ await withChrome(async ({ call, evaluate }) => {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await call("Page.setDocumentContent", { html: pageHtml(width, body, cssBundle) });
+    const { frameTree } = await call("Page.getFrameTree");
+    await call("Page.setDocumentContent", { frameId: frameTree.frame.id, html: pageHtml(width, body, cssBundle) });
     await sleep(150);
 
     const metrics = await evaluate(`(() => {
@@ -255,7 +256,8 @@ await withChrome(async ({ call, evaluate }) => {
       deviceScaleFactor: 1,
       mobile: true,
     });
-    await call("Page.setDocumentContent", {
+    const { frameTree } = await call("Page.getFrameTree");
+    await call("Page.setDocumentContent", { frameId: frameTree.frame.id,
       html: pageHtml(width, fixtures.mobileHtml, cssBundle),
     });
     await sleep(150);

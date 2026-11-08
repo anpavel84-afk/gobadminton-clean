@@ -195,7 +195,8 @@ await withChrome(async ({ call, evaluate }) => {
       deviceScaleFactor: 1,
       mobile: width <= 390,
     });
-    await call("Page.setDocumentContent", {
+    const { frameTree } = await call("Page.getFrameTree");
+    await call("Page.setDocumentContent", { frameId: frameTree.frame.id,
       html: pageHtml(width, feedHtml, cssBundle),
     });
     await sleep(150);
