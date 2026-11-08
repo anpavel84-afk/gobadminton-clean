@@ -163,6 +163,8 @@ def uid1002_preexec():
     Parent trusted Root retains controller/publisher and the global writer lease.
     Model/Git/GH never keep root. Matches working Mode A drop boundary.
     """
+    import ctypes
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
     def _drop():
         euid = os.geteuid()
         if euid == 0:
@@ -172,9 +174,7 @@ def uid1002_preexec():
         elif euid != CURSOR_UID:
             os._exit(125)
         try:
-            import ctypes
-            libc = ctypes.CDLL(None, use_errno=True)
-            if libc.prctl(38, 1, 0, 0, 0) != 0:
+            if prctl(38, 1, 0, 0, 0) != 0:
                 os._exit(126)
         except Exception:
             os._exit(126)
@@ -186,17 +186,72 @@ def _qa_output_policy():
                 core_soft=0, core_hard=0, guard='uid1002+nnp+rlimit-v1')
 
 
-def _qa_preexec():
-    """Set inherited hard limits before exec/FD use, then drop UID and set NNP."""
+# Fixed packet is below Linux PIPE_BUF; only trusted preexec owns the writer.
+_QA_IDENTITY_MAX = 512
+
+
+def _qa_preexec(identity_fd=None, binding=None):
+    """Preload everything before fork; child never imports or waits for parent."""
+    import ctypes
+    import resource
+    import struct
     drop = uid1002_preexec()
     policy = _qa_output_policy()
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    pack = struct.Struct('!9Q').pack
+    open_fd, read_fd, write_fd, close_fd = os.open, os.read, os.write, os.close
     def child():
-        import resource
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE,
                            (policy['fsize_soft'], policy['fsize_hard']))
         drop()
+        if identity_fd is not None:
+            try:
+                fd = open_fd('/proc/self/stat', os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                try:
+                    raw = read_fd(fd, 4096)
+                finally:
+                    close_fd(fd)
+                if len(raw) >= 4096 or not raw.endswith(b'\n'):
+                    os._exit(126)
+                fields = raw.rsplit(b')', 1)[1].split()
+                packet = binding + pack(os.getpid(), os.getpgrp(), int(fields[19]),
+                    os.geteuid(), *resource.getrlimit(resource.RLIMIT_FSIZE),
+                    *resource.getrlimit(resource.RLIMIT_CORE), prctl(39, 0, 0, 0, 0))
+                if len(packet) > _QA_IDENTITY_MAX or write_fd(identity_fd, packet) != len(packet):
+                    os._exit(126)
+            finally:
+                close_fd(identity_fd)  # No identity FD reaches untrusted exec.
     return child
+
+
+def _qa_cleanup_identity(process, fd, binding):
+    """Consume private preexec proof, never an approval or model-authored claim."""
+    import struct
+    layout = struct.Struct('!9Q')
+    try:
+        raw = os.read(fd, _QA_IDENTITY_MAX + 1)
+        if (len(raw) != len(binding) + layout.size or raw[:len(binding)] != binding
+                or os.read(fd, 1) != b''):
+            raise ValueError('packet')
+        pid, pgrp, ticks, uid, soft, hard, core_soft, core_hard, nnp = layout.unpack(raw[len(binding):])
+        if (pid != process.pid or pid <= 1 or pgrp != pid or ticks <= 0
+                or uid != CURSOR_UID or (soft, hard) != (QA_OUTPUT_MAX, QA_OUTPUT_MAX)
+                or (core_soft, core_hard, nnp) != (0, 0, 1)):
+            raise ValueError('identity')
+        identity = dict(pid=pid, pgrp=pgrp, start_ticks=str(ticks), uid=uid,
+                        output_policy=_qa_output_policy(), cleanup_only=True)
+        proc = Path('/proc') / str(pid) / 'stat'
+        try:
+            fields = proc.read_text().rsplit(')', 1)[1].split()
+        except FileNotFoundError:
+            fields = None  # Trusted pre-exec proof survives an already reaped leader.
+        if fields is not None and (fields[19] != str(ticks) or int(fields[2]) != pid):
+            raise ValueError('reused')
+        process._lean_owned_identity = identity
+        return identity
+    except (OSError, ValueError, IndexError) as err:
+        raise LiveError('qa_preexec_identity_hold') from err
 
 
 def _qa_output_bytes(path, *, scope=None, private=False):
@@ -1479,6 +1534,8 @@ def _kill_owned_process_group(p):
     # exits; an exited leader alone is never proof that its children stopped.
     identity = getattr(p, '_lean_owned_identity', None)
     if identity is None:
+        if getattr(p, '_lean_owned_identity_required', False):
+            raise LiveError('owned_process_identity_missing')
         if p.poll() is not None or os.getpgid(p.pid) != p.pid:
             raise LiveError('owned_process_identity_missing')
         fields = (Path('/proc') / str(p.pid) / 'stat').read_text().rsplit(')', 1)[1].split()
@@ -2250,6 +2307,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         mark_intent_phase(intent_path, 'launching', model=qa_model, effort=qa_effort,
                           rules_sha256=rules_sha, root_model=False,
                           home=str(AGENT_HOME), codex_home=str(NATIVE_CODEX_HOME))
+        recipe = None
         if routing_qa or _probe is not None:
             from author_handoff import fingerprint
             import host
@@ -2281,10 +2339,32 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         with (evidence / 'prompt.md').open() as i, \
                 (evidence / 'events.jsonl').open('w') as o, \
                 (evidence / 'stderr').open('w') as e:
-            p = subprocess.Popen(
-                cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
-                umask=0o022, close_fds=True, env=child_env, preexec_fn=_qa_preexec())
-            process_identity = _qa_process_identity(p, cmd)
+            # Freeze parent intent + trusted Root/shared recipe identity before fork.
+            # Packet bytes never become runtime approval; only the parent reads them.
+            launch_binding = os.urandom(32) + hashlib.sha256(json.dumps(dict(
+                intent=loads(Path(intent_path).read_bytes()), argv=cmd, permissions=fs,
+                root_uid=os.geteuid(), config=str(_QA_CONFIG), native=str(NATIVE_TRAIN),
+                authority=authority_meta, shared_recipe=recipe, output_policy=_qa_output_policy()),
+                sort_keys=True).encode()).digest()
+            identity_read, identity_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                try:
+                    p = subprocess.Popen(
+                        cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
+                        umask=0o022, close_fds=True, pass_fds=(identity_write,), env=child_env,
+                        preexec_fn=_qa_preexec(identity_write, launch_binding))
+                finally:
+                    os.close(identity_write)
+                p._lean_owned_identity_required = True
+                _qa_cleanup_identity(p, identity_read, launch_binding)
+            finally:
+                os.close(identity_read)
+            try:
+                process_identity = _qa_process_identity(p, cmd)
+            except (OSError, ValueError, StopIteration, IndexError) as err:
+                mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                                  error='qa_runtime_identity_hold', no_blind_replay=True)
+                raise ProviderError('qa_runtime_identity_hold', charge='unknown') from err
             try:
                 p.wait(timeout=QA_TIMEOUT_S + 30)
             except subprocess.TimeoutExpired as err:
@@ -4611,6 +4691,10 @@ def _qa_process_identity(process, argv):
         raise ValueError('qa process identity mismatch')
     identity = dict(pid=process.pid, pgrp=int(fields[2]), start_ticks=fields[19], uid=uid,
                     argv_sha256=fingerprint(argv), output_policy=_qa_output_policy())
+    cleanup = getattr(process, '_lean_owned_identity', None)
+    if cleanup is not None and any(cleanup.get(k) != identity[k]
+                                   for k in ('pid', 'pgrp', 'start_ticks', 'uid', 'output_policy')):
+        raise ValueError('qa preexec/runtime identity mismatch')
     process._lean_owned_identity = identity
     return identity
 

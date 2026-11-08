@@ -894,15 +894,26 @@ class Repair2Focused(unittest.TestCase):
         self.assertEqual(libc.prctl(36, 1, 0, 0, 0), 0)
         process=None; child=None
         try:
-            # Keep the leader until its original identity has been captured.
-            process=subprocess.Popen([sys.executable,'-c',
-                'import os,time,sys; p=os.fork(); '
-                '(time.sleep(30) if p==0 else (print(p,flush=True),sys.stdin.readline()))'],
-                start_new_session=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-            child=int(process.stdout.readline())
-            fields=(Path('/proc')/str(process.pid)/'stat').read_text().rsplit(')',1)[1].split()
-            process._lean_owned_identity=dict(pid=process.pid,pgrp=process.pid,start_ticks=fields[19])
-            process.stdin.close(); process.wait(timeout=3)
+            # The leader exits before strict validation, with no parent acknowledgement.
+            binding = os.urandom(64)
+            read_fd, write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                try:
+                    process=subprocess.Popen([sys.executable,'-c',
+                        'import os,time; p=os.fork(); '
+                        '(time.sleep(30) if p==0 else print(p,flush=True))'],
+                        start_new_session=True, stdout=subprocess.PIPE, text=True,
+                        pass_fds=(write_fd,), preexec_fn=live._qa_preexec(write_fd, binding))
+                finally:
+                    os.close(write_fd)
+                child=int(process.stdout.readline())
+                process.wait(timeout=3)
+                live._qa_cleanup_identity(process, read_fd, binding)
+            finally:
+                os.close(read_fd)
+            self.assertTrue(process._lean_owned_identity['cleanup_only'])
+            with self.assertRaises((ValueError, OSError, StopIteration)):
+                live._qa_process_identity(process, process.args)
             self.assertIsNotNone(process.poll())
             # Reap the adopted child so kernel group-absence verification is real.
             native=providers._import_native('native_antigravity')
@@ -1101,6 +1112,55 @@ class QAOutputBoundary(unittest.TestCase):
                     self.assertLessEqual(target.stat().st_size, 4096)
                     with self.assertRaises(live.LiveError): live._qa_output_bytes(target)
 
+    def test_preexec_packet_normal_identity_and_no_inherited_writer(self):
+        binding = os.urandom(64)
+        read_fd, write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+        process = None
+        try:
+            # An exec-time check verifies preexec closed even the explicitly passed FD.
+            code = 'import os,sys,time\ntry: os.fstat(int(sys.argv[1]))\nexcept OSError: print("closed",flush=True)\ntime.sleep(30)'
+            argv = [sys.executable, '-c', code, str(write_fd)]
+            try:
+                process = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.PIPE,
+                    text=True, pass_fds=(write_fd,), preexec_fn=live._qa_preexec(write_fd, binding))
+            finally:
+                os.close(write_fd)
+            self.assertEqual(process.stdout.readline().strip(), 'closed')
+            early = live._qa_cleanup_identity(process, read_fd, binding)
+            actual = live._qa_process_identity(process, argv)
+            self.assertNotIn('cleanup_only', actual)
+            self.assertEqual(early['start_ticks'], actual['start_ticks'])
+            with self.assertRaises(ValueError):
+                live._qa_process_identity(process, argv + ['wrong-cli'])
+            with patch.object(live, 'QA_OUTPUT_MAX', live.QA_OUTPUT_MAX + 1):
+                with self.assertRaises(ValueError): live._qa_process_identity(process, argv)
+            process._lean_owned_identity = dict(early, start_ticks='1')
+            with self.assertRaises(ValueError): live._qa_process_identity(process, argv)
+        finally:
+            os.close(read_fd)
+            if process:
+                os.killpg(process.pid, 9); process.wait(timeout=3); process.stdout.close()
+
+    def test_bad_preexec_packets_never_authorize_signal(self):
+        import struct
+        binding = os.urandom(64)
+        valid = struct.pack('!9Q', os.getpid(), os.getpid(), 1, live.CURSOR_UID,
+                            live.QA_OUTPUT_MAX, live.QA_OUTPUT_MAX, 0, 0, 1)
+        for raw in (b'', b'corrupt', os.urandom(64) + valid, binding + valid,
+                    binding + valid + b'extra'):
+            read_fd, write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+            process = SimpleNamespace(pid=os.getpid() + 1000000, _lean_owned_identity_required=True)
+            try:
+                os.write(write_fd, raw); os.close(write_fd)
+                with patch.object(os, 'killpg', side_effect=AssertionError('foreign signal')):
+                    with self.assertRaises(live.LiveError):
+                        live._qa_cleanup_identity(process, read_fd, binding)
+                    with self.assertRaises(live.LiveError):
+                        live._kill_owned_process_group(process)
+                self.assertFalse(hasattr(process, '_lean_owned_identity'))
+            finally:
+                os.close(read_fd)
+
     def test_oversize_rejected_before_parser_for_each_capture(self):
         with tempfile.TemporaryDirectory() as td, patch.object(live, 'QA_OUTPUT_MAX', 128):
             root = Path(td)
@@ -1145,9 +1205,10 @@ class QAOutputBoundary(unittest.TestCase):
 
     def test_capture_reaps_before_collection_and_rejects_each_oversize(self):
         candidate = 'b' * 40
-        for oversized in (None, 'events.jsonl', 'stderr', 'final.txt'):
+        for oversized in (None, 'events.jsonl', 'stderr', 'final.txt', 'early-exit'):
             with self.subTest(oversized=oversized), tempfile.TemporaryDirectory() as td:
                 root = Path(td); evidence = root / 'qa-output'
+                evidence.mkdir(); (evidence / 'intent.json').write_text('{}')
                 private = root / 'private'; private.mkdir()
                 process = SimpleNamespace(pid=42, returncode=0, wait=lambda **kw: 0)
                 stopped = []
@@ -1158,7 +1219,7 @@ class QAOutputBoundary(unittest.TestCase):
                     kw['stdout'].write('{"type":"turn.completed"}\n')
                     kw['stdout'].flush()
                     (private / 'tmp' / 'final.txt').write_bytes(final)
-                    if oversized:
+                    if oversized and oversized != 'early-exit':
                         dest = private / 'tmp' / 'final.txt' if oversized == 'final.txt' else evidence / oversized
                         dest.write_bytes(b'x' * 513)
                     return process
@@ -1176,7 +1237,9 @@ class QAOutputBoundary(unittest.TestCase):
                     stack.enter_context(patch.object(live, '_qa_launch', return_value=(['synthetic'], {})))
                     stack.enter_context(patch.object(live.tempfile, 'mkdtemp', return_value=str(private)))
                     stack.enter_context(patch.object(live.subprocess, 'Popen', side_effect=launch))
-                    stack.enter_context(patch.object(live, '_qa_process_identity', return_value={}))
+                    stack.enter_context(patch.object(live, '_qa_cleanup_identity', return_value={}))
+                    stack.enter_context(patch.object(live, '_qa_process_identity', return_value={},
+                        side_effect=FileNotFoundError('exited leader') if oversized == 'early-exit' else None))
                     stack.enter_context(patch.object(live, '_kill_owned_process_group', side_effect=lambda p: stopped.append(True)))
                     stack.enter_context(patch.object(live, '_qa_output_bytes', side_effect=collect))
                     mark = stack.enter_context(patch.object(providers, 'mark_intent_phase'))
@@ -1185,7 +1248,7 @@ class QAOutputBoundary(unittest.TestCase):
                         evidence_dir=evidence, intent_path=evidence/'intent.json')
                     if oversized:
                         with self.assertRaises(providers.ProviderError) as error: call()
-                        self.assertEqual(error.exception.code, 'qa_output_boundary_hold')
+                        self.assertEqual(error.exception.code, 'qa_runtime_identity_hold' if oversized == 'early-exit' else 'qa_output_boundary_hold')
                         parser.assert_not_called()
                         self.assertTrue(any(c.args[1] == 'HOLD_no_automatic_replay' for c in mark.call_args_list))
                         self.assertFalse((evidence / 'final.txt').exists())
