@@ -3,7 +3,7 @@
 **Assignment:** `OWNER521_QA1_IDENTITIES_LONG_NAMES_RELEASE_TESTS_BROWSER_REPAIR`
 **Author:** cursor:auto · attempt 2 · base `f398ca3770c7143aed325138a4a3ee9bcb2cdc1d`
 **App candidate:** `0.1.0-alpha.57` · API wire unchanged `0.39.0` · `source_sha` null · Owner UAT **NOT_TESTED**
-**Refs:** #521 · QA1 three findings FAIL · parent lint/release FAIL · Owner screenshot
+**Refs:** #521 · #523 (combined UI release 57; see `player523-actions.md`) · QA1 three findings FAIL · parent lint/release FAIL · Owner screenshot
 **Scope:** source only · single writer · do not touch #507 WT/branch · DEV56 only → target DEV57 card fix · no Git/push/deploy/PROD
 
 ## QA1 findings addressed

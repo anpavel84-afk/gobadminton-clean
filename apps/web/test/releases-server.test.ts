@@ -254,9 +254,10 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps sixty-four confirmed seed deployments including accepted alpha.1–alpha.55 and dedupes identical live rows", () => {
+  it("keeps sixty-five confirmed seed deployments including accepted alpha.1–alpha.56 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(64);
+    expect(seedCount).toBe(65);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(60);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -329,6 +330,7 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.53"
       || row.application_version === "0.1.0-alpha.54"
       || row.application_version === "0.1.0-alpha.55"
+      || row.application_version === "0.1.0-alpha.56"
       || row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -336,6 +338,14 @@ describe("history seed integrity", () => {
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
       && row.deployments[0]?.release_id === "r42455870420-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T06:58:58Z",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.56"
+      && row.source_sha === "524088767e2b7e77d569c2f0a47689db854ab7b0"
+      && row.deployments[0]?.release_id === "r42465159954-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T09:11:48Z"
+      && row.api_contract_version === "0.39.0"
+      && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.54"
@@ -604,6 +614,7 @@ describe("history seed integrity", () => {
       "2026-11-08T03:29:11Z",
       "2026-11-08T05:18:57Z",
       "2026-11-08T06:58:58Z",
+      "2026-11-08T09:11:48Z",
     ]);
   });
 

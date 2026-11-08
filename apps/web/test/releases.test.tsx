@@ -66,6 +66,7 @@ describe("releases catalogue integrity", () => {
     ].join(" ");
     expect(currentProse).toMatch(/карточка|тренер|компакт/i);
     expect(currentProse).toMatch(/организатор|отдельн|идентификатор/i);
+    expect(currentProse).toMatch(/Следующий|Давай сыграем|выравниван|статус/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,10 +86,13 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/карточка|тренер|компакт/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/карточка|тренер|выравниван|кноп/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(
       /тренер|организатор|компакт|фото|перенос/i,
+    );
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(
+      /Следующий|Давай сыграем|высот|статус/i,
     );
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce|138|140|PROD|DEV/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(3);
@@ -250,10 +254,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(59);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(60);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(64);
+    ).toBe(65);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -265,6 +269,25 @@ describe("releases catalogue integrity", () => {
       && row.title === "Жалоба на выбранное сообщение с явным согласием и чтением источника в обращении"
       && row.additions.length === 1
       && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.56"
+      && row.version_label === "0.1.0-alpha.56"
+      && row.source_sha === "524088767e2b7e77d569c2f0a47689db854ab7b0"
+      && row.deployments[0]?.release_id === "r42465159954-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T09:11:48Z"
+      && row.deployments[0]?.api_digest === "sha256:58e9c86acd10434b1e748c4dfffe7aac0bd375070559c8458a40ffbd1113927c"
+      && row.deployments[0]?.web_digest === "sha256:7457fe35b99d31b9bc48e1dbf862ff39a23eb1a11cf471dfeb2dd1e5cb2932e4"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.39.0"
+      && row.title === "Скрытие непроверенных фото из VK/Яндекс и журнал метаданных модерации"
+      && row.additions.length === 2
+      && row.fixes.length === 0
+      && row.known_limitations.length === 4
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
