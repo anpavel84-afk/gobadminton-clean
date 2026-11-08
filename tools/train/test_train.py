@@ -4137,9 +4137,16 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             proc.returncode = 0
             proc.pid = 4242
             proc.poll.return_value = 0
+            proc.wait.return_value = 0
             proc.communicate.return_value = (b'', b'')
 
-            with mock.patch.object(lean_live, 'require_executor_uid'), \
+            # Simulate an already-reaped owned group for this post-model fixture.
+            # Never signal or look up the fake pid on the host.
+            with mock.patch.object(lean_live, '_kill_owned_process_group',
+                                   return_value=None), \
+                    mock.patch.object(lean_live.os, 'killpg',
+                                      side_effect=ProcessLookupError), \
+                    mock.patch.object(lean_live, 'require_executor_uid'), \
                     mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
                         native if n == 'native_cursor' else guard)), \
                     mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
@@ -4383,9 +4390,16 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             proc.returncode = 0
             proc.pid = 4242
             proc.poll.return_value = 0
+            proc.wait.return_value = 0
             proc.communicate.return_value = (b'', b'')
 
-            with mock.patch.object(lean_live, 'require_executor_uid'), \
+            # Simulate an already-reaped owned group for this post-model fixture.
+            # Never signal or look up the fake pid on the host.
+            with mock.patch.object(lean_live, '_kill_owned_process_group',
+                                   return_value=None), \
+                    mock.patch.object(lean_live.os, 'killpg',
+                                      side_effect=ProcessLookupError), \
+                    mock.patch.object(lean_live, 'require_executor_uid'), \
                     mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
                         native if n == 'native_cursor' else guard)), \
                     mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
