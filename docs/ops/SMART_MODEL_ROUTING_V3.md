@@ -278,3 +278,18 @@ Historical Mode A completions lack historical CLI/argv proof and cannot satisfy
 this contract retroactively. Independent QA, CI7 and a scheduled actual Lean
 review remain pending. Actual vendor capacity export remains separately BLOCKED;
 default OFF/SHADOW, C5 OFF, no installation, activation or PROD change.
+
+B3 repair1 source candidate: QA now resolves the pinned scoped native Codex
+binary directly; normal QA and the one-shot Root probe share command and
+permission construction. Qualification binds complete Lean/native OPS Python
+bytes, effective UID/GID/paths, timeout/native/Node bytes and short rules, while
+its product SHA remains a historical sample. Acceptance requires protected
+probe admission, exact author claim provenance and operation, reconstructed
+command/permissions/output paths, raw completion, and a Root-captured Linux
+PID/start-time/group/UID/command record with matching reap/stop completion.
+Legacy Mode A raw output and boolean stop assertions cannot qualify a role.
+The trusted authority selects Medium first, or accepted High when Medium is
+unavailable; selectors and the actual QA operator recheck that authority.
+Successor claims retain and recheck the protected proposal's reviewer contract.
+No runtime acceptance, automatic READY, provider invocation or vendor capacity
+transport is implied. OFF/SHADOW defaults and vendor capacity BLOCKED remain.

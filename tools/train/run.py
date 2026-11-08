@@ -456,14 +456,19 @@ def claim_admission(admission, *, results_root=None, force=False, config=None, r
                     and tuple(decision.get('bucket') or ()) == bucket
                     and decision.get('provider') in counts):
                 counts[decision['provider']] += 1
-        qa_ok, qa_metadata = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority)
+        from providers import accepted_qa_effort
+        try:
+            effort = accepted_qa_effort(reviewer_authority)
+        except ProviderError:
+            effort = 'medium'
+        qa_ok, qa_metadata = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=effort)
         record['reviewer_authority'] = qa_metadata if qa_ok else None
         record['bound_author'] = freeze(dict(record['task'], issue=record['issue']),
             revision=record['revision'], pipeline=routing_config.get('pipeline_revision', ''),
             routes=routing_qualifications(record['task'], reviewer_authority=reviewer_authority), history_counts=counts,
             current_provider=current, mode=mode)
     if mode == 'on' and record['task'].get('handoff_from_revision'):
-        record = bind_capacity_successor(record, root, routing_config)
+        record = bind_capacity_successor(record, root, routing_config, reviewer_authority=reviewer_authority)
     write_receipt(claim_path, record)
     return record
 
@@ -1111,7 +1116,22 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 'native_evidence_dir': author_result.get('native_evidence_dir'),
                 'author_attempt': author_n,
             }
+            known_authors = {'cursor_auto': ('native:cursor:1002', 'auto'),
+                'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
+                'codex_author': ('native:codex:1002:author', 'gpt-6.1-sol:medium')}
+            actual_provider = author_result.get('provider') or 'cursor_auto'
+            executor, model = known_authors.get(actual_provider, ('', ''))
+            # No role inference from task JSON or historical partial output.
+            from live import _qa_source_bytes
+            if actual_provider != 'cursor_auto' and author_result.get('effective_model') != model:
+                executor = ''  # Unknown/mismatched native model cannot qualify an author receipt.
+            provenance = dict(role='author', source_bytes=_qa_source_bytes(worktree), executor=executor, model=model,
+                revision=claim['revision'], candidate_sha=candidate_sha,
+                operation_id=task['_author_operation'],
+                effective_model=author_result.get('effective_model'),
+                evidence_dir=str(author_evidence))
             claim = mark_phase(path, 'AUTHOR_DONE', stage='author',
+                               author_provenance=provenance,
                                candidate_sha=candidate_sha,
                                reviewed_candidate_sha=candidate_sha,
                                author_changed=author_result.get('changed_paths') or [],
@@ -1725,7 +1745,7 @@ def _restore_capacity_stop(value):
             proof['partial_state']))
 
 
-def bind_capacity_successor(record, root, routing_config):
+def bind_capacity_successor(record, root, routing_config, *, reviewer_authority=None):
     """Consume a previous protected proposal ONLY with a NEW admitted revision.
 
     Trusted integrator first imports the checkpoint and commits the retained
@@ -1743,6 +1763,12 @@ def bind_capacity_successor(record, root, routing_config):
     _need(previous.get('revision') == previous_revision and previous.get('phase') == 'BLOCKED'
           and proposal.get('action') == 'REQUIRE_NEW_ADMISSION'
           and not previous.get('capacity_successor_revision'), 'capacity_proposal_unavailable')
+    accepted = previous.get('reviewer_authority') or {}
+    effort = accepted.get('effort')
+    qa_ok, fresh = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=effort)
+    _need(qa_ok and fresh == accepted and proposal.get('reviewer', {}).get('model') == 'gpt-6-sol:' + effort,
+          'capacity_reviewer_authority_changed')
+    record['reviewer_authority'] = fresh
     h = proposal['handoff']
     _need(task['allowed_paths'] == previous['task']['allowed_paths']
           and task.get('checkpoint_fingerprint')

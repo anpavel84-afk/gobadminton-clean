@@ -438,6 +438,14 @@ def parse_qa_verdict(raw, reviewed_sha, *, model=AGY_MODEL, provider=None):
             'reviewed_sha': reviewed_sha, 'source': 'lean_exact_json', 'charge': 'none'}
 
 
+def accepted_qa_effort(reviewer_authority):
+    """Root callback selects authority; no task/event effort is consulted."""
+    for effort in ('medium', 'high'):
+        if role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=effort)[0]:
+            return effort
+    raise ProviderError('independent_qa_unavailable_hold', charge='none')
+
+
 def select_qa_provider(task, *, issue, reviewer_authority=None):
     """Nonblocking routing: default Codex Medium; AGY only when READY+quota.
 
@@ -447,7 +455,8 @@ def select_qa_provider(task, *, issue, reviewer_authority=None):
     AGY author never self-QAs — default QA remains Codex Sol Medium.
     """
     if task.get('_bound_author', {}).get('mode') == 'on':
-        if not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority)[0]:
+        if not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
+                          effort=accepted_qa_effort(reviewer_authority))[0]:
             raise ProviderError('independent_qa_unavailable_hold', charge='none')
         return 'codex_sol_medium', 'qualified_gpt_6_sol_qa', None
     routes = task.get('qaroute') or task.get('qa_route') or ['codex_sol_medium']
@@ -553,7 +562,8 @@ def select_author_provider(task, *, issue=None, reviewer_authority=None):
                 'codex_author': 'codex_author'}[provider]
         if provider not in author_routes(task) or not role_ready(role)[0]:
             raise ProviderError('bound_author_unavailable_hold', charge='none')
-        if not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority)[0]:
+        if not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
+                          effort=accepted_qa_effort(reviewer_authority))[0]:
             raise ProviderError('independent_qa_unavailable_hold', charge='none')
         return bound
     routes = author_routes(task)
@@ -948,7 +958,11 @@ def routing_qualifications(task, *, reviewer_authority=None):
     ):
         ready, _ = role_ready(role, reviewer_authority=reviewer_authority)
         if provider == p.CODEX:
-            ready = ready and role_ready('codex_routing_qa', reviewer_authority=reviewer_authority)[0]
+            try:
+                ready = ready and role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
+                    effort=accepted_qa_effort(reviewer_authority))[0]
+            except ProviderError:
+                ready = False
         result[provider] = p.Route(provider, ACTUAL_AUTHOR[provider] in admitted,
                                   ready, ready, executor, model)
     return result

@@ -511,7 +511,7 @@ class RootReviewerDelivery(unittest.TestCase):
             executor='native:codex:1002:qa', executor_uid=1002, recipe_fingerprint='r')
         pointer = dict(path='/var/lib/gobadminton-lean/results/issue-527/x/evidence/qa-1/qa-intent-codex_sol_medium.json', sha256='s')
         accepted = dict(recipe, root_acceptance='accepted', revoked=False,
-                        candidate_sha='a' * 40, operation_id='historical-sample')
+                        candidate_sha='a' * 40, operation_id='historical-sample', intent_path=pointer['path'])
         request = {k: recipe[k] for k in ('model', 'effort', 'role', 'executor')}
         with patch.object(live.os, 'geteuid', return_value=0), \
                 patch.object(live, '_qa_root_config', return_value={'codex_qa_authority': {'medium': pointer}}), \
@@ -625,3 +625,95 @@ class RootReviewerDelivery(unittest.TestCase):
                                   results_root=td, use_live_defaults=True)
             self.assertEqual(result['status'], 'ignored')
             factory.assert_called_once_with()
+
+
+class Repair1Focused(unittest.TestCase):
+    def test_high_only_authority_reaches_normal_selectors(self):
+        core = SimpleNamespace(live=lambda: (SimpleNamespace(model_command=lambda: None), None))
+        def authority(**kw):
+            if kw['effort'] != 'high': return None
+            return dict(kw, executor_uid=1002, admitted=True, qualified=True,
+                        secured=True, independent_executor=True)
+        t = bound(task())
+        with patch.object(providers, '_import_native', return_value=core), \
+                patch.object(providers, 'role_ready', wraps=providers.role_ready) as ready:
+            self.assertEqual(providers.accepted_qa_effort(authority), 'high')
+            self.assertEqual(providers.select_qa_provider(t, issue=527, reviewer_authority=authority)[0], 'codex_sol_medium')
+            with patch.object(h, 'bound_provider', return_value=('cursor_auto', 'bound', {})):
+                original = providers.role_ready
+                def roles(role, **kw):
+                    return (True, {}) if role == 'cursor_author' else original(role, **kw)
+                with patch.object(providers, 'role_ready', side_effect=roles):
+                    self.assertEqual(providers.select_author_provider(t, reviewer_authority=authority)[0], 'cursor_auto')
+            with self.assertRaises(providers.ProviderError):
+                providers.accepted_qa_effort(lambda **kw: None)
+
+    def test_actual_scoped_binary_resolver_without_execution(self):
+        binary = live.AGENT_HOME / '.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'
+        core = SimpleNamespace(live=lambda: (SimpleNamespace(NATIVE_CODEX=str(binary)), None))
+        with patch.object(providers, '_import_native', return_value=core), \
+                patch.object(Path, 'is_file', return_value=True), \
+                patch.object(Path, 'is_symlink', return_value=False), \
+                patch.object(Path, 'read_bytes', return_value=b'native'), \
+                patch.object(live.hashlib, 'sha256', return_value=SimpleNamespace(hexdigest=lambda: 'f34a4d2301892ae96c90097786bfe5dc269f187b6f69faf42a7b357b8c081e35')):
+            self.assertEqual(live._qa_native_binary(), binary)
+            core.live = lambda: (SimpleNamespace(NATIVE_CODEX='/obsolete/vendor/codex/codex'), None)
+            with self.assertRaises(ValueError): live._qa_native_binary()
+
+    def test_author_receipt_exact_operation_candidate_and_role(self):
+        t = task()
+        record = dict(schema='GB_LEAN_CLAIM_V1', task=t, issue=527, revision=t['revision'],
+            candidate_sha='b'*40, author_provider='codex_author', author_provenance=dict(
+                role='author', executor='native:codex:1002:author', model='gpt-6.1-sol:medium',
+                candidate_sha='b'*40, revision=t['revision'], operation_id='author-op', source_bytes='bytes'))
+        admission = dict(task=t, candidate_sha='b'*40, admission_ref=t['revision'],
+            author_receipt={}, author_executor='native:codex:1002:author', author_operation_id='author-op')
+        with patch.object(live, '_qa_receipt', return_value=record):
+            self.assertEqual(live._qa_author_binding(admission), admission['author_executor'])
+            for key, value in [('candidate_sha', 'c'*40), ('author_operation_id', 'old'), ('author_executor', 'arbitrary')]:
+                with self.assertRaises(ValueError): live._qa_author_binding(dict(admission, **{key: value}))
+            with patch.dict(record['author_provenance'], role='qa'):
+                with self.assertRaises(ValueError): live._qa_author_binding(admission)
+
+    def test_expected_factory_and_protected_completion_reject_forgery(self):
+        recipe = dict(role='qa', model='gpt-6-sol', effort='high', executor_uid=1002,
+                      executor='native:codex:1002:qa')
+        parent = '/var/lib/gobadminton-lean/results/qa-sample'
+        candidate = 'b'*40
+        admission = dict(schema='GB_LEAN_QA_PROBE_ADMISSION_V1', revoked=False,
+            recipe=recipe, candidate_sha=candidate, operation_id='op', admission_ref='a'*64, pipeline_revision='c'*40,
+            author_executor='native:cursor:1002:author', author_operation_id='author-op',
+            author_receipt={}, evidence_dir=parent, task=dict(worktree='/source'))
+        argv, permissions = ['native', '--read-only'], {'/source': 'read'}
+        stop = dict(pid=42, pgrp=42, start_ticks='123', uid=1002,
+            argv_sha256=h.fingerprint(argv), reaped=True, group_gone=True, exit=0,
+            operation_id='op', admission_ref='a'*64, evidence_dir=parent)
+        raw = b'{"type":"turn.completed"}\n'
+        final = json.dumps(dict(verdict='PASS', reviewed_sha=candidate, findings=[])).encode()
+        pointer = lambda name, data: dict(path=parent+'/'+name, sha256=hashlib.sha256(data).hexdigest())
+        intent = dict(recipe, **{k: admission[k] for k in ('candidate_sha','operation_id','admission_ref','author_executor','author_operation_id','author_receipt')},
+            phase='completed', pipeline_revision='c'*40, source_before=candidate, source_after=candidate,
+            readonly_bytes_before='bytes', readonly_bytes_after='bytes', actual_argv=argv,
+            actual_permissions=permissions, argv_sha256=h.fingerprint(argv), argv_permissions_sha256=h.fingerprint(permissions),
+            completion_proof=dict(path=parent+'/completion.json'), final_proof=pointer('final.txt',final),
+            raw_proof=pointer('events.jsonl', raw), owned_stop_proof=stop, probe_admission={'admission':True},
+            intent_path=parent+'/qa-intent-codex_sol_medium.json', source_path='/source', private_tmpdir='/tmp/gb-codex-lean-x/tmp')
+        completion = dict(exit=0, turn_completed=True, candidate_sha=candidate, stop_record=stop,
+            operator=dict(**{k: stop[k] for k in ('pid','pgrp','uid','start_ticks','argv_sha256','operation_id','admission_ref','evidence_dir')},
+                          actual_argv=argv, actual_permissions=permissions, source_before='bytes'))
+        def receipt(pointer):
+            if pointer == {}: return {'author_provenance': {'source_bytes': 'bytes'}}
+            return admission if pointer.get('admission') else completion
+        with patch.object(live, '_qa_recipe', return_value=recipe), \
+                patch.object(live, '_qa_author_binding', return_value=admission['author_executor']), \
+                patch.object(live, '_qa_launch', return_value=(argv, permissions)), \
+                patch.object(live, '_qa_receipt', side_effect=receipt), \
+                patch.object(live, '_qa_protected_bytes', side_effect=lambda path, **kw: final if str(path).endswith('final.txt') else raw):
+            self.assertEqual(live._qa_validate_completed(intent), recipe)
+            for patch_values in (
+                dict(actual_argv=['native','--unsafe'], argv_sha256=h.fingerprint(['native','--unsafe'])),
+                dict(actual_permissions={'/':'write'}, argv_permissions_sha256=h.fingerprint({'/':'write'})),
+                dict(owned_stop_proof=True), dict(operation_id='replay'),
+                dict(private_tmpdir='/source/tmp'), dict(source_path='/other')):
+                with self.assertRaises((ValueError, KeyError)):
+                    live._qa_validate_completed(dict(intent, **patch_values))
