@@ -432,6 +432,14 @@ def parse_stream(raw, model=MODEL, *, tokens=()):
         else:
             need(state in ('ACTIVE', 'DONE'), 'invalid author step')
             need(_tool_error(step) is None, 'unexpected author step error')
+            # CLI 1.4.5 emits tool finish ACTIVE, then native finish DONE at
+            # the same index. Only that exact handoff closes the pending tool.
+            index = step.get('step_index')
+            if (kind == 'finish' and state == 'DONE' and type(index) is int
+                    and steps.get(index) == ('finish', 'ACTIVE')):
+                steps[index] = ('finish', 'DONE')
+                if 'finish' not in executed_tools:
+                    executed_tools.append('finish')
         inference |= kind == 'agent_response' and state == 'DONE'
         finish |= kind == 'finish' and state == 'DONE'
     out = events[-1].get('result')

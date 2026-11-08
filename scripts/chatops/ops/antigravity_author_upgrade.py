@@ -670,6 +670,13 @@ def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
             need((sha(current) if current is not None else None)
                  in (journal['before'][str(target)], journal['after'][str(target)]),
                  'foreign readiness drift')
+        current_proof = optional(READY_PROOF)
+        if current_proof is not None:
+            saved_proof = backup / 'ready-proof.json'
+            if saved_proof.exists():
+                need(read(saved_proof) == current_proof, 'archived ready proof differs')
+            else:
+                put(saved_proof, current_proof, 0o600)
         put(MARKER, read(backup / 'marker'))
         if journal['before'][str(READY_PROOF)] is None:
             if READY_PROOF.exists():
@@ -691,10 +698,23 @@ def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
         need(current_manifest == proof['manifest_sha256'], 'qualification changed during CI readback')
         need(all(sha(read(INSTALL / name)) == value for name,value in proof['modules'].items()),
              'promotion module changed during CI readback')
-    need(optional(PROMOTION_JOURNAL) is None and optional(READY_PROOF) is None,
-         'prior readiness must be reconciled')
+    previous_raw = optional(PROMOTION_JOURNAL)
+    previous = loads(previous_raw) if previous_raw is not None else None
+    need(optional(READY_PROOF) is None, 'prior readiness proof must be revoked')
+    if previous is not None:
+        need(previous.get('schema') == 'GB_AGY_AUTHOR_PROMOTION_V1'
+             and previous.get('phase') == 'demoted-canary'
+             and re.fullmatch('[a-f0-9]{64}', previous.get('operation') or '')
+             and previous['operation'] != operation,
+             'prior readiness must be demoted; qualification operation must be new')
     if action == 'promote-dry':
         return {'phase': 'qualification-verified', 'ready': False, 'dry': True}
+    if previous is not None:
+        archive = BACKUP / 'promotions' / previous['operation'] / 'promotion-demoted.json'
+        if archive.exists():
+            need(read(archive) == previous_raw, 'prior demotion archive differs')
+        else:
+            put(archive, previous_raw, 0o600)
     parent = BACKUP / 'promotions'
     if not parent.exists(): _mkdir_backup(parent)
     backup = parent / operation
@@ -703,6 +723,7 @@ def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
     put(backup / 'marker', before_marker, 0o600)
     journal = dict(schema='GB_AGY_AUTHOR_PROMOTION_V1', phase='prepared', operation=operation,
         commit=commit, task_sha256=task_hash,
+        previous_operation=(previous or {}).get('operation'),
         before={str(MARKER): sha(before_marker), str(READY_PROOF): None},
         after={str(MARKER): sha(encoded(marker)), str(READY_PROOF): sha(encoded(proof))})
     put(PROMOTION_JOURNAL, encoded(journal), 0o600)

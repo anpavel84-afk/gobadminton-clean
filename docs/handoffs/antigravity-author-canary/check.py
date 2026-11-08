@@ -9,4 +9,14 @@ for values, expected in (([], 0), ([True, False, True], 2),
                          ([True, 1, 'yes', True], 2)):
     assert count(values) == expected, (values, expected)
 assert count(iter([True, False, True])) == 2
+assert count([True, False, True], limit=0) == 0
+assert count([True, 1, True, True], limit=2) == 2
+assert count(iter([True, False, True]), limit=5) == 2
+for limit in (-1, True, '1', 1.5):
+    try:
+        count([True], limit=limit)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(('invalid limit accepted', limit))
 print('ANTIGRAVITY_AUTHOR_CANARY_TESTS_PASS')

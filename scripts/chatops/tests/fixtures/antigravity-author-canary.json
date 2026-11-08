@@ -1,6 +1,6 @@
 {
   "issue": 199,
-  "assignment": "ANTIGRAVITY_AUTHOR_ISOLATED_OPS_CANARY_20261108",
+  "assignment": "ANTIGRAVITY_AUTHOR_FINISH_HANDOFF_REQUALIFICATION_20261108",
   "repo": "anpavel84-afk/gobadminton-clean",
   "target": "dev",
   "authorroute": [
@@ -12,11 +12,12 @@
   "allowed_paths": [
     "docs/handoffs/antigravity-author-canary/count_completed.py"
   ],
-  "goal": "Read docs/handoffs/antigravity-author-canary/check.py with view_file. Create count_completed.py in that same directory implementing count_completed(values): count only elements that are the boolean singleton True, ignoring truthy non-booleans, support iterators and do not mutate input. Use a native edit tool to create the file. Run python3 -I -B docs/handoffs/antigravity-author-canary/check.py using run_command; inspect output and exit status. Finish once, with actual result. No other files, publishing, Git, network, service or admin operations.",
+  "goal": "Read docs/handoffs/antigravity-author-canary/check.py with view_file. Extend count_completed(values, *, limit=None) in count_completed.py only: preserve the default boolean-singleton True count, support iterators and leave sequences unchanged; optional limit must be exactly a nonnegative int (reject bool, negative and non-integer values with ValueError), and caps the returned count. Use a native edit tool. Run python3 -I -B docs/handoffs/antigravity-author-canary/check.py with run_command, inspect actual output and exit status, then call native finish once. No other files, Git, publication, network or admin operations.",
   "acceptance": [
     "Real native read, edit, command execution and finish; checker exits zero.",
     "Only the allowed new Python file changes; independent Codex QA reviews exact resulting candidate.",
-    "This is a new isolated OPS admission; do not replay or modify historical #386 operations."
+    "This is a new isolated OPS admission; do not replay or modify historical #386 operations.",
+    "New prospective qualification after the evidenced native finish ACTIVE -> finish DONE parser repair. Old tasks and failed/paid operations remain immutable and are not replayed."
   ],
-  "revision": "b9545c56f28e9a10986c1340b19f60a5563359159ac1dd282b015db96cbb54e9"
+  "revision": "09a5c811a2118bc514c1d5486628e023bc6d13c9d63322e2f6c6faa7966ebd47"
 }

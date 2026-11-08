@@ -171,6 +171,22 @@ class Upgrade(unittest.TestCase):
         self.assertFalse(U.READY_PROOF.exists())
         self.assertTrue(U.read_prior_journal())
 
+    def test_new_qualification_after_demote_preserves_previous_proof_and_journal(self):
+        self.call('apply')
+        marker=dict(json.loads(U.read(U.MARKER)),phase='ready')
+        proof=dict(schema='GB_PRODUCT_AUTHOR_ROLE_READY_V1',phase='ready',verdict='PASS')
+        old,new='e'*64,'f'*64
+        with patch.object(U,'promotion_plan',return_value=(marker,proof)):
+            U.promote('promote',self.bundle,self.commit,self.task_hash,old)
+            U.promote('demote',self.bundle,self.commit,self.task_hash,old)
+            prior=U.read(U.PROMOTION_JOURNAL)
+            self.assertEqual(json.loads(U.read(U.BACKUP/'promotions'/old/'ready-proof.json')),proof)
+            with self.assertRaises(core.Refused):
+                U.promote('promote',self.bundle,self.commit,self.task_hash,old)
+            U.promote('promote',self.bundle,self.commit,self.task_hash,new)
+        self.assertEqual(U.read(U.BACKUP/'promotions'/old/'promotion-demoted.json'),prior)
+        self.assertEqual(json.loads(U.read(U.PROMOTION_JOURNAL))['previous_operation'],old)
+
     def test_promotion_requires_bound_native_route_qa_ci_and_acceptance(self):
         from test_actions_train_antigravity_author import N, rows, wire, CID
         task = json.loads((ROOT/'scripts/chatops/tests/fixtures/antigravity-author-canary.json').read_bytes())
