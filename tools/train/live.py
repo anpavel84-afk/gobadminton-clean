@@ -1405,18 +1405,30 @@ def _kill_owned_process_group(p):
     """Kill/reap only the owned process group on timeout — no blind paid replay."""
     if p is None:
         return
-    if p.poll() is None:
-        try:
-            os.killpg(p.pid, 9)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                p.kill()
-            except (ProcessLookupError, OSError):
-                pass
-    try:
-        p.wait(timeout=5)
-    except Exception:
-        pass
+    # Popen must belong to our new session. Retain identity before the leader
+    # exits; an exited leader alone is never proof that its children stopped.
+    identity = getattr(p, '_lean_owned_identity', None)
+    if identity is None:
+        if p.poll() is not None or os.getpgid(p.pid) != p.pid:
+            raise LiveError('owned_process_identity_missing')
+        fields = (Path('/proc') / str(p.pid) / 'stat').read_text().rsplit(')', 1)[1].split()
+        identity = dict(pid=p.pid, pgrp=p.pid, start_ticks=fields[19])
+        p._lean_owned_identity = identity
+    if identity['pid'] != p.pid or identity['pgrp'] != p.pid:
+        raise LiveError('owned_process_identity_mismatch')
+    proc = Path('/proc') / str(p.pid) / 'stat'
+    if proc.exists():
+        fields = proc.read_text().rsplit(')', 1)[1].split()
+        if fields[19] != identity['start_ticks'] or int(fields[2]) != p.pid:
+            raise LiveError('owned_process_identity_reused')
+    from providers import _import_native
+    native = _import_native('native_antigravity')
+    if hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() != '0a6ff52152b652d1d925513ea1f53e1fce597750d863c64fbac70575599ff779':
+        raise LiveError('owned_reap_primitive_changed')
+    native.reap(p)
+    from author_handoff import owned_group_gone
+    if not owned_group_gone(p):
+        raise LiveError('owned_process_stop_unreconciled')
 
 
 def _git_common_dir(source):
@@ -2246,10 +2258,6 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         parsed['exit'] = 0
         if routing_qa or _probe is not None:
             # Reap any surviving members of the owned group even after leader exit.
-            try:
-                os.killpg(p.pid, 9)
-            except ProcessLookupError:
-                pass
             _kill_owned_process_group(p)
             from author_handoff import owned_group_gone
             after = _qa_source_bytes(source)
@@ -2275,8 +2283,26 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
         return parsed
     finally:
-        if p is not None and p.poll() is None:
-            _kill_owned_process_group(p)
+        if p is not None:
+            failed = sys.exc_info()[0] is not None
+            try:
+                _kill_owned_process_group(p)
+            except Exception:
+                mark_intent_phase(intent_path, 'UNKNOWN', error='owned_stop_unreconciled',
+                                  no_blind_replay=True)
+                raise
+            if failed and (routing_qa or _probe is not None):
+                identity = getattr(p, '_lean_owned_identity', {})
+                stop = dict(identity, reaped=p.returncode is not None,
+                    group_gone=True, exit=p.returncode,
+                    operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                    admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'),
+                    evidence_dir=str(evidence))
+                # Keep the failure/UNKNOWN classification; cleanup is no PASS.
+                current = loads(Path(intent_path).read_bytes()) if intent_path else {}
+                mark_intent_phase(intent_path, current.get('phase', 'HOLD_no_automatic_replay'),
+                                  owned_stop_proof=stop)
+                (evidence / 'failure-stop.json').write_text(json.dumps(stop, indent=2) + '\n')
         shutil.rmtree(private, ignore_errors=True)
 
 
@@ -4291,12 +4317,18 @@ def _qa_recipe(effort='medium'):
     native_modules = sorted(NATIVE_TRAIN.rglob('*.py'))
     if not native_modules:
         raise ValueError('qa installed native closure missing')
-    closure = fingerprint({str(p): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in modules + native_modules + [binary, Path('/usr/bin/timeout'), AGENT_HOME / '.local/node-v24.21.0/bin/node']})
+    # Explicit effective executables, including symlink resolution and identity.
+    executables = [Path('/usr/bin/git'), Path(sys.executable)]
+    exec_identity = {str(p): dict(resolved=str(p.resolve(strict=True)),
+        uid=p.stat().st_uid, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+        for p in executables}
+    closure = fingerprint(dict(executables=exec_identity, modules={str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in modules + native_modules + [binary, Path('/usr/bin/timeout'), AGENT_HOME / '.local/node-v24.21.0/bin/node']}))
     _, rules_sha, rules_path = load_short_rules()
     constants = dict(uid=CURSOR_UID, gid=CURSOR_GID, registry_gid=REGISTRY_GID, home=str(AGENT_HOME),
         codex_home=str(NATIVE_CODEX_HOME), results=str(_QA_RESULTS), config=str(_QA_CONFIG),
-        native=str(NATIVE_TRAIN), timeout=QA_TIMEOUT_S, rules=str(rules_path))
+        native=str(NATIVE_TRAIN), timeout=QA_TIMEOUT_S, rules=str(rules_path),
+        effective_uid=os.geteuid(), effective_gid=os.getegid())
     return dict(role='qa', model='gpt-6-sol', effort=effort, executor_uid=CURSOR_UID,
         executor='native:codex:1002:qa', cli_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
         security_closure=closure, recipe_fingerprint=fingerprint(dict(closure=closure,
@@ -4342,11 +4374,100 @@ def _qa_command(codex, source, fs_expr, final_private, model, effort):
     ]
 
 
+def _qa_initial_author_binding(claim, admission):
+    """Protected factual Mode A origin; never a normal V3 or READY grant.
+
+    Root must independently reconcile the original operation before sealing
+    these existing RESULTS artifacts. Client fields and a bare Root assertion
+    cannot substitute for the hash-bound completed operation evidence.
+    """
+    from author_handoff import fingerprint
+    import host
+    def proof(name):
+        pointer = claim[name]
+        raw = _qa_protected_bytes(pointer['path'], results=True)
+        if hashlib.sha256(raw).hexdigest() != pointer['sha256']:
+            raise ValueError('initial author evidence hash')
+        return raw
+    origin = host.loads(proof('source_receipt'))
+    original_task = host.loads(proof('task_proof'))
+    completion = host.loads(proof('completion_proof'))
+    operator = host.loads(proof('operator_proof'))
+    stop = host.loads(proof('stop_proof'))
+    source = host.loads(proof('source_proof'))
+    raw = proof('raw_proof')
+    final = proof('final_proof')
+    events = [host.loads(line) for line in raw.decode().splitlines() if line.strip()]
+    provenance = claim.get('author_provenance') or {}
+    task = dict(admission['task'])
+    revision = task.pop('revision', None)
+    # The actual Mode A task is frozen in its own protected proof, not inferred
+    # from a new probe or normal V3 task. Only the computed probe revision differs.
+    expected = dict(operation_id=admission.get('author_operation_id'),
+        candidate_sha=admission.get('candidate_sha'), role='author',
+        executor='native:codex:1002:author', model='gpt-6.1-sol', effort='medium',
+        executor_uid=1002, mode='A')
+    if (admission.get('schema') != 'GB_LEAN_QA_PROBE_ADMISSION_V1'
+            or admission.get('revoked') is not False or not admission.get('operation_id')
+            or claim.get('revoked') is not False or claim.get('root_verified') is not True
+            or not expected['operation_id'] or not SHA40.fullmatch(expected['candidate_sha'] or '')
+            or revision != admission.get('admission_ref')
+            or claim.get('revision') != revision
+            or admission.get('author_executor') != expected['executor']
+            or task != original_task or claim.get('task') != original_task
+            or claim.get('scope_sha256') != fingerprint(sorted(task.get('allowed_paths', [])))
+            or any(record.get(k) != v for record in (claim, completion, operator, stop, source)
+                   for k, v in expected.items())
+            or origin.get('phase') != 'IMPORTED_COMMITTED_SOURCE_ONLY'
+            or origin.get('candidate') != expected['candidate_sha']
+            or origin.get('executor_uid') != 1002
+            or origin.get('requested_model') != expected['model']
+            or origin.get('requested_effort') != 'medium'
+            or origin.get('new_model_calls') != 1
+            or completion.get('exit') != 0 or completion.get('turn_completed') is not True
+            or completion.get('stop_record') != stop or completion.get('operator') != operator
+            or stop.get('reaped') is not True or stop.get('group_gone') is not True
+            or stop.get('exit') != 0 or stop.get('pgrp') != stop.get('pid')
+            or not isinstance(stop.get('pid'), int) or stop['pid'] <= 1
+            or not str(stop.get('start_ticks', '')).isdigit()
+            or any(operator.get(k) != stop.get(k) for k in ('pid','pgrp','start_ticks','argv_sha256'))
+            or not operator.get('actual_argv') or not operator.get('actual_permissions')
+            or fingerprint(operator['actual_argv']) != operator.get('argv_sha256')
+            or fingerprint(operator['actual_permissions']) != operator.get('permission_config_sha256')
+            or any(origin.get(k) != operator.get(k) for k in
+                   ('argv_sha256', 'permission_config_sha256', 'cli_sha256', 'prompt_sha256'))
+            or operator.get('cli_sha256') != 'f34a4d2301892ae96c90097786bfe5dc269f187b6f69faf42a7b357b8c081e35'
+            or not operator.get('prompt_sha256')
+            or source.get('task_sha256') != fingerprint(original_task)
+            or not source.get('source_bytes') or source.get('scope_sha256') != claim['scope_sha256']
+            or provenance.get('source_bytes') != source.get('source_bytes')
+            or provenance.get('candidate_sha') != expected['candidate_sha']
+            or any(e.get('type') in ('error', 'turn.failed') for e in events)
+            or sum(e.get('type') == 'turn.completed' for e in events) != 1
+            or not final.strip() or completion.get('final_sha256') != hashlib.sha256(final).hexdigest()
+            or completion.get('raw_sha256') != hashlib.sha256(raw).hexdigest()
+            or origin.get('status') in ('UNKNOWN', 'partial')
+            or completion.get('pending_unknown') is not False):
+        raise ValueError('qa initial Mode A author origin hold')
+    return expected['executor']
+
+
 def _qa_author_binding(admission):
     claim = _qa_receipt(admission['author_receipt'])
     task = admission['task']
+    if claim.get('schema') == 'GB_LEAN_INITIAL_MODE_A_AUTHOR_V1':
+        return _qa_initial_author_binding(claim, admission)
     provenance = claim.get('author_provenance') or {}
-    runtime_keys = {'worktree', 'runtime_base_sha', '_author_operation', '_bound_author', '_capacity_successor'}
+    if task.get('revision') != claim.get('revision') or admission.get('admission_ref') != claim.get('revision'):
+        raise ValueError('qa runtime revision binding')
+    runtime_keys = {'worktree', 'runtime_base_sha', '_author_operation', '_bound_author', '_capacity_successor',
+                    'author_attempt', 'repair_findings', 'findings'}
+    # Only runtime's computed revision is removed; any original revision remains
+    # an Owner requirement and must match. Unknown underscore fields survive.
+    runtime_task = dict(task)
+    if 'revision' not in (claim.get('task') or {}):
+        runtime_task.pop('revision', None)
+    runtime_keys -= set(claim.get('task') or {})
     canonical = lambda value: {k: v for k, v in value.items() if k not in runtime_keys}
     known = {'cursor_auto': ('native:cursor:1002', 'auto'),
              'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
@@ -4356,7 +4477,7 @@ def _qa_author_binding(admission):
             or claim.get('candidate_sha') != admission['candidate_sha']
             or claim.get('revision') != admission['admission_ref']
             or not provenance.get('source_bytes')
-            or canonical(claim.get('task') or {}) != canonical(task)
+            or canonical(claim.get('task') or {}) != canonical(runtime_task)
             or claim.get('worktree') != task.get('worktree')
             or claim.get('issue') != task.get('issue')
             or provenance.get('candidate_sha') != admission['candidate_sha']
@@ -4379,8 +4500,10 @@ def _qa_process_identity(process, argv):
     actual = (proc / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
     if uid != CURSOR_UID or actual != [str(x).encode() for x in argv] or int(fields[2]) != process.pid:
         raise ValueError('qa process identity mismatch')
-    return dict(pid=process.pid, pgrp=int(fields[2]), start_ticks=fields[19], uid=uid,
-                argv_sha256=fingerprint(argv))
+    identity = dict(pid=process.pid, pgrp=int(fields[2]), start_ticks=fields[19], uid=uid,
+                    argv_sha256=fingerprint(argv))
+    process._lean_owned_identity = identity
+    return identity
 
 
 def _qa_validate_completed(intent):

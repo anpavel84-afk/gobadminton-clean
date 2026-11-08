@@ -747,3 +747,178 @@ class Repair1Focused(unittest.TestCase):
                 dict(private_tmpdir='/source/tmp'), dict(source_path='/other')):
                 with self.assertRaises((ValueError, KeyError)):
                     live._qa_validate_completed(dict(intent, **patch_values))
+
+
+class Repair2Focused(unittest.TestCase):
+    def test_normal_frozen_revision_and_owner_fields(self):
+        original = dict(issue=527, allowed_paths=['x.py'], _owner_requirement='retain')
+        revision = 'a'*64
+        runtime = dict(original, revision=revision, worktree='/source')
+        record = dict(schema='GB_LEAN_CLAIM_V1', task=original, issue=527,
+            revision=revision, worktree='/source', candidate_sha='b'*40,
+            author_provider='codex_author', author_provenance=dict(role='author',
+                executor='native:codex:1002:author', model='gpt-6.1-sol:medium',
+                candidate_sha='b'*40, revision=revision, operation_id='op', source_bytes='bytes'))
+        admission = dict(task=runtime, candidate_sha='b'*40, admission_ref=revision,
+            author_receipt={}, author_executor='native:codex:1002:author', author_operation_id='op')
+        with patch.object(live, '_qa_receipt', return_value=record):
+            self.assertEqual(live._qa_author_binding(admission), admission['author_executor'])
+            for values in (dict(revision='c'*64), dict(_owner_requirement='lost')):
+                with self.assertRaises(ValueError):
+                    live._qa_author_binding(dict(admission, task=dict(runtime, **values)))
+
+    def test_initial_mode_a_hash_bound_facts(self):
+        original = dict(issue=527, allowed_paths=['x.py'], worktree='/source')
+        expected = dict(operation_id='author-op', candidate_sha='b'*40, role='author',
+            executor='native:codex:1002:author', model='gpt-6.1-sol', effort='medium',
+            executor_uid=1002, mode='A')
+        argv, perms = ['native', '--model', 'gpt-6.1-sol'], {'/source':'write'}
+        launch = dict(argv_sha256=h.fingerprint(argv), permission_config_sha256=h.fingerprint(perms),
+            cli_sha256='f34a4d2301892ae96c90097786bfe5dc269f187b6f69faf42a7b357b8c081e35', prompt_sha256='d'*64)
+        stop_record = dict(expected, pid=42, pgrp=42, start_ticks='12', reaped=True,
+            group_gone=True, exit=0, argv_sha256=launch['argv_sha256'])
+        operator = dict(expected, **launch, pid=42, pgrp=42, start_ticks='12',
+            actual_argv=argv, actual_permissions=perms)
+        raw, final = b'{"type":"turn.completed"}\n', b'actual source completion'
+        completion = dict(expected, exit=0, turn_completed=True, pending_unknown=False,
+            stop_record=stop_record, operator=operator,
+            raw_sha256=hashlib.sha256(raw).hexdigest(), final_sha256=hashlib.sha256(final).hexdigest())
+        origin = dict(phase='IMPORTED_COMMITTED_SOURCE_ONLY', candidate='b'*40,
+            executor_uid=1002, requested_model='gpt-6.1-sol', requested_effort='medium',
+            new_model_calls=1, **launch)
+        scope = h.fingerprint(['x.py'])
+        artifacts = dict(source_receipt=origin, task_proof=original, completion_proof=completion,
+            operator_proof=operator, stop_proof=stop_record,
+            source_proof=dict(expected, source_bytes='bytes', task_sha256=h.fingerprint(original), scope_sha256=scope),
+            raw_proof=raw, final_proof=final)
+        def fixture():
+            data = {k: v if isinstance(v, bytes) else json.dumps(v).encode() for k,v in artifacts.items()}
+            claim = dict(expected, schema='GB_LEAN_INITIAL_MODE_A_AUTHOR_V1', revoked=False,
+                root_verified=True, revision='a'*64, task=original, scope_sha256=scope,
+                author_provenance=dict(source_bytes='bytes', candidate_sha='b'*40))
+            claim.update({k:dict(path='/var/lib/gobadminton-lean/results/initial/'+k,
+                sha256=hashlib.sha256(v).hexdigest()) for k,v in data.items()})
+            return claim, data
+        admission = dict(schema='GB_LEAN_QA_PROBE_ADMISSION_V1', revoked=False, operation_id='qa-op',
+            task=dict(original, revision='a'*64), admission_ref='a'*64,
+            candidate_sha='b'*40, author_operation_id='author-op', author_executor=expected['executor'])
+        claim, data = fixture()
+        with patch.object(live, '_qa_receipt', return_value=claim), \
+                patch.object(live, '_qa_protected_bytes', side_effect=lambda path, **kw: data[Path(path).name]):
+            self.assertEqual(live._qa_author_binding(dict(admission, author_receipt={})), expected['executor'])
+            for artifact, key, value in [('source_receipt','phase','UNKNOWN'),
+                    ('completion_proof','turn_completed',False), ('stop_proof','group_gone',False)]:
+                old = artifacts[artifact][key]; artifacts[artifact][key] = value
+                changed, changed_data = fixture()
+                with patch.object(live, '_qa_receipt', return_value=changed), \
+                        patch.object(live, '_qa_protected_bytes', side_effect=lambda path, **kw: changed_data[Path(path).name]):
+                    with self.assertRaises(ValueError): live._qa_author_binding(dict(admission, author_receipt={}))
+                artifacts[artifact][key] = old
+        # An unprotected UID1002 receipt fails at the existing read boundary.
+        with patch.object(live, '_qa_protected_bytes', side_effect=ValueError('qa authority metadata')):
+            with self.assertRaises(ValueError): live._qa_receipt(dict(path='/raw/receipt.json', sha256='a'*64))
+
+    def test_execute_claim_high_capacity_boundary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); t = bound(task()); revision=t['revision']
+            admission = dict(issue=527, revision=revision, task=t)
+            claim = dict(schema='GB_LEAN_CLAIM_V1', issue=527, revision=revision, task=t,
+                phase='CLAIMED', attempts={'author':0,'qa':0}, bound_author=t['_bound_author'])
+            path = run.claim_path_for(admission, root); run.write_receipt(path, claim)
+            def authority(**request):
+                return dict(request, executor_uid=1002, admitted=True, qualified=True, secured=True,
+                    independent_executor=True) if request['effort']=='high' else None
+            adapters = run.Adapters(author=lambda **kw:None, author_capacity=lambda **kw: stop(), reviewer_authority=authority)
+            core = SimpleNamespace(live=lambda: (SimpleNamespace(model_command=lambda:None), None))
+            def frozen(c, path, adapters, task): return c, str(root), 'b'*40
+            lease = SimpleNamespace(acquire=lambda:None, release=lambda:None)
+            captured=[]
+            with ExitStack() as stack:
+                for name,value in [('claim_admission',claim), ('WriterLease',lease)]:
+                    stack.enter_context(patch.object(run,name,return_value=value))
+                stack.enter_context(patch.object(run,'_ensure_frozen_runtime',side_effect=frozen))
+                stack.enter_context(patch.object(run,'invoke_cursor_author',side_effect=providers.ProviderError('provider_control_failure')))
+                stack.enter_context(patch.object(providers,'_import_native',return_value=core))
+                stack.enter_context(patch.object(run,'_read_worktree_head_for_control',return_value='b'*40))
+                current=h.operation(dict(t, _author_operation=run.digest({'revision':revision,'attempt':1})), 'cursor_auto','b'*40)
+                failure=p.CapacityFailure(current,'capacityhash','QUOTA_EXHAUSTED','native_top_level_error')
+                proof=p.StopProof(current,failure.fingerprint,True,True,True,False,'checkpoint',('native-final',),'preserved_diff')
+                adapters.author_capacity=lambda **kw:p.CapacityStop(failure,proof)
+                stack.enter_context(patch.object(providers,'routing_qualifications',return_value=routes()))
+                actual=run.record_capacity_proposal
+                def call(*args,**kw):
+                    captured.append(kw['qa_effort']); return actual(*args,**kw)
+                stack.enter_context(patch.object(run,'record_capacity_proposal',side_effect=call))
+                result=run.execute_claim(admission,adapters,results_root=root,parent_lease=True)
+                for invalid in (lambda **kw: None,
+                        lambda **kw: dict(authority(**kw) or {}, model='wrong'),
+                        lambda **kw: dict(authority(**kw) or {}, admitted=False),
+                        lambda **kw: dict(authority(**kw) or {}, independent_executor=False)):
+                    run.write_receipt(path, dict(claim, phase='CLAIMED'))
+                    adapters.reviewer_authority=invalid
+                    with self.assertRaises(providers.ProviderError):
+                        run.execute_claim(admission,adapters,results_root=root,parent_lease=True)
+            self.assertEqual(captured,['high'])
+            self.assertEqual(result['reason'],'new_capacity_admission_required')
+            self.assertEqual(result['claim']['reviewer_authority']['effort'],'high')
+
+    def test_git_python_bytes_change_stable_recipe(self):
+        with tempfile.TemporaryDirectory() as td:
+            native=Path(td); (native/'native.py').write_text('# closure')
+            binary=native/'codex'; binary.write_bytes(b'cli')
+            actual=Path.read_bytes; mutated=set()
+            def read(path):
+                if str(path) in mutated: return b'changed executable'
+                if str(path).endswith('/bin/node'): return b'node'
+                return actual(path)
+            with patch.object(live,'NATIVE_TRAIN',native), patch.object(live,'_qa_native_binary',return_value=binary), \
+                    patch.object(live,'load_short_rules',return_value=('', 'rules', Path('/rules'))), \
+                    patch.object(Path,'read_bytes',read):
+                baseline=live._qa_recipe()
+                for executable in ('/usr/bin/git',sys.executable):
+                    mutated.add(executable)
+                    self.assertNotEqual(live._qa_recipe()['recipe_fingerprint'],baseline['recipe_fingerprint'])
+                    mutated.clear()
+                self.assertEqual(live._qa_recipe(),baseline)
+
+    def test_exited_leader_owned_child_and_foreign_guard(self):
+        import ctypes
+        import time
+        libc=ctypes.CDLL(None, use_errno=True)
+        old=ctypes.c_int()
+        self.assertEqual(libc.prctl(37, ctypes.byref(old), 0, 0, 0), 0) # GET_CHILD_SUBREAPER
+        self.assertEqual(libc.prctl(36, 1, 0, 0, 0), 0)
+        process=None; child=None
+        try:
+            # Keep the leader until its original identity has been captured.
+            process=subprocess.Popen([sys.executable,'-c',
+                'import os,time,sys; p=os.fork(); '
+                '(time.sleep(30) if p==0 else (print(p,flush=True),sys.stdin.readline()))'],
+                start_new_session=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            child=int(process.stdout.readline())
+            fields=(Path('/proc')/str(process.pid)/'stat').read_text().rsplit(')',1)[1].split()
+            process._lean_owned_identity=dict(pid=process.pid,pgrp=process.pid,start_ticks=fields[19])
+            process.stdin.close(); process.wait(timeout=3)
+            self.assertIsNotNone(process.poll())
+            # Reap the adopted child so kernel group-absence verification is real.
+            native=providers._import_native('native_antigravity')
+            real_reap=native.reap
+            def reap(popen):
+                real_reap(popen)
+                os.waitpid(child,0)
+            with patch.object(native,'reap',side_effect=reap), \
+                    patch.object(providers,'_import_native',return_value=native):
+                live._kill_owned_process_group(process)
+            self.assertTrue(h.owned_group_gone(process))
+            foreign=SimpleNamespace(pid=os.getpid(),poll=lambda:None)
+            with patch.object(os,'killpg',side_effect=AssertionError('foreign signal')):
+                with self.assertRaises(live.LiveError): live._kill_owned_process_group(foreign)
+        finally:
+            if process:
+                process.stdout.close()
+            if child:
+                try: os.kill(child,9)
+                except ProcessLookupError: pass
+                try: os.waitpid(child,0)
+                except ChildProcessError: pass
+            libc.prctl(36, old.value, 0, 0, 0)

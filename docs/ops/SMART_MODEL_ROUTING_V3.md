@@ -293,3 +293,56 @@ unavailable; selectors and the actual QA operator recheck that authority.
 Successor claims retain and recheck the protected proposal's reviewer contract.
 No runtime acceptance, automatic READY, provider invocation or vendor capacity
 transport is implied. OFF/SHADOW defaults and vendor capacity BLOCKED remain.
+
+B3 repair2 initial origin is a discriminated `GB_LEAN_INITIAL_MODE_A_AUTHOR_V1`
+receipt in the **existing RESULTS family**, selected by the protected probe
+admission's `author_receipt` path/hash. It supplies author provenance only for
+that one Root-admitted probe. Normal V3 still requires accepted independent QA;
+this receipt is neither READY nor an author registry grant. No receipt, config,
+probe, install or acceptance is created by this source change.
+
+Before a separately scheduled Root operation, the operator must independently
+verify the genuine completed `b3-completion-author/receipt.json` operation:
+Mode A, author, native UID1002, gpt-6.1-sol Medium, one completed turn,
+candidate 13e45a0a8814e4e9b80a3135dbf555d3e580ac0c and exact allowed source
+scope. Its UID1002/0644 raw receipt is input, never authority. Root must retain
+that original receipt and hash-bound copies of the original frozen task,
+source/scope snapshot, raw events, final output, completion, owned stop and
+operator launch provenance under RESULTS, with protected ancestors and files.
+No UNKNOWN/partial attempt may be relabelled completed. If original launch,
+source import/candidate, raw/final or owned-stop facts cannot be reconciled,
+HOLD at that missing factual boundary; a new JSON assertion is insufficient.
+
+The sealed receipt has `revoked:false`, `root_verified:true`, computed probe
+`revision`, original `task`, `scope_sha256`, and `author_provenance` containing
+`source_bytes` and `candidate_sha`. All of receipt/completion/operator/stop/source
+bind `operation_id`, `candidate_sha`, `role:author`, `executor:native:codex:1002:author`,
+`executor_uid:1002`, `model:gpt-6.1-sol`, `effort:medium`, `mode:A`.
+Hash pointers are `source_receipt`, `task_proof`, `source_proof`,
+`completion_proof`, `operator_proof`, `stop_proof`, `raw_proof`, `final_proof`.
+The source proof binds `task_sha256`, `scope_sha256`, `source_bytes`.
+Completion binds `exit:0`, `turn_completed:true`, `pending_unknown:false`,
+`raw_sha256`, `final_sha256`, exact `operator` and `stop_record` copies.
+Operator binds actual argv/permissions and their fingerprints, CLI/prompt hashes,
+PID/PGID/start ticks; original receipt launch hashes must match. Stop additionally
+binds `reaped:true`, `group_gone:true`, `exit:0`. These inputs require independent
+Root verification against actual operation evidence; this validator does not
+manufacture missing historical facts. Current task/probe fields cannot grant them.
+
+Normal probe revision is checked against outer frozen claim revision separately
+from original task comparison; only known computed runtime additions are
+normalized. Unknown underscore Owner requirements remain binding. Production
+capacity handling derives trusted accepted QA effort and carries it into the
+proposal; successor/QA continue rechecking that exact authority. Failure cleanup
+uses the unchanged SHA-pinned native owned reap primitive even after leader exit,
+checks group absence and retains failure stop proof without changing UNKNOWN
+to PASS. The stable recipe binds effective Git and Python executable bytes,
+resolved paths and owner IDs, alongside existing native/timeout/Node/OPS closure
+and effective process IDs. On the observed host Git is `/usr/bin/git`
+(SHA256 eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201),
+Python `/usr/bin/python3` resolves to `/usr/bin/python3.12`
+(SHA256 e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f).
+Runtime hashes current effective bytes; historical sample hashes and future
+product candidate identity remain separate. Actual vendor capacity stays
+BLOCKED; default OFF/SHADOW, CI7, independent cumulative High QA and separate
+Root runtime acceptance remain required.

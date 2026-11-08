@@ -22,7 +22,7 @@ from providers import (
     OWNER_ID, REPO_ID, REPO, ProviderError, SHA40, atomic_write, digest, loads,
     progress_halt, default_routes, AUTHOR_PASS_CLAIMS, role_ready,
     invoke_cursor_author, invoke_codex_qa, invoke_trusted_publish, select_qa_provider,
-    select_author_provider,
+    select_author_provider, accepted_qa_effort,
     parse_qa_verdict,
 )
 
@@ -1098,7 +1098,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                         and adapters.author_capacity is not None):
                     proposal = record_capacity_proposal(
                         path, task, err, author_evidence, adapters.author_capacity,
-                        reviewer_authority=adapters.reviewer_authority)
+                        reviewer_authority=adapters.reviewer_authority,
+                        qa_effort=accepted_qa_effort(adapters.reviewer_authority))
                     if proposal.get('action') == 'REQUIRE_NEW_ADMISSION':
                         return {'status': 'blocked', 'claim': read_receipt(path),
                                 'claim_path': str(path), 'reason': 'new_capacity_admission_required'}
