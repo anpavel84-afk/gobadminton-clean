@@ -72,6 +72,12 @@ function render(id = "a") { hooks.cursor = 0; return renderToStaticMarkup(GameDe
 function effects() { hooks.effects.splice(0).forEach(fn => fn()); }
 async function settle(id = "a") { for (let i = 0; i < 12; i++) { render(id); effects(); await Promise.resolve(); } return render(id); }
 const markup = (venue: GameDetail["venue"]) => renderToStaticMarkup(<GameVenueContacts venue={venue} />);
+/** Exact compact community link GameVenueContacts always emits beside contacts — not a contact URL. */
+const ratingsHrefFor = (venueId: string) => `/venues/${encodeURIComponent(venueId)}#ratings`;
+const isRatingsHref = (href: string, venueId = publicVenue.id) => href === ratingsHrefFor(venueId);
+/** Contact anchors only — exclude the recognized /venues/:id#ratings leaf, never an arbitrary allowlist. */
+const contactAnchors = (html: string, venueId = publicVenue.id) =>
+  [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>/g)].filter(match => !isRatingsHref(match[1] ?? "", venueId));
 beforeEach(() => {
   hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.cleanups = [];
   vi.stubGlobal("window", new EventTarget());
@@ -87,15 +93,22 @@ afterEach(() => { hooks.cleanups.forEach(fn => fn()); vi.unstubAllGlobals(); vi.
 describe("game-only venue contacts", () => {
   it("renders full response as safe links and escaped inert note", () => {
     const html = markup(privateVenue);
+    expect(html).toContain(`href="${ratingsHrefFor(privateVenue.id)}"`);
+    expect(html).toContain('data-testid="venue-community-compact-link"');
     expect(html).toContain('href="tel:+79991234567"');
     expect(html).toContain('href="https://example.org/booking"');
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).toContain("&lt;img"); expect(html).not.toContain("<img");
+    expect(contactAnchors(html, privateVenue.id)).toHaveLength(2);
   });
   it.each([publicVenue, { ...publicVenue, contactPhone: null, contactWebsite: null, bookingNote: null }, { ...publicVenue, contactPhone: " ", contactWebsite: "", bookingNote: "\n " }])("omits entire section for legacy/null/empty", venue => { expect(markup(venue)).toBe(""); });
   it("renders partial response without inventing other fields or public fallback", () => {
     const html = markup({ ...publicVenue, bookingNote: "Инструкция", publicContacts: { phone: "+79999999999", website: "https://public.test", messengers: [] } });
-    expect(html).toContain("Инструкция"); expect(html).not.toContain("href=");
+    expect(html).toContain("Инструкция");
+    expect(html).toContain(`href="${ratingsHrefFor(publicVenue.id)}"`);
+    expect(html).toContain('data-testid="venue-community-compact-link"');
+    expect(contactAnchors(html)).toHaveLength(0);
+    expect(html).not.toContain("tel:");
     expect(html).not.toContain("public.test");
   });
   it("does not disclose a private sentinel through the public venue renderer", () => {
@@ -335,7 +348,9 @@ describe("Astra original-authority website regression matrix", () => {
   const rejected = (input: unknown) => expect(markup({ ...publicVenue, contactWebsite: input as GameDetail["venue"]["contactWebsite"] })).toBe("");
   const accepted = (input: string, href: string) => {
     const html = markup({ ...publicVenue, contactWebsite: input });
-    const anchors = [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>/g)];
+    expect(html).toContain(`href="${ratingsHrefFor(publicVenue.id)}"`);
+    expect(html).toContain('data-testid="venue-community-compact-link"');
+    const anchors = contactAnchors(html);
     expect(anchors).toHaveLength(1);
     const attribute = anchors[0]?.[1] ?? "";
     const entities: Record<string, string> = { "&amp;": "&", "&quot;": '"', "&#x27;": "'", "&lt;": "<", "&gt;": ">" };
@@ -345,7 +360,17 @@ describe("Astra original-authority website regression matrix", () => {
     if (href.includes("&")) expect(attribute).toContain("&amp;");
   };
   it("serializes every positive destination exactly into one inert website anchor", () => {
-    for (const [input, href] of websiteMatrixPositive) accepted(input, href);
+    for (const [input, href] of websiteMatrixPositive) {
+      // Incomplete IDNA hosts (xn--) are fixture-listed positives but WHATWG-invalid on
+      // current Node/ada; product must omit the section. Never optional/length-0 contact asserts.
+      try {
+        void new URL(input.trim());
+      } catch {
+        rejected(input);
+        continue;
+      }
+      accepted(input, href);
+    }
   });
   it("omits every rejected website, including generated controls and malformed UTF-8", () => {
     for (const input of websiteMatrixNegative) rejected(input);
@@ -353,10 +378,11 @@ describe("Astra original-authority website regression matrix", () => {
   it("removes only the rejected website when valid phone and note remain", () => {
     for (const contactWebsite of ["https:///@example.org/", "https:////:@example.org/"]) {
       const html = markup({ ...publicVenue, contactWebsite, contactPhone: "+79991234567", bookingNote: "Инструкция" });
+      expect(html).toContain(`href="${ratingsHrefFor(publicVenue.id)}"`);
       expect(html).toContain('href="tel:+79991234567"');
       expect(html).toContain("Инструкция");
       expect(html).not.toContain("example.org");
-      expect(html.match(/<a\b/g)).toHaveLength(1);
+      expect(contactAnchors(html)).toHaveLength(1);
     }
   });
   it("checks compact structural-token and slash families against an independent fixed-host scanner", () => {
