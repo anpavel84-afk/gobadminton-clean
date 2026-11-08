@@ -111,7 +111,8 @@
 .gb-discovery-host .gb-discovery-avatar { margin-top: 2px; }
 .gb-discovery-host .gb-discovery-card__actions { align-self: center; }
 .gb-discovery-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--gb-lime); }
-.gb-consumer .gb-discovery-host .gb-c23-btn { margin-left: auto; min-height: 44px; padding: 0 13px; font-size: 12px; flex: none; }
+/* Shared discovery CardActions (ordinary host + trainer people band) — one primary CTA family. */
+.gb-consumer .gb-discovery-card__actions .gb-c23-btn { margin-left: auto; min-height: 44px; padding: 0 13px; font-size: 12px; flex: none; }
 /* #521 R3 / #507: full-width people band; roles + actions share row; long history on its own row. */
 .gb-discovery-card[data-activity="trainer_led"] {
   grid-template-rows: auto auto;
@@ -313,8 +314,9 @@
   .gb-discovery-card__people > .gb-discovery-card__actions {
     justify-content: flex-start;
   }
-  .gb-consumer .gb-discovery-host .gb-c23-btn { width: 44px; padding: 0; }
-  .gb-discovery-host .gb-c23-btn > span { display: none; }
+  /* ≤720: same 44px icon-only arrow + share for ordinary and trainer; keep aria-label + SVG. */
+  .gb-consumer .gb-discovery-card__actions .gb-c23-btn { width: 44px; height: 44px; min-height: 44px; padding: 0; }
+  .gb-discovery-card__actions .gb-c23-btn > span { display: none; }
   .gb-discovery-sidebar { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {

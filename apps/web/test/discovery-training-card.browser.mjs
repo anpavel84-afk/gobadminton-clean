@@ -221,7 +221,12 @@ await withChrome(async ({ call, evaluate }) => {
         const imageSlot = card.querySelector('.gb-discovery-card__image');
         const imageEl = imageSlot?.querySelector('img') || imageSlot?.querySelector('.gb-venue-cover');
         const content = card.querySelector('.gb-discovery-card__content');
-        const details = card.querySelector('.gb-c23-btn');
+        const actions = card.querySelector('.gb-discovery-card__actions');
+        const details = actions?.querySelector('.gb-c23-btn') || card.querySelector('.gb-c23-btn');
+        const detailsSpan = details?.querySelector(':scope > span') || null;
+        const detailsSvg = details?.querySelector('svg') || null;
+        const shareBtn = actions?.querySelector('.gb-game-share__button') || null;
+        const spanCs = detailsSpan ? getComputedStyle(detailsSpan) : null;
         const imgStyle = imageEl ? getComputedStyle(imageEl.tagName === 'IMG' ? imageEl : (imageEl.querySelector('img') || imageEl)) : null;
         const strongs = [...card.querySelectorAll('.gb-discovery-host strong')].map((s) => ({
           text: s.textContent || '',
@@ -272,6 +277,14 @@ await withChrome(async ({ call, evaluate }) => {
           image,
           content: rect(content),
           details: rect(details),
+          detailsAriaLabel: details?.getAttribute('aria-label') || null,
+          detailsSpanDisplay: spanCs?.display || null,
+          detailsSpanVisibleText: detailsSpan ? ((detailsSpan.textContent || '').trim()) : null,
+          detailsHasSvg: !!detailsSvg,
+          detailsWidth: details ? Math.round(details.getBoundingClientRect().width) : null,
+          detailsHeight: details ? Math.round(details.getBoundingClientRect().height) : null,
+          shareWidth: shareBtn ? Math.round(shareBtn.getBoundingClientRect().width) : null,
+          shareHeight: shareBtn ? Math.round(shareBtn.getBoundingClientRect().height) : null,
           strongs,
           roles,
           people,
@@ -315,6 +328,18 @@ await withChrome(async ({ call, evaluate }) => {
     const ordinary = metrics.cards[0];
     const typical = metrics.cards[1];
     assert.ok(ordinary && typical);
+    if (width <= 390) {
+      assert.equal(ordinary.activity, "regular");
+      assert.equal(typical.activity, "trainer_led");
+      assert.ok(
+        Math.abs(ordinary.detailsWidth - typical.detailsWidth) <= 1,
+        `${width}: ordinary/trainer primary action widths must match (${ordinary.detailsWidth} vs ${typical.detailsWidth})`,
+      );
+      assert.ok(
+        Math.abs(ordinary.detailsHeight - typical.detailsHeight) <= 1,
+        `${width}: ordinary/trainer primary action heights must match (${ordinary.detailsHeight} vs ${typical.detailsHeight})`,
+      );
+    }
 
     // #507: role names need usable width / normal text height (reject one-character-wide vertical letters).
     for (const trainerCard of metrics.cards.filter((c) => c.activity === "trainer_led" && c.peopleBand)) {
@@ -391,12 +416,40 @@ await withChrome(async ({ call, evaluate }) => {
         assert.ok(Math.abs(row.imageSlot.height - 210) <= 1, `${width}:${row.activity} mobile image height 210`);
         assert.ok(row.imageSlot.width >= row.card.width * 0.9, `${width}:${row.activity} mobile image width`);
         assert.ok(row.content.y >= row.imageSlot.bottom - 1, `${width}:${row.activity} mobile content below image`);
+        // Shared mobile CardActions: ordinary + trainer use the same 44px arrow-only primary + share.
+        assert.ok(row.detailsAriaLabel && /Подробнее/.test(row.detailsAriaLabel), `${width}:${row.activity} details aria-label`);
+        assert.equal(row.detailsSpanDisplay, "none", `${width}:${row.activity} Подробнее text hidden on mobile`);
+        assert.equal(row.detailsHasSvg, true, `${width}:${row.activity} details keeps SVG arrow`);
+        assert.ok(
+          row.detailsWidth != null && Math.abs(row.detailsWidth - 44) <= 1,
+          `${width}:${row.activity} details width ${row.detailsWidth} must be 44px arrow footprint`,
+        );
+        assert.ok(
+          row.detailsHeight != null && Math.abs(row.detailsHeight - 44) <= 1,
+          `${width}:${row.activity} details height ${row.detailsHeight} must be 44px`,
+        );
+        assert.ok(
+          row.shareWidth != null && Math.abs(row.shareWidth - 44) <= 1,
+          `${width}:${row.activity} share width ${row.shareWidth} must stay 44px`,
+        );
+        assert.ok(
+          row.shareHeight != null && Math.abs(row.shareHeight - 44) <= 1,
+          `${width}:${row.activity} share height ${row.shareHeight} must stay 44px`,
+        );
       } else {
         assert.ok(Math.abs(row.imageSlot.width - row.imageSlot.height) <= 1, `${width}:${row.activity} desktop square slot`);
         assert.ok(Math.abs(row.image.width - row.image.height) <= 1, `${width}:${row.activity} desktop square img`);
         assert.ok(row.imageSlot.x < row.content.x, `${width}:${row.activity} image left of content`);
         assert.ok(row.imageSlot.width <= row.card.width * 0.45, `${width}:${row.activity} image not full-width banner`);
         assert.ok(row.content.x >= row.imageSlot.right - 2, `${width}:${row.activity} content starts after image`);
+        if (width >= 1280) {
+          // Desktop keeps visible text CTA (not icon-only).
+          assert.notEqual(row.detailsSpanDisplay, "none", `${width}:${row.activity} desktop Подробнее text visible`);
+          assert.ok(
+            row.detailsWidth != null && row.detailsWidth > 80,
+            `${width}:${row.activity} desktop details stays wide text CTA (got ${row.detailsWidth})`,
+          );
+        }
       }
     }
 

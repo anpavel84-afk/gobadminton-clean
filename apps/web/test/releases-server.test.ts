@@ -254,10 +254,10 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps sixty-nine confirmed seed deployments including accepted alpha.1–alpha.60 and dedupes identical live rows", () => {
+  it("keeps seventy confirmed seed deployments including accepted alpha.1–alpha.61 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(69);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(64);
+    expect(seedCount).toBe(70);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(65);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -334,7 +334,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.57"
       || row.application_version === "0.1.0-alpha.58"
       || row.application_version === "0.1.0-alpha.59"
-      || row.application_version === "0.1.0-alpha.60",
+      || row.application_version === "0.1.0-alpha.60"
+      || row.application_version === "0.1.0-alpha.61",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -384,12 +385,21 @@ describe("history seed integrity", () => {
       && row.known_limitations.some((item) => /визуальный дефект|узкие колонки/i.test(item)),
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.61"
+      && row.source_sha === "23a3d2dba33d79da55151e5d1eff8ff54d9d74ce"
+      && row.deployments[0]?.release_id === "r42532364094-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T22:56:54Z"
+      && row.api_contract_version === "0.40.0"
+      && row.owner_uat === "NOT_TESTED"
+      && row.known_limitations.some((item) => /мобильная кнопка|унификация действий/i.test(item)),
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.54"
       && row.source_sha === "cce49ce72daed8c81f89ddc845deabbb8ac5d7aa"
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.61");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.62");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -655,6 +665,7 @@ describe("history seed integrity", () => {
       "2026-11-08T18:34:32Z",
       "2026-11-08T20:50:15Z",
       "2026-11-08T22:07:51Z",
+      "2026-11-08T22:56:54Z",
     ]);
   });
 
