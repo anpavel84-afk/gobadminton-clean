@@ -43,14 +43,15 @@ const UNSAFE_SCHEME_RE =
   /(?:^|[\s<(["'])(?:javascript|data|vbscript|file|blob)\s*:/i;
 
 /**
- * Narrow explicit threat phrases (normalized lowercase). Whole-phrase / bounded
- * token runs only — criticism, sports talk and quoted speech are not listed.
+ * Narrow explicit direct-threat phrases (normalized lowercase). Whole-phrase /
+ * bounded token runs only. Roster-management verbs (e.g. «уберу тебя из состава»)
+ * are intentionally absent. Criticism, sports talk, plain profanity and clearly
+ * attributed quotations are not listed as threats.
  */
 const OBVIOUS_THREAT_PHRASES = [
   "я тебя убью",
   "я убью тебя",
   "убить тебя",
-  "уберу тебя",
   "взорву тебя",
   "взорву ваш",
   "взорву ваш дом",
@@ -72,6 +73,38 @@ export function normalizePrivateTextForMatch(raw: string): string {
     .trim();
 }
 
+/**
+ * Drop clearly delimited quoted spans so attributed reports/quotations are not
+ * treated as the author's own direct threat. Unquoted remainder is still checked.
+ */
+function stripClearlyQuotedSpans(normalized: string): string {
+  return normalized
+    .replace(/«[^»]*»/g, " ")
+    .replace(/"[^"]*"/g, " ")
+    .replace(/'[^']*'/g, " ")
+    .replace(/„[^“]*“/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** True only when `phrase` appears as a bounded whole run (not a naive substring). */
+function containsBoundedPhrase(haystack: string, phrase: string): boolean {
+  if (!haystack || !phrase) return false;
+  let from = 0;
+  while (from <= haystack.length) {
+    const idx = haystack.indexOf(phrase, from);
+    if (idx < 0) return false;
+    const before = idx === 0 ? "" : haystack[idx - 1]!;
+    const afterIdx = idx + phrase.length;
+    const after = afterIdx >= haystack.length ? "" : haystack[afterIdx]!;
+    const beforeOk = before === "" || !/[\p{L}\p{N}]/u.test(before);
+    const afterOk = after === "" || !/[\p{L}\p{N}]/u.test(after);
+    if (beforeOk && afterOk) return true;
+    from = idx + 1;
+  }
+  return false;
+}
+
 export function evaluatePrivateTextContent(text: string): PrivateTextContentDecision {
   const trimmed = text.trim();
   if (UNSAFE_SCHEME_RE.test(trimmed)) {
@@ -82,8 +115,9 @@ export function evaluatePrivateTextContent(text: string): PrivateTextContentDeci
     return { kind: "reject", reason: "basic_spam" };
   }
   const normalized = normalizePrivateTextForMatch(trimmed);
+  const unquoted = stripClearlyQuotedSpans(normalized);
   for (const phrase of OBVIOUS_THREAT_PHRASES) {
-    if (normalized.includes(phrase)) {
+    if (containsBoundedPhrase(unquoted, phrase)) {
       return { kind: "reject", reason: "obvious_direct_threat" };
     }
   }

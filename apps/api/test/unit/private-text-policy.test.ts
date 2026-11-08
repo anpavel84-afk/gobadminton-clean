@@ -58,11 +58,40 @@ describe("private-text-policy private-local-safety-v1", () => {
     expect(evaluatePrivateTextContent("Убить тебя хочу прямо сейчас").kind).toBe(
       "reject",
     );
+    expect(evaluatePrivateTextContent("I'll kill you").kind).toBe("reject");
+    expect(evaluatePrivateTextContent("I am going to kill you").kind).toBe(
+      "reject",
+    );
     // Harmless figurative / sports language must stay allowed.
     expect(evaluatePrivateTextContent("Этот smash убил соперника").kind).toBe(
       "allow",
     );
     expect(evaluatePrivateTextContent("Убьюсь на тренировке от усталости").kind).toBe(
+      "allow",
+    );
+  });
+
+  it("allows benign roster removal and clearly attributed threat quotes (QA42 probes)", () => {
+    // Probe: benign_roster_removal — roster management is not a direct threat.
+    expect(evaluatePrivateTextContent("Уберу тебя из состава").kind).toBe(
+      "allow",
+    );
+    expect(
+      evaluatePrivateTextContent("Завтра уберу тебя из состава на игру"),
+    ).toEqual({ kind: "allow" });
+    // Probe: attributed_quote_report — quoted speech is not the author's threat.
+    expect(
+      evaluatePrivateTextContent(
+        "Он написал «я тебя убью» — это недопустимо, прошу разобраться",
+      ).kind,
+    ).toBe("allow");
+    expect(
+      evaluatePrivateTextContent(
+        'Peer said "I will kill you" in chat — reporting',
+      ),
+    ).toEqual({ kind: "allow" });
+    // Naive substring must not reject embedded harmless stems.
+    expect(evaluatePrivateTextContent("неубить тебянельзя как лозунг").kind).toBe(
       "allow",
     );
   });
