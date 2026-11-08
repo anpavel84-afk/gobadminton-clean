@@ -324,7 +324,7 @@ export const abuseReports = pgTable("abuse_reports", {
   reporterUserId: uuid("reporter_user_id").notNull(),
   targetKind: text("target_kind").notNull(),
   targetUserId: uuid("target_user_id").notNull(),
-  // Nullable for game_review / message typed reports (migration 0053/0067).
+  // Nullable for game_review / message / venue_community typed reports (0053/0067/0068).
   targetPublicPlayerId: uuid("target_public_player_id"),
   reasonCode: text("reason_code").notNull(),
   detail: text("detail"),
@@ -750,6 +750,72 @@ export const gameRecommendationActions = pgTable("game_recommendation_actions", 
   actorUserId:uuid("actor_user_id").notNull().references(()=>users.id),
   createdAt:timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
 },t=>[primaryKey({columns:[t.recommendationId,t.version]})]);
+
+/** #507 I1 F3 venue-community report bindings. Migration0068. */
+export const venueCommunityReportBindings = pgTable("venue_community_report_bindings", {
+  reportId: uuid("report_id").primaryKey(),
+  reporterUserId: uuid("reporter_user_id").notNull(),
+  canonicalVenueId: uuid("canonical_venue_id").notNull(),
+  subjectKind: text("subject_kind").notNull(),
+  voteId: uuid("vote_id"),
+  commentId: uuid("comment_id"),
+  reportedResourceVersion: integer("reported_resource_version"),
+  contentFingerprint: text("content_fingerprint"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const venueCommunityReportRateBudgets = pgTable("venue_community_report_rate_budgets", {
+  userId: uuid("user_id").notNull(),
+  bucket: text("bucket").notNull(),
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+  count: integer("count").notNull().default(0),
+  dayStartedAt: timestamp("day_started_at", { withTimezone: true }).notNull(),
+  dayCount: integer("day_count").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.bucket] }),
+]);
+
+/** #507 I1 community star votes. Migration0068. */
+export const venueCommunityVotes = pgTable("venue_community_votes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  canonicalVenueId: uuid("canonical_venue_id").notNull().references(() => venues.id),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  value: integer("value"),
+  version: integer("version").notNull(),
+  moderationState: text("moderation_state").notNull().default("clear"),
+  withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+  userActionAt: timestamp("user_action_at", { withTimezone: true }).notNull().defaultNow(),
+  mergedIntoVoteId: uuid("merged_into_vote_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("venue_community_votes_current_uidx")
+    .on(t.canonicalVenueId, t.userId)
+    .where(sql`${t.mergedIntoVoteId} IS NULL`),
+  check("venue_community_votes_value_check", sql`${t.value} IS NULL OR ${t.value} BETWEEN 1 AND 5`),
+  check("venue_community_votes_moderation_check", sql`${t.moderationState} IN ('clear','withheld')`),
+]);
+
+export const venueCommunityVoteRevisions = pgTable("venue_community_vote_revisions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  voteId: uuid("vote_id").notNull().references(() => venueCommunityVotes.id),
+  resourceVersion: integer("resource_version").notNull(),
+  actorUserId: uuid("actor_user_id").references(() => users.id),
+  actorPrincipalId: uuid("actor_principal_id"),
+  action: text("action").notNull(),
+  beforeValue: integer("before_value"),
+  afterValue: integer("after_value"),
+  beforeModerationState: text("before_moderation_state"),
+  afterModerationState: text("after_moderation_state"),
+  beforeWithdrawn: boolean("before_withdrawn"),
+  afterWithdrawn: boolean("after_withdrawn"),
+  caseId: uuid("case_id"),
+  decisionId: uuid("decision_id"),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("venue_community_vote_revisions_version_uidx").on(t.voteId, t.resourceVersion),
+]);
 
 /** #404 play interest; independent of friendships. Migration0043. */
 export const playInterests = pgTable("play_interests", {

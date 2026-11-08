@@ -411,8 +411,8 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
     expect(fake.textCalls).toBe(1);
   });
 
-  it("unauthorized/blocked/stale and venue closed do not call provider", async () => {
-    const { gameId, venueId } = await createPublishedGame(author);
+  it("unauthorized/blocked/stale do not call provider", async () => {
+    const { gameId } = await createPublishedGame(author);
     const url = `/v1/games/${gameId}/comments`;
     const create = await app.inject({
       method: "POST",
@@ -463,15 +463,131 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
     });
     expect(blocked.statusCode).toBe(403);
     expect(fake.textCalls).toBe(0);
+  });
 
-    const venueWrite = await app.inject({
+  // #507 Owner: open public venue discussion — auth write through text provider; no attendance.
+  it("venue auth comment 201 binds publication; reject/timeout keep prior; replay/delete while provider down", async () => {
+    const { venueId } = await createPublishedGame(author);
+    const url = `/v1/venues/${venueId}/comments`;
+    fake.textCalls = 0;
+
+    const create = await app.inject({
       method: "POST",
-      url: `/v1/venues/${venueId}/comments`,
-      headers: headers(author),
-      payload: { text: "Площадка пока закрыта", parentCommentId: null },
+      url,
+      headers: headers(peer),
+      payload: { text: "Есть парковка у площадки?", parentCommentId: null },
     });
-    expect(venueWrite.statusCode).toBe(403);
-    expect(venueWrite.json().code).toBe("COMMENT_VENUE_WRITES_CLOSED");
+    expect(create.statusCode).toBe(201);
+    expect(create.json()).toMatchObject({
+      entityKind: "venue",
+      entityId: venueId,
+      body: "Есть парковка у площадки?",
+      deleted: false,
+      version: 1,
+    });
+    expect(fake.textCalls).toBe(1);
+    const commentId = create.json().id as string;
+    const binding = await pool.query(
+      `SELECT surface_key, resource_version, binding_kind, entity_kind
+       FROM content_moderation_bindings
+       WHERE entity_id = $1::uuid AND surface_key = 'comment_body'`,
+      [commentId],
+    );
+    expect(binding.rows[0]).toMatchObject({
+      surface_key: "comment_body",
+      resource_version: 1,
+      binding_kind: "publication",
+      entity_kind: "entity_comment",
+    });
+
+    // Guest create denied — no provider.
+    fake.textCalls = 0;
+    const guest = await app.inject({
+      method: "POST",
+      url,
+      headers: {
+        origin: webOrigin,
+        "content-type": "application/json",
+        "idempotency-key": key(),
+      },
+      payload: { text: "guest write", parentCommentId: null },
+    });
+    expect([401, 403]).toContain(guest.statusCode);
+    expect(fake.textCalls).toBe(0);
+
+    fake.textFixture = async (input) => flaggedTextBatch(input.texts.length);
+    const rejected = await app.inject({
+      method: "PUT",
+      url: `/v1/comments/${commentId}`,
+      headers: headers(peer),
+      payload: { text: "Замена с отказом на площадке", expectedVersion: 1 },
+    });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json().code).toBe("PUBLIC_TEXT_CONTENT_REJECTED");
+    expect(rejected.json().fields?.text).toBeTruthy();
+
+    const afterReject = await app.inject({
+      method: "GET",
+      url,
+      headers: { cookie: peer.cookie },
+    });
+    const kept = afterReject.json().items.find((i: { id: string }) => i.id === commentId);
+    expect(kept.body).toBe("Есть парковка у площадки?");
+    expect(kept.version).toBe(1);
+
+    fake.textFixture = async () => {
+      throw new ModerationProviderError("unavailable", 3);
+    };
+    const unavailable = await app.inject({
+      method: "PUT",
+      url: `/v1/comments/${commentId}`,
+      headers: headers(peer),
+      payload: { text: "Ещё одна замена при сбое площадки", expectedVersion: 1 },
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json().code).toBe("MODERATION_TEMPORARILY_UNAVAILABLE");
+    const after503 = await app.inject({
+      method: "GET",
+      url,
+      headers: { cookie: peer.cookie },
+    });
+    const still = after503.json().items.find((i: { id: string }) => i.id === commentId);
+    expect(still.body).toBe("Есть парковка у площадки?");
+    expect(still.version).toBe(1);
+
+    // Same-key replay and deletion remain safe while provider is down.
+    const idem = key();
+    fake.textFixture = async (input) => safeTextBatchDecision(input.texts.length);
+    const first = await app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text: "Идемпотентный комментарий площадки", parentCommentId: null },
+    });
+    expect(first.statusCode).toBe(201);
+    const afterCreate = fake.textCalls;
+    fake.textFixture = async () => {
+      throw new ModerationProviderError("unavailable", 3);
+    };
+    const replay = await app.inject({
+      method: "POST",
+      url,
+      headers: headers(author, idem),
+      payload: { text: "Идемпотентный комментарий площадки", parentCommentId: null },
+    });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json().id).toBe(first.json().id);
+    expect(fake.textCalls).toBe(afterCreate);
+
+    fake.textCalls = 0;
+    const del = await app.inject({
+      method: "DELETE",
+      url: `/v1/comments/${first.json().id}`,
+      headers: headers(author),
+      payload: { expectedVersion: first.json().version },
+    });
+    expect(del.statusCode).toBe(200);
+    expect(del.json().deleted).toBe(true);
     expect(fake.textCalls).toBe(0);
   });
 

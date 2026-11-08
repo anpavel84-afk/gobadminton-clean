@@ -14,6 +14,7 @@ import {
 import type { TextFieldCandidate } from "../moderation/text-policy";
 import { extractIdentityDiscriminator, normalizeVenueText, venueDedupeKey } from "./venue-normalize";
 import { effectiveVenueCtes } from "./effective-venue.query";
+import { reconcileCommunityVotesOnMerge } from "./venue-community.query";
 
 type Row = VenueProfileRow & {public_contacts?:unknown;public_description:string|null;contact_phone:string|null;contact_website:string|null;booking_note:string|null;id:string;city_id:string;city_name?:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
 const select = `SELECT v.*, venue_cover_url(v.id) AS cover_url, ${venueGallerySelectSql("v")}, (SELECT name_ru FROM cities WHERE id=v.city_id) AS city_name, ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude FROM venues v`;
@@ -209,6 +210,14 @@ export class AdminVenuesService {
         await c.query("UPDATE venue_identity_keys SET venue_id=$2 WHERE venue_id=$1",[id,target.id]);
         await c.query("UPDATE venues SET canonical_venue_id=$2,version=version+1,updated_at=now() WHERE canonical_venue_id=$1 AND lifecycle_state='merged'",[id,target.id]);
         await c.query("UPDATE venue_duplicate_candidates SET status='dismissed',version=version+1 WHERE status='open' AND (left_venue_id=$1 OR right_venue_id=$1)",[id]);
+        // #507 I1: reconcile community votes before retiring the source terminal.
+        await reconcileCommunityVotesOnMerge(
+          c,
+          id,
+          target.id,
+          a.principal.user_id,
+          a.principalId,
+        );
         await c.query("UPDATE venues SET lifecycle_state='merged',canonical_venue_id=$2,version=version+1,updated_at=now() WHERE id=$1",[id,target.id]);
         await c.query("UPDATE venues SET version=version+1,updated_at=now() WHERE id=$1",[target.id]);
         await c.query("INSERT INTO venue_merge_history(source_venue_id,target_venue_id,reason) VALUES($1,$2,$3)",[id,target.id,input.reasonCode]);

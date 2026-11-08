@@ -8,6 +8,7 @@ import {
 } from "../../src/venues/venues.service";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
+import type { AppEnv } from "../../src/config/env";
 import type { Pool } from "pg";
 
 const MOSCOW = "a0000000-0000-4000-8000-000000000001";
@@ -38,6 +39,7 @@ describe("regional city catalog scope", () => {
           return { rows: [], rowCount: 0 };
         },
       } as unknown as Pool,
+      {} as AppEnv,
       {} as IdempotencyService,
       {} as MutationRunner,
       {} as import("../../src/moderation/moderation.service").ContentModerationService,

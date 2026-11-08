@@ -1,9 +1,11 @@
 import {
   Controller,
+  Delete,
   Get,
   Header,
   Param,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -20,6 +22,57 @@ export class VenuesController {
     private readonly venues: VenuesService,
     private readonly idempotency: IdempotencyService,
   ) {}
+
+  @Get("venue-community-summaries")
+  @Header("Cache-Control", "no-store")
+  async communitySummaries(@Query("venueIds") venueIds?: string) {
+    return this.venues.listCommunitySummaries(venueIds);
+  }
+
+  @Get("venues/:venueId/community-rating/me")
+  @Header("Cache-Control", "no-store")
+  async communityOwn(@Req() request: FastifyRequest, @Param("venueId") venueId: string) {
+    const actor = await this.auth.requireSession(request);
+    return this.venues.getCommunityOwnVote(venueId, actor.userId);
+  }
+
+  @Put("venues/:venueId/community-rating")
+  @Header("Cache-Control", "no-store")
+  async upsertCommunityRating(
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+    @Param("venueId") venueId: string,
+  ) {
+    const actor = await this.auth.requireCookieMutation(request);
+    const result = await this.venues.upsertCommunityRating(
+      venueId,
+      actor.userId,
+      actor.sessionId,
+      this.idempotency.requireKey(request.headers["idempotency-key"]),
+      request.body,
+    );
+    reply.status(result.statusCode);
+    return result.body;
+  }
+
+  @Delete("venues/:venueId/community-rating")
+  @Header("Cache-Control", "no-store")
+  async withdrawCommunityRating(
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+    @Param("venueId") venueId: string,
+  ) {
+    const actor = await this.auth.requireCookieMutation(request);
+    const result = await this.venues.withdrawCommunityRating(
+      venueId,
+      actor.userId,
+      actor.sessionId,
+      this.idempotency.requireKey(request.headers["idempotency-key"]),
+      request.body,
+    );
+    reply.status(result.statusCode);
+    return result.body;
+  }
 
   @Get("cities")
   async listCities() {

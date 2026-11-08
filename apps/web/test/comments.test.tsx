@@ -63,18 +63,18 @@ describe("#394 CommentsSection", () => {
     expect(html).toBe("");
   });
 
-  it("VenuePage has no unrestricted composer; game CommentsSection guest entry unchanged", () => {
+  it("VenuePage mounts #507 community discussion via CommentsSection; game guest entry unchanged", () => {
     const venueSrc = readFileSync(
       resolve(__dirname, "../src/components/consumer/venues/VenuePage.tsx"),
       "utf8",
     );
     expect(venueSrc).toContain("VenueReviewsPanel");
-    expect(venueSrc).toContain("csrfToken={csrf}");
-    expect(venueSrc).toContain("canWrite={signedIn && Boolean(csrf)}");
+    expect(venueSrc).toContain("VenueCommunityRating");
+    expect(venueSrc).toContain("CommentsSection");
+    expect(venueSrc).toContain('kind="venue"');
+    expect(venueSrc).toContain("Обсуждение и фотографии");
     expect(venueSrc).toMatch(/SurfacePanel/);
-    expect(venueSrc).not.toMatch(/CommentsSection/);
-    expect(venueSrc).not.toMatch(/Войдите, чтобы оставить комментарий|Ваш комментарий|canCreate/);
-    expect(venueSrc).not.toMatch(/отметьте|самостоятельн|напишите отзыв/i);
+    expect(venueSrc).toContain("Добавление фотографий к публикациям появится позже");
 
     const gameHtml = renderToStaticMarkup(
       createElement(CommentsSection, {

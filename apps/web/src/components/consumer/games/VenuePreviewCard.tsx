@@ -5,6 +5,7 @@ import { nearestGameLabel, venueGameCount } from "../../../lib/venue-popup";
 import { VenueCover, venueCoverUrl } from "../venues/VenueCover";
 import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
+import { VenueCommunityRating } from "../venues/VenueCommunityRating";
 import "../../../styles/venue-popup.css";
 
 export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange }: {
@@ -55,6 +56,13 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
         {showDefaultIllustrationLabel
           ? <span className="gb-venue-illustration-label">Иллюстрация</span>
           : null}
+        <VenueCommunityRating
+          venueId={venue.id}
+          variant="compact"
+          signedIn={false}
+          csrfToken={null}
+          authReturnPath={`/venues/${venue.id}`}
+        />
         <span className="gb-venue-preview-time">{gamesReady ? nearestGameLabel(games, venue.timezone, now) : "Расписание временно недоступно"}</span>
       <span className="gb-venue-preview-count">{gamesReady && games.length > 0 ? venueGameCount(games.length) : "\u00a0"}</span>
       </span>

@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.39.0",
+    "version": "0.40.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -2933,6 +2933,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Idempotent same-source replay receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbuseReportReceipt"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Submitted",
             "content": {
@@ -2959,6 +2969,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -20665,7 +20678,7 @@
           "Comments"
         ],
         "summary": "List public comments for a venue",
-        "description": "#394. Guest read when parent currently public/available. Chronological created_at+id cursor; roots and replies separately paginated; visibleCount omits blocked-pair authors for authenticated readers. no-store. Unavailable parent → indistinguishable 404 without leaking counts.",
+        "description": "#507 I1. Guest-readable public venue discussion on canonical physical venue (and merged-origin family). Empty only when no eligible comments. canCreate reflects current capability (no attendance).",
         "security": [
           {
             "cookieSession": []
@@ -20780,7 +20793,7 @@
           "Comments"
         ],
         "summary": "Create a comment or one-level reply on a venue",
-        "description": "#394/#506. Broad venue comment writes remain CURRENT runtime-closed pending Owner-approved #507 (not permanent by-design). When that slice opens, the same comment_body gate applies: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Experience reviews stay on /experience-reviews.",
+        "description": "#507 I1. Authorized registered users may create/reply on a canonical public physical venue without attendance. Same comment_body gate: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Guest read. Experience reviews stay on /experience-reviews. Photo attachments remain #507 I2.",
         "security": [
           {
             "cookieSession": []
@@ -23990,6 +24003,310 @@
         },
         "x-client-surface": "admin-only"
       }
+    },
+    "/admin/cases/{id}/community-reports/{reportId}": {
+      "get": {
+        "operationId": "adminReadCaseCommunityReport",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Assigned reviewer reads exact venue-community report source",
+        "description": "#507 I1 F3. Only currently assigned independent reviewer with evidence.assigned.read and fresh step-up. case.manage alone or unassigned staff is insufficient. Human COI is established before private detail on unavailable paths; creator/admin-action affiliation spans the bounded physical venue family. Aggregate pages via opaque HMAC cursor bound to this case/report/venue (raw UUID rejected). own_vote/venue_comment return exact reported revision only after fingerprint validation; mismatch keeps values null. decisionCapability exposes venue_community_decide retain/withhold/restore when backend exists. Audited metadata only (no body/detail/fingerprint in audit). Safe 403/404 on reassignment/COI/cross-case/global roles without scoped rights.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "reportId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": "Opaque HMAC-bound aggregate vote keyset cursor scoped to this case/report/physical venue; ignored for own_vote/venue_comment. Raw UUIDs are rejected."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 25
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact assigned community source or honest limited-availability metadata; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCaseCommunityReportSource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or tampered aggregate cursor / query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable / cross-case / unassigned",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-client-surface": "admin-only"
+      }
+    },
+    "/venue-community-summaries": {
+      "get": {
+        "operationId": "listVenueCommunitySummaries",
+        "summary": "Batch community rating summaries",
+        "description": "#507 I1 guest batch (max 200). No own vote or voter identities.",
+        "tags": [
+          "Venues"
+        ],
+        "parameters": [
+          {
+            "name": "venueIds",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated venue UUIDs, max 200 unique"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summaries for requested ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunitySummariesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/venues/{venueId}/community-rating/me": {
+      "get": {
+        "operationId": "getVenueCommunityOwnRating",
+        "summary": "Own community rating for a venue",
+        "description": "#507 I1 authenticated no-store own vote + fresh aggregate. Guests must not call.",
+        "tags": [
+          "Venues"
+        ],
+        "parameters": [
+          {
+            "name": "venueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own vote state and summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityOwnVoteResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/venues/{venueId}/community-rating": {
+      "put": {
+        "operationId": "upsertVenueCommunityRating",
+        "summary": "Upsert community rating 1–5",
+        "description": "#507 I1 standalone vote without mandatory comment/photo/attendance. Idempotent.",
+        "tags": [
+          "Venues"
+        ],
+        "parameters": [
+          {
+            "name": "venueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertCommunityRatingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityOwnVoteResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityOwnVoteResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdrawVenueCommunityRating",
+        "summary": "Withdraw community rating",
+        "description": "#507 I1 withdraw independent of moderation provider. Retains current withdrawn row.",
+        "tags": [
+          "Venues"
+        ],
+        "parameters": [
+          {
+            "name": "venueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawCommunityRatingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Withdrawn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityOwnVoteResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -25907,6 +26224,63 @@
               "shareMessageWithSupport": {
                 "type": "boolean",
                 "const": true
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "targetKind",
+              "subjectKind",
+              "venueId",
+              "reasonCode"
+            ],
+            "description": "#507 I1 F3 venue-community report. Server derives reporter, canonical physical venue, and immutable binding (aggregate has no individual revision; own_vote resolved by actor+venue+version — no foreign voter IDs; venue_comment exact id+version). Public or own-withheld comment only. Detail is private complainant input — never sent to providers or queue metadata. Cookie+CSRF+Origin+Idempotency. No attendance. No automatic sanctions.",
+            "properties": {
+              "targetKind": {
+                "type": "string",
+                "const": "venue_community"
+              },
+              "subjectKind": {
+                "type": "string",
+                "enum": [
+                  "aggregate",
+                  "own_vote",
+                  "venue_comment"
+                ]
+              },
+              "venueId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "commentId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Required when subjectKind=venue_comment."
+              },
+              "expectedVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647,
+                "description": "Required for own_vote and venue_comment. Omitted for aggregate."
+              },
+              "reasonCode": {
+                "type": "string",
+                "enum": [
+                  "harassment",
+                  "spam",
+                  "fake_profile",
+                  "inappropriate",
+                  "other"
+                ]
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 1000
               }
             }
           }
@@ -32408,6 +32782,50 @@
               "createdAt",
               "caseId"
             ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "#507 I1 F3 venue_community queue item — minimal metadata only. No detail, fingerprints, identities, or raw source. Assigned exact source-read is GET /admin/cases/{id}/community-reports/{reportId}; assigned source-read + venue_community_decide retain/withhold/restore.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "venue_community"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "caseId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "reasonCode",
+              "state",
+              "createdAt",
+              "caseId"
+            ]
           }
         ]
       },
@@ -32673,7 +33091,8 @@
             "enum": [
               "player",
               "game_review",
-              "message"
+              "message",
+              "venue_community"
             ],
             "description": "Optional; present on report links from abuse_reports.target_kind. Omitted for game links."
           }
@@ -32937,6 +33356,74 @@
               "reasonCode",
               "linkId"
             ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "venue_community_decide",
+                "type": "string"
+              },
+              "expectedCaseVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483646
+              },
+              "expectedResourceVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "reportId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "resourceKind": {
+                "type": "string",
+                "enum": [
+                  "vote",
+                  "comment"
+                ]
+              },
+              "voteId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "commentId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "retain",
+                  "withhold",
+                  "restore"
+                ]
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "description": "Required plain bounded staff rationale; no control characters."
+              },
+              "reasonCode": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{2,63}$"
+              }
+            },
+            "required": [
+              "action",
+              "expectedCaseVersion",
+              "expectedResourceVersion",
+              "reportId",
+              "resourceKind",
+              "decision",
+              "rationale",
+              "reasonCode"
+            ],
+            "description": "#507 I1 F3. Assigned independent human retain/withhold/restore for exact linked venue_community report resource (vote|comment). Aggregate may select only an exact current vote from the report physical venue. own_vote/comment must match bound immutable ref+HMAC. Comment restore reuses #506 comment_body publication gate outside DB locks. No public voter list; audit metadata IDs/versions/action only."
           }
         ]
       },
@@ -39186,6 +39673,698 @@
               "null"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "CommunityRatingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "venueId",
+          "canonicalVenueId",
+          "average",
+          "count",
+          "state"
+        ],
+        "properties": {
+          "venueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonicalVenueId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "average": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "available",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "CommunityOwnVote": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "venueId",
+          "canonicalVenueId",
+          "value",
+          "version",
+          "withdrawn",
+          "moderationState",
+          "allowedActions"
+        ],
+        "properties": {
+          "venueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonicalVenueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 5
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "withdrawn": {
+            "type": "boolean"
+          },
+          "moderationState": {
+            "type": "string",
+            "enum": [
+              "clear",
+              "withheld"
+            ]
+          },
+          "allowedActions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "upsert",
+              "update",
+              "withdraw"
+            ],
+            "properties": {
+              "upsert": {
+                "type": "boolean"
+              },
+              "update": {
+                "type": "boolean"
+              },
+              "withdraw": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "CommunityOwnVoteResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "own",
+          "summary"
+        ],
+        "properties": {
+          "own": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CommunityOwnVote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CommunityRatingSummary"
+          }
+        }
+      },
+      "CommunitySummariesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityRatingSummary"
+            }
+          }
+        }
+      },
+      "UpsertCommunityRatingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "expectedVersion"
+        ],
+        "properties": {
+          "value": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "WithdrawCommunityRatingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "AdminCaseCommunityVoteItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "voteId",
+          "value",
+          "version",
+          "moderationState",
+          "withdrawn",
+          "eligibleForPublicCount"
+        ],
+        "properties": {
+          "voteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 5
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "moderationState": {
+            "type": "string",
+            "enum": [
+              "clear",
+              "withheld"
+            ]
+          },
+          "withdrawn": {
+            "type": "boolean"
+          },
+          "eligibleForPublicCount": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AdminCaseCommunityAggregateSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "reportId",
+          "subjectKind",
+          "canonicalVenueId",
+          "reasonCode",
+          "reportState",
+          "detail",
+          "sourceAvailable",
+          "unavailableReason",
+          "summary",
+          "votes",
+          "decisionCapability"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonicalVenueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reasonCode": {
+            "type": "string"
+          },
+          "reportState": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000,
+            "description": "Private complainant input; assigned source response only — never queue/audit/logs"
+          },
+          "sourceAvailable": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "venue_unavailable",
+              "revision_missing",
+              "fingerprint_mismatch",
+              "merged_superseded",
+              "vote_missing",
+              "comment_missing",
+              "empty_body",
+              null
+            ]
+          },
+          "subjectKind": {
+            "type": "string",
+            "const": "aggregate"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CommunityRatingSummary"
+          },
+          "votes": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "nextCursor",
+              "limit"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminCaseCommunityVoteItem"
+                }
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Opaque HMAC-bound keyset cursor for the next aggregate page; null when exhausted"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              }
+            }
+          },
+          "decisionCapability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminCaseCommunityDecisionCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when venue_community_decide backend exists and the case/resource is actionable; null when closed/unavailable/HMAC-invalid. Not a fake UI affordance."
+          }
+        }
+      },
+      "AdminCaseCommunityOwnVoteSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "reportId",
+          "subjectKind",
+          "canonicalVenueId",
+          "reasonCode",
+          "reportState",
+          "detail",
+          "sourceAvailable",
+          "unavailableReason",
+          "voteId",
+          "reportedVersion",
+          "currentVersion",
+          "reportedValue",
+          "reportedModerationState",
+          "reportedWithdrawn",
+          "currentValue",
+          "currentModerationState",
+          "currentWithdrawn",
+          "mergedIntoVoteId",
+          "decisionCapability"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonicalVenueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reasonCode": {
+            "type": "string"
+          },
+          "reportState": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000,
+            "description": "Private complainant input; assigned source response only — never queue/audit/logs"
+          },
+          "sourceAvailable": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "venue_unavailable",
+              "revision_missing",
+              "fingerprint_mismatch",
+              "merged_superseded",
+              "vote_missing",
+              "comment_missing",
+              "empty_body",
+              null
+            ]
+          },
+          "subjectKind": {
+            "type": "string",
+            "const": "own_vote"
+          },
+          "voteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportedVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "reportedValue": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 5
+          },
+          "reportedModerationState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "clear",
+              "withheld",
+              null
+            ]
+          },
+          "reportedWithdrawn": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "currentValue": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 5
+          },
+          "currentModerationState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "clear",
+              "withheld",
+              null
+            ]
+          },
+          "currentWithdrawn": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "mergedIntoVoteId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decisionCapability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminCaseCommunityDecisionCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when venue_community_decide backend exists and the case/resource is actionable; null when closed/unavailable/HMAC-invalid. Not a fake UI affordance."
+          }
+        }
+      },
+      "AdminCaseCommunityCommentSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "reportId",
+          "subjectKind",
+          "canonicalVenueId",
+          "reasonCode",
+          "reportState",
+          "detail",
+          "sourceAvailable",
+          "unavailableReason",
+          "commentId",
+          "reportedVersion",
+          "currentVersion",
+          "text",
+          "currentPublication",
+          "decisionCapability"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "canonicalVenueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reasonCode": {
+            "type": "string"
+          },
+          "reportState": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000,
+            "description": "Private complainant input; assigned source response only — never queue/audit/logs"
+          },
+          "sourceAvailable": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "venue_unavailable",
+              "revision_missing",
+              "fingerprint_mismatch",
+              "merged_superseded",
+              "vote_missing",
+              "comment_missing",
+              "empty_body",
+              null
+            ]
+          },
+          "subjectKind": {
+            "type": "string",
+            "const": "venue_comment"
+          },
+          "commentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportedVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          },
+          "currentPublication": {
+            "type": "string",
+            "enum": [
+              "live",
+              "edited",
+              "deleted",
+              "withheld",
+              "unavailable"
+            ]
+          },
+          "decisionCapability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminCaseCommunityDecisionCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when venue_community_decide backend exists and the case/resource is actionable; null when closed/unavailable/HMAC-invalid. Not a fake UI affordance."
+          }
+        }
+      },
+      "AdminCaseCommunityReportSource": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AdminCaseCommunityAggregateSource"
+          },
+          {
+            "$ref": "#/components/schemas/AdminCaseCommunityOwnVoteSource"
+          },
+          {
+            "$ref": "#/components/schemas/AdminCaseCommunityCommentSource"
+          }
+        ],
+        "description": "#507 I1 F3 assigned Cases community source. No decision capability."
+      },
+      "AdminCaseCommunityDecisionCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "decisions",
+          "resourceKind",
+          "expectedCaseVersion",
+          "expectedResourceVersion"
+        ],
+        "properties": {
+          "action": {
+            "const": "venue_community_decide",
+            "type": "string"
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "retain",
+                "withhold",
+                "restore"
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "resourceKind": {
+            "type": "string",
+            "enum": [
+              "vote",
+              "comment"
+            ]
+          },
+          "requiresExactVoteId": {
+            "type": "boolean"
+          },
+          "voteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "commentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedCaseVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expectedResourceVersion": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
           }
         }
       }

@@ -9,6 +9,7 @@ import type { AdminService, AdminActor } from "../../src/admin/admin.service";
 import { venueCommand, venueCreate } from "../../src/admin/venues.dto";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
+import type { AppEnv } from "../../src/config/env";
 import type { ContentModerationService } from "../../src/moderation/moderation.service";
 import { AdminVenuesService } from "../../src/venues/admin-venues.service";
 import { VenuesService } from "../../src/venues/venues.service";
@@ -65,6 +66,7 @@ const moderationStub = {
 function publicService(query: Pool["query"]) {
   return new VenuesService(
     { query } as Pool,
+    {} as AppEnv,
     {} as IdempotencyService,
     {} as MutationRunner,
     moderationStub,
@@ -233,6 +235,7 @@ describe("production service bindings and runtime responses against actual OpenA
       };
       const response = await new VenuesService(
         pool,
+        {} as AppEnv,
         hash as IdempotencyService,
         runner as MutationRunner,
         moderation as ContentModerationService,
