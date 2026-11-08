@@ -114,8 +114,10 @@ run("venue cover import: disposable PostGIS",()=>{
     const [unknown,retired,refused]=input.manifest.items;if(!unknown||!retired||!refused)throw new Error("fixture");
     await db().query("DELETE FROM venues WHERE id=$1",[unknown.venueId]);
     await db().query("UPDATE venues SET lifecycle_state='retired' WHERE id=$1",[retired.venueId]);
-    // Distinct bytes avoid the earlier allow cache.
+    // Distinct bytes + matching manifest sha so staging reaches fake provider reject → GC cleanup.
     const bytes=await sharp({create:{width:900,height:600,channels:3,background:"red"}}).jpeg().toBuffer();
+    const sha=createHash("sha256").update(bytes).digest("hex");
+    refused.sha256=sha;
     input.images.set(refused.venueId,bytes);
     fake.fixture=async()=>{const d=safeImageDecision();return {...d,flagged:true,categories:{...d.categories,violence:true}};};
     const lines:object[]=[];
@@ -126,6 +128,120 @@ run("venue cover import: disposable PostGIS",()=>{
       expect(lines).toContainEqual(expect.objectContaining({venueId:unknown.venueId,action:"FAILED"}));
       expect(lines).toContainEqual(expect.objectContaining({venueId:retired.venueId,action:"SKIPPED"}));
     }finally{fake.fixture=async()=>safeImageDecision();}
+  });
+  it("hash tamper rejects before provider without new staged GC",async()=>{
+    const input=await batch(["photo"]);
+    const item=input.manifest.items[0];if(!item)throw new Error("fixture");
+    // Swap bytes but keep stale manifest sha → strict prestage hash reject (not provider refuse).
+    const bytes=await sharp({create:{width:900,height:600,channels:3,background:"blue"}}).jpeg().toBuffer();
+    input.images.set(item.venueId,bytes);
+    const calls=fake.calls;
+    const gcBefore=(await db().query("SELECT count(*)::int AS n FROM avatar_media_gc")).rows[0]!.n;
+    const filesBefore=await readdir(root??"");
+    const lines:object[]=[];
+    expect(await importVenueCovers(db(),input,actor,true,{media,moderation},l=>lines.push(l))).toBe(1);
+    expect(fake.calls).toBe(calls);
+    expect((await db().query("SELECT count(*)::int AS n FROM avatar_media_gc")).rows[0]!.n).toBe(gcBefore);
+    expect(await readdir(root??"")).toEqual(filesBefore);
+    expect(lines).toContainEqual(expect.objectContaining({venueId:item.venueId,action:"FAILED"}));
+  });
+  it("admission: same-input replay skips; changed credit/source/image conflicts; deletion does not restore",async()=>{
+    const input=await batch(["photo"]);
+    const item=input.manifest.items[0];if(!item)throw new Error("fixture");
+    expect(await importVenueCovers(db(),input,actor,true,{media,moderation},()=>undefined)).toBe(0);
+    const published=(await db().query<{cover_key:string|null;version:number;cover_credit_text:string|null}>(
+      "SELECT cover_key,version,cover_credit_text FROM venues WHERE id=$1",[item.venueId],
+    )).rows[0]!;
+    expect(published.cover_key).toBeTruthy();
+    const calls=fake.calls;
+    const textCalls=fake.textCalls;
+
+    const replayLines:object[]=[];
+    expect(await importVenueCovers(db(),input,actor,true,{media,moderation},l=>replayLines.push(l))).toBe(0);
+    expect(replayLines).toContainEqual(expect.objectContaining({
+      venueId:item.venueId,action:"SKIPPED",reason:"COVER_IMPORT_REPLAY",
+    }));
+    expect(fake.calls).toBe(calls);
+    expect(fake.textCalls).toBe(textCalls);
+
+    const changedCredit={
+      manifest:validateManifest({
+        schema:"VENUE_COVER_BATCH_V1",batch:input.manifest.batch,count:1,
+        items:[{...item,credit_text:"Фото: Другой клуб"}],
+      }),
+      images:input.images,
+    };
+    const creditLines:object[]=[];
+    expect(await importVenueCovers(db(),changedCredit,actor,true,{media,moderation},l=>creditLines.push(l))).toBe(1);
+    expect(creditLines).toContainEqual(expect.objectContaining({
+      venueId:item.venueId,action:"FAILED",reason:"COVER_IMPORT_CONFLICT",
+    }));
+    expect(fake.calls).toBe(calls);
+
+    const changedSource={
+      manifest:validateManifest({
+        schema:"VENUE_COVER_BATCH_V1",batch:input.manifest.batch,count:1,
+        items:[{...item,source_page_url:"https://example.com/other"}],
+      }),
+      images:input.images,
+    };
+    const sourceLines:object[]=[];
+    expect(await importVenueCovers(db(),changedSource,actor,true,{media,moderation},l=>sourceLines.push(l))).toBe(1);
+    expect(sourceLines).toContainEqual(expect.objectContaining({
+      venueId:item.venueId,action:"FAILED",reason:"COVER_IMPORT_CONFLICT",
+    }));
+
+    const changedBasis={
+      manifest:validateManifest({
+        schema:"VENUE_COVER_BATCH_V1",batch:input.manifest.batch,count:1,
+        items:[{...item,basis_note:"OTHER PRIVATE BASIS"}],
+      }),
+      images:input.images,
+    };
+    const basisLines:object[]=[];
+    expect(await importVenueCovers(db(),changedBasis,actor,true,{media,moderation},l=>basisLines.push(l))).toBe(1);
+    expect(basisLines).toContainEqual(expect.objectContaining({
+      venueId:item.venueId,action:"FAILED",reason:"COVER_IMPORT_CONFLICT",
+    }));
+    expect(JSON.stringify(basisLines)).not.toContain("OTHER PRIVATE BASIS");
+    expect(JSON.stringify(basisLines)).not.toContain("PRIVATE BASIS");
+
+    const otherBytes=await sharp({create:{width:900,height:600,channels:3,background:"green"}}).jpeg().toBuffer();
+    const otherSha=createHash("sha256").update(otherBytes).digest("hex");
+    const changedImage={
+      manifest:validateManifest({
+        schema:"VENUE_COVER_BATCH_V1",batch:input.manifest.batch,count:1,
+        items:[{...item,sha256:otherSha}],
+      }),
+      images:new Map([[item.venueId,otherBytes]]),
+    };
+    const imageLines:object[]=[];
+    expect(await importVenueCovers(db(),changedImage,actor,true,{media,moderation},l=>imageLines.push(l))).toBe(1);
+    expect(imageLines).toContainEqual(expect.objectContaining({
+      venueId:item.venueId,action:"FAILED",reason:"COVER_IMPORT_CONFLICT",
+    }));
+    expect(fake.calls).toBe(calls);
+    expect((await db().query(
+      "SELECT cover_key,version,cover_credit_text FROM venues WHERE id=$1",[item.venueId],
+    )).rows[0]).toEqual(published);
+
+    await db().query(
+      `UPDATE venues SET cover_key=null,cover_credit_kind=null,cover_credit_text=null,cover_credit_url=null,
+         cover_moderation_approval_id=null,cover_actor_id=null,updated_at=now() WHERE id=$1`,
+      [item.venueId],
+    );
+    await db().query(`UPDATE venue_gallery_items SET active=false,updated_at=now() WHERE venue_id=$1 AND is_main`,[item.venueId]);
+    const delLines:object[]=[];
+    expect(await importVenueCovers(db(),input,actor,true,{media,moderation},l=>delLines.push(l))).toBe(0);
+    expect(delLines).toContainEqual(expect.objectContaining({
+      venueId:item.venueId,action:"SKIPPED",reason:"COVER_IMPORT_REPLAY",
+    }));
+    expect(fake.calls).toBe(calls);
+    expect(fake.textCalls).toBe(textCalls);
+    const afterDel=(await db().query<{cover_key:string|null}>(
+      "SELECT cover_key FROM venues WHERE id=$1",[item.venueId],
+    )).rows[0]!;
+    expect(afterDel.cover_key).toBeNull();
   });
   it("CLI apply rejects inactive principals, inactive users and missing superadmin grants before writes",async()=>{
     const dir=await mkdtemp(path.join(tmpdir(),"venue-import-cli-"));

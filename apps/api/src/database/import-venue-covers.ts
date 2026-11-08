@@ -63,6 +63,27 @@ import {
 } from "../venues/venue-gallery.service";
 import { VENUE_GALLERY_MAX } from "../venues/venue-gallery";
 import {
+  bindVenueCreditPublication,
+  bindVenueDescriptionPublication,
+  captureCoverAdmission,
+  coverAdmissionFingerprint,
+  coverAdmissionKeyHash,
+  coverCaptureMatches,
+  coverSnapshotDigest,
+  emptyVenueImportTextPrep,
+  freeCreditTextCandidate,
+  needsCreditTextPrepare,
+  needsPublicDataTextPrepare,
+  planCoverAcceptedReplay,
+  planCoverAttemptReplay,
+  planPublicDataAttemptReplay,
+  publicDataDescriptionCandidate,
+  type CoverAdmissionCapture,
+  type CoverAdmissionRecord,
+  type PublicDataAttemptRecord,
+  type VenueImportTextPrep,
+} from "../venues/venue-import-moderation";
+import {
   buildAcceptedGalleryMaintenanceReceipt,
   galleryMaintenanceAdmissionKeyHash,
   galleryMaintenanceItemFingerprint,
@@ -78,7 +99,6 @@ import {
   type GalleryMaintenanceReport,
   type GalleryMaintenanceVenueRow,
 } from "../venues/venue-gallery-maintenance";
-
 export function guardImportEnv(env: NodeJS.ProcessEnv): void {
   if (!["mvp","stage"].includes(env.APP_ENV ?? "") || env.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" ||
     !env.AVATAR_MEDIA_ROOT || env.CONTENT_MODERATION_PROVIDER !== "openai") throw new Error("IMPORT_ENV_REFUSED");
@@ -210,11 +230,124 @@ async function planPublicDataItemState(
   return { name, result: { action: "READY", reason: "PUBLIC_DATA_READY" }, nextIdentity };
 }
 
-type Services = {media:Pick<AvatarService,"stage"|"verifyStage"|"releaseStage">; moderation:Pick<ContentModerationService,"approveImage"|"bindImage">};
+type Services = {
+  media: Pick<AvatarService, "stage" | "verifyStage" | "releaseStage">;
+  moderation: Pick<ContentModerationService, "approveImage" | "bindImage" | "approveTexts" | "bindTexts">;
+};
+
+async function loadCoverAttempt(
+  c: Pick<PoolClient, "query">,
+  keyHash: string,
+): Promise<CoverAdmissionRecord | undefined> {
+  const row = (await c.query<{ after_diff: Record<string, unknown> }>(
+    `SELECT after_diff FROM privileged_audit_events
+     WHERE idempotency_hash=$1 AND action_key='venue.cover_changed'
+       AND reason_code='venue_cover_batch_attempt'
+     ORDER BY created_at DESC LIMIT 1`,
+    [keyHash],
+  )).rows[0];
+  const after = row?.after_diff;
+  if (!after || typeof after.fingerprint !== "string" || typeof after.digest !== "string"
+    || typeof after.batch !== "string" || typeof after.venueId !== "string"
+    || typeof after.sha256 !== "string" || typeof after.credit_text !== "string") {
+    return undefined;
+  }
+  return {
+    fingerprint: after.fingerprint,
+    digest: after.digest,
+    batch: after.batch,
+    venueId: after.venueId,
+    sha256: after.sha256,
+    credit_text: after.credit_text,
+    source_page_url: typeof after.source_page_url === "string" || after.source_page_url === null
+      ? (after.source_page_url as string | null)
+      : null,
+  };
+}
+
+async function loadAcceptedCoverFingerprint(
+  c: Pick<PoolClient, "query">,
+  keyHash: string,
+): Promise<string | undefined> {
+  const row = (await c.query<{ after_diff: Record<string, unknown> }>(
+    `SELECT after_diff FROM privileged_audit_events
+     WHERE idempotency_hash=$1 AND action_key='venue.cover_changed'
+       AND reason_code='venue_cover_batch_import'
+     ORDER BY created_at DESC LIMIT 1`,
+    [keyHash],
+  )).rows[0];
+  const fp = row?.after_diff?.fingerprint;
+  return typeof fp === "string" ? fp : undefined;
+}
+
+/**
+ * Short committed txn under claim: bind immutable input fingerprint before provider I/O.
+ * Captured venue snapshot is stored for first-publish CAS only (separate snapshot digest).
+ * Legacy image-hash digests stay compatible; admission is additive.
+ */
+async function commitCoverAttemptOrReplay(
+  pool: Pool,
+  principalId: string,
+  userId: string,
+  batch: string,
+  item: CoverManifest["items"][number],
+  captured: CoverAdmissionCapture,
+  fingerprint: string,
+  keyHash: string,
+  currentDigest: string,
+): Promise<{ action: "READY" | "SKIPPED" | "FAILED" | "HOLD"; reason: string }> {
+  return adminTransaction(pool, async (c) => {
+    if (await requireImportActor(c, principalId) !== userId) {
+      throw new Error("IMPORT_ACTOR_REFUSED");
+    }
+    const acceptedFp = await loadAcceptedCoverFingerprint(c, keyHash);
+    const accepted = planCoverAcceptedReplay(fingerprint, acceptedFp);
+    if (accepted) return accepted;
+    const prior = await loadCoverAttempt(c, keyHash);
+    if (prior) return planCoverAttemptReplay(fingerprint, currentDigest, prior);
+    await appendAudit(c, {
+      actor: { principalId, roles: ["superadmin"] },
+      action: "venue.cover_changed",
+      targetType: "venue",
+      targetId: item.venueId,
+      permission: "venue.manage",
+      reason: "venue_cover_batch_attempt",
+      keyHash,
+      after: {
+        batch,
+        venueId: item.venueId,
+        fingerprint,
+        digest: currentDigest,
+        snapshot_digest: coverSnapshotDigest(captured),
+        sha256: item.sha256.toLowerCase(),
+        kind: item.kind,
+        credit_text: item.credit_text,
+        source_page_url: item.source_page_url,
+        captured,
+      },
+    });
+    return { action: "READY", reason: "ATTEMPT_RECORDED" };
+  });
+}
+
+function coverFail(error: unknown): { action: "FAILED" | "HOLD"; reason: string } {
+  const body = error instanceof ProblemHttpException ? error.getResponse() : undefined;
+  const code = typeof body === "object" && body !== null && "code" in body ? body.code : undefined;
+  if (typeof code === "string" && /^[A-Z_]{1,80}$/.test(code)) {
+    if (code === "MODERATION_TEMPORARILY_UNAVAILABLE" || code === "MODERATION_POLICY_MISMATCH"
+      || code === "MODERATION_RATE_LIMITED" || code === "AVATAR_BUSY") {
+      return { action: "HOLD", reason: code };
+    }
+    return { action: "FAILED", reason: code };
+  }
+  return { action: "FAILED", reason: "IMPORT_ROW_FAILED" };
+}
+
 export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest;images:Map<string,Buffer>}, principalId:string,
   apply:boolean, services:Services, emit:(line:object)=>void) {
   const userId = await requireImportActor(pool,principalId,apply);
-  const totals = {APPLIED:0,SKIPPED:0,FAILED:0,READY:0};
+  const totals = {APPLIED:0,SKIPPED:0,FAILED:0,READY:0,HOLD:0};
+  const currentDigest = manifestDigest(batch.manifest);
   for (const item of batch.manifest.items) {
     let key:string|undefined;
     let name = "";
@@ -223,66 +356,131 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
       const row = (await pool.query<VenueSnapshot>("SELECT name,lifecycle_state,cover_key,cover_credit_kind,version FROM venues WHERE id=$1",[item.venueId])).rows[0];
       name = row?.name ?? "";
       result = planCover(row);
-      if (result.action === "READY" && apply) {
-        const bytes = batch.images.get(item.venueId);
-        if (!bytes) throw new Error("INVALID_IMAGE");
-        const sanitized = await sanitizeAvatar(bytes,"image/jpeg","cover");
-        key = `${randomBytes(32).toString("hex")}.png`;
-        const staged = await services.media.stage(key,sanitized);
-        const approval = await services.moderation.approveImage(userId,sanitized,"cover");
-        const storageKey = key;
-        result = await adminTransaction(pool,async c => {
-          if (await requireImportActor(c,principalId) !== userId) throw new Error("IMPORT_ACTOR_REFUSED");
-          const current = (await c.query<VenueSnapshot>("SELECT name,lifecycle_state,cover_key,cover_credit_kind,version FROM venues WHERE id=$1 FOR UPDATE",[item.venueId])).rows[0];
-          const plan = planCover(current);
-          if (plan.action !== "READY") return plan;
-          const verified = await services.media.verifyStage(c,storageKey,staged);
-          const approvalId = await services.moderation.bindImage(c,approval,verified,"cover");
-          const updated = (await c.query<{version:number}>(`UPDATE venues SET cover_key=$2,cover_moderation_approval_id=$3,cover_actor_id=$4,
-            cover_credit_kind=$5,cover_credit_text=$6,cover_credit_url=$7,version=version+1,updated_at=now() WHERE id=$1 RETURNING version`,
-            [item.venueId,storageKey,approvalId,userId,item.kind,item.credit_text,item.source_page_url])).rows[0];
-          if (!updated) throw new Error("VENUE_NOT_FOUND");
-          await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1",[storageKey]);
-          // Keep gallery main atomic with legacy cover columns after batch import.
-          const main = (await c.query<{id:string}>(
-            `SELECT id FROM venue_gallery_items WHERE venue_id=$1 AND active AND is_main FOR UPDATE`,
-            [item.venueId],
-          )).rows[0];
-          if (main) {
-            await c.query(
-              `UPDATE venue_gallery_items SET storage_key=$2, moderation_approval_id=$3, actor_id=$4,
-                 credit_kind=$5, credit_text=$6, credit_url=$7, source_url=$8, permission_basis=$9,
-                 source_fingerprint=$10, updated_at=now() WHERE id=$1`,
-              [main.id, storageKey, approvalId, userId, item.kind, item.credit_text, item.source_page_url,
-                item.kind === "photo" ? item.source_page_url : null, item.basis_note, item.sha256.toLowerCase()],
-            );
-          } else {
-            await c.query(
-              `INSERT INTO venue_gallery_items(
-                 venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
-                 credit_kind, credit_text, credit_url, source_url, permission_basis, source_fingerprint
-               ) VALUES ($1,0,true,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-              [item.venueId, storageKey, approvalId, userId, item.kind, item.credit_text, item.source_page_url,
-                item.kind === "photo" ? item.source_page_url : null, item.basis_note, item.sha256.toLowerCase()],
-            );
-          }
-          const audit = await appendAudit(c,{actor:{principalId,roles:["superadmin"]},action:"venue.cover_changed",targetType:"venue",targetId:item.venueId,
-            permission:"venue.manage",reason:"venue_cover_batch_import",after:{batch:batch.manifest.batch,kind:item.kind,sha256:item.sha256.toLowerCase(),basis_note:item.basis_note}});
-          await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'cover',$3,$4)",[item.venueId,updated.version,principalId,audit]);
-          return {action:"APPLIED" as const,reason:"IMPORTED"};
+      // Apply: admission (accepted/attempt) before EXISTING_COVER shortcircuit; fresh actor first.
+      if (apply && row) {
+        if (await requireImportActor(pool, principalId, false) !== userId) {
+          throw new Error("IMPORT_ACTOR_REFUSED");
+        }
+        const keyHash = coverAdmissionKeyHash(batch.manifest.batch, item.venueId);
+        const fingerprint = coverAdmissionFingerprint({
+          venueId: item.venueId,
+          sha256: item.sha256,
+          kind: item.kind,
+          credit_text: item.credit_text,
+          source_page_url: item.source_page_url,
+          basis_note: item.basis_note,
         });
+        const acceptedFp = await loadAcceptedCoverFingerprint(pool, keyHash);
+        const accepted = planCoverAcceptedReplay(fingerprint, acceptedFp);
+        if (accepted) {
+          // Exact accepted replay SKIP; changed input CONFLICT — never restore deleted cover.
+          result = accepted;
+        } else {
+          const priorAttempt = await loadCoverAttempt(pool, keyHash);
+          if (priorAttempt) {
+            result = planCoverAttemptReplay(fingerprint, currentDigest, priorAttempt);
+          } else if (result.action === "READY") {
+            const captured = captureCoverAdmission(row);
+            const attemptGate = await commitCoverAttemptOrReplay(
+              pool, principalId, userId, batch.manifest.batch, item, captured,
+              fingerprint, keyHash, currentDigest,
+            );
+            if (attemptGate.action !== "READY") {
+              result = attemptGate;
+            } else {
+              const bytes = batch.images.get(item.venueId);
+              if (!bytes) throw new Error("INVALID_IMAGE");
+              validateImage(bytes, item.sha256);
+              let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
+              const creditCandidate = freeCreditTextCandidate(item.credit_text, item.kind);
+              if (creditCandidate) {
+                const approval = await services.moderation.approveTexts(userId, [creditCandidate]);
+                textPrep = {
+                  approval,
+                  committed: [{ surface: "venue_credit_text", text: item.credit_text }],
+                };
+              }
+              const sanitized = await sanitizeAvatar(bytes,"image/jpeg","cover");
+              key = `${randomBytes(32).toString("hex")}.png`;
+              const staged = await services.media.stage(key,sanitized);
+              const approval = await services.moderation.approveImage(userId,sanitized,"cover");
+              const storageKey = key;
+              result = await adminTransaction(pool,async c => {
+                if (await requireImportActor(c,principalId) !== userId) throw new Error("IMPORT_ACTOR_REFUSED");
+                const liveAccepted = await loadAcceptedCoverFingerprint(c, keyHash);
+                const liveReplay = planCoverAcceptedReplay(fingerprint, liveAccepted);
+                if (liveReplay) return liveReplay;
+                const current = (await c.query<VenueSnapshot>("SELECT name,lifecycle_state,cover_key,cover_credit_kind,version FROM venues WHERE id=$1 FOR UPDATE",[item.venueId])).rows[0];
+                if (!current || !coverCaptureMatches(current, captured)) {
+                  return { action: "FAILED" as const, reason: "COVER_IMPORT_CONFLICT" };
+                }
+                const plan = planCover(current);
+                if (plan.action !== "READY") return plan;
+                const verified = await services.media.verifyStage(c,storageKey,staged);
+                const approvalId = await services.moderation.bindImage(c,approval,verified,"cover");
+                const updated = (await c.query<{version:number}>(`UPDATE venues SET cover_key=$2,cover_moderation_approval_id=$3,cover_actor_id=$4,
+                  cover_credit_kind=$5,cover_credit_text=$6,cover_credit_url=$7,version=version+1,updated_at=now() WHERE id=$1 AND version=$8 RETURNING version`,
+                  [item.venueId,storageKey,approvalId,userId,item.kind,item.credit_text,item.source_page_url,captured.version])).rows[0];
+                if (!updated) return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
+                await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1",[storageKey]);
+                // Keep gallery main atomic with legacy cover columns after batch import.
+                const main = (await c.query<{id:string}>(
+                  `SELECT id FROM venue_gallery_items WHERE venue_id=$1 AND active AND is_main FOR UPDATE`,
+                  [item.venueId],
+                )).rows[0];
+                let galleryItemId: string;
+                if (main) {
+                  await c.query(
+                    `UPDATE venue_gallery_items SET storage_key=$2, moderation_approval_id=$3, actor_id=$4,
+                       credit_kind=$5, credit_text=$6, credit_url=$7, source_url=$8, permission_basis=$9,
+                       source_fingerprint=$10, updated_at=now() WHERE id=$1`,
+                    [main.id, storageKey, approvalId, userId, item.kind, item.credit_text, item.source_page_url,
+                      item.kind === "photo" ? item.source_page_url : null, item.basis_note, item.sha256.toLowerCase()],
+                  );
+                  galleryItemId = main.id;
+                } else {
+                  const inserted = (await c.query<{id:string}>(
+                    `INSERT INTO venue_gallery_items(
+                       venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
+                       credit_kind, credit_text, credit_url, source_url, permission_basis, source_fingerprint
+                     ) VALUES ($1,0,true,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+                    [item.venueId, storageKey, approvalId, userId, item.kind, item.credit_text, item.source_page_url,
+                      item.kind === "photo" ? item.source_page_url : null, item.basis_note, item.sha256.toLowerCase()],
+                  )).rows[0];
+                  if (!inserted) throw new Error("GALLERY_INSERT_FAILED");
+                  galleryItemId = inserted.id;
+                }
+                await bindVenueCreditPublication(c, services.moderation, textPrep, {
+                  galleryItemId,
+                  resourceVersion: updated.version,
+                  actorUserId: userId,
+                  actorPrincipalId: principalId,
+                });
+                // Additive input fingerprint on accepted receipt; old image-hash digests remain compatible.
+                const audit = await appendAudit(c,{actor:{principalId,roles:["superadmin"]},action:"venue.cover_changed",targetType:"venue",targetId:item.venueId,
+                  permission:"venue.manage",reason:"venue_cover_batch_import",keyHash,after:{
+                    batch:batch.manifest.batch,kind:item.kind,sha256:item.sha256.toLowerCase(),basis_note:item.basis_note,
+                    fingerprint, snapshot_digest: coverSnapshotDigest(captured),
+                    credit_text: item.credit_text, source_page_url: item.source_page_url,
+                    galleryItemId, version: updated.version,
+                  }});
+                await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'cover',$3,$4)",[item.venueId,updated.version,principalId,audit]);
+                return {action:"APPLIED" as const,reason:"IMPORTED"};
+              });
+            }
+          }
+          // else keep planCover EXISTING_COVER / VENUE_INELIGIBLE when no prior admission
+        }
       }
     } catch (error:unknown) {
-      const body=error instanceof ProblemHttpException ? error.getResponse() : undefined;
-      const code=typeof body === "object" && body !== null && "code" in body ? body.code : undefined;
-      result = {action:"FAILED",reason:typeof code === "string" && /^[A-Z_]{1,80}$/.test(code) ? code : "IMPORT_ROW_FAILED"};
+      result = coverFail(error);
     }
     finally { if (key) await services.media.releaseStage(key); }
     totals[result.action]++;
     emit({venueId:item.venueId,name,kind:item.kind,...result});
   }
-  emit({totals,digest:manifestDigest(batch.manifest)});
-  return totals.FAILED === 0 ? 0 : 1;
+  emit({totals,digest:currentDigest});
+  return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
 }
 
 const galleryVenueSelect = `SELECT name,address,lifecycle_state,version,canonical_venue_id FROM venues WHERE id=$1`;
@@ -446,7 +644,7 @@ function galleryFail(error: unknown): GalleryImportPlan {
 
 type GalleryServices = {
   media: Pick<AvatarService, "stage" | "verifyStage" | "releaseStage">;
-  moderation: Pick<ContentModerationService, "approveImage" | "bindImage">;
+  moderation: Pick<ContentModerationService, "approveImage" | "bindImage" | "approveTexts" | "bindTexts">;
 };
 
 type GalleryTotals = { APPLIED: number; SKIPPED: number; FAILED: number; READY: number; HOLD: number };
@@ -637,6 +835,21 @@ export async function importVenueGallery(
                 if (attemptGate.action !== "READY") {
                   result = attemptGate;
                 } else {
+                  // Same durable attempt admits both free credit text and image provider I/O.
+                  let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
+                  if (needsCreditTextPrepare(item.evidence)) {
+                    const candidate = freeCreditTextCandidate(
+                      item.evidence.creditText,
+                      item.evidence.creditKind,
+                    );
+                    if (candidate) {
+                      const textApproval = await services.moderation.approveTexts(userId, [candidate]);
+                      textPrep = {
+                        approval: textApproval,
+                        committed: [{ surface: "venue_credit_text", text: item.evidence.creditText }],
+                      };
+                    }
+                  }
                   const sanitized = await sanitizeAvatar(bytes, "image/jpeg", "cover");
                   key = `${randomBytes(32).toString("hex")}.png`;
                   const staged = await services.media.stage(key, sanitized);
@@ -694,6 +907,12 @@ export async function importVenueGallery(
                       [item.venueId, item.expectedVersion],
                     )).rows[0];
                     if (!updated) throw new Error("VENUE_VERSION_CONFLICT");
+                    await bindVenueCreditPublication(c, services.moderation, textPrep, {
+                      galleryItemId: inserted.id,
+                      resourceVersion: updated.version,
+                      actorUserId: userId,
+                      actorPrincipalId: principalId,
+                    });
 
                     const receiptBody = buildAcceptedGalleryReceipt(batch.manifest, item, itemIndex);
                     const audit = await appendAudit(c, {
@@ -1042,14 +1261,278 @@ export async function importVenueGalleryMaintenance(
   return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
 }
 
+type PublicDataServices = {
+  moderation: Pick<ContentModerationService, "approveTexts" | "bindTexts">;
+};
+
+async function loadPublicDataAttempt(
+  c: Pick<PoolClient, "query">,
+  keyHash: string,
+): Promise<PublicDataAttemptRecord | undefined> {
+  const row = (await c.query<{ after_diff: Record<string, unknown> }>(
+    `SELECT after_diff FROM privileged_audit_events
+     WHERE idempotency_hash=$1 AND action_key='venue.edit'
+       AND reason_code='venue_public_data_batch_attempt'
+     ORDER BY created_at DESC LIMIT 1`,
+    [keyHash],
+  )).rows[0];
+  const after = row?.after_diff;
+  if (!after || typeof after.fingerprint !== "string" || typeof after.digest !== "string"
+    || typeof after.batch !== "string" || typeof after.venueId !== "string") {
+    return undefined;
+  }
+  return {
+    fingerprint: after.fingerprint,
+    digest: after.digest,
+    batch: after.batch,
+    venueId: after.venueId,
+  };
+}
+
+/**
+ * Narrow durable claim before text I/O — same audit-pattern as gallery attempt.
+ * Attempt fingerprint mismatch rejects before accepted/eligibility; matching
+ * accepted retains known replay/drift via planning. Matching pending stays HOLD.
+ */
+async function commitPublicDataAttemptOrReplay(
+  pool: Pool,
+  principalId: string,
+  userId: string,
+  manifest: PublicDataManifest,
+  item: PublicDataItem,
+  fingerprint: string,
+  keyHash: string,
+  currentDigest: string,
+): Promise<PublicDataPlan | { action: "HOLD"; reason: string }> {
+  return adminTransaction(pool, async (c) => {
+    if (await requireImportActor(c, principalId) !== userId) {
+      throw new Error("IMPORT_ACTOR_REFUSED");
+    }
+    const current = (await c.query<PublicDataVenueRow>(publicDataSelect, [item.venueId])).rows[0];
+    // Same ordering as apply path: retained attempt mismatch before accepted/planning.
+    const prior = await loadPublicDataAttempt(c, keyHash);
+    if (prior) {
+      const attemptReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, prior);
+      if (attemptReplay.action === "FAILED") return attemptReplay;
+      const terminal = await loadAcceptedPublicDataReceipt(c, keyHash);
+      if (terminal) {
+        const planned = await planPublicDataItemState(c, manifest.batch, item, current);
+        return planned.result;
+      }
+      return attemptReplay;
+    }
+    const planned = await planPublicDataItemState(c, manifest.batch, item, current);
+    if (planned.result.action !== "READY") return planned.result;
+    const terminal = await loadAcceptedPublicDataReceipt(c, keyHash);
+    if (terminal) {
+      return planPublicDataReplay(current!, fingerprint, terminal);
+    }
+    const raced = await loadPublicDataAttempt(c, keyHash);
+    if (raced) return planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
+    await appendAudit(c, {
+      actor: { principalId, roles: ["superadmin"] },
+      action: "venue.edit",
+      targetType: "venue",
+      targetId: item.venueId,
+      permission: "venue.manage",
+      reason: "venue_public_data_batch_attempt",
+      keyHash,
+      after: {
+        batch: manifest.batch,
+        venueId: item.venueId,
+        fingerprint,
+        digest: currentDigest,
+        expectedVersion: item.expectedVersion,
+      },
+    });
+    return { action: "READY", reason: "ATTEMPT_RECORDED" };
+  });
+}
+
+function publicDataFail(error: unknown): { action: "FAILED" | "HOLD"; reason: string } {
+  const body = error instanceof ProblemHttpException ? error.getResponse() : undefined;
+  const code = typeof body === "object" && body !== null && "code" in body ? body.code : undefined;
+  if (typeof code === "string" && /^[A-Z_]{1,80}$/.test(code)) {
+    if (code === "MODERATION_TEMPORARILY_UNAVAILABLE" || code === "MODERATION_POLICY_MISMATCH"
+      || code === "MODERATION_RATE_LIMITED") {
+      return { action: "HOLD", reason: code };
+    }
+    return { action: "FAILED", reason: code };
+  }
+  return { action: "FAILED", reason: "IMPORT_ROW_FAILED" };
+}
+
+async function applyPublicDataItem(
+  c: PoolClient,
+  principalId: string,
+  userId: string,
+  manifest: PublicDataManifest,
+  item: PublicDataItem,
+  textPrep: VenueImportTextPrep,
+  services: PublicDataServices | undefined,
+): Promise<{ action: "APPLIED" | "READY" | "SKIPPED" | "FAILED"; reason: string }> {
+  if (await requireImportActor(c, principalId) !== userId) throw new Error("IMPORT_ACTOR_REFUSED");
+  await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
+  const current = (await c.query<PublicDataVenueRow>(`${publicDataSelect} FOR UPDATE`, [item.venueId])).rows[0];
+  const planned = await planPublicDataItemState(c, manifest.batch, item, current);
+  if (planned.result.action !== "READY" || !current) return planned.result;
+
+  const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
+  const touchIdentity = item.identity !== undefined;
+  const nextIdentity = touchIdentity
+    ? (planned.nextIdentity ?? resolvePublicDataIdentity(current, item.identity!))
+    : undefined;
+
+  const touchContacts = item.publicContacts !== undefined;
+  const touchProfile = item.profile !== undefined;
+  const contactsJson = touchContacts
+    ? (item.publicContacts === null ? null : JSON.stringify(item.publicContacts))
+    : null;
+  const touchDescription = touchProfile && item.profile !== null
+    && Object.prototype.hasOwnProperty.call(item.profile, "description");
+  const clearProfile = touchProfile && item.profile === null;
+  // Row CAS first so a version miss cannot leave a new identity key committed alone.
+  const updated = (await c.query<{
+    version: number;
+    name: string;
+    address: string;
+    identity_discriminator: string;
+    public_contacts: unknown;
+    court_count: number | null;
+    amenity_parking: boolean | null;
+    amenity_showers: boolean | null;
+    public_description: string | null;
+  }>(`UPDATE venues SET
+      name=CASE WHEN $2::boolean THEN $3::text ELSE name END,
+      address=CASE WHEN $2::boolean THEN $4::text ELSE address END,
+      normalized_name=CASE WHEN $2::boolean THEN $5::text ELSE normalized_name END,
+      normalized_address=CASE WHEN $2::boolean THEN $6::text ELSE normalized_address END,
+      identity_discriminator=CASE WHEN $2::boolean THEN $7::text ELSE identity_discriminator END,
+      public_contacts=CASE WHEN $8::boolean THEN $9::jsonb ELSE public_contacts END,
+      court_count=CASE WHEN $10::boolean THEN $11::integer ELSE court_count END,
+      amenity_parking=CASE WHEN $10::boolean THEN $12::boolean ELSE amenity_parking END,
+      amenity_showers=CASE WHEN $10::boolean THEN $13::boolean ELSE amenity_showers END,
+      public_description=CASE WHEN $14::boolean THEN $15::text WHEN $16::boolean THEN NULL ELSE public_description END,
+      version=version+1, updated_at=now()
+    WHERE id=$1 AND version=$17
+    RETURNING version, name, address, identity_discriminator, public_contacts,
+              court_count, amenity_parking, amenity_showers, public_description`,
+  [
+    item.venueId,
+    touchIdentity,
+    nextIdentity?.name ?? current.name,
+    nextIdentity?.address ?? current.address,
+    nextIdentity?.normalizedName ?? null,
+    nextIdentity?.normalizedAddress ?? null,
+    nextIdentity?.identityDiscriminator ?? current.identity_discriminator,
+    touchContacts,
+    contactsJson,
+    touchProfile,
+    item.profile?.courtCount ?? null,
+    item.profile?.amenities.parking ?? null,
+    item.profile?.amenities.showers ?? null,
+    touchDescription,
+    touchDescription ? (item.profile?.description ?? null) : null,
+    clearProfile,
+    item.expectedVersion,
+  ])).rows[0];
+  if (!updated) return { action: "FAILED", reason: "VENUE_VERSION_CONFLICT" };
+
+  if (touchIdentity && nextIdentity) {
+    await c.query(
+      "INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1) ON CONFLICT(dedupe_key) DO NOTHING",
+      [nextIdentity.dedupeKey, item.venueId],
+    );
+    const claimant = await loadIdentityKeyClaimant(c, nextIdentity.dedupeKey);
+    const collision = planPublicDataIdentityCollision(claimant, item.venueId);
+    if (collision.action !== "READY") {
+      throw new Error("VENUE_IDENTITY_CONFLICT");
+    }
+  }
+
+  const applied = buildAppliedPatch(item);
+  const afterRow: PublicDataVenueRow = {
+    ...current,
+    version: updated.version,
+    name: updated.name,
+    address: updated.address,
+    identity_discriminator: updated.identity_discriminator,
+    public_contacts: updated.public_contacts,
+    court_count: updated.court_count,
+    amenity_parking: updated.amenity_parking,
+    amenity_showers: updated.amenity_showers,
+    public_description: updated.public_description,
+  };
+  if (!appliedPublicFieldsMatch(afterRow, applied)) {
+    throw new Error("PUBLIC_DATA_READBACK_MISMATCH");
+  }
+
+  if (services && textPrep.committed.length > 0) {
+    await bindVenueDescriptionPublication(c, services.moderation, textPrep, {
+      venueId: item.venueId,
+      resourceVersion: updated.version,
+      actorUserId: userId,
+      actorPrincipalId: principalId,
+    });
+  }
+
+  const before: Record<string, unknown> = { version: current.version };
+  const after: Record<string, unknown> = {
+    version: updated.version,
+    fingerprint: applied.fingerprint,
+    batch: manifest.batch,
+    provenance: "venue_public_data_batch_import",
+    sources: applied.sources,
+  };
+  if (touchIdentity) {
+    before.identity = { name: current.name, address: current.address };
+    after.identity = applied.identity;
+  }
+  if (touchContacts) {
+    before.publicContacts = current.public_contacts ?? null;
+    after.publicContacts = applied.publicContacts ?? null;
+  }
+  if (touchProfile) {
+    before.profile = {
+      courtCount: current.court_count,
+      amenities: { parking: current.amenity_parking, showers: current.amenity_showers },
+      description: current.public_description,
+    };
+    after.profile = applied.profile ?? null;
+  }
+
+  const audit = await appendAudit(c, {
+    actor: { principalId, roles: ["superadmin"] },
+    action: "venue.edit",
+    targetType: "venue",
+    targetId: item.venueId,
+    permission: "venue.manage",
+    reason: "venue_public_data_batch_import",
+    keyHash,
+    before,
+    after,
+  });
+  await c.query(
+    "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'edit',$3,$4)",
+    [item.venueId, updated.version, principalId, audit],
+  );
+  await c.query(
+    "INSERT INTO outbox_events(type,aggregate_type,aggregate_id,aggregate_version,payload) VALUES($1,'venue',$2,$3,$4::jsonb)",
+    ["venue.edit", item.venueId, updated.version, JSON.stringify({ venueId: item.venueId, canonicalVenueId: current.canonical_venue_id })],
+  );
+  return { action: "APPLIED", reason: "IMPORTED" };
+}
+
 export async function importVenuePublicData(
   pool: Pool,
   manifest: PublicDataManifest,
   principalId: string,
   apply: boolean,
   emit: (line: object) => void,
+  services?: PublicDataServices,
 ): Promise<number> {
-  const totals = { APPLIED: 0, SKIPPED: 0, FAILED: 0, READY: 0 };
+  const totals = { APPLIED: 0, SKIPPED: 0, FAILED: 0, READY: 0, HOLD: 0 };
+  const currentDigest = publicDataDigest(manifest);
   if (!apply) {
     const client = await pool.connect();
     try {
@@ -1076,8 +1559,8 @@ export async function importVenuePublicData(
     } finally {
       client.release();
     }
-    emit({ totals, digest: publicDataDigest(manifest) });
-    return totals.FAILED === 0 ? 0 : 1;
+    emit({ totals, digest: currentDigest });
+    return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
   }
 
   const userId = await requireImportActor(pool, principalId, true);
@@ -1085,165 +1568,96 @@ export async function importVenuePublicData(
     let name = "";
     let result: { action: keyof typeof totals; reason: string };
     try {
+      if (await requireImportActor(pool, principalId, false) !== userId) {
+        throw new Error("IMPORT_ACTOR_REFUSED");
+      }
       const preview = (await pool.query<PublicDataVenueRow>(publicDataSelect, [item.venueId])).rows[0];
       name = preview?.name ?? "";
-      result = await adminTransaction(pool, async (c) => {
-        if (await requireImportActor(c, principalId) !== userId) throw new Error("IMPORT_ACTOR_REFUSED");
-        await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
-        const current = (await c.query<PublicDataVenueRow>(`${publicDataSelect} FOR UPDATE`, [item.venueId])).rows[0];
-        name = current?.name ?? name;
-        const planned = await planPublicDataItemState(c, manifest.batch, item, current);
-        name = planned.name || name;
-        if (planned.result.action !== "READY" || !current) return planned.result;
+      const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
+      const fingerprint = publicDataPatchFingerprint(item);
 
-        const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
-        const touchIdentity = item.identity !== undefined;
-        const nextIdentity = touchIdentity
-          ? (planned.nextIdentity ?? resolvePublicDataIdentity(current, item.identity!))
-          : undefined;
-
-        const touchContacts = item.publicContacts !== undefined;
-        const touchProfile = item.profile !== undefined;
-        const contactsJson = touchContacts
-          ? (item.publicContacts === null ? null : JSON.stringify(item.publicContacts))
-          : null;
-        const touchDescription = touchProfile && item.profile !== null
-          && Object.prototype.hasOwnProperty.call(item.profile, "description");
-        const clearProfile = touchProfile && item.profile === null;
-        // Row CAS first so a version miss cannot leave a new identity key committed alone.
-        const updated = (await c.query<{
-          version: number;
-          name: string;
-          address: string;
-          identity_discriminator: string;
-          public_contacts: unknown;
-          court_count: number | null;
-          amenity_parking: boolean | null;
-          amenity_showers: boolean | null;
-          public_description: string | null;
-        }>(`UPDATE venues SET
-            name=CASE WHEN $2::boolean THEN $3::text ELSE name END,
-            address=CASE WHEN $2::boolean THEN $4::text ELSE address END,
-            normalized_name=CASE WHEN $2::boolean THEN $5::text ELSE normalized_name END,
-            normalized_address=CASE WHEN $2::boolean THEN $6::text ELSE normalized_address END,
-            identity_discriminator=CASE WHEN $2::boolean THEN $7::text ELSE identity_discriminator END,
-            public_contacts=CASE WHEN $8::boolean THEN $9::jsonb ELSE public_contacts END,
-            court_count=CASE WHEN $10::boolean THEN $11::integer ELSE court_count END,
-            amenity_parking=CASE WHEN $10::boolean THEN $12::boolean ELSE amenity_parking END,
-            amenity_showers=CASE WHEN $10::boolean THEN $13::boolean ELSE amenity_showers END,
-            public_description=CASE WHEN $14::boolean THEN $15::text WHEN $16::boolean THEN NULL ELSE public_description END,
-            version=version+1, updated_at=now()
-          WHERE id=$1 AND version=$17
-          RETURNING version, name, address, identity_discriminator, public_contacts,
-                    court_count, amenity_parking, amenity_showers, public_description`,
-        [
-          item.venueId,
-          touchIdentity,
-          nextIdentity?.name ?? current.name,
-          nextIdentity?.address ?? current.address,
-          nextIdentity?.normalizedName ?? null,
-          nextIdentity?.normalizedAddress ?? null,
-          nextIdentity?.identityDiscriminator ?? current.identity_discriminator,
-          touchContacts,
-          contactsJson,
-          touchProfile,
-          item.profile?.courtCount ?? null,
-          item.profile?.amenities.parking ?? null,
-          item.profile?.amenities.showers ?? null,
-          touchDescription,
-          touchDescription ? (item.profile?.description ?? null) : null,
-          clearProfile,
-          item.expectedVersion,
-        ])).rows[0];
-        if (!updated) return { action: "FAILED" as const, reason: "VENUE_VERSION_CONFLICT" };
-
-        if (touchIdentity && nextIdentity) {
-          // Retain historical keys; foreign claim after row write must roll back the txn.
-          await c.query(
-            "INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1) ON CONFLICT(dedupe_key) DO NOTHING",
-            [nextIdentity.dedupeKey, item.venueId],
-          );
-          const claimant = await loadIdentityKeyClaimant(c, nextIdentity.dedupeKey);
-          const collision = planPublicDataIdentityCollision(claimant, item.venueId);
-          if (collision.action !== "READY") {
-            throw new Error("VENUE_IDENTITY_CONFLICT");
+      // After auth: load ANY retained attempt; fingerprint/digest mismatch rejects
+      // before accepted branch and mutable eligibility/version planning.
+      // Matching accepted keeps known replay/drift; matching pending stays HOLD.
+      // Do not convert matching accepted into pending HOLD.
+      const priorAttempt = await loadPublicDataAttempt(pool, keyHash);
+      let attemptConflict: { action: "FAILED"; reason: string } | undefined;
+      let matchingPendingHold: { action: "HOLD"; reason: string } | undefined;
+      if (priorAttempt) {
+        const attemptReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, priorAttempt);
+        if (attemptReplay.action === "FAILED") {
+          attemptConflict = { action: "FAILED", reason: attemptReplay.reason };
+        } else {
+          matchingPendingHold = { action: "HOLD", reason: attemptReplay.reason };
+        }
+      }
+      if (attemptConflict) {
+        result = attemptConflict;
+      } else {
+        const accepted = await loadAcceptedPublicDataReceipt(pool, keyHash);
+        if (accepted) {
+          const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
+          name = planned.name || name;
+          result = planned.result;
+        } else if (matchingPendingHold) {
+          result = matchingPendingHold;
+        } else {
+          const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
+          name = planned.name || name;
+          if (planned.result.action !== "READY" || !preview) {
+            result = planned.result;
+          } else {
+            const needsText = needsPublicDataTextPrepare(preview, item);
+            let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
+            if (needsText) {
+              if (!services) throw new Error("PUBLIC_DATA_MODERATION_REQUIRED");
+              const attemptGate = await commitPublicDataAttemptOrReplay(
+                pool, principalId, userId, manifest, item, fingerprint, keyHash, currentDigest,
+              );
+              if (attemptGate.action !== "READY") {
+                result = attemptGate;
+              } else {
+                const candidate = publicDataDescriptionCandidate(preview, item);
+                if (candidate) {
+                  const approval = await services.moderation.approveTexts(userId, [candidate]);
+                  textPrep = {
+                    approval,
+                    committed: [{ surface: "venue_description", text: candidate.text }],
+                  };
+                }
+                result = await adminTransaction(pool, async (c) =>
+                  applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, services),
+                );
+              }
+            } else {
+              // Fresh clear/omit/noop — zero provider egress; no new attempt claim.
+              // Concurrent claim: attempt mismatch before accepted; matching accepted
+              // must not become pending HOLD under the write TX.
+              result = await adminTransaction(pool, async (c) => {
+                if (await requireImportActor(c, principalId) !== userId) {
+                  throw new Error("IMPORT_ACTOR_REFUSED");
+                }
+                const raced = await loadPublicDataAttempt(c, keyHash);
+                if (raced) {
+                  const racedReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
+                  if (racedReplay.action === "FAILED") return racedReplay;
+                  const racedAccepted = await loadAcceptedPublicDataReceipt(c, keyHash);
+                  if (!racedAccepted) return racedReplay;
+                }
+                return applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, undefined);
+              });
+            }
           }
         }
-
-        const applied = buildAppliedPatch(item);
-        const afterRow: PublicDataVenueRow = {
-          ...current,
-          version: updated.version,
-          name: updated.name,
-          address: updated.address,
-          identity_discriminator: updated.identity_discriminator,
-          public_contacts: updated.public_contacts,
-          court_count: updated.court_count,
-          amenity_parking: updated.amenity_parking,
-          amenity_showers: updated.amenity_showers,
-          public_description: updated.public_description,
-        };
-        if (!appliedPublicFieldsMatch(afterRow, applied)) {
-          throw new Error("PUBLIC_DATA_READBACK_MISMATCH");
-        }
-
-        const before: Record<string, unknown> = { version: current.version };
-        const after: Record<string, unknown> = {
-          version: updated.version,
-          fingerprint: applied.fingerprint,
-          batch: manifest.batch,
-          provenance: "venue_public_data_batch_import",
-          // Same transactional after_diff: validated sources for operator provenance.
-          sources: applied.sources,
-        };
-        if (touchIdentity) {
-          before.identity = { name: current.name, address: current.address };
-          after.identity = applied.identity;
-        }
-        if (touchContacts) {
-          before.publicContacts = current.public_contacts ?? null;
-          after.publicContacts = applied.publicContacts ?? null;
-        }
-        if (touchProfile) {
-          before.profile = {
-            courtCount: current.court_count,
-            amenities: { parking: current.amenity_parking, showers: current.amenity_showers },
-            description: current.public_description,
-          };
-          after.profile = applied.profile ?? null;
-        }
-
-        const audit = await appendAudit(c, {
-          actor: { principalId, roles: ["superadmin"] },
-          action: "venue.edit",
-          targetType: "venue",
-          targetId: item.venueId,
-          permission: "venue.manage",
-          reason: "venue_public_data_batch_import",
-          keyHash,
-          before,
-          after,
-        });
-        await c.query(
-          "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'edit',$3,$4)",
-          [item.venueId, updated.version, principalId, audit],
-        );
-        await c.query(
-          "INSERT INTO outbox_events(type,aggregate_type,aggregate_id,aggregate_version,payload) VALUES($1,'venue',$2,$3,$4::jsonb)",
-          ["venue.edit", item.venueId, updated.version, JSON.stringify({ venueId: item.venueId, canonicalVenueId: current.canonical_venue_id })],
-        );
-        return { action: "APPLIED" as const, reason: "IMPORTED" };
-      });
+      }
     } catch (error: unknown) {
-      const body = error instanceof ProblemHttpException ? error.getResponse() : undefined;
-      const code = typeof body === "object" && body !== null && "code" in body ? body.code : undefined;
-      result = { action: "FAILED", reason: typeof code === "string" && /^[A-Z_]{1,80}$/.test(code) ? code : "IMPORT_ROW_FAILED" };
+      result = publicDataFail(error);
     }
     totals[result.action]++;
     emit({ venueId: item.venueId, name, action: result.action, reason: result.reason });
   }
-  emit({ totals, digest: publicDataDigest(manifest) });
-  return totals.FAILED === 0 ? 0 : 1;
+  emit({ totals, digest: currentDigest });
+  return totals.FAILED === 0 && totals.HOLD === 0 ? 0 : 1;
 }
 
 export async function main(argv:string[], raw:NodeJS.ProcessEnv = process.env):Promise<number> {
@@ -1265,7 +1679,12 @@ export async function main(argv:string[], raw:NodeJS.ProcessEnv = process.env):P
     const manifest = validatePublicDataManifest(JSON.parse((await readBatchFile(dir, file, 256 * 1024)).toString("utf8")));
     const env = loadEnv(raw), { pool } = createDatabase(env.DATABASE_URL);
     try {
-      return await importVenuePublicData(pool, manifest, actor, apply, (line) => console.log(JSON.stringify(line)));
+      // Narrow moderation injection for description gate only; dry-run still skips provider.
+      const moderation = new ContentModerationService(pool, env, new OpenAIModerationProvider(env));
+      return await importVenuePublicData(
+        pool, manifest, actor, apply, (line) => console.log(JSON.stringify(line)),
+        { moderation },
+      );
     } finally { await pool.end(); }
   }
   if (galleryMaintenance) {

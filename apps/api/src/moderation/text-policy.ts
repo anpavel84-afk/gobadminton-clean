@@ -1,7 +1,7 @@
 /**
- * Public text surface catalogue and field-kind mapping for MOD-V2-A/B1a/B1b/B1c/B2a.
+ * Public text surface catalogue and field-kind mapping for MOD-V2-A/B1a/B1b/B1c/B2a/B2b.
  * Provider policy version is independent from local ru-profanity-v1.
- * Review surfaces keep contextual prose semantics; ordinary A/B1a/B2a reject paths unchanged.
+ * Review surfaces keep contextual prose semantics; ordinary A/B1a/B2a/B2b reject paths unchanged.
  */
 
 import type { LocalTextKind } from "./local-text-policy";
@@ -30,6 +30,7 @@ export const TEXT_SURFACES = [
   "venue_name",
   "venue_address",
   "venue_description",
+  "venue_credit_text",
 ] as const;
 
 export type TextSurface = (typeof TEXT_SURFACES)[number];
@@ -90,6 +91,7 @@ export const TEXT_SURFACE_KIND: Record<TextSurface, LocalTextKind> = {
   venue_name: "identity",
   venue_address: "factual",
   venue_description: "prose",
+  venue_credit_text: "identity",
 };
 
 /** Neutral Russian correction hints keyed by client field id (never expose matched tokens). */
@@ -113,6 +115,7 @@ export const TEXT_FIELD_HINTS: Record<TextSurface, string> = {
   venue_name: "Измените название площадки",
   venue_address: "Измените адрес площадки",
   venue_description: "Измените описание площадки",
+  venue_credit_text: "Измените подпись к изображению площадки",
 };
 
 export type TextFieldCandidate = Readonly<{
@@ -132,7 +135,8 @@ export type EntityKind =
   | "role_review_revision"
   | "role_reply_revision"
   | "venue_review_revision"
-  | "venue";
+  | "venue"
+  | "venue_gallery_item";
 
 export type BindingKind = "candidate" | "publication";
 
