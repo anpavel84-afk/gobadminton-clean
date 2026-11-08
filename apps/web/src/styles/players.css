@@ -258,11 +258,11 @@
 .fr3 .profile-form-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
 .fr3 .profile-safety { margin-top:22px; }
 /* #507: safety actions keep whole-word labels under inherited .fr3 overflow-wrap:anywhere.
- * Natural min width + wrap/stack; do not let mobile flex:1 squeeze mid-word breaks. */
+ * Natural wrap/stack; do not let mobile flex:1 squeeze mid-word breaks.
+ * Avoid no-op min-width:min(100%,max-content) — UI29 independent cases already PASS. */
 .fr3 .profile-safety .profile-form-actions > .gb-c23-btn {
   overflow-wrap: normal;
   word-break: normal;
-  min-width: min(100%, max-content);
   max-width: 100%;
   min-height: 44px;
 }
