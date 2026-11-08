@@ -19,7 +19,7 @@ import { geographicCity } from "./geographic-contract";
 import { RadarFeatureService } from "./radar-feature";
 import { RadarBudgetService } from "./radar-budget.service";
 import { ProfilesService } from "../profiles/profiles.service";
-import { safeProviderAvatar } from "../profiles/avatar-presentation";
+import { safeUploadedAvatar } from "../profiles/avatar-presentation";
 import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { quantizeUnified } from "./unified-location";
 import { assertUnifiedOrigin } from "./unified-origin";
@@ -306,19 +306,16 @@ export class UnifiedPlayersService {
       const avatars = await client.query<{
         user_id: string;
         avatar_key: string | null;
-        provider_url: string | null;
       }>(
-        `SELECT p.user_id,p.avatar_key,(SELECT e.avatar_url FROM external_identities e WHERE e.user_id=p.user_id AND e.provider_key IN ('vk','yandex') AND e.avatar_url IS NOT NULL ORDER BY e.created_at,e.id LIMIT 1) provider_url FROM player_social_profiles p WHERE p.user_id=ANY($1::uuid[])`,
+        `SELECT p.user_id,p.avatar_key FROM player_social_profiles p WHERE p.user_id=ANY($1::uuid[])`,
         [ids],
       );
       const avatarMap = new Map(
         avatars.rows.map((r) => [
           r.user_id,
           {
-            uploadedUrl: r.avatar_key
-              ? `/v1/media/avatars/${r.avatar_key}`
-              : null,
-            providerUrl: safeProviderAvatar(r.provider_url),
+            uploadedUrl: safeUploadedAvatar(r.avatar_key),
+            providerUrl: null,
           },
         ]),
       );

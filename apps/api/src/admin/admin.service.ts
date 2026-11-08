@@ -1467,6 +1467,156 @@ export class AdminService {
       };
     });
   }
+
+  /**
+   * D2 — bounded metadata-only moderation history (saved allow/review approvals + bindings).
+   * Reuses audit.security.read + fresh step-up. Never returns raw text/URL/images/scores/fingerprints.
+   * Not append-only attempt history; missing reject/temp/budget rows are not fabricated.
+   */
+  async moderationAudit(
+    request: FastifyRequest,
+    query: {
+      surface?: string;
+      decision?: "allow" | "review";
+      policy?: string;
+      model?: string;
+      checkedFrom?: string;
+      checkedTo?: string;
+      beforeCheckedAt?: string;
+      beforeId?: string;
+      limit: number;
+    },
+  ) {
+    return this.privilegedRead(
+      request,
+      "audit.security.read",
+      async (c, a) => {
+        await appendAudit(c, {
+          actor: a,
+          action: "admin.moderation_audit_read",
+          targetType: "content_moderation_approvals",
+          targetId: "bounded_metadata",
+          permission: "audit.security.read",
+          reason: "security_review",
+          after: {
+            surface: query.surface ?? null,
+            decision: query.decision ?? null,
+            policy: query.policy ?? null,
+            model: query.model ?? null,
+            limit: query.limit,
+          },
+        });
+        const params: unknown[] = [
+          query.surface ?? null,
+          query.decision ?? null,
+          query.policy ?? null,
+          query.model ?? null,
+          query.checkedFrom ?? null,
+          query.checkedTo ?? null,
+          query.beforeCheckedAt ?? null,
+          query.beforeId ?? null,
+          query.limit + 1,
+        ];
+        type ApprovalRow = {
+          id: string;
+          surface_key: string;
+          decision: string;
+          provider_key: string;
+          provider_model: string;
+          policy_version: string;
+          local_policy_version: string;
+          checked_at: Date;
+        };
+        const approvals = await c.query<ApprovalRow>(
+          `SELECT a.id, a.surface_key, a.decision, a.provider_key, a.provider_model,
+                  a.policy_version, a.local_policy_version, a.checked_at
+             FROM content_moderation_approvals a
+            WHERE a.decision IN ('allow','review')
+              AND ($1::text IS NULL OR a.surface_key = $1)
+              AND ($2::text IS NULL OR a.decision = $2)
+              AND ($3::text IS NULL OR a.policy_version = $3 OR a.local_policy_version = $3)
+              AND ($4::text IS NULL OR a.provider_model = $4)
+              AND ($5::timestamptz IS NULL OR a.checked_at >= $5::timestamptz)
+              AND ($6::timestamptz IS NULL OR a.checked_at <= $6::timestamptz)
+              AND (
+                $7::timestamptz IS NULL OR $8::uuid IS NULL
+                OR (a.checked_at, a.id) < ($7::timestamptz, $8::uuid)
+              )
+            ORDER BY a.checked_at DESC, a.id DESC
+            LIMIT $9`,
+          params,
+        );
+        const page = approvals.rows.slice(0, query.limit);
+        const next = approvals.rows.length > query.limit ? approvals.rows[query.limit]! : null;
+        const ids = page.map((row) => row.id);
+        type BindingRow = {
+          id: string;
+          approval_id: string;
+          entity_kind: string;
+          entity_id: string;
+          surface_key: string;
+          resource_version: number;
+          binding_kind: string;
+          role_reputation_decision_id: string | null;
+          venue_review_decision_id: string | null;
+          created_at: Date;
+        };
+        const bindings =
+          ids.length === 0
+            ? { rows: [] as BindingRow[] }
+            : await c.query<BindingRow>(
+                `SELECT b.id, b.approval_id, b.entity_kind, b.entity_id, b.surface_key,
+                        b.resource_version, b.binding_kind,
+                        b.role_reputation_decision_id, b.venue_review_decision_id, b.created_at
+                   FROM content_moderation_bindings b
+                  WHERE b.approval_id = ANY($1::uuid[])
+                  ORDER BY b.approval_id, b.created_at DESC, b.id DESC`,
+                [ids],
+              );
+        const byApproval = new Map<string, BindingRow[]>();
+        for (const binding of bindings.rows) {
+          const list = byApproval.get(binding.approval_id) ?? [];
+          // Bound nested bindings per approval — no unlimited join expansion.
+          if (list.length >= 20) continue;
+          list.push(binding);
+          byApproval.set(binding.approval_id, list);
+        }
+        return {
+          historyScope: "saved_allow_review_only" as const,
+          historyNote:
+            "Сохранённые allow/review approvals и связанные bindings. Отклонённые/временные попытки и бюджеты не входят в этот журнал.",
+          items: page.map((row) => {
+            const bound = byApproval.get(row.id) ?? [];
+            return {
+              approvalId: row.id,
+              surface: row.surface_key,
+              decision: row.decision,
+              providerKey: row.provider_key,
+              providerModel: row.provider_model,
+              policyVersion: row.policy_version,
+              localPolicyVersion: row.local_policy_version,
+              checkedAt: row.checked_at.toISOString(),
+              bindingStatus: bound.length > 0 ? ("bound" as const) : ("unbound_or_legacy" as const),
+              bindings: bound.map((b) => ({
+                bindingId: b.id,
+                entityKind: b.entity_kind,
+                entityId: b.entity_id,
+                surface: b.surface_key,
+                resourceVersion: b.resource_version,
+                bindingKind: b.binding_kind,
+                roleReputationDecisionId: b.role_reputation_decision_id,
+                venueReviewDecisionId: b.venue_review_decision_id,
+                createdAt: b.created_at.toISOString(),
+              })),
+            };
+          }),
+          nextBeforeCheckedAt: next ? next.checked_at.toISOString() : null,
+          nextBeforeId: next ? next.id : null,
+        };
+      },
+      true,
+    );
+  }
 }
 
 function adminHttpExceptionCode(error: unknown): string {

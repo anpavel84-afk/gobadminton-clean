@@ -14,7 +14,7 @@ import {
   unprocessable,
 } from "../auth/problem";
 import { ActorFenceService } from "../common/actor-fence.service";
-import { safeProviderAvatar } from "../profiles/avatar-presentation";
+import { safeUploadedAvatar } from "../profiles/avatar-presentation";
 import { safePublicDisplayName } from "../profiles/social-profile-defaults";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { DEMO_SPB_CITY_ID } from "../database/demo-ids";
@@ -255,10 +255,8 @@ export class GeographicRadarService {
             displayName: safePublicDisplayName(row.display_name),
             trainer: row.trainer,
             avatar: {
-              uploadedUrl: row.avatar_key
-                ? `/v1/media/avatars/${row.avatar_key}`
-                : null,
-              providerUrl: safeProviderAvatar(row.provider_url),
+              uploadedUrl: safeUploadedAvatar(row.avatar_key),
+              providerUrl: null,
             },
             level:
               row.level_scale_id &&

@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps sixty-three confirmed seed deployments including accepted alpha.1–alpha.54 and dedupes identical live rows", () => {
+  it("keeps sixty-four confirmed seed deployments including accepted alpha.1–alpha.55 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(63);
+    expect(seedCount).toBe(64);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -328,7 +328,14 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.52"
       || row.application_version === "0.1.0-alpha.53"
       || row.application_version === "0.1.0-alpha.54"
+      || row.application_version === "0.1.0-alpha.55"
       || row.application_version === CURRENT_APPLICATION_VERSION,
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.55"
+      && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
+      && row.deployments[0]?.release_id === "r42455870420-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T06:58:58Z",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.54"
@@ -336,7 +343,7 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.55");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.56");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -596,6 +603,7 @@ describe("history seed integrity", () => {
       "2026-11-08T01:56:35Z",
       "2026-11-08T03:29:11Z",
       "2026-11-08T05:18:57Z",
+      "2026-11-08T06:58:58Z",
     ]);
   });
 

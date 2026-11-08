@@ -27,6 +27,8 @@ PII профиля/контактов, identities, sessions, organizer authority
 
 Для поиска не нужен вход. Для заявки — внутренний аккаунт и минимальные сведения для согласованного уровня/сценария. Телефон, паспорт, дата рождения и доступ к адресной книге не собираются по умолчанию. Provider scopes — только требуемые; отсутствие email не делает аккаунт недействительным. Геолокация только по действию пользователя, без background tracking.
 
+Публичный процессор контента (inventory #506): OpenAI moderation для публичного текста и изображений на допущенных backend-поверхностях. Внешняя обработка личных сообщений и прочего private content остаётся OFF/blocked до явных disclosure/privacy gates. Непроверенные VK/Yandex avatar URL не публикуются в DTO (`providerUrl=null`); sanitizer при OAuth ingest не является pixel approval.
+
 Public organizer contact — осознанно указанный контакт. Applicant contacts и roster не public. Причины отказа/модерации минимальны, без чувствительных характеристик. Data retention/deletion — [policy](../data/MIGRATIONS_AND_RETENTION.md).
 
 ## Abuse и real-world safety

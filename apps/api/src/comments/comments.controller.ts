@@ -13,6 +13,7 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
 import { IdempotencyService } from "../common/idempotency.service";
+import { projectCommentAvatar } from "../profiles/public-avatar-projection";
 import { CommentsService } from "./comments.service";
 
 @Controller()
@@ -59,7 +60,7 @@ export class CommentsController {
       request.body,
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectCommentAvatar(result.body);
   }
 
   @Get("venues/:venueId/comments")
@@ -98,7 +99,7 @@ export class CommentsController {
       request.body,
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectCommentAvatar(result.body);
   }
 
   @Put("comments/:commentId")
@@ -117,7 +118,7 @@ export class CommentsController {
       request.body,
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectCommentAvatar(result.body);
   }
 
   @Delete("comments/:commentId")
@@ -136,6 +137,6 @@ export class CommentsController {
       request.body,
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectCommentAvatar(result.body);
   }
 }

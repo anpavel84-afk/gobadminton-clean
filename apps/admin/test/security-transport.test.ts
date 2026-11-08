@@ -44,6 +44,15 @@ describe("internal Admin transport fence", () => {
     expect(url.href).toBe("http://127.0.0.1:18921/v1/admin/auth/me");
     expect(options.headers.get("origin")).toBe(origin); expect(options.headers.get("cookie")).toBe("__Host-gb_admin_session=admin"); expect(options.headers.has("authorization")).toBe(false);
   });
+  it("forwards bounded audit/moderation query params and rejects unknown ones", async () => {
+    enabled(); const fetch = vi.fn().mockResolvedValue(Response.json({ items: [] })); vi.stubGlobal("fetch", fetch);
+    const ok = await GET(new Request(origin + "/v1/admin/audit/moderation?surface=comment_body&decision=allow&limit=10", { headers: { "sec-fetch-site": "same-origin", cookie: "__Host-gb_admin_session=admin" } }), ctx("audit/moderation"));
+    expect(ok.status).toBe(200);
+    expect(fetch.mock.calls[0]![0].href).toContain("/v1/admin/audit/moderation?");
+    expect(fetch.mock.calls[0]![0].searchParams.get("surface")).toBe("comment_body");
+    const bad = await GET(new Request(origin + "/v1/admin/audit/moderation?rawText=no", { headers: { "sec-fetch-site": "same-origin", cookie: "__Host-gb_admin_session=admin" } }), ctx("audit/moderation"));
+    expect(bad.status).toBe(400);
+  });
   it("preserves logout 204 and forwards its CSRF and same-key retry", async () => {
     enabled(); const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204, headers: { "Set-Cookie": "__Host-gb_admin_session=; Path=/; Secure; HttpOnly; Max-Age=0" } })); vi.stubGlobal("fetch", fetch);
     const response = await POST(new Request(origin + "/v1/admin/auth/logout", { method: "POST", headers: { origin, "x-csrf-token": "csrf", "idempotency-key": "same-logout-key-1234" }, body: "{}" }), ctx("auth/logout"));

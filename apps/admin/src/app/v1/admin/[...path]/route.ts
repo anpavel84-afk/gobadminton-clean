@@ -1,7 +1,7 @@
 import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, adminRequestOrigin, adminRequestPath, devQaKeyUiEnabled } from "../../../../lib/server-config";
 
 export const dynamic = "force-dynamic";
-const allowedGet = new Set(["auth/me", "audit/security", "games", "reports", "cases", "pilot-metrics"]);
+const allowedGet = new Set(["auth/me", "audit/security", "audit/moderation", "games", "reports", "cases", "pilot-metrics"]);
 const allowedPost = new Set(["auth/dev-qa-key", "auth/vk/start", "auth/yandex/start", "auth/webauthn/options", "auth/webauthn/verify", "auth/logout", "cases"]);
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const galleryMeta = [
@@ -103,9 +103,9 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
       const query = new URL(request.url).searchParams;
       for (const name of ["state", "code", "device_id"]) if (query.has(name)) url.searchParams.set(name, query.get(name)!);
     }
-    if (request.method === "GET" && (path === "games" || gameDetail || userDetail || path === "cases" || path === "reports" || path === "pilot-metrics" || caseDetail || caseEvidence)) {
+    if (request.method === "GET" && (path === "games" || gameDetail || userDetail || path === "cases" || path === "reports" || path === "pilot-metrics" || path === "audit/moderation" || caseDetail || caseEvidence)) {
       const query = new URL(request.url).searchParams;
-      const names = path === "reports" ? ["beforeId", "limit", "reportId"] : path === "cases" || /\/evidence$/.test(path) ? ["beforeId", "limit"] : caseDetail ? ["beforeVersion"] : caseEvidence ? [] : path === "games" ? ["cursor", "limit"] : path === "pilot-metrics" ? ["cityId", "from", "to"] : userDetail ? ["beforeVersion"] : ["historyCursor"];
+      const names = path === "reports" ? ["beforeId", "limit", "reportId"] : path === "cases" || /\/evidence$/.test(path) ? ["beforeId", "limit"] : caseDetail ? ["beforeVersion"] : caseEvidence ? [] : path === "games" ? ["cursor", "limit"] : path === "pilot-metrics" ? ["cityId", "from", "to"] : path === "audit/moderation" ? ["surface", "decision", "policy", "model", "checkedFrom", "checkedTo", "beforeCheckedAt", "beforeId", "limit"] : userDetail ? ["beforeVersion"] : ["historyCursor"];
       for (const [name, value] of query) {
         if (!names.includes(name) || value.length > 256 || query.getAll(name).length !== 1)
           return Response.json({code:"ADMIN_INVALID_REQUEST"},{status:400,headers:{"Cache-Control":"no-store"}});
