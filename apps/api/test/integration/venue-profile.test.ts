@@ -64,12 +64,13 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     await apply(pool, "0058");
     // Current Admin external-prepare + public venue text (outside the <0058 harness cut):
     // 0061 text bindings, 0062 idempotency claim_nonce, 0063 admin receipt reservation_state/claim,
-    // 0065 venue_name/address/description surfaces. Skip 0064 (needs 0058 venue_review_decisions).
+    // 0065 venue_name/address/description, 0066 venue_credit_text. Skip 0064 (needs 0058 venue_review_decisions).
     for (const file of [
       "0061_content_moderation_text.sql",
       "0062_content_moderation_comments.sql",
       "0063_moderation_role_review_bindings.sql",
       "0065_moderation_venue_public_fields.sql",
+      "0066_moderation_venue_imports_credits.sql",
     ]) {
       const mid = file.replace(/\.sql$/, "");
       if ((await pool.query("SELECT 1 FROM schema_migrations WHERE id=$1", [mid])).rowCount) continue;

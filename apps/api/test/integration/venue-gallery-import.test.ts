@@ -354,8 +354,10 @@ run("venue gallery import: disposable PostGIS", () => {
     const bytes = await jpeg("rb-append");
     const input = galleryBatch(venueId, [{ bytes, expectedVersion: version }], "rollback-batch");
 
-    const brokenModeration: Pick<ContentModerationService, "approveImage" | "bindImage"> = {
+    const brokenModeration: Pick<ContentModerationService, "approveImage" | "bindImage" | "approveTexts" | "bindTexts"> = {
       approveImage: (...args) => moderation.approveImage(...args),
+      approveTexts: (...args) => moderation.approveTexts(...args),
+      bindTexts: (...args) => moderation.bindTexts(...args),
       bindImage: async () => {
         throw new Error("INJECTED_BIND_FAIL");
       },
@@ -390,10 +392,12 @@ run("venue gallery import: disposable PostGIS", () => {
     const unkInput = galleryBatch(unkVenue, [{
       bytes: unkBytes, expectedVersion: unkVersion, name: "Unk Hall", address: "Unk Address 1",
     }], "unknown-batch");
-    const unknownModeration: Pick<ContentModerationService, "approveImage" | "bindImage"> = {
+    const unknownModeration: Pick<ContentModerationService, "approveImage" | "bindImage" | "approveTexts" | "bindTexts"> = {
       approveImage: async () => {
         throw problem(503, "MODERATION_TEMPORARILY_UNAVAILABLE", "Проверка фото временно недоступна");
       },
+      approveTexts: (...args) => moderation.approveTexts(...args),
+      bindTexts: (...args) => moderation.bindTexts(...args),
       bindImage: (...args) => moderation.bindImage(...args),
     };
     const unkLines: object[] = [];
@@ -500,7 +504,9 @@ run("venue gallery import: disposable PostGIS", () => {
     let resolveEntered!: () => void;
     const enteredProvider = new Promise<void>((resolve) => { resolveEntered = resolve; });
     let entered = false;
-    const holdingModeration: Pick<ContentModerationService, "approveImage" | "bindImage"> = {
+    const holdingModeration: Pick<ContentModerationService, "approveImage" | "bindImage" | "approveTexts" | "bindTexts"> = {
+      approveTexts: (...args) => moderation.approveTexts(...args),
+      bindTexts: (...args) => moderation.bindTexts(...args),
       approveImage: async (...args) => {
         if (!entered) {
           entered = true;

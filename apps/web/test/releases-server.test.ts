@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps sixty confirmed seed deployments including accepted alpha.1–alpha.51 and dedupes identical live rows", () => {
+  it("keeps sixty-one confirmed seed deployments including accepted alpha.1–alpha.52 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(60);
+    expect(seedCount).toBe(61);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -325,6 +325,7 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.49"
       || row.application_version === "0.1.0-alpha.50"
       || row.application_version === "0.1.0-alpha.51"
+      || row.application_version === "0.1.0-alpha.52"
       || row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(true);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
@@ -583,6 +584,7 @@ describe("history seed integrity", () => {
       "2026-11-07T22:12:06Z",
       "2026-11-07T23:32:15Z",
       "2026-11-08T00:08:42Z",
+      "2026-11-08T01:56:35Z",
     ]);
   });
 

@@ -204,6 +204,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0063_moderation_role_review_bindings",
         "0064_moderation_venue_review_bindings",
         "0065_moderation_venue_public_fields",
+        "0066_moderation_venue_imports_credits",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
@@ -387,6 +388,27 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0]?.consrc,
       ).toMatch(/venue_description/);
+      // 0066 #506 B2b venue_credit_text + venue_gallery_item entity kind.
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_approvals'::regclass
+               AND conname = 'content_moderation_approvals_surface_key_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/venue_credit_text/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.content_moderation_bindings'::regclass
+               AND conname = 'content_moderation_bindings_entity_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/venue_gallery_item/);
       expect(
         (
           await pool.query<{ consrc: string }>(
@@ -726,6 +748,57 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       } finally {
         await venuePublicFieldsRollback.query("ROLLBACK");
         venuePublicFieldsRollback.release();
+      }
+      // 0066 B2b non-destructive rollback retains venue_credit_text + venue_gallery_item.
+      const venueCreditsRollback = await pool.connect();
+      try {
+        await venueCreditsRollback.query("BEGIN");
+        await venueCreditsRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/rollback/0066_moderation_venue_imports_credits.sql"),
+            "utf8",
+          ),
+        );
+        expect(
+          (
+            await venueCreditsRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_approvals'::regclass
+                 AND conname = 'content_moderation_approvals_surface_key_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/venue_credit_text/);
+        expect(
+          (
+            await venueCreditsRollback.query<{ consrc: string }>(
+              `SELECT pg_get_constraintdef(oid) AS consrc
+               FROM pg_constraint
+               WHERE conrelid = 'public.content_moderation_bindings'::regclass
+                 AND conname = 'content_moderation_bindings_entity_kind_check'`,
+            )
+          ).rows[0]?.consrc,
+        ).toMatch(/venue_gallery_item/);
+        expect(
+          (
+            await venueCreditsRollback.query(
+              "SELECT 1 FROM schema_migrations WHERE id='0066_moderation_venue_imports_credits'",
+            )
+          ).rowCount,
+        ).toBe(0);
+        await venueCreditsRollback.query(
+          readFileSync(
+            path.join(apiRoot, "migrations/0066_moderation_venue_imports_credits.sql"),
+            "utf8",
+          ),
+        );
+        await venueCreditsRollback.query(
+          `INSERT INTO schema_migrations(id) VALUES ('0066_moderation_venue_imports_credits')
+           ON CONFLICT DO NOTHING`,
+        );
+      } finally {
+        await venueCreditsRollback.query("ROLLBACK");
+        venueCreditsRollback.release();
       }
       const bindingsRollback = await pool.connect();
       try {

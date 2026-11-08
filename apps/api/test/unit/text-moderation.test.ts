@@ -135,20 +135,24 @@ describe("text moderation adapter", () => {
     ).toBe("contextual");
   });
 
-  it("B2a venue public surfaces: identity / factual / prose; not review", () => {
+  it("B2a/B2b venue public surfaces: identity / factual / prose / credit; not review", () => {
     expect(isReviewTextSurface("venue_name")).toBe(false);
     expect(isReviewTextSurface("venue_address")).toBe(false);
     expect(isReviewTextSurface("venue_description")).toBe(false);
+    expect(isReviewTextSurface("venue_credit_text")).toBe(false);
     expect(TEXT_SURFACE_KIND.venue_name).toBe("identity");
     expect(TEXT_SURFACE_KIND.venue_address).toBe("factual");
     expect(TEXT_SURFACE_KIND.venue_description).toBe("prose");
+    expect(TEXT_SURFACE_KIND.venue_credit_text).toBe("identity");
     expect(TEXT_FIELD_HINTS.venue_name).toMatch(/назван/i);
     expect(TEXT_FIELD_HINTS.venue_address).toMatch(/адрес/i);
     expect(TEXT_FIELD_HINTS.venue_description).toMatch(/описание/i);
+    expect(TEXT_FIELD_HINTS.venue_credit_text).toMatch(/подпис|изображен/i);
     expect(evaluateLocalText("Клуб Бадминтон Псков", "identity").kind).toBe("clean");
     expect(evaluateLocalText("ул. Ленина, 10 корпус 2", "factual").kind).toBe("clean");
     expect(evaluateLocalText("José García Court 3", "factual").kind).toBe("clean");
     expect(evaluateLocalText("хуй", "factual").kind).toBe("reject");
+    expect(evaluateLocalText("Фото: Клуб", "identity").kind).toBe("clean");
   });
 
   it("B1b/B1c review surfaces stay prose; soft vs hard category split", () => {

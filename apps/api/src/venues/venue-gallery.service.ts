@@ -7,7 +7,10 @@ import { appendAudit } from "../admin/admin-db";
 import { conflict, notFound, serviceUnavailable, unprocessable } from "../auth/problem";
 import { AvatarService } from "../profiles/avatar.service";
 import { sanitizeAvatar } from "../profiles/avatar-image";
-import { ContentModerationService } from "../moderation/moderation.service";
+import {
+  ContentModerationService,
+  type ImageApproval,
+} from "../moderation/moderation.service";
 import {
   VENUE_GALLERY_MAX,
   mapAdminGalleryItem,
@@ -15,6 +18,13 @@ import {
   type VenueGalleryItemRow,
   type VenueGalleryReceipt,
 } from "./venue-gallery";
+import {
+  bindVenueCreditPublication,
+  emptyVenueImportTextPrep,
+  freeCreditTextCandidate,
+  needsCreditTextPrepare,
+  type VenueImportTextPrep,
+} from "./venue-import-moderation";
 
 type ScopeRow = { version: number; count: number };
 
@@ -188,10 +198,6 @@ export class VenueGalleryService {
     evidence: GalleryEvidence,
     itemId?: string,
   ) {
-    const authority = await this.admin.privilegedMutationPreflight(request, "venue.manage", async (c, a) => {
-      const row = await this.scope(c, a, id);
-      return { venueVersion: row.version, userId: a.principal.user_id, version: a.principal.version, sessionId: a.sessionId };
-    });
     const original = Buffer.isBuffer(upload.body) ? Buffer.from(upload.body) : null;
     if (!original) throw unprocessable("GALLERY_IMAGE_REQUIRED", "Нужно изображение площадки");
     const input = {
@@ -199,27 +205,73 @@ export class VenueGalleryService {
       mime: upload.mime, sha256: createHash("sha256").update(original).digest("hex"),
       evidence,
     };
-    const replay = await this.admin.privilegedReplay<VenueGalleryReceipt>(
-      request, replayKey, "venue.manage", `venue.gallery.${action}`, input,
-      async (c, a) => { await this.scope(c, a, id); },
-    );
-    if (replay) return replay;
-    if (authority.venueVersion !== expectedVersion) {
-      throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
-    }
+    type GalleryUploadPrep = {
+      textPrep: VenueImportTextPrep;
+      imageApproval: ImageApproval;
+      storageKey: string;
+      staged: Awaited<ReturnType<AvatarService["stage"]>>;
+      authority: { userId: string; version: number; sessionId: string };
+    };
+    let authoritySnap: GalleryUploadPrep["authority"] | undefined;
     if (this.processing >= 2) throw serviceUnavailable("AVATAR_BUSY", "Загрузка занята. Попробуйте ещё раз.");
     this.processing++;
     let key: string | undefined;
     try {
-      const sanitized = await sanitizeAvatar(original, upload.mime, "cover");
-      const approval = await this.moderation.approveImage(authority.userId, sanitized, "cover");
-      key = `${randomBytes(32).toString("hex")}.png`;
-      const staged = await this.media.stage(key, sanitized);
-      return await this.admin.privilegedCommand(
-        request, replayKey, "venue.manage", true, `venue.gallery.${action}`, input,
-        async (c, a, keyHash) => {
-          if (a.principal.version !== authority.version || a.sessionId !== authority.sessionId
-            || a.principal.user_id !== authority.userId) {
+      return await this.admin.privilegedRunWithExternalPrepare<GalleryUploadPrep, VenueGalleryReceipt>(
+        request,
+        replayKey,
+        "venue.manage",
+        true,
+        `venue.gallery.${action}`,
+        input,
+        async (c, a) => { await this.scope(c, a, id); },
+        async (c, a) => {
+          const row = await this.scope(c, a, id);
+          if (row.version !== expectedVersion) {
+            throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
+          }
+          if (action === "replace") {
+            const existing = (await c.query(
+              `SELECT id FROM venue_gallery_items WHERE id=$1 AND venue_id=$2 AND active`,
+              [itemId, id],
+            )).rows[0];
+            if (!existing) throw notFound("GALLERY_ITEM_NOT_FOUND", "Изображение площадки не найдено");
+          }
+          authoritySnap = {
+            userId: a.principal.user_id,
+            version: a.principal.version,
+            sessionId: a.sessionId,
+          };
+        },
+        async () => {
+          if (!authoritySnap) throw conflict("VENUE_AUTHORITY_CHANGED", "Права изменились. Обновите данные.");
+          let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
+          // Trusted static «Иллюстрация» skips provider; free photo/logo creditText gates.
+          if (needsCreditTextPrepare(evidence)) {
+            const candidate = freeCreditTextCandidate(evidence.creditText, evidence.creditKind);
+            if (candidate) {
+              const approval = await this.moderation.approveTexts(authoritySnap.userId, [candidate]);
+              textPrep = {
+                approval,
+                committed: [{ surface: "venue_credit_text", text: evidence.creditText }],
+              };
+            }
+          }
+          const sanitized = await sanitizeAvatar(original, upload.mime, "cover");
+          const imageApproval = await this.moderation.approveImage(authoritySnap.userId, sanitized, "cover");
+          key = `${randomBytes(32).toString("hex")}.png`;
+          const staged = await this.media.stage(key, sanitized);
+          return {
+            textPrep,
+            imageApproval,
+            storageKey: key,
+            staged,
+            authority: authoritySnap,
+          };
+        },
+        async (c, a, keyHash, prep) => {
+          if (a.principal.version !== prep.authority.version || a.sessionId !== prep.authority.sessionId
+            || a.principal.user_id !== prep.authority.userId) {
             throw conflict("VENUE_AUTHORITY_CHANGED", "Права изменились. Обновите данные.");
           }
           await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
@@ -227,24 +279,27 @@ export class VenueGalleryService {
           if (row.version !== expectedVersion) {
             throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
           }
-          const bytes = await this.media.verifyStage(c, key!, staged);
-          const approvalId = await this.moderation.bindImage(c, approval, bytes, "cover");
+          const bytes = await this.media.verifyStage(c, prep.storageKey, prep.staged);
+          const approvalId = await this.moderation.bindImage(c, prep.imageApproval, bytes, "cover");
+          let boundItemId: string;
           if (action === "add") {
             if (row.count >= VENUE_GALLERY_MAX) {
               throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
             }
             const position = row.count;
             const isMain = row.count === 0;
-            await c.query(
+            const inserted = (await c.query<{ id: string }>(
               `INSERT INTO venue_gallery_items(
                  venue_id, position, is_main, storage_key, moderation_approval_id, actor_id,
                  credit_kind, credit_text, credit_url, source_url, source_author, permission_basis, source_fingerprint
-               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-              [id, position, isMain, key, approvalId, authority.userId,
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+              [id, position, isMain, prep.storageKey, approvalId, prep.authority.userId,
                 evidence.creditKind, evidence.creditText, evidence.creditUrl,
                 evidence.sourceUrl ?? null, evidence.sourceAuthor ?? null,
                 evidence.permissionBasis, evidence.sourceFingerprint ?? null],
-            );
+            )).rows[0];
+            if (!inserted) throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
+            boundItemId = inserted.id;
           } else {
             const existing = (await c.query<VenueGalleryItemRow>(
               `SELECT * FROM venue_gallery_items WHERE id=$1 AND venue_id=$2 AND active FOR UPDATE`,
@@ -256,23 +311,30 @@ export class VenueGalleryService {
                  credit_kind=$5, credit_text=$6, credit_url=$7, source_url=$8, source_author=$9,
                  permission_basis=$10, source_fingerprint=$11, updated_at=now()
                WHERE id=$1`,
-              [existing.id, key, approvalId, authority.userId,
+              [existing.id, prep.storageKey, approvalId, prep.authority.userId,
                 evidence.creditKind, evidence.creditText, evidence.creditUrl,
                 evidence.sourceUrl ?? null, evidence.sourceAuthor ?? null,
                 evidence.permissionBasis, evidence.sourceFingerprint ?? null],
             );
+            boundItemId = existing.id;
           }
-          await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1", [key]);
-          await this.syncMainCover(c, id, authority.userId);
+          await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1", [prep.storageKey]);
+          await this.syncMainCover(c, id, prep.authority.userId);
           const updated = (await c.query<{ version: number }>(
             `UPDATE venues SET version=version+1, updated_at=now() WHERE id=$1 RETURNING version`,
             [id],
           )).rows[0]!;
+          await bindVenueCreditPublication(c, this.moderation, prep.textPrep, {
+            galleryItemId: boundItemId,
+            resourceVersion: updated.version,
+            actorUserId: prep.authority.userId,
+            actorPrincipalId: a.principalId,
+          });
           const items = await this.listItems(c, id);
           const auditId = await appendAudit(c, {
             actor: a, action: `venue.gallery_${action}`, targetType: "venue", targetId: id,
             permission: "venue.manage", reason: "venue_gallery", keyHash,
-            before: { version: row.version }, after: { version: updated.version, action, itemId: itemId ?? null },
+            before: { version: row.version }, after: { version: updated.version, action, itemId: boundItemId },
           });
           await c.query(
             "INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,$3,$4,$5)",
@@ -280,7 +342,6 @@ export class VenueGalleryService {
           );
           return this.receipt(updated.version, items);
         },
-        async (c, a) => { await this.scope(c, a, id); },
       );
     } finally {
       if (key) await this.media.releaseStage(key);
