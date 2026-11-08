@@ -12,13 +12,18 @@ import {
   withdrawCommunityRating,
   type CommunityOwnVote,
   type CommunityRatingSummary,
+  type VenueCommunityReportSubject,
 } from "../../../lib/venue-community-api";
+import { VenueCommunityReportDialog } from "./VenueCommunityReportDialog";
+import { AuthChooser } from "../players/ProfileComposition";
 import "../../../styles/venue-community.css";
 
 type Props = {
   venueId: string;
   variant?: "full" | "compact";
   signedIn: boolean;
+  /** Exact actor id for report bind — memory only, never placed in storage keys. */
+  actorId?: string | null;
   csrfToken: string | null;
   authReturnPath: string;
   /** Optional parent-batched summary; skips network when provided with ready/error state. */
@@ -37,6 +42,7 @@ export function VenueCommunityRating({
   venueId,
   variant = "full",
   signedIn,
+  actorId = null,
   csrfToken,
   authReturnPath,
   summary: summaryProp,
@@ -53,8 +59,16 @@ export function VenueCommunityRating({
   );
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
   const [status, setStatus] = useState("");
+  const [reportSubject, setReportSubject] = useState<VenueCommunityReportSubject | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
   const compactOnly = variant === "compact";
   const parentOwnsSummary = summaryLoadState !== undefined;
+  const canReportOwn = Boolean(
+    own
+    && !own.withdrawn
+    && own.version >= 1
+    && Number.isInteger(own.version),
+  );
 
   useEffect(() => {
     if (parentOwnsSummary) {
@@ -163,13 +177,40 @@ export function VenueCommunityRating({
     }
   }
 
+  function openAggregateReport() {
+    if (!(signedIn && actorId && csrfToken)) {
+      setAuthOpen(true);
+      return;
+    }
+    setReportSubject({ subjectKind: "aggregate", venueId });
+  }
+
+  function openOwnVoteReport() {
+    if (!(signedIn && actorId && csrfToken) || !canReportOwn || !own) return;
+    setReportSubject({
+      subjectKind: "own_vote",
+      venueId,
+      expectedVersion: own.version,
+    });
+  }
+
   return (
     <section className="gb-venue-community__panel" id="ratings" aria-labelledby={headingId}>
       <div className="gb-venue-community__heading">
         <div>
           <h2 id={headingId}>Оценки сообщества</h2>
-          <p>Впечатления пользователей об этой площадке</p>
+          <p>Впечатления пользователей об этой площадке · не отзывы после игры</p>
         </div>
+        {loadState === "ready" && summary?.state !== "unavailable" ? (
+          <button
+            type="button"
+            className="gb-textbutton gb-venue-community__report-trigger"
+            onClick={openAggregateReport}
+            data-testid="venue-community-report-aggregate"
+          >
+            Пожаловаться на сводку
+          </button>
+        ) : null}
       </div>
       {loadState === "loading" ? (
         <div role="status" aria-busy="true" aria-label="Загрузка">
@@ -256,6 +297,12 @@ export function VenueCommunityRating({
             <p className="gb-venue-community__help">
               Оценка относится к этой площадке по адресу. Комментарий — по желанию в обсуждении ниже.
             </p>
+            {own && own.moderationState === "withheld" && !own.withdrawn ? (
+              <div className="gb-venue-community__notice" role="status">
+                <strong>Оценка снята с публичной сводки</strong>
+                <p>Снятие модерацией нельзя отменить здесь. Можно изменить или убрать оценку, если сервер это разрешает, либо запросить проверку.</p>
+              </div>
+            ) : null}
             <div className="gb-actions" style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap" }}>
               <Button
                 disabled={!selected || saveState === "pending" || (own?.value === selected && !own.withdrawn)}
@@ -266,6 +313,18 @@ export function VenueCommunityRating({
               {own && !own.withdrawn && own.allowedActions.withdraw ? (
                 <button type="button" className="gb-textbutton" onClick={() => void withdraw()}>
                   Убрать мою оценку
+                </button>
+              ) : null}
+              {canReportOwn ? (
+                <button
+                  type="button"
+                  className="gb-textbutton"
+                  onClick={openOwnVoteReport}
+                  data-testid="venue-community-report-own-vote"
+                >
+                  {own?.moderationState === "withheld"
+                    ? "Запросить проверку оценки"
+                    : "Пожаловаться на свою оценку"}
                 </button>
               ) : null}
             </div>
@@ -287,6 +346,21 @@ export function VenueCommunityRating({
             </Button>
           </div>
         )
+      ) : null}
+      {reportSubject ? (
+        <VenueCommunityReportDialog
+          subject={reportSubject}
+          actorId={actorId}
+          csrfToken={csrfToken}
+          authReturnPath={`${authReturnPath}#ratings`}
+          onClose={() => setReportSubject(null)}
+        />
+      ) : null}
+      {authOpen ? (
+        <AuthChooser
+          returnPath={`${authReturnPath}#ratings`}
+          onClose={() => setAuthOpen(false)}
+        />
       ) : null}
     </section>
   );

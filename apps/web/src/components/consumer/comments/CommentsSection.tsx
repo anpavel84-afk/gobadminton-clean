@@ -17,6 +17,8 @@ import { MutationNotice } from "../messages/MessageComposition";
 import { useSocialMutation } from "../messages/useSocialMutation";
 import { AuthChooser, Avatar, ProfileDialog } from "../players/ProfileComposition";
 import { ConversationSafety } from "../messages/ConversationSafety";
+import { VenueCommunityReportDialog } from "../venues/VenueCommunityReportDialog";
+import type { VenueCommunityReportSubject } from "../../../lib/venue-community-api";
 import "../../../styles/comments.css";
 
 const TEXT_MAX = 1000;
@@ -106,6 +108,9 @@ export function CommentsSection({
   const [expandedText, setExpandedText] = useState<Record<string, boolean>>({});
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  /** Venue-community comment report only (kind=venue). Never player/review fallback. */
+  const [reportSubject, setReportSubject] = useState<VenueCommunityReportSubject | null>(null);
+  const [reportAuthOpen, setReportAuthOpen] = useState(false);
   /** Bumps only for guest public reactivation when host me stays null after private-expired. */
   const [guestReadEpoch, setGuestReadEpoch] = useState(0);
   const generation = useRef(0);
@@ -139,6 +144,8 @@ export function CommentsSection({
     if (deleteTarget !== null) setDeleteTarget(null);
     if (menuFor !== null) setMenuFor(null);
     if (status) setStatus("");
+    if (reportSubject !== null) setReportSubject(null);
+    if (reportAuthOpen) setReportAuthOpen(false);
     if (Object.keys(expandedReplies).length) setExpandedReplies({});
     if (Object.keys(replyCursors).length) setReplyCursors({});
     if (Object.keys(expandedText).length) setExpandedText({});
@@ -157,9 +164,26 @@ export function CommentsSection({
     setDeleteTarget(null);
     setMenuFor(null);
     setStatus("");
+    setReportSubject(null);
+    setReportAuthOpen(false);
     setExpandedReplies({});
     setReplyCursors({});
     setExpandedText({});
+  }
+
+  function openVenueCommentReport(item: EntityComment) {
+    if (kind !== "venue" || item.deleted || item.entityKind !== "venue") return;
+    if (!Number.isInteger(item.version) || item.version < 1) return;
+    if (!me?.id || !me.csrfToken) {
+      setReportAuthOpen(true);
+      return;
+    }
+    setReportSubject({
+      subjectKind: "venue_comment",
+      venueId: entityId,
+      commentId: item.id,
+      expectedVersion: item.version,
+    });
   }
 
   function fenceSession() {
@@ -505,6 +529,7 @@ export function CommentsSection({
             <li key={item.id} className="gb-comments__item">
               <CommentArticle
                 item={item}
+                entityKind={kind}
                 expanded={Boolean(expandedText[item.id])}
                 onExpand={() => setExpandedText((prev) => ({ ...prev, [item.id]: true }))}
                 menuOpen={menuFor === item.id}
@@ -535,6 +560,7 @@ export function CommentsSection({
                   setDeleteTarget(item);
                   setMenuFor(null);
                 }}
+                onReportVenueComment={() => openVenueCommentReport(item)}
                 replyOpen={replyFor === item.id}
                 replyDraft={replyDraft}
                 onReplyDraft={setReplyDraft}
@@ -557,6 +583,7 @@ export function CommentsSection({
                 onMoreReplies={() => void loadReplies(item.id, false)}
                 expandedTextMap={expandedText}
                 onExpandText={(id) => setExpandedText((prev) => ({ ...prev, [id]: true }))}
+                onReportVenueReply={(reply) => openVenueCommentReport(reply)}
               />
             </li>
           ))}
@@ -607,12 +634,27 @@ export function CommentsSection({
       {authOpen ? (
         <AuthChooser returnPath={authReturnPath} onClose={() => setAuthOpen(false)} />
       ) : null}
+
+      {reportAuthOpen ? (
+        <AuthChooser returnPath={authReturnPath} onClose={() => setReportAuthOpen(false)} />
+      ) : null}
+
+      {reportSubject && kind === "venue" ? (
+        <VenueCommunityReportDialog
+          subject={reportSubject}
+          actorId={me?.id ?? null}
+          csrfToken={me?.csrfToken ?? null}
+          authReturnPath={authReturnPath}
+          onClose={() => setReportSubject(null)}
+        />
+      ) : null}
     </section>
   );
 }
 
 function CommentArticle({
   item,
+  entityKind,
   expanded,
   onExpand,
   menuOpen,
@@ -628,6 +670,7 @@ function CommentArticle({
   onCancelEdit,
   onSaveEdit,
   onDelete,
+  onReportVenueComment,
   replyOpen,
   replyDraft,
   onReplyDraft,
@@ -639,8 +682,10 @@ function CommentArticle({
   onMoreReplies,
   expandedTextMap,
   onExpandText,
+  onReportVenueReply,
 }: {
   item: EntityComment;
+  entityKind: CommentEntityKind;
   expanded: boolean;
   onExpand: () => void;
   menuOpen: boolean;
@@ -656,6 +701,7 @@ function CommentArticle({
   onCancelEdit: () => void;
   onSaveEdit: () => void;
   onDelete: () => void;
+  onReportVenueComment: () => void;
   replyOpen: boolean;
   replyDraft: string;
   onReplyDraft: (value: string) => void;
@@ -667,6 +713,7 @@ function CommentArticle({
   onMoreReplies: () => void;
   expandedTextMap: Record<string, boolean>;
   onExpandText: (id: string) => void;
+  onReportVenueReply: (reply: EntityComment) => void;
 }) {
   const author = item.author ?? { displayName: "Игрок", publicPlayerId: null, avatar: { uploadedUrl: null, providerUrl: null }, profilePublic: false };
   const canWriteOwn = Boolean(item.mine && canCreate);
@@ -674,6 +721,11 @@ function CommentArticle({
   const canAuthorSafety = Boolean(
     me && !item.mine && author.profilePublic && author.publicPlayerId,
   );
+  /** Venue discussion report only — never game comments or private peer-review paths. */
+  const canVenueCommunityReport = entityKind === "venue"
+    && !item.deleted
+    && Number.isInteger(item.version)
+    && item.version >= 1;
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menuOpen) return;
@@ -707,7 +759,7 @@ function CommentArticle({
               )}
               <time dateTime={item.createdAt}>{commentTime(item.createdAt)}{item.edited ? " · изменён" : ""}</time>
             </div>
-            {canWriteOwn || canAuthorSafety ? (
+            {canWriteOwn || canAuthorSafety || canVenueCommunityReport ? (
               <div className="gb-comment__menu" ref={menuRef}>
                 <button
                   type="button"
@@ -726,6 +778,20 @@ function CommentArticle({
                         <button type="button" role="menuitem" disabled={locked} onClick={onStartEdit}>Изменить</button>
                         <button type="button" role="menuitem" className="danger" disabled={locked} onClick={onDelete}>Удалить</button>
                       </>
+                    ) : null}
+                    {canVenueCommunityReport ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={locked}
+                        data-testid="venue-community-report-comment"
+                        onClick={() => {
+                          onCloseMenu();
+                          onReportVenueComment();
+                        }}
+                      >
+                        Пожаловаться
+                      </button>
                     ) : null}
                     {canAuthorSafety && me && author.publicPlayerId ? (
                       <div className="gb-comment__safety" role="none">
@@ -814,6 +880,19 @@ function CommentArticle({
                         )}
                         <time dateTime={reply.createdAt}>{commentTime(reply.createdAt)}</time>
                       </div>
+                      {entityKind === "venue"
+                        && !reply.deleted
+                        && Number.isInteger(reply.version)
+                        && reply.version >= 1 ? (
+                          <button
+                            type="button"
+                            className="gb-textbutton"
+                            data-testid="venue-community-report-reply"
+                            onClick={() => onReportVenueReply(reply)}
+                          >
+                            Пожаловаться
+                          </button>
+                        ) : null}
                     </header>
                     <CommentBody
                       text={reply.body ?? ""}

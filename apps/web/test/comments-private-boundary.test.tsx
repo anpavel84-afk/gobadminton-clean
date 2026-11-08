@@ -860,7 +860,8 @@ describe("#394 comments private boundary", () => {
     expect(html).toContain("Удалить");
     expect(html).toContain("Ваш комментарий");
     expect(html).not.toContain("Заблокировать");
-    expect(html).not.toContain("Пожаловаться");
+    // Venue community report is allowed on own visible venue comments; player-author safety is not.
+    expect(html).toContain('data-testid="venue-community-report-comment"');
     expect(html).not.toContain("Действие в отношении автора");
   });
 

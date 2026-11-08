@@ -33,6 +33,16 @@
   color: var(--gb-ink-soft, #536159);
 }
 
+.gb-venue-community__report-trigger {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.gb-venue-community__report-form {
+  display: grid;
+  gap: 14px;
+}
+
 .gb-venue-community__rating-row {
   display: flex;
   align-items: center;

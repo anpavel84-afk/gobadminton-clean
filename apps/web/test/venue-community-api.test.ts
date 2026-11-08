@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildVenueCommunityReportBody,
   compactCommunitySummaryText,
   fetchCommunitySummaries,
   formatCommunityAverage,
   isCommunityOwnVoteResponse,
+  isVenueCommunityReportReceipt,
+  venueCommunityReportSubjectMatchesBody,
   voteCountLabel,
 } from "../src/lib/venue-community-api";
 
@@ -61,5 +64,53 @@ describe("#507 I1 venue-community-api", () => {
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toContain("/v1/venue-community-summaries?venueIds=");
     expect(isCommunityOwnVoteResponse({ summary: page.items[0], own: null })).toBe(true);
     expect(isCommunityOwnVoteResponse({ summary: page.items[0] })).toBe(false);
+  });
+
+  it("builds exact venue_community report bodies for aggregate/own_vote/comment", () => {
+    const venueId = "10000000-0000-4000-8000-000000000001";
+    const aggregate = buildVenueCommunityReportBody(
+      { subjectKind: "aggregate", venueId },
+      "spam",
+      "  note  ",
+    );
+    expect(aggregate).toEqual({
+      targetKind: "venue_community",
+      subjectKind: "aggregate",
+      venueId,
+      reasonCode: "spam",
+      detail: "note",
+    });
+    expect(venueCommunityReportSubjectMatchesBody(
+      { subjectKind: "aggregate", venueId },
+      aggregate,
+    )).toBe(true);
+    const own = buildVenueCommunityReportBody(
+      { subjectKind: "own_vote", venueId, expectedVersion: 4 },
+      "other",
+      null,
+    );
+    expect(own.expectedVersion).toBe(4);
+    expect(own).not.toHaveProperty("commentId");
+    const comment = buildVenueCommunityReportBody(
+      {
+        subjectKind: "venue_comment",
+        venueId,
+        commentId: "20000000-0000-4000-8000-000000000001",
+        expectedVersion: 2,
+      },
+      "harassment",
+      null,
+    );
+    expect(comment).toMatchObject({
+      subjectKind: "venue_comment",
+      commentId: "20000000-0000-4000-8000-000000000001",
+      expectedVersion: 2,
+    });
+    expect(isVenueCommunityReportReceipt({
+      reportId: "r",
+      status: "submitted",
+      createdAt: "2026-11-08T00:00:00.000Z",
+    })).toBe(true);
+    expect(isVenueCommunityReportReceipt({ reportId: "r", status: "open" })).toBe(false);
   });
 });

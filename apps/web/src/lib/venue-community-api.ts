@@ -1,3 +1,5 @@
+import { apiFetch } from "./api-client";
+
 export type CommunityAggregateState = "empty" | "available" | "unavailable";
 
 export type CommunityRatingSummary = {
@@ -7,6 +9,145 @@ export type CommunityRatingSummary = {
   count: number | null;
   state: CommunityAggregateState;
 };
+
+/** Consumer POST /v1/reports targetKind=venue_community — exact backend subject kinds. */
+export type VenueCommunityReportSubjectKind =
+  | "aggregate"
+  | "own_vote"
+  | "venue_comment";
+
+export type VenueCommunityReportReasonCode =
+  | "harassment"
+  | "spam"
+  | "fake_profile"
+  | "inappropriate"
+  | "other";
+
+export type CreateVenueCommunityReportRequest = {
+  targetKind: "venue_community";
+  subjectKind: VenueCommunityReportSubjectKind;
+  venueId: string;
+  /** Required when subjectKind=venue_comment. */
+  commentId?: string;
+  /** Required when subjectKind is own_vote or venue_comment. Aggregate omits revision. */
+  expectedVersion?: number;
+  reasonCode: VenueCommunityReportReasonCode;
+  /** Private complainant input — never logged or sent to providers. */
+  detail?: string | null;
+};
+
+export type VenueCommunityReportReceipt = {
+  reportId: string;
+  status: "submitted";
+  createdAt: string;
+};
+
+export const VENUE_COMMUNITY_REPORT_REASON_OPTIONS: ReadonlyArray<{
+  code: VenueCommunityReportReasonCode;
+  label: string;
+}> = [
+  { code: "harassment", label: "Оскорбления / давление" },
+  { code: "spam", label: "Спам" },
+  { code: "fake_profile", label: "Поддельный профиль" },
+  { code: "inappropriate", label: "Неприемлемый контент" },
+  { code: "other", label: "Другое" },
+];
+
+export type VenueCommunityReportSubject =
+  | { subjectKind: "aggregate"; venueId: string }
+  | { subjectKind: "own_vote"; venueId: string; expectedVersion: number }
+  | {
+    subjectKind: "venue_comment";
+    venueId: string;
+    commentId: string;
+    expectedVersion: number;
+  };
+
+export function buildVenueCommunityReportBody(
+  subject: VenueCommunityReportSubject,
+  reasonCode: VenueCommunityReportReasonCode,
+  detail: string | null,
+): CreateVenueCommunityReportRequest {
+  const trimmed = detail?.trim() ? detail.trim().slice(0, 1000) : null;
+  if (subject.subjectKind === "aggregate") {
+    return {
+      targetKind: "venue_community",
+      subjectKind: "aggregate",
+      venueId: subject.venueId,
+      reasonCode,
+      detail: trimmed,
+    };
+  }
+  if (subject.subjectKind === "own_vote") {
+    return {
+      targetKind: "venue_community",
+      subjectKind: "own_vote",
+      venueId: subject.venueId,
+      expectedVersion: subject.expectedVersion,
+      reasonCode,
+      detail: trimmed,
+    };
+  }
+  return {
+    targetKind: "venue_community",
+    subjectKind: "venue_comment",
+    venueId: subject.venueId,
+    commentId: subject.commentId,
+    expectedVersion: subject.expectedVersion,
+    reasonCode,
+    detail: trimmed,
+  };
+}
+
+export function isVenueCommunityReportReceipt(
+  value: unknown,
+): value is VenueCommunityReportReceipt {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.reportId === "string"
+    && row.status === "submitted"
+    && typeof row.createdAt === "string"
+  );
+}
+
+/** Typed POST /v1/reports for venue_community — CSRF + Idempotency-Key required. */
+export function createVenueCommunityReport(
+  input: CreateVenueCommunityReportRequest,
+  csrfToken: string,
+  idempotencyKey: string,
+) {
+  return apiFetch<VenueCommunityReportReceipt>("/v1/reports", {
+    method: "POST",
+    csrfToken,
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+export function venueCommunityReportSubjectMatchesBody(
+  subject: VenueCommunityReportSubject,
+  body: unknown,
+): boolean {
+  if (!body || typeof body !== "object") return false;
+  const row = body as Record<string, unknown>;
+  if (row.targetKind !== "venue_community") return false;
+  if (row.venueId !== subject.venueId) return false;
+  if (row.subjectKind !== subject.subjectKind) return false;
+  if (subject.subjectKind === "aggregate") {
+    return row.commentId === undefined && row.expectedVersion === undefined;
+  }
+  if (subject.subjectKind === "own_vote") {
+    return (
+      row.commentId === undefined
+      && row.expectedVersion === subject.expectedVersion
+    );
+  }
+  return (
+    row.commentId === subject.commentId
+    && row.expectedVersion === subject.expectedVersion
+  );
+}
 
 export type CommunityOwnVote = {
   venueId: string;
