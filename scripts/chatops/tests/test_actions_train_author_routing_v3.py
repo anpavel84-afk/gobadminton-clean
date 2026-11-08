@@ -2,10 +2,39 @@
 from dataclasses import replace
 from pathlib import Path
 import sys
+from contextlib import contextmanager
 import unittest
+from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tools/train'))
-import author_routing as ar
+_TRAIN_DIR = Path(__file__).resolve().parents[3] / 'tools/train'
+# Generic Lean import names also exist in legacy actions_train. Restore the
+# complete import cache and path after discovery and after this module's tests.
+_LEAN_NAMES = {p.stem for p in _TRAIN_DIR.glob('*.py')
+               if not p.stem.startswith('test') and p.stem != '__init__'}
+
+
+@contextmanager
+def _lean_import_scope(modules=None):
+    with patch.dict(sys.modules), patch.object(sys, 'path', [str(_TRAIN_DIR), *sys.path]):
+        for name in list(sys.modules):
+            if name.split('.')[0] in _LEAN_NAMES:
+                sys.modules.pop(name)
+        sys.modules.update(modules or {})
+        yield
+
+
+with _lean_import_scope():
+    import author_routing as ar
+    _LEAN_MODULES = {name: sys.modules[name] for name in _LEAN_NAMES if name in sys.modules}
+
+
+def setUpModule():
+    # Methods under test use absolute imports lazily as well as at load time.
+    scope = _lean_import_scope(_LEAN_MODULES)
+    scope.__enter__()
+    unittest.addModuleCleanup(scope.__exit__, None, None, None)
+
+
 
 BASE = 'a' * 40
 SOURCE = 'b' * 40

@@ -15,26 +15,54 @@ from __future__ import annotations
 import json
 import os
 import sys
+from contextlib import contextmanager
 import tempfile
 import textwrap
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from unittest.mock import patch
 
 import base64
 import hashlib
 import inspect
 
-import providers
-import run as lean_run
-import host as lean_host
-import client as lean_client
-import monitor as lean_mon
-import live as lean_live
-import install as lean_install
+_TRAIN_DIR = Path(__file__).resolve().parent
+# Generic Lean import names also exist in legacy actions_train. Restore the
+# complete import cache and path after discovery and after this module's tests.
+_LEAN_NAMES = {p.stem for p in _TRAIN_DIR.glob('*.py')
+               if not p.stem.startswith('test') and p.stem != '__init__'}
+
+
+@contextmanager
+def _lean_import_scope(modules=None):
+    with patch.dict(sys.modules), patch.object(sys, 'path', [str(_TRAIN_DIR), *sys.path]):
+        for name in list(sys.modules):
+            if name.split('.')[0] in _LEAN_NAMES:
+                sys.modules.pop(name)
+        sys.modules.update(modules or {})
+        yield
+
+
+with _lean_import_scope():
+    import providers
+    import run as lean_run
+    import host as lean_host
+    import client as lean_client
+    import monitor as lean_mon
+    import live as lean_live
+    import install as lean_install
+    _LEAN_MODULES = {name: sys.modules[name] for name in _LEAN_NAMES if name in sys.modules}
+
+
+def setUpModule():
+    # Methods under test use absolute imports lazily as well as at load time.
+    scope = _lean_import_scope(_LEAN_MODULES)
+    scope.__enter__()
+    unittest.addModuleCleanup(scope.__exit__, None, None, None)
+
+
 
 
 OWNER = 318610566
@@ -968,14 +996,17 @@ class LiveBindingsTests(unittest.TestCase):
     def test_host_entry_default_uses_live_adapters_mock_boundary(self):
         """Deterministic mock subprocess boundary — no live model/gh calls."""
         with tempfile.TemporaryDirectory() as td:
-            adapters, state = make_flow_adapters(td, shas=[_sha(3)])
+            host_sha = _sha(100)  # Synthetic installed identity, same as fixture base.
+            adapters, state = make_flow_adapters(td, shas=[_sha(3)], frozen_base=host_sha)
             admissions = []
             comment, _ = owner_task_comment(issue=720, priority=5)
             adm = lean_run.admit_comment(
                 comment, {'number': 720, 'state': 'open'}, {'id': REPO_ID})
             admissions.append(adm)
             adapters.fetch_admissions = lambda: admissions
-            with mock.patch.object(lean_run, 'default_live_adapters', return_value=adapters):
+            with mock.patch.object(lean_run, 'default_live_adapters', return_value=adapters), \
+                    mock.patch.object(lean_host, 'read_config', return_value={}), \
+                    mock.patch.object(lean_host, 'installed_release_sha', return_value=host_sha):
                 # wake_budget must cover AUTHOR_TIMEOUT+margin and QA_TIMEOUT+margin
                 out = lean_run.run_once(
                     {'event_name': 'schedule', 'wake_budget_s': 2400},
