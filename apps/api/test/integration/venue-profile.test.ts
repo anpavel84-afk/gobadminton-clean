@@ -60,15 +60,45 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     pool = new Pool({ connectionString: url.href, max: 10 });
     // Current AdminService requires 0057 auth_method; historical upgrade DBs below keep their bounds.
     await apply(pool, "0058");
+    // Current Admin external-prepare + public venue text (outside the <0058 harness cut):
+    // 0061 text bindings, 0062 idempotency claim_nonce, 0063 admin receipt reservation_state/claim,
+    // 0065 venue_name/address/description surfaces. Skip 0064 (needs 0058 venue_review_decisions).
+    for (const file of [
+      "0061_content_moderation_text.sql",
+      "0062_content_moderation_comments.sql",
+      "0063_moderation_role_review_bindings.sql",
+      "0065_moderation_venue_public_fields.sql",
+    ]) {
+      const mid = file.replace(/\.sql$/, "");
+      if ((await pool.query("SELECT 1 FROM schema_migrations WHERE id=$1", [mid])).rowCount) continue;
+      const c = await pool.connect();
+      try {
+        await c.query("BEGIN");
+        await c.query(await readFile(path.join(dir, file), "utf8"));
+        await c.query("INSERT INTO schema_migrations(id) VALUES($1)", [mid]);
+        await c.query("COMMIT");
+      } catch (error) {
+        await c.query("ROLLBACK");
+        throw error;
+      } finally {
+        c.release();
+      }
+    }
     const env = loadEnv({ ...process.env, DATABASE_URL: url.href, PUBLIC_API_ORIGIN: "http://127.0.0.1:19441",
       PUBLIC_WEB_ORIGIN: "http://127.0.0.1:19442", ALLOWED_WEB_ORIGINS: "http://127.0.0.1:19442",
-      ADMIN_INTERNAL_ENABLED: "1", ADMIN_ORIGIN: origin, ADMIN_AUTH_PEPPER: pepper });
+      ADMIN_INTERNAL_ENABLED: "1", ADMIN_ORIGIN: origin, ADMIN_AUTH_PEPPER: pepper,
+      CONTENT_MODERATION_PROVIDER: "fake",
+      CONTENT_MODERATION_FINGERPRINT_SECRET: "venue-profile-synthetic-fingerprint!!!!" });
     const mod = await Test.createTestingModule({ imports: [buildTestCoreModule(env, pool), AdminModule, VenuesModule] }).compile();
     app = mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter({ logger: false }));
     await app.register(cookie); app.setGlobalPrefix("v1"); app.useGlobalFilters(new ProblemExceptionFilter());
     await app.init(); await app.getHttpAdapter().getInstance().ready(); manager = await actor("content_manager");
   }, 120000);
-  beforeEach(async () => { await pool.query("DELETE FROM admin_rate_windows"); });
+  // Disposable fixture only: isolate synthetic admin/text budgets between unrelated cases (p4 pattern).
+  beforeEach(async () => {
+    await pool.query("DELETE FROM admin_rate_windows");
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
+  });
   afterAll(async () => {
     try { await app?.close(); } finally {
       try { await pool?.end(); } finally {

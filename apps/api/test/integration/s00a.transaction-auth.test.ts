@@ -6,7 +6,7 @@ import {
 import { Test } from "@nestjs/testing";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildTestCoreModule } from "./test-core.module";
 import { uniqueSuffix } from "./unique";
 import { AuthModule } from "../../src/auth/auth.module";
@@ -158,6 +158,13 @@ describeIntegration("S-00A transaction/auth reconciliation", () => {
   afterAll(async () => {
     await app?.close();
     await pool?.end();
+  });
+
+  // Disposable fixture only: shared synthetic OAuth actors reuse venue-text moderation budgets
+  // across unrelated cases; isolate budgets between independent cases (p4 pattern).
+  // Never touches live/claims/UNKNOWN accounting; no production limit/backoff/date changes.
+  beforeEach(async () => {
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
   });
 
   async function login(provider: "vk" | "yandex"): Promise<Session> {

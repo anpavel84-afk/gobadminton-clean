@@ -166,6 +166,10 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
     await pool.query("DELETE FROM social_pairs");
     await pool.query("DELETE FROM player_looking_intents");
     await pool.query("DELETE FROM player_social_profiles");
+    // Disposable fixture only: shared synthetic OAuth actors accumulate text budgets across cases
+    // after venue/public-text moderation; isolate budgets between independent cases (p4 pattern).
+    // Never touches live/claims/UNKNOWN accounting; production caps stay enforced.
+    await pool.query("DELETE FROM content_moderation_rate_budgets");
   });
 
   async function login(provider: "vk" | "yandex"): Promise<Session> {

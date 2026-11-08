@@ -62,8 +62,11 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       await migrate(file);
     }
     await migrate("0045_venue_gallery.sql");
-    // Current GamesModule text publication requires 0061 bindings (outside the N-1 outcomes cut).
+    // Current Venues/Games text publication needs independent deps outside the N-1 outcomes cut:
+    // 0061 bindings, 0062 external-prepare claim_nonce, 0065 venue public-field surfaces.
     await migrate("0061_content_moderation_text.sql");
+    await migrate("0062_content_moderation_comments.sql");
+    await migrate("0065_moderation_venue_public_fields.sql");
     env = loadEnv({
       NODE_ENV: "test",
       APP_ENV: "local",
@@ -103,10 +106,12 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       await client.query("BEGIN");
       await client.query(await readFile(path.join(migrations, "rollback/0042_game_outcomes.sql"), "utf8"));
       expect((await client.query("SELECT to_regclass('game_outcomes') AS name")).rows[0].name).toBeNull();
-      // Explicit ledger after independent 0045/0061 + rolled-back 0042: 0001–0041, 0045, 0061.
-      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(43);
+      // Explicit ledger after independent 0045/0061/0062/0065 + rolled-back 0042: 0001–0041, 0045, 0061, 0062, 0065.
+      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(45);
       expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
       expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0061_content_moderation_text'")).rowCount).toBe(1);
+      expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0062_content_moderation_comments'")).rowCount).toBe(1);
+      expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0065_moderation_venue_public_fields'")).rowCount).toBe(1);
       expect((await client.query("SELECT 1 FROM schema_migrations WHERE id='0042_game_outcomes'")).rowCount).toBe(0);
     } finally {
       await client.query("ROLLBACK");
