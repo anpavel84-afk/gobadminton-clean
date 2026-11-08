@@ -23813,7 +23813,8 @@
               }
             }
           }
-        }
+        },
+        "x-client-surface": "admin-only"
       }
     }
   },
