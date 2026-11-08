@@ -86,7 +86,7 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.title).toMatch(/мобильн|действи|обычн|тренировк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/стрелк|Подробнее|обычн|тренер|мобильн/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
@@ -828,10 +828,13 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders current named limits, not first-alpha false email/postgame/push claims", async () => {
+  it("renders the three current fixes and limits without first-alpha false email/postgame/push claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
+    expect(html).toContain("карточки обычной игры и тренировки");
+    expect(html).toContain("не требует подтверждать её самому себе");
+    expect(html).toContain("не разрывается внутри слова");
     for (const item of CURRENT_NAMED_RELEASE.known_limitations) {
       expect(html).toContain(item);
     }

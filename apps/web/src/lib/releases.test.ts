@@ -29,7 +29,14 @@ describe("releases current descriptor literals", () => {
     expect(prose).toMatch(/обычн|тренер|тренировк/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
+    const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
+    expect(fixes).toMatch(/собственн.*посещени/i);
+    expect(fixes).toMatch(/не требует подтверждать.*самому себе/i);
+    expect(fixes).toMatch(/не показывает уведомление.*свою отметку/i);
+    expect(fixes).toMatch(/авторство.*реальные подтверждения.*история.*оспорить/i);
+    expect(fixes).toMatch(/блокировки.*не разрывается внутри слова/i);
+    expect(fixes).not.toMatch(/#526|карта игроков|карту игроков/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.title).toMatch(/мобильн|действи|обычн|тренировк/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
