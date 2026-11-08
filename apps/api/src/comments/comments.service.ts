@@ -10,9 +10,7 @@ import {
   type TextBatchApproval,
 } from "../moderation/moderation.service";
 import {
-  avatarForUser,
   emptyAvatar,
-  safeProviderAvatar,
   safeUploadedAvatar,
 } from "../profiles/avatar-presentation";
 import {
@@ -837,10 +835,6 @@ export class CommentsService {
       )
     ).rows[0];
     if (!row) unavailable();
-    // Ensure avatar helper path stays available for future enrichment.
-    if (row.author_public_ok && row.author_user_id) {
-      await avatarForUser(client, row.author_user_id).catch(() => emptyAvatar());
-    }
     return this.projectRow(row, viewerId);
   }
 
@@ -880,7 +874,7 @@ export class CommentsService {
       displayName: safePublicDisplayName(row.author_display_name),
       avatar: {
         uploadedUrl: safeUploadedAvatar(row.author_avatar_key),
-        providerUrl: safeProviderAvatar(row.author_provider_url),
+        providerUrl: null,
       },
       profilePublic: true,
     };

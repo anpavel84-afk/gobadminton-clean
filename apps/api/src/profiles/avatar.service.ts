@@ -14,6 +14,7 @@ import { APP_ENV, DATABASE_POOL } from "../tokens";
 import { AVATAR_KEY, sanitizeAvatar } from "./avatar-image";
 import { coverForUser } from "./cover-presentation";
 import { avatarForUser } from "./avatar-presentation";
+import { projectOwnAvatarReceipt } from "./public-avatar-projection";
 
 @Injectable()
 export class AvatarService implements OnModuleInit, OnModuleDestroy {
@@ -63,7 +64,8 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
     const replay = await this.mutations.findReplay<{
       version: number; avatar?: Awaited<ReturnType<typeof avatarForUser>>; cover?: Awaited<ReturnType<typeof coverForUser>>;
     }>(receipt);
-    if (replay) return replay.body;
+    // Legacy stored receipts may embed providerUrl; quarantine at DTO boundary without rewriting history.
+    if (replay) return projectOwnAvatarReceipt(replay.body);
     if (upload && (snapshot?.version ?? 0) !== expected) throw conflict("VERSION_CONFLICT", "Профиль изменился. Обновите данные.");
     if (upload && this.processing >= 2) throw serviceUnavailable("AVATAR_BUSY", "Загрузка занята. Попробуйте ещё раз.");
     if (upload) this.processing++;
@@ -110,7 +112,7 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
         if (key) await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [key]);
         return { statusCode: 200, body: { version: updated.rows[0]!.version, ...await presentation(client) } };
       } });
-      return result.body;
+      return projectOwnAvatarReceipt(result.body);
     } finally {
       // Winners remove their journal atomically. Losers/rollbacks keep it,
       // including ambiguous COMMIT; GC checks references before deleting bytes.

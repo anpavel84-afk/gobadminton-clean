@@ -11,6 +11,7 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
 import { IdempotencyService } from "../common/idempotency.service";
+import { projectGameOrganizerAvatar } from "../profiles/public-avatar-projection";
 import { parseMapQuery } from "./games-map.query";
 import { GamesService, type CreateGameInput } from "./games.service";
 
@@ -94,7 +95,7 @@ export class GamesController {
       body,
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectGameOrganizerAvatar(result.body);
   }
 
   @Get(":gameId")
@@ -125,7 +126,7 @@ export class GamesController {
       body.expectedVersion as number,
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectGameOrganizerAvatar(result.body);
   }
 
   @Post(":gameId/cancel")
@@ -150,6 +151,6 @@ export class GamesController {
       body.reason ?? "",
     );
     reply.status(result.statusCode);
-    return result.body;
+    return projectGameOrganizerAvatar(result.body);
   }
 }

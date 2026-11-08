@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.55 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.55");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.38.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.56 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.56");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.39.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,10 +64,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/жалоб|сообщен/i);
-    expect(currentProse).toMatch(/согласи|выбранн/i);
-    expect(currentProse).toMatch(/обращен|источник/i);
-    expect(currentProse).toMatch(/внешн/i);
+    expect(currentProse).toMatch(/VK|Яндекс|фото/i);
+    expect(currentProse).toMatch(/журнал|метаданн|модерац/i);
+    expect(currentProse).toMatch(/инициал|загружен/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -86,16 +85,16 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/личн|сообщен|черновик|защит/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/VK|Яндекс|метаданн|модерац|фото/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(
-      /личн|сообщен|чат|локальн|черновик|проверк/i,
+      /VK|Яндекс|Radar|инициал|журнал|модерац/i,
     );
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce|138|140|PROD|DEV/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /модерац|жалоб|сообщен|внешн|приёмк|юридическ|2027/i,
+      /журнал|сохранённ|проверк|приёмк|юридическ|2027/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /#507|\bB2b\b|\bB2a\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
@@ -252,10 +251,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(58);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(59);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(63);
+    ).toBe(64);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.55"
+      && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
+      && row.deployments[0]?.release_id === "r42455870420-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T06:58:58Z"
+      && row.deployments[0]?.api_digest === "sha256:59d94a8d7a0a199693e1aa388e7a5ca5b032df6735a19b716612477460703b06"
+      && row.deployments[0]?.web_digest === "sha256:e2cba1cdaddd2b2779c7075e487b428239ea6e5d5c0988e9b88dcdd4a6721ee5"
+      && row.api_contract_version === "0.38.0"
+      && row.title === "Жалоба на выбранное сообщение с явным согласием и чтением источника в обращении"
+      && row.additions.length === 1
+      && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.54"
       && row.source_sha === "cce49ce72daed8c81f89ddc845deabbb8ac5d7aa"

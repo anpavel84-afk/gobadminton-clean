@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.55" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.56" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.38.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.39.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,16 +424,17 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.55",
-  "title": "Жалоба на выбранное сообщение с явным согласием и чтением источника в обращении",
+  "application_version": "0.1.0-alpha.56",
+  "title": "Скрытие непроверенных фото из VK/Яндекс и журнал метаданных модерации",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [
-    "В личной переписке и чате игры можно пожаловаться на одно уже загруженное входящее сообщение с явным согласием на передачу назначенному специалисту; в обращении источник читается только пока исходное сообщение ещё доступно по своему сроку"
+    "В публичных профилях, комментариях и Radar больше не показываются непроверенные фото из VK и Яндекса — остаются загруженное фото или инициалы; вход через эти сервисы работает как раньше",
+    "В разделе безопасности кабинета доступен ограниченный журнал сохранённых решений модерации без сырого текста и изображений"
   ],
   "fixes": [],
   "known_limitations": [
-    "Это не полная модерация переписки: внешняя проверка личных текстов выключена; при отсутствии конечного срока хранения исходного сообщения точный текст для разбора недоступен",
+    "Журнал показывает только сохранённые разрешения и отправки на проверку; отклонённые и временные попытки, а также бюджеты туда не входят",
     "На тестовом стенде до 1 января 2027 UTC временно сняты количественные ограничения на проверки фото и текста; сами проверки содержимого продолжаются",
     "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены; служебный разбор отзывов после обычного входа ещё не проверен",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
@@ -2187,6 +2188,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-08T05:18:57Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.55",
+    "title": "Жалоба на выбранное сообщение с явным согласием и чтением источника в обращении",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "В личной переписке и чате игры можно пожаловаться на одно уже загруженное входящее сообщение с явным согласием на передачу назначенному специалисту; в обращении источник читается только пока исходное сообщение ещё доступно по своему сроку"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Это не полная модерация переписки: внешняя проверка личных текстов выключена; при отсутствии конечного срока хранения исходного сообщения точный текст для разбора недоступен",
+      "На тестовом стенде до 1 января 2027 UTC временно сняты количественные ограничения на проверки фото и текста; сами проверки содержимого продолжаются",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены; служебный разбор отзывов после обычного входа ещё не проверен",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "edc6744ce0f96dcaa922dafcd373fdab8e482bf8",
+    "version_label": "0.1.0-alpha.55",
+    "api_contract_version": "0.38.0",
+    "deployments": [
+      {
+        "release_id": "r42455870420-a1",
+        "api_digest": "sha256:59d94a8d7a0a199693e1aa388e7a5ca5b032df6735a19b716612477460703b06",
+        "web_digest": "sha256:e2cba1cdaddd2b2779c7075e487b428239ea6e5d5c0988e9b88dcdd4a6721ee5",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-08T06:58:58Z",
         "kind": "pipeline"
       }
     ]

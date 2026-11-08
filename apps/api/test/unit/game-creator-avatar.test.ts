@@ -6,7 +6,7 @@ describe("game creator avatar projection", () => {
   it("uses creator authorization before reading current media; never returns identity or keys", async () => {
     const key = "a".repeat(64) + ".png";
     const query = vi.fn().mockResolvedValueOnce({ rows: [{ user_id: "creator" }] })
-      .mockResolvedValueOnce({ rows: [{ avatar_key: key, provider_url: "https://avatars.yandex.net/photo" }] });
+      .mockResolvedValueOnce({ rows: [{ avatar_key: key }] });
     const avatar = await avatarForGameCreator({ query } as unknown as Pool, "game", true, "viewer");
     expect(query.mock.calls[0]![1]).toEqual(["game", "viewer"]);
     const sql = query.mock.calls[0]![0];
@@ -15,8 +15,10 @@ describe("game creator avatar projection", () => {
     expect(sql).not.toContain("trainer");
     for (const guard of ["u.status = 'active'", "p.directory_visible", "p.social_eligible", "user_restrictions", "profile.public", "user_blocks", "b.blocker_user_id = $2", "b.blocked_user_id = $2"]) expect(sql).toContain(guard);
     expect(query.mock.calls[1]![1]).toEqual(["creator"]);
-    expect(avatar).toEqual({ uploadedUrl: `/v1/media/avatars/${key}`, providerUrl: "https://avatars.yandex.net/photo" });
+    // D1: unreviewed providerUrl quarantined; uploaded M1 key retained.
+    expect(avatar).toEqual({ uploadedUrl: `/v1/media/avatars/${key}`, providerUrl: null });
     expect(JSON.stringify(avatar)).not.toContain("creator");
+    expect(JSON.stringify(avatar)).not.toContain("yandex");
   });
   it("fails closed when creator profile is unavailable", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
@@ -28,9 +30,9 @@ describe("game creator avatar projection", () => {
   });
   it("reads replacement and removal afresh without a projection cache", async () => {
     const query = vi.fn().mockResolvedValueOnce({ rows: [{ user_id: "creator" }] })
-      .mockResolvedValueOnce({ rows: [{ avatar_key: "b".repeat(64) + ".png", provider_url: null }] })
+      .mockResolvedValueOnce({ rows: [{ avatar_key: "b".repeat(64) + ".png" }] })
       .mockResolvedValueOnce({ rows: [{ user_id: "creator" }] })
-      .mockResolvedValueOnce({ rows: [{ avatar_key: null, provider_url: null }] });
+      .mockResolvedValueOnce({ rows: [{ avatar_key: null }] });
     const db = { query } as unknown as Pool;
     expect((await avatarForGameCreator(db, "game", true)).uploadedUrl).toContain("b".repeat(64));
     expect(await avatarForGameCreator(db, "game", true)).toEqual(emptyAvatar());

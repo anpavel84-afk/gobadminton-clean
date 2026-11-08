@@ -427,20 +427,22 @@ run("M1 direct avatar prepublication",()=>{
     await writeFile(path.join(media,orphan),source);await app.close();await start();await app.get(AvatarService).cleanup();
     expect(await readdir(media)).not.toContain(orphan);expect((await app.inject({method:"GET",url:oldUrl})).statusCode).toBe(200);
   });
-  it("legacy and VK/Yandex fallback require no moderation; arbitrary URLs and unknown provider are denied",async()=>{
+  it("legacy uploaded read needs no approval; public projection quarantines unreviewed VK/Yandex providerUrl",async()=>{
     await pool.query("UPDATE player_social_profiles SET avatar_moderation_approval_id=NULL WHERE user_id=$1",[userId]);
     expect((await row()).avatar_moderation_approval_id).toBeNull();expect((await app.inject({method:"GET",url:oldUrl})).statusCode).toBe(200);
     fake.fixture=async()=>{throw new ModerationProviderError("unavailable");};
-    for(const [provider,url,expected] of [["vk","https://sun9.userapi.com/synthetic.png","https://sun9.userapi.com/synthetic.png"],
-      ["yandex","https://avatars.yandex.net/synthetic.png","https://avatars.yandex.net/synthetic.png"],
-      ["yandex","https://evil.invalid/avatar.png",null],["future","https://avatars.yandex.net/synthetic.png",null]] as const){
+    for(const [provider,url] of [["vk","https://sun9.userapi.com/synthetic.png"],
+      ["yandex","https://avatars.yandex.net/synthetic.png"],
+      ["yandex","https://evil.invalid/avatar.png"],["future","https://avatars.yandex.net/synthetic.png"]] as const){
       await pool.query("DELETE FROM external_identities WHERE user_id=$1",[userId]);
       // Current schema deliberately only accepts VK/Yandex; verify future identity cannot even be registered.
       if(provider==="future") {await expect(pool.query("INSERT INTO external_identities(user_id,provider_key,issuer_namespace,subject,avatar_url) VALUES ($1::uuid,$2,'m1',$1::text,$3)",[userId,provider,url])).rejects.toThrow();continue;}
       await pool.query("INSERT INTO external_identities(user_id,provider_key,issuer_namespace,subject,avatar_url) VALUES ($1::uuid,$2,'m1',$1::text,$3)",[userId,provider,url]);
-      expect((await avatarForUser(pool,userId)).providerUrl).toBe(expected);
+      // D1: public projection never emits providerUrl; stored metadata may still exist.
+      expect((await avatarForUser(pool,userId)).providerUrl).toBeNull();
     }
     const response=await remove();expect(response.statusCode).toBe(200);expect(fake.calls).toBe(0);
+    expect(response.json().avatar.providerUrl).toBeNull();
     await pool.query("DELETE FROM external_identities WHERE user_id=$1",[userId]);
   });
 });

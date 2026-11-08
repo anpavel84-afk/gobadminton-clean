@@ -78,3 +78,39 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 export const emptyBodySchema = z.object({}).strict();
+
+/** Bounded metadata-only moderation history filters (D2). No free-text / raw body search. */
+export const moderationAuditQuerySchema = z
+  .object({
+    surface: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/).optional(),
+    decision: z.enum(["allow", "review"]).optional(),
+    policy: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
+    model: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
+    checkedFrom: z.iso.datetime({ offset: true }).optional(),
+    checkedTo: z.iso.datetime({ offset: true }).optional(),
+    beforeCheckedAt: z.iso.datetime({ offset: true }).optional(),
+    beforeId: uuid.optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(25),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasCursorTime = value.beforeCheckedAt !== undefined;
+    const hasCursorId = value.beforeId !== undefined;
+    if (hasCursorTime !== hasCursorId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "beforeCheckedAt and beforeId must be supplied together",
+      });
+    }
+    if (
+      value.checkedFrom &&
+      value.checkedTo &&
+      Date.parse(value.checkedFrom) > Date.parse(value.checkedTo)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "checkedFrom must be <= checkedTo",
+      });
+    }
+  });
+export type ModerationAuditQuery = z.infer<typeof moderationAuditQuerySchema>;

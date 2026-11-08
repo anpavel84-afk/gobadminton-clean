@@ -29,3 +29,8 @@
 .pilot-formulas{list-style:none;padding:0;margin:0 0 24px;display:grid;gap:12px}
 .pilot-formulas li{display:grid;gap:4px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .pilot-formulas span{color:var(--ink-soft);font-size:14px}
+.moderation-journal{margin-top:32px;padding-top:24px;border-top:1px solid var(--line);min-width:0}
+.moderation-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px 16px}
+.moderation-scope{font-size:14px;margin:16px 0}
+.moderation-bindings{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:4px}
+.moderation-bindings li{color:var(--ink-soft);font-size:14px;overflow-wrap:anywhere}

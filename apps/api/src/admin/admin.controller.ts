@@ -17,6 +17,7 @@ import { AdminService } from "./admin.service";
 import {
   commandSchema,
   emptyBodySchema,
+  moderationAuditQuerySchema,
   optionsSchema,
   parse,
   verifySchema,
@@ -111,5 +112,10 @@ export class AdminController {
   @Header("Cache-Control", "no-store")
   audit(@Req() request: FastifyRequest) {
     return this.admin.audit(request);
+  }
+  @Get("audit/moderation")
+  @Header("Cache-Control", "no-store")
+  moderationAudit(@Req() request: FastifyRequest, @Query() query: unknown) {
+    return this.admin.moderationAudit(request, parse(moderationAuditQuerySchema, query));
   }
 }

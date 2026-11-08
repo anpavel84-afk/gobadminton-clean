@@ -82,7 +82,7 @@ run("owned avatar integration", () => {
   });
   it("upload strips metadata and exposes only sanitized current derivative",async()=>{
     const r=await upload(); expect(r.statusCode,r.body).toBe(200);const body=r.json();version=body.version;url=body.avatar.uploadedUrl;
-    expect(body.avatar.providerUrl).toBe('https://avatars.yandex.net/test');
+    expect(body.avatar.providerUrl).toBeNull();
     expect(url).toMatch(/^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/);
     const read=await app.inject({method:'GET',url});expect(read.statusCode).toBe(200);expect(read.headers['x-content-type-options']).toBe('nosniff');expect(read.headers['cache-control']).toBe('no-store');
     const meta=await sharp(read.rawPayload).metadata();expect(meta).toMatchObject({width:512,height:512,format:'png'});expect(meta.exif).toBeUndefined();expect(meta.icc).toBeUndefined();
@@ -130,7 +130,7 @@ run("owned avatar integration", () => {
   });
   it("remove restores provider and retires owned bytes",async()=>{
     const r=await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...headers,'idempotency-key':randomUUID(),'x-profile-version':String(version)}});expect(r.statusCode).toBe(200);version=r.json().version;
-    expect(r.json().avatar).toEqual({uploadedUrl:null,providerUrl:'https://avatars.yandex.net/test'});expect((await app.inject({method:'GET',url})).statusCode).toBe(404);
+    expect(r.json().avatar).toEqual({uploadedUrl:null,providerUrl:null});expect((await app.inject({method:'GET',url})).statusCode).toBe(404);
     expect(await readdir(media)).not.toContain(url.split('/').pop());
   });
   it("revoked session rejected, missing file honest 404, account deletion transition queues cleanup",async()=>{

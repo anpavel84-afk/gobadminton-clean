@@ -2,6 +2,7 @@ import { coverForUser, type PlayerCover } from "./cover-presentation";
 import { withdrawGeographicConsent } from "../radar/geographic-consent";
 import { unrestrictedSql } from "../restrictions/policy";
 import { avatarForUser, avatarForPlayer, type PlayerAvatar } from "./avatar-presentation";
+import { projectOwnProfileAvatar } from "./public-avatar-projection";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -218,7 +219,9 @@ export class ProfilesService {
       },
     };
     const replay = await this.mutations.findReplay<OwnSocialProfileDto>(receipt);
-    if (replay) return replay;
+    if (replay) {
+      return { statusCode: replay.statusCode, body: projectOwnProfileAvatar(replay.body) };
+    }
 
     const existing = await this.loadProfile(this.pool, userId);
     let seededName: string | undefined;
@@ -563,7 +566,9 @@ export class ProfilesService {
       },
     };
     const replay = await this.mutations.findReplay<OwnSocialProfileDto>(receipt);
-    if (replay) return replay;
+    if (replay) {
+      return { statusCode: replay.statusCode, body: projectOwnProfileAvatar(replay.body) };
+    }
 
     // OFF remains provider-independent. ON requires full stored name/bio snapshot.
     let textApproval: TextBatchApproval | null = null;

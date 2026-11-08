@@ -12,6 +12,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
 import { IdempotencyService } from "../common/idempotency.service";
 import { unprocessable } from "../auth/problem";
+import { projectConversationRequestAvatar } from "../profiles/public-avatar-projection";
 import { MessagingService } from "./messaging.service";
 
 @Controller("conversations")
@@ -44,7 +45,8 @@ export class ConversationsController {
       body,
     );
     reply.status(result.statusCode);
-    return result.body;
+    // Legacy first-DM receipts may embed providerUrl; quarantine without rewriting history bytes.
+    return projectConversationRequestAvatar(result.body);
   }
 
   @Get()
