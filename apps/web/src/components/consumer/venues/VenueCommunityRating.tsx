@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useEffect, useId, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { Button } from "../Button";
 import {
   compactCommunitySummaryText,
   fetchCommunitySummaries,
   fetchOwnCommunityRating,
   formatCommunityAverage,
+  invalidateCommunitySummaries,
+  isCommunityRatingMutationError,
   upsertCommunityRating,
   voteCountLabel,
   withdrawCommunityRating,
@@ -22,20 +24,40 @@ type Props = {
   venueId: string;
   variant?: "full" | "compact";
   signedIn: boolean;
-  /** Exact actor id for report bind — memory only, never placed in storage keys. */
+  /** Exact actor id for report/vote bind — memory only, never placed in storage keys. */
   actorId?: string | null;
   csrfToken: string | null;
   authReturnPath: string;
-  /** Optional parent-batched summary; skips network when provided with ready/error state. */
+  /** Optional parent-batched summary; compact skips network when provided with ready/error state. */
   summary?: CommunityRatingSummary | null;
-  summaryLoadState?: "loading" | "ready" | "error";
+  summaryLoadState?: "idle" | "loading" | "ready" | "error";
   href?: string | null;
+  /**
+   * When false, compact renders plain text (safe inside a parent <button>).
+   * Default true adds the labelled link to `#ratings`.
+   */
+  linkToRatings?: boolean;
   onSummaryChange?: (summary: CommunityRatingSummary) => void;
+};
+
+type VotePending = {
+  kind: "upsert" | "withdraw";
+  key: string;
+  venueId: string;
+  actorId: string;
+  csrfToken: string;
+  expectedVersion: number;
+  value: number | null;
 };
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `vc-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function ratingsHref(authReturnPath: string, venueId: string, href: string | null): string {
+  if (href) return href;
+  return `/venues/${encodeURIComponent(venueId)}#ratings`;
 }
 
 export function VenueCommunityRating({
@@ -48,6 +70,7 @@ export function VenueCommunityRating({
   summary: summaryProp,
   summaryLoadState,
   href = null,
+  linkToRatings = true,
   onSummaryChange,
 }: Props) {
   const headingId = useId();
@@ -55,14 +78,41 @@ export function VenueCommunityRating({
   const [own, setOwn] = useState<CommunityOwnVote | null>(null);
   const [selected, setSelected] = useState(0);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">(
-    summaryLoadState ?? (summaryProp ? "ready" : "loading"),
+    summaryLoadState === "ready" || summaryLoadState === "error"
+      ? summaryLoadState
+      : summaryProp
+        ? "ready"
+        : "loading",
   );
-  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error" | "unknown">("idle");
   const [status, setStatus] = useState("");
   const [reportSubject, setReportSubject] = useState<VenueCommunityReportSubject | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const compactOnly = variant === "compact";
   const parentOwnsSummary = summaryLoadState !== undefined;
+  const onSummaryChangeRef = useRef(onSummaryChange);
+  onSummaryChangeRef.current = onSummaryChange;
+  const generation = useRef(0);
+  const pendingRef = useRef<VotePending | null>(null);
+  const userPickedRef = useRef(false);
+  const authRef = useRef({ venueId, actorId: actorId ?? null, csrfToken });
+  // Render-time fence: reset private own/success before effects when identity drifts.
+  if (
+    authRef.current.venueId !== venueId
+    || authRef.current.actorId !== (actorId ?? null)
+    || authRef.current.csrfToken !== csrfToken
+  ) {
+    authRef.current = { venueId, actorId: actorId ?? null, csrfToken };
+    pendingRef.current = null;
+    userPickedRef.current = false;
+    if (saveState === "saved" || saveState === "pending" || saveState === "unknown") {
+      setSaveState("idle");
+      setStatus("");
+    }
+    if (own) setOwn(null);
+    if (selected) setSelected(0);
+  }
+
   const canReportOwn = Boolean(
     own
     && !own.withdrawn
@@ -71,109 +121,229 @@ export function VenueCommunityRating({
   );
 
   useEffect(() => {
+    const gen = ++generation.current;
+    const controller = new AbortController();
+
     if (parentOwnsSummary) {
       setSummary(summaryProp ?? null);
-      setLoadState(summaryLoadState ?? "ready");
-      return;
+      if (summaryLoadState === "loading" || summaryLoadState === "idle") {
+        setLoadState("loading");
+      } else if (summaryLoadState === "error") {
+        setLoadState("error");
+      } else {
+        setLoadState("ready");
+      }
+      // Compact guests: parent summary only — never /me.
+      if (compactOnly || !signedIn) {
+        setOwn(null);
+        setSelected(0);
+        return () => controller.abort();
+      }
+      // Full panel with parent-owned public summary still reads own for authorized actor.
+      void fetchOwnCommunityRating(venueId, controller.signal)
+        .then((mine) => {
+          if (gen !== generation.current || controller.signal.aborted) return;
+          if (
+            authRef.current.venueId !== venueId
+            || authRef.current.actorId !== (actorId ?? null)
+            || authRef.current.csrfToken !== csrfToken
+          ) {
+            return;
+          }
+          setOwn(mine.own);
+          setSummary(mine.summary);
+          onSummaryChangeRef.current?.(mine.summary);
+          if (!userPickedRef.current) {
+            setSelected(mine.own?.value && !mine.own.withdrawn ? mine.own.value : 0);
+          }
+          setLoadState("ready");
+        })
+        .catch(() => {
+          if (gen !== generation.current || controller.signal.aborted) return;
+          // Public parent summary stays; own panel shows error via empty own.
+          setOwn(null);
+          if (!userPickedRef.current) setSelected(0);
+        });
+      return () => controller.abort();
     }
-    const controller = new AbortController();
+
     setLoadState("loading");
     setSaveState("idle");
     setStatus("");
+    setOwn(null);
+    userPickedRef.current = false;
+    setSelected(0);
     void (async () => {
       try {
         // Compact surfaces never call /me (guest-safe; own-vote is VenuePage full panel only).
         const page = await fetchCommunitySummaries([venueId], controller.signal);
+        if (gen !== generation.current || controller.signal.aborted) return;
         const next = page.items[0] ?? null;
-        if (controller.signal.aborted) return;
         setSummary(next);
-        if (next) onSummaryChange?.(next);
+        if (next) onSummaryChangeRef.current?.(next);
         if (!compactOnly && signedIn) {
           const mine = await fetchOwnCommunityRating(venueId, controller.signal);
-          if (controller.signal.aborted) return;
+          if (gen !== generation.current || controller.signal.aborted) return;
+          if (
+            authRef.current.venueId !== venueId
+            || authRef.current.actorId !== (actorId ?? null)
+            || authRef.current.csrfToken !== csrfToken
+          ) {
+            return;
+          }
           setOwn(mine.own);
           setSummary(mine.summary);
-          onSummaryChange?.(mine.summary);
-          setSelected(mine.own?.value && !mine.own.withdrawn ? mine.own.value : 0);
-        } else {
-          setOwn(null);
-          setSelected(0);
+          onSummaryChangeRef.current?.(mine.summary);
+          if (!userPickedRef.current) {
+            setSelected(mine.own?.value && !mine.own.withdrawn ? mine.own.value : 0);
+          }
         }
         setLoadState("ready");
       } catch {
-        if (!controller.signal.aborted) setLoadState("error");
+        if (gen !== generation.current || controller.signal.aborted) return;
+        setLoadState("error");
       }
     })();
     return () => controller.abort();
-  }, [venueId, signedIn, compactOnly, parentOwnsSummary, summaryProp, summaryLoadState, onSummaryChange]);
+  }, [
+    venueId,
+    signedIn,
+    compactOnly,
+    parentOwnsSummary,
+    summaryProp,
+    summaryLoadState,
+    actorId,
+    csrfToken,
+  ]);
 
-  if (compactOnly) {
-    const text = loadState === "loading"
-      ? "Оценки загружаются…"
-      : loadState === "error"
-        ? "Оценки временно недоступны"
-        : compactCommunitySummaryText(summary);
-    const body = (
-      <span className={`gb-venue-community__compact${summary?.state === "available" ? "" : " is-muted"}`}>
-        {text}
-      </span>
+  function contextMatches(pending: VotePending): boolean {
+    return (
+      pending.venueId === venueId
+      && pending.actorId === (actorId ?? "")
+      && pending.csrfToken === (csrfToken ?? "")
+      && Boolean(actorId && csrfToken)
     );
-    if (href) {
-      return (
-        <a className="gb-venue-community__compact-link" href={href}>
-          {body}
-          <span className="gb-venue-community__compact-cta">Оценки и обсуждение</span>
-        </a>
+  }
+
+  function applyVoteResult(result: { own: CommunityOwnVote | null; summary: CommunityRatingSummary }) {
+    setOwn(result.own);
+    setSummary(result.summary);
+    onSummaryChangeRef.current?.(result.summary);
+    setSelected(result.own?.value && !result.own.withdrawn ? result.own.value : 0);
+    const touch = [venueId];
+    if (result.summary.canonicalVenueId) touch.push(result.summary.canonicalVenueId);
+    if (result.own?.canonicalVenueId) touch.push(result.own.canonicalVenueId);
+    invalidateCommunitySummaries(touch);
+  }
+
+  async function runPending(pending: VotePending, isRetry: boolean) {
+    if (!contextMatches(pending) || saveState === "pending") return;
+    setSaveState("pending");
+    setStatus(pending.kind === "withdraw" ? "Убираем оценку…" : "Сохраняем оценку…");
+    const gen = generation.current;
+    try {
+      const result = pending.kind === "withdraw"
+        ? await withdrawCommunityRating({
+          venueId: pending.venueId,
+          expectedVersion: pending.expectedVersion,
+          csrfToken: pending.csrfToken,
+          idempotencyKey: pending.key,
+        })
+        : await upsertCommunityRating({
+          venueId: pending.venueId,
+          value: pending.value ?? 0,
+          expectedVersion: pending.expectedVersion,
+          csrfToken: pending.csrfToken,
+          idempotencyKey: pending.key,
+        });
+      if (gen !== generation.current || !contextMatches(pending)) return;
+      pendingRef.current = null;
+      applyVoteResult(result);
+      setSaveState("saved");
+      setStatus(pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена");
+    } catch (error) {
+      if (gen !== generation.current || !contextMatches(pending)) return;
+      if (isCommunityRatingMutationError(error) && error.kind === "network") {
+        // UNKNOWN: keep same key + frozen body + authorized context; no automatic new POST.
+        pendingRef.current = pending;
+        setSaveState("unknown");
+        setStatus(
+          isRetry
+            ? "Результат прошлой отправки не подтверждён. Проверьте актуальную оценку или повторите с тем же запросом."
+            : "Отправка не подтверждена. Не создаём новый запрос — проверьте результат или повторите тот же.",
+        );
+        return;
+      }
+      pendingRef.current = null;
+      setSaveState("error");
+      setStatus(
+        pending.kind === "withdraw"
+          ? "Не удалось убрать оценку"
+          : "Оценку пока не удалось сохранить",
       );
     }
-    return body;
   }
 
   async function saveVote() {
-    if (!csrfToken || !selected || saveState === "pending") return;
-    setSaveState("pending");
-    setStatus("Сохраняем оценку…");
-    try {
-      const expectedVersion = own?.version ?? 0;
-      const result = await upsertCommunityRating({
-        venueId,
-        value: selected,
-        expectedVersion,
-        csrfToken,
-        idempotencyKey: newIdempotencyKey(),
-      });
-      setOwn(result.own);
-      setSummary(result.summary);
-      onSummaryChange?.(result.summary);
-      setSelected(result.own?.value ?? selected);
-      setSaveState("saved");
-      setStatus("Оценка сохранена");
-    } catch {
-      setSaveState("error");
-      setStatus("Оценку пока не удалось сохранить");
+    if (!csrfToken || !actorId || !selected || saveState === "pending" || saveState === "unknown") {
+      return;
     }
+    if (own && !own.withdrawn && own.value === selected) return;
+    if (own && !own.withdrawn && !own.allowedActions.update) return;
+    if (own?.withdrawn && !own.allowedActions.upsert) return;
+
+    const pending: VotePending = {
+      kind: "upsert",
+      key: newIdempotencyKey(),
+      venueId,
+      actorId,
+      csrfToken,
+      expectedVersion: own?.version ?? 0,
+      value: selected,
+    };
+    pendingRef.current = pending;
+    await runPending(pending, false);
   }
 
   async function withdraw() {
-    if (!csrfToken || !own || own.withdrawn || !own.allowedActions.withdraw) return;
+    if (!csrfToken || !actorId || !own || own.withdrawn || !own.allowedActions.withdraw) return;
+    if (saveState === "pending") return;
+    const pending: VotePending = {
+      kind: "withdraw",
+      key: newIdempotencyKey(),
+      venueId,
+      actorId,
+      csrfToken,
+      expectedVersion: own.version,
+      value: null,
+    };
+    pendingRef.current = pending;
+    await runPending(pending, false);
+  }
+
+  async function retryUnknown() {
+    const pending = pendingRef.current;
+    if (!pending || !contextMatches(pending) || saveState !== "unknown") return;
+    await runPending(pending, true);
+  }
+
+  async function reconcileUnknown() {
+    const pending = pendingRef.current;
+    if (!pending || !contextMatches(pending) || !csrfToken || !actorId) return;
+    const gen = generation.current;
     setSaveState("pending");
-    setStatus("Убираем оценку…");
+    setStatus("Проверяем актуальную оценку…");
     try {
-      const result = await withdrawCommunityRating({
-        venueId,
-        expectedVersion: own.version,
-        csrfToken,
-        idempotencyKey: newIdempotencyKey(),
-      });
-      setOwn(result.own);
-      setSummary(result.summary);
-      onSummaryChange?.(result.summary);
-      setSelected(0);
+      const mine = await fetchOwnCommunityRating(venueId);
+      if (gen !== generation.current || !contextMatches(pending)) return;
+      pendingRef.current = null;
+      applyVoteResult(mine);
       setSaveState("saved");
-      setStatus("Оценка убрана");
+      setStatus("Показана актуальная оценка с сервера");
     } catch {
-      setSaveState("error");
-      setStatus("Не удалось убрать оценку");
+      if (gen !== generation.current) return;
+      setSaveState("unknown");
+      setStatus("Не удалось проверить результат. Можно повторить тот же запрос.");
     }
   }
 
@@ -193,6 +363,43 @@ export function VenueCommunityRating({
       expectedVersion: own.version,
     });
   }
+
+  if (compactOnly) {
+    const text = loadState === "loading"
+      ? "Оценки загружаются…"
+      : loadState === "error"
+        ? "Оценки временно недоступны"
+        : compactCommunitySummaryText(summary);
+    const body = (
+      <span
+        className={`gb-venue-community__compact${summary?.state === "available" ? "" : " is-muted"}`}
+        data-testid="venue-community-compact"
+      >
+        {text}
+      </span>
+    );
+    if (!linkToRatings) return body;
+    const link = ratingsHref(authReturnPath, venueId, href);
+    return (
+      <a className="gb-venue-community__compact-link" href={link} data-testid="venue-community-compact-link">
+        {body}
+        <span className="gb-venue-community__compact-cta">Оценки и обсуждение</span>
+      </a>
+    );
+  }
+
+  const upsertAllowed = own && !own.withdrawn
+    ? own.allowedActions.update
+    : own?.withdrawn
+      ? own.allowedActions.upsert
+      : true;
+  const saveDisabled = !selected
+    || saveState === "pending"
+    || saveState === "unknown"
+    || (own?.value === selected && !own.withdrawn)
+    || !csrfToken
+    || !actorId
+    || upsertAllowed === false;
 
   return (
     <section className="gb-venue-community__panel" id="ratings" aria-labelledby={headingId}>
@@ -253,7 +460,7 @@ export function VenueCommunityRating({
       )}
 
       {loadState === "ready" && summary?.state !== "unavailable" ? (
-        signedIn && csrfToken ? (
+        signedIn && csrfToken && actorId ? (
           <div className="gb-venue-community__own">
             <strong style={{ fontSize: 14 }}>
               {own && !own.withdrawn && own.value
@@ -274,10 +481,14 @@ export function VenueCommunityRating({
                   aria-label={`${n} из 5`}
                   tabIndex={selected === n || (!selected && n === 1) ? 0 : -1}
                   className={`gb-venue-community__star${n <= selected ? " is-selected" : ""}`}
+                  disabled={saveState === "pending" || saveState === "unknown"}
                   onClick={() => {
+                    userPickedRef.current = true;
                     setSelected(n);
-                    setSaveState("idle");
-                    setStatus("");
+                    if (saveState !== "unknown") {
+                      setSaveState("idle");
+                      setStatus("");
+                    }
                   }}
                   onKeyDown={(event) => {
                     if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
@@ -305,13 +516,18 @@ export function VenueCommunityRating({
             ) : null}
             <div className="gb-actions" style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap" }}>
               <Button
-                disabled={!selected || saveState === "pending" || (own?.value === selected && !own.withdrawn)}
+                disabled={saveDisabled}
                 onClick={() => void saveVote()}
               >
                 {own && !own.withdrawn ? "Сохранить изменение" : "Отправить оценку"}
               </Button>
               {own && !own.withdrawn && own.allowedActions.withdraw ? (
-                <button type="button" className="gb-textbutton" onClick={() => void withdraw()}>
+                <button
+                  type="button"
+                  className="gb-textbutton"
+                  disabled={saveState === "pending" || saveState === "unknown"}
+                  onClick={() => void withdraw()}
+                >
                   Убрать мою оценку
                 </button>
               ) : null}
@@ -333,6 +549,19 @@ export function VenueCommunityRating({
             ) : null}
             {saveState === "error" ? (
               <div className="gb-venue-community__notice is-error" role="alert">{status}</div>
+            ) : null}
+            {saveState === "unknown" ? (
+              <div className="gb-venue-community__notice is-error" role="alert" data-testid="venue-community-vote-unknown">
+                <strong>{status}</strong>
+                <div className="gb-actions" style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <button type="button" className="gb-textbutton" onClick={() => void reconcileUnknown()}>
+                    Проверить актуальную оценку
+                  </button>
+                  <button type="button" className="gb-textbutton" onClick={() => void retryUnknown()}>
+                    Повторить тот же запрос
+                  </button>
+                </div>
+              </div>
             ) : null}
             {saveState === "saved" ? (
               <div className="gb-venue-community__notice is-success" role="status">{status}</div>

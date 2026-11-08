@@ -201,6 +201,47 @@ type BatchWaiter = {
 let batchQueue: BatchWaiter[] = [];
 let batchFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Public-only summary invalidation bus (module listeners, not a global app store).
+ * Payloads are venue IDs only — never actor, CSRF, own-vote, or private text.
+ */
+type SummaryInvalidationListener = (venueIds: readonly string[]) => void;
+const summaryInvalidationListeners = new Set<SummaryInvalidationListener>();
+
+export function subscribeCommunitySummaryInvalidation(
+  listener: SummaryInvalidationListener,
+): () => void {
+  summaryInvalidationListeners.add(listener);
+  return () => {
+    summaryInvalidationListeners.delete(listener);
+  };
+}
+
+/** After a confirmed public aggregate change: refresh mounted canonical + alias surfaces. */
+export function invalidateCommunitySummaries(venueIds: readonly string[]): void {
+  const unique = [...new Set(venueIds.filter(Boolean))];
+  if (unique.length === 0) return;
+  for (const listener of summaryInvalidationListeners) listener(unique);
+}
+
+export class CommunityRatingMutationError extends Error {
+  readonly status: number | null;
+  readonly kind: "http" | "network" | "invalid";
+
+  constructor(message: string, status: number | null, kind: "http" | "network" | "invalid") {
+    super(message);
+    this.name = "CommunityRatingMutationError";
+    this.status = status;
+    this.kind = kind;
+  }
+}
+
+export function isCommunityRatingMutationError(
+  value: unknown,
+): value is CommunityRatingMutationError {
+  return value instanceof CommunityRatingMutationError;
+}
+
 async function executeSummariesRequest(
   venueIds: string[],
   signal?: AbortSignal,
@@ -287,27 +328,39 @@ export async function upsertCommunityRating(input: {
   expectedVersion: number;
   csrfToken: string;
   idempotencyKey: string;
+  signal?: AbortSignal;
 }): Promise<CommunityOwnVoteResponse> {
-  const response = await fetch(
-    `/v1/venues/${encodeURIComponent(input.venueId)}/community-rating`,
-    {
-      method: "PUT",
-      cache: "no-store",
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
-        "x-csrf-token": input.csrfToken,
-        "idempotency-key": input.idempotencyKey,
+  let response: Response;
+  try {
+    response = await fetch(
+      `/v1/venues/${encodeURIComponent(input.venueId)}/community-rating`,
+      {
+        method: "PUT",
+        cache: "no-store",
+        credentials: "include",
+        signal: input.signal,
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": input.csrfToken,
+          "idempotency-key": input.idempotencyKey,
+        },
+        body: JSON.stringify({
+          value: input.value,
+          expectedVersion: input.expectedVersion,
+        }),
       },
-      body: JSON.stringify({
-        value: input.value,
-        expectedVersion: input.expectedVersion,
-      }),
-    },
-  );
-  if (!response.ok) throw new Error("community_upsert_failed");
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new CommunityRatingMutationError("community_upsert_network", null, "network");
+  }
+  if (!response.ok) {
+    throw new CommunityRatingMutationError("community_upsert_failed", response.status, "http");
+  }
   const body = await response.json();
-  if (!isCommunityOwnVoteResponse(body)) throw new Error("community_upsert_invalid");
+  if (!isCommunityOwnVoteResponse(body)) {
+    throw new CommunityRatingMutationError("community_upsert_invalid", response.status, "invalid");
+  }
   return body;
 }
 
@@ -316,24 +369,36 @@ export async function withdrawCommunityRating(input: {
   expectedVersion: number;
   csrfToken: string;
   idempotencyKey: string;
+  signal?: AbortSignal;
 }): Promise<CommunityOwnVoteResponse> {
-  const response = await fetch(
-    `/v1/venues/${encodeURIComponent(input.venueId)}/community-rating`,
-    {
-      method: "DELETE",
-      cache: "no-store",
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
-        "x-csrf-token": input.csrfToken,
-        "idempotency-key": input.idempotencyKey,
+  let response: Response;
+  try {
+    response = await fetch(
+      `/v1/venues/${encodeURIComponent(input.venueId)}/community-rating`,
+      {
+        method: "DELETE",
+        cache: "no-store",
+        credentials: "include",
+        signal: input.signal,
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": input.csrfToken,
+          "idempotency-key": input.idempotencyKey,
+        },
+        body: JSON.stringify({ expectedVersion: input.expectedVersion }),
       },
-      body: JSON.stringify({ expectedVersion: input.expectedVersion }),
-    },
-  );
-  if (!response.ok) throw new Error("community_withdraw_failed");
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new CommunityRatingMutationError("community_withdraw_network", null, "network");
+  }
+  if (!response.ok) {
+    throw new CommunityRatingMutationError("community_withdraw_failed", response.status, "http");
+  }
   const body = await response.json();
-  if (!isCommunityOwnVoteResponse(body)) throw new Error("community_withdraw_invalid");
+  if (!isCommunityOwnVoteResponse(body)) {
+    throw new CommunityRatingMutationError("community_withdraw_invalid", response.status, "invalid");
+  }
   return body;
 }
 

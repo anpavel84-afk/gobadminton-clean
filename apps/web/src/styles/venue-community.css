@@ -171,6 +171,26 @@
   color: var(--gb-ink-soft, #536159);
 }
 
+.gb-venue-community__compact-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+
+.gb-venue-community__compact-link:hover .gb-venue-community__compact-cta,
+.gb-venue-community__compact-link:focus-visible .gb-venue-community__compact-cta {
+  text-decoration: underline;
+}
+
+.gb-venue-community__compact-cta {
+  font-size: 12px;
+  color: var(--gb-ink-soft, #536159);
+}
+
 .gb-venue-community__limitation {
   font-size: 12px;
   color: var(--gb-ink-soft, #536159);

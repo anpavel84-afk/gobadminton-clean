@@ -10,8 +10,8 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.57 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.57");
+  it("bumps current descriptor to alpha.58 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.58");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -51,6 +51,21 @@ describe("releases current descriptor literals", () => {
           row.deployments[0]?.web_digest ===
             "sha256:7457fe35b99d31b9bc48e1dbf862ff39a23eb1a11cf471dfeb2dd1e5cb2932e4" &&
           row.title === "Скрытие непроверенных фото из VK/Яндекс и журнал метаданных модерации" &&
+          row.api_contract_version === "0.39.0",
+      ),
+    ).toBe(true);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.57" &&
+          row.source_sha === "895e97fd5f60e4eaaa493cb911cd7d3d7fdd4c22" &&
+          row.deployments[0]?.release_id === "r42486594258-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-08T13:53:05Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:dde4e16f576ec4df2c69cee584dbfa91bba89afe99fa338378f9a629bc148b55" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:e9824a215dbc8746331d02181e38441883a6fc4348e1ded143c878c363fd6e2f" &&
+          row.title === "Карточка тренера в ленте и выравнивание кнопок действий в карточках игроков" &&
           row.api_contract_version === "0.39.0",
       ),
     ).toBe(true);

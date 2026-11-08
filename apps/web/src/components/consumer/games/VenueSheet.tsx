@@ -16,6 +16,8 @@ import { DesktopInspectorGame } from "./DesktopInspectorGame";
 import { VenueGameActions } from "./VenueGameActions";
 import { useVenuePopupModalLifecycle } from "./VenuePopup";
 import { useDesktopMapInspector } from "./DesktopMapInspector";
+import { VenueCommunityRating } from "../venues/VenueCommunityRating";
+import type { CommunityRatingSummary } from "../../../lib/venue-community-api";
 import "../../../styles/venue-popup.css";
 import "../../../styles/desktop-overlays.css";
 
@@ -45,7 +47,7 @@ export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; time
   </button>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
@@ -55,6 +57,10 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   onCoverRetry?: () => void;
   galleryIndex?: number;
   onGalleryIndexChange?: (index: number, item: GalleryItem | null) => void;
+  communitySummary?: CommunityRatingSummary | null;
+  communitySummaryState?: "idle" | "loading" | "ready" | "error";
+  /** False while compact preview already shows the same summary. */
+  showCommunityRating?: boolean;
 }) {
   const desktop = useDesktopMapInspector();
   const [view, setView] = useState<"info" | "schedule" | "game" | "create">("info");
@@ -117,6 +123,19 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     />
     {venue.profile?.description ? <p className="gb-venue-sheet-description">{venue.profile.description}</p> : null}
     <h3>{venue.name}</h3><p>{venue.address}</p>
+    {showCommunityRating ? (
+      <VenueCommunityRating
+        venueId={venue.id}
+        variant="compact"
+        signedIn={false}
+        csrfToken={null}
+        authReturnPath={`/venues/${venue.id}`}
+        href={`/venues/${encodeURIComponent(venue.id)}#ratings`}
+        summary={communitySummary}
+        summaryLoadState={communitySummaryState}
+        linkToRatings
+      />
+    ) : null}
     <VenuePublicContacts value={venue.publicContacts} />
     {!gamesReady && <p role="status">Расписание временно недоступно</p>}
     {gamesReady && games.length === 0 && (desktop

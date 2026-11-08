@@ -6,9 +6,10 @@ import { VenueCover, venueCoverUrl } from "../venues/VenueCover";
 import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import { VenueCommunityRating } from "../venues/VenueCommunityRating";
+import type { CommunityRatingSummary } from "../../../lib/venue-community-api";
 import "../../../styles/venue-popup.css";
 
-export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange }: {
+export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number; onOpen: () => void; embedded?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
   /** Shared SelectedVenueCover.ready — morph slot loan is not decoded readiness. */
@@ -17,6 +18,11 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
   onCoverRetry?: () => void;
   galleryIndex?: number;
   onGalleryIndexChange?: (index: number, item: GalleryItem | null) => void;
+  /** Parent-batched public summary — no per-card N+1. */
+  communitySummary?: CommunityRatingSummary | null;
+  communitySummaryState?: "idle" | "loading" | "ready" | "error";
+  /** False when expanded sheet already shows the same summary (no nested double render). */
+  showCommunityRating?: boolean;
 }) {
   // Cover/media stay presentational inside the single row button — no nested interactive controls.
   // Morph slot still goes through VenueGallery so ordered gallery + main-at-nonzero stay coherent.
@@ -56,13 +62,18 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
         {showDefaultIllustrationLabel
           ? <span className="gb-venue-illustration-label">Иллюстрация</span>
           : null}
-        <VenueCommunityRating
-          venueId={venue.id}
-          variant="compact"
-          signedIn={false}
-          csrfToken={null}
-          authReturnPath={`/venues/${venue.id}`}
-        />
+        {showCommunityRating ? (
+          <VenueCommunityRating
+            venueId={venue.id}
+            variant="compact"
+            signedIn={false}
+            csrfToken={null}
+            authReturnPath={`/venues/${venue.id}`}
+            summary={communitySummary}
+            summaryLoadState={communitySummaryState}
+            linkToRatings={false}
+          />
+        ) : null}
         <span className="gb-venue-preview-time">{gamesReady ? nearestGameLabel(games, venue.timezone, now) : "Расписание временно недоступно"}</span>
       <span className="gb-venue-preview-count">{gamesReady && games.length > 0 ? venueGameCount(games.length) : "\u00a0"}</span>
       </span>

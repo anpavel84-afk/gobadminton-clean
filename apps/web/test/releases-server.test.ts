@@ -254,10 +254,10 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps sixty-five confirmed seed deployments including accepted alpha.1–alpha.56 and dedupes identical live rows", () => {
+  it("keeps sixty-six confirmed seed deployments including accepted alpha.1–alpha.57 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(65);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(60);
+    expect(seedCount).toBe(66);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(61);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -331,7 +331,7 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.54"
       || row.application_version === "0.1.0-alpha.55"
       || row.application_version === "0.1.0-alpha.56"
-      || row.application_version === CURRENT_APPLICATION_VERSION,
+      || row.application_version === "0.1.0-alpha.57",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -348,12 +348,20 @@ describe("history seed integrity", () => {
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.57"
+      && row.source_sha === "895e97fd5f60e4eaaa493cb911cd7d3d7fdd4c22"
+      && row.deployments[0]?.release_id === "r42486594258-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T13:53:05Z"
+      && row.api_contract_version === "0.39.0"
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.54"
       && row.source_sha === "cce49ce72daed8c81f89ddc845deabbb8ac5d7aa"
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.57");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.58");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -615,6 +623,7 @@ describe("history seed integrity", () => {
       "2026-11-08T05:18:57Z",
       "2026-11-08T06:58:58Z",
       "2026-11-08T09:11:48Z",
+      "2026-11-08T13:53:05Z",
     ]);
   });
 
