@@ -1,5 +1,4 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
 import { GameCover } from "../games/GameCover";
 import { Avatar } from "../players/ProfileComposition";
 /* Current venue-approved derivative in the canonical media slot. */
@@ -11,60 +10,13 @@ import { formatSeats, isTrainerLed, settlementTerms } from "../../../lib/game-pr
 import { discoveryFormat, discoveryGameWhen } from "../../../lib/discovery-presentation";
 import { DiscoveryIcon } from "./DiscoveryComposition";
 
-/** Desktop feed: keep max-square media fill; stack when content outgrows the square column.
- * Once stacked for a content/width identity, latch until width or content identity meaningfully changes —
- * do not unstack merely because stacked content became shorter than the row media budget. */
-function useFeedCardLayout() {
-  const cardRef = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [layout, setLayout] = useState<"row" | "stacked">("row");
-  const latchRef = useRef<{ width: number; identity: string } | null>(null);
-  useEffect(() => {
-    const card = cardRef.current;
-    const content = contentRef.current;
-    if (!card || !content || typeof ResizeObserver === "undefined") return;
-    let frame = 0;
-    const contentIdentity = () => {
-      const text = (content.textContent ?? "").replace(/\s+/g, " ").trim();
-      return `${text.length}:${text.slice(0, 96)}`;
-    };
-    const measure = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (window.matchMedia("(max-width: 720px)").matches) {
-          latchRef.current = null;
-          setLayout("row");
-          return;
-        }
-        const width = Math.round(card.clientWidth);
-        const identity = contentIdentity();
-        const mediaBudget = Math.min(300, Math.max(210, Math.floor(width * 0.36)));
-        const latch = latchRef.current;
-        const widthChanged = !latch || Math.abs(latch.width - width) >= 24;
-        const contentChanged = !latch || latch.identity !== identity;
-        if (latch && !widthChanged && !contentChanged) {
-          setLayout("stacked");
-          return;
-        }
-        if (content.scrollHeight > mediaBudget + 8) {
-          latchRef.current = { width, identity };
-          setLayout("stacked");
-          return;
-        }
-        latchRef.current = null;
-        setLayout("row");
-      });
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(card);
-    observer.observe(content);
-    measure();
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, []);
-  return { cardRef, contentRef, layout };
+/** Stable public identities only — never merge trainer/organizer by displayName strings.
+ * Trainer profileId and organizer user id are different namespaces; equal only if the
+ * contract later exposes a shared person key. */
+function sameKnownPerson(game: Game): boolean {
+  const trainerId = game.trainer?.profileId?.trim() ?? "";
+  const organizerId = game.organizer.id?.trim() ?? "";
+  return Boolean(trainerId && organizerId && trainerId === organizerId);
 }
 
 export function DiscoveryGameCard({
@@ -79,19 +31,19 @@ export function DiscoveryGameCard({
   const host = game.organizer.displayName;
   const when = discoveryGameWhen(game);
   const format = discoveryFormat(game.formatKey);
-  const { cardRef, contentRef, layout } = useFeedCardLayout();
+  const combinedIdentity = trainer && game.trainer && sameKnownPerson(game);
   const trainerMarker =
     trainer && game.trainer
       ? `С тренером. Тренер · самостоятельно указано: ${game.trainer.displayName}`
       : trainer
-        ? "С тренером"
+        ? "С тренером. Профиль тренера недоступен"
         : "Обычная игра";
-  return <article ref={cardRef} className="gb-discovery-card" data-activity={game.activityKind} data-layout={layout}>
+  return <article className="gb-discovery-card" data-activity={game.activityKind}>
     <div className="gb-discovery-card__image">
       <GameCover game={game} />
       <span className="gb-discovery-type" title={trainer && game.trainer ? `Тренер · самостоятельно указано: ${game.trainer.displayName}` : undefined} aria-label={trainerMarker}>{trainer ? "С тренером" : "Обычная игра"}</span>
     </div>
-    <div className="gb-discovery-card__content" ref={contentRef}>
+    <div className="gb-discovery-card__content">
       <div className="gb-discovery-card__topline"><span>{when.day}</span><span className="gb-discovery-spots" data-full={game.availablePlaces <= 0 || game.status !== "published"}>{formatSeats(game)}</span></div>
       <time className="gb-discovery-card__time" dateTime={game.startsAt}>{when.time}</time>
       <h3><Link href={`/games/${game.id}`}>{game.title}</Link></h3>
@@ -99,15 +51,28 @@ export function DiscoveryGameCard({
       <p className="gb-discovery-address"><DiscoveryIcon name="pin" />{game.venue.address}</p>
       <div className="gb-discovery-meta"><span>Уровень: {game.levelRule.allowedLevelIds.join(", ")}</span>{format && <span>{format}</span>}</div>
       <p className="gb-discovery-terms">{settlementTerms(game.settlement)}</p>
-      {trainer && game.trainer ? (
-        <div className="gb-discovery-host">
+      {trainer && game.trainer && !combinedIdentity ? (
+        <div className="gb-discovery-host" data-role="trainer" data-trainer-profile={game.trainer.profileId}>
           <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
           <span><small>Тренер · самостоятельно указано</small><strong>{game.trainer.displayName}</strong></span>
         </div>
       ) : null}
-      <div className="gb-discovery-host">
+      {trainer && !game.trainer ? (
+        <div className="gb-discovery-host" data-role="trainer" data-trainer-unavailable="true">
+          <span><small>Тренер</small><strong>Профиль недоступен</strong></span>
+        </div>
+      ) : null}
+      <div
+        className="gb-discovery-host"
+        data-role={combinedIdentity ? "trainer-organizer" : "organizer"}
+        data-organizer-id={game.organizer.id ?? undefined}
+        data-trainer-profile={combinedIdentity && game.trainer ? game.trainer.profileId : undefined}
+      >
         <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
-        <span><small>Организатор</small><strong>{host}</strong></span>
+        <span>
+          <small>{combinedIdentity ? "Тренер · самостоятельно указано · Организатор" : "Организатор"}</small>
+          <strong>{host}</strong>
+        </span>
         <div className="gb-discovery-card__actions"><Link className="gb-c23-btn gb-c23-btn--outline" href={`/games/${game.id}`} aria-label={`Подробнее: ${game.title}`}><span>Подробнее</span><DiscoveryIcon name="arrow" /></Link><GameShare gameId={game.id} /></div>
       </div>
       {reputation ? (

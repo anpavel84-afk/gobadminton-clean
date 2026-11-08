@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.56" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.57" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.39.0" as const;
@@ -424,17 +424,15 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.56",
-  "title": "Скрытие непроверенных фото из VK/Яндекс и журнал метаданных модерации",
+  "application_version": "0.1.0-alpha.57",
+  "title": "Одинаковая компактная карточка обычной игры и занятия с тренером в ленте",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
-  "additions": [
-    "В публичных профилях, комментариях и Radar больше не показываются непроверенные фото из VK и Яндекса — остаются загруженное фото или инициалы; вход через эти сервисы работает как раньше",
-    "В разделе безопасности кабинета доступен ограниченный журнал сохранённых решений модерации без сырого текста и изображений"
+  "additions": [],
+  "fixes": [
+    "В ленте на широком экране карточка «С тренером» держит то же компактное расположение фото слева и текста справа, что и обычная игра; роли тренера и организатора показаны по устойчивым идентификаторам без склеивания имён, при недоступном профиле тренера показывается честный статус"
   ],
-  "fixes": [],
   "known_limitations": [
-    "Журнал показывает только сохранённые разрешения и отправки на проверку; отклонённые и временные попытки, а также бюджеты туда не входят",
     "На тестовом стенде до 1 января 2027 UTC временно сняты количественные ограничения на проверки фото и текста; сами проверки содержимого продолжаются",
     "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены; служебный разбор отзывов после обычного входа ещё не проверен",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
