@@ -1,8 +1,15 @@
 # #506 B2b — public-data description + media credits (SOURCE repair candidate)
 
-Base frozen: `9c9346143e3c60eed0755b0053419db6b7d3858a` (attempt 38 candidate). Application notes: **0.1.0-alpha.53** (UAT `NOT_TESTED`). API contract **0.37.0** (compatible). Cursor Auto sole source writer. **Attempt 39** = bounded repair of QA38 single remaining HIGH (retained public-data attempt before mutable planning). Preserve all 37/38 results/costs; 39 never replays UNKNOWN. Cover replay independently accepted — not re-architected. No fabricated CI/DEV PASS. Repair source only — QA/CI/DEV pending. Do not claim whole-MOD DONE. C/D/#507 pending.
+Base frozen: `af8836b0474956944b2c2a781ff2cdbf74d40667` (attempt 39 candidate). Application notes: **0.1.0-alpha.53** (UAT `NOT_TESTED`). API contract **0.37.0** (compatible). Cursor Auto sole source writer. **Attempt 40** = bounded repair of QA39 single HIGH (accepted+attempt coexistence; fingerprint before accepted/eligibility). Preserve all 37/38/39 results/costs; 40 never replays UNKNOWN. Cover replay independently accepted — not re-architected. No fabricated CI/DEV PASS. Repair source only — QA/CI/DEV pending. Do not claim whole-MOD DONE. C/D/#507 pending.
 
-## Attempt 39 repair (this handoff)
+## Attempt 40 repair (this handoff)
+
+- **HIGH** `importVenuePublicData`: after successful moderated apply both attempt and accepted coexist. After real actor auth, compare retained attempt fingerprint/digest **before** accepted branch and mutable eligibility/version planning. Mismatch → `PUBLIC_DATA_CONFLICT` (clear/omit change must not become `VENUE_INELIGIBLE`). Matching accepted retains known replay/drift via planning — never convert to pending HOLD. Matching pending stays HOLD/zero egress.
+- Same guard ordering in narrow `commitPublicDataAttemptOrReplay` and clear/omit race entry (attempt mismatch before accepted; matching accepted does not HOLD).
+- One targeted regression: successful moderated apply creates attempt+accepted; unchanged replay → `PUBLIC_DATA_REPLAY`; version+retire drift + changed clear/omit → `PUBLIC_DATA_CONFLICT`; zero egress; no mutation. Keep pending-only regression from 39.
+- No cover-path changes. No migration/schema/release metadata. No PROD/runtime/config/budget/UNKNOWN reset.
+
+## Attempt 39 (preserved)
 
 - **HIGH** `importVenuePublicData`: after real actor authorization, compare retained attempt / immutable input fingerprint **before** mutable venue planning (eligibility / version shortcircuit), including clear/omit. Accepted receipt remains authoritative via existing planning. Version/eligibility drift must not mask changed admission → `PUBLIC_DATA_CONFLICT`. Fresh ops still run CAS/eligibility; no writes on conflict; no cached disclosure before auth; zero egress + exact HOLD UNKNOWN replay retained.
 - One targeted regression: prior attempt → venue version+eligibility drift → changed clear/omit → `PUBLIC_DATA_CONFLICT`; exact same input → `OPERATION_OUTCOME_UNKNOWN`; zero egress; no mutation.
@@ -24,7 +31,7 @@ Base frozen: `9c9346143e3c60eed0755b0053419db6b7d3858a` (attempt 38 candidate). 
 - B4U_SOURCE_V1 club names stay LEGACY_UNREVIEWED; no active writer → future writer entrypoint required (not claimed IMPLEMENTED).
 - B2a actual 52 metadata/source SHA null for 53; trusted 52 entire seed/history unchanged. Current 3data/7g prepared facts not applied (waiting real 53).
 
-## Paths (39 touched)
+## Paths (40 touched)
 
 | Area | Path |
 | --- | --- |

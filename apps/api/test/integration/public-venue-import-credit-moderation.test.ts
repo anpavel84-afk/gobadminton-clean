@@ -614,4 +614,106 @@ run("MOD-V2-B2b public venue import + credit moderation", () => {
       "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
     )).rows[0]).toEqual(drifted);
   });
+
+  it("public-data: accepted+attempt coexistence — mismatch CONFLICT before eligibility; matching accepted replay", async () => {
+    const v = await seedVenue();
+    fake.textFixture = async (input) => safeTextBatchDecision(input.texts.length);
+    const manifest = {
+      schema: "VENUE_PUBLIC_DATA_BATCH_V1" as const,
+      batch: `pd-acc-${randomUUID().slice(0, 8)}`,
+      count: 1,
+      items: [{
+        venueId: v.id,
+        expectedVersion: 1,
+        expectedName: v.name,
+        expectedAddress: v.address,
+        profile: {
+          courtCount: 1,
+          amenities: { parking: false, showers: false },
+          description: "Описание после moderated apply",
+        },
+        sources: [{ url: "https://example.com/acc", checkedAt: "2026-11-01T00:00:00.000Z", note: "SECRET" }],
+      }],
+    };
+    const textBeforeApply = fake.textCalls;
+    const applyLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, manifest, actorPrincipal, true, (l) => applyLines.push(l), { moderation },
+    )).toBe(0);
+    expect(applyLines).toContainEqual(expect.objectContaining({
+      action: "APPLIED", reason: "IMPORTED",
+    }));
+    expect(fake.textCalls).toBe(textBeforeApply + 1);
+    const applied = (await pool!.query<{ public_description: string | null; version: number; lifecycle_state: string }>(
+      "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
+    )).rows[0]!;
+    expect(applied.public_description).toBe("Описание после moderated apply");
+    expect(applied.version).toBe(2);
+
+    // Successful moderated apply retains BOTH attempt and accepted under the same batch key.
+    const audit = await pool!.query<{ reason_code: string }>(
+      `SELECT reason_code FROM privileged_audit_events
+       WHERE target_id=$1 AND action_key='venue.edit'
+         AND reason_code IN ('venue_public_data_batch_attempt','venue_public_data_batch_import')
+       ORDER BY created_at ASC`,
+      [v.id],
+    );
+    expect(audit.rows.map((r) => r.reason_code)).toEqual([
+      "venue_public_data_batch_attempt",
+      "venue_public_data_batch_import",
+    ]);
+
+    // Unchanged matching input: accepted replay SKIP — must not become pending HOLD.
+    const replayCalls = fake.textCalls;
+    const replayLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, manifest, actorPrincipal, true, (l) => replayLines.push(l), { moderation },
+    )).toBe(0);
+    expect(replayLines).toContainEqual(expect.objectContaining({
+      action: "SKIPPED", reason: "PUBLIC_DATA_REPLAY",
+    }));
+    expect(fake.textCalls).toBe(replayCalls);
+    expect((await pool!.query<{ public_description: string | null; version: number }>(
+      "SELECT public_description, version FROM venues WHERE id=$1", [v.id],
+    )).rows[0]).toEqual({
+      public_description: applied.public_description,
+      version: applied.version,
+    });
+
+    // Mutable version/eligibility drift after accepted+attempt — must not mask clear/omit conflict.
+    await pool!.query(
+      "UPDATE venues SET version=version+1, lifecycle_state='retired', updated_at=now() WHERE id=$1",
+      [v.id],
+    );
+    const drifted = (await pool!.query<{ public_description: string | null; version: number; lifecycle_state: string }>(
+      "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
+    )).rows[0]!;
+    expect(drifted.version).toBe(3);
+    expect(drifted.lifecycle_state).toBe("retired");
+    expect(drifted.public_description).toBe("Описание после moderated apply");
+
+    const textBeforeConflict = fake.textCalls;
+    const clearManifest = {
+      ...manifest,
+      items: [{
+        ...manifest.items[0]!,
+        profile: {
+          courtCount: 1,
+          amenities: { parking: false, showers: false },
+          description: null,
+        },
+      }],
+    };
+    const clearLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, clearManifest, actorPrincipal, true, (l) => clearLines.push(l), { moderation },
+    )).toBe(1);
+    expect(clearLines).toContainEqual(expect.objectContaining({
+      action: "FAILED", reason: "PUBLIC_DATA_CONFLICT",
+    }));
+    expect(fake.textCalls).toBe(textBeforeConflict);
+    expect((await pool!.query<{ public_description: string | null; version: number; lifecycle_state: string }>(
+      "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
+    )).rows[0]).toEqual(drifted);
+  });
 });

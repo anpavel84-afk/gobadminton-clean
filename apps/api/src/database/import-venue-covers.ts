@@ -1291,7 +1291,8 @@ async function loadPublicDataAttempt(
 
 /**
  * Narrow durable claim before text I/O — same audit-pattern as gallery attempt.
- * Accepted TX receipt remains authoritative for known replay.
+ * Attempt fingerprint mismatch rejects before accepted/eligibility; matching
+ * accepted retains known replay/drift via planning. Matching pending stays HOLD.
  */
 async function commitPublicDataAttemptOrReplay(
   pool: Pool,
@@ -1308,14 +1309,26 @@ async function commitPublicDataAttemptOrReplay(
       throw new Error("IMPORT_ACTOR_REFUSED");
     }
     const current = (await c.query<PublicDataVenueRow>(publicDataSelect, [item.venueId])).rows[0];
+    // Same ordering as apply path: retained attempt mismatch before accepted/planning.
+    const prior = await loadPublicDataAttempt(c, keyHash);
+    if (prior) {
+      const attemptReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, prior);
+      if (attemptReplay.action === "FAILED") return attemptReplay;
+      const terminal = await loadAcceptedPublicDataReceipt(c, keyHash);
+      if (terminal) {
+        const planned = await planPublicDataItemState(c, manifest.batch, item, current);
+        return planned.result;
+      }
+      return attemptReplay;
+    }
     const planned = await planPublicDataItemState(c, manifest.batch, item, current);
     if (planned.result.action !== "READY") return planned.result;
     const terminal = await loadAcceptedPublicDataReceipt(c, keyHash);
     if (terminal) {
       return planPublicDataReplay(current!, fingerprint, terminal);
     }
-    const prior = await loadPublicDataAttempt(c, keyHash);
-    if (prior) return planPublicDataAttemptReplay(fingerprint, currentDigest, prior);
+    const raced = await loadPublicDataAttempt(c, keyHash);
+    if (raced) return planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
     await appendAudit(c, {
       actor: { principalId, roles: ["superadmin"] },
       action: "venue.edit",
@@ -1563,19 +1576,31 @@ export async function importVenuePublicData(
       const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
       const fingerprint = publicDataPatchFingerprint(item);
 
-      // After auth: terminal accepted receipt stays authoritative via planning.
-      // Retained attempt / immutable input comparison runs BEFORE mutable
-      // eligibility/version shortcircuit so version/eligibility drift cannot mask
-      // a changed clear/omit admission conflict. Fresh ops still plan CAS/eligibility.
-      const accepted = await loadAcceptedPublicDataReceipt(pool, keyHash);
-      if (accepted) {
-        const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
-        name = planned.name || name;
-        result = planned.result;
+      // After auth: load ANY retained attempt; fingerprint/digest mismatch rejects
+      // before accepted branch and mutable eligibility/version planning.
+      // Matching accepted keeps known replay/drift; matching pending stays HOLD.
+      // Do not convert matching accepted into pending HOLD.
+      const priorAttempt = await loadPublicDataAttempt(pool, keyHash);
+      let attemptConflict: { action: "FAILED"; reason: string } | undefined;
+      let matchingPendingHold: { action: "HOLD"; reason: string } | undefined;
+      if (priorAttempt) {
+        const attemptReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, priorAttempt);
+        if (attemptReplay.action === "FAILED") {
+          attemptConflict = attemptReplay;
+        } else {
+          matchingPendingHold = attemptReplay;
+        }
+      }
+      if (attemptConflict) {
+        result = attemptConflict;
       } else {
-        const priorAttempt = await loadPublicDataAttempt(pool, keyHash);
-        if (priorAttempt) {
-          result = planPublicDataAttemptReplay(fingerprint, currentDigest, priorAttempt);
+        const accepted = await loadAcceptedPublicDataReceipt(pool, keyHash);
+        if (accepted) {
+          const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
+          name = planned.name || name;
+          result = planned.result;
+        } else if (matchingPendingHold) {
+          result = matchingPendingHold;
         } else {
           const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
           name = planned.name || name;
@@ -1606,13 +1631,19 @@ export async function importVenuePublicData(
               }
             } else {
               // Fresh clear/omit/noop — zero provider egress; no new attempt claim.
-              // Concurrent claim boundary: re-check retained attempt under the write TX.
+              // Concurrent claim: attempt mismatch before accepted; matching accepted
+              // must not become pending HOLD under the write TX.
               result = await adminTransaction(pool, async (c) => {
                 if (await requireImportActor(c, principalId) !== userId) {
                   throw new Error("IMPORT_ACTOR_REFUSED");
                 }
                 const raced = await loadPublicDataAttempt(c, keyHash);
-                if (raced) return planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
+                if (raced) {
+                  const racedReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
+                  if (racedReplay.action === "FAILED") return racedReplay;
+                  const racedAccepted = await loadAcceptedPublicDataReceipt(c, keyHash);
+                  if (!racedAccepted) return racedReplay;
+                }
                 return applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, undefined);
               });
             }
