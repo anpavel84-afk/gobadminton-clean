@@ -69,6 +69,7 @@ CI_POLL_S = 30
 CI_WAIT_BUDGET_S = 1200
 DEPLOY_WAIT_BUDGET_S = 900
 AUTHOR_TIMEOUT_S = 1200
+QA_OUTPUT_MAX = 2 << 20  # Equality is possible truncation, never accepted.
 QA_TIMEOUT_S = 1800
 
 
@@ -178,6 +179,75 @@ def uid1002_preexec():
         except Exception:
             os._exit(126)
     return _drop
+
+
+def _qa_output_policy():
+    return dict(fsize_soft=QA_OUTPUT_MAX, fsize_hard=QA_OUTPUT_MAX,
+                core_soft=0, core_hard=0, guard='uid1002+nnp+rlimit-v1')
+
+
+def _qa_preexec():
+    """Set inherited hard limits before exec/FD use, then drop UID and set NNP."""
+    drop = uid1002_preexec()
+    policy = _qa_output_policy()
+    def child():
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (policy['fsize_soft'], policy['fsize_hard']))
+        drop()
+    return child
+
+
+def _qa_output_bytes(path, *, scope=None, private=False):
+    """Stable bounded output snapshot; private UID1002 output is never authority."""
+    import stat
+    path = Path(path).absolute()
+    scope = Path(scope).absolute() if scope is not None else path.parent
+    if '..' in path.parts or not path.is_relative_to(scope) or path == scope:
+        raise LiveError('qa_output_scope_hold')
+    owners = {CURSOR_UID} if private else {os.geteuid()}
+    for ancestor in scope.parents:
+        if not stat.S_ISDIR(ancestor.lstat().st_mode):
+            raise LiveError('qa_output_scope_hold')
+    parent = path.parent
+    directories = []
+    while True:
+        info = parent.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in owners
+                or info.st_mode & 0o022):
+            raise LiveError('qa_output_scope_hold')
+        directories.append((parent, info))
+        if parent == scope:
+            break
+        parent = parent.parent
+    identity = lambda st: (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid,
+        st.st_nlink, st.st_size, st.st_blocks, st.st_mtime_ns, st.st_ctime_ns)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid not in owners
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or not 0 <= before.st_size < QA_OUTPUT_MAX
+                or before.st_blocks * 512 < before.st_size):
+            raise LiveError('qa_output_metadata_hold')
+        chunks, remaining = [], before.st_size + 1
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(fd)
+        raw = b''.join(chunks)
+        if (identity(before) != identity(after)
+                or identity(path.lstat()) != identity(after) or len(raw) != before.st_size
+                or any(identity(directory.lstat()) != identity(info)
+                       for directory, info in directories)):
+            raise LiveError('qa_output_unstable_hold')
+        return raw
+    finally:
+        os.close(fd)
 
 
 def require_executor_uid():
@@ -1459,9 +1529,11 @@ AGY_IPC_FIELDS = frozenset({
 def _codex_turn_completed(events_path):
     """Require a valid JSONL event with type exactly turn.completed — no heuristics."""
     path = Path(events_path)
-    if not path.is_file():
+    try:
+        raw = _qa_output_bytes(path)
+    except FileNotFoundError:
         return False
-    for line in path.read_text(errors='replace').splitlines():
+    for line in raw.decode(errors='replace').splitlines():
         if not line.strip():
             continue
         try:
@@ -1484,17 +1556,21 @@ def _codex_capacity_technical(evidence_dir):
     blobs = []
     for name in ('events.jsonl', 'stderr', 'final.txt'):
         path = evidence / name
-        if path.is_file():
-            blobs.append(path.read_text(errors='replace'))
+        try:
+            blobs.append(_qa_output_bytes(path).decode(errors='replace'))
+        except FileNotFoundError:
+            pass
     text = '\n'.join(blobs)
     if CODEX_CAPACITY_MSG not in text:
         return False
     if _codex_turn_completed(evidence / 'events.jsonl'):
         return False
     events = evidence / 'events.jsonl'
-    if not events.is_file():
+    try:
+        raw = _qa_output_bytes(events)
+    except FileNotFoundError:
         return CODEX_CAPACITY_MSG in text
-    for line in events.read_text(errors='replace').splitlines():
+    for line in raw.decode(errors='replace').splitlines():
         if not line.strip():
             continue
         try:
@@ -2089,6 +2165,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     worktree checkout on HEAD mismatch — precise HOLD. Timeout kills owned pg.
     """
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
+    from author_handoff import fingerprint
     require_executor_uid()
     routing_qa = task.get('_bound_author', {}).get('mode') == 'on'
     if routing_qa and _probe is None:
@@ -2206,7 +2283,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 (evidence / 'stderr').open('w') as e:
             p = subprocess.Popen(
                 cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
-                umask=0o022, close_fds=True, env=child_env, preexec_fn=uid1002_preexec())
+                umask=0o022, close_fds=True, env=child_env, preexec_fn=_qa_preexec())
             process_identity = _qa_process_identity(p, cmd)
             try:
                 p.wait(timeout=QA_TIMEOUT_S + 30)
@@ -2216,10 +2293,22 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout',
                                   no_blind_replay=True)
                 raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
-        # Parent securely collects regular non-symlink final into Root evidence AFTER exit.
+        # Reap exact owned descendants even after leader exit, before collection.
+        _kill_owned_process_group(p)
         final = evidence / 'final.txt'
-        if final_private.is_file() and not final_private.is_symlink():
-            final.write_bytes(final_private.read_bytes())
+        try:
+            _qa_output_bytes(evidence / 'events.jsonl', scope=evidence)
+            _qa_output_bytes(evidence / 'stderr', scope=evidence)
+            try:
+                final_bytes = _qa_output_bytes(final_private, scope=tmpdir, private=True)
+            except FileNotFoundError:
+                final_bytes = None
+            if final_bytes is not None:
+                final.write_bytes(final_bytes)
+        except (LiveError, OSError) as err:
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                              error='qa_output_boundary_hold', no_blind_replay=True)
+            raise ProviderError('qa_output_boundary_hold', charge='unknown') from err
         # Persist raw completion envelope before parse (no automatic paid replay).
         completion = {
             'exit': p.returncode,
@@ -2246,10 +2335,9 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         if not completion['turn_completed']:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='turn_completed_missing')
             raise ProviderError('codex_turn_completed_missing')
-        if not final.is_file():
+        if final_bytes is None:
             raise ProviderError('codex_final_missing')
-        raw_final = final.read_text()
-        (evidence / 'final.raw.txt').write_text(raw_final)
+        raw_final = _qa_output_bytes(final, scope=evidence).decode('utf-8')
         parsed = parse_codex_final(raw_final, candidate_sha)
         if parsed.get('reviewed_sha') != candidate_sha:
             raise ProviderError('stale_sha_verdict', str(parsed.get('reviewed_sha')))
@@ -2265,7 +2353,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                     or git(source, 'rev-parse', 'HEAD') != candidate_sha):
                 raise ProviderError('qa_readonly_or_stop_hold')
             def proof(path):
-                return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                return dict(path=str(path), sha256=hashlib.sha256(_qa_output_bytes(path, scope=evidence)).hexdigest())
             stop_record = dict(process_identity, reaped=p.returncode is not None,
                 group_gone=owned_group_gone(p), exit=p.returncode,
                 operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
@@ -2282,6 +2370,12 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 raw_proof=proof(evidence / 'events.jsonl'), final_proof=proof(final))
         mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
         return parsed
+    except LiveError as err:
+        if not err.code.startswith('qa_output_'):
+            raise
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error=err.code, no_blind_replay=True)
+        raise ProviderError('qa_output_boundary_hold', charge='unknown') from err
     finally:
         if p is not None:
             failed = sys.exc_info()[0] is not None
@@ -2291,7 +2385,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 mark_intent_phase(intent_path, 'UNKNOWN', error='owned_stop_unreconciled',
                                   no_blind_replay=True)
                 raise
-            if failed and (routing_qa or _probe is not None):
+            if failed:
                 identity = getattr(p, '_lean_owned_identity', {})
                 stop = dict(identity, reaped=p.returncode is not None,
                     group_gone=True, exit=p.returncode,
@@ -2299,7 +2393,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                     admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'),
                     evidence_dir=str(evidence))
                 # Keep the failure/UNKNOWN classification; cleanup is no PASS.
-                current = loads(Path(intent_path).read_bytes()) if intent_path else {}
+                current = loads(_qa_output_bytes(intent_path, scope=evidence)) if intent_path else {}
                 mark_intent_phase(intent_path, current.get('phase', 'HOLD_no_automatic_replay'),
                                   owned_stop_proof=stop)
                 (evidence / 'failure-stop.json').write_text(json.dumps(stop, indent=2) + '\n')
@@ -4336,9 +4430,9 @@ def _qa_recipe(effort='medium'):
     constants = dict(uid=CURSOR_UID, gid=CURSOR_GID, registry_gid=REGISTRY_GID, home=str(AGENT_HOME),
         codex_home=str(NATIVE_CODEX_HOME), results=str(_QA_RESULTS), config=str(_QA_CONFIG),
         native=str(NATIVE_TRAIN), timeout=QA_TIMEOUT_S, rules=str(rules_path),
-        effective_uid=os.geteuid(), effective_gid=os.getegid())
+        effective_uid=os.geteuid(), effective_gid=os.getegid(), output_policy=_qa_output_policy())
     return dict(role='qa', model='gpt-6-sol', effort=effort, executor_uid=CURSOR_UID,
-        executor='native:codex:1002:qa', cli_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+        executor='native:codex:1002:qa', output_policy=_qa_output_policy(), cli_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
         security_closure=closure, recipe_fingerprint=fingerprint(dict(closure=closure,
             constants=constants, effort=effort, model='gpt-6-sol', rules_sha256=rules_sha)))
 
@@ -4503,13 +4597,20 @@ def _qa_process_identity(process, argv):
     from author_handoff import fingerprint
     proc = Path('/proc') / str(process.pid)
     fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
-    uid = int(next(line for line in (proc / 'status').read_text().splitlines()
-                   if line.startswith('Uid:')).split()[2])
+    status = (proc / 'status').read_text().splitlines()
+    uid = int(next(line for line in status if line.startswith('Uid:')).split()[2])
+    limits = (proc / 'limits').read_text().splitlines()
+    for label, expected in (('Max file size', QA_OUTPUT_MAX), ('Max core file size', 0)):
+        line = next(line for line in limits if line.startswith(label)).split()
+        if line[-3:-1] != [str(expected), str(expected)]:
+            raise ValueError('qa process output limits mismatch')
+    if next(line for line in status if line.startswith('NoNewPrivs:')).split()[1] != '1':
+        raise ValueError('qa process NNP mismatch')
     actual = (proc / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
     if uid != CURSOR_UID or actual != [str(x).encode() for x in argv] or int(fields[2]) != process.pid:
         raise ValueError('qa process identity mismatch')
     identity = dict(pid=process.pid, pgrp=int(fields[2]), start_ticks=fields[19], uid=uid,
-                    argv_sha256=fingerprint(argv))
+                    argv_sha256=fingerprint(argv), output_policy=_qa_output_policy())
     process._lean_owned_identity = identity
     return identity
 
@@ -4559,6 +4660,7 @@ def _qa_validate_completed(intent):
     stop = intent['owned_stop_proof']
     if (intent['actual_argv'] != argv or intent['actual_permissions'] != permissions
             or stop.get('argv_sha256') != fingerprint(argv)
+            or stop.get('output_policy') != recipe.get('output_policy')
             or stop.get('uid') != recipe['executor_uid'] or stop.get('pgrp') != stop.get('pid')
             or not isinstance(stop.get('pid'), int) or stop['pid'] <= 1
             or not str(stop.get('start_ticks', '')).isdigit()

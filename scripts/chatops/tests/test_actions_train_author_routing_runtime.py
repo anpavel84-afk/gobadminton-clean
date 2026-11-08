@@ -880,6 +880,10 @@ class Repair2Focused(unittest.TestCase):
                     self.assertNotEqual(live._qa_recipe()['recipe_fingerprint'],baseline['recipe_fingerprint'])
                     mutated.clear()
                 self.assertEqual(live._qa_recipe(),baseline)
+                with patch.object(live, 'QA_OUTPUT_MAX', 4096):
+                    limited = live._qa_recipe()
+                    self.assertNotEqual(limited['recipe_fingerprint'], baseline['recipe_fingerprint'])
+                    self.assertEqual(limited['output_policy']['fsize_hard'], 4096)
 
     def test_exited_leader_owned_child_and_foreign_guard(self):
         import ctypes
@@ -1068,3 +1072,124 @@ class ProtectedHighSuccessor(unittest.TestCase):
             with self.assertRaises(providers.ProviderError):
                 providers.select_qa_provider(t, issue=527, reviewer_authority=lambda **kw: None,
                                              protected_reviewer=medium)
+
+
+class QAOutputBoundary(unittest.TestCase):
+    """Tiny local Python children only; no installed native/provider calls."""
+
+    def test_real_child_inherits_hard_file_bound_and_valid_output(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(live, 'QA_OUTPUT_MAX', 4096):
+            root = Path(td)
+            for kind in ('stdout', 'file', 'valid'):
+                output = root / (kind + '.out')
+                code = (
+                    'import os,resource,sys; '
+                    'assert resource.getrlimit(resource.RLIMIT_FSIZE)==(4096,4096); '
+                    'assert resource.getrlimit(resource.RLIMIT_CORE)==(0,0); '
+                    'os.fork() == 0 and None; '
+                    + ("os.write(1,b'x'*8192); os.write(1,b'x')" if kind == 'stdout' else
+                       "f=open(sys.argv[1],'wb',buffering=0); f.write(b'x'*8192); f.write(b'x')" if kind == 'file' else
+                       "os.write(1,b'valid')"))
+                with output.open('wb') as stream:
+                    result = subprocess.run([sys.executable, '-c', code, str(root / 'direct')],
+                        stdout=stream, stderr=subprocess.DEVNULL, preexec_fn=live._qa_preexec(), timeout=3)
+                if kind == 'valid':
+                    self.assertEqual(result.returncode, 0)
+                    self.assertIn(b'valid', live._qa_output_bytes(output))
+                else:
+                    target = output if kind == 'stdout' else root / 'direct'
+                    self.assertLessEqual(target.stat().st_size, 4096)
+                    with self.assertRaises(live.LiveError): live._qa_output_bytes(target)
+
+    def test_oversize_rejected_before_parser_for_each_capture(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(live, 'QA_OUTPUT_MAX', 128):
+            root = Path(td)
+            for name in ('events.jsonl', 'stderr', 'final.txt'):
+                path = root / name
+                path.write_bytes(b'x' * 129)
+                with patch.object(live, 'loads', side_effect=AssertionError('parsed oversized bytes')):
+                    with self.assertRaises(live.LiveError): live._codex_capacity_technical(root)
+                    if name == 'events.jsonl':
+                        with self.assertRaises(live.LiveError): live._codex_turn_completed(path)
+                with patch.object(live.hashlib, 'sha256', side_effect=AssertionError('hashed oversized bytes')):
+                    with self.assertRaises(live.LiveError): live._qa_output_bytes(path)
+                path.unlink()
+            events = root / 'events.jsonl'
+            events.write_text('{"type":"turn.completed"}\n')
+            self.assertTrue(live._codex_turn_completed(events))
+            self.assertFalse(live._codex_capacity_technical(root))
+            (root / 'final.txt').write_bytes(b'{"verdict":"PASS"}')
+            self.assertEqual(live._qa_output_bytes(root / 'final.txt', scope=root, private=True), b'{"verdict":"PASS"}')
+
+    def test_links_fifo_sparse_and_unstable_rejected_without_blocking(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); path = root / 'output'
+            target = root / 'target'; target.write_bytes(b'valid')
+            path.symlink_to(target)
+            with self.assertRaises(OSError): live._qa_output_bytes(path)
+            path.unlink(); os.mkfifo(path)
+            with self.assertRaises(live.LiveError): live._qa_output_bytes(path)
+            path.unlink(); os.link(target, path)
+            with self.assertRaises(live.LiveError): live._qa_output_bytes(path)
+            path.unlink()
+            with path.open('wb') as stream: stream.truncate(65536)
+            with self.assertRaises(live.LiveError): live._qa_output_bytes(path)
+            path.write_bytes(b'valid')
+            read = os.read
+            def mutate(fd, size):
+                raw = read(fd, size)
+                path.write_bytes(b'changed')
+                return raw
+            with patch.object(live.os, 'read', side_effect=mutate):
+                with self.assertRaises(live.LiveError): live._qa_output_bytes(path)
+
+    def test_capture_reaps_before_collection_and_rejects_each_oversize(self):
+        candidate = 'b' * 40
+        for oversized in (None, 'events.jsonl', 'stderr', 'final.txt'):
+            with self.subTest(oversized=oversized), tempfile.TemporaryDirectory() as td:
+                root = Path(td); evidence = root / 'qa-output'
+                private = root / 'private'; private.mkdir()
+                process = SimpleNamespace(pid=42, returncode=0, wait=lambda **kw: 0)
+                stopped = []
+                final = json.dumps(dict(verdict='PASS', findings=[], reviewed_sha=candidate)).encode()
+                def launch(*args, **kw):
+                    self.assertIsNotNone(kw['preexec_fn'])
+                    (evidence / 'intent.json').write_text('{}')
+                    kw['stdout'].write('{"type":"turn.completed"}\n')
+                    kw['stdout'].flush()
+                    (private / 'tmp' / 'final.txt').write_bytes(final)
+                    if oversized:
+                        dest = private / 'tmp' / 'final.txt' if oversized == 'final.txt' else evidence / oversized
+                        dest.write_bytes(b'x' * 513)
+                    return process
+                reader = live._qa_output_bytes
+                def collect(*args, **kw):
+                    self.assertTrue(stopped, 'collected before owned group reaped')
+                    return reader(*args, **kw)
+                with ExitStack() as stack:
+                    for name, value in [('QA_OUTPUT_MAX', 512)]:
+                        stack.enter_context(patch.object(live, name, value))
+                    stack.enter_context(patch.object(live, 'git', return_value=candidate))
+                    stack.enter_context(patch.object(live, 'load_short_rules', return_value=('rules','sha',root/'rules')))
+                    stack.enter_context(patch.object(live, '_qa_native_binary', return_value=Path('/synthetic')))
+                    stack.enter_context(patch.object(live, '_git_common_dir', return_value=''))
+                    stack.enter_context(patch.object(live, '_qa_launch', return_value=(['synthetic'], {})))
+                    stack.enter_context(patch.object(live.tempfile, 'mkdtemp', return_value=str(private)))
+                    stack.enter_context(patch.object(live.subprocess, 'Popen', side_effect=launch))
+                    stack.enter_context(patch.object(live, '_qa_process_identity', return_value={}))
+                    stack.enter_context(patch.object(live, '_kill_owned_process_group', side_effect=lambda p: stopped.append(True)))
+                    stack.enter_context(patch.object(live, '_qa_output_bytes', side_effect=collect))
+                    mark = stack.enter_context(patch.object(providers, 'mark_intent_phase'))
+                    parser = stack.enter_context(patch.object(providers, 'parse_codex_final', wraps=providers.parse_codex_final))
+                    call = lambda: live.codex_qa_live(task=dict(worktree='/source'), candidate_sha=candidate,
+                        evidence_dir=evidence, intent_path=evidence/'intent.json')
+                    if oversized:
+                        with self.assertRaises(providers.ProviderError) as error: call()
+                        self.assertEqual(error.exception.code, 'qa_output_boundary_hold')
+                        parser.assert_not_called()
+                        self.assertTrue(any(c.args[1] == 'HOLD_no_automatic_replay' for c in mark.call_args_list))
+                        self.assertFalse((evidence / 'final.txt').exists())
+                        self.assertTrue((evidence / 'failure-stop.json').is_file())
+                    else:
+                        self.assertEqual(call()['verdict'], 'PASS')
+                        parser.assert_called_once()
