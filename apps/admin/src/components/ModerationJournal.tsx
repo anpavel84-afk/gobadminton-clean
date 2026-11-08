@@ -85,6 +85,8 @@ export function ModerationJournal({
   appliedRef.current = applied;
   const pageRef = useRef(page);
   pageRef.current = page;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   const mounted = useRef(true);
   const requestGeneration = useRef(0);
   const draftDirty = applied !== null && !sameFilters(draft, applied);
@@ -97,14 +99,25 @@ export function ModerationJournal({
     };
   }, []);
 
+  function responseStillAuthorized(gen: number, principalId: string): boolean {
+    return (
+      mounted.current &&
+      gen === requestGeneration.current &&
+      freshStepUp(sessionRef.current, Date.now()) &&
+      sessionRef.current.principalId === principalId
+    );
+  }
+
   async function load(mode: "refresh" | "more") {
     await run(async () => {
       if (!freshStepUp(session, Date.now())) {
+        requestGeneration.current += 1;
         setPage(null);
         setApplied(null);
         throw new AdminError("ADMIN_STEP_UP_REQUIRED", 403);
       }
       const gen = ++requestGeneration.current;
+      const principalId = session.principalId;
       const filters: Filters | null =
         mode === "more" ? appliedRef.current : { ...draftRef.current };
       if (!filters) return;
@@ -133,7 +146,7 @@ export function ModerationJournal({
       const qs = params.toString();
       try {
         const next = await adminRequest<Page>("audit/moderation" + (qs ? `?${qs}` : ""));
-        if (!mounted.current || gen !== requestGeneration.current) return;
+        if (!responseStillAuthorized(gen, principalId)) return;
         if (mode === "refresh") {
           if (!sameFilters(draftRef.current, filters)) return;
           setApplied(filters);
@@ -147,7 +160,7 @@ export function ModerationJournal({
             : next,
         );
       } catch (error) {
-        if (!mounted.current || gen !== requestGeneration.current) return;
+        if (!responseStillAuthorized(gen, principalId)) return;
         setPage(null);
         setApplied(null);
         if (error instanceof AdminError && (error.status === 401 || error.code === "ADMIN_PERMISSION_DENIED" || error.code === "ADMIN_STEP_UP_REQUIRED")) {
@@ -160,6 +173,7 @@ export function ModerationJournal({
 
   useEffect(() => {
     if (!fresh) {
+      requestGeneration.current += 1;
       setPage(null);
       setApplied(null);
       return;

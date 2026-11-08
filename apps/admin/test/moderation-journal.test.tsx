@@ -2,7 +2,7 @@ import { isValidElement } from "react";
 import type * as ReactModule from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModerationJournal } from "../src/components/ModerationJournal";
-import { freshStepUp, visibleNavigation, type Session } from "../src/lib/admin-client";
+import { AdminError, freshStepUp, visibleNavigation, type Session } from "../src/lib/admin-client";
 import type * as AdminClientModule from "../src/lib/admin-client";
 
 const hooks = vi.hoisted(() => ({
@@ -450,5 +450,110 @@ describe("ModerationJournal applied-filter load-more scope", () => {
     expect(treeText()).not.toContain("Первая страница");
     expect(treeText()).not.toContain("game_title · Разрешено");
     expect(treeText()).toContain("Старт без фильтра");
+  });
+
+  it("keeps expired-step-up deferred rows absent until renewed load resolves current rows", async () => {
+    let resolveStale!: (value: typeof pageOne) => void;
+    const deferredStale = new Promise<typeof pageOne>((resolve) => {
+      resolveStale = resolve;
+    });
+    let resolveRenewed!: (value: typeof currentScope) => void;
+    const deferredRenewed = new Promise<typeof currentScope>((resolve) => {
+      resolveRenewed = resolve;
+    });
+    let resolveDenied!: (reason: unknown) => void;
+    const deferredDenied = new Promise<never>((_, reject) => {
+      resolveDenied = reject;
+    });
+    let phase: "boot" | "stale" | "renew" | "deny" = "boot";
+
+    transport.handler = async (path) => {
+      if (phase === "boot" && path === "audit/moderation") return emptyStart;
+      if (phase === "stale" && path === "audit/moderation?surface=game_title") return deferredStale;
+      if (phase === "renew" && path === "audit/moderation?surface=game_title") return deferredRenewed;
+      if (phase === "deny" && path === "audit/moderation?surface=game_title") return deferredDenied;
+      throw new Error(`${phase}:${path}`);
+    };
+
+    renderTree();
+    flushEffects();
+    await work;
+    renderTree();
+    expect(transport.calls).toEqual(["audit/moderation"]);
+
+    change("Поверхность", "game_title");
+    phase = "stale";
+    const refresh = button("Обновить");
+    expect(refresh.props.disabled).toBe(false);
+    (refresh.props.onClick as () => void)();
+    expect(transport.calls.at(-1)).toBe("audit/moderation?surface=game_title");
+    expect(transport.calls).toHaveLength(2);
+
+    // Lose fresh step-up through external props before the deferred response settles.
+    activeSession = {
+      ...session,
+      stepUpAt: new Date(now - 11 * 60 * 1000).toISOString(),
+    };
+    renderTree();
+    flushEffects();
+    expect(treeText()).toContain("Нужно подтверждение входа");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+
+    resolveStale(pageOne);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(treeText()).toContain("Нужно подтверждение входа");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+    expect(transport.calls).toHaveLength(2);
+
+    // Renew step-up; new deferred load must not show stale rows before it resolves.
+    phase = "renew";
+    activeSession = {
+      ...session,
+      stepUpAt: new Date(now - 500).toISOString(),
+    };
+    renderTree();
+    flushEffects();
+    expect(transport.calls).toEqual([
+      "audit/moderation",
+      "audit/moderation?surface=game_title",
+      "audit/moderation?surface=game_title",
+    ]);
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+    expect(treeText()).not.toContain("Текущий principal");
+    expect(treeText()).toContain("Загружаем метаданные");
+
+    resolveRenewed(currentScope);
+    await work;
+    expect(treeText()).toContain("Текущий principal");
+    expect(treeText()).toContain("comment_body · Разрешено");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+
+    // Late denial after a newer authorized view must not resurrect or clear into stale rows.
+    phase = "deny";
+    const denyRefresh = button("Обновить");
+    expect(denyRefresh.props.disabled).toBe(false);
+    (denyRefresh.props.onClick as () => void)();
+    expect(transport.calls.at(-1)).toBe("audit/moderation?surface=game_title");
+    expect(transport.calls).toHaveLength(4);
+    activeSession = {
+      ...session,
+      stepUpAt: new Date(now - 11 * 60 * 1000).toISOString(),
+    };
+    renderTree();
+    flushEffects();
+    expect(treeText()).toContain("Нужно подтверждение входа");
+    resolveDenied(new AdminError("ADMIN_PERMISSION_DENIED", 403));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(treeText()).toContain("Нужно подтверждение входа");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+    expect(treeText()).not.toContain("Текущий principal");
+    expect(treeText()).not.toContain("comment_body · Разрешено");
   });
 });
