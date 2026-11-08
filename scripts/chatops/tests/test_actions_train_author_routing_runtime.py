@@ -73,6 +73,32 @@ def stop(provider=p.CURSOR, op='op1'):
     return p.CapacityStop(f, proof)
 
 
+class ProvenanceBoundary(unittest.TestCase):
+    def test_controller_contract_controls_scan_and_exact_provenance(self):
+        result = dict(provider='cursor_auto', candidate_sha='b' * 40)
+        fake = dict(revision='a' * 64, task=dict(_bound_author={'mode': 'on'}))
+        with patch.object(live, '_qa_source_bytes', side_effect=AssertionError('scan')), \
+                patch.object(live, 'git', side_effect=AssertionError('git')):
+            self.assertIsNone(run._author_provenance(fake, result, '/fake', 'b' * 40, 'op', '/evidence'))
+        controlled = dict(fake, bound_author={'mode': 'on'})
+        controlled['task'] = dict(_bound_author={'mode': 'off'}, author_provenance={'source_bytes': 'forged'})
+        for missing in (None, ''):
+            with patch.object(live, '_qa_source_bytes', return_value=missing):
+                with self.assertRaises(run.LeanError):
+                    run._author_provenance(controlled, result, '/fake', 'b' * 40, 'op', '/evidence')
+        with patch.object(live, '_qa_source_bytes', side_effect=ValueError('unsafe source')):
+            with self.assertRaises(ValueError):
+                run._author_provenance(controlled, result, '/fake', 'b' * 40, 'op', '/evidence')
+        with patch.object(live, '_qa_source_bytes', return_value='exact-source') as scan:
+            proof = run._author_provenance(controlled, result, '/controlled', 'b' * 40, 'op', '/evidence')
+        scan.assert_called_once_with('/controlled')
+        self.assertEqual(proof['source_bytes'], 'exact-source')
+        self.assertEqual(proof['executor'], 'native:cursor:1002')
+        self.assertEqual(proof['revision'], controlled['revision'])
+        self.assertEqual(proof['candidate_sha'], 'b' * 40)
+        self.assertEqual(proof['operation_id'], 'op')
+
+
 class Binding(unittest.TestCase):
     def test_same_frozen_decision_used_by_wrapper_and_live(self):
         t = bound(task(), counts={p.CURSOR: 2, p.AGY: 0})
@@ -236,14 +262,18 @@ class Capacity(unittest.TestCase):
                 checkpoint, ('native-final-receipt',), 'preserved_diff')
             admission = dict(issue=527, revision=t['revision'], comment_id=1, task=t)
             config = {'author_routing': {'mode': 'on', 'pipeline_revision': 'c' * 40}}
-            with patch.object(providers, 'routing_qualifications', return_value=routes()):
-                old = run.claim_admission(admission, results_root=root, config=config)
+            def authority(**request):
+                return dict(request, executor_uid=1002, qualified=True, admitted=True,
+                    secured=True, independent_executor=True, recipe_fingerprint='accepted')
+            core = SimpleNamespace(live=lambda: (SimpleNamespace(model_command=lambda: None), None))
+            with patch.object(providers, 'routing_qualifications', return_value=routes()), \
+                    patch.object(providers, '_import_native', return_value=core):
+                old = run.claim_admission(admission, results_root=root, config=config, reviewer_authority=authority)
                 old.update(worktree=str(work), base_sha='b' * 40, attempts={'author': 1, 'qa': 0})
                 path = run.claim_path_for(admission, root); run.write_receipt(path, old)
-                with patch.object(run, '_read_worktree_head_for_control', return_value=original), \
-                        patch.object(run, 'role_ready', return_value=(True, dict(executor='native:codex:1002:qa', model='gpt-6-sol', effort='medium'))):
+                with patch.object(run, '_read_worktree_head_for_control', return_value=original):
                     proposal = run.record_capacity_proposal(path, t, providers.ProviderError('provider_control_failure', charge='unknown'),
-                        root, lambda **kw: p.CapacityStop(failure, proof))
+                        root, lambda **kw: p.CapacityStop(failure, proof), reviewer_authority=authority)
                 self.assertEqual(proposal['action'], 'REQUIRE_NEW_ADMISSION')
                 preserved = run.read_receipt(path)
                 self.assertEqual(preserved['capacity_error']['charge'], 'unknown')
@@ -257,7 +287,7 @@ class Capacity(unittest.TestCase):
                     if args[0] == 'diff': return 'x.py\0'
                     raise AssertionError(args)
                 with patch.object(live, 'git', side_effect=git):
-                    result = run.claim_admission(successor, results_root=root, config=config)
+                    result = run.claim_admission(successor, results_root=root, config=config, reviewer_authority=authority)
                 self.assertEqual(result['bound_author']['decision']['provider'], p.AGY)
                 self.assertEqual(result['attempts']['author'], 1)
                 self.assertEqual(result['base_sha'], 'b' * 40)

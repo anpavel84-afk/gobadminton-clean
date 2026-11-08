@@ -1163,8 +1163,17 @@ class LiveBindingsTests(unittest.TestCase):
         self.assertNotIn("checkout', '--detach'", src)
         self.assertIn("HOME': str(AGENT_HOME)", src)
         self.assertIn('NATIVE_CODEX_HOME', src)
-        self.assertIn("str(NATIVE_CODEX_HOME): 'deny'", src)
-        self.assertIn("str(AGENT_HOME / '.ssh'): 'deny'", src)
+        factory = inspect.getsource(lean_live._qa_launch)
+        self.assertIn("str(NATIVE_CODEX_HOME): 'deny'", factory)
+        self.assertIn("str(AGENT_HOME / '.ssh'): 'deny'", factory)
+        self.assertIn('_qa_launch(source, tmpdir, qa_model, qa_effort)', src)
+        self.assertIn('codex_qa_live(', inspect.getsource(lean_live.codex_qa_probe_live))
+        with patch.object(lean_live, '_git_common_dir', return_value=None), \
+                patch.object(lean_live, 'load_short_rules', return_value=('', '', Path('/rules'))), \
+                patch.object(lean_live, '_qa_native_binary', return_value=Path('/codex')):
+            _, permissions = lean_live._qa_launch('/source', '/private', 'gpt-6-sol', 'medium')
+        self.assertEqual(permissions[str(lean_live.NATIVE_CODEX_HOME)], 'deny')
+        self.assertEqual(permissions[str(lean_live.AGENT_HOME / '.ssh')], 'deny')
         # umask 077 Root evidence: CLI -o final under private 1002 TMPDIR, parent collects.
         self.assertIn('final_private', src)
         self.assertIn("tmpdir / 'final.txt'", src)

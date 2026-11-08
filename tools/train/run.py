@@ -918,6 +918,29 @@ def _collect_done_uat_blocked(results_root):
     return done, uat, blocked
 
 
+def _author_provenance(claim, author_result, worktree, candidate_sha, operation, evidence):
+    # Controller-frozen installed V3 contract, never admission task flags.
+    if (claim.get('bound_author') or {}).get('mode') != 'on':
+        return None
+    known_authors = {'cursor_auto': ('native:cursor:1002', 'auto'),
+        'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
+        'codex_author': ('native:codex:1002:author', 'gpt-6.1-sol:medium')}
+    actual_provider = author_result.get('provider') or 'cursor_auto'
+    executor, model = known_authors.get(actual_provider, ('', ''))
+    # No role inference from task JSON or historical partial output.
+    from live import _qa_source_bytes
+    if actual_provider != 'cursor_auto' and author_result.get('effective_model') != model:
+        executor = ''  # Unknown/mismatched native model cannot qualify an author receipt.
+    _need(executor, 'author_provenance_hold')
+    provenance = dict(role='author', source_bytes=_qa_source_bytes(worktree), executor=executor, model=model,
+        revision=claim['revision'], candidate_sha=candidate_sha,
+        operation_id=operation,
+        effective_model=author_result.get('effective_model'),
+        evidence_dir=str(evidence))
+    _need(provenance['source_bytes'], 'author_provenance_hold')
+    return provenance
+
+
 def execute_claim(admission, adapters, *, results_root, config=None, parent_lease=False,
                   max_repair=None):
     """Finite resumable flow for one admitted Issue. Same path for live + tests.
@@ -1116,26 +1139,19 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 'native_evidence_dir': author_result.get('native_evidence_dir'),
                 'author_attempt': author_n,
             }
-            known_authors = {'cursor_auto': ('native:cursor:1002', 'auto'),
-                'agy_author': ('native:agy:978', 'claude-sonnet-5-5-medium'),
-                'codex_author': ('native:codex:1002:author', 'gpt-6.1-sol:medium')}
-            actual_provider = author_result.get('provider') or 'cursor_auto'
-            executor, model = known_authors.get(actual_provider, ('', ''))
-            # No role inference from task JSON or historical partial output.
-            from live import _qa_source_bytes
-            if actual_provider != 'cursor_auto' and author_result.get('effective_model') != model:
-                executor = ''  # Unknown/mismatched native model cannot qualify an author receipt.
-            provenance = dict(role='author', source_bytes=_qa_source_bytes(worktree), executor=executor, model=model,
-                revision=claim['revision'], candidate_sha=candidate_sha,
-                operation_id=task['_author_operation'],
-                effective_model=author_result.get('effective_model'),
-                evidence_dir=str(author_evidence))
+            try:
+                provenance = _author_provenance(claim, author_result, worktree,
+                    candidate_sha, task['_author_operation'], author_evidence)
+            except Exception as err:
+                # A failed security scan is an explicit HOLD, never AUTHOR_DONE.
+                mark_phase(path, 'BLOCKED', stage='author', error='author_provenance_hold')
+                raise LeanError('author_provenance_hold') from err
             claim = mark_phase(path, 'AUTHOR_DONE', stage='author',
                                author_provenance=provenance,
                                candidate_sha=candidate_sha,
                                reviewed_candidate_sha=candidate_sha,
                                author_changed=author_result.get('changed_paths') or [],
-                               author_provider=author_result.get('provider'),
+                               author_provider=author_result.get('provider') or 'cursor_auto',
                                effective_model=author_result.get('effective_model'),
                                operation_fingerprint=author_result.get(
                                    'operation_fingerprint'),
