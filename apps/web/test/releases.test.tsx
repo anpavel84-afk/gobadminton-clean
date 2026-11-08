@@ -87,7 +87,8 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
     expect(CURRENT_NAMED_RELEASE.title).toMatch(/оценк|обсуждени|площадк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/квадрат|компактн|210|ролей|отзыв/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф/i,

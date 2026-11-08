@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CHROME = "/opt/gobadminton-qa/chromium-headless-1243/chrome-headless-shell";
-const VIEWPORTS = [390, 820, 1280];
+const VIEWPORTS = [390, 820, 1280, 1920];
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const outDir = process.argv[2] || join(tmpdir(), `gb521-browser-${process.pid}`);
 mkdirSync(outDir, { recursive: true });
@@ -48,12 +48,15 @@ async function ssrExactCards() {
   assert.equal(result.status, 0, result.stderr || result.stdout || "vitest SSR fixture failed");
   const payload = JSON.parse(await readFile(out, "utf8"));
   assert.match(payload.regularHtml, /gb-discovery-card/);
+  assert.match(payload.trainerTypicalHtml, /Demo Morozov Coaching Hour/);
   assert.match(payload.trainerHtml, /data-activity="trainer_led"/);
   assert.match(payload.trainerSameStringIdsHtml, /data-role="trainer"/);
   assert.match(payload.trainerSameStringIdsHtml, /data-role="organizer"/);
   assert.doesNotMatch(payload.trainerSameStringIdsHtml, /trainer-organizer/);
   assert.match(payload.trainerMissingHtml, /data-trainer-unavailable/);
   assert.doesNotMatch(payload.trainerHtml, /data-layout/);
+  assert.match(payload.trainerHtml, /gb-discovery-card__people/);
+  assert.match(payload.trainerTypicalHtml, /gb-discovery-card__footer/);
   await rm(dir, { recursive: true, force: true });
   return payload;
 }
@@ -176,11 +179,13 @@ const consumerRaw = await readFile(new URL("../src/styles/consumer.css", import.
 const consumer = consumerRaw.replace(/@import\s+["'][^"']+["']\s*;?/g, "/* inlined tokens separately */");
 const discovery = await readFile(new URL("../src/styles/discovery.css", import.meta.url), "utf8");
 const roleRep = await readFile(new URL("../src/styles/role-reputation.css", import.meta.url), "utf8");
-const cssBundle = `${consumerTokens}\n${consumer}\n${discovery}\n${roleRep}`;
+const games = await readFile(new URL("../src/styles/games.css", import.meta.url), "utf8");
+const cssBundle = `${consumerTokens}\n${consumer}\n${discovery}\n${roleRep}\n${games}`;
 const fixtures = await ssrExactCards();
 
 const feedHtml = [
   fixtures.regularHtml,
+  fixtures.trainerTypicalHtml,
   fixtures.trainerHtml,
   fixtures.trainerSameStringIdsHtml,
   fixtures.trainerMissingHtml,
@@ -188,7 +193,7 @@ const feedHtml = [
 
 await withChrome(async ({ call, evaluate }) => {
   for (const width of VIEWPORTS) {
-    const height = width <= 390 ? 1600 : 1400;
+    const height = width <= 390 ? 2200 : width >= 1920 ? 1800 : 1600;
     await call("Emulation.setDeviceMetricsOverride", {
       width,
       height,
@@ -201,35 +206,6 @@ await withChrome(async ({ call, evaluate }) => {
     });
     await sleep(150);
 
-    // Append an extra reputation block (loaded-reputation resize path) on the distinct trainer card.
-    await evaluate(`(() => {
-      const content = document.querySelector('#feed .gb-discovery-card[data-activity="trainer_led"] .gb-discovery-card__content');
-      if (!content) throw new Error('trainer content missing');
-      const extra = document.createElement('div');
-      extra.className = 'gb-role-rep-footer';
-      extra.setAttribute('data-browser-append', '1');
-      extra.innerHTML = "<span>3 проведённые игры по подтверждённой истории. История может быть неполной</span><button type='button'>Отзывы об организации · 2</button>";
-      content.append(extra);
-      window.dispatchEvent(new Event('resize'));
-      return true;
-    })()`);
-
-    // Force a viewport resize pulse after reputation append.
-    await call("Emulation.setDeviceMetricsOverride", {
-      width,
-      height: height + 40,
-      deviceScaleFactor: 1,
-      mobile: width <= 390,
-    });
-    await sleep(80);
-    await call("Emulation.setDeviceMetricsOverride", {
-      width,
-      height,
-      deviceScaleFactor: 1,
-      mobile: width <= 390,
-    });
-    await sleep(80);
-
     const metrics = await evaluate(`(() => {
       const viewportWidth = ${width};
       const longTrainer = ${JSON.stringify(fixtures.longTrainerName)};
@@ -239,10 +215,12 @@ await withChrome(async ({ call, evaluate }) => {
         const r = el.getBoundingClientRect();
         return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
       };
-      const cards = [...document.querySelectorAll('.gb-discovery-card')].map((card) => {
-        const image = card.querySelector('.gb-discovery-card__image');
+      const cards = [...document.querySelectorAll('.gb-discovery-card')].map((card, index) => {
+        const imageSlot = card.querySelector('.gb-discovery-card__image');
+        const imageEl = imageSlot?.querySelector('img') || imageSlot?.querySelector('.gb-venue-cover');
         const content = card.querySelector('.gb-discovery-card__content');
         const details = card.querySelector('.gb-c23-btn');
+        const imgStyle = imageEl ? getComputedStyle(imageEl.tagName === 'IMG' ? imageEl : (imageEl.querySelector('img') || imageEl)) : null;
         const strongs = [...card.querySelectorAll('.gb-discovery-host strong')].map((s) => ({
           text: s.textContent || '',
           rect: rect(s),
@@ -253,15 +231,25 @@ await withChrome(async ({ call, evaluate }) => {
           overflowWrap: getComputedStyle(s).overflowWrap,
         }));
         const roles = [...card.querySelectorAll('.gb-discovery-host')].map((h) => h.getAttribute('data-role'));
+        const people = [...card.querySelectorAll('.gb-discovery-card__people > .gb-discovery-host')].map(rect);
+        const footer = card.querySelector('.gb-discovery-card__footer');
+        const slot = rect(imageSlot);
+        const image = rect(imageEl?.tagName === 'IMG' ? imageEl : (imageEl?.querySelector('img') || imageEl));
+        const cardBox = rect(card);
         return {
+          index,
           activity: card.getAttribute('data-activity'),
           layout: card.getAttribute('data-layout'),
-          card: rect(card),
-          image: rect(image),
+          card: cardBox,
+          imageSlot: slot,
+          image,
           content: rect(content),
           details: rect(details),
           strongs,
           roles,
+          people,
+          footer: footer ? rect(footer) : null,
+          crop: imgStyle ? { fit: imgStyle.objectFit, position: imgStyle.objectPosition } : null,
           overflowX: card.scrollWidth > card.clientWidth + 1,
           viewportWidth,
         };
@@ -279,16 +267,20 @@ await withChrome(async ({ call, evaluate }) => {
           return roles.includes('trainer') && roles.includes('organizer') && !roles.includes('trainer-organizer');
         })(),
         missingTrainer: !!document.querySelector('[data-trainer-unavailable="true"]'),
-        appendedReputation: !!document.querySelector('[data-browser-append="1"]'),
+        typicalPeople: !!document.querySelector('#feed .gb-discovery-card[data-activity="trainer_led"] .gb-discovery-card__people'),
       };
     })()`);
 
-    assert.equal(metrics.cards.length, 4, `${width}: expected 4 fixture cards`);
+    assert.equal(metrics.cards.length, 5, `${width}: expected 5 fixture cards`);
     assert.equal(metrics.longTrainerVisible, true, `${width}: long trainer name must be in DOM text`);
     assert.equal(metrics.longOrganizerVisible, true, `${width}: long organizer name must be in DOM text`);
     assert.equal(metrics.sameStringStillSeparate, true, `${width}: coinciding id strings must stay separate roles`);
     assert.equal(metrics.missingTrainer, true, `${width}: missing trainer fixture`);
-    assert.equal(metrics.appendedReputation, true, `${width}: reputation append`);
+    assert.equal(metrics.typicalPeople, true, `${width}: compact people row present`);
+
+    const ordinary = metrics.cards[0];
+    const typical = metrics.cards[1];
+    assert.ok(ordinary && typical);
 
     for (const row of metrics.cards) {
       assert.equal(row.layout, null);
@@ -296,6 +288,13 @@ await withChrome(async ({ call, evaluate }) => {
       assert.ok(row.details, `${width}:${row.activity} details CTA`);
       assert.ok(row.details.bottom <= row.card.bottom + 1, `${width}:${row.activity} CTA clipped`);
       assert.ok(row.details.right <= width + 1, `${width}:${row.activity} CTA beyond viewport`);
+      assert.ok(row.imageSlot && row.image, `${width}:${row.activity} image metrics`);
+      assert.ok(Math.abs(row.image.width - row.imageSlot.width) <= 1, `${width}:${row.activity} img width fills slot`);
+      assert.ok(Math.abs(row.image.height - row.imageSlot.height) <= 1, `${width}:${row.activity} img height fills slot`);
+      if (row.crop) {
+        assert.equal(row.crop.fit, "cover", `${width}:${row.activity} object-fit`);
+        assert.match(row.crop.position, /50%\s*50%/, `${width}:${row.activity} object-position`);
+      }
       for (const s of row.strongs) {
         assert.notEqual(s.whiteSpace, "nowrap", `${width}: strong must wrap, got ${s.whiteSpace}`);
         assert.notEqual(s.textOverflow, "ellipsis", `${width}: strong must not ellipsis`);
@@ -307,20 +306,29 @@ await withChrome(async ({ call, evaluate }) => {
         }
       }
       if (width <= 390) {
-        assert.ok(row.image.width >= row.card.width * 0.9, `${width}:${row.activity} mobile image width`);
-        assert.ok(row.content.y >= row.image.bottom - 1, `${width}:${row.activity} mobile content below image`);
+        assert.ok(Math.abs(row.imageSlot.height - 210) <= 1, `${width}:${row.activity} mobile image height 210`);
+        assert.ok(row.imageSlot.width >= row.card.width * 0.9, `${width}:${row.activity} mobile image width`);
+        assert.ok(row.content.y >= row.imageSlot.bottom - 1, `${width}:${row.activity} mobile content below image`);
       } else {
-        assert.ok(row.image.x < row.content.x, `${width}:${row.activity} image left of content`);
-        assert.ok(row.image.width <= row.card.width * 0.45, `${width}:${row.activity} image not full-width banner`);
-        assert.ok(row.content.x >= row.image.right - 2, `${width}:${row.activity} content starts after image`);
+        assert.ok(Math.abs(row.imageSlot.width - row.imageSlot.height) <= 1, `${width}:${row.activity} desktop square slot`);
+        assert.ok(Math.abs(row.image.width - row.image.height) <= 1, `${width}:${row.activity} desktop square img`);
+        assert.ok(row.imageSlot.x < row.content.x, `${width}:${row.activity} image left of content`);
+        assert.ok(row.imageSlot.width <= row.card.width * 0.45, `${width}:${row.activity} image not full-width banner`);
+        assert.ok(row.content.x >= row.imageSlot.right - 2, `${width}:${row.activity} content starts after image`);
       }
     }
+
     if (width >= 1280) {
-      const regular = metrics.cards.find((c) => c.activity === "regular");
-      const training = metrics.cards.find((c) => c.activity === "trainer_led");
-      assert.ok(regular && training);
-      assert.ok(training.image.width <= regular.image.width + 8, "trainer image must stay compact vs ordinary");
-      assert.ok(training.content.x >= training.image.right - 2);
+      assert.ok(Math.abs(ordinary.imageSlot.width - typical.imageSlot.width) <= 1, "regular/trainer same square crop width");
+      assert.ok(Math.abs(ordinary.imageSlot.height - typical.imageSlot.height) <= 1, "regular/trainer same square crop height");
+      // Compact typical DEMO should grow modestly vs ordinary — not equal-height latch to content.
+      const delta = typical.card.height - ordinary.card.height;
+      assert.ok(delta >= 20, `${width}: typical trainer should grow vs ordinary, delta=${delta}`);
+      assert.ok(delta < 160, `${width}: typical trainer should stay compact vs old tall stretch, delta=${delta}`);
+      assert.ok(
+        typical.card.height - typical.imageSlot.height > 20,
+        `${width}: blank below square image expected on taller trainer card`,
+      );
     }
 
     const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
@@ -333,11 +341,14 @@ await withChrome(async ({ call, evaluate }) => {
       longOrganizerVisible: metrics.longOrganizerVisible,
       sameStringStillSeparate: metrics.sameStringStillSeparate,
       missingTrainer: metrics.missingTrainer,
-      appendedReputation: metrics.appendedReputation,
+      ordinaryH: Math.round(ordinary.card.height),
+      typicalH: Math.round(typical.card.height),
+      slotSquare: Math.abs(ordinary.imageSlot.width - ordinary.imageSlot.height) <= 1,
       activities: metrics.cards.map((c) => ({
         activity: c.activity,
         roles: c.roles,
-        imageW: Math.round(c.image.width),
+        imageW: Math.round(c.imageSlot.width),
+        imageH: Math.round(c.imageSlot.height),
         contentX: Math.round(c.content.x),
         detailsBottom: Math.round(c.details.bottom),
         cardBottom: Math.round(c.card.bottom),
@@ -359,4 +370,4 @@ console.log(JSON.stringify({
   outDir,
   note: "component geometry only; not DEV/Owner UAT",
 }));
-console.log("#521 discovery training card browser geometry OK (390 + 820 + 1280); not Owner UAT.");
+console.log("#521 discovery training card browser geometry OK (390 + 820 + 1280 + 1920); not Owner UAT.");

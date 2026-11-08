@@ -14,6 +14,22 @@ import { DiscoveryIcon } from "./DiscoveryComposition";
  * No confirmed common person key exists in the allowed contract, so roles are
  * always rendered separately — never merged by id equality or displayName. */
 
+function CardActions({ gameId, title }: { gameId: string; title: string }) {
+  return (
+    <div className="gb-discovery-card__actions">
+      <Link
+        className="gb-c23-btn gb-c23-btn--outline"
+        href={`/games/${gameId}`}
+        aria-label={`Подробнее: ${title}`}
+      >
+        <span>Подробнее</span>
+        <DiscoveryIcon name="arrow" />
+      </Link>
+      <GameShare gameId={gameId} />
+    </div>
+  );
+}
+
 export function DiscoveryGameCard({
   game,
   reputation,
@@ -45,37 +61,118 @@ export function DiscoveryGameCard({
       <p className="gb-discovery-address"><DiscoveryIcon name="pin" />{game.venue.address}</p>
       <div className="gb-discovery-meta"><span>Уровень: {game.levelRule.allowedLevelIds.join(", ")}</span>{format && <span>{format}</span>}</div>
       <p className="gb-discovery-terms">{settlementTerms(game.settlement)}</p>
-      {trainer && game.trainer ? (
-        <div className="gb-discovery-host" data-role="trainer" data-trainer-profile={game.trainer.profileId}>
-          <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
-          <span><small>Тренер · самостоятельно указано</small><strong>{game.trainer.displayName}</strong></span>
-        </div>
-      ) : null}
-      {trainer && !game.trainer ? (
-        <div className="gb-discovery-host" data-role="trainer" data-trainer-unavailable="true">
-          <span><small>Тренер</small><strong>Профиль недоступен</strong></span>
-        </div>
-      ) : null}
-      <div
-        className="gb-discovery-host"
-        data-role="organizer"
-        data-organizer-id={game.organizer.id ?? undefined}
-      >
-        <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
-        <span>
-          <small>Организатор</small>
-          <strong>{host}</strong>
-        </span>
-        <div className="gb-discovery-card__actions"><Link className="gb-c23-btn gb-c23-btn--outline" href={`/games/${game.id}`} aria-label={`Подробнее: ${game.title}`}><span>Подробнее</span><DiscoveryIcon name="arrow" /></Link><GameShare gameId={game.id} /></div>
-      </div>
-      {reputation ? (
+      {trainer ? (
         <RoleReputationCardActions
           gameId={game.id}
-          organization={reputation.organization}
-          training={reputation.training}
+          organization={reputation?.organization}
+          training={reputation?.training}
           trainerName={game.trainer?.displayName}
+          organizerName={host}
+          renderCompact={(view) => (
+            <>
+              <div className="gb-discovery-card__people">
+                {game.trainer ? (
+                  <div
+                    className="gb-discovery-host"
+                    data-role="trainer"
+                    data-trainer-profile={game.trainer.profileId}
+                  >
+                    {view.trainingTrigger ? (
+                      <button
+                        type="button"
+                        className="gb-discovery-card__role-review"
+                        aria-label={view.trainingTrigger.ariaLabel}
+                        onClick={view.trainingTrigger.onOpen}
+                      >
+                        <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
+                        <span className="gb-discovery-host__copy">
+                          <small>Тренер · самостоятельно указано</small>
+                          <strong>{game.trainer.displayName}</strong>
+                          <span className="gb-discovery-card__review-cue">{view.trainingTrigger.cue}</span>
+                        </span>
+                      </button>
+                    ) : (
+                      <>
+                        <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
+                        <span className="gb-discovery-host__copy">
+                          <small>Тренер · самостоятельно указано</small>
+                          <strong>{game.trainer.displayName}</strong>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="gb-discovery-host" data-role="trainer" data-trainer-unavailable="true">
+                    <span className="gb-discovery-host__copy">
+                      <small>Тренер</small>
+                      <strong>Профиль недоступен</strong>
+                    </span>
+                  </div>
+                )}
+                <div
+                  className="gb-discovery-host"
+                  data-role="organizer"
+                  data-organizer-id={game.organizer.id ?? undefined}
+                >
+                  {view.organizationTrigger ? (
+                    <button
+                      type="button"
+                      className="gb-discovery-card__role-review"
+                      aria-label={view.organizationTrigger.ariaLabel}
+                      onClick={view.organizationTrigger.onOpen}
+                    >
+                      <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
+                      <span className="gb-discovery-host__copy">
+                        <small>Организатор</small>
+                        <strong>{host}</strong>
+                        <span className="gb-discovery-card__review-cue">{view.organizationTrigger.cue}</span>
+                      </span>
+                    </button>
+                  ) : (
+                    <>
+                      <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
+                      <span className="gb-discovery-host__copy">
+                        <small>Организатор</small>
+                        <strong>{host}</strong>
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="gb-discovery-card__footer">
+                {view.historyLabel ? (
+                  <p className="gb-discovery-card__history">{view.historyLabel}</p>
+                ) : null}
+                <CardActions gameId={game.id} title={game.title} />
+              </div>
+            </>
+          )}
         />
-      ) : null}
+      ) : (
+        <>
+          <div
+            className="gb-discovery-host"
+            data-role="organizer"
+            data-organizer-id={game.organizer.id ?? undefined}
+          >
+            <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
+            <span className="gb-discovery-host__copy">
+              <small>Организатор</small>
+              <strong>{host}</strong>
+            </span>
+            <CardActions gameId={game.id} title={game.title} />
+          </div>
+          {reputation ? (
+            <RoleReputationCardActions
+              gameId={game.id}
+              organization={reputation.organization}
+              training={reputation.training}
+              trainerName={game.trainer?.displayName}
+              organizerName={host}
+            />
+          ) : null}
+        </>
+      )}
     </div>
   </article>;
 }

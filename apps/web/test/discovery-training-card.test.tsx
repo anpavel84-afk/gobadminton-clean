@@ -11,6 +11,8 @@ const LONG_TRAINER =
   "Alexey Morozov (demo trainer) · Extended Qualifier String That Must Fully Wrap Across Widths";
 const LONG_ORGANIZER =
   "Other Organizer With Extremely Long Display Name For Wrap Verification Across Widths";
+const DEMO_TRAINER = "Alexey Morozov (demo trainer)";
+const DEMO_ORGANIZER = "Alexey Morozov";
 
 /** Exact DiscoveryGameCard SSR payloads for the sibling browser geometry helper. */
 export function renderTrainingCardBrowserFixtures() {
@@ -50,6 +52,28 @@ export function renderTrainingCardBrowserFixtures() {
       terms: "Аренду делим поровну. Длинные условия участия для проверки переноса строк без обрезки CTA.",
     },
   };
+  const trainerTypical: Game = {
+    ...regular,
+    id: "game-trainer-typical",
+    title: "Demo Morozov Coaching Hour",
+    activityKind: "trainer_led",
+    trainer: {
+      profileId: "trainer-profile-am",
+      displayName: DEMO_TRAINER,
+      declarationSource: "self_declared",
+    },
+    organizer: { id: "org-user-am", displayName: DEMO_ORGANIZER, publicContact: "private" },
+    startsAt: "2030-11-11T16:00:00Z",
+    endsAt: "2030-11-11T18:00:00Z",
+    settlement: {
+      mode: "external",
+      purpose: "trainer_fee",
+      priceStatus: "by_agreement",
+      priceMinor: null,
+      currency: null,
+      terms: "Оплата тренеру по договорённости · Synthetic demo settlement terms. Payment custody outside MVP.",
+    },
+  };
   const trainerDistinct: Game = {
     ...regular,
     id: "game-trainer",
@@ -87,6 +111,31 @@ export function renderTrainingCardBrowserFixtures() {
     trainer: null,
     organizer: { id: "org-user-other", displayName: LONG_ORGANIZER, publicContact: "private" },
   };
+  const reputationTypical: GameRoleReputationCard = {
+    gameId: trainerTypical.id,
+    organization: {
+      roleHandle: "o".repeat(32),
+      role: "organization",
+      subjectDisplayName: DEMO_ORGANIZER,
+      heldGamesCount: 3,
+      countScope: "confirmed_history",
+      historyMayBeIncomplete: true,
+      publishedReviewCount: 0,
+      projectionVersion: "1",
+      availability: "available",
+    },
+    training: {
+      roleHandle: "t".repeat(32),
+      role: "training",
+      subjectDisplayName: DEMO_TRAINER,
+      heldGamesCount: 1,
+      countScope: "confirmed_history",
+      historyMayBeIncomplete: true,
+      publishedReviewCount: 0,
+      projectionVersion: "1",
+      availability: "available",
+    },
+  };
   const reputation: GameRoleReputationCard = {
     gameId: trainerDistinct.id,
     organization: {
@@ -112,13 +161,42 @@ export function renderTrainingCardBrowserFixtures() {
       availability: "available",
     },
   };
+  const reputationNullHeld: GameRoleReputationCard = {
+    ...reputation,
+    organization: {
+      ...reputation.organization!,
+      heldGamesCount: null,
+      publishedReviewCount: 2,
+    },
+  };
+  const reputationZeroHeld: GameRoleReputationCard = {
+    ...reputation,
+    organization: {
+      ...reputation.organization!,
+      heldGamesCount: 0,
+      historyMayBeIncomplete: true,
+      publishedReviewCount: 0,
+    },
+  };
   return {
     regularHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: regular })),
+    trainerTypicalHtml: renderToStaticMarkup(
+      createElement(DiscoveryGameCard, { game: trainerTypical, reputation: reputationTypical }),
+    ),
     trainerHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct, reputation })),
     trainerSameStringIdsHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerSameStringIds })),
     trainerMissingHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerMissing })),
+    trainerWithoutRoleDataHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct })),
+    trainerNullHeldHtml: renderToStaticMarkup(
+      createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: reputationNullHeld }),
+    ),
+    trainerZeroHeldHtml: renderToStaticMarkup(
+      createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: reputationZeroHeld }),
+    ),
     longTrainerName: LONG_TRAINER,
     longOrganizerName: LONG_ORGANIZER,
+    demoTrainerName: DEMO_TRAINER,
+    demoOrganizerName: DEMO_ORGANIZER,
   };
 }
 
@@ -229,22 +307,35 @@ const reputation: GameRoleReputationCard = {
 };
 
 const cardSource = readFileSync(new URL("../src/components/consumer/discovery/DiscoveryGameCard.tsx", import.meta.url), "utf8");
+const panelSource = readFileSync(new URL("../src/components/consumer/games/RoleReputationPanel.tsx", import.meta.url), "utf8");
 const discoveryCss = readFileSync(new URL("../src/styles/discovery.css", import.meta.url), "utf8");
 
-describe("#521 discovery training card unified desktop row", () => {
+describe("#521 discovery training card D2 square + compact roles", () => {
   it("writes exact DiscoveryGameCard SSR fixture for the browser helper when requested", () => {
     const path = process.env.GB521_BROWSER_FIXTURE;
     if (!path) return;
     writeFileSync(path, JSON.stringify(renderTrainingCardBrowserFixtures()));
   });
 
-  it("removes content-height stacked latch; CSS keeps desktop row for all cards", () => {
-    expect(cardSource).not.toMatch(/useFeedCardLayout|mediaBudget|data-layout/);
+  it("keeps desktop square image CSS without height-latch or mobile square rewrite", () => {
+    expect(cardSource).not.toMatch(/useFeedCardLayout|mediaBudget|data-layout|ResizeObserver|height-latch/);
     expect(cardSource).not.toMatch(/setLayout\("stacked"\)|scrollHeight/);
     expect(cardSource).not.toMatch(/sameKnownPerson|combinedIdentity|trainer-organizer/);
     expect(discoveryCss).not.toMatch(/data-layout="stacked"|aspect-ratio:\s*16\s*\/\s*10/);
     expect(discoveryCss).toMatch(/grid-template-columns:\s*minmax\(210px,\s*min\(300px,\s*36%\)\)\s*minmax\(0,\s*1fr\)/);
-    expect(discoveryCss).toMatch(/@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card,\s*\.gb-discovery-skeleton\s*\{\s*display:\s*block/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card\s*\{[^}]*align-items:\s*start/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__image\s*\{[^}]*aspect-ratio:\s*1\s*\/\s*1/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__image\s*\{[^}]*align-self:\s*start/);
+    expect(discoveryCss).toMatch(/object-fit:\s*cover/);
+    expect(discoveryCss).toMatch(/object-position:\s*50%\s*50%/);
+    expect(discoveryCss).toMatch(/@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card__image[\s\S]*height:\s*210px/);
+    expect(discoveryCss).toMatch(/@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card__image[\s\S]*aspect-ratio:\s*auto/);
+    expect(discoveryCss).not.toMatch(/\.gb-discovery-(?:card|host|card__people)[^{]*\{[^}]*(?:line-clamp|text-overflow:\s*ellipsis)/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__people/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__role-review/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__footer/);
+    expect(panelSource).toMatch(/renderCompact/);
+    expect(panelSource).toMatch(/compactHistoryLabel|Подтверждённая история/);
   });
 
   it("allows complete trainer/organizer name wrap without ellipsis clipping", () => {
@@ -278,15 +369,21 @@ describe("#521 discovery training card unified desktop row", () => {
     }
     expect(regular).toContain("Обычная игра");
     expect(regular).toContain('data-activity="regular"');
+    expect(regular).not.toContain("gb-discovery-card__people");
     expect(training).toContain("С тренером");
     expect(training).toContain('data-activity="trainer_led"');
+    expect(training).toContain("gb-discovery-card__people");
+    expect(training).toContain("gb-discovery-card__footer");
     expect(training).toContain('data-role="trainer"');
     expect(training).toContain('data-trainer-profile="trainer-profile-am"');
     expect(training).toContain("Alexey Morozov (demo trainer)");
     expect(training).toContain('data-role="organizer"');
     expect(training).toContain('data-organizer-id="org-user-other"');
     expect(training).toContain("Other Organizer");
+    expect(training).toContain("gb-discovery-card__role-review");
     expect(training).toContain("Отзывы");
+    expect(training).toContain("Подтверждённая история: 3");
+    expect(training).not.toContain("gb-role-rep-footer");
   });
 
   it("always shows trainer and organizer separately even when id strings coincide", () => {
@@ -299,6 +396,7 @@ describe("#521 discovery training card unified desktop row", () => {
       expect(html).not.toContain("Тренер · самостоятельно указано · Организатор");
       expect(html).toContain("Тренер · самостоятельно указано");
       expect(html).toContain("Организатор");
+      expect(html).toContain("gb-discovery-card__people");
     }
     expect(same).toContain('data-trainer-profile="shared-looking-id"');
     expect(same).toContain('data-organizer-id="shared-looking-id"');
@@ -309,7 +407,7 @@ describe("#521 discovery training card unified desktop row", () => {
     expect(distinct).not.toContain("MorozovOther");
   });
 
-  it("shows truthful unavailable trainer state without fabricating a person", () => {
+  it("shows truthful unavailable trainer state without fabricating organizer avatar", () => {
     const html = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerMissing }));
     expect(html).toContain("С тренером");
     expect(html).toContain('data-trainer-unavailable="true"');
@@ -317,9 +415,12 @@ describe("#521 discovery training card unified desktop row", () => {
     expect(html).not.toContain("data-trainer-profile=");
     expect(html).toContain("Other Organizer");
     expect(html).toContain("Организатор");
+    expect(html).toContain("gb-discovery-card__people");
+    expect(html).toContain("gb-discovery-card__footer");
+    expect(html).toContain("Подробнее");
   });
 
-  it("preserves long terms, seats, share and reputation actions on trainer cards", () => {
+  it("preserves long terms, seats, share and compact review cues on trainer cards", () => {
     const html = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct, reputation }));
     expect(html).toContain(trainerDistinct.settlement.terms);
     expect(html).toContain("Свободно 3 из 4");
@@ -327,5 +428,61 @@ describe("#521 discovery training card unified desktop row", () => {
     expect(html).toContain("Уровень: 2.5");
     expect(html).toContain("Парная игра");
     expect(html).toContain(`href="/games/${trainerDistinct.id}"`);
+    expect(html).toContain(" · Отзывы · 1");
+    expect(html).toContain(" · Отзывы · 2");
+    expect(html).toContain('aria-label="Отзывы о тренировках · 1: Alexey Morozov (demo trainer). Тренер · самостоятельно указано"');
+    expect(html).toContain('aria-label="Отзывы об организации · 2: Other Organizer"');
+  });
+
+  it("keeps available reviews when held count is null and distinguishes zero from null history", () => {
+    const nullHeld: GameRoleReputationCard = {
+      ...reputation,
+      organization: { ...reputation.organization!, heldGamesCount: null, publishedReviewCount: 2 },
+    };
+    const zeroHeld: GameRoleReputationCard = {
+      ...reputation,
+      organization: {
+        ...reputation.organization!,
+        heldGamesCount: 0,
+        historyMayBeIncomplete: true,
+        publishedReviewCount: 0,
+      },
+      training: { ...reputation.training!, availability: "unavailable" },
+    };
+    const without = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct }));
+    const nullHtml = renderToStaticMarkup(
+      createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: nullHeld }),
+    );
+    const zeroHtml = renderToStaticMarkup(
+      createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: zeroHeld }),
+    );
+    expect(without).toContain("gb-discovery-card__people");
+    expect(without).toContain("Подробнее");
+    expect(without).not.toContain("gb-discovery-card__role-review");
+    expect(without).not.toContain("gb-discovery-card__history");
+    expect(nullHtml).toContain("gb-discovery-card__role-review");
+    expect(nullHtml).toContain(" · Отзывы · 2");
+    expect(nullHtml).not.toContain("gb-discovery-card__history");
+    expect(nullHtml).not.toContain("Подтверждённая история");
+    expect(zeroHtml).toContain("По подтверждённой истории проведённых игр пока нет");
+    expect(zeroHtml).not.toContain("Подтверждённая история: 0");
+    expect(zeroHtml).not.toContain(" · Отзывы · 0");
+  });
+
+  it("leaves unavailable review gates as plain roles without fake zero counts", () => {
+    const unavailable: GameRoleReputationCard = {
+      gameId: trainerDistinct.id,
+      organization: { ...reputation.organization!, availability: "unavailable" },
+      training: { ...reputation.training!, availability: "unavailable" },
+    };
+    const html = renderToStaticMarkup(
+      createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: unavailable }),
+    );
+    expect(html).toContain("Тренер · самостоятельно указано");
+    expect(html).toContain("Организатор");
+    expect(html).not.toContain("gb-discovery-card__role-review");
+    expect(html).not.toContain(" · Отзывы · 0");
+    expect(html).not.toContain("gb-discovery-card__history");
+    expect(html).toContain("Подробнее");
   });
 });

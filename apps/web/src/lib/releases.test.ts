@@ -30,7 +30,8 @@ describe("releases current descriptor literals", () => {
     expect(prose).toMatch(/площадк/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/квадрат|компактн|210/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
     expect(CURRENT_NAMED_RELEASE.title).toMatch(/оценк|обсуждени|площадк/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
