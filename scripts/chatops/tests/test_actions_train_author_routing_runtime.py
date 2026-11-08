@@ -949,7 +949,7 @@ class ProtectedHighSuccessor(unittest.TestCase):
             stack.enter_context(patch.object(providers, '_import_native', return_value=core))
             stack.enter_context(patch.object(providers, 'routing_qualifications', return_value=routes()))
             config = {'author_routing': {'mode': 'on', 'pipeline_revision': 'c' * 40}}
-            admission = dict(issue=527, revision=t['revision'], task=t)
+            admission = dict(issue=527, comment_id=527001, revision=t['revision'], task=t)
             high_only = lambda **kw: self.authority(**kw) if kw['effort'] == 'high' else None
             claim = run.claim_admission(admission, results_root=root, config=config, reviewer_authority=high_only)
             claim.update(worktree=str(work), base_sha='b' * 40, attempts={'author': 1, 'qa': 0})
@@ -960,7 +960,7 @@ class ProtectedHighSuccessor(unittest.TestCase):
             self.assertEqual(proposal['action'], 'REQUIRE_NEW_ADMISSION')
             newtask = task(); newtask.update(handoff_from_revision=t['revision'],
                 checkpoint_fingerprint=manifest['fingerprint'], checkpoint_sha='c' * 40, base='c' * 40)
-            successor = dict(issue=527, revision='d' * 64, task=newtask)
+            successor = dict(issue=527, comment_id=527002, revision='d' * 64, task=newtask)
             def git(worktree, *args):
                 if args[:2] == ('rev-parse', 'HEAD'): return 'c' * 40
                 if args[0] == 'status': return ''
@@ -1009,6 +1009,10 @@ class ProtectedHighSuccessor(unittest.TestCase):
                 qa_checks = [c.kwargs['effort'] for c in ready.call_args_list
                              if c.args[0] == 'codex_routing_qa']
                 self.assertEqual(qa_checks, ['high', 'high'])
+            # Simulate the orchestrator's next owned author attempt and receipt.
+            t['_author_operation'] = 'operation2'
+            claim['attempts']['author'] += 1
+            run.write_receipt(path, claim)
             current = h.operation(t, 'agy_author', 'c' * 40)
             failure = p.CapacityFailure(current, 'secondhash', 'RATE_LIMIT', 'native_top_level_error')
             proof = p.StopProof(current, failure.fingerprint, True, True, True, False,
