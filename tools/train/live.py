@@ -1099,6 +1099,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     before = None
     model_result = None
     import_done = False
+    retention = None
     try:
         for name in CURSOR_PRIVATE_DIRS:
             (base / name).mkdir(mode=0o700)
@@ -1192,6 +1193,17 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 f'{err.code}:{err.detail or ""}',
                 charge='none',
             ) from err
+        from author_handoff import SourceRetention
+        def ignored(name):
+            checked = run_argv(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
+                cwd=str(worktree), env=env_git, timeout=15, check=False)
+            if checked.returncode not in (0, 1):
+                raise ValueError('ignore check failed')
+            return checked.returncode == 0
+        retention = SourceRetention(baseline=before, allowed=task['allowed_paths'],
+            ignored=ignored, source_name=native.source_name, secrets=lambda: (token,))
+        retention.prepare(base / 'work')
         mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
         stream = evidence / 'stream.jsonl'
         errf = evidence / 'stderr'
@@ -1222,6 +1234,19 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                     _kill_owned_process_group(p)
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
                 raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
+            finally:
+                def reap_owned(process):
+                    native._stop(process)
+                    # _stop alone does not kill an exited parent's descendants.
+                    try:
+                        os.killpg(process.pid, 9)
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
+                retention.observe(base / 'work', p, reap_owned)
+                from author_handoff import owned_group_gone
+                if not owned_group_gone(p):
+                    raise ProviderError('cursor_owned_reap_hold', charge='unknown')
         if p.returncode != 0:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', exit=p.returncode)
             raise ProviderError('cursor_exit_nonzero', str(p.returncode))
@@ -1328,23 +1353,28 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 charge='charged',
             ) from err
     finally:
-        # Paid model completed but technical import failed: keep allowed sources
-        # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
-        if (
-            model_result is not None and not import_done
-            and native is not None and before is not None
-        ):
+        if retention is not None and retention.result is not None and not import_done:
             try:
-                _preserve_unpublished_author_sources(
-                    evidence,
-                    work=base / 'work',
-                    baseline=before,
-                    allowed=set(task.get('allowed_paths') or []),
-                    native=native,
-                    token=token,
-                )
+                from author_handoff import operation
+                retention.persist(evidence, operation(dict(task,
+                    _author_operation=task.get('_author_operation') or hashlib.sha256(str(intent_path).encode()).hexdigest(),
+                    runtime_base_sha=task.get('runtime_base_sha') or task.get('base') or git(worktree, 'rev-parse', 'HEAD')),
+                    'cursor_auto', git(worktree, 'rev-parse', 'HEAD')))
+                current_intent = loads(Path(intent_path).read_bytes())
+                mark_intent_phase(intent_path, current_intent['phase'],
+                    checkpoint='source-checkpoint/manifest.json', unvalidated=True)
+            except Exception:
+                pass  # Native raw/error/charge receipt remains authoritative.
+        if (model_result is not None and not import_done and retention is not None
+                and retention.result is not None and retention.failure is None):
+            try:
+                _preserve_unpublished_author_sources(evidence, work=base / 'work',
+                    baseline=before, allowed=set(task.get('allowed_paths') or []),
+                    native=native, token=token)
             except Exception:
                 pass
+        # Paid model completed but technical import failed: keep allowed sources
+        # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
         if p is not None and p.poll() is None:
             _kill_owned_process_group(p)
         shutil.rmtree(base, ignore_errors=True)
@@ -2026,6 +2056,12 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     """
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
     require_executor_uid()
+    routing_qa = task.get('_bound_author', {}).get('mode') == 'on'
+    if routing_qa:
+        from providers import role_ready
+        if not role_ready('codex_routing_qa')[0]:
+            raise ProviderError('independent_qa_unavailable_hold', charge='none')
+    qa_model = 'gpt-6-sol' if routing_qa else 'gpt-6.1-sol'
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
         raise ProviderError('invalid_candidate_sha')
     evidence_root = Path(evidence_dir)
@@ -2106,7 +2142,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             '-c', 'permissions.gb-task=' + ('{extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}'),
             '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
             '-c', 'web_search="disabled"',
-            '--model', 'gpt-6.1-sol',
+            '--model', qa_model,
             '-c', 'model_reasoning_effort="medium"',
             '--json', '-o', str(final_private), '-',
         ]
@@ -2122,7 +2158,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             'HOME': str(AGENT_HOME),
             'TMPDIR': str(tmpdir),
         }
-        mark_intent_phase(intent_path, 'launching', model='gpt-6.1-sol', effort='medium',
+        mark_intent_phase(intent_path, 'launching', model=qa_model, effort='medium',
                           rules_sha256=rules_sha, root_model=False,
                           home=str(AGENT_HOME), codex_home=str(NATIVE_CODEX_HOME))
         with (evidence / 'prompt.md').open() as i, \
@@ -2687,6 +2723,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                           requested_provider='agy_author', effective_model=AGY_MODEL)
 
     def cursor_fallback():
+        if task.get('_bound_author', {}).get('mode') == 'on':
+            raise ProviderError('bound_agy_local_governance_hold', charge='none')
         # Direct live bindings enforce the same authorization as routing.
         if not cursor_fallback_authorized(task):
             mark_intent_phase(intent_path, 'HOLD_no_authorized_fallback',
@@ -2914,16 +2952,58 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 try:
                     if os.geteuid() == 0:
                         _agy_drop_to_executor()
-                    native.invoke(
-                        bridge, rt, prompt, choice,
-                        popen=subprocess.Popen,
-                        atomic=lambda path, value: (
-                            Path(path).write_text(
-                                json.dumps(value, sort_keys=True) + '\n')
-                        ),
-                        permitted=lambda n, allowed: n in set(allowed or []),
-                        evidence_dir=native_ev,
-                    )
+                    from author_handoff import SourceRetention, operation
+                    retention = None
+                    launch = subprocess.Popen
+                    try:
+                        baseline = {n: hashlib.sha256(native._source(staging / n, staging)).hexdigest()
+                            for n in staging_git('ls-files', '-z').split('\0')
+                            if n and native._source_name(n)}
+                        old_tokens = native._credentials(native.trusted(native.AUTH, owner=AGY_UID))
+                        observed_work = {}
+                        def retention_secrets():
+                            tokens = list(old_tokens)
+                            tokens += native._credentials(native.trusted(native.AUTH, owner=AGY_UID))
+                            if observed_work.get('home'):
+                                tokens += native._credentials(native.trusted(
+                                    Path(observed_work['home']) / '.gemini/antigravity-cli/antigravity-oauth-token',
+                                    owner=AGY_UID))
+                            return tokens
+                        def original_ignored(name):
+                            result = subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                                '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
+                                cwd=staging, env=env_git, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                            if result.returncode not in (0, 1):
+                                raise ValueError('ignore check failed')
+                            return result.returncode == 0
+                        retention = SourceRetention(baseline=baseline, allowed=task['allowed_paths'],
+                            ignored=original_ignored, source_name=native._source_name, secrets=retention_secrets,
+                            control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()))
+                        observed_popen = retention.popen(subprocess.Popen, native.reap)
+                        def launch(*a, **k):
+                            observed_work['home'] = k['env']['HOME']
+                            return observed_popen(*a, **k)
+                    except Exception:
+                        retention = None
+                        launch = subprocess.Popen
+                    try:
+                        native.invoke(
+                            bridge, rt, prompt, choice,
+                            popen=launch,
+                            atomic=lambda path, value: (
+                                Path(path).write_text(
+                                    json.dumps(value, sort_keys=True) + '\n')
+                            ),
+                            permitted=lambda n, allowed: n in set(allowed or []),
+                            evidence_dir=native_ev,
+                        )
+                    finally:
+                        # Native final receipt/cleanup is separate from UNVALIDATED bytes.
+                        if retention is not None and retention.result is not None and retention.failure is None:
+                            try:
+                                retention.persist(native_ev, operation(dict(task, _author_operation=task.get('_author_operation') or fingerprint, runtime_base_sha=base_sha), 'agy_author', head_before))
+                            except Exception:
+                                pass  # No checkpoint => HOLD; never change native outcome.
                     charged_flag = _agy_read_charge_receipt(charge_receipt)[0]
                     payload = {'ok': True, 'charged': charged_flag}
                 except BaseException as err:
@@ -3819,6 +3899,10 @@ def qa_dispatch(claim, *, deadline=None):
         or claim.get('evidence_root')
         or EVIDENCE_ROOT
     )
+    if claim.get('bound_author', {}).get('mode') == 'on':
+        task['_bound_author'] = claim['bound_author']
+        task['revision'] = claim['revision']
+        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'], evidence_dir=evidence)
     # Persisted capacity-fallback resume: skip already-completed Codex entirely.
     resume = claim.get('resume_provider') or runtime.get('resume_provider')
     if resume == 'agy_qa' or claim.get('wake') == 'capacity_fallback_budget':
@@ -3909,6 +3993,8 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
             task, issue=task.get('issue'))
         if provider == 'agy_author':
             return agy_author_live(**kwargs)
+        if provider == 'codex_author':
+            return codex_author_live(**kwargs)
         return cursor_author_live(**kwargs)
 
     def qa(claim):
@@ -3970,3 +4056,94 @@ def live_self_check():
         'agy_author_ready': False,
         'note': 'Native AGY author binding present; READY only after real acceptance gates',
     }
+
+
+def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True):
+    """Qualified exact author via pinned native model_command in private source.
+
+    Only a separately admitted capacity successor may reach this transport.
+    No chat-author qualification assumptions, external hook, or QA self-PASS.
+    """
+    from providers import ProviderError, role_ready, mark_intent_phase
+    from author_handoff import bound_provider, SourceRetention, operation, owned_group_gone
+    if (bound_provider(task) or (None,))[0] != 'codex_author' or not task.get('_capacity_successor'):
+        raise ProviderError('codex_capacity_admission_required', charge='none')
+    if not role_ready('codex_author')[0] or not role_ready('codex_routing_qa')[0]:
+        raise ProviderError('codex_role_unqualified', charge='none')
+    require_executor_uid()
+    issues, slots = _load_native('core').live()
+    native = _load_native('native_cursor')
+    evidence = Path(evidence_dir)
+    worktree = Path(worktree)
+    private = Path(tempfile.mkdtemp(prefix='gb-codex-author-', dir='/tmp'))
+    process = None
+    retention = None
+    try:
+        source = private / 'source'; source.mkdir()
+        job = private / 'job'; job.mkdir()
+        from types import SimpleNamespace
+        bridge = SimpleNamespace(work=worktree, git=lambda *a, **k: git(worktree, *a), env=git_env())
+        before = native.export(bridge, source)
+        if os.geteuid() == 0:
+            chown_private_tree(private)
+        # The existing secure constructor supplies permission/fs/network policy.
+        cmd = issues.model_command(AGENT_HOME / '.local/bin/codex', source, job,
+            _git_common_dir(worktree), Path('/var/lib/gobadminton-autonomy'), qa=False,
+            denied=(AGENT_HOME / '.ssh', '/srv/gb-slots', '/etc/gobadminton-slots',
+                    '/var/lib/gobadminton-actions-train', worktree))
+        cmd += ['--model', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="medium"',
+                '--json', '-o', str(job / 'final.txt'), '-']
+        rules, rules_sha, _ = load_short_rules()
+        prompt = rules + '\nAuthor only. No commit/push/deploy. TASK DATA:\n' + json.dumps({
+            k: v for k, v in task.items() if not k.startswith('_')})
+        def ignored(name):
+            r = run_argv(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
+                cwd=str(worktree), env=git_env(), timeout=15, check=False)
+            if r.returncode not in (0, 1): raise ValueError('ignore check failed')
+            return r.returncode == 0
+        retention = SourceRetention(baseline=before, allowed=task['allowed_paths'],
+            ignored=ignored, source_name=native.source_name, secrets=lambda: ())
+        budget = shared_agy_budget(int(task['issue']))
+        if not budget_left_eligible(budget.remaining('codex', 'author', 'slot1')):
+            raise ProviderError('codex_local_governance_hold', charge='none')
+        with (evidence / 'events.jsonl').open('xb') as out, (evidence / 'stderr').open('xb') as err:
+            budget.charge('slot1', 'codex', 'author')
+            mark_intent_phase(intent_path, 'launching', provider='codex_author',
+                model='gpt-6.1-sol', effort='medium', calls_charged=1, usage=None,
+                rules_sha256=rules_sha, root_model=False)
+            process = subprocess.Popen(cmd, cwd=source, env=issues.clean_env() | {'TMPDIR': str(job)},
+                stdin=subprocess.PIPE, stdout=out, stderr=err, start_new_session=True,
+                close_fds=True, preexec_fn=uid1002_preexec())
+            try:
+                process.communicate(input=prompt.encode(), timeout=AUTHOR_TIMEOUT_S)
+            finally:
+                def stop(p):
+                    native._stop(p)
+                    try: os.killpg(p.pid, 9)
+                    except ProcessLookupError: pass
+                    p.wait(timeout=5)
+                retention.observe(source, process, stop)
+        events = [loads(line) for line in (evidence / 'events.jsonl').read_bytes().splitlines() if line.strip()]
+        if (process.returncode != 0 or not owned_group_gone(process)
+                or not any(e.get('type') == 'turn.completed' for e in events)
+                or any(e.get('type') in ('error', 'turn.failed') for e in events)
+                or retention.failure or not retention.result):
+            raise ProviderError('codex_author_hold', charge='unknown')
+        changed = retention.result['changed_paths']
+        if not changed: raise ProviderError('author_empty_or_oos', charge='unknown')
+        owner_safe_atomic_import(worktree=worktree, payloads=retention.result['payloads'],
+                                deleted=retention.result['deleted'])
+        git(worktree, 'add', '--', *changed)
+        git(worktree, '-c', 'user.name=agentagency-dev', '-c', 'user.email=agentagency-dev@localhost',
+            '-c', 'commit.gpgsign=false', 'commit', '-m', f'lean: issue-{task["issue"]} codex author')
+        sha = git(worktree, 'rev-parse', 'HEAD')
+        return dict(candidate_sha=sha, changed_paths=changed, provider='codex_author',
+                    effective_model='gpt-6.1-sol:medium', root_model=False, uid=1002)
+    finally:
+        if process is not None and process.poll() is None:
+            _kill_owned_process_group(process)
+        if retention and retention.result and not retention.failure:
+            try: retention.persist(evidence, operation(task, 'codex_author', git(worktree, 'rev-parse', 'HEAD')))
+            except Exception: pass
+        shutil.rmtree(private, ignore_errors=True)

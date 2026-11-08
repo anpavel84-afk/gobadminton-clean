@@ -144,3 +144,98 @@ measurement, rejected quota-like literals/program/QA/security failures, and
 independent reviewer requirements. They consume no real provider capacity and
 make no qualification/model/native calls. These are author checks, not independent
 QA, Product CI, install, shadow execution, runtime activation or DEV acceptance.
+
+## B2 source candidate — no runtime activation
+
+The B2 source adds `author_handoff.py` and binds the existing controller, provider
+wrapper and live dispatch. B1 policy and protected native modules/guard hashes
+are unchanged. No install, config write, model call, qualification, lease reset,
+CI, independent QA, DEV release or Owner UAT has been performed by this source
+pass. This is **SOURCE_ONLY**, not DONE, READY or ACTIVE.
+
+The existing protected config may prospectively select `author_routing.mode`:
+absent/`off` preserves legacy behavior; `shadow` stores a proposed decision but
+executes the legacy route; `on` consumes the frozen decision. The host entry
+binds the actual installed release SHA, rather than a task-provided pipeline ID.
+PMA controls installation/configuration separately. The code-only installer now
+packages both routing source modules; this pass does not invoke it.
+
+Only new claims get a binding. Classification uses the admitted task's existing
+`complexity`/`work_kind`; missing classification holds an enabled decision.
+Counts are prospective new comparable claims, not measured subscription usage
+or a reconstruction of older unknown assignments. Repairs, continuations and
+capacity successor admissions do not count. A later revision of the same Issue
+keeps its latest recorded author. Both `invoke_cursor_author` and live dispatch
+read the same claim/intent binding; neither reranks it. Disabling routing affects
+future claims; existing bindings and all attempt/history records remain.
+
+Policy `antigravity_sonnet` maps explicitly to native `agy_author`.
+Policy `codex_sol_medium` maps to **author** `codex_author`, never the QA alias.
+Codex author requires pinned `core.live()` registry/role qualification and uses
+its secure `autonomous_issues.model_command`, exact `gpt-6.1-sol`, medium effort,
+UID1002, private exported source and the existing owner-safe importer. Routing QA
+requires separately qualified `gpt-6-sol:medium` and a separate QA invocation.
+The current exported legacy registry does not contain that exact QA model;
+B2 therefore holds until an authoritative existing qualification admits it.
+No marker, registry entry, native module or qualification hash is rewritten.
+Native Cursor `qualification(...).phase=ready` suffices without a Lean cosmetic
+marker. Bound AGY unavailability or local governance cannot silently select Cursor.
+
+### Capacity evidence and successor admission
+
+The current native Cursor/AGY streams have **no supported authoritative capacity
+control schema**. Production adapters therefore install no capacity decoder and
+HOLD on failures; a raw quota-looking string cannot switch providers. The existing
+Adapters seam accepts a trusted installed `author_capacity` decoder only for a
+supported control contract. Task JSON cannot supply this callback. Controlled
+tests use typed provider-control fixtures; they do not establish a vendor schema.
+A decoder must authenticate/prove the schema, bind the exact operation/provider/
+task/base/source/scope/evidence fingerprint, and reconcile the final native
+receipt and retained bytes before supplying a CapacityStop. `reconciled_stop`
+provides the fixed binding/closure predicate; a dataclass alone is not proof.
+Local per-Issue/shared budget, charge UNKNOWN, spend, auth, security, program,
+QA FAIL and missing schema are HOLD, never subscription/model capacity.
+
+A valid stop produces a persisted `REQUIRE_NEW_ADMISSION` proposal, never another
+paid invocation within the same operation. The finite B1 chain and cumulative
+attempts/history survive in the old claim. An unavailable immediate backup holds;
+Codex requires both primary stops and separate exact-model QA qualification.
+The trusted integrator must prepare the retained checkpoint through the normal
+source process, then obtain a new canonical immutable admission with
+`handoff_from_revision`, `checkpoint_fingerprint`, `checkpoint_sha` and `base`
+(equal to that prepared checkpoint SHA). Successor binding reads the old protected
+proposal, checks the exact scope/base/operation binding, full Git diff, imported
+bytes and actual retained payload hashes, and reuses the original review base.
+It refuses reused admissions. It neither resets the source nor imports it itself.
+No new service, scheduler, polling loop or global lock is added.
+
+### Retention boundary
+
+AGY uses only the existing native `invoke(popen=...)` seam. The wrapper delegates
+the original command, environment, preexec, stdin/communicate and process attributes;
+it invokes the ORIGINAL native owned reap on the original process before taking
+a bounded source snapshot. Native parsing, charge/raw/error receipts, guard
+restoration and cgroup cleanup still run unchanged. The snapshot survives native
+private-tree deletion and parser/exit failures, but is explicitly UNVALIDATED.
+The caller must reconcile the FINAL native receipt after invoke/finalizers;
+AGY needs `cgroup-quiet` and no cleanup/guard/refresh/persist failure. Failed
+observation never replaces a native success or exception; no checkpoint means
+no fallback. Cursor likewise reaps the owned group on success and failure and
+retains partial source before parsing and cleanup.
+
+Snapshots traverse only the private source directory, use original checkout
+ignore decisions, scan even ignored output for old/current/refreshed credentials
+in memory, and compare two complete bounded scans for races. Links, nonregular
+files, excessive counts/bytes, chmods unsupported by the byte-only native import,
+OOS changes and secrets refuse retention. AGY control exclusion requires the
+exact native `.agents/agents/<AGENT>.md` path, definition and unchanged tree.
+Payload files are ordinal names with hashes calculated from the actual retained
+bytes. Private auth/home/cache is never exported into the checkpoint. Raw/native
+receipts remain separate; unknown provider usage is never rewritten as zero,
+and unknown actual effects always prevent handoff.
+
+Focused source checks: the B1 22-test suite, B2 runtime fixture suite and relevant
+`test_train` classes. These are author checks. Full Product CI/security gates,
+independent QA, actual installed exact-model qualification, supported vendor
+capacity schema, runtime shadow/activation, native live cleanup/guard readback,
+DEV acceptance and Owner UAT remain **NOT_TESTED**. Mobile #522 was not executed.

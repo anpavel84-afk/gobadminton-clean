@@ -403,12 +403,14 @@ def claim_path_for(admission, results_root):
     return root / f'issue-{admission["issue"]}' / admission['revision'][:16] / 'claim.json'
 
 
-def claim_admission(admission, *, results_root=None, force=False):
+def claim_admission(admission, *, results_root=None, force=False, config=None):
     root = Path(results_root) if results_root else RESULTS
     claim_dir = root / f'issue-{admission["issue"]}' / admission['revision'][:16]
     claim_dir.mkdir(parents=True, exist_ok=True)
     claim_path = claim_dir / 'claim.json'
     existing = read_receipt(claim_path)
+    if existing and force and existing.get('bound_author'):
+        raise LeanError('frozen_author_cannot_force_reset')
     if existing and not force:
         if existing.get('revision') != admission['revision']:
             raise LeanError('revision_changed_cannot_replay')
@@ -428,6 +430,38 @@ def claim_admission(admission, *, results_root=None, force=False):
         'findings_fingerprints': [],
         'claimed_at': int(time.time()),
     }
+    # Existing claims are returned above, including after routing rollback.
+    routing_config = (config or {}).get('author_routing') or {}
+    mode = routing_config.get('mode', 'off')
+    if mode != 'off':
+        from author_handoff import freeze
+        from providers import routing_qualifications
+        counts = {'cursor_auto': 0, 'antigravity_sonnet': 0}
+        bucket = (record['task'].get('complexity'), record['task'].get('work_kind'))
+        current = None
+        latest_issue_key = (-1, '')
+        for previous_path in sorted(root.glob('issue-*/*/claim.json')):
+            previous = read_receipt(previous_path) or {}
+            bound = previous.get('bound_author') or {}
+            decision = bound.get('decision') or {}
+            previous_key = (previous.get('claimed_at', 0), previous.get('revision', ''))
+            if previous.get('issue') == record['issue'] and previous_key > latest_issue_key:
+                latest_issue_key = previous_key
+                actual = previous.get('author_provider') or (previous.get('routes') or {}).get('author')
+                if isinstance(actual, dict): actual = actual.get('provider')
+                from author_handoff import POLICY
+                current = decision.get('provider') or POLICY.get(actual)
+            if (bound.get('mode') == 'on' and decision.get('action') == 'ASSIGN'
+                    and decision.get('reason') != 'new_capacity_admission'
+                    and tuple(decision.get('bucket') or ()) == bucket
+                    and decision.get('provider') in counts):
+                counts[decision['provider']] += 1
+        record['bound_author'] = freeze(dict(record['task'], issue=record['issue']),
+            revision=record['revision'], pipeline=routing_config.get('pipeline_revision', ''),
+            routes=routing_qualifications(record['task']), history_counts=counts,
+            current_provider=current, mode=mode)
+    if mode == 'on' and record['task'].get('handoff_from_revision'):
+        record = bind_capacity_successor(record, root, routing_config)
     write_receipt(claim_path, record)
     return record
 
@@ -613,6 +647,8 @@ class Adapters:
         self.fetch_admissions = hooks.get('fetch_admissions')
         self.gh_api = hooks.get('gh_api')
         self.author = hooks.get('author')
+        # Installed trusted control decoder only. None means unsupported schema/HOLD.
+        self.author_capacity = hooks.get('author_capacity')
         self.qa = hooks.get('qa')
         self.publish = hooks.get('publish')
         self.wait_ci = hooks.get('wait_ci')
@@ -884,11 +920,19 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
     propagate into the same worktree/PR/history author prompt.
     """
     root = Path(results_root)
-    claim = claim_admission(admission, results_root=root)
+    claim = claim_admission(admission, results_root=root, config=config)
     path = claim_path_for(admission, root)
     task = dict(claim['task'])
     task['revision'] = claim['revision']
     task['issue'] = claim['issue']
+    # These fields come only from the protected claim, never admission JSON.
+    task.pop('_bound_author', None)
+    task.pop('_author_operation', None)
+    task.pop('_capacity_successor', None)
+    if claim.get('bound_author'):
+        task['_bound_author'] = claim['bound_author']
+    if claim.get('capacity_successor'):
+        task['_capacity_successor'] = claim['capacity_successor']
     evidence = _evidence_dir(adapters, claim, root)
 
     if claim.get('phase') in ACTIVE_HOLD_PHASES:
@@ -1004,6 +1048,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             task['worktree'] = worktree
             task['runtime_base_sha'] = base_sha
             task['author_attempt'] = author_n
+            task['_author_operation'] = digest({'revision': claim['revision'], 'attempt': author_n})
             mark_phase(path, 'RUNNING', stage='author', attempts=claim['attempts'],
                        repair_findings=findings or None,
                        worktree=str(worktree), base_sha=base_sha,
@@ -1018,6 +1063,13 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 else:
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
+                if (task.get('_bound_author', {}).get('mode') == 'on'
+                        and adapters.author_capacity is not None):
+                    proposal = record_capacity_proposal(
+                        path, task, err, author_evidence, adapters.author_capacity)
+                    if proposal.get('action') == 'REQUIRE_NEW_ADMISSION':
+                        return {'status': 'blocked', 'claim': read_receipt(path),
+                                'claim_path': str(path), 'reason': 'new_capacity_admission_required'}
                 if err.code == 'preflight_no_call':
                     # Known loader NO_CALL before CLI/auth: terminal BLOCKED.
                     # Structured blocked return (not re-raise) so advance_queue
@@ -1482,6 +1534,12 @@ def run_once(event, *, adapters=None, gh_api=None, results_root=None, config=Non
     name = event.get('event_name') or event.get('name') or 'workflow_dispatch'
     root = Path(results_root) if results_root else RESULTS
     root.mkdir(parents=True, exist_ok=True)
+    if adapters is None and config is None and use_live_defaults is not False:
+        from host import read_config, installed_release_sha
+        config = dict(read_config())
+        routing = dict(config.get('author_routing') or {})
+        routing['pipeline_revision'] = installed_release_sha()
+        config['author_routing'] = routing
     if adapters is None:
         # Real host path: trusted live bindings. Tests always pass adapters=.
         if use_live_defaults is False:
@@ -1524,7 +1582,7 @@ def run_once(event, *, adapters=None, gh_api=None, results_root=None, config=Non
             if existing.get('phase') not in ('CLAIMED',) and existing.get('claimed_at'):
                 return {'status': 'duplicate_ignored', 'claim': existing,
                         'claim_path': str(claim_file)}
-        claim = claim_admission(admission, results_root=root)
+        claim = claim_admission(admission, results_root=root, config=config)
         # Immediate execute when live/test adapters provide author+qa (or execute flag).
         if event.get('execute') or (adapters.author and adapters.qa):
             try:
@@ -1596,6 +1654,148 @@ def main(argv=None):
     result = run_once(event, use_live_defaults=True)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get('status') not in ('denied', 'queue_unavailable') else 1
+
+
+def record_capacity_proposal(path, task, error, evidence, decoder):
+    """Persist finite handoff proposal; never execute a backup in this operation.
+
+    decoder is installed trusted code for a SUPPORTED control schema, not a task
+    callable or parser for stdout text. Live currently supplies no such decoder.
+    Its StopProof must already reconcile final native receipts/checkpoint bytes.
+    """
+    from dataclasses import asdict, is_dataclass
+    import author_routing as p
+    from author_handoff import operation, propose_handoff
+    from providers import routing_qualifications
+    claim = read_receipt(path)
+    hold = {'action': 'HOLD', 'reason': 'unsupported_or_unreconciled_provider_control'}
+    # Only a supported trusted adapter may emit this internal control error.
+    # Generic native/parser/program/auth/governance failures never enter routing.
+    if error.code != 'provider_control_failure':
+        return hold
+    try:
+        control = decoder(error=error, evidence_dir=evidence, task=task)
+        from author_handoff import ACTUAL
+        current = operation(task, ACTUAL[claim['bound_author']['decision']['provider']],
+                            _read_worktree_head_for_control(claim))
+        if not isinstance(control, p.CapacityStop) or control.failure.binding != current:
+            return hold
+        chain = tuple(_restore_capacity_stop(s) for s in claim.get('capacity_chain', []))
+        qa_ok, _ = role_ready('codex_routing_qa')
+        reviewer = p.Reviewer('native:codex:1002:qa', 'gpt-6-sol:medium', qa_ok, qa_ok, qa_ok)
+        proposal = propose_handoff(current=current, failure=control.failure, proof=control.proof,
+            routes=routing_qualifications(task), reviewer=reviewer,
+            initial_provider=claim.get('initial_author_provider') or claim['bound_author']['decision']['initial_provider'],
+            chain=chain, cumulative_attempts=claim['attempts']['author'],
+            history_refs=tuple(claim.get('author_history_refs', [])) + (str(path), str(evidence)))
+        def serial(value):
+            if is_dataclass(value): return asdict(value)
+            raise TypeError('unsupported control record')
+        proposal = json.loads(json.dumps(proposal, default=serial))
+        claim['capacity_proposal'] = proposal
+        claim['phase'] = 'BLOCKED'
+        claim['capacity_error'] = {'code': error.code, 'charge': error.charge}
+        write_receipt(path, claim)
+        return proposal
+    except Exception:
+        return hold
+
+
+def _read_worktree_head_for_control(claim):
+    # Trusted live Git helper executes as the source owner. No raw stream parsing.
+    from live import git
+    return git(claim['worktree'], 'rev-parse', 'HEAD')
+
+
+def _restore_capacity_stop(value):
+    import author_routing as p
+    f, proof = value['failure'], value['proof']
+    return p.CapacityStop(p.CapacityFailure(p.Operation(**f['binding']), f['fingerprint'],
+        f['code'], f['origin'], f['schema'], f['domain']),
+        p.StopProof(p.Operation(**proof['binding']), proof['failure_fingerprint'],
+            proof['stopped'], proof['source_reconciled'], proof['within_scope'],
+            proof['pending_unknown'], proof['checkpoint_ref'], tuple(proof['receipt_refs']),
+            proof['partial_state']))
+
+
+def bind_capacity_successor(record, root, routing_config):
+    """Consume a previous protected proposal ONLY with a NEW admitted revision.
+
+    Trusted integrator first imports the checkpoint and commits the retained
+    candidate. Admission binds that exact checkpoint SHA and fingerprint. This
+    function performs readback; it never imports sources or resets a worktree.
+    """
+    from author_handoff import fingerprint
+    task = record['task']
+    previous_revision = task['handoff_from_revision']
+    _need(isinstance(previous_revision, str) and re_full_revision(previous_revision)
+          and previous_revision != record['revision'], 'capacity_new_revision_required')
+    previous_path = Path(root) / f'issue-{record["issue"]}' / previous_revision[:16] / 'claim.json'
+    previous = read_receipt(previous_path) or {}
+    proposal = previous.get('capacity_proposal') or {}
+    _need(previous.get('revision') == previous_revision and previous.get('phase') == 'BLOCKED'
+          and proposal.get('action') == 'REQUIRE_NEW_ADMISSION'
+          and not previous.get('capacity_successor_revision'), 'capacity_proposal_unavailable')
+    h = proposal['handoff']
+    _need(task['allowed_paths'] == previous['task']['allowed_paths']
+          and task.get('checkpoint_fingerprint')
+          and SHA40.fullmatch(task.get('checkpoint_sha', ''))
+          and task.get('base') == task['checkpoint_sha'], 'capacity_checkpoint_admission_required')
+    checkpoint = read_receipt(h['checkpoint_ref']) or {}
+    expected_binding = dict(task=str(record['issue']), operation=h['previous_operation'],
+        provider=h['previous_provider'], source_sha=h['source_sha'],
+        scope_id=h['scope_id'], original_base=h['original_base'])
+    _need(checkpoint.get('binding') == expected_binding
+          and checkpoint.get('schema') == 'GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1'
+          and set(checkpoint.get('changed_paths') or []) <= set(task['allowed_paths'])
+          and fingerprint(sorted(task['allowed_paths'])) == h['scope_id']
+          and checkpoint.get('fingerprint') == task['checkpoint_fingerprint']
+          and fingerprint({k: v for k, v in checkpoint.items() if k != 'fingerprint'})
+              == checkpoint.get('fingerprint'), 'capacity_checkpoint_mismatch')
+    from live import git
+    worktree = previous['worktree']
+    _need(git(worktree, 'rev-parse', 'HEAD') == task['checkpoint_sha']
+          and not git(worktree, 'status', '--porcelain').strip(), 'capacity_source_not_prepared')
+    # Full tracked diff and actual imported bytes must match the snapshot, including deletions.
+    names = sorted(filter(None, git(worktree, 'diff', '--name-only', '-z',
+                                   h['source_sha'], task['checkpoint_sha']).split('\0')))
+    _need(names == sorted(checkpoint['changed_paths']), 'capacity_import_diff_mismatch')
+    for name in names:
+        source = Path(worktree) / name
+        _need(not any(x.is_symlink() for x in (source, *source.parents)), 'capacity_source_symlink')
+        if name in checkpoint['deleted']:
+            _need(not source.exists(), 'capacity_deletion_mismatch')
+        else:
+            import hashlib
+            payload_name = checkpoint.get('payload_files', {}).get(name, '')
+            _need(payload_name.startswith('payload-') and payload_name[8:].isdigit(),
+                  'capacity_payload_path')
+            retained = Path(h['checkpoint_ref']).parent / payload_name
+            _need(retained.is_file() and not any(x.is_symlink() for x in (retained, *retained.parents))
+                  and retained.stat().st_size <= 8 << 20
+                  and hashlib.sha256(retained.read_bytes()).hexdigest() == checkpoint['payload_hashes'][name],
+                  'capacity_retained_bytes_mismatch')
+            _need(source.is_file() and hashlib.sha256(source.read_bytes()).hexdigest()
+                  == checkpoint['payload_hashes'][name], 'capacity_payload_mismatch')
+    bound = record['bound_author']
+    target = proposal['provider']
+    bound['decision'].update(action='ASSIGN', provider=target,
+        initial_provider=proposal['initial_provider'], reason='new_capacity_admission')
+    bound['fingerprint'] = fingerprint({k: v for k, v in bound.items() if k != 'fingerprint'})
+    record.update(capacity_successor={'previous_revision': previous_revision,
+        'checkpoint_fingerprint': task['checkpoint_fingerprint']},
+        capacity_chain=proposal['chain'], initial_author_provider=proposal['initial_provider'],
+        author_history_refs=proposal['history_refs'], worktree=worktree,
+        base_sha=previous['base_sha'], candidate_sha=task['checkpoint_sha'],
+        attempts={'author': proposal['cumulative_attempts'], 'qa': previous['attempts'].get('qa', 0)})
+    # Unique admission is sealed in the existing claim history before any launch.
+    previous['capacity_successor_revision'] = record['revision']
+    write_receipt(previous_path, previous)
+    return record
+
+
+def re_full_revision(value):
+    return len(value) == 64 and all(c in '0123456789abcdef' for c in value)
 
 
 if __name__ == '__main__':

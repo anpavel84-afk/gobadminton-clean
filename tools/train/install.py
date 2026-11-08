@@ -35,6 +35,8 @@ MONITOR_PROJECTION = Path('/var/lib/gb-ops-monitor/lean-mode-b.json')
 SHA40 = re.compile(r'^[0-9a-f]{40}$')
 
 INSTALL_FILES = (
+    'tools/train/author_routing.py',
+    'tools/train/author_handoff.py',
     'tools/train/run.py',
     'tools/train/providers.py',
     'tools/train/live.py',
