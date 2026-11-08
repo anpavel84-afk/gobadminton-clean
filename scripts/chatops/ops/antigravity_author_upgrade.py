@@ -8,6 +8,7 @@ Reuses stage5 quiet_v5 resource checks for dead historical 113/119 occupancy;
 preserves journals/counters. C5 stays disabled. READY is a separate proof-bound OPS action; C5 launch policy stays disabled.
 """
 import argparse
+from contextlib import contextmanager
 import copy
 import hashlib
 import importlib.util
@@ -650,7 +651,7 @@ def promotion_plan(bundle, commit, task_hash, operation):
     return marker, proof
 
 
-def promote(action, bundle, commit, task_hash, operation):
+def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
     """Install proof first, marker last: readiness changes at one atomic replace.
 
     Demotion reverses the grant first. Backups/history remain; no provider call,
@@ -678,7 +679,18 @@ def promote(action, bundle, commit, task_hash, operation):
         journal['phase'] = 'demoted-canary'
         put(PROMOTION_JOURNAL, encoded(journal), 0o600)
         return {'phase': journal['phase'], 'ready': False}
-    marker, proof = promotion_plan(bundle, commit, task_hash, operation)
+    marker, proof = prepared or promotion_plan(bundle, commit, task_hash, operation)
+    if prepared is not None:
+        # No network under the brief admission fence; recheck all immutable input.
+        prior = read_prior_journal()
+        need(prior['bundle_commit'] == commit and prior['task_sha256'] == task_hash,
+             'promotion install changed during CI readback')
+        validate_prior_installed(prior)
+        quiet(canary_task_sha256=task_hash)
+        _, _, current_manifest = qualification_artifacts(operation)
+        need(current_manifest == proof['manifest_sha256'], 'qualification changed during CI readback')
+        need(all(sha(read(INSTALL / name)) == value for name,value in proof['modules'].items()),
+             'promotion module changed during CI readback')
     need(optional(PROMOTION_JOURNAL) is None and optional(READY_PROOF) is None,
          'prior readiness must be reconciled')
     if action == 'promote-dry':
@@ -702,6 +714,32 @@ def promote(action, bundle, commit, task_hash, operation):
     put(PROMOTION_JOURNAL, encoded(journal), 0o600)
     return {'phase': 'ready', 'ready': True, 'operation': operation,
             'qualification_kind': 'isolated_ops_canary'}
+
+
+@contextmanager
+def operation_fences():
+    """Brief existing integration/registry fences; never wait on a busy PMA."""
+    import fcntl
+    descriptors = []
+    try:
+        for name in ('integration.lock', 'registry.lock'):
+            path = r.AUTONOMY / 'locks' / name
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptors.append(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Use the same live-lease definition while registry.lock is held.
+        path = INSTALL / 'live' / 'slots.py'
+        r.trusted_tree(path)
+        spec = importlib.util.spec_from_file_location('agy_upgrade_slots', path)
+        slots = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(slots)
+        registry = slots.LockRegistry(str(r.AUTONOMY / 'locks'),
+                                      str(r.AUTONOMY / 'locks' / 'registry.lock'))
+        need(not registry._live(), 'executor lease busy; zero changes')
+        yield
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
 
 
 def main():
@@ -728,14 +766,28 @@ def main():
     fd = os.open(STATE / 'controller.lock', os.O_RDWR | os.O_NOFOLLOW)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if args.action in ('promote-dry', 'promote', 'demote'):
-            result = promote(args.action, args.bundle, args.commit,
-                             args.canary_task_sha256, args.operation)
+        # Expensive GH readback happens before shared admission fences.
+        prepared = None
+        if args.action in ('promote-dry', 'promote'):
+            prepared = promotion_plan(args.bundle, args.commit,
+                                      args.canary_task_sha256, args.operation)
+        if args.action in ('dry', 'promote-dry'):
+            if args.action == 'dry':
+                result = execute(args.action, args.bundle, args.commit,
+                    args.canary_task_sha256, base_controller=args.base_controller,
+                    legacy_finite=legacy, canary_task_path=args.canary_task_path)
+            else:
+                result = {'phase':'qualification-verified','ready':False,'dry':True}
         else:
-            result = execute(
-                args.action, args.bundle, args.commit, args.canary_task_sha256,
-                base_controller=args.base_controller, legacy_finite=legacy,
-                manifest_hash=args.manifest_sha256, canary_task_path=args.canary_task_path)
+            with operation_fences():
+                if args.action in ('promote', 'demote'):
+                    result = promote(args.action, args.bundle, args.commit,
+                        args.canary_task_sha256, args.operation, prepared=prepared)
+                else:
+                    result = execute(args.action, args.bundle, args.commit,
+                        args.canary_task_sha256, base_controller=args.base_controller,
+                        legacy_finite=legacy, manifest_hash=args.manifest_sha256,
+                        canary_task_path=args.canary_task_path)
         print(json.dumps(result, sort_keys=True))
     finally:
         os.close(fd)

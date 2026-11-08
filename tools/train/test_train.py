@@ -1469,6 +1469,45 @@ class HostRequestTests(unittest.TestCase):
         self.assertGreater(lean_client.DEFAULT_SSH_TIMEOUT_S, 2400)
 
 
+class RuntimeUpgradeTests(unittest.TestCase):
+    def test_runtime_upgrade_preserves_config_and_refuses_busy_admission(self):
+        from contextlib import nullcontext
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);current=root/'current';config=root/'config.json'
+            current.write_text('a'*40+'\n');config.write_bytes(b'{"enabled":true,"keep":"unchanged"}\n')
+            original=config.read_bytes();dest=root/'release';dest.mkdir()
+            target=dest/'tools/train/live.py';target.parent.mkdir(parents=True)
+            target.write_bytes(b'reviewed runtime')
+            blobs={'tools/train/live.py':{'data':target.read_bytes()}}
+            def read(path):
+                if str(path)=='/etc/gobadminton-actions-train/policy.json':
+                    return b'{"mode":"disabled"}',{}
+                return Path(path).read_bytes(),{}
+            with mock.patch.multiple(lean_install,CURRENT=current,CONFIG=config,STATE_ROOT=root), \
+                    mock.patch.object(lean_install.os,'geteuid',return_value=0), \
+                    mock.patch.object(lean_install,'_regular_root_bytes',side_effect=read), \
+                    mock.patch.object(lean_install,'collect_blobs',return_value=blobs), \
+                    mock.patch.object(lean_install,'write_release',return_value=(dest,True)), \
+                    mock.patch.object(lean_install,'runtime_upgrade_fences',side_effect=BlockingIOError):
+                with self.assertRaises(BlockingIOError):
+                    lean_install.upgrade_runtime(root,'b'*40)
+                self.assertEqual(current.read_text(),'a'*40+'\n')
+                self.assertEqual(config.read_bytes(),original)
+                self.assertFalse((root/'state').exists())
+            with mock.patch.multiple(lean_install,CURRENT=current,CONFIG=config,STATE_ROOT=root), \
+                    mock.patch.object(lean_install.os,'geteuid',return_value=0), \
+                    mock.patch.object(lean_install,'_regular_root_bytes',side_effect=read), \
+                    mock.patch.object(lean_install,'collect_blobs',return_value=blobs), \
+                    mock.patch.object(lean_install,'write_release',return_value=(dest,True)), \
+                    mock.patch.object(lean_install,'runtime_upgrade_fences',return_value=nullcontext()):
+                result=lean_install.upgrade_runtime(root,'b'*40)
+            self.assertEqual(current.read_text(),'b'*40+'\n')
+            self.assertEqual(config.read_bytes(),original)
+            self.assertEqual(result['previous_sha'],'a'*40)
+            self.assertEqual(result['phase'],'accepted')
+            self.assertFalse(result['services_restarted'])
+
+
 class InstallPointerTests(unittest.TestCase):
     def test_point_current_regular_file_not_symlink(self):
         with tempfile.TemporaryDirectory() as td:

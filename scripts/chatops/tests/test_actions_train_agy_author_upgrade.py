@@ -229,6 +229,28 @@ class Upgrade(unittest.TestCase):
                         U.promotion_plan(self.bundle,self.commit,self.task_hash,operation)
                     artifacts[name][key]=old
 
+    def test_admission_fences_refuse_busy_registry_integration_or_lease(self):
+        import fcntl
+        locks=self.autonomy/'locks';locks.mkdir()
+        for name in ('integration.lock','registry.lock'):
+            (locks/name).touch()
+        live=self.install/'live';live.mkdir()
+        (live/'slots.py').write_bytes((ROOT/'scripts/chatops/actions_train/live/slots.py').read_bytes())
+        for name in ('integration.lock','registry.lock','slot1.lease'):
+            path=locks/name
+            path.write_text(json.dumps(dict(issue=523,writer=True,allowed_paths=['apps/web/'])))
+            fd=os.open(path,os.O_RDONLY)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with self.assertRaises((BlockingIOError,core.Refused)):
+                    with U.operation_fences():
+                        self.fail('must not enter while PMA resource is busy')
+            finally:
+                os.close(fd)
+        with U.operation_fences():
+            # Stale file stays intact; no takeover, deletion or lease mutation.
+            self.assertTrue((locks/'slot1.lease').exists())
+
     def test_missing_qualification_cannot_promote(self):
         self.call('apply')
         before = self.files()

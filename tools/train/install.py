@@ -10,6 +10,7 @@ Does not claim MODE_B_ACTIVE before two real tasks. Does not patch PROD.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -729,6 +730,69 @@ def install(repo, sha, *, enable=False, patch_helper=True, apply_od020=True):
     return report
 
 
+@contextmanager
+def runtime_upgrade_fences():
+    """Existing admission mutexes, no waiting and no executor-slot takeover."""
+    import fcntl
+    import importlib.util
+    descriptors = []
+    try:
+        for path in (CONTROLLER_LOCK, INTEGRATION_LOCK, WRITER_REGISTRY_LOCK):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptors.append(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        path = ACTIONS_TRAIN_INSTALL / 'live' / 'slots.py'
+        _regular_root_bytes(path)
+        spec = importlib.util.spec_from_file_location('lean_runtime_upgrade_slots', path)
+        slots = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(slots)
+        registry = slots.LockRegistry(str(WRITER_REGISTRY_LOCK.parent), str(WRITER_REGISTRY_LOCK))
+        need(not registry._live(), 'executor lease busy; runtime pointer unchanged')
+        _agy_executor_quiet()
+        yield
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+
+def upgrade_runtime(repo, sha):
+    """Versioned code-only upgrade; preserve active config/helper/budgets/history.
+
+    Preparation adds an immutable release. Shared fences cover only final CAS,
+    journal and regular-file pointer replacement. Rollback uses this same path
+    with the receipt's previous_sha and its accepted Git source.
+    """
+    need(os.geteuid() == 0, 'runtime upgrade requires root')
+    need(SHA40.fullmatch(sha or ''), 'exact accepted runtime SHA required')
+    before, _ = _regular_root_bytes(CURRENT)
+    config, _ = _regular_root_bytes(CONFIG)
+    previous = before.decode().strip()
+    need(SHA40.fullmatch(previous or ''), 'prior runtime pointer invalid')
+    need(previous != sha, 'runtime already selected; use readback')
+    policy, _ = _regular_root_bytes(Path('/etc/gobadminton-actions-train/policy.json'))
+    need(loads(policy).get('mode') == 'disabled', 'legacy launches enabled; refuse runtime upgrade')
+    blobs = collect_blobs(repo, sha)
+    dest, created = write_release(sha, blobs)
+    journal = STATE_ROOT / 'state' / ('runtime-upgrade-' + str(time.time_ns()) + '.json')
+    with runtime_upgrade_fences():
+        need(_regular_root_bytes(CURRENT)[0] == before, 'runtime pointer changed during preparation')
+        need(_regular_root_bytes(CONFIG)[0] == config, 'runtime config changed during preparation')
+        need(_regular_root_bytes(Path('/etc/gobadminton-actions-train/policy.json'))[0] == policy,
+             'legacy launch policy changed during preparation')
+        for rel, info in blobs.items():
+            need(_regular_root_bytes(dest / rel)[0] == info['data'], 'prepared runtime release drift')
+        report = dict(schema='GB_LEAN_RUNTIME_UPGRADE_V1', phase='prepared',
+            previous_sha=previous, sha=sha, created=created, config_sha256=sha256_bytes(config),
+            rollback_previous_sha=previous)
+        atomic_write(journal, json.dumps(report,sort_keys=True)+'\n', 0o600)
+        atomic_write(CURRENT, sha+'\n', 0o644)
+        need(_regular_root_bytes(CURRENT)[0] == (sha+'\n').encode()
+             and _regular_root_bytes(CONFIG)[0] == config, 'runtime upgrade readback failed')
+        report['phase']='accepted'
+        atomic_write(journal, json.dumps(report,sort_keys=True)+'\n', 0o600)
+    return dict(report, journal=str(journal), services_restarted=False)
+
+
 def commission():
     """Enable bounded worker after review/CI. Status stays commissioning until proof.
 
@@ -755,10 +819,14 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ('-h', '--help'):
         print('usage: install.py install <repo> <sha> | rollback [sha] | commission | '
-              'dry-blobs <repo> <sha> | dry-od020 <repo> <sha>')
+              'dry-blobs <repo> <sha> | dry-od020 <repo> <sha> | upgrade-runtime <repo> <sha>')
         return 2
     cmd = argv[0]
     try:
+        if cmd == 'upgrade-runtime':
+            need(len(argv) == 3, 'upgrade-runtime <repo> <sha>')
+            print(json.dumps(upgrade_runtime(argv[1], argv[2]),sort_keys=True))
+            return 0
         if cmd == 'install':
             need(len(argv) == 3, 'install <repo> <sha>')
             report = install(argv[1], argv[2])
