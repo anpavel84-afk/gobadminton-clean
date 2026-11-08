@@ -911,7 +911,7 @@ describeIntegration("MOD-V2-B2a public venue fields moderation", () => {
       payload: secondPayload,
     });
     expect([200, 201]).toContain(second.statusCode);
-    await pool.query("UPDATE consumer_sessions SET revoked_at = now() WHERE id = $1", [
+    await pool.query("UPDATE app_sessions SET revoked_at = now() WHERE id = $1", [
       consumer.sessionId,
     ]);
     const replay = await app.inject({
