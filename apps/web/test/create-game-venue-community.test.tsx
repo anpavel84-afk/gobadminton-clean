@@ -1,9 +1,14 @@
 /** @vitest-environment jsdom */
 import { cleanup, render, screen, waitFor, act } from "@testing-library/react";
+import { PathnameContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 import { createElement, useState, type ComponentProps, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
 import type { VenueSummary } from "../src/lib/consumer-types";
+
+function renderWithPath(node: ReactNode) {
+  return render(createElement(PathnameContext.Provider, { value: "/games/create" }, node));
+}
 
 const V_A = "10000000-0000-4000-8000-0000000000a1";
 const V_B = "10000000-0000-4000-8000-0000000000b2";
@@ -301,5 +306,88 @@ describe("#507 I1 F4 CreateGamePage selected-venue community summary", () => {
     await waitFor(() => expect(screen.getByText("Оценки временно недоступны")).toBeTruthy());
     expect(screen.getByTestId("create-game-selected-venue-community")).toBeTruthy();
     expect(fetchMock.calls.some((c) => c.url.includes("/community-rating/me"))).toBe(false);
+  });
+
+  it("embedded keeps readonly summary without #ratings navigation; full page keeps the link", async () => {
+    fetchMock.handler = async (url) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V_A, "available", 4.0, 2)] });
+      }
+      throw new Error(url);
+    };
+
+    const { CreateGamePresentation, emptyDraft } = await import(
+      "../src/components/consumer/pages/CreateGamePage"
+    );
+    type PresentationProps = ComponentProps<typeof CreateGamePresentation>;
+    const draft = { ...emptyDraft(), venueId: V_A, createNewVenue: false };
+    const base = {
+      onClose: () => {},
+      step: "form" as const,
+      me: { id: "me", displayName: "Игрок", csrfToken: "csrf", locale: "ru", linkedProviders: [] },
+      preferences: null,
+      saveContact: false,
+      setSaveContact: () => {},
+      creatorSeat: null,
+      trainer: null,
+      setReload: () => {},
+      activityKind: "regular" as const,
+      setActivityKind: () => {},
+      dateChoice: "custom" as const,
+      setDateChoice: () => {},
+      customDuration: false,
+      setCustomDuration: () => {},
+      draft,
+      setDraft: () => {},
+      knownVenues: [venueA],
+      selectedVenue: venueA,
+      venueStatus: "ready" as const,
+      setVenueReload: () => {},
+      venuePickerOpen: false,
+      setVenuePickerOpen: () => {},
+      venueTriggerRef: { current: null },
+      onVenueModeChange: () => {},
+      onVenueSelect: () => {},
+      created: null,
+      error: null,
+      busy: false,
+      setBusy: () => {},
+      photo: null,
+      setPhoto: () => {},
+      photoReady: true,
+      setPhotoReady: () => {},
+      photoUrl: undefined,
+      contactEdited: { current: false },
+      previewPayload: null,
+      previewGame: null,
+      location: { cityId: "city", nameRu: "Москва", timezone: "Europe/Moscow" },
+      onCheck: async () => {},
+      onPublish: async () => {},
+      setStep: () => {},
+      recoveryChecked: true,
+      rereadResult: async () => {},
+      returnPath: "/games/create",
+      invitePlayerId: null,
+    };
+
+    const { unmount: unmountEmbedded } = renderWithPath(createElement(CreateGamePresentation, {
+      ...base,
+      embedded: true,
+    } as PresentationProps));
+    await waitFor(() => expect(screen.getByTestId("create-game-selected-venue-community")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/4,0/)).toBeTruthy());
+    expect(screen.queryByTestId("venue-community-compact-link")).toBeNull();
+    expect(screen.queryByRole("link", { name: /Оценки и обсуждение/ })).toBeNull();
+    unmountEmbedded();
+
+    renderWithPath(createElement(CreateGamePresentation, {
+      ...base,
+      embedded: false,
+    } as PresentationProps));
+    await waitFor(() => expect(screen.getByTestId("create-game-selected-venue-community")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("venue-community-compact-link")).toBeTruthy());
+    const link = screen.getByTestId("venue-community-compact-link");
+    expect(link.getAttribute("href")).toBe(`/venues/${encodeURIComponent(V_A)}#ratings`);
+    expect(link.className.split(/\s+/)).toContain("gb-venue-community__compact-link");
   });
 });

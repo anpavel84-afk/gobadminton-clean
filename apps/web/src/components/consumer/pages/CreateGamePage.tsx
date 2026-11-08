@@ -533,7 +533,7 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
                     href={`/venues/${encodeURIComponent(selectedVenue.id)}#ratings`}
                     summary={selectedCommunity.summaries[selectedVenue.id] ?? null}
                     summaryLoadState={selectedCommunity.state === "idle" ? "loading" : selectedCommunity.state}
-                    linkToRatings
+                    linkToRatings={!embedded}
                   />
                 </div>
               ) : null}

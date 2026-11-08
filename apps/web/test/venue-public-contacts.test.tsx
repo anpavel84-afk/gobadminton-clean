@@ -42,8 +42,20 @@ describe("VenueSheet public organization contacts",()=>{
   }
  });
  it("retains safe neighbors and independently enforces URL policy",()=>{
+  const ratingsHref=`/venues/${encodeURIComponent(venue.id)}#ratings`;
+  const isCommunityRatingsLink=(n:React.ReactElement<Record<string,unknown>>)=>{
+   const href=String(n.props.href??"");
+   const className=String(n.props.className??"");
+   return href===ratingsHref && className.split(/\s+/).includes("gb-venue-community__compact-link");
+  };
   const bad=["https://a@b/","https://b:444/","https://b/\n","https://b/\\x","javascript:x","https://example.com/"+"я".repeat(100)];
-  for(const website of bad){const {html,nodes}=render({phone:"+1234567",website,messengers:[]});expect(html).toContain('tel:+1234567');expect(nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('tel:'))).toHaveLength(0);}
+  for(const website of bad){
+   const {html,nodes}=render({phone:"+1234567",website,messengers:[]});
+   expect(html).toContain('tel:+1234567');
+   // Exact known public #ratings marker only — never skip arbitrary internal/substring URLs.
+   expect(nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('tel:') && !isCommunityRatingsLink(n))).toHaveLength(0);
+   expect(nodes.some(n=>n.type==='a' && isCommunityRatingsLink(n))).toBe(true);
+  }
   for(const [raw,expected] of [[" HTTP://Example.COM:80/a/../b ","http://example.com/b"],["https://[::1]/","https://[::1]/"],["https://127.0.0.1/","https://127.0.0.1/"],[" ".repeat(310)+"https://example.com/","https://example.com/"]]){
    expect(render({phone:null,website:raw,messengers:[]}).nodes.some(n=>n.props.href===expected)).toBe(true);
   }
