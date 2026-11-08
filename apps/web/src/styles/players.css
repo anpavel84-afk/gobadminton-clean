@@ -257,6 +257,15 @@
 .fr3 .profile-notice { padding:16px; border-radius:12px; background:var(--gb-purple-soft); }
 .fr3 .profile-form-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
 .fr3 .profile-safety { margin-top:22px; }
+/* #507: safety actions keep whole-word labels under inherited .fr3 overflow-wrap:anywhere.
+ * Natural min width + wrap/stack; do not let mobile flex:1 squeeze mid-word breaks. */
+.fr3 .profile-safety .profile-form-actions > .gb-c23-btn {
+  overflow-wrap: normal;
+  word-break: normal;
+  min-width: min(100%, max-content);
+  max-width: 100%;
+  min-height: 44px;
+}
 .fr3 .player-profile-status .status-badge { color:var(--gb-ink); }
 .fr3 .player-profile-status .status-badge--attention { color:var(--gb-purple); }
 .fr3 .player-profile-actions { flex-wrap:wrap; }
@@ -493,6 +502,7 @@
     padding:16px 20px calc(24px + env(safe-area-inset-bottom, 0px));
   }
   .fr3 .profile-form-actions > .gb-c23-btn { flex:1; }
+  .fr3 .profile-safety .profile-form-actions > .gb-c23-btn { flex:1 1 auto; }
 }
 @media (prefers-reduced-motion:reduce) { .fr3 *, .fr3 *::before, .fr3 *::after { animation:none !important; transition:none !important; } }
 
