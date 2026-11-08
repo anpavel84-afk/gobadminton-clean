@@ -141,8 +141,14 @@ run("Admin D2 moderation metadata · disposable", () => {
     });
   }
 
-  async function seedApproval(surface: string, decision: "allow" | "review", model = "omni-moderation-2024-09-26") {
-    const fingerprint = "fp_" + randomUUID().replaceAll("-", "");
+  async function seedApproval(
+    surface: string,
+    decision: "allow" | "review",
+    model = "omni-moderation-2024-09-26",
+    checkedAt?: string,
+  ) {
+    // DB check requires unique hex64 fingerprint — not a prefixed UUID32.
+    const fingerprint = randomUUID().replaceAll("-", "").repeat(2);
     return (
       await pool.query<{ id: string; checked_at: Date }>(
         `INSERT INTO content_moderation_approvals(
@@ -151,9 +157,9 @@ run("Admin D2 moderation metadata · disposable", () => {
            category_flags, decision, checked_at
          ) VALUES (
            'text', $1, 1, $2, 'public-text-v1', 'local-text-v1', 'openai', $3,
-           '{}'::jsonb, $4, clock_timestamp()
+           '{}'::jsonb, $4, COALESCE($5::timestamptz, clock_timestamp())
          ) RETURNING id, checked_at`,
-        [surface, fingerprint, model, decision],
+        [surface, fingerprint, model, decision, checkedAt ?? null],
       )
     ).rows[0]!;
   }
@@ -208,7 +214,11 @@ run("Admin D2 moderation metadata · disposable", () => {
 
     const page1 = await get("?limit=1");
     expect(page1.json().items).toHaveLength(1);
-    expect(page1.json().nextBeforeId).toBeTruthy();
+    expect(typeof page1.json().nextBeforeCheckedAt).toBe("string");
+    expect(page1.json().nextBeforeCheckedAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/,
+    );
+    expect(page1.json().nextBeforeId).toBe(page1.json().items[0].approvalId);
     const page2 = await get(
       `?limit=1&beforeCheckedAt=${encodeURIComponent(page1.json().nextBeforeCheckedAt)}&beforeId=${page1.json().nextBeforeId}`,
     );
@@ -218,6 +228,61 @@ run("Admin D2 moderation metadata · disposable", () => {
     const modelFilter = await get("?model=omni-moderation-fixture&limit=10");
     expect(modelFilter.json().items.every((i: { providerModel: string }) => i.providerModel === "omni-moderation-fixture")).toBe(true);
     expect(modelFilter.json().items.some((i: { approvalId: string }) => i.approvalId === a2.id)).toBe(true);
+
+    // Microsecond-identical / same-millisecond keyset: limit=1 must emit every id once, in SQL order.
+    const surfaceKey = "journal_keyset_fx";
+    const tHi = "2099-06-01T15:30:00.123456+00";
+    const tLo = "2099-06-01T15:30:00.123111+00"; // same truncated ms as tHi; distinct µs
+    const k1 = await seedApproval(surfaceKey, "allow", "omni-moderation-2024-09-26", tHi);
+    const k2 = await seedApproval(surfaceKey, "allow", "omni-moderation-2024-09-26", tLo);
+    const k3 = await seedApproval(surfaceKey, "allow", "omni-moderation-2024-09-26", tHi);
+    const expectedOrder = (
+      await pool.query<{ id: string }>(
+        `SELECT id FROM content_moderation_approvals
+          WHERE surface_key=$1
+          ORDER BY checked_at DESC, id DESC`,
+        [surfaceKey],
+      )
+    ).rows.map((row) => row.id);
+    expect(expectedOrder).toEqual(
+      expect.arrayContaining([k1.id, k2.id, k3.id]),
+    );
+    expect(expectedOrder).toHaveLength(3);
+
+    const walked: string[] = [];
+    let beforeCheckedAt: string | null = null;
+    let beforeId: string | null = null;
+    for (let pageNo = 0; pageNo < 8; pageNo += 1) {
+      const qs =
+        beforeCheckedAt && beforeId
+          ? `?surface=${surfaceKey}&limit=1&beforeCheckedAt=${encodeURIComponent(beforeCheckedAt)}&beforeId=${beforeId}`
+          : `?surface=${surfaceKey}&limit=1`;
+      const res = await get(qs);
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json() as {
+        items: { approvalId: string }[];
+        nextBeforeCheckedAt: string | null;
+        nextBeforeId: string | null;
+      };
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0]!.approvalId).toBe(expectedOrder[pageNo]);
+      walked.push(body.items[0]!.approvalId);
+      if (pageNo < expectedOrder.length - 1) {
+        expect(typeof body.nextBeforeCheckedAt).toBe("string");
+        expect(body.nextBeforeCheckedAt).toMatch(
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/,
+        );
+        expect(body.nextBeforeId).toBe(body.items[0]!.approvalId);
+        beforeCheckedAt = body.nextBeforeCheckedAt;
+        beforeId = body.nextBeforeId;
+      } else {
+        expect(body.nextBeforeCheckedAt).toBeNull();
+        expect(body.nextBeforeId).toBeNull();
+        break;
+      }
+    }
+    expect(walked).toEqual(expectedOrder);
+    expect(new Set(walked).size).toBe(expectedOrder.length);
   });
 
   it("does not invent reject history and leaves Cases source permissions unchanged", async () => {

@@ -1526,10 +1526,13 @@ export class AdminService {
           policy_version: string;
           local_policy_version: string;
           checked_at: Date;
+          /** Exact UTC ISO with 6-digit fractional seconds for keyset cursor (not JS Date). */
+          checked_at_cursor: string;
         };
         const approvals = await c.query<ApprovalRow>(
           `SELECT a.id, a.surface_key, a.decision, a.provider_key, a.provider_model,
-                  a.policy_version, a.local_policy_version, a.checked_at
+                  a.policy_version, a.local_policy_version, a.checked_at,
+                  to_char(a.checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS checked_at_cursor
              FROM content_moderation_approvals a
             WHERE a.decision IN ('allow','review')
               AND ($1::text IS NULL OR a.surface_key = $1)
@@ -1547,7 +1550,10 @@ export class AdminService {
           params,
         );
         const page = approvals.rows.slice(0, query.limit);
-        const next = approvals.rows.length > query.limit ? approvals.rows[query.limit]! : null;
+        // Keyset cursor must be the last emitted row when lookahead proves hasMore;
+        // using rows[limit] (first unreturned) skips that row under the strict < predicate.
+        const lastEmitted =
+          approvals.rows.length > query.limit ? page[page.length - 1]! : null;
         const ids = page.map((row) => row.id);
         type BindingRow = {
           id: string;
@@ -1610,8 +1616,8 @@ export class AdminService {
               })),
             };
           }),
-          nextBeforeCheckedAt: next ? next.checked_at.toISOString() : null,
-          nextBeforeId: next ? next.id : null,
+          nextBeforeCheckedAt: lastEmitted ? lastEmitted.checked_at_cursor : null,
+          nextBeforeId: lastEmitted ? lastEmitted.id : null,
         };
       },
       true,

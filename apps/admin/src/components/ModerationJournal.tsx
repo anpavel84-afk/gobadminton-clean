@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AdminError, adminRequest, freshStepUp, type Session } from "../lib/admin-client";
 
 type Binding = {
@@ -60,6 +60,9 @@ export function ModerationJournal({
   const [policy, setPolicy] = useState("");
   const [model, setModel] = useState("");
   const fresh = freshStepUp(session, now);
+  // Filters apply only on explicit refresh / load-more — keep them out of the effect deps.
+  const filtersRef = useRef({ surface, decision, policy, model });
+  filtersRef.current = { surface, decision, policy, model };
 
   async function load(cursor?: { beforeCheckedAt: string; beforeId: string }) {
     await run(async () => {
@@ -67,11 +70,12 @@ export function ModerationJournal({
         setPage(null);
         throw new AdminError("ADMIN_STEP_UP_REQUIRED", 403);
       }
+      const filters = filtersRef.current;
       const params = new URLSearchParams();
-      if (surface.trim()) params.set("surface", surface.trim());
-      if (decision) params.set("decision", decision);
-      if (policy.trim()) params.set("policy", policy.trim());
-      if (model.trim()) params.set("model", model.trim());
+      if (filters.surface.trim()) params.set("surface", filters.surface.trim());
+      if (filters.decision) params.set("decision", filters.decision);
+      if (filters.policy.trim()) params.set("policy", filters.policy.trim());
+      if (filters.model.trim()) params.set("model", filters.model.trim());
       if (cursor) {
         params.set("beforeCheckedAt", cursor.beforeCheckedAt);
         params.set("beforeId", cursor.beforeId);
@@ -101,7 +105,6 @@ export function ModerationJournal({
     }
     void load();
     // Initial load when step-up becomes fresh; filters apply on explicit refresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.principalId, session.stepUpAt, fresh]);
 
   return (
