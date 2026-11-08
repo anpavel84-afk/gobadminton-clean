@@ -3,12 +3,14 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { Button } from "../Button";
 import {
+  communityResponseProvesPendingEffect,
   compactCommunitySummaryText,
   fetchCommunitySummaries,
   fetchOwnCommunityRating,
   formatCommunityAverage,
   invalidateCommunitySummaries,
   isCommunityRatingMutationError,
+  isCommunityRatingTerminalMutationStatus,
   upsertCommunityRating,
   voteCountLabel,
   withdrawCommunityRating,
@@ -225,23 +227,6 @@ export function VenueCommunityRating({
     );
   }
 
-  /** Own-read proves the frozen mutation only with exact expectedVersion+1 and matching value/withdraw. */
-  function ownProvesPendingEffect(
-    pending: VotePending,
-    mine: { own: CommunityOwnVote | null },
-  ): boolean {
-    const current = mine.own;
-    if (pending.kind === "upsert") {
-      if (!current || current.withdrawn) return false;
-      if (current.value !== pending.value) return false;
-      // Unrelated higher revision with the same value is not proof of this key.
-      return current.version === pending.expectedVersion + 1;
-    }
-    // withdraw: null own is never proof; require an explicit withdrawn row at exact +1.
-    if (!current || !current.withdrawn) return false;
-    return current.version === pending.expectedVersion + 1;
-  }
-
   function applyVoteResult(result: { own: CommunityOwnVote | null; summary: CommunityRatingSummary }) {
     setOwn(result.own);
     setSummary(result.summary);
@@ -253,15 +238,42 @@ export function VenueCommunityRating({
     invalidateCommunitySummaries(touch);
   }
 
+  /**
+   * Unified completion: prove → apply → clear packet → saved.
+   * Any validation/application failure retains the exact frozen packet as UNKNOWN.
+   */
+  function completeProvenPending(
+    pending: VotePending,
+    result: { own: CommunityOwnVote | null; summary: CommunityRatingSummary },
+    unknownMessage: string,
+  ): boolean {
+    if (!communityResponseProvesPendingEffect(pending, result)) {
+      pendingRef.current = pending;
+      setSaveState("unknown");
+      setStatus(unknownMessage);
+      return false;
+    }
+    try {
+      applyVoteResult(result);
+    } catch {
+      pendingRef.current = pending;
+      setSaveState("unknown");
+      setStatus(unknownMessage);
+      return false;
+    }
+    pendingRef.current = null;
+    setSaveState("saved");
+    setStatus(pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена");
+    return true;
+  }
+
   function isAmbiguousMutationFailure(error: unknown): boolean {
-    // Ordinary Error / body-read throw may follow commit — keep frozen UNKNOWN.
+    // Ordinary Error / body-read / semantic-invalid may follow commit — keep frozen UNKNOWN.
     if (!isCommunityRatingMutationError(error)) return true;
     if (error.kind === "network" || error.kind === "invalid") return true;
-    // Ambiguous 5xx may have committed; terminal 4xx/409 clear below.
-    return error.status === 500
-      || error.status === 502
-      || error.status === 503
-      || error.status === 504;
+    if (error.kind !== "http") return true;
+    // Fail-closed: only the terminal whitelist may clear; 408 and any 5xx stay UNKNOWN.
+    return !isCommunityRatingTerminalMutationStatus(error.status);
   }
 
   async function runPending(pending: VotePending, isRetry: boolean) {
@@ -271,6 +283,9 @@ export function VenueCommunityRating({
     setSaveState("pending");
     setStatus(pending.kind === "withdraw" ? "Убираем оценку…" : "Сохраняем оценку…");
     const gen = generation.current;
+    const unknownMessage = isRetry
+      ? "Результат прошлой отправки не подтверждён. Проверьте актуальную оценку или повторите с тем же запросом."
+      : "Отправка не подтверждена. Не создаём новый запрос — проверьте результат или повторите тот же.";
     try {
       const result = pending.kind === "withdraw"
         ? await withdrawCommunityRating({
@@ -287,21 +302,14 @@ export function VenueCommunityRating({
           idempotencyKey: pending.key,
         });
       if (gen !== generation.current || !contextMatches(pending)) return;
-      applyVoteResult(result);
-      pendingRef.current = null;
-      setSaveState("saved");
-      setStatus(pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена");
+      completeProvenPending(pending, result, unknownMessage);
     } catch (error) {
       if (gen !== generation.current || !contextMatches(pending)) return;
       if (isAmbiguousMutationFailure(error)) {
         // UNKNOWN: keep same key + frozen body + authorized context; no automatic new POST.
         pendingRef.current = pending;
         setSaveState("unknown");
-        setStatus(
-          isRetry
-            ? "Результат прошлой отправки не подтверждён. Проверьте актуальную оценку или повторите с тем же запросом."
-            : "Отправка не подтверждена. Не создаём новый запрос — проверьте результат или повторите тот же.",
-        );
+        setStatus(unknownMessage);
         return;
       }
       // Trustworthy terminal rejection (e.g. 409) — clear pending; no fresh key auto-send.
@@ -368,31 +376,16 @@ export function VenueCommunityRating({
     const gen = generation.current;
     setSaveState("pending");
     setStatus("Проверяем актуальную оценку…");
+    const unknownMessage =
+      "Актуальная оценка не подтверждает прошлый запрос. Можно повторить тот же запрос.";
     try {
       const mine = await fetchOwnCommunityRating(venueId);
       if (gen !== generation.current || !contextMatches(pending)) return;
-      // Read success alone never means mutation success — prove frozen effect first.
-      if (!ownProvesPendingEffect(pending, mine)) {
-        // Unchanged / mismatching / non-advancing revision: keep frozen key+body; no fresh POST.
-        pendingRef.current = pending;
-        setOwn(mine.own);
-        setSummary(mine.summary);
-        onSummaryChangeRef.current?.(mine.summary);
-        // Do not rewrite selected from a non-proving read while UNKNOWN retry body stays frozen.
-        setSaveState("unknown");
-        setStatus(
-          "Актуальная оценка не подтверждает прошлый запрос. Можно повторить тот же запрос.",
-        );
-        return;
-      }
-      pendingRef.current = null;
-      applyVoteResult(mine);
-      setSaveState("saved");
-      setStatus(
-        pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена",
-      );
+      // Same prove → apply → clear invariant as direct 2xx; never clear before apply succeeds.
+      completeProvenPending(pending, mine, unknownMessage);
     } catch {
       if (gen !== generation.current) return;
+      pendingRef.current = pending;
       setSaveState("unknown");
       setStatus("Не удалось проверить результат. Можно повторить тот же запрос.");
     }

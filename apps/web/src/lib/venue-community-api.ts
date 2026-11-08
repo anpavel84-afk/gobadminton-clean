@@ -270,6 +270,54 @@ export function isCommunityRatingMutationError(
   return value instanceof CommunityRatingMutationError;
 }
 
+/** Frozen mutation intent fields needed to prove a direct or own-read outcome. */
+export type CommunityPendingEffect = {
+  kind: "upsert" | "withdraw";
+  venueId: string;
+  expectedVersion: number;
+  value: number | null;
+};
+
+/**
+ * Single completion proof for direct mutation 2xx and own-read reconciliation.
+ * Structural schema validity alone is never enough: venue binding, canonical
+ * consistency, exact expectedVersion+1, and value/withdraw must all match.
+ * Requested alias may differ from canonical; both own+summary venueId must equal
+ * the frozen requested venueId, and both canonicals must match and be non-null.
+ */
+export function communityResponseProvesPendingEffect(
+  pending: CommunityPendingEffect,
+  result: CommunityOwnVoteResponse,
+): boolean {
+  const { own, summary } = result;
+  if (!own) return false;
+  if (own.venueId !== pending.venueId) return false;
+  if (summary.venueId !== pending.venueId) return false;
+  if (summary.canonicalVenueId === null) return false;
+  if (own.canonicalVenueId !== summary.canonicalVenueId) return false;
+  if (own.version !== pending.expectedVersion + 1) return false;
+  if (pending.kind === "upsert") {
+    if (own.withdrawn) return false;
+    return own.value === pending.value;
+  }
+  return own.withdrawn === true;
+}
+
+/**
+ * Fail-closed terminal whitelist for clearing a frozen packet.
+ * 408 and every 5xx stay ambiguous; unknown statuses default to UNKNOWN.
+ */
+export function isCommunityRatingTerminalMutationStatus(status: number | null): boolean {
+  return (
+    status === 400
+    || status === 401
+    || status === 403
+    || status === 404
+    || status === 409
+    || status === 422
+  );
+}
+
 async function executeSummariesRequest(
   venueIds: string[],
   signal?: AbortSignal,

@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildVenueCommunityReportBody,
+  communityResponseProvesPendingEffect,
   compactCommunitySummaryText,
   fetchCommunitySummaries,
   formatCommunityAverage,
   isCommunityOwnVoteResponse,
   isCommunityRatingMutationError,
+  isCommunityRatingTerminalMutationStatus,
   isVenueCommunityReportReceipt,
   upsertCommunityRating,
   venueCommunityReportSubjectMatchesBody,
@@ -133,6 +135,101 @@ describe("#507 I1 venue-community-api", () => {
     })).rejects.toSatisfy((error: unknown) => (
       isCommunityRatingMutationError(error) && error.kind === "invalid"
     ));
+  });
+
+  it("proves pending effect only with venue binding, canonical consistency, exact +1, value/withdraw", () => {
+    const alias = "10000000-0000-4000-8000-0000000000aa";
+    const canon = "10000000-0000-4000-8000-0000000000bb";
+    const foreign = "10000000-0000-4000-8000-0000000000cc";
+    const upsertPending = {
+      kind: "upsert" as const,
+      venueId: alias,
+      expectedVersion: 1,
+      value: 5,
+    };
+    const withdrawPending = {
+      kind: "withdraw" as const,
+      venueId: alias,
+      expectedVersion: 1,
+      value: null,
+    };
+    const coherentOwn = {
+      venueId: alias,
+      canonicalVenueId: canon,
+      value: 5,
+      version: 2,
+      withdrawn: false,
+      moderationState: "clear" as const,
+      allowedActions: { upsert: true, update: true, withdraw: true },
+    };
+    const coherentSummary = {
+      venueId: alias,
+      canonicalVenueId: canon,
+      average: 4.5,
+      count: 3,
+      state: "available" as const,
+    };
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: coherentOwn,
+      summary: coherentSummary,
+    })).toBe(true);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: null,
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: { ...coherentOwn, venueId: foreign },
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: coherentOwn,
+      summary: { ...coherentSummary, venueId: foreign },
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: { ...coherentOwn, canonicalVenueId: foreign },
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: coherentOwn,
+      summary: { ...coherentSummary, canonicalVenueId: null },
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: { ...coherentOwn, version: 1 },
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: { ...coherentOwn, version: 9 },
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: { ...coherentOwn, value: 4 },
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(upsertPending, {
+      own: { ...coherentOwn, withdrawn: true, value: null },
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(withdrawPending, {
+      own: { ...coherentOwn, value: null, withdrawn: true },
+      summary: { ...coherentSummary, state: "empty", average: null, count: 0 },
+    })).toBe(true);
+    expect(communityResponseProvesPendingEffect(withdrawPending, {
+      own: null,
+      summary: coherentSummary,
+    })).toBe(false);
+    expect(communityResponseProvesPendingEffect(withdrawPending, {
+      own: coherentOwn,
+      summary: coherentSummary,
+    })).toBe(false);
+  });
+
+  it("terminal mutation statuses are an explicit whitelist; 408 and all 5xx are not terminal", () => {
+    for (const status of [400, 401, 403, 404, 409, 422]) {
+      expect(isCommunityRatingTerminalMutationStatus(status)).toBe(true);
+    }
+    for (const status of [408, 429, 500, 501, 502, 503, 504, 507, 599, null]) {
+      expect(isCommunityRatingTerminalMutationStatus(status)).toBe(false);
+    }
   });
 
   it("builds exact venue_community report bodies for aggregate/own_vote/comment", () => {

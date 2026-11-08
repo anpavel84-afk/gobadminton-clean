@@ -1098,3 +1098,473 @@ describe("#507 I1a19 UNKNOWN proof repair", () => {
     expect(screen.queryByText("Оценка сохранена")).toBeNull();
   });
 });
+
+describe("#507 I1a20 unified frozen outcome invariant", () => {
+  const FOREIGN = "10000000-0000-4000-8000-0000000000ff";
+
+  function coherentUpsertBody(venueId = V1, canonicalVenueId = V1) {
+    return {
+      own: {
+        ...ownRow({ value: 4, version: 2, withdrawn: false }),
+        venueId,
+        canonicalVenueId,
+      },
+      summary: summary(venueId, canonicalVenueId, "available", 4.0, 3),
+    };
+  }
+
+  function coherentWithdrawBody(venueId = V1, canonicalVenueId = V1, version = 2) {
+    return {
+      own: {
+        ...ownRow({ value: null, version, withdrawn: true }),
+        venueId,
+        canonicalVenueId,
+      },
+      summary: summary(venueId, canonicalVenueId, "empty", null, 0),
+    };
+  }
+
+  it.each([
+    {
+      name: "null own",
+      body: () => ({ own: null, summary: summary(V1, V1, "available", 3.0, 2) }),
+    },
+    {
+      name: "foreign own venue",
+      body: () => ({
+        own: { ...ownRow({ value: 4, version: 2 }), venueId: FOREIGN, canonicalVenueId: V1 },
+        summary: summary(V1, V1, "available", 4.0, 3),
+      }),
+    },
+    {
+      name: "foreign summary venue",
+      body: () => ({
+        own: ownRow({ value: 4, version: 2 }),
+        summary: summary(FOREIGN, V1, "available", 4.0, 3),
+      }),
+    },
+    {
+      name: "canonical inconsistency",
+      body: () => ({
+        own: { ...ownRow({ value: 4, version: 2 }), canonicalVenueId: V1 },
+        summary: summary(V1, FOREIGN, "available", 4.0, 3),
+      }),
+    },
+    {
+      name: "same revision",
+      body: () => ({
+        own: ownRow({ value: 4, version: 1 }),
+        summary: summary(V1, V1, "available", 3.0, 2),
+      }),
+    },
+    {
+      name: "too-high revision",
+      body: () => ({
+        own: ownRow({ value: 4, version: 9 }),
+        summary: summary(V1, V1, "available", 4.0, 3),
+      }),
+    },
+    {
+      name: "wrong value",
+      body: () => ({
+        own: ownRow({ value: 5, version: 2 }),
+        summary: summary(V1, V1, "available", 4.0, 3),
+      }),
+    },
+  ])("upsert direct 2xx $name stays UNKNOWN without accepting own/summary", async ({ body }) => {
+    let puts = 0;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V1, V1, "available", 3.0, 2)] });
+      }
+      if (url.includes("/community-rating/me")) {
+        return jsonResponse({
+          own: ownRow({ value: 2, version: 1 }),
+          summary: summary(V1, V1, "available", 3.0, 2),
+        });
+      }
+      if (url.includes("/community-rating") && init?.method === "PUT") {
+        puts += 1;
+        return jsonResponse(body());
+      }
+      throw new Error(url);
+    };
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+    render(createElement(VenueCommunityRating, {
+      venueId: V1,
+      variant: "full",
+      signedIn: true,
+      actorId: ACTOR,
+      csrfToken: CSRF,
+      authReturnPath: `/venues/${V1}`,
+    }));
+    await screen.findByText("Ваша оценка · 2 из 5");
+    await act(async () => {
+      screen.getByRole("radio", { name: "4 из 5" }).click();
+    });
+    await act(async () => {
+      screen.getByText("Сохранить изменение").click();
+    });
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(puts).toBe(1);
+    expect(screen.queryByText("Оценка сохранена")).toBeNull();
+    expect(screen.getByText("Ваша оценка · 2 из 5")).toBeTruthy();
+    const key = idempotencyKeyOf(fetchMock.calls.find((c) => c.method === "PUT"));
+    await act(async () => {
+      screen.getByText("Повторить тот же запрос").click();
+    });
+    await waitFor(() => expect(puts).toBe(2));
+    expect(idempotencyKeyOf(fetchMock.calls.filter((c) => c.method === "PUT")[1])).toBe(key);
+    await screen.findByTestId("venue-community-vote-unknown");
+  });
+
+  it.each([
+    {
+      name: "null own",
+      body: () => ({ own: null, summary: summary(V1, V1, "available", 4.0, 2) }),
+    },
+    {
+      name: "not withdrawn at +1",
+      body: () => ({
+        own: ownRow({ value: 4, version: 2, withdrawn: false }),
+        summary: summary(V1, V1, "available", 4.0, 2),
+      }),
+    },
+    {
+      name: "foreign summary venue",
+      body: () => ({
+        own: ownRow({ value: null, version: 2, withdrawn: true }),
+        summary: summary(FOREIGN, V1, "empty", null, 0),
+      }),
+    },
+  ])("withdraw direct 2xx $name stays UNKNOWN", async ({ body }) => {
+    let deletes = 0;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V1, V1, "available", 4.0, 2)] });
+      }
+      if (url.includes("/community-rating/me")) {
+        return jsonResponse({
+          own: ownRow({ value: 4, version: 1 }),
+          summary: summary(V1, V1, "available", 4.0, 2),
+        });
+      }
+      if (url.includes("/community-rating") && init?.method === "DELETE") {
+        deletes += 1;
+        return jsonResponse(body());
+      }
+      throw new Error(url);
+    };
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+    render(createElement(VenueCommunityRating, {
+      venueId: V1,
+      variant: "full",
+      signedIn: true,
+      actorId: ACTOR,
+      csrfToken: CSRF,
+      authReturnPath: `/venues/${V1}`,
+    }));
+    await screen.findByText("Ваша оценка · 4 из 5");
+    await act(async () => {
+      screen.getByText("Убрать мою оценку").click();
+    });
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(deletes).toBe(1);
+    expect(screen.queryByText("Оценка убрана")).toBeNull();
+    expect(screen.getByText("Ваша оценка · 4 из 5")).toBeTruthy();
+  });
+
+  it.each([408, 500, 501, 502, 503, 504, 507, 599])(
+    "upsert HTTP %s keeps UNKNOWN same frozen key",
+    async (status) => {
+      let puts = 0;
+      fetchMock.handler = async (url, init) => {
+        if (url.includes("/v1/venue-community-summaries")) {
+          return jsonResponse({ items: [summary(V1, V1, "available", 3.0, 1)] });
+        }
+        if (url.includes("/community-rating/me")) {
+          return jsonResponse({
+            own: ownRow({ value: 1, version: 1 }),
+            summary: summary(V1, V1, "available", 3.0, 1),
+          });
+        }
+        if (url.includes("/community-rating") && init?.method === "PUT") {
+          puts += 1;
+          return jsonResponse({ error: `status-${status}` }, status);
+        }
+        throw new Error(url);
+      };
+      const { VenueCommunityRating } = await import(
+        "../src/components/consumer/venues/VenueCommunityRating"
+      );
+      render(createElement(VenueCommunityRating, {
+        venueId: V1,
+        variant: "full",
+        signedIn: true,
+        actorId: ACTOR,
+        csrfToken: CSRF,
+        authReturnPath: `/venues/${V1}`,
+      }));
+      await screen.findByText("Ваша оценка · 1 из 5");
+      await act(async () => {
+        screen.getByRole("radio", { name: "5 из 5" }).click();
+      });
+      await act(async () => {
+        screen.getByText("Сохранить изменение").click();
+      });
+      await screen.findByTestId("venue-community-vote-unknown");
+      const key = idempotencyKeyOf(fetchMock.calls.find((c) => c.method === "PUT"));
+      const body = fetchMock.calls.find((c) => c.method === "PUT")?.body;
+      await act(async () => {
+        screen.getByText("Повторить тот же запрос").click();
+      });
+      await waitFor(() => expect(puts).toBe(2));
+      expect(idempotencyKeyOf(fetchMock.calls.filter((c) => c.method === "PUT")[1])).toBe(key);
+      expect(fetchMock.calls.filter((c) => c.method === "PUT")[1]?.body).toBe(body);
+      await screen.findByTestId("venue-community-vote-unknown");
+      expect(screen.queryByText("Оценка сохранена")).toBeNull();
+    },
+  );
+
+  it("coherent alias direct upsert and withdraw succeed; 409 remains terminal", async () => {
+    let phase: "upsert" | "withdraw-409" | "withdraw-ok" = "upsert";
+    let puts = 0;
+    let deletes = 0;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(ALIAS, CANON, "available", 3.0, 1)] });
+      }
+      if (url.includes("/community-rating/me")) {
+        return jsonResponse({
+          own: {
+            ...ownRow({ value: 2, version: 1 }),
+            venueId: ALIAS,
+            canonicalVenueId: CANON,
+          },
+          summary: summary(ALIAS, CANON, "available", 3.0, 1),
+        });
+      }
+      if (url.includes("/community-rating") && init?.method === "PUT") {
+        puts += 1;
+        return jsonResponse(coherentUpsertBody(ALIAS, CANON));
+      }
+      if (url.includes("/community-rating") && init?.method === "DELETE") {
+        deletes += 1;
+        if (phase === "withdraw-409") return jsonResponse({ error: "conflict" }, 409);
+        // After coherent upsert at version 2, withdraw proof needs exact version 3.
+        return jsonResponse(coherentWithdrawBody(ALIAS, CANON, 3));
+      }
+      throw new Error(url);
+    };
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+    render(createElement(VenueCommunityRating, {
+      venueId: ALIAS,
+      variant: "full",
+      signedIn: true,
+      actorId: ACTOR,
+      csrfToken: CSRF,
+      authReturnPath: `/venues/${ALIAS}`,
+    }));
+    await screen.findByText("Ваша оценка · 2 из 5");
+    await act(async () => {
+      screen.getByRole("radio", { name: "4 из 5" }).click();
+    });
+    await act(async () => {
+      screen.getByText("Сохранить изменение").click();
+    });
+    await waitFor(() => expect(screen.getByText("Оценка сохранена")).toBeTruthy());
+    expect(puts).toBe(1);
+    expect(screen.getByText("Ваша оценка · 4 из 5")).toBeTruthy();
+
+    phase = "withdraw-409";
+    await act(async () => {
+      screen.getByText("Убрать мою оценку").click();
+    });
+    await waitFor(() => expect(screen.getByText(/Конфликт версии оценки/)).toBeTruthy());
+    expect(deletes).toBe(1);
+    expect(screen.queryByTestId("venue-community-vote-unknown")).toBeNull();
+
+    phase = "withdraw-ok";
+    await act(async () => {
+      screen.getByText("Убрать мою оценку").click();
+    });
+    await waitFor(() => expect(screen.getByText("Оценка убрана")).toBeTruthy());
+    expect(deletes).toBe(2);
+  });
+
+  it("own-read: unproven mismatches keep packet; exact +1 saves; apply throw retains packet", async () => {
+    let upsertAttempts = 0;
+    let meMode: "baseline" | "foreign" | "exact" = "baseline";
+    let applyThrows = false;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V1, V1, "available", 3.0, 2)] });
+      }
+      if (url.includes("/community-rating/me")) {
+        if (meMode === "foreign") {
+          return jsonResponse({
+            own: { ...ownRow({ value: 4, version: 2 }), venueId: FOREIGN },
+            summary: summary(V1, V1, "available", 4.0, 3),
+          });
+        }
+        if (meMode === "exact") {
+          return jsonResponse(coherentUpsertBody());
+        }
+        return jsonResponse({
+          own: ownRow({ value: 2, version: 1 }),
+          summary: summary(V1, V1, "available", 3.0, 2),
+        });
+      }
+      if (url.includes("/community-rating") && init?.method === "PUT") {
+        upsertAttempts += 1;
+        return jsonResponse({ error: "upstream" }, 503);
+      }
+      throw new Error(url);
+    };
+
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+    function Host() {
+      return createElement(VenueCommunityRating, {
+        venueId: V1,
+        variant: "full",
+        signedIn: true,
+        actorId: ACTOR,
+        csrfToken: CSRF,
+        authReturnPath: `/venues/${V1}`,
+        onSummaryChange: () => {
+          if (applyThrows) throw new Error("apply-boom");
+        },
+      });
+    }
+    render(createElement(Host));
+    await screen.findByText("Ваша оценка · 2 из 5");
+    await act(async () => {
+      screen.getByRole("radio", { name: "4 из 5" }).click();
+    });
+    await act(async () => {
+      screen.getByText("Сохранить изменение").click();
+    });
+    await screen.findByTestId("venue-community-vote-unknown");
+    const key = idempotencyKeyOf(fetchMock.calls.find((c) => c.method === "PUT"));
+    const body = fetchMock.calls.find((c) => c.method === "PUT")?.body;
+
+    meMode = "foreign";
+    await act(async () => {
+      screen.getByText("Проверить актуальную оценку").click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("venue-community-vote-unknown").textContent ?? "").toMatch(
+        /не подтверждает прошлый запрос/,
+      );
+    });
+    expect(screen.getByText("Ваша оценка · 2 из 5")).toBeTruthy();
+    expect(upsertAttempts).toBe(1);
+
+    applyThrows = true;
+    meMode = "exact";
+    await act(async () => {
+      screen.getByText("Проверить актуальную оценку").click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("venue-community-vote-unknown")).toBeTruthy();
+    });
+    expect(screen.queryByText("Оценка сохранена")).toBeNull();
+    expect(upsertAttempts).toBe(1);
+
+    applyThrows = false;
+    await act(async () => {
+      screen.getByText("Повторить тот же запрос").click();
+    });
+    await waitFor(() => expect(upsertAttempts).toBe(2));
+    expect(idempotencyKeyOf(fetchMock.calls.filter((c) => c.method === "PUT")[1])).toBe(key);
+    expect(fetchMock.calls.filter((c) => c.method === "PUT")[1]?.body).toBe(body);
+    await screen.findByTestId("venue-community-vote-unknown");
+
+    await act(async () => {
+      screen.getByText("Проверить актуальную оценку").click();
+    });
+    await waitFor(() => expect(screen.getByText("Оценка сохранена")).toBeTruthy());
+    expect(upsertAttempts).toBe(2);
+  });
+
+  it("withdraw own-read exact +1 clears after apply; invalid JSON and unknown error keep UNKNOWN", async () => {
+    let deletes = 0;
+    let phase: "500" | "invalid-json" | "unknown-throw" | "ok-me" = "500";
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V1, V1, "available", 4.0, 2)] });
+      }
+      if (url.includes("/community-rating/me")) {
+        if (phase === "ok-me") return jsonResponse(coherentWithdrawBody());
+        return jsonResponse({
+          own: ownRow({ value: 3, version: 1 }),
+          summary: summary(V1, V1, "available", 4.0, 2),
+        });
+      }
+      if (url.includes("/community-rating") && init?.method === "DELETE") {
+        deletes += 1;
+        if (phase === "500") return jsonResponse({ error: "boom" }, 500);
+        if (phase === "invalid-json") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => {
+              throw new SyntaxError("truncated");
+            },
+          } as unknown as Response;
+        }
+        if (phase === "unknown-throw") throw new Error("weird");
+        return jsonResponse(coherentWithdrawBody());
+      }
+      throw new Error(url);
+    };
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+    render(createElement(VenueCommunityRating, {
+      venueId: V1,
+      variant: "full",
+      signedIn: true,
+      actorId: ACTOR,
+      csrfToken: CSRF,
+      authReturnPath: `/venues/${V1}`,
+    }));
+    await screen.findByText("Ваша оценка · 3 из 5");
+    await act(async () => {
+      screen.getByText("Убрать мою оценку").click();
+    });
+    await screen.findByTestId("venue-community-vote-unknown");
+    const key = idempotencyKeyOf(fetchMock.calls.find((c) => c.method === "DELETE"));
+
+    phase = "invalid-json";
+    await act(async () => {
+      screen.getByText("Повторить тот же запрос").click();
+    });
+    await waitFor(() => expect(deletes).toBe(2));
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(idempotencyKeyOf(fetchMock.calls.filter((c) => c.method === "DELETE")[1])).toBe(key);
+
+    phase = "unknown-throw";
+    await act(async () => {
+      screen.getByText("Повторить тот же запрос").click();
+    });
+    await waitFor(() => expect(deletes).toBe(3));
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(idempotencyKeyOf(fetchMock.calls.filter((c) => c.method === "DELETE")[2])).toBe(key);
+
+    phase = "ok-me";
+    await act(async () => {
+      screen.getByText("Проверить актуальную оценку").click();
+    });
+    await waitFor(() => expect(screen.getByText("Оценка убрана")).toBeTruthy());
+    expect(deletes).toBe(3);
+  });
+});
