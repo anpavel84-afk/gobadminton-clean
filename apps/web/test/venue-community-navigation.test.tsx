@@ -42,7 +42,8 @@ vi.mock("../src/components/consumer/venues/VenueCommunityRating", () => ({
 }));
 
 vi.mock("../src/components/consumer/comments/CommentsSection", () => ({
-  CommentsSection: () => createElement("div", { "data-comments": "stub" }),
+  CommentsSection: ({ sectionId }: { sectionId?: string }) =>
+    createElement("div", { id: sectionId, "data-comments": "stub" }),
 }));
 
 vi.mock("../src/components/consumer/venues/VenueReviewsPanel", () => ({
