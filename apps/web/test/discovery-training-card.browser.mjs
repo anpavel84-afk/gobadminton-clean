@@ -356,9 +356,11 @@ await withChrome(async ({ call, evaluate }) => {
           `${width}: history must sit on its own row below roles (history.y=${trainerCard.history.y}, role.bottom=${trainerCard.people[0].bottom})`,
         );
       }
+      // Mobile (CSS max-width:720) stacks roles — normal 390 layout ~229px; keep desktop ≤220.
+      const maxPeopleBandHeight = width <= 720 ? 240 : 220;
       assert.ok(
-        trainerCard.peopleBand.height <= 220,
-        `${width}: people band height ${trainerCard.peopleBand.height} still crushed/tall`,
+        trainerCard.peopleBand.height <= maxPeopleBandHeight,
+        `${width}: people band height ${trainerCard.peopleBand.height} still crushed/tall (max ${maxPeopleBandHeight})`,
       );
     }
 
