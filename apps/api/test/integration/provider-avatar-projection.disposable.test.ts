@@ -308,7 +308,7 @@ run("D1 provider-avatar public quarantine · disposable", () => {
       .json()
       .items.find((row: { publicPlayerId: string }) => row.publicPlayerId === a.publicPlayerId);
     expect(unifiedPeer).toBeTruthy();
-    expect(unifiedPeer.avatar).toEqual({ uploadedUrl: null, providerUrl: null });
+    expect(unifiedPeer.player.avatar).toEqual({ uploadedUrl: null, providerUrl: null });
 
     // 4) Geographic Radar — real activation + results query
     const started = await app.inject({
@@ -319,7 +319,7 @@ run("D1 provider-avatar public quarantine · disposable", () => {
         location: {
           latitude: 55.7558,
           longitude: 37.6173,
-          accuracyMeters: 10,
+          accuracyMeters: 40,
           capturedAt: new Date().toISOString(),
         },
         consentPolicyVersion: GEO_POLICY,
