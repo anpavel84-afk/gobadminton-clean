@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.60 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.60");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.61 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.61");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,8 +64,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/площадк|выбор|сводк/i);
-    expect(currentProse).toMatch(/обсужден|аватар|upsert|тренер/i);
+    expect(currentProse).toMatch(/ролей|сетк|тренер/i);
+    expect(currentProse).toMatch(/истори|строк|ширин|имена|вертикальн/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,9 +85,9 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/площадк|обсужден|тренер|Astra/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(4);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/выбор|сводк|жалоб|upsert|тренер/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/ролей|тренер|сетк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/ролей|истори|ширин|имена|тренер/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
@@ -247,10 +247,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(63);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(64);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(68);
+    ).toBe(69);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -338,6 +338,26 @@ describe("releases catalogue integrity", () => {
       && row.additions.length === 0
       && row.fixes.length === 3
       && row.known_limitations.length === 4
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.60"
+      && row.version_label === "0.1.0-alpha.60"
+      && row.source_sha === "2db4aafece41939f9e209bae9015f90da1d8ca7a"
+      && row.deployments[0]?.release_id === "r42528128745-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T22:07:51Z"
+      && row.deployments[0]?.api_digest === "sha256:1e111f7338350cfb3418d5cb77a1ec66c160b79fb10ff76008aaec0f73a7e74e"
+      && row.deployments[0]?.web_digest === "sha256:a5c995635405ac5f15b2be19a212f77c4a771a8ccb58cb5918b9ec3d56eb0547"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.40.0"
+      && row.title === "Выбор площадки, обсуждение, первая оценка и карточка тренера по макету Astra"
+      && row.additions.length === 0
+      && row.fixes.length === 4
+      && row.known_limitations.length === 7
+      && row.known_limitations.some((item) => /визуальный дефект|узкие колонки/i.test(item))
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
