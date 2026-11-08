@@ -221,9 +221,14 @@ run("MOD-V2-B2b public venue import + credit moderation", () => {
     return { id, name, address: addr };
   }
 
+  /** Deterministic distinct benign JPEG per label — fixed RGB caused cover/gallery dedup SKIP. */
   async function jpeg(label: string) {
+    const digest = createHash("sha256").update(label).digest();
+    const r = 40 + (digest[0]! % 200);
+    const g = digest[1]!;
+    const b = digest[2]!;
     return sharp({
-      create: { width: 900, height: 600, channels: 3, background: { r: 40, g: 80, b: 120 } },
+      create: { width: 900, height: 600, channels: 3, background: { r, g, b } },
     }).jpeg().toBuffer();
   }
 
@@ -493,5 +498,45 @@ run("MOD-V2-B2b public venue import + credit moderation", () => {
     )).rows[0]!;
     expect(row.public_description).toBeNull();
     expect(row.version).toBe(1);
+
+    // Retained attempt + same batch changed to clear/omit → CONFLICT, no mutation, no paid retry.
+    fake.textFixture = async (input) => safeTextBatchDecision(input.texts.length);
+    const textBefore = fake.textCalls;
+    const clearManifest = {
+      ...manifest,
+      items: [{
+        ...manifest.items[0]!,
+        profile: {
+          courtCount: 1,
+          amenities: { parking: false, showers: false },
+          description: null,
+        },
+      }],
+    };
+    const clearLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, clearManifest, actorPrincipal, true, (l) => clearLines.push(l), { moderation },
+    )).toBe(1);
+    expect(clearLines).toContainEqual(expect.objectContaining({
+      action: "FAILED", reason: "PUBLIC_DATA_CONFLICT",
+    }));
+    expect(fake.textCalls).toBe(textBefore);
+    const afterClear = (await pool!.query<{ public_description: string | null; version: number }>(
+      "SELECT public_description, version FROM venues WHERE id=$1", [v.id],
+    )).rows[0]!;
+    expect(afterClear).toEqual(row);
+
+    // Exact same retained input → HOLD UNKNOWN, zero egress (no paid retry).
+    const replayLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, manifest, actorPrincipal, true, (l) => replayLines.push(l), { moderation },
+    )).toBe(1);
+    expect(replayLines).toContainEqual(expect.objectContaining({
+      action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN",
+    }));
+    expect(fake.textCalls).toBe(textBefore);
+    expect((await pool!.query<{ public_description: string | null; version: number }>(
+      "SELECT public_description, version FROM venues WHERE id=$1", [v.id],
+    )).rows[0]).toEqual(row);
   });
 });

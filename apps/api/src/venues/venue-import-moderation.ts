@@ -134,7 +134,11 @@ export type CoverAdmissionRecord = {
   source_page_url: string | null;
 };
 
-/** Exact credit + source + image hash + captured venue identity/version/lifecycle/old cover. */
+/**
+ * Immutable cover INPUT only (credit/source/image/kind/basis).
+ * Captured mutable venue snapshot is NOT part of admission conflict — it is CAS for first publish.
+ * Row version/cover changes must not fake an input conflict on exact replay.
+ */
 export function coverAdmissionFingerprint(input: {
   venueId: string;
   sha256: string;
@@ -142,7 +146,6 @@ export function coverAdmissionFingerprint(input: {
   credit_text: string;
   source_page_url: string | null;
   basis_note: string;
-  captured: CoverAdmissionCapture;
 }): string {
   return createHash("sha256").update(stableStringify({
     venueId: input.venueId,
@@ -150,10 +153,14 @@ export function coverAdmissionFingerprint(input: {
     kind: input.kind,
     credit_text: input.credit_text,
     source_page_url: input.source_page_url,
-    // basis_note is private provenance — bind into admission CAS but never send to provider.
+    // basis_note is private provenance — bind into admission but never send to provider.
     basis_note: input.basis_note,
-    captured: input.captured,
   })).digest("hex");
+}
+
+/** Snapshot digest for audit/CAS evidence — independent of input admission fingerprint. */
+export function coverSnapshotDigest(captured: CoverAdmissionCapture): string {
+  return createHash("sha256").update(stableStringify({ captured })).digest("hex");
 }
 
 export function coverAdmissionKeyHash(batch: string, venueId: string): string {

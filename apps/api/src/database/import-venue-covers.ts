@@ -69,6 +69,7 @@ import {
   coverAdmissionFingerprint,
   coverAdmissionKeyHash,
   coverCaptureMatches,
+  coverSnapshotDigest,
   emptyVenueImportTextPrep,
   freeCreditTextCandidate,
   needsCreditTextPrepare,
@@ -280,9 +281,9 @@ async function loadAcceptedCoverFingerprint(
 }
 
 /**
- * Short committed txn under claim: bind exact credit+source+imagehash and captured
- * venue snapshot before provider I/O. Legacy digests stay image-hash-only; this
- * admission is additive and does not claim historical CAS existed.
+ * Short committed txn under claim: bind immutable input fingerprint before provider I/O.
+ * Captured venue snapshot is stored for first-publish CAS only (separate snapshot digest).
+ * Legacy image-hash digests stay compatible; admission is additive.
  */
 async function commitCoverAttemptOrReplay(
   pool: Pool,
@@ -317,6 +318,7 @@ async function commitCoverAttemptOrReplay(
         venueId: item.venueId,
         fingerprint,
         digest: currentDigest,
+        snapshot_digest: coverSnapshotDigest(captured),
         sha256: item.sha256.toLowerCase(),
         kind: item.kind,
         credit_text: item.credit_text,
@@ -354,9 +356,12 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
       const row = (await pool.query<VenueSnapshot>("SELECT name,lifecycle_state,cover_key,cover_credit_kind,version FROM venues WHERE id=$1",[item.venueId])).rows[0];
       name = row?.name ?? "";
       result = planCover(row);
-      if (result.action === "READY" && apply && row) {
+      // Apply: admission (accepted/attempt) before EXISTING_COVER shortcircuit; fresh actor first.
+      if (apply && row) {
+        if (await requireImportActor(pool, principalId, false) !== userId) {
+          throw new Error("IMPORT_ACTOR_REFUSED");
+        }
         const keyHash = coverAdmissionKeyHash(batch.manifest.batch, item.venueId);
-        const captured = captureCoverAdmission(row);
         const fingerprint = coverAdmissionFingerprint({
           venueId: item.venueId,
           sha256: item.sha256,
@@ -364,20 +369,18 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
           credit_text: item.credit_text,
           source_page_url: item.source_page_url,
           basis_note: item.basis_note,
-          captured,
         });
-        if (await requireImportActor(pool, principalId, false) !== userId) {
-          throw new Error("IMPORT_ACTOR_REFUSED");
-        }
         const acceptedFp = await loadAcceptedCoverFingerprint(pool, keyHash);
         const accepted = planCoverAcceptedReplay(fingerprint, acceptedFp);
         if (accepted) {
+          // Exact accepted replay SKIP; changed input CONFLICT — never restore deleted cover.
           result = accepted;
         } else {
           const priorAttempt = await loadCoverAttempt(pool, keyHash);
           if (priorAttempt) {
             result = planCoverAttemptReplay(fingerprint, currentDigest, priorAttempt);
-          } else {
+          } else if (result.action === "READY") {
+            const captured = captureCoverAdmission(row);
             const attemptGate = await commitCoverAttemptOrReplay(
               pool, principalId, userId, batch.manifest.batch, item, captured,
               fingerprint, keyHash, currentDigest,
@@ -453,11 +456,12 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
                   actorUserId: userId,
                   actorPrincipalId: principalId,
                 });
-                // Additive fingerprint on accepted receipt; old image-hash digests remain compatible.
+                // Additive input fingerprint on accepted receipt; old image-hash digests remain compatible.
                 const audit = await appendAudit(c,{actor:{principalId,roles:["superadmin"]},action:"venue.cover_changed",targetType:"venue",targetId:item.venueId,
                   permission:"venue.manage",reason:"venue_cover_batch_import",keyHash,after:{
                     batch:batch.manifest.batch,kind:item.kind,sha256:item.sha256.toLowerCase(),basis_note:item.basis_note,
-                    fingerprint, credit_text: item.credit_text, source_page_url: item.source_page_url,
+                    fingerprint, snapshot_digest: coverSnapshotDigest(captured),
+                    credit_text: item.credit_text, source_page_url: item.source_page_url,
                     galleryItemId, version: updated.version,
                   }});
                 await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'cover',$3,$4)",[item.venueId,updated.version,principalId,audit]);
@@ -465,6 +469,7 @@ export async function importVenueCovers(pool:Pool, batch:{manifest:CoverManifest
               });
             }
           }
+          // else keep planCover EXISTING_COVER / VENUE_INELIGIBLE when no prior admission
         }
       }
     } catch (error:unknown) {
@@ -1565,7 +1570,12 @@ export async function importVenuePublicData(
         const needsText = needsPublicDataTextPrepare(preview, item);
         let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
 
-        if (needsText) {
+        // Retained attempt / input fingerprint BEFORE provider vs no-provider branch
+        // (clear/omit must not bypass immutable admission for the same batch key).
+        const priorAttempt = await loadPublicDataAttempt(pool, keyHash);
+        if (priorAttempt) {
+          result = planPublicDataAttemptReplay(fingerprint, currentDigest, priorAttempt);
+        } else if (needsText) {
           if (!services) throw new Error("PUBLIC_DATA_MODERATION_REQUIRED");
           const attemptGate = await commitPublicDataAttemptOrReplay(
             pool, principalId, userId, manifest, item, fingerprint, keyHash, currentDigest,
@@ -1586,10 +1596,16 @@ export async function importVenuePublicData(
             );
           }
         } else {
-          // Clear/omit/noop/unchanged description — zero provider egress; no attempt claim.
-          result = await adminTransaction(pool, async (c) =>
-            applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, undefined),
-          );
+          // Fresh clear/omit/noop — zero provider egress; no new attempt claim.
+          // Concurrent claim boundary: re-check retained attempt under the write TX.
+          result = await adminTransaction(pool, async (c) => {
+            if (await requireImportActor(c, principalId) !== userId) {
+              throw new Error("IMPORT_ACTOR_REFUSED");
+            }
+            const raced = await loadPublicDataAttempt(c, keyHash);
+            if (raced) return planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
+            return applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, undefined);
+          });
         }
       }
     } catch (error: unknown) {
