@@ -770,6 +770,24 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
     );
     expect(membership.rowCount).toBe(1);
 
+    // Active-manager control: seal a real 201 receipt before revoke so later
+    // replay exercises authorizeReplay (not a fresh create that never stored a receipt).
+    const sealedKey = randomUUID();
+    const sealedPayload = {
+      targetKind: "message",
+      messageId: ownerMessageId,
+      gameId: game.id,
+      reasonCode: "harassment",
+      shareMessageWithSupport: true,
+    };
+    const sealedCreate = await app.inject({
+      method: "POST",
+      url: "/v1/reports",
+      headers: mutationHeaders(peer, sealedKey),
+      payload: sealedPayload,
+    });
+    expect(sealedCreate.statusCode, sealedCreate.body).toBe(201);
+
     await pool.query(
       `UPDATE game_managers
        SET status = 'revoked', revoked_at = now(), updated_at = now()
@@ -789,18 +807,17 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
     });
     expect(readDenied.statusCode).toBe(404);
 
-    const bindingsBefore = await pool.query<{ n: number }>(
+    const bindingsAfterSeal = await pool.query<{ n: number }>(
       `SELECT COUNT(*)::int AS n FROM message_report_bindings`,
     );
-    const reportsBefore = await pool.query<{ n: number }>(
+    const reportsAfterSeal = await pool.query<{ n: number }>(
       `SELECT COUNT(*)::int AS n FROM abuse_reports`,
     );
 
-    const deniedKey = randomUUID();
     const deniedFresh = await app.inject({
       method: "POST",
       url: "/v1/reports",
-      headers: mutationHeaders(peer, deniedKey),
+      headers: mutationHeaders(peer, randomUUID()),
       payload: {
         targetKind: "message",
         messageId: ownerMessageId,
@@ -811,19 +828,14 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
     });
     expect(deniedFresh.statusCode).toBe(404);
 
-    const deniedReplay = await app.inject({
+    // Same exact sealed key/body after revoke must 404 — not cached 201.
+    const deniedSealedReplay = await app.inject({
       method: "POST",
       url: "/v1/reports",
-      headers: mutationHeaders(peer, deniedKey),
-      payload: {
-        targetKind: "message",
-        messageId: ownerMessageId,
-        gameId: game.id,
-        reasonCode: "harassment",
-        shareMessageWithSupport: true,
-      },
+      headers: mutationHeaders(peer, sealedKey),
+      payload: sealedPayload,
     });
-    expect(deniedReplay.statusCode).toBe(404);
+    expect(deniedSealedReplay.statusCode).toBe(404);
 
     const deniedOtherKey = await app.inject({
       method: "POST",
@@ -842,11 +854,11 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
     expect(
       (await pool.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM message_report_bindings`))
         .rows[0]!.n,
-    ).toBe(bindingsBefore.rows[0]!.n);
+    ).toBe(bindingsAfterSeal.rows[0]!.n);
     expect(
       (await pool.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM abuse_reports`))
         .rows[0]!.n,
-    ).toBe(reportsBefore.rows[0]!.n);
+    ).toBe(reportsAfterSeal.rows[0]!.n);
 
     const ownerReport = await app.inject({
       method: "POST",
@@ -877,13 +889,25 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
     });
     expect(peerChatAfter.statusCode, peerChatAfter.body).toBe(200);
 
+    const ownerSendAfterConfirm = await app.inject({
+      method: "POST",
+      url: `/v1/games/${game.id}/chat/messages`,
+      headers: mutationHeaders(owner, randomUUID()),
+      payload: {
+        text: "C2_OWNER_INCOMING_AFTER_CONFIRM",
+        clientMessageId: randomUUID(),
+      },
+    });
+    expect(ownerSendAfterConfirm.statusCode, ownerSendAfterConfirm.body).toBe(201);
+    const ownerMessageAfterConfirmId = ownerSendAfterConfirm.json().messageId as string;
+
     const peerReport = await app.inject({
       method: "POST",
       url: "/v1/reports",
       headers: mutationHeaders(peer, randomUUID()),
       payload: {
         targetKind: "message",
-        messageId: ownerMessageId,
+        messageId: ownerMessageAfterConfirmId,
         gameId: game.id,
         reasonCode: "harassment",
         shareMessageWithSupport: true,
