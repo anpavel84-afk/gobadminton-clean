@@ -417,6 +417,48 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
     expect(unknownDispute.json().challengedAssertion).toMatchObject({ value: "unknown", version: 2 });
   });
 
+  it("self_attested current keeps canAcknowledgeCurrent false; external mark still acks", async () => {
+    const g = await createEndedGame(manager);
+    const ownContext = await confirmWithTransition(g.id, manager.userId);
+    const marked = await put(manager, `/v1/games/${g.id}/attendance/${ownContext}`, {
+      expectedVersion: 0,
+      value: "present",
+    });
+    expect(marked.statusCode).toBe(200);
+    expect(marked.json()).toMatchObject({
+      assertion: { source: "self_attested" },
+      allowedActions: expect.objectContaining({ canAcknowledge: false }),
+    });
+
+    const dispute = await post(manager, `/v1/games/${g.id}/attendance/${ownContext}/disputes`, {
+      attendanceVersion: 1,
+      explanation: "Нужно уточнить собственную массовую отметку",
+    });
+    expect(dispute.statusCode).toBe(201);
+    expect(dispute.json()).toMatchObject({
+      status: "open",
+      currentAssertion: { version: 1, assertion: { source: "self_attested" } },
+      allowedActions: expect.objectContaining({ canAcknowledgeCurrent: false }),
+    });
+
+    expect(
+      (
+        await post(manager, `/v1/games/${g.id}/attendance/${ownContext}/acknowledgements`, {
+          attendanceVersion: 1,
+          resolvingDisputeId: dispute.json().id,
+          expectedDisputeVersion: 1,
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    // Dispute stays open; party_acknowledged history is not fabricated for self.
+    const open = await get(manager, `/v1/attendance-disputes/${dispute.json().id}`);
+    expect(open.json()).toMatchObject({
+      status: "open",
+      allowedActions: expect.objectContaining({ canAcknowledgeCurrent: false }),
+    });
+  });
+
   it("revision snapshot/reason guard rejects version>1 with null before snapshot and null reason (23514)", async () => {
     const g = await createEndedGame(manager);
     const contextId = await confirmWithTransition(g.id, participant.userId);

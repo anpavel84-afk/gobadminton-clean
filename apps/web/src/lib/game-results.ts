@@ -53,7 +53,7 @@ export function canOfferAttendanceWrites(results: GameResults | null | undefined
 
 export function pendingOwnNotice(page: MeGameResultsPage | null | undefined): number {
   if (!page) return 0;
-  return page.items.filter((item) => item.notice && !item.notice.acknowledgedAt).length;
+  return page.items.filter((item) => ownResultPendingNotice(item)).length;
 }
 
 /** Validated results tab from URL; unknown/untrusted values fall back to attendance. */
@@ -122,8 +122,19 @@ export function ownResultEndsAtBucket(
   return ms < now ? "past" : "future";
 }
 
+/**
+ * Attention only for current external unacked notices.
+ * Self-authored and superseded versions must not create attention;
+ * server may already project notice:null — keep client guards for stale fixtures.
+ */
 export function ownResultPendingNotice(item: MeGameResultsItem): boolean {
-  return Boolean(item.notice && !item.notice.acknowledgedAt);
+  const notice = item.notice;
+  if (!notice || notice.acknowledgedAt) return false;
+  if (notice.source === "self_attested") return false;
+  if (item.attendance.version > 0 && notice.attendanceVersion !== item.attendance.version) {
+    return false;
+  }
+  return true;
 }
 
 /** Bounded open disputes from the current roster page + own attendance — no full-DB fetch. */

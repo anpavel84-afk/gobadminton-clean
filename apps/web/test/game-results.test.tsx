@@ -6,10 +6,12 @@ import {
   canOfferAttendanceWrites,
   defaultOpenDisputeId,
   listOpenAttendanceDisputes,
+  ownResultPendingNotice,
   parseResultsSection,
+  pendingOwnNotice,
   resultsPath,
 } from "../src/lib/game-results";
-import type { AttendanceRecord, GameResults } from "../src/lib/consumer-types";
+import type { AttendanceRecord, GameResults, MeGameResultsPage } from "../src/lib/consumer-types";
 
 describe("PG-1b game results helpers", () => {
   it("labels attendance without inventing present/absent from time", () => {
@@ -85,13 +87,102 @@ describe("PG-1b game results helpers", () => {
       path.resolve(__dirname, "../src/components/consumer/games/GameResultsComposition.tsx"),
       "utf8",
     );
-    expect(composition).toContain('? "Организатор отметил ваше посещение"');
+    expect(composition).toContain('"Организатор отметил ваше посещение"');
+    expect(composition).toContain('"Вы отметили своё посещение"');
+    expect(composition).toContain('"Отмечено вами"');
     expect(composition).toContain('? "Отметка требует уточнения"');
     expect(composition).toContain(': "Посещение ещё не отмечено"');
+    expect(composition).toContain('my.assertion.source === "self_attested"');
     // Static-only heading would always claim organizer marked attendance.
     expect(composition).not.toMatch(
       /<SectionHeader title="Организатор отметил ваше посещение"\s*\/>/,
     );
+    expect(composition).not.toMatch(
+      /<SectionHeader title="Вы отметили своё посещение"\s*\/>/,
+    );
+  });
+
+  it("pending own notice ignores self_attested and superseded versions", () => {
+    const base = {
+      gameId: "10000000-0000-4000-8000-000000000001",
+      contextId: "10000000-0000-4000-8000-000000000011",
+      gameTitle: "Игра",
+      endsAt: "2026-10-24T17:00:00.000Z",
+      attendance: {
+        contextId: "10000000-0000-4000-8000-000000000011",
+        value: "present" as const,
+        version: 2,
+        late: false,
+        assertion: {
+          actorDisplay: "Я",
+          source: "self_attested" as const,
+          at: "2026-10-24T18:00:00.000Z",
+        },
+        acknowledgedVersion: null,
+        dispute: null,
+        displayName: "Я",
+        allowedActions: {
+          canSetAttendance: false,
+          canAcknowledge: false,
+          canDispute: true,
+          canWithdrawDispute: false,
+        },
+      },
+      notice: {
+        id: "10000000-0000-4000-8000-000000000021",
+        attendanceVersion: 2,
+        value: "present" as const,
+        late: false,
+        source: "self_attested" as const,
+        actorDisplay: "Я",
+        createdAt: "2026-10-24T18:00:00.000Z",
+        acknowledgedAt: null,
+      },
+    };
+    expect(ownResultPendingNotice(base)).toBe(false);
+    expect(
+      ownResultPendingNotice({
+        ...base,
+        notice: null,
+      }),
+    ).toBe(false);
+    expect(
+      ownResultPendingNotice({
+        ...base,
+        attendance: {
+          ...base.attendance,
+          assertion: { ...base.attendance.assertion, source: "manager_explicit" },
+        },
+        notice: {
+          ...base.notice!,
+          source: "manager_explicit",
+          attendanceVersion: 1,
+        },
+      }),
+    ).toBe(false);
+    const externalCurrent = {
+      ...base,
+      attendance: {
+        ...base.attendance,
+        assertion: {
+          actorDisplay: "Ольга",
+          source: "manager_explicit" as const,
+          at: "2026-10-24T19:00:00.000Z",
+        },
+      },
+      notice: {
+        ...base.notice!,
+        source: "manager_explicit" as const,
+        actorDisplay: "Ольга",
+        attendanceVersion: 2,
+      },
+    };
+    expect(ownResultPendingNotice(externalCurrent)).toBe(true);
+    const page: MeGameResultsPage = {
+      items: [base, externalCurrent],
+      nextCursor: null,
+    };
+    expect(pendingOwnNotice(page)).toBe(1);
   });
 
   it("OwnedGameSummary exposes contextual Results entry via resultsPath", () => {
