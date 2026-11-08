@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.58 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.58");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.59 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.59");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,9 +64,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/оценк|сообществ/i);
-    expect(currentProse).toMatch(/обсуждени/i);
-    expect(currentProse).toMatch(/площадк/i);
+    expect(currentProse).toMatch(/жалоб|сводк/i);
+    expect(currentProse).toMatch(/якор|раздел/i);
+    expect(currentProse).toMatch(/площадк|шапк/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,10 +85,10 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/оценк|обсуждени|площадк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/квадрат|компактн|210|ролей|отзыв/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/узк|перенос|жалоб|якор|шапк/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф/i,
@@ -248,10 +248,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(61);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(62);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(66);
+    ).toBe(67);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -301,6 +301,25 @@ describe("releases catalogue integrity", () => {
       && row.additions.length === 0
       && row.fixes.length === 2
       && row.known_limitations.length === 3
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.58"
+      && row.version_label === "0.1.0-alpha.58"
+      && row.source_sha === "190187919cb3e36839aabc543e2c85d206de0cb4"
+      && row.deployments[0]?.release_id === "r42508393660-a3"
+      && row.deployments[0]?.accepted_at === "2026-11-08T18:34:32Z"
+      && row.deployments[0]?.api_digest === "sha256:ef01bfb584eedb24f5a0a9836053a7f0ba0ee9f3db2ff66ad345fd1c9246053c"
+      && row.deployments[0]?.web_digest === "sha256:8bd2a2f5134b6fe8ee919697b24fb8af546385e2be8a4501fff7473d6082fe10"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.40.0"
+      && row.title === "Оценки сообщества площадки и открытое обсуждение"
+      && row.additions.length === 3
+      && row.fixes.length === 1
+      && row.known_limitations.length === 4
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>

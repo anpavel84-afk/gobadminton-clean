@@ -16,6 +16,13 @@ import { CommentsSection } from "../comments/CommentsSection";
 import type { Me } from "../../../lib/consumer-types";
 import "../../../styles/venue-community.css";
 
+/** Allowlisted community section ids only — never treat the hash as a free selector. */
+function knownVenueCommunityTargetId(hash: string): "ratings" | "discussion" | "reviews" | null {
+  const id = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (id === "ratings" || id === "discussion" || id === "reviews") return id;
+  return null;
+}
+
 export function VenuePage({venueId}:{venueId:string}) {
   const [context,setContext]=useState({day:"",returnTo:"/games?view=map"});
   useEffect(()=>{ const query=new URLSearchParams(window.location.search); setContext({day:query.get("day") ?? "",returnTo:gamesMapReturnPath(query.get("returnTo"))}); },[]);
@@ -52,6 +59,36 @@ export function VenuePage({venueId}:{venueId:string}) {
       .catch(()=>{setMe(null);});
     return ()=>controller.abort();
   },[venueId]);
+  // Late fragment: venue markup arrives after fetch; re-apply known hashes with CSS scroll-margin.
+  useEffect(() => {
+    if (!venue) return;
+    let cancelled = false;
+    let frame = 0;
+
+    const scrollKnownHash = () => {
+      if (cancelled) return;
+      const targetId = knownVenueCommunityTargetId(window.location.hash);
+      if (!targetId) return;
+      const node = document.getElementById(targetId);
+      if (!node) return;
+      node.scrollIntoView({ block: "start", behavior: "auto" });
+    };
+
+    frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(scrollKnownHash);
+    });
+
+    const onHashChange = () => {
+      scrollKnownHash();
+    };
+    window.addEventListener("hashchange", onHashChange);
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, [venueId, venue]);
   return <ConsumerShell active="games" title="Площадка" mode="page" hideHeading><div className="gb-venue-page">
     <header className="gb-page-local-header">
       <Button variant="ghost" className="gb-game-back" href={context.returnTo}>← Назад к карте</Button>
