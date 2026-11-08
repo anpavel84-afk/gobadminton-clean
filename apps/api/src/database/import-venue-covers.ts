@@ -1586,9 +1586,9 @@ export async function importVenuePublicData(
       if (priorAttempt) {
         const attemptReplay = planPublicDataAttemptReplay(fingerprint, currentDigest, priorAttempt);
         if (attemptReplay.action === "FAILED") {
-          attemptConflict = attemptReplay;
+          attemptConflict = { action: "FAILED", reason: attemptReplay.reason };
         } else {
-          matchingPendingHold = attemptReplay;
+          matchingPendingHold = { action: "HOLD", reason: attemptReplay.reason };
         }
       }
       if (attemptConflict) {
