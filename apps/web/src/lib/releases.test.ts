@@ -28,12 +28,14 @@ describe("releases current descriptor literals", () => {
     expect(prose).toMatch(/жалоб|сводк/i);
     expect(prose).toMatch(/якор|раздел/i);
     expect(prose).toMatch(/площадк|шапк/i);
+    expect(prose).toMatch(/личн|аватар|Профиль|переход/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/узк|перенос|жалоб|якор|шапк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/личн|аватар|Профиль|переход/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк|шапк/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);

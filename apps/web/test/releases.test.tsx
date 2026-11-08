@@ -67,6 +67,7 @@ describe("releases catalogue integrity", () => {
     expect(currentProse).toMatch(/жалоб|сводк/i);
     expect(currentProse).toMatch(/якор|раздел/i);
     expect(currentProse).toMatch(/площадк|шапк/i);
+    expect(currentProse).toMatch(/личн|аватар|Профиль|переход/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -86,9 +87,10 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк|шапк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/узк|перенос|жалоб|якор|шапк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/личн|аватар|Профиль|переход/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф/i,
