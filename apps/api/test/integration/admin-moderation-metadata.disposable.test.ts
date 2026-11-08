@@ -230,18 +230,20 @@ run("Admin D2 moderation metadata · disposable", () => {
     expect(modelFilter.json().items.some((i: { approvalId: string }) => i.approvalId === a2.id)).toBe(true);
 
     // Microsecond-identical / same-millisecond keyset: limit=1 must emit every id once, in SQL order.
-    const surfaceKey = "journal_keyset_fx";
+    // Isolate via unique permitted model (not an invented surface_key enum value).
+    const surfaceKey = "game_title";
+    const keysetModel = "omni-moderation-keyset-us-fx";
     const tHi = "2099-06-01T15:30:00.123456+00";
     const tLo = "2099-06-01T15:30:00.123111+00"; // same truncated ms as tHi; distinct µs
-    const k1 = await seedApproval(surfaceKey, "allow", "omni-moderation-2024-09-26", tHi);
-    const k2 = await seedApproval(surfaceKey, "allow", "omni-moderation-2024-09-26", tLo);
-    const k3 = await seedApproval(surfaceKey, "allow", "omni-moderation-2024-09-26", tHi);
+    const k1 = await seedApproval(surfaceKey, "allow", keysetModel, tHi);
+    const k2 = await seedApproval(surfaceKey, "allow", keysetModel, tLo);
+    const k3 = await seedApproval(surfaceKey, "allow", keysetModel, tHi);
     const expectedOrder = (
       await pool.query<{ id: string }>(
         `SELECT id FROM content_moderation_approvals
-          WHERE surface_key=$1
+          WHERE provider_model=$1
           ORDER BY checked_at DESC, id DESC`,
-        [surfaceKey],
+        [keysetModel],
       )
     ).rows.map((row) => row.id);
     expect(expectedOrder).toEqual(
@@ -255,8 +257,8 @@ run("Admin D2 moderation metadata · disposable", () => {
     for (let pageNo = 0; pageNo < 8; pageNo += 1) {
       const qs =
         beforeCheckedAt && beforeId
-          ? `?surface=${surfaceKey}&limit=1&beforeCheckedAt=${encodeURIComponent(beforeCheckedAt)}&beforeId=${beforeId}`
-          : `?surface=${surfaceKey}&limit=1`;
+          ? `?model=${encodeURIComponent(keysetModel)}&limit=1&beforeCheckedAt=${encodeURIComponent(beforeCheckedAt)}&beforeId=${beforeId}`
+          : `?model=${encodeURIComponent(keysetModel)}&limit=1`;
       const res = await get(qs);
       expect(res.statusCode, res.body).toBe(200);
       const body = res.json() as {
@@ -283,6 +285,72 @@ run("Admin D2 moderation metadata · disposable", () => {
     }
     expect(walked).toEqual(expectedOrder);
     expect(new Set(walked).size).toBe(expectedOrder.length);
+
+    // Synthetic >20 bindings on one approval: HTTP nested list stays <=20, ordered, associated.
+    const heavy = await seedApproval(
+      "comment_body",
+      "allow",
+      "omni-moderation-bindings-cap-fx",
+    );
+    const heavyEntityIds: string[] = [];
+    const heavyCreatedAts: string[] = [];
+    for (let i = 0; i < 25; i += 1) {
+      heavyEntityIds.push(randomUUID());
+      // Distinct created_at so ORDER BY created_at DESC, id DESC is deterministic.
+      heavyCreatedAts.push(`2098-01-01T12:00:${String(i).padStart(2, "0")}.000000+00`);
+    }
+    await pool.query(
+      `INSERT INTO content_moderation_bindings(
+         entity_kind, entity_id, surface_key, resource_version, approval_id,
+         actor_user_id, binding_kind, created_at
+       )
+       SELECT 'entity_comment', x.entity_id, 'comment_body', 1, $1, $2, 'publication',
+              x.created_at::timestamptz
+         FROM unnest($3::uuid[], $4::text[]) AS x(entity_id, created_at)`,
+      [heavy.id, superadmin.userId, heavyEntityIds, heavyCreatedAts],
+    );
+    const dbBoundCount = (
+      await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM content_moderation_bindings WHERE approval_id=$1`,
+        [heavy.id],
+      )
+    ).rows[0]!.n;
+    expect(Number(dbBoundCount)).toBe(25);
+
+    const expectedBindingEntityIds = (
+      await pool.query<{ entity_id: string }>(
+        `SELECT entity_id FROM content_moderation_bindings
+          WHERE approval_id=$1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 20`,
+        [heavy.id],
+      )
+    ).rows.map((row) => row.entity_id);
+
+    const capped = await get(
+      `?model=${encodeURIComponent("omni-moderation-bindings-cap-fx")}&limit=5`,
+    );
+    expect(capped.statusCode, capped.body).toBe(200);
+    const cappedBody = capped.json() as {
+      items: {
+        approvalId: string;
+        bindings: {
+          entityId: string;
+          entityKind: string;
+          bindingKind: string;
+          createdAt: string;
+        }[];
+      }[];
+    };
+    const heavyItem = cappedBody.items.find((i) => i.approvalId === heavy.id);
+    expect(heavyItem).toBeTruthy();
+    expect(heavyItem!.bindings).toHaveLength(20);
+    expect(heavyItem!.bindings.every((b) => b.entityKind === "entity_comment")).toBe(true);
+    expect(heavyItem!.bindings.every((b) => b.bindingKind === "publication")).toBe(true);
+    expect(heavyItem!.bindings.map((b) => b.entityId)).toEqual(expectedBindingEntityIds);
+    expect(JSON.stringify(cappedBody)).not.toMatch(
+      /content_fingerprint|category_flags|provider_response|base64|avatar_url|body_text|email/,
+    );
   });
 
   it("does not invent reject history and leaves Cases source permissions unchanged", async () => {

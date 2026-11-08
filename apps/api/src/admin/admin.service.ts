@@ -1571,19 +1571,26 @@ export class AdminService {
           ids.length === 0
             ? { rows: [] as BindingRow[] }
             : await c.query<BindingRow>(
+                // Per-approval SQL bound (not a global LIMIT across the page): each
+                // already-bounded approval id gets at most 20 bindings from the DB.
                 `SELECT b.id, b.approval_id, b.entity_kind, b.entity_id, b.surface_key,
                         b.resource_version, b.binding_kind,
                         b.role_reputation_decision_id, b.venue_review_decision_id, b.created_at
-                   FROM content_moderation_bindings b
-                  WHERE b.approval_id = ANY($1::uuid[])
-                  ORDER BY b.approval_id, b.created_at DESC, b.id DESC`,
+                   FROM unnest($1::uuid[]) AS aid(id)
+                   CROSS JOIN LATERAL (
+                     SELECT b.id, b.approval_id, b.entity_kind, b.entity_id, b.surface_key,
+                            b.resource_version, b.binding_kind,
+                            b.role_reputation_decision_id, b.venue_review_decision_id, b.created_at
+                       FROM content_moderation_bindings b
+                      WHERE b.approval_id = aid.id
+                      ORDER BY b.created_at DESC, b.id DESC
+                      LIMIT 20
+                   ) b`,
                 [ids],
               );
         const byApproval = new Map<string, BindingRow[]>();
         for (const binding of bindings.rows) {
           const list = byApproval.get(binding.approval_id) ?? [];
-          // Bound nested bindings per approval — no unlimited join expansion.
-          if (list.length >= 20) continue;
           list.push(binding);
           byApproval.set(binding.approval_id, list);
         }
