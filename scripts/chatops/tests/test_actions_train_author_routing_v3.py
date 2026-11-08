@@ -48,8 +48,8 @@ def routes():
     }
 
 
-QA = ar.Reviewer('codex-qa', 'gpt-6.1-sol:medium', True, True, True)
-SEPARATE_QA = ar.Reviewer('separate-qa', 'different-qualified-model', True, True, True)
+QA = ar.Reviewer('codex-qa', 'gpt-6-sol:medium', True, True, True)
+SEPARATE_QA = ar.Reviewer('separate-qa', 'gpt-6-sol:medium', True, True, True)
 
 
 def stopped(provider=ar.CURSOR, operation='op-1'):
@@ -230,12 +230,12 @@ class HandoffTests(unittest.TestCase):
             self.assertEqual(handoff(**updates)['action'], 'HOLD')
 
     def test_codex_author_requires_separate_qualified_reviewer(self):
-        for reviewer in (None, QA, replace(SEPARATE_QA, executor='codex-author'),
+        for reviewer in (None, replace(QA, model=ar.CODEX_MODEL), replace(SEPARATE_QA, executor='codex-author'),
                          replace(SEPARATE_QA, qualified=False), replace(SEPARATE_QA, admitted=False),
                          replace(SEPARATE_QA, ready=False)):
             self.assertEqual(handoff(stopped(ar.AGY, 'op-2'), chain=(stopped(),),
                                      reviewer=reviewer)['action'], 'HOLD')
-        self.assertEqual(handoff(reviewer=SEPARATE_QA)['reason'], 'default_codex_qa_required')
+        self.assertEqual(handoff(reviewer=replace(SEPARATE_QA, model=ar.CODEX_MODEL))['reason'], 'default_codex_qa_required')
 
 
 if __name__ == '__main__':

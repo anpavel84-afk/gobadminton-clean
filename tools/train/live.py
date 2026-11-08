@@ -2067,8 +2067,9 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
         payload_ok=bool(payload.get('ok')), payload=payload)
 
 
-def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
-    """Actual Codex Sol Medium read-only QA (Mode A gpt-6.1-sol effort=medium).
+def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
+                  reviewer_authority=None, qa_effort='medium', _probe=None):
+    """Actual protected Codex read-only QA; Lean routing uses gpt-6-sol.
 
     Match working launch_medium_qa: UID1002 real HOME + native CODEX_HOME,
     private TMPDIR, explicit short rules on stdin, deny model FS .codex/.ssh.
@@ -2078,11 +2079,19 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
     require_executor_uid()
     routing_qa = task.get('_bound_author', {}).get('mode') == 'on'
-    if routing_qa:
+    authority_meta = None
+    if _probe is not None:
+        if os.geteuid() != 0 or _probe != _qa_probe_admission():
+            raise ProviderError('qa_probe_root_admission_hold', charge='none')
+        if (_probe['candidate_sha'] != candidate_sha or _probe['task'] != task
+                or _probe['evidence_dir'] != str(evidence_dir)):
+            raise ProviderError('qa_probe_binding_hold', charge='none')
+    if routing_qa and _probe is None:
         from providers import role_ready
-        if not role_ready('codex_routing_qa')[0]:
+        ready, authority_meta = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=qa_effort)
+        if not ready:
             raise ProviderError('independent_qa_unavailable_hold', charge='none')
-    qa_model = 'gpt-6-sol' if routing_qa else 'gpt-6.1-sol'
+    qa_model = 'gpt-6-sol' if routing_qa or _probe is not None else 'gpt-6.1-sol'
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
         raise ProviderError('invalid_candidate_sha')
     evidence_root = Path(evidence_dir)
@@ -2154,19 +2163,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             fs[common] = 'read'
         fs[str(rules_path)] = 'read'
         fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
-        cmd = [
-            '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
-            str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
-            '--ephemeral', '--skip-git-repo-check', '-C', str(source),
-            '-c', 'approval_policy="never"',
-            '-c', 'default_permissions="gb-task"',
-            '-c', 'permissions.gb-task=' + ('{extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}'),
-            '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
-            '-c', 'web_search="disabled"',
-            '--model', qa_model,
-            '-c', 'model_reasoning_effort="medium"',
-            '--json', '-o', str(final_private), '-',
-        ]
+        cmd = _qa_command(codex, source, fs_expr, final_private, qa_model, qa_effort)
         # Codex shebang is #!/usr/bin/env node — include the already-qualified
         # Node 24.21 bin (same FS allowlist). Do not mutate global uid1002_env.
         child_env = {
@@ -2179,9 +2176,33 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             'HOME': str(AGENT_HOME),
             'TMPDIR': str(tmpdir),
         }
-        mark_intent_phase(intent_path, 'launching', model=qa_model, effort='medium',
+        mark_intent_phase(intent_path, 'launching', model=qa_model, effort=qa_effort,
                           rules_sha256=rules_sha, root_model=False,
                           home=str(AGENT_HOME), codex_home=str(NATIVE_CODEX_HOME))
+        if routing_qa or _probe is not None:
+            from author_handoff import fingerprint
+            import host
+            recipe = _qa_recipe(qa_effort)
+            if _probe is None:
+                # Frozen metadata is not a grant: fresh callback immediately before effect.
+                ready, fresh = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
+                                          effort=qa_effort)
+                if not ready or any(fresh.get(k) != v for k, v in recipe.items()):
+                    raise ProviderError('qa_authority_changed_hold', charge='none')
+            author_executor = ((_probe or {}).get('author_executor') or
+                task.get('_bound_author', {}).get('route_proofs', {}).get(
+                    task.get('_bound_author', {}).get('decision', {}).get('provider'), {}).get('executor'))
+            if not author_executor or author_executor == recipe['executor']:
+                raise ProviderError('qa_independence_hold', charge='none')
+            source_bytes_before = _qa_source_bytes(source)
+            mark_intent_phase(intent_path, 'launching', **recipe,
+                author_executor=author_executor,
+                authority_metadata=authority_meta, actual_argv=cmd, argv_sha256=fingerprint(cmd),
+                argv_permissions_sha256=fingerprint(fs), actual_permissions=fs,
+                operation_id=(_probe or {}).get('operation_id') or fingerprint(str(intent_path)),
+                admission_ref=(_probe or {}).get('admission_ref') or task.get('revision'),
+                pipeline_revision=host.installed_release_sha(), source_before=head,
+                readonly_bytes_before=source_bytes_before)
         with (evidence / 'prompt.md').open() as i, \
                 (evidence / 'events.jsonl').open('w') as o, \
                 (evidence / 'stderr').open('w') as e:
@@ -2232,6 +2253,24 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         parsed['charge'] = 'charged'
         parsed['turn_completed'] = True
         parsed['exit'] = 0
+        if routing_qa or _probe is not None:
+            # Reap any surviving members of the owned group even after leader exit.
+            try:
+                os.killpg(p.pid, 9)
+            except ProcessLookupError:
+                pass
+            _kill_owned_process_group(p)
+            from author_handoff import owned_group_gone
+            after = _qa_source_bytes(source)
+            if (not owned_group_gone(p) or after != source_bytes_before
+                    or git(source, 'rev-parse', 'HEAD') != candidate_sha):
+                raise ProviderError('qa_readonly_or_stop_hold')
+            def proof(path):
+                return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+            mark_intent_phase(intent_path, 'completed', source_after=candidate_sha,
+                readonly_bytes_after=after, owned_stop_proof=True,
+                completion_proof=proof(evidence / 'completion.json'),
+                raw_proof=proof(evidence / 'events.jsonl'), final_proof=proof(final))
         mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
         return parsed
     finally:
@@ -3893,7 +3932,7 @@ def _qa_resume_agy_capacity(claim, task, evidence, *, deadline=None):
         evidence_dir=fallback, capacity_alternative_only=True)
 
 
-def qa_dispatch(claim, *, deadline=None):
+def qa_dispatch(claim, *, deadline=None, reviewer_authority=None):
     """Route QA: AGY when READY+admitted+quota else Codex Medium.
 
     Uses immutable claim.runtime worktree/base/evidence — never recreate from raw task.
@@ -3923,20 +3962,20 @@ def qa_dispatch(claim, *, deadline=None):
     if claim.get('bound_author', {}).get('mode') == 'on':
         task['_bound_author'] = claim['bound_author']
         task['revision'] = claim['revision']
-        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'], evidence_dir=evidence)
+        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'], evidence_dir=evidence, reviewer_authority=reviewer_authority)
     # Persisted capacity-fallback resume: skip already-completed Codex entirely.
     resume = claim.get('resume_provider') or runtime.get('resume_provider')
     if resume == 'agy_qa' or claim.get('wake') == 'capacity_fallback_budget':
         return _qa_resume_agy_capacity(
             claim, task, evidence, deadline=deadline)
     # Explicit task provider routes remain authoritative — do not override prohibited.
-    provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
+    provider, reason, _meta = select_qa_provider(task, issue=claim['issue'], reviewer_authority=reviewer_authority)
     if provider == 'agy_qa':
         return agy_qa_live(task=task, candidate_sha=claim['candidate_sha'],
                            evidence_dir=evidence)
     try:
         return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'],
-                             evidence_dir=evidence)
+                             evidence_dir=evidence, reviewer_authority=reviewer_authority)
     except ProviderError as err:
         if err.code != 'codex_capacity_technical':
             raise
@@ -3981,6 +4020,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
                         deadline=None, repo=None):
     """Trusted LIVE default adapters for host run_once. Tests must inject fakes."""
     import run as lean_run
+    reviewer_authority = build_reviewer_authority()
 
     def fetch_admissions():
         result = fetch_project_admissions(config=None)
@@ -4011,11 +4051,11 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         from providers import select_author_provider
         task = kwargs.get('task') or {}
         provider, _reason, _meta = select_author_provider(
-            task, issue=task.get('issue'))
+            task, issue=task.get('issue'), reviewer_authority=reviewer_authority)
         if provider == 'agy_author':
             return agy_author_live(**kwargs)
         if provider == 'codex_author':
-            return codex_author_live(**kwargs)
+            return codex_author_live(**kwargs, reviewer_authority=reviewer_authority)
         return cursor_author_live(**kwargs)
 
     def qa(claim):
@@ -4023,7 +4063,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         # Prefer claim-scoped evidence_dir (attempt/candidate) over host default.
         if not claim.get('evidence_dir') and evidence_dir:
             claim['evidence_dir'] = evidence_dir
-        return qa_dispatch(claim, deadline=deadline)
+        return qa_dispatch(claim, deadline=deadline, reviewer_authority=reviewer_authority)
 
     def publish(**kwargs):
         return publish_push_pr(**kwargs)
@@ -4044,6 +4084,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         return wait_dev_deploy(claim, budget_s=remaining)
 
     return lean_run.Adapters(
+        reviewer_authority=reviewer_authority,
         fetch_admissions=fetch_admissions,
         gh_api=gh_api,
         author=author,
@@ -4079,7 +4120,7 @@ def live_self_check():
     }
 
 
-def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True):
+def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True, reviewer_authority=None):
     """Qualified exact author via pinned native model_command in private source.
 
     Only a separately admitted capacity successor may reach this transport.
@@ -4089,7 +4130,7 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     from author_handoff import bound_provider, SourceRetention, operation, owned_group_gone
     if (bound_provider(task) or (None,))[0] != 'codex_author' or not task.get('_capacity_successor'):
         raise ProviderError('codex_capacity_admission_required', charge='none')
-    if not role_ready('codex_author')[0] or not role_ready('codex_routing_qa')[0]:
+    if not role_ready('codex_author')[0] or not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority)[0]:
         raise ProviderError('codex_role_unqualified', charge='none')
     require_executor_uid()
     issues, slots = _load_native('core').live()
@@ -4171,3 +4212,248 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
             try: retention.persist(evidence, operation(task, 'codex_author', source_sha))
             except Exception: pass
         shutil.rmtree(private, ignore_errors=True)
+
+# Root-only authority delivery. None of these inputs comes from an event/task.
+_QA_RESULTS = Path('/var/lib/gobadminton-lean/results')
+_QA_CONFIG = Path('/etc/gobadminton-lean/config.json')
+
+
+def _qa_protected_bytes(path, *, results=False):
+    """Bounded stable read, no links at any component, including ancestors."""
+    import stat
+    path = Path(path)
+    if not path.is_absolute() or '..' in path.parts:
+        raise ValueError('qa authority path')
+    if results and (not path.is_relative_to(_QA_RESULTS) or path == _QA_RESULTS):
+        raise ValueError('qa authority outside results')
+    for parent in reversed(path.parents):
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('qa authority ancestor')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or not 0 < before.st_size <= 2 << 20):
+            raise ValueError('qa authority metadata')
+        raw = os.read(fd, (2 << 20) + 1)
+        after = os.fstat(fd)
+        identity = lambda st: (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid,
+                               st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        if identity(before) != identity(after) or identity(path.lstat()) != identity(after) or len(raw) != after.st_size:
+            raise ValueError('qa authority unstable')
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _qa_root_config():
+    import host
+    raw = _qa_protected_bytes(_QA_CONFIG)
+    cfg = host.read_config()
+    if host.loads(raw) != cfg or _qa_protected_bytes(_QA_CONFIG) != raw:
+        raise ValueError('qa config changed')
+    host.installed_release_sha()  # accepted installed pipeline, never task SHA
+    return cfg
+
+
+def _qa_receipt(pointer):
+    import host
+    raw = _qa_protected_bytes(pointer['path'], results=True)
+    if hashlib.sha256(raw).hexdigest() != pointer['sha256']:
+        raise ValueError('qa receipt hash')
+    return host.loads(raw)
+
+
+def _qa_recipe(effort='medium'):
+    """Security closure independent of product SHA and per-operation paths.
+
+    Hash the actual shared operator/factory, not a separately maintained recipe.
+    CLI bytes are current bytes, never invented historical Mode A metadata.
+    """
+    import inspect
+    from author_handoff import fingerprint
+    if effort not in ('medium', 'high'):
+        raise ValueError('qa effort')
+    cli = AGENT_HOME / '.local/lib/node_modules/@openai/codex/bin/codex.js'
+    native = AGENT_HOME / '.local/lib/node_modules/@openai/codex/vendor'
+    # Hash executable launcher plus the executable selected by the installed CLI.
+    # A deployment must bind the actual native binary too; absence HOLDs.
+    binaries = sorted(native.glob('*/codex/codex'))
+    if len(binaries) != 1:
+        raise ValueError('qa exact native CLI missing')
+    cli_hash = fingerprint({str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                            for p in (cli, binaries[0])})
+    _, rules_sha, _ = load_short_rules()
+    closure = fingerprint({f.__name__: inspect.getsource(f) for f in
+        (codex_qa_live, _qa_recipe, _qa_command, uid1002_preexec,
+         _kill_owned_process_group, _codex_turn_completed, _qa_source_bytes,
+         require_executor_uid, load_short_rules)})
+    return dict(role='qa', model='gpt-6-sol', effort=effort, executor_uid=1002,
+                executor='native:codex:1002:qa', cli_sha256=cli_hash,
+                security_closure=closure,
+                recipe_fingerprint=fingerprint(dict(closure=closure, cli=cli_hash,
+                    effort=effort, model='gpt-6-sol', uid=1002, rules_sha256=rules_sha)))
+
+
+def _qa_command(codex, source, fs_expr, final_private, model, effort):
+    return [
+        '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
+        str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
+        '--ephemeral', '--skip-git-repo-check', '-C', str(source),
+        '-c', 'approval_policy="never"', '-c', 'default_permissions="gb-task"',
+        '-c', 'permissions.gb-task={extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}',
+        '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
+        '-c', 'web_search="disabled"', '--model', model,
+        '-c', 'model_reasoning_effort=' + json.dumps(effort),
+        '--json', '-o', str(final_private), '-',
+    ]
+
+
+def _qa_validate_completed(intent):
+    """Validate the historical SAMPLE, never bind future reviews to its SHA."""
+    from author_handoff import fingerprint
+    from providers import parse_codex_final
+    recipe = _qa_recipe(intent['effort'])
+    if (any(intent.get(k) != v for k, v in recipe.items())
+            or intent.get('phase') != 'completed'
+            or not SHA40.fullmatch(intent.get('candidate_sha', ''))
+            or not intent.get('operation_id') or not intent.get('admission_ref')
+            or not SHA40.fullmatch(intent.get('pipeline_revision', ''))
+            or intent.get('owned_stop_proof') is not True
+            or intent.get('source_before') != intent.get('source_after')
+            or intent.get('source_before') != intent['candidate_sha']
+            or not intent.get('readonly_bytes_before')
+            or intent.get('readonly_bytes_before') != intent.get('readonly_bytes_after')
+            or fingerprint(intent.get('actual_permissions')) != intent.get('argv_permissions_sha256')
+            or fingerprint(intent.get('actual_argv')) != intent.get('argv_sha256')):
+        raise ValueError('qa completion provenance')
+    parent = Path(intent['completion_proof']['path']).parent
+    if (Path(intent['completion_proof']['path']).name != 'completion.json'
+            or Path(intent['final_proof']['path']) != parent / 'final.txt'
+            or Path(intent['raw_proof']['path']) != parent / 'events.jsonl'
+            or not intent.get('author_executor')
+            or intent.get('author_executor') == recipe['executor']):
+        raise ValueError('qa evidence binding')
+    completion = _qa_receipt(intent['completion_proof'])
+    final_raw = _qa_protected_bytes(intent['final_proof']['path'], results=True)
+    if hashlib.sha256(final_raw).hexdigest() != intent['final_proof']['sha256']:
+        raise ValueError('qa final bytes')
+    # Raw is hash-bound, not logged or parsed as an authority grant.
+    _qa_receipt_bytes = _qa_protected_bytes(intent['raw_proof']['path'], results=True)
+    if hashlib.sha256(_qa_receipt_bytes).hexdigest() != intent['raw_proof']['sha256']:
+        raise ValueError('qa raw bytes')
+    import host
+    events = [host.loads(line) for line in _qa_receipt_bytes.decode().splitlines() if line.strip()]
+    if not any(isinstance(event, dict) and event.get('type') == 'turn.completed' for event in events):
+        raise ValueError('qa raw turn missing')
+    if (completion.get('exit') != 0 or completion.get('turn_completed') is not True
+            or completion.get('candidate_sha') != intent['candidate_sha']):
+        raise ValueError('qa completion failed')
+    parse_codex_final(final_raw.decode(), intent['candidate_sha'])
+    return recipe
+
+
+def build_reviewer_authority():
+    """Constructed by normal Root adapters; re-read authority on EVERY use."""
+    def authority(*, model, effort, role, executor):
+        if os.geteuid() != 0:
+            return None
+        try:
+            cfg = _qa_root_config()
+            pointer = cfg['codex_qa_authority'][effort]
+            if Path(pointer['path']).name != 'qa-intent-codex_sol_medium.json':
+                return None
+            intent = _qa_receipt(pointer)
+            recipe = _qa_validate_completed(intent)
+            if (intent.get('root_acceptance') != 'accepted'
+                    or intent.get('revoked') is not False
+                    or (model, role, executor) != (recipe['model'], 'qa', recipe['executor'])):
+                return None
+            from author_handoff import fingerprint
+            return dict(recipe, admitted=True, qualified=True, secured=True,
+                        independent_executor=True, accepted_intent_path_sha256=pointer,
+                        sample_candidate_sha=intent['candidate_sha'],
+                        sample_operation_id=intent['operation_id'],
+                        admission_ref=intent.get('admission_ref'),
+                        pipeline_revision=intent.get('pipeline_revision'),
+                        argv_permissions_sha256=intent.get('argv_permissions_sha256'),
+                        source_before_after_sha256=fingerprint([intent.get('readonly_bytes_before'), intent.get('readonly_bytes_after')]),
+                        raw_final_completion_sha256=fingerprint([intent.get(k) for k in ('raw_proof', 'final_proof', 'completion_proof')]),
+                        owned_stop_proof=intent.get('owned_stop_proof'))
+        except Exception:
+            return None
+    return authority
+
+
+def _qa_probe_admission():
+    """One Root-admitted probe, no task/event toggle and no automatic acceptance.
+
+    Same operator/factory as normal QA. The prepared intent is the idempotency
+    guard; every outcome, including UNKNOWN, consumes this exact admission.
+    """
+    from providers import ProviderError
+    if os.geteuid() != 0:
+        raise ProviderError('qa_probe_root_required', charge='none')
+    cfg = _qa_root_config()
+    admission = _qa_receipt(cfg['codex_qa_probe'])
+    from author_handoff import fingerprint
+    if (admission.get('schema') != 'GB_LEAN_QA_PROBE_ADMISSION_V1'
+            or admission.get('revoked') is not False
+            or admission.get('recipe') != _qa_recipe(admission.get('effort'))):
+        raise ProviderError('qa_probe_admission_hold', charge='none')
+    admission_path = Path(cfg['codex_qa_probe']['path'])
+    if (admission_path.name != 'qa-intent-codex_sol_medium.json'
+            or Path(admission['evidence_dir']).parent != admission_path.parent):
+        raise ProviderError('qa_probe_receipt_family_hold', charge='none')
+    task = admission['task']
+    if (task.get('_bound_author') or task.get('author_executor') == 'native:codex:1002:qa'
+            or not admission.get('author_executor')
+            or admission.get('author_executor') == 'native:codex:1002:qa'
+            or not admission.get('operation_id')
+            or admission.get('scope_sha256') != fingerprint(sorted(task.get('allowed_paths', [])))
+            or not SHA40.fullmatch(admission.get('candidate_sha', ''))
+            or admission.get('admission_ref') != task.get('revision')):
+        raise ProviderError('qa_probe_scope_hold', charge='none')
+    # No callable or authority data is taken from task. Admission is Root bytes.
+    return admission
+
+
+def codex_qa_probe_live():
+    admission = _qa_probe_admission()
+    task = admission['task']
+    return codex_qa_live(task=task, candidate_sha=admission['candidate_sha'],
+        evidence_dir=admission['evidence_dir'], _probe=admission,
+        qa_effort=admission['effort'])
+
+
+def accept_codex_qa_intent(pointer):
+    """Explicit trusted Root acceptance only; PMA later CAS-updates config pointer."""
+    from providers import atomic_write
+    if os.geteuid() != 0:
+        raise ValueError('qa acceptance Root required')
+    if Path(pointer['path']).name != 'qa-intent-codex_sol_medium.json':
+        raise ValueError('qa acceptance intent family')
+    intent = _qa_receipt(pointer)
+    _qa_validate_completed(intent)
+    if intent.get('root_acceptance') or intent.get('revoked'):
+        raise ValueError('qa acceptance already resolved')
+    intent.update(root_acceptance='accepted', revoked=False)
+    atomic_write(pointer['path'], intent, 0o600)
+    return dict(path=pointer['path'], sha256=hashlib.sha256(
+        _qa_protected_bytes(pointer['path'], results=True)).hexdigest())
+
+
+def _qa_source_bytes(source):
+    from author_handoff import fingerprint
+    names = git(source, 'ls-files', '-z').split('\0')
+    result = {}
+    for name in names:
+        if not name:
+            continue
+        path = Path(source) / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('qa source irregular')
+        result[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return fingerprint(result)

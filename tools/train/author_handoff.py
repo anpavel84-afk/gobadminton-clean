@@ -68,17 +68,13 @@ def operation(task, provider, source_sha):
 def propose_handoff(*, current, failure, proof, routes, reviewer, initial_provider,
                     chain=(), cumulative_attempts, history_refs):
     """Trusted adapter boundary. No JSON/raw-string error interpretation."""
-    if (not isinstance(reviewer, policy.Reviewer) or reviewer.model != 'gpt-6-sol:medium'):
+    if (not isinstance(reviewer, policy.Reviewer)
+            or reviewer.model not in policy.QUALIFIED_QA_MODELS):
         return dict(action='HOLD', reason='qualified_separate_gpt_6_sol_qa_required')
-    # B1 default QA alias predates final B2 role split. Preserve pure B1 and use
-    # its reviewer predicate with the policy alias, after validating actual QA.
-    legacy = policy.Reviewer(reviewer.executor, policy.CODEX_MODEL,
-        reviewer.qualified, reviewer.admitted, reviewer.ready)
-    target_codex = len(chain) == 1
     result = policy.capacity_handoff(current=current, failure=failure, proof=proof,
         routes=routes, initial_provider=initial_provider, chain=chain,
         cumulative_attempts=cumulative_attempts, history_refs=history_refs,
-        reviewer=reviewer if target_codex else legacy)
+        reviewer=reviewer)
     if result['action'] == 'REQUIRE_NEW_ADMISSION':
         result['reviewer'] = reviewer
         result['actual_provider'] = ACTUAL[result['provider']]

@@ -239,3 +239,42 @@ Focused source checks: the B1 22-test suite, B2 runtime fixture suite and releva
 independent QA, actual installed exact-model qualification, supported vendor
 capacity schema, runtime shadow/activation, native live cleanup/guard readback,
 DEV acceptance and Owner UAT remain **NOT_TESTED**. Mobile #522 was not executed.
+
+### B3 Root reviewer authority delivery (source candidate; NOT runtime accepted)
+
+Normal `run_once → default_live_adapters → build_live_adapters` constructs a
+reviewer-authority callback. Selectors, invocation wrappers, Codex backup,
+claim metadata and capacity proposals receive it outside task/event JSON.
+Frozen metadata is provenance, never a grant; live invocation rechecks authority.
+Actual author remains `gpt-6.1-sol:medium`; independent QA is `gpt-6-sol:medium`,
+or High only with acceptance of that exact effort. Handoff preserves actual tags.
+
+The existing `/etc/gobadminton-lean/config.json` may reference
+`codex_qa_authority.<medium|high> = {path, sha256}` pointing strictly beneath
+`/var/lib/gobadminton-lean/results` to an existing
+`qa-intent-codex_sol_medium.json`. Root acceptance is recorded in that intent;
+no registry, READY marker or separate grant store is introduced. All ancestors
+and receipt/config files must be Root owned, nonlink, non-group/world-writable;
+reads are bounded, stable and reject duplicate JSON keys. Missing, stale,
+revoked, mismatched model/role/effort/UID/CLI/security closure holds routing.
+The historical sample SHA/operation remain evidence, not restrictions on future
+product candidates. Recipe closure hashes code and CLI/rules bytes independently
+of product SHA; each operation also records actual argv and permissions hashes.
+
+Bootstrap is the separate Root-only `codex_qa_probe_live()` entry. A protected
+`codex_qa_probe` pointer references a `GB_LEAN_QA_PROBE_ADMISSION_V1` receipt in the
+same qa-intent family, binding one operation, revision, candidate, scope hash,
+author executor, exact recipe and task. Its evidence directory is a separate
+`qa-*` child of the admission directory. It uses the same operator and command
+factory as normal Lean QA. Exclusive intent creation consumes the operation;
+failed/UNKNOWN operations cannot replay. It does not grant normal routing or
+accept itself. After a future real operation, trusted Root may explicitly call
+`accept_codex_qa_intent` on the exact intent path/hash after examining the real
+raw/completion/final, readonly byte hashes and owned process-stop evidence.
+PMA alone later updates the existing config pointer with guarded CAS/backup.
+Neither acceptance nor probe nor config change was performed in this source task.
+
+Historical Mode A completions lack historical CLI/argv proof and cannot satisfy
+this contract retroactively. Independent QA, CI7 and a scheduled actual Lean
+review remain pending. Actual vendor capacity export remains separately BLOCKED;
+default OFF/SHADOW, C5 OFF, no installation, activation or PROD change.

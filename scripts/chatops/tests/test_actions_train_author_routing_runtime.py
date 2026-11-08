@@ -116,7 +116,7 @@ class Binding(unittest.TestCase):
         self.assertEqual(providers.author_routes({'authorroute': ['antigravity_sonnet', 'codex_sol_medium']}),
                          ['agy_author', 'codex_author'])
         t = bound(task())
-        with patch.object(providers, 'role_ready', side_effect=lambda role: (role != 'codex_routing_qa', {})):
+        with patch.object(providers, 'role_ready', side_effect=lambda role, **kw: (role != 'codex_routing_qa', {})):
             with self.assertRaises(providers.ProviderError): providers.select_author_provider(t)
 
     def test_native_cursor_ready_without_cosmetic_marker(self):
@@ -153,7 +153,7 @@ class Binding(unittest.TestCase):
                 self.assertFalse(providers.qualified_codex_role('qa',
                     reviewer_authority=lambda **r: dict(authority(**r), **change))[0])
             issues.mode_a_reviewer_authority = authority
-            self.assertTrue(providers.role_ready('codex_routing_qa')[0])
+            self.assertFalse(providers.role_ready('codex_routing_qa')[0])
             self.assertFalse(providers.qualified_codex_role('unknown')[0])
             self.assertFalse(providers.qualified_codex_role('author', effort='high')[0])
 
@@ -241,7 +241,7 @@ class Capacity(unittest.TestCase):
                 old.update(worktree=str(work), base_sha='b' * 40, attempts={'author': 1, 'qa': 0})
                 path = run.claim_path_for(admission, root); run.write_receipt(path, old)
                 with patch.object(run, '_read_worktree_head_for_control', return_value=original), \
-                        patch.object(run, 'role_ready', return_value=(True, {})):
+                        patch.object(run, 'role_ready', return_value=(True, dict(executor='native:codex:1002:qa', model='gpt-6-sol', effort='medium'))):
                     proposal = run.record_capacity_proposal(path, t, providers.ProviderError('provider_control_failure', charge='unknown'),
                         root, lambda **kw: p.CapacityStop(failure, proof))
                 self.assertEqual(proposal['action'], 'REQUIRE_NEW_ADMISSION')
@@ -489,3 +489,139 @@ class Retention(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RootReviewerDelivery(unittest.TestCase):
+    def test_default_entry_builds_and_delivers_callback(self):
+        callback = lambda **kw: None
+        with patch.object(live, 'build_reviewer_authority', return_value=callback), \
+                patch.object(live, 'qa_dispatch', return_value={'verdict': 'PASS'}) as qa, \
+                patch.object(providers, 'select_author_provider', return_value=('codex_author', '', {})) as select, \
+                patch.object(live, 'codex_author_live', return_value={}) as author:
+            adapters = run.default_live_adapters(results_root='unused')
+            self.assertIs(adapters.reviewer_authority, callback)
+            adapters.qa({})
+            self.assertIs(qa.call_args.kwargs['reviewer_authority'], callback)
+            adapters.author(task={})
+            self.assertIs(select.call_args.kwargs['reviewer_authority'], callback)
+            self.assertIs(author.call_args.kwargs['reviewer_authority'], callback)
+
+    def test_root_authority_rechecks_missing_revoked_and_recipe(self):
+        recipe = dict(model='gpt-6-sol', effort='medium', role='qa',
+            executor='native:codex:1002:qa', executor_uid=1002, recipe_fingerprint='r')
+        pointer = dict(path='/var/lib/gobadminton-lean/results/issue-527/x/evidence/qa-1/qa-intent-codex_sol_medium.json', sha256='s')
+        accepted = dict(recipe, root_acceptance='accepted', revoked=False,
+                        candidate_sha='a' * 40, operation_id='historical-sample')
+        request = {k: recipe[k] for k in ('model', 'effort', 'role', 'executor')}
+        with patch.object(live.os, 'geteuid', return_value=0), \
+                patch.object(live, '_qa_root_config', return_value={'codex_qa_authority': {'medium': pointer}}), \
+                patch.object(live, '_qa_receipt', return_value=accepted), \
+                patch.object(live, '_qa_validate_completed', return_value=recipe):
+            authority = live.build_reviewer_authority()
+            self.assertTrue(authority(**request)['qualified'])
+            # Sample SHA is provenance only; no future candidate argument exists.
+            self.assertEqual(authority(**request)['sample_candidate_sha'], 'a' * 40)
+            for key, value in (('revoked', True), ('root_acceptance', None)):
+                with patch.dict(accepted, {key: value}):
+                    self.assertIsNone(authority(**request))
+            self.assertIsNone(authority(**dict(request, model='gpt-6.1-sol')))
+            with patch.object(live, '_qa_validate_completed', side_effect=ValueError('stale')):
+                self.assertIsNone(authority(**request))
+            with patch.object(live, '_qa_root_config', return_value={}):
+                self.assertIsNone(authority(**request))
+        with patch.object(live.os, 'geteuid', return_value=1002):
+            self.assertIsNone(live.build_reviewer_authority()(**request))
+            with self.assertRaises(providers.ProviderError): live.codex_qa_probe_live()
+
+    def test_task_json_is_not_authority_and_probe_is_not_ready(self):
+        t = bound(task()); t['reviewer_authority'] = lambda **kw: {'qualified': True}
+        with self.assertRaises(providers.ProviderError):
+            providers.select_qa_provider(t, issue=527)
+        with patch.object(live.os, 'geteuid', return_value=0), \
+                patch.object(live, '_qa_root_config', return_value={'codex_qa_probe': {}}), \
+                patch.object(live, '_qa_receipt', return_value={'schema': 'wrong'}):
+            with self.assertRaises(providers.ProviderError): live.codex_qa_probe_live()
+        with tempfile.TemporaryDirectory() as td:
+            providers.prepare_qa_intent(task(), 'a' * 40, 'codex_sol_medium', td)
+            with self.assertRaises(providers.ProviderError):
+                providers.prepare_qa_intent(task(), 'a' * 40, 'codex_sol_medium', td)
+        self.assertFalse(providers.role_ready('codex_routing_qa')[0])
+
+    def test_integrated_proposal_uses_actual_accepted_medium_and_high(self):
+        core = SimpleNamespace(live=lambda: (SimpleNamespace(model_command=lambda: None), None))
+        for effort in ('medium', 'high'):
+            for initial, second in ((p.CURSOR, p.AGY), (p.AGY, p.CURSOR)):
+                for chained in (False, True):
+                    def actual_stop(provider, op):
+                        from dataclasses import replace
+                        value = stop(provider, op)
+                        binding = replace(value.failure.binding, scope_id=h.fingerprint(['x.py']))
+                        return p.CapacityStop(replace(value.failure, binding=binding),
+                                              replace(value.proof, binding=binding))
+                    first = actual_stop(initial, 'op1')
+                    current = actual_stop(second, 'op2') if chained else first
+                    t = task(); t['_author_operation'] = current.failure.binding.operation
+                    admission = dict(issue=527, revision=t['revision'], comment_id=1, task=t)
+                    with tempfile.TemporaryDirectory() as td:
+                        claim = run.claim_admission(admission, results_root=td)
+                        claim.update(bound_author={'decision': {'provider': current.failure.binding.provider}},
+                            initial_author_provider=initial, attempts={'author': 2 if chained else 1},
+                            capacity_chain=[run.json.loads(run.json.dumps(
+                                first, default=lambda v: __import__('dataclasses').asdict(v)))] if chained else [])
+                        path = run.claim_path_for(admission, td); run.write_receipt(path, claim)
+                        def authority(**request):
+                            return dict(request, executor_uid=1002, qualified=True, admitted=True,
+                                        secured=True, independent_executor=True, recipe_fingerprint='accepted')
+                        with patch.object(providers, '_import_native', return_value=core), \
+                                patch.object(providers, 'routing_qualifications', return_value=routes()), \
+                                patch.object(run, '_read_worktree_head_for_control', return_value=current.failure.binding.source_sha):
+                            result = run.record_capacity_proposal(path, t,
+                                providers.ProviderError('provider_control_failure'), td,
+                                lambda **kw: current, reviewer_authority=authority, qa_effort=effort)
+                            self.assertEqual(result['action'], 'REQUIRE_NEW_ADMISSION', result)
+                            self.assertEqual(result['reviewer']['model'], 'gpt-6-sol:' + effort)
+                            for change in ({'model': 'gpt-6.1-sol'}, {'qualified': False},
+                                           {'executor': routes()[p.CODEX].executor}):
+                                bad = lambda **kw: dict(authority(**kw), **change)
+                                rejected = run.record_capacity_proposal(path, t,
+                                    providers.ProviderError('provider_control_failure'), td,
+                                    lambda **kw: current, reviewer_authority=bad, qa_effort=effort)
+                                self.assertEqual(rejected['action'], 'HOLD')
+
+    def test_receipt_json_and_metadata_boundary(self):
+        import stat
+        raw = b'{"role":"qa"}'
+        info = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0, st_gid=0,
+            st_nlink=1, st_size=len(raw), st_dev=1, st_ino=2, st_mtime_ns=1, st_ctime_ns=1)
+        directory = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
+        target = '/var/lib/gobadminton-lean/results/x.json'
+        def metadata(path):
+            return info if str(path) == target else directory
+        with patch.object(Path, 'lstat', metadata), patch.object(live.os, 'open', return_value=42), \
+                patch.object(live.os, 'fstat', return_value=info), \
+                patch.object(live.os, 'read', return_value=raw), patch.object(live.os, 'close'):
+            self.assertEqual(live._qa_protected_bytes(target, results=True), raw)
+            for change in ({'st_uid': 1002}, {'st_mode': stat.S_IFREG | 0o620},
+                           {'st_size': 3 << 20}, {'st_mode': stat.S_IFLNK | 0o600}):
+                with patch.dict(info.__dict__, change):
+                    with self.assertRaises(ValueError): live._qa_protected_bytes(target, results=True)
+            with patch.dict(directory.__dict__, {'st_mode': stat.S_IFDIR | 0o777}):
+                with self.assertRaises(ValueError): live._qa_protected_bytes(target, results=True)
+        duplicate = b'{"role":"qa","role":"author"}'
+        with patch.object(live, '_qa_protected_bytes', return_value=duplicate):
+            with self.assertRaises(Exception):
+                live._qa_receipt(dict(path=target, sha256=hashlib.sha256(duplicate).hexdigest()))
+
+    def test_probe_shared_factory_and_run_once_default(self):
+        admission = dict(task=task(), candidate_sha='a' * 40, evidence_dir='qa-exact', effort='high')
+        with patch.object(live, '_qa_probe_admission', return_value=admission), \
+                patch.object(live, 'codex_qa_live', return_value={}) as operator:
+            live.codex_qa_probe_live()
+            self.assertEqual(operator.call_args.kwargs['_probe'], admission)
+            self.assertEqual(operator.call_args.kwargs['qa_effort'], 'high')
+        with tempfile.TemporaryDirectory() as td, \
+                patch.object(live, 'build_reviewer_authority', return_value=lambda **kw: None) as factory:
+            result = run.run_once({'event_name': 'offline-ignored'}, config={},
+                                  results_root=td, use_live_defaults=True)
+            self.assertEqual(result['status'], 'ignored')
+            factory.assert_called_once_with()

@@ -403,7 +403,7 @@ def claim_path_for(admission, results_root):
     return root / f'issue-{admission["issue"]}' / admission['revision'][:16] / 'claim.json'
 
 
-def claim_admission(admission, *, results_root=None, force=False, config=None):
+def claim_admission(admission, *, results_root=None, force=False, config=None, reviewer_authority=None):
     root = Path(results_root) if results_root else RESULTS
     claim_dir = root / f'issue-{admission["issue"]}' / admission['revision'][:16]
     claim_dir.mkdir(parents=True, exist_ok=True)
@@ -456,9 +456,11 @@ def claim_admission(admission, *, results_root=None, force=False, config=None):
                     and tuple(decision.get('bucket') or ()) == bucket
                     and decision.get('provider') in counts):
                 counts[decision['provider']] += 1
+        qa_ok, qa_metadata = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority)
+        record['reviewer_authority'] = qa_metadata if qa_ok else None
         record['bound_author'] = freeze(dict(record['task'], issue=record['issue']),
             revision=record['revision'], pipeline=routing_config.get('pipeline_revision', ''),
-            routes=routing_qualifications(record['task']), history_counts=counts,
+            routes=routing_qualifications(record['task'], reviewer_authority=reviewer_authority), history_counts=counts,
             current_provider=current, mode=mode)
     if mode == 'on' and record['task'].get('handoff_from_revision'):
         record = bind_capacity_successor(record, root, routing_config)
@@ -649,6 +651,7 @@ class Adapters:
         self.author = hooks.get('author')
         # Installed trusted control decoder only. None means unsupported schema/HOLD.
         self.author_capacity = hooks.get('author_capacity')
+        self.reviewer_authority = hooks.get('reviewer_authority')
         self.qa = hooks.get('qa')
         self.publish = hooks.get('publish')
         self.wait_ci = hooks.get('wait_ci')
@@ -920,7 +923,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
     propagate into the same worktree/PR/history author prompt.
     """
     root = Path(results_root)
-    claim = claim_admission(admission, results_root=root, config=config)
+    claim = claim_admission(admission, results_root=root, config=config, reviewer_authority=adapters.reviewer_authority)
     path = claim_path_for(admission, root)
     task = dict(claim['task'])
     task['revision'] = claim['revision']
@@ -1059,14 +1062,15 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 if adapters.author:
                     author_result = invoke_cursor_author(
                         task=task, worktree=worktree, evidence_dir=author_evidence,
-                        launcher=adapters.author, parent_lease=True)
+                        launcher=adapters.author, parent_lease=True, reviewer_authority=adapters.reviewer_authority)
                 else:
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
                 if (task.get('_bound_author', {}).get('mode') == 'on'
                         and adapters.author_capacity is not None):
                     proposal = record_capacity_proposal(
-                        path, task, err, author_evidence, adapters.author_capacity)
+                        path, task, err, author_evidence, adapters.author_capacity,
+                        reviewer_authority=adapters.reviewer_authority)
                     if proposal.get('action') == 'REQUIRE_NEW_ADMISSION':
                         return {'status': 'blocked', 'claim': read_receipt(path),
                                 'claim_path': str(path), 'reason': 'new_capacity_admission_required'}
@@ -1253,7 +1257,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 # Codex capacity already done on prior wake — AGY only, no Codex rerun.
                 provider, reason = 'agy_qa', 'capacity_fallback_resume'
             else:
-                provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
+                provider, reason, _meta = select_qa_provider(task, issue=claim['issue'], reviewer_authority=adapters.reviewer_authority)
             claim['attempts'] = dict(claim.get('attempts') or {})
             qa_attempt = int(claim['attempts'].get('qa') or 0) + 1
             claim['attempts']['qa'] = qa_attempt
@@ -1296,7 +1300,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 else:
                     raw = invoke_codex_qa(
                         task=qa_task, candidate_sha=claim['candidate_sha'],
-                        evidence_dir=qa_evidence, launcher=None)
+                        evidence_dir=qa_evidence, launcher=None, reviewer_authority=adapters.reviewer_authority)
             except ProviderError as err:
                 if err.code in (
                         'wake_defer_capacity_fallback',
@@ -1582,7 +1586,7 @@ def run_once(event, *, adapters=None, gh_api=None, results_root=None, config=Non
             if existing.get('phase') not in ('CLAIMED',) and existing.get('claimed_at'):
                 return {'status': 'duplicate_ignored', 'claim': existing,
                         'claim_path': str(claim_file)}
-        claim = claim_admission(admission, results_root=root, config=config)
+        claim = claim_admission(admission, results_root=root, config=config, reviewer_authority=adapters.reviewer_authority)
         # Immediate execute when live/test adapters provide author+qa (or execute flag).
         if event.get('execute') or (adapters.author and adapters.qa):
             try:
@@ -1656,7 +1660,7 @@ def main(argv=None):
     return 0 if result.get('status') not in ('denied', 'queue_unavailable') else 1
 
 
-def record_capacity_proposal(path, task, error, evidence, decoder):
+def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_authority=None, qa_effort='medium'):
     """Persist finite handoff proposal; never execute a backup in this operation.
 
     decoder is installed trusted code for a SUPPORTED control schema, not a task
@@ -1681,10 +1685,13 @@ def record_capacity_proposal(path, task, error, evidence, decoder):
         if not isinstance(control, p.CapacityStop) or control.failure.binding != current:
             return hold
         chain = tuple(_restore_capacity_stop(s) for s in claim.get('capacity_chain', []))
-        qa_ok, _ = role_ready('codex_routing_qa')
-        reviewer = p.Reviewer('native:codex:1002:qa', 'gpt-6-sol:medium', qa_ok, qa_ok, qa_ok)
+        qa_ok, qa_meta = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=qa_effort)
+        if not qa_ok:
+            return hold
+        reviewer = p.Reviewer(qa_meta['executor'], qa_meta['model'] + ':' + qa_meta['effort'], qa_ok, qa_ok, qa_ok)
+        claim['reviewer_authority'] = qa_meta
         proposal = propose_handoff(current=current, failure=control.failure, proof=control.proof,
-            routes=routing_qualifications(task), reviewer=reviewer,
+            routes=routing_qualifications(task, reviewer_authority=reviewer_authority), reviewer=reviewer,
             initial_provider=claim.get('initial_author_provider') or claim['bound_author']['decision']['initial_provider'],
             chain=chain, cumulative_attempts=claim['attempts']['author'],
             history_refs=tuple(claim.get('author_history_refs', [])) + (str(path), str(evidence)))

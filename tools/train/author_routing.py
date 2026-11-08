@@ -13,7 +13,8 @@ AGY = 'antigravity_sonnet'
 CODEX = 'codex_sol_medium'
 PROVIDERS = (CURSOR, AGY, CODEX)
 AGY_MODEL = 'claude-sonnet-5-5-medium'
-CODEX_MODEL = 'gpt-6.1-sol:medium'
+CODEX_MODEL = 'gpt-6.1-sol:medium'  # exact author role
+QUALIFIED_QA_MODELS = frozenset({'gpt-6-sol:medium', 'gpt-6-sol:high'})
 CAPACITY_CODES = frozenset({'QUOTA_EXHAUSTED', 'RATE_LIMIT', 'CAPACITY_EXHAUSTED'})
 ORIGINS = frozenset({'native_top_level_error', 'trusted_preflight_budget_check'})
 
@@ -202,7 +203,7 @@ def capacity_handoff(*, current, failure, proof, routes, initial_provider,
             or not reviewer.executor or not reviewer.model
             or reviewer.executor == route.executor or reviewer.model == route.model):
         return hold('independent_reviewer_required')
-    if target != CODEX and reviewer.model != CODEX_MODEL:
+    if reviewer.model not in QUALIFIED_QA_MODELS:
         return hold('default_codex_qa_required')
     return dict(action='REQUIRE_NEW_ADMISSION', reason='confirmed_capacity_handoff',
                 policy_version=POLICY_VERSION, initial_provider=initial_provider,
