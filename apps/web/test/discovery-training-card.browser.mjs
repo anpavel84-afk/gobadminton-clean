@@ -321,14 +321,24 @@ await withChrome(async ({ call, evaluate }) => {
     if (width >= 1280) {
       assert.ok(Math.abs(ordinary.imageSlot.width - typical.imageSlot.width) <= 1, "regular/trainer same square crop width");
       assert.ok(Math.abs(ordinary.imageSlot.height - typical.imageSlot.height) <= 1, "regular/trainer same square crop height");
-      // Compact typical DEMO should grow modestly vs ordinary — not equal-height latch to content.
+      // D2: no equal-height latch / no forced blank below photo. Compact typical grows only if needed.
+      // Upper-bound compactness for standard (typical DEMO) fixture only — not a global long-name cap.
       const delta = typical.card.height - ordinary.card.height;
-      assert.ok(delta >= 20, `${width}: typical trainer should grow vs ordinary, delta=${delta}`);
-      assert.ok(delta < 160, `${width}: typical trainer should stay compact vs old tall stretch, delta=${delta}`);
+      const maxDelta = width >= 1920 ? 64 : 80;
       assert.ok(
-        typical.card.height - typical.imageSlot.height > 20,
-        `${width}: blank below square image expected on taller trainer card`,
+        delta <= maxDelta,
+        `${width}: typical trainer must stay compact vs ordinary, delta=${delta} max=${maxDelta}`,
       );
+      // Card wraps image + content; geometry nonnegative / contained (no clip). No extra-height requirement.
+      assert.ok(typical.card.height >= typical.imageSlot.height - 1, `${width}: typical card must wrap image slot`);
+      assert.ok(typical.content.bottom <= typical.card.bottom + 1, `${width}: typical content must stay in card`);
+      if (typical.footer) {
+        assert.ok(typical.footer.bottom <= typical.card.bottom + 1, `${width}: typical footer must stay in card`);
+      }
+      for (const person of typical.people || []) {
+        assert.ok(person.width >= 0 && person.height >= 0, `${width}: typical people geometry nonnegative`);
+        assert.ok(person.bottom <= typical.card.bottom + 1, `${width}: typical people must stay in card`);
+      }
     }
 
     const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
