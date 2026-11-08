@@ -10,8 +10,8 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.61 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.61");
+  it("bumps current descriptor to alpha.62 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.62");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -25,19 +25,36 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/ролей|сетк|тренер/i);
-    expect(prose).toMatch(/истори|строк|ширин|имена|вертикальн/i);
+    expect(prose).toMatch(/мобильн|стрелк|Подробнее|действи/i);
+    expect(prose).toMatch(/обычн|тренер|тренировк/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/ролей|тренер|сетк/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/мобильн|действи|обычн|тренировк/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);
     expect(prose).not.toMatch(/134|138|140|Slow4G|5555|8656|все фото|prefetch|переписан|переписать|Изменить/i);
     expect(prose).not.toMatch(/новых типов уведомлен|новой модели разрешен|массовое переименование на диске уже|все файлы переименова/i);
     expect(prose).not.toMatch(/nonce|claim_nonce|Idempotency|MutationRunner|OpenAPI|Mode B|WebP|\bB2b\b|\bB2a\b|RBAC|SQL/i);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.61" &&
+          row.source_sha === "23a3d2dba33d79da55151e5d1eff8ff54d9d74ce" &&
+          row.deployments[0]?.release_id === "r42532364094-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-08T22:56:54Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:701c336b8ba179e8c77fea86e5a78d24ce44986cfedfa5750f1eff600e7f4aea" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:cd6b4327e306b02968488d3687069ed485af08f1296a9d989cb78536db0c9837" &&
+          row.title === "Ремонт сетки ролей в карточке тренера" &&
+          row.api_contract_version === "0.40.0" &&
+          row.known_limitations.some((item) => /мобильная кнопка|унификация действий/i.test(item)),
+      ),
+    ).toBe(true);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
         (row) =>

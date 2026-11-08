@@ -330,6 +330,16 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     expect(discoveryCss).toMatch(/object-position:\s*50%\s*50%/);
     expect(discoveryCss).toMatch(/@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card__image[\s\S]*height:\s*210px/);
     expect(discoveryCss).toMatch(/@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card__image[\s\S]*aspect-ratio:\s*auto/);
+    // Shared CardActions mobile rule (not host-only): ordinary + trainer both get 44px arrow-only CTA.
+    expect(discoveryCss).toMatch(
+      /@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card__actions\s+\.gb-c23-btn\s*\{[^}]*width:\s*44px/,
+    );
+    expect(discoveryCss).toMatch(
+      /@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card__actions\s+\.gb-c23-btn\s*>\s*span\s*\{\s*display:\s*none/,
+    );
+    expect(discoveryCss).not.toMatch(
+      /@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-host\s+\.gb-c23-btn\s*>\s*span\s*\{\s*display:\s*none/,
+    );
     expect(discoveryCss).not.toMatch(/\.gb-discovery-(?:card|host|card__people)[^{]*\{[^}]*(?:line-clamp|text-overflow:\s*ellipsis)/);
     expect(discoveryCss).toMatch(/\.gb-discovery-card__people/);
     expect(discoveryCss).toMatch(/\.gb-discovery-card__role-review/);

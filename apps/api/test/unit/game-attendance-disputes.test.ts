@@ -7,11 +7,14 @@ import {
   putAttendanceRequest,
   respondDisputeRequest,
 } from "../../src/games/game-attendance.policy";
+import { isExactCurrentSelfAuthored } from "../../src/games/game-attendance.service";
 import {
   attendanceDisputeIntakeSchema,
   attendanceDisputeResolveSchema,
 } from "../../src/admin/attendance-disputes.dto";
 import { parse as adminParse } from "../../src/admin/dto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const disputeId = "10000000-0000-4000-8000-000000000021";
 
@@ -126,5 +129,25 @@ describe("PG-2 attendance dispute policy", () => {
         reasonCode: "attendance_resolve",
       }).resolution,
     ).toBe("insufficient_evidence");
+  });
+
+  it("dispute canAcknowledgeCurrent excludes exact-current self without closing history", () => {
+    const subject = "10000000-0000-4000-8000-000000000041";
+    expect(
+      isExactCurrentSelfAuthored({
+        source: "self_attested",
+        actor_user_id: subject,
+        user_id: subject,
+      }),
+    ).toBe(true);
+    const serviceSrc = readFileSync(
+      path.resolve(__dirname, "../../src/games/game-attendance.service.ts"),
+      "utf8",
+    );
+    expect(serviceSrc).toMatch(
+      /canAcknowledgeCurrent:[\s\S]*!isExactCurrentSelfAuthored\(/,
+    );
+    // Party acknowledge / reviewer paths stay independent of self-notice suppression.
+    expect(serviceSrc).toContain("party_acknowledged");
   });
 });

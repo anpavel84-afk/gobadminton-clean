@@ -43,6 +43,20 @@ type Tab = ResultsSection;
 type MarkTarget = { record: AttendanceRecord; mode: "single" | "bulk-review" } | null;
 
 /**
+ * Manager roster status line. Dispute first; self_attested known rows stay neutral
+ * (not «ждёт ответа»); real external ack-pending copy is preserved.
+ */
+export function managerRosterRowStatusLabel(row: AttendanceRecord): string {
+  if (row.dispute?.status === "open") return "На уточнении";
+  if (row.acknowledgedVersion === row.version && row.value !== "unknown") {
+    return "Участник подтвердил";
+  }
+  if (row.value === "unknown") return "Ещё без отметки";
+  if (row.assertion.source === "self_attested") return "Сами отметили";
+  return "Ждёт ответа участника";
+}
+
+/**
  * Immutable actor+game operation host: one useGameResultsMutation instance for this
  * mount only. Parent keys by `${actorId}:${gameId}` so A→B / game change remounts
  * (live=false + generation bump) and cannot retry or clear across hosts.
@@ -590,15 +604,7 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                             <Avatar name={row.displayName} />
                             <div>
                               <strong>{row.displayName}</strong>
-                              <small>
-                                {row.dispute?.status === "open"
-                                  ? "На уточнении"
-                                  : row.acknowledgedVersion === row.version && row.value !== "unknown"
-                                    ? "Участник подтвердил"
-                                    : row.value === "unknown"
-                                      ? "Ещё без отметки"
-                                      : "Ждёт ответа участника"}
-                              </small>
+                              <small>{managerRosterRowStatusLabel(row)}</small>
                             </div>
                           </div>
                           <span className="gb-postgame__pill" data-value={row.value}>
@@ -655,7 +661,9 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                     <SectionHeader
                       title={
                         my && my.value !== "unknown"
-                          ? "Организатор отметил ваше посещение"
+                          ? my.assertion.source === "self_attested"
+                            ? "Вы отметили своё посещение"
+                            : "Организатор отметил ваше посещение"
                           : my && my.value === "unknown" && my.version > 0
                             ? "Отметка требует уточнения"
                             : "Посещение ещё не отмечено"
@@ -663,14 +671,29 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                     />
                     {my && my.value !== "unknown" ? (
                       <>
-                        <p className="gb-postgame__pill" data-tone="wait">
+                        <p
+                          className="gb-postgame__pill"
+                          data-tone={
+                            my.dispute?.status === "open" ||
+                            (my.assertion.source !== "self_attested" &&
+                              my.acknowledgedVersion !== my.version)
+                              ? "wait"
+                              : undefined
+                          }
+                        >
                           {my.dispute?.status === "open"
                             ? "На уточнении"
-                            : my.acknowledgedVersion === my.version
-                              ? "Подтверждено вами"
-                              : "Ждёт вашего ответа"}
+                            : my.assertion.source === "self_attested"
+                              ? "Отмечено вами"
+                              : my.acknowledgedVersion === my.version
+                                ? "Подтверждено вами"
+                                : "Ждёт вашего ответа"}
                         </p>
-                        <p>Проверьте отметку. Отсутствие ответа не означает согласие.</p>
+                        {my.assertion.source === "self_attested" ? (
+                          <p>Вы сами отметили своё посещение. При необходимости можно уточнить или оспорить отметку.</p>
+                        ) : (
+                          <p>Проверьте отметку. Отсутствие ответа не означает согласие.</p>
+                        )}
                         <p>
                           <strong>{attendanceLabel(my.value)}</strong>
                           {my.late ? " · опоздание" : ""} · версия {my.version}
@@ -692,10 +715,12 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                             История изменений
                           </Button>
                         </div>
-                        <p className="gb-postgame__helper">
-                          «Согласен с этой отметкой» — явное согласие с точной версией отметки, не просто ознакомление.
-                          Уведомление сохранено в «Моих играх», а не только в чате.
-                        </p>
+                        {writes && my.allowedActions.canAcknowledge ? (
+                          <p className="gb-postgame__helper">
+                            «Согласен с этой отметкой» — явное согласие с точной версией отметки, не просто ознакомление.
+                            Уведомление сохранено в «Моих играх», а не только в чате.
+                          </p>
+                        ) : null}
                       </>
                     ) : my && my.value === "unknown" && my.version > 0 ? (
                       <>

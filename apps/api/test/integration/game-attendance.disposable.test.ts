@@ -378,6 +378,129 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     );
   });
 
+  it("organizer self bulk-present: self_attested keeps history, no ACK/notice attention; external after self prompts", async () => {
+    const coManager = await actor("PG1b co-manager");
+    const g = await createEndedGame(manager);
+    await pool.query(
+      `INSERT INTO game_managers (game_id, user_id, role, status) VALUES ($1, $2, 'manager', 'active')`,
+      [g.id, coManager.userId],
+    );
+    const ownContext = await confirmWithTransition(g.id, manager.userId, -4);
+    const otherContext = await confirmWithTransition(g.id, participant.userId, -4);
+
+    const bulk = await post(manager, `/v1/games/${g.id}/attendance/bulk-present`, {
+      items: [
+        { contextId: ownContext, expectedVersion: 0 },
+        { contextId: otherContext, expectedVersion: 0 },
+      ],
+      confirmedExactSelection: true,
+    });
+    expect(bulk.statusCode).toBe(200);
+    const ownBulk = bulk.json().items.find((r: { contextId: string }) => r.contextId === ownContext);
+    const otherBulk = bulk.json().items.find((r: { contextId: string }) => r.contextId === otherContext);
+    expect(ownBulk).toMatchObject({
+      value: "present",
+      version: 1,
+      assertion: { source: "self_attested" },
+      allowedActions: expect.objectContaining({ canAcknowledge: false }),
+    });
+    expect(otherBulk).toMatchObject({
+      assertion: { source: "manager_explicit" },
+    });
+
+    const ownResults = await get(manager, `/v1/games/${g.id}/results`);
+    expect(ownResults.json().attendance.myAttendance).toMatchObject({
+      contextId: ownContext,
+      value: "present",
+      version: 1,
+      assertion: { source: "self_attested" },
+      acknowledgedVersion: null,
+      allowedActions: expect.objectContaining({ canAcknowledge: false, canDispute: true }),
+    });
+
+    const meSelf = await get(manager, "/v1/me/game-results");
+    expect(meSelf.statusCode).toBe(200);
+    const selfItem = meSelf.json().items.find((i: { contextId: string }) => i.contextId === ownContext);
+    expect(selfItem).toMatchObject({
+      gameId: g.id,
+      contextId: ownContext,
+      attendance: { value: "present", version: 1, assertion: { source: "self_attested" } },
+      notice: null,
+    });
+    const durableSelfNotice = await pool.query(
+      `SELECT source, acknowledged_at IS NOT NULL AS acked
+       FROM game_attendance_notices
+       WHERE participation_id=$1 AND attendance_version=1`,
+      [ownContext],
+    );
+    expect(durableSelfNotice.rows[0]).toMatchObject({ source: "self_attested", acked: false });
+
+    const selfAck = await post(manager, `/v1/games/${g.id}/attendance/${ownContext}/acknowledgements`, {
+      attendanceVersion: 1,
+    });
+    expect(selfAck.statusCode).toBe(409);
+    expect(selfAck.json().code).toBe("ATTENDANCE_SELF_ACK_REDUNDANT");
+    const stillUnacked = await pool.query(
+      `SELECT acknowledged_at FROM game_attendance_notices
+       WHERE participation_id=$1 AND attendance_version=1`,
+      [ownContext],
+    );
+    expect(stillUnacked.rows[0]!.acknowledged_at).toBeNull();
+
+    const meOther = await get(participant, "/v1/me/game-results");
+    const otherItem = meOther.json().items.find((i: { contextId: string }) => i.contextId === otherContext);
+    expect(otherItem).toMatchObject({
+      notice: { attendanceVersion: 1, value: "present", source: "manager_explicit", acknowledgedAt: null },
+      attendance: { allowedActions: expect.objectContaining({ canAcknowledge: true }) },
+    });
+
+    const externalOnSelf = await put(coManager, `/v1/games/${g.id}/attendance/${ownContext}`, {
+      expectedVersion: 1,
+      value: "absent",
+      correctionReason: "Другой организатор уточнил",
+    });
+    expect(externalOnSelf.statusCode).toBe(200);
+    expect(externalOnSelf.json()).toMatchObject({
+      value: "absent",
+      version: 2,
+      assertion: { source: "manager_explicit" },
+    });
+    const afterExternal = await get(manager, `/v1/games/${g.id}/results`);
+    expect(afterExternal.json().attendance.myAttendance).toMatchObject({
+      version: 2,
+      assertion: { source: "manager_explicit" },
+      allowedActions: expect.objectContaining({ canAcknowledge: true }),
+    });
+    const meAfter = await get(manager, "/v1/me/game-results");
+    const pendingExternal = meAfter
+      .json()
+      .items.find(
+        (i: { contextId: string; notice: { attendanceVersion: number } | null }) =>
+          i.contextId === ownContext && i.notice?.attendanceVersion === 2,
+      );
+    expect(pendingExternal).toMatchObject({
+      notice: { attendanceVersion: 2, source: "manager_explicit", acknowledgedAt: null },
+    });
+    const staleSelfRow = meAfter
+      .json()
+      .items.find(
+        (i: { contextId: string; notice: { attendanceVersion: number } | null; attendance: { version: number } }) =>
+          i.contextId === ownContext && i.attendance.version === 2 && i.notice === null,
+      );
+    // Historical self notice row remains discoverable as an item with notice:null (no attention).
+    expect(
+      meAfter.json().items.some(
+        (i: { contextId: string; notice: null | object; attendance: { version: number } }) =>
+          i.contextId === ownContext && i.notice === null,
+      ),
+    ).toBe(true);
+    expect(staleSelfRow || pendingExternal).toBeTruthy();
+
+    const history = await get(manager, `/v1/games/${g.id}/attendance/${ownContext}/history`);
+    expect(history.statusCode).toBe(200);
+    expect(history.json().items.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("idempotent PUT replay; version conflict; concurrent revoke private 404", async () => {
     const g = await createEndedGame(manager);
     const contextId = await confirmWithTransition(g.id, participant.userId);

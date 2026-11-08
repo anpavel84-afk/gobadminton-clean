@@ -551,6 +551,22 @@ describe("PG-1b game results mutation host", () => {
     expect(
       validateGameResultsSuccess(record({ version: 2, acknowledgedVersion: 2, value: "unknown" }), ackPending),
     ).toBe(false);
+    // Self-attested marks must not be treated as ACK success without real acknowledgedVersion.
+    expect(
+      validateGameResultsSuccess(
+        record({
+          version: 2,
+          acknowledgedVersion: null,
+          value: "present",
+          assertion: {
+            actorDisplay: "Self",
+            source: "self_attested",
+            at: "2026-11-01T00:00:00Z",
+          },
+        }),
+        ackPending,
+      ),
+    ).toBe(false);
 
     const resolvingAckPending = {
       path: `/v1/games/${gameId}/attendance/${contextId}/acknowledgements`,
