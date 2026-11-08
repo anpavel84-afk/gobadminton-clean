@@ -16,6 +16,8 @@ import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv } from "../../src/config/env";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
+import { FakeModerationProvider } from "../../src/moderation/fake-provider";
+import { MODERATION_PROVIDER } from "../../src/moderation/provider";
 import { VenuesModule } from "../../src/venues/venues.module";
 import { VenuesService, type VenueDto } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
@@ -335,20 +337,75 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     expect(JSON.stringify(await detail(x.v.id))).not.toMatch(/private|cover_key|actor_id|approval_id|rating|reviewCount/);
   });
   it("command/audit/history/outbox/receipt failure rolls back facts, contacts and DB date atomically", async () => {
+    if (!app) throw new Error("Missing app");
+    // Narrow FakeModerationProvider access only — never claim real OpenAI transport.
+    const fake = app.get<FakeModerationProvider>(MODERATION_PROVIDER);
     const x = await fixture();
+    const ledgerCounts = async () => (await pool.query(
+      "SELECT (SELECT count(*) FROM privileged_audit_events) AS audit,(SELECT count(*) FROM venue_admin_actions) AS history,(SELECT count(*) FROM outbox_events) AS outbox,(SELECT count(*) FROM admin_command_receipts) AS receipts,(SELECT count(*) FROM admin_command_receipts WHERE reservation_state='completed') AS completed",
+    )).rows[0]!;
+    const receiptByKey = async (keyHash: string) => (await pool.query<{
+      reservation_state: string;
+      response_ciphertext: string | null;
+      claim_nonce: string | null;
+    }>(
+      "SELECT reservation_state, response_ciphertext, claim_nonce FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",
+      [manager.id, keyHash],
+    )).rows;
     for (const table of ["privileged_audit_events", "venue_admin_actions", "outbox_events", "admin_command_receipts"]) {
       const before = await stored(x.v.id);
-      const counts = async () => (await pool.query("SELECT (SELECT count(*) FROM privileged_audit_events) AS audit,(SELECT count(*) FROM venue_admin_actions) AS history,(SELECT count(*) FROM outbox_events) AS outbox,(SELECT count(*) FROM admin_command_receipts) AS receipts")).rows[0];
-      const totals = await counts();
+      const totals = await ledgerCounts();
+      const key = randomUUID();
+      const keyHash = hashSecret(pepper, key);
+      // Public text change so prepare pays once when the durable claim is reserved.
+      const fields = { ...x.f, name: `${x.f.name} atomic-${randomUUID()}`, profile: facts, publicContacts: contacts };
+      const textCallsBefore = fake.textCalls;
       // Synthetic throw lives only in this random database, never in runtime source.
       await pool.query("CREATE FUNCTION synthetic_profile_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$");
       await pool.query(`CREATE TRIGGER synthetic_profile_failure BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION synthetic_profile_failure()`);
+      let triggerLive = true;
       try {
-        const response = await edit(x.v.id, { ...x.f, profile: facts, publicContacts: contacts }, 1);
+        const response = await edit(x.v.id, fields, before.version, key);
         expect(response.statusCode).toBeGreaterThanOrEqual(500);
-        expect(await stored(x.v.id)).toEqual(before); expect(await counts()).toEqual(totals);
+        expect(await stored(x.v.id)).toEqual(before);
+        if (table === "admin_command_receipts") {
+          // Claim INSERT itself failed: no reservation, prepare never ran, all ledgers unchanged.
+          expect(await ledgerCounts()).toEqual(totals);
+          expect(await receiptByKey(keyHash)).toEqual([]);
+          expect(fake.textCalls).toBe(textCallsBefore);
+        } else {
+          // Business TX rolled back; durable external-prepare claim must remain noncommitted
+          // (ambiguous non-HTTP → leave processing; prevents paid-call replay).
+          const after = await ledgerCounts();
+          expect(after).toMatchObject({ audit: totals.audit, history: totals.history, outbox: totals.outbox, completed: totals.completed });
+          expect(Number(after.receipts)).toBe(Number(totals.receipts) + 1);
+          const claims = await receiptByKey(keyHash);
+          expect(claims).toHaveLength(1);
+          expect(claims[0]).toMatchObject({
+            reservation_state: "processing",
+            response_ciphertext: null,
+          });
+          expect(typeof claims[0]!.claim_nonce).toBe("string");
+          expect(claims[0]!.claim_nonce!.length).toBeGreaterThan(0);
+          expect(fake.textCalls).toBe(textCallsBefore + 1);
+          // Drop trigger before same-key replay so CIP comes from the durable claim, not the synthetic RAISE.
+          await pool.query(`DROP TRIGGER synthetic_profile_failure ON ${table}`);
+          await pool.query("DROP FUNCTION synthetic_profile_failure()");
+          triggerLive = false;
+          const textCallsAfterFail = fake.textCalls;
+          const replay = await edit(x.v.id, fields, before.version, key);
+          expect(replay.statusCode).toBe(409);
+          expect(replay.json()).toMatchObject({ code: "COMMAND_IN_PROGRESS" });
+          expect(await stored(x.v.id)).toEqual(before);
+          expect(await ledgerCounts()).toEqual(after);
+          expect(await receiptByKey(keyHash)).toEqual(claims);
+          expect(fake.textCalls).toBe(textCallsAfterFail);
+        }
       } finally {
-        await pool.query(`DROP TRIGGER synthetic_profile_failure ON ${table}`); await pool.query("DROP FUNCTION synthetic_profile_failure()");
+        if (triggerLive) {
+          await pool.query(`DROP TRIGGER IF EXISTS synthetic_profile_failure ON ${table}`);
+          await pool.query("DROP FUNCTION IF EXISTS synthetic_profile_failure()");
+        }
       }
     }
   });
