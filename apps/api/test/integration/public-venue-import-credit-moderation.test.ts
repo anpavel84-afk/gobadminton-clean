@@ -539,4 +539,79 @@ run("MOD-V2-B2b public venue import + credit moderation", () => {
       "SELECT public_description, version FROM venues WHERE id=$1", [v.id],
     )).rows[0]).toEqual(row);
   });
+
+  it("public-data: retained attempt clear/omit CONFLICT before version/eligibility drift", async () => {
+    const v = await seedVenue();
+    fake.textFixture = async () => {
+      throw new ModerationProviderError("unavailable");
+    };
+    const manifest = {
+      schema: "VENUE_PUBLIC_DATA_BATCH_V1" as const,
+      batch: `pd-adm-${randomUUID().slice(0, 8)}`,
+      count: 1,
+      items: [{
+        venueId: v.id,
+        expectedVersion: 1,
+        expectedName: v.name,
+        expectedAddress: v.address,
+        profile: {
+          courtCount: 1,
+          amenities: { parking: false, showers: false },
+          description: "Описание до дрейфа версии",
+        },
+        sources: [{ url: "https://example.com/adm", checkedAt: "2026-11-01T00:00:00.000Z", note: "SECRET" }],
+      }],
+    };
+    expect(await importVenuePublicData(pool!, manifest, actorPrincipal, true, () => undefined, { moderation })).toBe(1);
+
+    // Mutable venue drift after retained attempt — must not mask changed clear/omit admission.
+    await pool!.query(
+      "UPDATE venues SET version=version+1, lifecycle_state='retired', updated_at=now() WHERE id=$1",
+      [v.id],
+    );
+    const drifted = (await pool!.query<{ public_description: string | null; version: number; lifecycle_state: string }>(
+      "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
+    )).rows[0]!;
+    expect(drifted.version).toBe(2);
+    expect(drifted.lifecycle_state).toBe("retired");
+    expect(drifted.public_description).toBeNull();
+
+    fake.textFixture = async (input) => safeTextBatchDecision(input.texts.length);
+    const textBefore = fake.textCalls;
+    const clearManifest = {
+      ...manifest,
+      items: [{
+        ...manifest.items[0]!,
+        profile: {
+          courtCount: 1,
+          amenities: { parking: false, showers: false },
+          description: null,
+        },
+      }],
+    };
+    const clearLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, clearManifest, actorPrincipal, true, (l) => clearLines.push(l), { moderation },
+    )).toBe(1);
+    expect(clearLines).toContainEqual(expect.objectContaining({
+      action: "FAILED", reason: "PUBLIC_DATA_CONFLICT",
+    }));
+    expect(fake.textCalls).toBe(textBefore);
+    expect((await pool!.query<{ public_description: string | null; version: number; lifecycle_state: string }>(
+      "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
+    )).rows[0]).toEqual(drifted);
+
+    // Exact retained input still HOLD UNKNOWN with zero egress — no paid retry.
+    const replayLines: object[] = [];
+    expect(await importVenuePublicData(
+      pool!, manifest, actorPrincipal, true, (l) => replayLines.push(l), { moderation },
+    )).toBe(1);
+    expect(replayLines).toContainEqual(expect.objectContaining({
+      action: "HOLD", reason: "OPERATION_OUTCOME_UNKNOWN",
+    }));
+    expect(fake.textCalls).toBe(textBefore);
+    expect((await pool!.query<{ public_description: string | null; version: number; lifecycle_state: string }>(
+      "SELECT public_description, version, lifecycle_state FROM venues WHERE id=$1", [v.id],
+    )).rows[0]).toEqual(drifted);
+  });
 });

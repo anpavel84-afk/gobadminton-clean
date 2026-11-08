@@ -1,14 +1,18 @@
 # #506 B2b — public-data description + media credits (SOURCE repair candidate)
 
-Base frozen: `16882cbeeeb7726bff28809d69269df32a5c872e` (attempt 37 candidate; DEV alpha.52 ACCEPTED `52aa222`; alpha.53 not published, `source_sha` null). Application notes: **0.1.0-alpha.53** (UAT `NOT_TESTED`). API contract **0.37.0** (compatible). Cursor Auto sole source writer. **Attempt 38** = bounded repair of QA exact2 HIGH + 2 fixture failures. Preserve all 37 results/costs; 38 never replays UNKNOWN. No fabricated CI/DEV PASS. Repair source only — QA/CI/DEV pending. Do not claim whole-MOD DONE. C/D/#507 pending.
+Base frozen: `9c9346143e3c60eed0755b0053419db6b7d3858a` (attempt 38 candidate). Application notes: **0.1.0-alpha.53** (UAT `NOT_TESTED`). API contract **0.37.0** (compatible). Cursor Auto sole source writer. **Attempt 39** = bounded repair of QA38 single remaining HIGH (retained public-data attempt before mutable planning). Preserve all 37/38 results/costs; 39 never replays UNKNOWN. Cover replay independently accepted — not re-architected. No fabricated CI/DEV PASS. Repair source only — QA/CI/DEV pending. Do not claim whole-MOD DONE. C/D/#507 pending.
 
-## Attempt 38 repair (this handoff)
+## Attempt 39 repair (this handoff)
 
-- **HIGH1** `importVenueCovers`: admission (accepted/attempt input fingerprint) before `EXISTING_COVER` shortcircuit; immutable INPUT fingerprint independent of captured venue snapshot; captured CAS retained for first publish; exact accepted replay SKIP without restoring deleted cover; changed credit/source/image/kind/basis → `COVER_IMPORT_CONFLICT` even when cover exists. Optional `coverSnapshotDigest` on audit only.
-- **HIGH2** `importVenuePublicData`: retained attempt/input fingerprint checked before provider vs clear/omit branch; changed bound input → `PUBLIC_DATA_CONFLICT` before write; fresh clear/omit still zero egress; concurrent claim re-check under clear/omit TX.
-- **Fixture1** credit-moderation `jpeg(label)`: deterministic distinct RGB per label (legacy identical bytes caused gallery `EXISTING_SOURCE_FINGERPRINT` SKIP / textCalls 0).
-- **Fixture2** cover-import refused stage: update manifest sha with new bytes for real provider-reject GC; separate tamper case keeps early hash reject / provider0 / no new staged GC.
-- Added bounded admission replay/conflict/deletion-replay and 503→clear/omit assertions. No migration 001..65 edits. No PROD/runtime/config writes.
+- **HIGH** `importVenuePublicData`: after real actor authorization, compare retained attempt / immutable input fingerprint **before** mutable venue planning (eligibility / version shortcircuit), including clear/omit. Accepted receipt remains authoritative via existing planning. Version/eligibility drift must not mask changed admission → `PUBLIC_DATA_CONFLICT`. Fresh ops still run CAS/eligibility; no writes on conflict; no cached disclosure before auth; zero egress + exact HOLD UNKNOWN replay retained.
+- One targeted regression: prior attempt → venue version+eligibility drift → changed clear/omit → `PUBLIC_DATA_CONFLICT`; exact same input → `OPERATION_OUTCOME_UNKNOWN`; zero egress; no mutation.
+- No cover-path changes. No migration/schema/release metadata. No PROD/runtime/config/budget/UNKNOWN reset.
+
+## Attempt 38 (preserved)
+
+- **HIGH1** `importVenueCovers`: admission before `EXISTING_COVER` shortcircuit; immutable INPUT fingerprint; exact accepted replay SKIP without restoring deleted cover; changed credit/source/image → `COVER_IMPORT_CONFLICT`.
+- **HIGH2** `importVenuePublicData`: retained attempt before provider vs clear/omit branch (39 further orders attempt before eligibility/version).
+- Fixture jpeg(label) distinct RGB; cover refused-stage manifest sha updates.
 
 ## What landed (through 37, preserved)
 
@@ -20,19 +24,18 @@ Base frozen: `16882cbeeeb7726bff28809d69269df32a5c872e` (attempt 37 candidate; D
 - B4U_SOURCE_V1 club names stay LEGACY_UNREVIEWED; no active writer → future writer entrypoint required (not claimed IMPLEMENTED).
 - B2a actual 52 metadata/source SHA null for 53; trusted 52 entire seed/history unchanged. Current 3data/7g prepared facts not applied (waiting real 53).
 
-## Paths (38 touched)
+## Paths (39 touched)
 
 | Area | Path |
 | --- | --- |
-| Helper | `apps/api/src/venues/venue-import-moderation.ts` |
-| Cover / public-data CLI | `apps/api/src/database/import-venue-covers.ts` |
+| Public-data CLI | `apps/api/src/database/import-venue-covers.ts` |
 | Integration | `apps/api/test/integration/public-venue-import-credit-moderation.test.ts` |
-| Integration | `apps/api/test/integration/venue-cover-import.test.ts` |
 | Handoff | this file |
 
 ## Limits (honest)
 
-- Author marks **repair source only**; independent SolMedium QA (exact findings + related delta), Product CI, DEV ACCEPTED, Owner UAT — **pending**.
+- Author marks **SOURCE repair pending QA/CI/DEV** — not DONE.
+- Independent SolMedium QA (exact finding + related delta), Product CI, DEV ACCEPTED, Owner UAT — **pending**.
 - Private external OFF; GoBad / Owner / live Admin / iPhone NOT_TESTED.
 - No PROD; no Mode B binding claim; no whole-B/MOD READY/ACTIVE.
 - Quantity pause hard Jan 1 unchanged; content checks remain.

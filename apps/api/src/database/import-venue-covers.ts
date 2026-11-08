@@ -1560,52 +1560,63 @@ export async function importVenuePublicData(
       }
       const preview = (await pool.query<PublicDataVenueRow>(publicDataSelect, [item.venueId])).rows[0];
       name = preview?.name ?? "";
-      const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
-      name = planned.name || name;
-      if (planned.result.action !== "READY" || !preview) {
+      const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
+      const fingerprint = publicDataPatchFingerprint(item);
+
+      // After auth: terminal accepted receipt stays authoritative via planning.
+      // Retained attempt / immutable input comparison runs BEFORE mutable
+      // eligibility/version shortcircuit so version/eligibility drift cannot mask
+      // a changed clear/omit admission conflict. Fresh ops still plan CAS/eligibility.
+      const accepted = await loadAcceptedPublicDataReceipt(pool, keyHash);
+      if (accepted) {
+        const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
+        name = planned.name || name;
         result = planned.result;
       } else {
-        const keyHash = publicDataKeyHash(manifest.batch, item.venueId);
-        const fingerprint = publicDataPatchFingerprint(item);
-        const needsText = needsPublicDataTextPrepare(preview, item);
-        let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
-
-        // Retained attempt / input fingerprint BEFORE provider vs no-provider branch
-        // (clear/omit must not bypass immutable admission for the same batch key).
         const priorAttempt = await loadPublicDataAttempt(pool, keyHash);
         if (priorAttempt) {
           result = planPublicDataAttemptReplay(fingerprint, currentDigest, priorAttempt);
-        } else if (needsText) {
-          if (!services) throw new Error("PUBLIC_DATA_MODERATION_REQUIRED");
-          const attemptGate = await commitPublicDataAttemptOrReplay(
-            pool, principalId, userId, manifest, item, fingerprint, keyHash, currentDigest,
-          );
-          if (attemptGate.action !== "READY") {
-            result = attemptGate;
-          } else {
-            const candidate = publicDataDescriptionCandidate(preview, item);
-            if (candidate) {
-              const approval = await services.moderation.approveTexts(userId, [candidate]);
-              textPrep = {
-                approval,
-                committed: [{ surface: "venue_description", text: candidate.text }],
-              };
-            }
-            result = await adminTransaction(pool, async (c) =>
-              applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, services),
-            );
-          }
         } else {
-          // Fresh clear/omit/noop — zero provider egress; no new attempt claim.
-          // Concurrent claim boundary: re-check retained attempt under the write TX.
-          result = await adminTransaction(pool, async (c) => {
-            if (await requireImportActor(c, principalId) !== userId) {
-              throw new Error("IMPORT_ACTOR_REFUSED");
+          const planned = await planPublicDataItemState(pool, manifest.batch, item, preview);
+          name = planned.name || name;
+          if (planned.result.action !== "READY" || !preview) {
+            result = planned.result;
+          } else {
+            const needsText = needsPublicDataTextPrepare(preview, item);
+            let textPrep: VenueImportTextPrep = emptyVenueImportTextPrep();
+            if (needsText) {
+              if (!services) throw new Error("PUBLIC_DATA_MODERATION_REQUIRED");
+              const attemptGate = await commitPublicDataAttemptOrReplay(
+                pool, principalId, userId, manifest, item, fingerprint, keyHash, currentDigest,
+              );
+              if (attemptGate.action !== "READY") {
+                result = attemptGate;
+              } else {
+                const candidate = publicDataDescriptionCandidate(preview, item);
+                if (candidate) {
+                  const approval = await services.moderation.approveTexts(userId, [candidate]);
+                  textPrep = {
+                    approval,
+                    committed: [{ surface: "venue_description", text: candidate.text }],
+                  };
+                }
+                result = await adminTransaction(pool, async (c) =>
+                  applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, services),
+                );
+              }
+            } else {
+              // Fresh clear/omit/noop — zero provider egress; no new attempt claim.
+              // Concurrent claim boundary: re-check retained attempt under the write TX.
+              result = await adminTransaction(pool, async (c) => {
+                if (await requireImportActor(c, principalId) !== userId) {
+                  throw new Error("IMPORT_ACTOR_REFUSED");
+                }
+                const raced = await loadPublicDataAttempt(c, keyHash);
+                if (raced) return planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
+                return applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, undefined);
+              });
             }
-            const raced = await loadPublicDataAttempt(c, keyHash);
-            if (raced) return planPublicDataAttemptReplay(fingerprint, currentDigest, raced);
-            return applyPublicDataItem(c, principalId, userId, manifest, item, textPrep, undefined);
-          });
+          }
         }
       }
     } catch (error: unknown) {
