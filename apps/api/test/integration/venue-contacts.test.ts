@@ -28,10 +28,12 @@ run("T0a-1: контакты площадки и приватность",()=>{
  const cityId="a0000000-0000-4000-8000-000000000001";
  beforeAll(async()=>{
   process.env.NODE_ENV="test";process.env.APP_ENV="local";process.env.PUBLIC_API_ORIGIN="http://127.0.0.1:19441";process.env.PUBLIC_WEB_ORIGIN="http://127.0.0.1:19442";process.env.ALLOWED_WEB_ORIGINS=process.env.PUBLIC_WEB_ORIGIN;
+  process.env.CONTENT_MODERATION_PROVIDER="fake";
+  process.env.CONTENT_MODERATION_FINGERPRINT_SECRET="venue-contacts-synthetic-fingerprint-secret!!";
   const url=new URL(process.env.DATABASE_URL!);
   if(!["127.0.0.1","localhost","[::1]"].includes(url.hostname))throw new Error("Нужен изолированный локальный PostGIS");
   adminPool=new Pool({connectionString:url.href});await adminPool.query(`CREATE DATABASE "${databaseName}"`);url.pathname="/"+databaseName;
-  const env=loadEnv({...process.env,DATABASE_URL:url.href,ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:origin,ADMIN_AUTH_PEPPER:pepper});pool=new Pool({connectionString:url.href,max:10});
+  const env=loadEnv({...process.env,DATABASE_URL:url.href,ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:origin,ADMIN_AUTH_PEPPER:pepper,CONTENT_MODERATION_PROVIDER:"fake",CONTENT_MODERATION_FINGERPRINT_SECRET:"venue-contacts-synthetic-fingerprint-secret!!"});pool=new Pool({connectionString:url.href,max:10});
   await pool.query("CREATE TABLE schema_migrations(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())");
   const dir=path.resolve(__dirname,"../../migrations");
   for(const file of (await readdir(dir)).filter(f=>f.endsWith(".sql")).sort())await pool.query(await readFile(path.join(dir,file),"utf8"));
@@ -255,7 +257,9 @@ import { AdminVenuesService } from "../../src/venues/admin-venues.service";
 import { VenuesService } from "../../src/venues/venues.service";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { MutationRunner } from "../../src/common/mutation-runner.service";
+import type { ContentModerationService } from "../../src/moderation/moderation.service";
 function queryResult<R extends QueryResultRow>(rows:R[]):QueryResult<R>{return {rows,rowCount:rows.length,command:"SELECT",oid:0,fields:[]};}
+const moderationStub={approveTexts:async()=>({fields:[]}),bindTexts:async()=>undefined} as unknown as ContentModerationService;
 describe("public contacts service projections and SQL binds without DB",()=>{
  const id="a0000000-0000-4000-8000-000000000003",cityId="a0000000-0000-4000-8000-000000000001";
  const contacts={phone:"+1234567",website:"https://example.com/",messengers:[]};
@@ -268,7 +272,7 @@ describe("public contacts service projections and SQL binds without DB",()=>{
    if(alias && statements.length===1)return queryResult([{...base,lifecycle_state:"merged",canonical_venue_id:"a0000000-0000-4000-8000-000000000004"}]);
    return queryResult([{...base,id:alias?"a0000000-0000-4000-8000-000000000004":id,public_contacts:{...contacts,phone:"unsafe"}}]);
   }) as Pool['query']};
-  const service=new VenuesService(fake as Pool,{} as IdempotencyService,{} as MutationRunner);
+  const service=new VenuesService(fake as Pool,{} as IdempotencyService,{} as MutationRunner,moderationStub);
   const page=await service.searchCatalog({cityId});expect(page.items[0]?.publicContacts).toEqual({...contacts,phone:null});expect(JSON.stringify(page)).not.toContain('private');expect(statements[0]).toContain('public_contacts');
   statements.length=0;alias=true;
   const detail=await service.getById(id);expect(detail.publicContacts).toEqual({...contacts,phone:null});expect(detail.resolvedFromVenueId).toBe(id);expect(statements).toHaveLength(2);
@@ -276,17 +280,32 @@ describe("public contacts service projections and SQL binds without DB",()=>{
  it("fuzzy candidates and proposal RETURNING expose safe contacts without contact writes",async()=>{
   for(const fuzzy of [true,false]){
    const calls:string[]=[];
-   const client:Pick<PoolClient,'query'>={query:(async(sql:string)=>{
+   const query=(async(sql:string)=>{
     calls.push(sql);
+    if(sql==='BEGIN'||sql==='COMMIT'||sql==='ROLLBACK')return queryResult([]);
     if(sql.startsWith('SELECT id FROM cities'))return queryResult([{id:cityId}]);
+    if(sql.includes('SELECT venue_id FROM venue_identity_keys'))return queryResult([]);
     if(sql.includes('AS distance_m'))return queryResult(fuzzy?[{...base,distance_m:0}]:[]);
     if(sql.includes('INSERT INTO venues ('))return queryResult([{...base,public_contacts:null}]);
     if(sql.includes('INSERT INTO venue_identity_keys'))return queryResult([{venue_id:id}]);
+    if(sql.includes('pg_advisory_xact_lock'))return queryResult([]);
+    if(sql.includes('INSERT INTO venue_proposal_confirm_tokens'))return queryResult([]);
     return queryResult([]);
-   }) as PoolClient['query']};
-   const mutations:Pick<MutationRunner,'runIdempotent'>={runIdempotent:async input=>input.execute(client as PoolClient)};
+   }) as PoolClient['query'];
+   const client:Pick<PoolClient,'query'>={query};
+   const pool={connect:async()=>({query,release:()=>undefined})} as unknown as Pool;
+   const mutations:Pick<MutationRunner,'runWithExternalPrepare'>={
+    runWithExternalPrepare:async input=>{
+     const prep=await input.prepare();
+     return input.execute(client as PoolClient,prep);
+    },
+   };
    const hash:Pick<IdempotencyService,'requestHash'>={requestHash:()=>"synthetic"};
-   const service=new VenuesService({} as Pool,hash as IdempotencyService,mutations as MutationRunner);
+   const moderation:Pick<ContentModerationService,'approveTexts'|'bindTexts'>={
+    approveTexts:async(_a,fields)=>({fields:fields.map(f=>({surface:f.surface,fieldId:f.fieldId,text:f.text,fingerprint:'synthetic',providerKey:'fake' as const,providerModel:'synthetic',policy:'public-text-v1',localPolicy:'ru-profanity-v1',checkedAt:new Date(),decision:{flagged:false,categories:{} as never},classification:'allow' as const,responseId:null}))}),
+    bindTexts:async()=>undefined,
+   };
+   const service=new VenuesService(pool,hash as IdempotencyService,mutations as MutationRunner,moderation as ContentModerationService);
    const result=await service.propose(id,id,'synthetic-key',{cityId,name:base.name,address:base.address,timezone:base.timezone,latitude:55,longitude:37});
    expect(result.statusCode).toBe(fuzzy?409:201);
    if('candidates' in result.body)expect(result.body.candidates[0]?.publicContacts).toEqual(contacts);
@@ -317,11 +336,16 @@ describe("public contacts service projections and SQL binds without DB",()=>{
      step_up_at: timestamp, revoked_at: null,
     },
    };
-   const fake:Pick<AdminService,'privilegedCommand'|'privilegedRead'>={
+   const fake:Pick<AdminService,'privilegedCommand'|'privilegedRead'|'privilegedRunWithExternalPrepare'>={
     privilegedCommand:async(_r,_k,_p,_s,_o,_i,execute)=>execute(client as PoolClient,actor,'hash'),
+    privilegedRunWithExternalPrepare:async(_r,_k,_p,_s,_o,_i,_ar,authorizeNew,prepare,execute)=>{
+     await authorizeNew(client as PoolClient,actor);
+     const prep=await prepare();
+     return execute(client as PoolClient,actor,'hash',prep);
+    },
     privilegedRead:async(_r,_p,read)=>read(client as PoolClient,actor),
    };
-   const service=new AdminVenuesService(fake as AdminService);
+   const service=new AdminVenuesService(fake as AdminService,moderationStub);
    const input=venueCommand.parse({action:'edit',expectedVersion:1,reasonCode:'synthetic_review',fields:{cityId,name:base.name,address:base.address,timezone:base.timezone,latitude:55,longitude:37,publicContacts}});
    const result=await service.command({} as FastifyRequest,'synthetic-key',id,input);
    const update=calls.find(c=>c.sql.startsWith('UPDATE venues SET name='));expect(update?.sql).toContain('CASE WHEN $13::boolean THEN $14::jsonb ELSE public_contacts END');

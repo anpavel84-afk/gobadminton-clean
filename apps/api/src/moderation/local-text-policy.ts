@@ -6,7 +6,7 @@
 
 export const LOCAL_TEXT_POLICY_VERSION = "ru-profanity-v1";
 
-export type LocalTextKind = "identity" | "title" | "prose" | "contact";
+export type LocalTextKind = "identity" | "title" | "prose" | "contact" | "factual";
 
 export type LocalTextSignal =
   | { kind: "clean" }
@@ -179,8 +179,10 @@ function looksQuotedOrReported(raw: string): boolean {
 
 /**
  * Evaluate one field. Identity/title: high-confidence token → reject.
- * Prose/contact: local signal is contextual (provider decides); hard reject only for
+ * Prose/contact/factual: local signal is contextual (provider decides); hard reject only for
  * unambiguous short identity-like obscenity without surrounding prose.
+ * Factual addresses keep sports names, street numbers and common international place tokens
+ * via the narrow FALSE_POSITIVE_ALLOW set — no broad allow-bypass.
  */
 export function evaluateLocalText(raw: string, kind: LocalTextKind): LocalTextSignal {
   const trimmed = raw.trim();
@@ -192,13 +194,17 @@ export function evaluateLocalText(raw: string, kind: LocalTextKind): LocalTextSi
   if (kind === "identity" || kind === "title") {
     return { kind: "reject", reason: "profanity" };
   }
-  if (kind === "contact" && trimmed.length <= 40 && tokens.length <= 3) {
+  if (
+    (kind === "contact" || kind === "factual") &&
+    trimmed.length <= 40 &&
+    tokens.length <= 3
+  ) {
     return { kind: "reject", reason: "profanity" };
   }
   if (looksQuotedOrReported(trimmed)) {
     return { kind: "contextual", reason: "profanity_signal" };
   }
-  // Ordinary prose with obscenity still goes to contextual provider; A does not invent pending.
+  // Ordinary prose/factual with obscenity still goes to contextual provider; A does not invent pending.
   return { kind: "contextual", reason: "profanity_signal" };
 }
 

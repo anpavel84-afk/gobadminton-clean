@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.51 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.51");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.52 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.52");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.37.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,16 +64,12 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/тестов.*стенд|стенд/i);
-    expect(currentProse).toMatch(/количественн.*ограничен|ограничен.*провер/i);
+    expect(currentProse).toMatch(/площадк/i);
+    expect(currentProse).toMatch(/назван|адрес|описан/i);
+    expect(currentProse).toMatch(/проверк/i);
+    expect(currentProse).toMatch(/публик/i);
+    expect(currentProse).toMatch(/импорт|галере|комментар|личн.*сообщен/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
-    expect(currentProse).toMatch(/фото|изображен/i);
-    expect(currentProse).toMatch(/текст/i);
-    expect(currentProse).toMatch(/проверк.*содержим|содержим.*проверк/i);
-    expect(currentProse).toMatch(/возвращают/i);
-    expect(currentProse).toMatch(/провайдер|неизвестн/i);
-    expect(currentProse).toMatch(/не завершен.*модерац|не отмена проверк/i);
-    expect(currentProse).toMatch(/основн.*сайт.*не меня|не менял/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
     expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
@@ -92,18 +88,18 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/количественн|ограничен|тестов.*стенд/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/площадк|назван|адрес|описан/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).toMatch(
-      /тестов.*стенд|количественн|1 января 2027|проверк.*содержим|возвращают/i,
+      /площадк|назван|адрес|описан|проверк|публик/i,
     );
     expect(CURRENT_NAMED_RELEASE.additions.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce|138|140|PROD|DEV/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /модерац|комментари|сообщен|аватар|приёмк|юридическ|основн.*сайт/i,
+      /модерац|импорт|галере|комментари|сообщен|аватар|приёмк|юридическ|2027/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
-      /#507|\bB2\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
+      /#507|\bB2b\b|\bB2a\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
     );
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE)).toEqual(CURRENT_NAMED_RELEASE.known_limitations);
     expect(visibleKnownLimitations(CURRENT_NAMED_RELEASE).join(" ")).not.toMatch(
@@ -257,10 +253,23 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(54);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(55);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(59);
+    ).toBe(60);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.51"
+      && row.source_sha === "4cefe7a6ef780da13796c1df85eca6fdc27a50ef"
+      && row.deployments[0]?.release_id === "r42427559664-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T00:08:42Z"
+      && row.deployments[0]?.api_digest === "sha256:55b2753ad3debb76583a8c56a49fd42acd8619b0d667820d68b2a709be719330"
+      && row.deployments[0]?.web_digest === "sha256:0f17742f15f5533986409abfa49ca9fe569defa99fe3d205ec69f494f6265fa7"
+      && row.api_contract_version === "0.37.0"
+      && row.title === "Временно сняты количественные ограничения проверок на тестовом стенде"
+      && row.additions.length === 1
+      && row.fixes.length === 0
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.50"
       && row.source_sha === "3153e3cd1fd1e1f1936e60ea27f7632589701bea"

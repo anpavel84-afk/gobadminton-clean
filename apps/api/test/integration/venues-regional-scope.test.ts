@@ -97,7 +97,7 @@ run("venues regional scope: disposable PostGIS searchCatalog", () => {
     expect(REGIONAL_CITY_RADIUS_METERS).toBe(40000);
 
     // Idempotency/MutationRunner unused by searchCatalog — stub only; do not mock pool.query.
-    service = new VenuesService(db(), {} as IdempotencyService, {} as MutationRunner);
+    service = new VenuesService(db(), {} as IdempotencyService, {} as MutationRunner, {} as import("../../src/moderation/moderation.service").ContentModerationService);
   }, 120000);
 
   afterAll(async () => {

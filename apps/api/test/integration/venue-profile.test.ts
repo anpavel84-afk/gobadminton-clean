@@ -157,7 +157,7 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
       expect((await db.query("SELECT * FROM venues WHERE id=$1", [id])).rows[0]).toEqual({ ...populated, public_description: null });
       expect((await db.query("SELECT public_contacts,contact_phone FROM venues WHERE id=$1", [id])).rows[0]).toEqual({ public_contacts: contacts, contact_phone: "private" });
       expect((await db.query("SELECT 1 FROM schema_migrations WHERE id='0045_venue_gallery'")).rowCount).toBe(1);
-      const service = new VenuesService(db, {} as IdempotencyService, {} as MutationRunner);
+      const service = new VenuesService(db, {} as IdempotencyService, {} as MutationRunner, {} as import("../../src/moderation/moderation.service").ContentModerationService);
       expect((await service.getById(id)).profile).toMatchObject({ courtCount: 0, amenities: { parking: false, showers: true }, updatedAt: expect.any(String), gallery: { coverage: "ordered", items: [] } });
       expect(JSON.stringify(await service.getById(id))).not.toContain("private");
     } finally { try { await db.end(); } finally { await adminPool.query(`DROP DATABASE IF EXISTS "${upgradeName}"`); } }
