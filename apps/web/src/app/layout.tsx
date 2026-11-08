@@ -12,6 +12,7 @@ import "../styles/messages.css";
 import "../styles/radar.css";
 import "../styles/content.css";
 import "../styles/utility.css";
+import "../styles/venue-community.css";
 import { ViewportLock } from "../components/consumer/ViewportLock";
 import "../styles/mobile-controls.css";
 

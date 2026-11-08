@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import type { IdempotencyService } from "../../src/common/idempotency.service";
 import type { MutationRunner } from "../../src/common/mutation-runner.service";
+import type { AppEnv } from "../../src/config/env";
 import { venueCommand } from "../../src/admin/venues.dto";
 import { httpsCreditUrl, privateContactWebsite } from "../../src/lib/original-http-authority";
 import { safeProviderAvatar } from "../../src/profiles/avatar-presentation";
@@ -61,7 +62,13 @@ function row(url: string) {
 }
 function mapped(url: string) {
   const query = (async () => ({ rows: [row(url)], rowCount: 1, command: "SELECT", oid: 0, fields: [] })) as Pool["query"];
-  return new VenuesService({ query } as Pool, {} as IdempotencyService, {} as MutationRunner, {} as import("../../src/moderation/moderation.service").ContentModerationService).getById(id);
+  return new VenuesService(
+    { query } as Pool,
+    {} as AppEnv,
+    {} as IdempotencyService,
+    {} as MutationRunner,
+    {} as import("../../src/moderation/moderation.service").ContentModerationService,
+  ).getById(id);
 }
 
 describe("public URL authority class", () => {

@@ -1,7 +1,7 @@
 import { Body,Controller,Get,Header,Headers,HttpCode,Param,Post,Query,Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { parse,uuid } from "./dto";
-import { caseCreateSchema,caseCommandSchema,casePageSchema,caseHistorySchema,reportPageSchema } from "./cases.dto";
+import { caseCreateSchema,caseCommandSchema,casePageSchema,caseHistorySchema,reportPageSchema,communityReportPageSchema } from "./cases.dto";
 import { AdminCasesService } from "./cases.service";
 @Controller("admin")
 export class AdminCasesController {
@@ -29,5 +29,10 @@ export class AdminCasesController {
  messageReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Req() request:FastifyRequest){
   this.cases.enabled();
   return this.cases.readMessageReport(request,parse(uuid,id),parse(uuid,reportId));
+ }
+ @Get("cases/:id/community-reports/:reportId") @Header("Cache-Control","no-store")
+ communityReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Query() query:unknown,@Req() request:FastifyRequest){
+  this.cases.enabled();
+  return this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),parse(communityReportPageSchema,query));
  }
 }

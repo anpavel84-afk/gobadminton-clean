@@ -36,6 +36,27 @@ export type {
   VenueReviewsSummary,
   CreateVenueReviewRequest,
 } from "./venue-reviews.js";
+export type {
+  CommunityAggregateState,
+  CommunityRatingSummary,
+  CommunityOwnVote,
+  CommunityOwnVoteResponse,
+  CommunitySummariesResponse,
+  UpsertCommunityRatingRequest,
+  WithdrawCommunityRatingRequest,
+  VenueCommunityReportSubjectKind,
+  VenueCommunityReportReasonCode,
+  CreateVenueCommunityReportRequest,
+  VenueCommunityReportReceipt,
+  CommunitySourceUnavailableReason,
+  CommunityCommentPublication,
+  AdminCaseCommunityVoteItem,
+  AdminCaseCommunityDecisionCapability,
+  AdminCaseCommunityAggregateSource,
+  AdminCaseCommunityOwnVoteSource,
+  AdminCaseCommunityCommentSource,
+  AdminCaseCommunityReportSource,
+} from "./venue-community.js";
 
 export {
   REGIONAL_CITIES,

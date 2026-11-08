@@ -1,6 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
-import { notFound, unprocessable, problem } from "../auth/problem";
+import { conflict, notFound, unprocessable, problem } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import type { AppEnv } from "../config/env";
@@ -10,6 +10,20 @@ import {
 import { SocialFeatureService } from "../profiles/social-feature";
 import { ProfilesService } from "../profiles/profiles.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
+import {
+  canonicalVenueFamilyIds,
+  lockCatalogShared,
+  resolveCanonicalVenue,
+} from "../venues/venue-community.query";
+import {
+  normalizeVenueCommunityReport,
+  venueCommunityCommentReportFingerprint,
+  venueCommunityVoteReportFingerprint,
+  VENUE_COMMUNITY_REPORT_RATE_DAY,
+  VENUE_COMMUNITY_REPORT_RATE_WINDOW,
+  type CreateVenueCommunityReportInput,
+  type NormalizedVenueCommunityReport,
+} from "../venues/venue-community-report";
 import { PairFenceService } from "./pair-fence.service";
 
 export type BlockReceiptDto = {
@@ -51,7 +65,10 @@ export type CreateMessageReportInput = {
   shareMessageWithSupport: true;
 };
 
-export type CreateReportInput = CreatePlayerReportInput | CreateMessageReportInput;
+export type CreateReportInput =
+  | CreatePlayerReportInput
+  | CreateMessageReportInput
+  | CreateVenueCommunityReportInput;
 
 const REASON_CODES = new Set([
   "harassment",
@@ -66,6 +83,8 @@ const REASON_CODES = new Set([
  * (`role_reputation_reports`) and never widen this player-only abuse_reports intake.
  * Private peer `game_review` received-report guards stay in game-feedback (kind===peer).
  * C2 adds discriminated `message` with exact selected-message consent binding.
+ * #507 I1 F3 adds discriminated `venue_community` with immutable typed bindings
+ * (aggregate / own_vote / venue_comment). No automatic sanctions; no provider call.
  */
 export const ROLE_REPUTATION_REPORT_REASON_CODES = [
   "harassment",
@@ -95,6 +114,16 @@ type ResolvedMessageSource = {
   authorUserId: string;
   bodyText: string;
   contentFingerprint: string;
+};
+
+type ResolvedVenueCommunitySource = {
+  subjectKind: "aggregate" | "own_vote" | "venue_comment";
+  canonicalVenueId: string;
+  targetUserId: string;
+  voteId: string | null;
+  commentId: string | null;
+  reportedResourceVersion: number | null;
+  contentFingerprint: string | null;
 };
 
 @Injectable()
@@ -224,6 +253,14 @@ export class SafetyService {
     this.feature.assertEnabled();
     if (input?.targetKind === "message") {
       return this.createMessageReport(actorId, sessionId, idempotencyKey, input);
+    }
+    if (input?.targetKind === "venue_community") {
+      return this.createVenueCommunityReport(
+        actorId,
+        sessionId,
+        idempotencyKey,
+        input,
+      );
     }
     const normalized = normalizePlayerReport(input);
     const operation = "abuse_report.create";
@@ -377,6 +414,97 @@ export class SafetyService {
     });
   }
 
+  private async createVenueCommunityReport(
+    actorId: string,
+    sessionId: string,
+    idempotencyKey: string,
+    input: CreateVenueCommunityReportInput,
+  ): Promise<{ statusCode: number; body: ReportReceiptDto }> {
+    const normalized = normalizeVenueCommunityReport(input);
+    const operation = "abuse_report.venue_community.create";
+    const requestHash = this.idempotency.requestHash(normalized);
+    return this.mutations.runIdempotent<ReportReceiptDto>({
+      actorId,
+      sessionId,
+      operation,
+      key: idempotencyKey,
+      requestHash,
+      authorizeReplay: async (client, existing) => {
+        await this.assertVenueCommunityBindingsInstalled(client);
+        const resolved = await this.resolveVenueCommunityReportSource(
+          client,
+          actorId,
+          normalized,
+        );
+        // Replay must authorize the cached receipt.reportId — never an arbitrary
+        // first binding for the same actor/source when later reports exist.
+        await this.assertVenueCommunityReceiptBinding(
+          client,
+          actorId,
+          existing.reportId,
+          resolved,
+        );
+      },
+      execute: async (client) => {
+        await this.assertVenueCommunityBindingsInstalled(client);
+        const resolved = await this.resolveVenueCommunityReportSource(
+          client,
+          actorId,
+          normalized,
+        );
+
+        // Idempotency is key + normalized request only. Do not suppress a new
+        // key / changed reason|detail via permanent per-source binding lookup.
+        await this.consumeVenueCommunityReportRate(client, actorId);
+
+        // target_user_id: subject author when foreign public comment; else reporter
+        // (own vote / own withheld / aggregate — no_self relaxed for venue_community).
+        const targetUserId = resolved.targetUserId;
+        if (
+          resolved.subjectKind === "venue_comment" &&
+          targetUserId !== actorId
+        ) {
+          // Pair fence serializes vs block; block must NOT prevent reporting public abuse.
+          await this.pairs.lockOrCreate(client, actorId, targetUserId);
+        }
+
+        const inserted = await client.query<{ id: string; created_at: Date }>(
+          `INSERT INTO abuse_reports (
+             reporter_user_id, target_kind, target_user_id,
+             target_public_player_id, reason_code, detail, evidence_refs, state
+           ) VALUES ($1, 'venue_community', $2, NULL, $3, $4, '[]'::jsonb, 'submitted')
+           RETURNING id, created_at`,
+          [actorId, targetUserId, normalized.reasonCode, normalized.detail],
+        );
+        const reportId = inserted.rows[0]!.id;
+        await client.query(
+          `INSERT INTO venue_community_report_bindings (
+             report_id, reporter_user_id, canonical_venue_id, subject_kind,
+             vote_id, comment_id, reported_resource_version, content_fingerprint
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            reportId,
+            actorId,
+            resolved.canonicalVenueId,
+            resolved.subjectKind,
+            resolved.voteId,
+            resolved.commentId,
+            resolved.reportedResourceVersion,
+            resolved.contentFingerprint,
+          ],
+        );
+        return {
+          statusCode: 201,
+          body: {
+            reportId,
+            status: "submitted",
+            createdAt: inserted.rows[0]!.created_at.toISOString(),
+          },
+        };
+      },
+    });
+  }
+
   private fingerprintSecret(): string {
     const secret = this.env.CONTENT_MODERATION_FINGERPRINT_SECRET;
     if (!secret) {
@@ -398,6 +526,275 @@ export class SafetyService {
     if (!installed) {
       throw problem(503, "FEATURE_UNAVAILABLE", "Жалоба на сообщение временно недоступна");
     }
+  }
+
+  private async assertVenueCommunityBindingsInstalled(
+    client: PoolClient,
+  ): Promise<void> {
+    const installed = (
+      await client.query<{ name: string | null }>(
+        `SELECT to_regclass('venue_community_report_bindings') AS name`,
+      )
+    ).rows[0]?.name;
+    if (!installed) {
+      throw problem(
+        503,
+        "FEATURE_UNAVAILABLE",
+        "Жалоба на сообщество площадки временно недоступна",
+      );
+    }
+  }
+
+  private async consumeVenueCommunityReportRate(
+    client: PoolClient,
+    actorId: string,
+  ): Promise<void> {
+    const updated = await client.query<{ count: number; day_count: number }>(
+      `INSERT INTO venue_community_report_rate_budgets(
+         user_id, bucket, window_started_at, count, day_started_at, day_count
+       ) VALUES ($1, 'report', now(), 1, now(), 1)
+       ON CONFLICT (user_id, bucket) DO UPDATE SET
+         window_started_at = CASE
+           WHEN venue_community_report_rate_budgets.window_started_at
+             <= now() - interval '15 minutes' THEN now()
+           ELSE venue_community_report_rate_budgets.window_started_at
+         END,
+         count = CASE
+           WHEN venue_community_report_rate_budgets.window_started_at
+             <= now() - interval '15 minutes' THEN 1
+           ELSE venue_community_report_rate_budgets.count + 1
+         END,
+         day_started_at = CASE
+           WHEN venue_community_report_rate_budgets.day_started_at
+             <= now() - interval '1 day' THEN now()
+           ELSE venue_community_report_rate_budgets.day_started_at
+         END,
+         day_count = CASE
+           WHEN venue_community_report_rate_budgets.day_started_at
+             <= now() - interval '1 day' THEN 1
+           ELSE venue_community_report_rate_budgets.day_count + 1
+         END,
+         updated_at = clock_timestamp()
+       WHERE (
+           venue_community_report_rate_budgets.window_started_at
+             <= now() - interval '15 minutes'
+           OR venue_community_report_rate_budgets.count < $2
+         )
+         AND (
+           venue_community_report_rate_budgets.day_started_at
+             <= now() - interval '1 day'
+           OR venue_community_report_rate_budgets.day_count < $3
+         )
+       RETURNING count, day_count`,
+      [
+        actorId,
+        VENUE_COMMUNITY_REPORT_RATE_WINDOW,
+        VENUE_COMMUNITY_REPORT_RATE_DAY,
+      ],
+    );
+    if (!updated.rows[0]) {
+      throw problem(
+        429,
+        "REPORT_RATE_LIMITED",
+        "Слишком много жалоб. Попробуйте позже",
+      );
+    }
+  }
+
+  /**
+   * Authorize idempotent replay against the exact stored receipt binding.
+   * Multiple bindings may exist for the same actor/source; never pick `.rows[0]`.
+   */
+  private async assertVenueCommunityReceiptBinding(
+    client: PoolClient,
+    actorId: string,
+    reportId: string,
+    source: ResolvedVenueCommunitySource,
+  ): Promise<void> {
+    const bound = (
+      await client.query<{ report_id: string }>(
+        `SELECT b.report_id
+         FROM venue_community_report_bindings b
+         WHERE b.report_id = $1
+           AND b.reporter_user_id = $2
+           AND b.canonical_venue_id = $3
+           AND b.subject_kind = $4
+           AND b.vote_id IS NOT DISTINCT FROM $5::uuid
+           AND b.comment_id IS NOT DISTINCT FROM $6::uuid
+           AND b.reported_resource_version IS NOT DISTINCT FROM $7::integer
+           AND b.content_fingerprint IS NOT DISTINCT FROM $8`,
+        [
+          reportId,
+          actorId,
+          source.canonicalVenueId,
+          source.subjectKind,
+          source.voteId,
+          source.commentId,
+          source.reportedResourceVersion,
+          source.contentFingerprint,
+        ],
+      )
+    ).rows[0];
+    if (!bound) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+  }
+
+  /**
+   * Server-authoritative venue-community report source under catalog/actor fences.
+   * No attendance. Block does not hide already-public comments from reporting.
+   * Foreign withheld/hidden material stays unavailable. No provider / no AI quota.
+   */
+  private async resolveVenueCommunityReportSource(
+    client: PoolClient,
+    actorId: string,
+    input: NormalizedVenueCommunityReport,
+  ): Promise<ResolvedVenueCommunitySource> {
+    await lockCatalogShared(client);
+    const resolved = await resolveCanonicalVenue(client, input.venueId);
+    if (!resolved) throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    await client.query(`SELECT id FROM venues WHERE id = $1 FOR SHARE`, [
+      resolved.canonicalId,
+    ]);
+    await client.query(`SELECT id FROM users WHERE id = $1 FOR SHARE`, [actorId]);
+    const active = await client.query(
+      `SELECT 1 FROM users WHERE id = $1 AND status = 'active'`,
+      [actorId],
+    );
+    if (!active.rows[0]) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+
+    if (input.subjectKind === "aggregate") {
+      return {
+        subjectKind: "aggregate",
+        canonicalVenueId: resolved.canonicalId,
+        targetUserId: actorId,
+        voteId: null,
+        commentId: null,
+        reportedResourceVersion: null,
+        contentFingerprint: null,
+      };
+    }
+
+    if (input.subjectKind === "own_vote") {
+      const vote = (
+        await client.query<{
+          id: string;
+          user_id: string;
+          value: number | null;
+          version: number;
+          moderation_state: string;
+          withdrawn_at: Date | null;
+          canonical_venue_id: string;
+        }>(
+          `SELECT id, user_id, value, version, moderation_state, withdrawn_at, canonical_venue_id
+           FROM venue_community_votes
+           WHERE canonical_venue_id = $1
+             AND user_id = $2
+             AND merged_into_vote_id IS NULL
+           FOR UPDATE`,
+          [resolved.canonicalId, actorId],
+        )
+      ).rows[0];
+      if (!vote || vote.user_id !== actorId) {
+        throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+      }
+      if (vote.version !== input.expectedVersion) {
+        throw conflict("VERSION_CONFLICT", "Версия оценки устарела");
+      }
+      const revision = (
+        await client.query<{ resource_version: number }>(
+          `SELECT resource_version FROM venue_community_vote_revisions
+           WHERE vote_id = $1 AND resource_version = $2`,
+          [vote.id, vote.version],
+        )
+      ).rows[0];
+      if (!revision) throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+      const secret = this.fingerprintSecret();
+      const contentFingerprint = venueCommunityVoteReportFingerprint(secret, {
+        voteId: vote.id,
+        canonicalVenueId: vote.canonical_venue_id,
+        userId: vote.user_id,
+        resourceVersion: vote.version,
+        value: vote.value,
+        moderationState: vote.moderation_state,
+        withdrawn: vote.withdrawn_at != null,
+      });
+      return {
+        subjectKind: "own_vote",
+        canonicalVenueId: resolved.canonicalId,
+        targetUserId: actorId,
+        voteId: vote.id,
+        commentId: null,
+        reportedResourceVersion: vote.version,
+        contentFingerprint,
+      };
+    }
+
+    const comment = (
+      await client.query<{
+        id: string;
+        entity_kind: string;
+        entity_id: string;
+        author_user_id: string;
+        body: string | null;
+        version: number;
+        deleted_at: Date | null;
+        moderation_state: string | null;
+      }>(
+        `SELECT id, entity_kind, entity_id, author_user_id, body, version,
+                deleted_at, moderation_state
+         FROM entity_comments
+         WHERE id = $1
+         FOR UPDATE`,
+        [input.commentId],
+      )
+    ).rows[0];
+    if (!comment || comment.entity_kind !== "venue") {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    if (comment.deleted_at || comment.body == null || comment.body.length < 1) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    const family = await canonicalVenueFamilyIds(client, resolved.canonicalId);
+    if (!family.includes(comment.entity_id)) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    const moderation = comment.moderation_state ?? "clear";
+    if (moderation === "withheld") {
+      // Author may appeal own withheld current comment; foreign withheld stays hidden.
+      if (comment.author_user_id !== actorId) {
+        throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+      }
+    }
+    if (comment.version !== input.expectedVersion) {
+      throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
+    }
+    const revision = (
+      await client.query<{ resource_version: number }>(
+        `SELECT resource_version FROM entity_comment_revisions
+         WHERE comment_id = $1 AND resource_version = $2`,
+        [comment.id, comment.version],
+      )
+    ).rows[0];
+    if (!revision) throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    const secret = this.fingerprintSecret();
+    const contentFingerprint = venueCommunityCommentReportFingerprint(secret, {
+      commentId: comment.id,
+      entityId: comment.entity_id,
+      resourceVersion: comment.version,
+      bodyText: comment.body,
+    });
+    return {
+      subjectKind: "venue_comment",
+      canonicalVenueId: resolved.canonicalId,
+      targetUserId: comment.author_user_id,
+      voteId: null,
+      commentId: comment.id,
+      reportedResourceVersion: comment.version,
+      contentFingerprint,
+    };
   }
 
   /**

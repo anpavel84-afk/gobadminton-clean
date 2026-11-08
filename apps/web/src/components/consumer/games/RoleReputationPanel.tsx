@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   getGameRoleReputation,
   getPlayerRoleReputation,
@@ -48,6 +48,32 @@ function heldLabel(count: number | null, incomplete: boolean): string | null {
       ? "По подтверждённой истории проведённых игр пока нет"
       : `${count} ${heldGamesForm(count)} по подтверждённой истории`;
   return incomplete ? `${base}. История может быть неполной` : base;
+}
+
+/** Compact discovery history — organization held count only; never invent 0 from null. */
+function compactHistoryLabel(count: number | null, incomplete: boolean): string | null {
+  if (count == null) return null;
+  if (count === 0) return heldLabel(0, incomplete);
+  const base = `Подтверждённая история: ${count} ${heldGamesForm(count)}.`;
+  return incomplete ? `${base} Может быть неполной.` : base;
+}
+
+function reviewCue(count: number): string {
+  return count > 0 ? ` · Отзывы · ${count}` : " · Отзывы";
+}
+
+function roleReviewAriaLabel(
+  role: RoleKind,
+  name: string,
+  count: number,
+  trainerSelfDeclared: boolean,
+): string {
+  const kind = role === "training" ? "Отзывы о тренировках" : "Отзывы об организации";
+  const headed = count > 0 ? `${kind} · ${count}` : kind;
+  if (role === "training" && trainerSelfDeclared) {
+    return `${headed}: ${name}. Тренер · самостоятельно указано`;
+  }
+  return `${headed}: ${name}`;
 }
 
 /** Panel/dialog body: numeric value once in strong + case form without repeating the digit. */
@@ -266,21 +292,101 @@ export function RoleReputationPanel({
   );
 }
 
+/** Gated discovery compact triggers — only available roles become interactive. */
+export type RoleReputationCompactTrigger = {
+  onOpen: () => void;
+  ariaLabel: string;
+  cue: string;
+  count: number;
+};
+
+export type RoleReputationCompactView = {
+  gameId: string;
+  trainingTrigger: RoleReputationCompactTrigger | null;
+  organizationTrigger: RoleReputationCompactTrigger | null;
+  historyLabel: string | null;
+};
+
 /** Compact discovery/card footer actions outside the title Link — no nested interactive controls. */
 export function RoleReputationCardActions({
   gameId,
   organization,
   training,
   trainerName,
+  organizerName,
+  renderCompact,
 }: {
   gameId: string;
   organization?: RoleReputationCardSummary | null;
   training?: RoleReputationCardSummary | null;
   trainerName?: string | null;
+  organizerName?: string | null;
+  /** Discovery D2 presentation; called before the ordinary null return so roles/actions survive without reputation. */
+  renderCompact?: (view: RoleReputationCompactView) => ReactNode;
 }) {
   const [open, setOpen] = useState<null | { role: RoleKind; handle: string }>(null);
   const hasOrg = organization?.availability === "available";
   const hasTrain = training?.availability === "available";
+
+  const trainingTrigger: RoleReputationCompactTrigger | null =
+    hasTrain && training
+      ? {
+          onOpen: () => setOpen({ role: "training", handle: training.roleHandle }),
+          ariaLabel: roleReviewAriaLabel(
+            "training",
+            trainerName || training.subjectDisplayName || "Тренер",
+            training.publishedReviewCount,
+            true,
+          ),
+          cue: reviewCue(training.publishedReviewCount),
+          count: training.publishedReviewCount,
+        }
+      : null;
+
+  const organizationTrigger: RoleReputationCompactTrigger | null =
+    hasOrg && organization
+      ? {
+          onOpen: () => setOpen({ role: "organization", handle: organization.roleHandle }),
+          ariaLabel: roleReviewAriaLabel(
+            "organization",
+            organizerName || organization.subjectDisplayName || "Организатор",
+            organization.publishedReviewCount,
+            false,
+          ),
+          cue: reviewCue(organization.publishedReviewCount),
+          count: organization.publishedReviewCount,
+        }
+      : null;
+
+  const historyLabel =
+    hasOrg && organization
+      ? compactHistoryLabel(organization.heldGamesCount, organization.historyMayBeIncomplete)
+      : null;
+
+  const dialog =
+    open ? (
+      <RoleReviewsDialog
+        roleHandle={open.handle}
+        role={open.role}
+        gameId={gameId}
+        onClose={() => setOpen(null)}
+      />
+    ) : null;
+
+  if (renderCompact) {
+    return (
+      <>
+        {renderCompact({
+          gameId,
+          trainingTrigger,
+          organizationTrigger,
+          historyLabel,
+        })}
+        {dialog}
+      </>
+    );
+  }
+
   if (!hasOrg && !hasTrain) return null;
   return (
     <div className="gb-role-rep-footer" data-game-id={gameId}>
@@ -308,14 +414,7 @@ export function RoleReputationCardActions({
           </button>
         </>
       ) : null}
-      {open ? (
-        <RoleReviewsDialog
-          roleHandle={open.handle}
-          role={open.role}
-          gameId={gameId}
-          onClose={() => setOpen(null)}
-        />
-      ) : null}
+      {dialog}
     </div>
   );
 }

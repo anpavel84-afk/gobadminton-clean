@@ -68,13 +68,24 @@ describe("FR-01 API-backed card semantics", () => {
     expect(html).toContain(game.organizer.displayName);
     expect(html).toContain("Тренер · самостоятельно указано");
     expect(html).toContain("Организатор");
+    expect(html).toContain('data-trainer-profile="trainer"');
+    expect(html).toContain('data-role="trainer"');
+    expect(html).toContain('data-role="organizer"');
+    expect(html).not.toContain("data-layout");
     expect(html).not.toContain("gb-discovery-trainer");
     expect(html).not.toContain("gb-discovery-card--trainer");
     expect(html).toContain("gb-c23-btn--outline");
     expect(html).not.toContain("gb-c23-btn--dark");
     expect(regular).toContain("gb-c23-btn--outline");
     expect(regular).not.toContain("gb-c23-btn--dark");
+    expect(regular).not.toContain("data-layout");
     expect(renderToStaticMarkup(createElement(DiscoveryGameCard, { game: { ...game, status: "cancelled" } }))).toContain("Игра отменена");
+    const missingTrainer = renderToStaticMarkup(createElement(DiscoveryGameCard, {
+      game: { ...game, activityKind: "trainer_led" as const, trainer: null },
+    }));
+    expect(missingTrainer).toContain("С тренером");
+    expect(missingTrainer).toContain('data-trainer-unavailable="true"');
+    expect(missingTrainer).toContain("Профиль недоступен");
   });
 });
 

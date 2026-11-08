@@ -52,7 +52,7 @@ type Props = {
 };
 
 /** Stable footer: one reserved status line + same action baseline (no panel that pushes controls). */
-function StableActionFooter({
+export function StableActionFooter({
   desktop,
   status,
   statusTone,
@@ -87,6 +87,74 @@ function StableActionFooter({
           {primary}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Desktop actions shell: primary slot + Next in one row; caption outside. Shared with layout fixtures. */
+export function DesktopBrowseActionsShell({
+  primarySlot,
+  nextControl,
+  caption = "Совпадение — когда оба хотите сыграть. Не дружба.",
+}: {
+  primarySlot: ReactNode;
+  nextControl: ReactNode;
+  caption?: string;
+}) {
+  return (
+    <div className="pb-profile-bottom">
+      <div className="pb-profile-actions">
+        <div className="pb-friend-slot">{primarySlot}</div>
+        {nextControl}
+      </div>
+      <p className="pb-action-caption">{caption}</p>
+    </div>
+  );
+}
+
+/**
+ * Pure presentational desktop actions fixture — same DOM/classes as Deck + StableActionFooter.
+ * Geometry/layout regression only; no play-interest handlers/network.
+ */
+export function DesktopBrowseActionsFixture({
+  status,
+  statusTone = "",
+  primaryLabel = "Давай сыграем",
+  primaryClassName = "pb-btn-request",
+  showPrimary = true,
+  nextDisabled = false,
+}: {
+  status: string;
+  statusTone?: "success" | "warning" | "";
+  primaryLabel?: string;
+  primaryClassName?: string;
+  showPrimary?: boolean;
+  nextDisabled?: boolean;
+}) {
+  return (
+    <div className="gb-player-browse" data-browse-desktop="true" data-surface="player-browse-actions-layout">
+      <DesktopBrowseActionsShell
+        primarySlot={(
+          <StableActionFooter
+            desktop
+            status={status}
+            statusTone={statusTone}
+            showSkip={false}
+            skipDisabled={false}
+            onSkip={() => {}}
+            primary={
+              showPrimary ? (
+                <button type="button" className={primaryClassName}>{primaryLabel}</button>
+              ) : null
+            }
+          />
+        )}
+        nextControl={(
+          <button type="button" className="pb-btn-next" disabled={nextDisabled}>
+            Следующий
+          </button>
+        )}
+      />
     </div>
   );
 }

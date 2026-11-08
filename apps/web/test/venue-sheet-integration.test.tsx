@@ -59,6 +59,26 @@ vi.mock("../src/components/consumer/players/ProfileComposition", () => ({
 vi.mock("../src/components/consumer/games/RoleReputationPanel", () => ({
   RoleReputationPanel: ({ role }: { role: string }) => <section data-role-reputation-for={role} />,
 }));
+// VenueCommunityRating authRef/hooks collide with this map-lifetime harness when the
+// sheet/preview SSR nested leaf. Real compact/full rating contracts are covered by
+// venue-community* suites; keep a faithful public #ratings link shape here.
+vi.mock("../src/components/consumer/venues/VenueCommunityRating", () => ({
+  VenueCommunityRating: ({
+    venueId,
+    href,
+  }: {
+    venueId: string;
+    href?: string | null;
+  }) => {
+    const link = href ?? `/venues/${encodeURIComponent(venueId)}#ratings`;
+    return (
+      <a className="gb-venue-community__compact-link" href={link} data-testid="venue-community-compact-link">
+        <span className="gb-venue-community__compact is-muted">Оценки сообщества</span>
+        <span className="gb-venue-community__compact-cta">Оценки и обсуждение</span>
+      </a>
+    );
+  },
+}));
 vi.mock("../src/components/consumer/NavIcon", () => ({ shuttlecockElement: () => ({ setAttribute() {} }) }));
 vi.mock("pmtiles", () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock("maplibre-gl", () => ({
@@ -242,6 +262,9 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   await vi.advanceTimersByTimeAsync(220); const expanded = cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
   if (!popup) throw new Error("No sheet");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
+  // Faithful compact #ratings leaf from the VenueCommunityRating boundary mock.
+  expect(renderToStaticMarkup(sheetTree)).toContain(`href="/venues/${encodeURIComponent(venue.id)}#ratings"`);
+  expect(renderToStaticMarkup(sheetTree)).toContain('data-testid="venue-community-compact-link"');
   sheetClick("Показать игры"); cycle();
   expect(renderToStaticMarkup(sheetTree)).toContain("Игры на этой площадке");
   sheetClick("Вечерняя игра"); cycle();

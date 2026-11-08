@@ -73,25 +73,34 @@ beforeEach(() => {
   responseVenues = null;
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
-  vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => {
+  vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
     const parsed = new URL(url, "https://example.test");
-    const signal = init.signal as AbortSignal;
-    requests.push({ url: parsed, signal }); inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
-    const finish = () => { inFlight--; signal.removeEventListener("abort", abort); };
-    const abort = () => { if (ignoreAbort) return; clearTimeout(timer); finish(); reject(new DOMException("Aborted", "AbortError")); };
-    const timer = setTimeout(() => {
-      finish();
-      const isVenue = parsed.pathname === "/v1/venues";
-      if (failResource === "reject") { reject(new Error("offline")); return; }
-      const resourceFailed = fail || (isVenue ? failResource === "venues" : failResource === "games");
-      const venueItems = responseVenues ?? [{ ...venue, cityId: parsed.searchParams.get("cityId") }];
-      resolve(new Response(JSON.stringify(resourceFailed ? { title: "Offline" } : {
-        items: isVenue ? venueItems : [responseGame],
-        nextCursor: (isVenue ? venueItems : [responseGame]).length === 0 || parsed.searchParams.has("cursor") ? null : "page-2",
-      }), { status: resourceFailed ? 503 : 200 }));
-    }, 20000);
-    signal.addEventListener("abort", abort, { once: true });
-  })));
+    // Public community batch is shared, may omit per-waiter AbortSignal — not catalog transport.
+    if (parsed.pathname === "/v1/venue-community-summaries") {
+      const ids = (parsed.searchParams.get("venueIds") ?? "").split(",").filter(Boolean);
+      return Promise.resolve(new Response(JSON.stringify({
+        items: ids.map(id => ({ venueId: id, canonicalVenueId: id, state: "empty", average: null, count: 0 })),
+      }), { status: 200 }));
+    }
+    return new Promise<Response>((resolve, reject) => {
+      const signal = init?.signal as AbortSignal;
+      requests.push({ url: parsed, signal }); inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      const finish = () => { inFlight--; signal.removeEventListener("abort", abort); };
+      const abort = () => { if (ignoreAbort) return; clearTimeout(timer); finish(); reject(new DOMException("Aborted", "AbortError")); };
+      const timer = setTimeout(() => {
+        finish();
+        const isVenue = parsed.pathname === "/v1/venues";
+        if (failResource === "reject") { reject(new Error("offline")); return; }
+        const resourceFailed = fail || (isVenue ? failResource === "venues" : failResource === "games");
+        const venueItems = responseVenues ?? [{ ...venue, cityId: parsed.searchParams.get("cityId") }];
+        resolve(new Response(JSON.stringify(resourceFailed ? { title: "Offline" } : {
+          items: isVenue ? venueItems : [responseGame],
+          nextCursor: (isVenue ? venueItems : [responseGame]).length === 0 || parsed.searchParams.has("cursor") ? null : "page-2",
+        }), { status: resourceFailed ? 503 : 200 }));
+      }, 20000);
+      signal.addEventListener("abort", abort, { once: true });
+    });
+  }));
 });
 afterEach(() => { unmount(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 it("finishes >30s sequential pagination, renders venues/schedules, and does not idle-poll the catalog", async () => {

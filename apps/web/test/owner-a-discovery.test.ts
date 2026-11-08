@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { cityDate, futureDiscoveryBounds, futureDiscoveryItems, nextCalendarDay } from "../src/lib/discovery-presentation";
 import { filterGamesBySelectedNtrpLevel } from "../src/lib/level-guide";
@@ -28,5 +29,15 @@ describe("Owner A future-only city feed", () => {
     expect(future).toHaveLength(2);
     expect(filterGamesBySelectedNtrpLevel(future, "3.0")).toEqual([]);
     expect(future.map((g) => g.id)).toEqual(["soon", "later"]);
+  });
+});
+
+describe("Owner A #521 supersedes height-stacked discovery card intent", () => {
+  it("keeps ordinary and trainer feed cards on one desktop row CSS contract", () => {
+    const css = readFileSync(new URL("../src/styles/discovery.css", import.meta.url), "utf8");
+    const card = readFileSync(new URL("../src/components/consumer/discovery/DiscoveryGameCard.tsx", import.meta.url), "utf8");
+    expect(card).not.toMatch(/useFeedCardLayout|mediaBudget|setLayout\("stacked"\)/);
+    expect(css).not.toMatch(/\[data-layout="stacked"\]/);
+    expect(css).toMatch(/minmax\(210px,\s*min\(300px,\s*36%\)\)/);
   });
 });

@@ -7,7 +7,9 @@ const consumer = readFileSync(new URL("../src/styles/consumer.css", import.meta.
 
 describe("FB01 mobile card footer and profile dialog close control", () => {
   it("keeps organizer identity and both normal-size actions in one row at phone widths", () => {
-    expect(discovery).toMatch(/\.gb-discovery-host > span:nth-child\(2\)\s*\{[^}]*flex:\s*1 1 0/);
+    // #521 D2: copy lives under role button as `.gb-discovery-host__copy`, not nth-child(2) span.
+    expect(discovery).toMatch(/\.gb-discovery-host__copy\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1 1 0/);
+    expect(discovery).toMatch(/\.gb-consumer\s+\.gb-discovery-host\s+\.gb-c23-btn\s*\{[^}]*flex:\s*none/);
     expect(games).toMatch(/@media\s*\(max-width:\s*500px\)\s*\{\s*\.gb-discovery-host\s*\{\s*flex-wrap:\s*nowrap/);
     expect(games).toMatch(/\.gb-discovery-card__actions\s*\{[^}]*width:\s*auto/);
     expect(games).toMatch(/\.gb-game-share__button\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px/);

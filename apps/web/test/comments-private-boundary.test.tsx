@@ -529,28 +529,26 @@ describe("#394 comments private boundary", () => {
     expect(mutation.run).not.toHaveBeenCalled();
   });
 
-  it("VenuePage offers confirmed-experience reviews without broad CommentsSection composer", async () => {
+  it("VenuePage mounts community ratings, discussion, and verified experience reviews", async () => {
     vi.mocked(getMe).mockResolvedValue({ ok: true, status: 200, data: me });
+    vi.mocked(listEntityComments).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: emptyPage,
+    });
 
     hooks.cursor = 0;
     VenuePage({ venueId });
     flushEffects();
-    await settle(6);
+    await settle(8);
 
     hooks.cursor = 0;
     const html = renderToStaticMarkup(VenuePage({ venueId }));
-    expect(html).toContain("Опыт на площадке");
-    expect(html).toContain("от участников с подтверждённым посещением");
-    expect(html).toContain("без профиля и деталей встречи");
-    expect(html).toContain("Поделиться опытом");
-    expect(html).not.toContain("Ваш комментарий");
-    expect(html).not.toContain("Войдите, чтобы оставить комментарий");
-    expect(html).not.toContain("напишите");
-    expect(html).not.toMatch(/canCreate|eligibility|Можно поделиться/i);
+    expect(html).toContain("Оценки сообщества");
+    expect(html).toContain("Обсуждение и фотографии");
+    expect(html).toContain("Добавление фотографий к публикациям появится позже");
+    expect(html).toMatch(/отзыв|опыт|посещен/i);
     expect(html).not.toMatch(/отметьте посещение|самостоятельно отметь/i);
-    // VenuePage no longer mounts session-bound comments me path.
-    expect(vi.mocked(getMe)).not.toHaveBeenCalled();
-    expect(vi.mocked(listEntityComments)).not.toHaveBeenCalled();
   });
 
   it("CommentsSection ignores late replies and mutation success after session/expiry fence", async () => {
@@ -862,7 +860,8 @@ describe("#394 comments private boundary", () => {
     expect(html).toContain("Удалить");
     expect(html).toContain("Ваш комментарий");
     expect(html).not.toContain("Заблокировать");
-    expect(html).not.toContain("Пожаловаться");
+    // Venue community report is allowed on own visible venue comments; player-author safety is not.
+    expect(html).toContain('data-testid="venue-community-report-comment"');
     expect(html).not.toContain("Действие в отношении автора");
   });
 

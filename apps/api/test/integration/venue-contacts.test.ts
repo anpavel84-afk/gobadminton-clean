@@ -272,7 +272,7 @@ describe("public contacts service projections and SQL binds without DB",()=>{
    if(alias && statements.length===1)return queryResult([{...base,lifecycle_state:"merged",canonical_venue_id:"a0000000-0000-4000-8000-000000000004"}]);
    return queryResult([{...base,id:alias?"a0000000-0000-4000-8000-000000000004":id,public_contacts:{...contacts,phone:"unsafe"}}]);
   }) as Pool['query']};
-  const service=new VenuesService(fake as Pool,{} as IdempotencyService,{} as MutationRunner,moderationStub);
+  const service=new VenuesService(fake as Pool,{} as import("../../src/config/env").AppEnv,{} as IdempotencyService,{} as MutationRunner,moderationStub);
   const page=await service.searchCatalog({cityId});expect(page.items[0]?.publicContacts).toEqual({...contacts,phone:null});expect(JSON.stringify(page)).not.toContain('private');expect(statements[0]).toContain('public_contacts');
   statements.length=0;alias=true;
   const detail=await service.getById(id);expect(detail.publicContacts).toEqual({...contacts,phone:null});expect(detail.resolvedFromVenueId).toBe(id);expect(statements).toHaveLength(2);
@@ -305,7 +305,7 @@ describe("public contacts service projections and SQL binds without DB",()=>{
     approveTexts:async(_a,fields)=>({fields:fields.map(f=>({surface:f.surface,fieldId:f.fieldId,text:f.text,fingerprint:'synthetic',providerKey:'fake' as const,providerModel:'synthetic',policy:'public-text-v1',localPolicy:'ru-profanity-v1',checkedAt:new Date(),decision:{flagged:false,categories:{} as never},classification:'allow' as const,responseId:null}))}),
     bindTexts:async()=>undefined,
    };
-   const service=new VenuesService(pool,hash as IdempotencyService,mutations as MutationRunner,moderation as ContentModerationService);
+   const service=new VenuesService(pool,{} as import("../../src/config/env").AppEnv,hash as IdempotencyService,mutations as MutationRunner,moderation as ContentModerationService);
    const result=await service.propose(id,id,'synthetic-key',{cityId,name:base.name,address:base.address,timezone:base.timezone,latitude:55,longitude:37});
    expect(result.statusCode).toBe(fuzzy?409:201);
    if('candidates' in result.body)expect(result.body.candidates[0]?.publicContacts).toEqual(contacts);
