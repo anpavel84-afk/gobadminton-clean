@@ -178,7 +178,7 @@ def read_ready_marker(path):
     return value
 
 
-def role_ready(role):
+def role_ready(role, *, reviewer_authority=None):
     """Separate verified predicates. Author pass must not claim READY.
 
     agy_qa binds the real native product_role_ready()/root proof (PR #376),
@@ -222,7 +222,8 @@ def role_ready(role):
         # Lean READY marker is never an independent READY grant for author.
         return False, 'agy_author READY native proof absent or not verified'
     if role in ('codex_author', 'codex_routing_qa'):
-        return qualified_codex_role('author' if role == 'codex_author' else 'qa')
+        return qualified_codex_role('author' if role == 'codex_author' else 'qa',
+                                    reviewer_authority=reviewer_authority)
     if role == 'cursor_author':
         try:
             marker = _import_native('native_cursor').qualification('slot1', None)
@@ -946,17 +947,48 @@ ACTUAL_AUTHOR = {'cursor_auto': 'cursor_auto', 'antigravity_sonnet': 'agy_author
                  'codex_sol_medium': 'codex_author'}
 
 
-def qualified_codex_role(role):
-    """Use pinned core registry and native model_command, never QA alias as author."""
+# Policy codex_sol_medium author alias resolves to 6.1; independent Mode A QA
+# resolves to 6-sol. Availability and the legacy author registry cannot grant QA.
+CODEX_ROLE_MODELS = {'author': 'gpt-6.1-sol', 'qa': 'gpt-6-sol'}
+
+
+def qualified_codex_role(role, *, reviewer_authority=None, effort='medium'):
+    """Protected native/controller authority only; task JSON is never consulted.
+
+    The optional callable is injected by the trusted controller, as with live
+    launcher seams. Without a real Mode A authority runtime integration HOLDs.
+    """
+    if role not in CODEX_ROLE_MODELS or effort not in ('medium', 'high'):
+        return False, 'unsupported Codex role or effort'
+    if role == 'author' and effort != 'medium':
+        return False, 'exact author effort required'
     try:
         issues, slots = _import_native('core').live()
-        model = 'gpt-6.1-sol' if role == 'author' else 'gpt-6-sol'
+        model = CODEX_ROLE_MODELS[role]
+        if not callable(getattr(issues, 'model_command', None)):
+            return False, 'secured native model_command unavailable'
+        executor = 'native:codex:1002:' + role
+        if role == 'qa':
+            authority = reviewer_authority
+            if authority is None:
+                authority = getattr(issues, 'mode_a_reviewer_authority', None)
+            if not callable(authority):
+                return False, 'trusted Mode A reviewer authority unavailable'
+            proof = authority(model=model, effort=effort, role=role, executor=executor)
+            expected = dict(model=model, effort=effort, role=role, executor=executor,
+                            executor_uid=1002)
+            if (not isinstance(proof, dict)
+                    or any(proof.get(k) != v for k, v in expected.items())
+                    or any(proof.get(k) is not True for k in
+                           ('admitted', 'qualified', 'secured', 'independent_executor'))):
+                return False, 'exact secured independent Mode A reviewer proof required'
+            return True, dict(expected, source='trusted_mode_a_reviewer_authority')
         if slots.MODEL_ADAPTER.get(model) != 'codex':
             return False, 'exact Codex model absent from qualified registry'
         ok, why = slots.adapter_status('codex', role)
-        if not ok or not callable(getattr(issues, 'model_command', None)):
+        if not ok:
             return False, why
         return True, {'source': 'pinned_core_registry', 'role': role,
-                      'model': model + ':medium', 'executor': 'native:codex:1002:' + role}
+                      'model': model + ':' + effort, 'executor': executor}
     except Exception:
         return False, 'native Codex role unavailable'

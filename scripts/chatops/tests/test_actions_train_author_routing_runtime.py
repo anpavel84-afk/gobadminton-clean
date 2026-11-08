@@ -1,5 +1,6 @@
 """B2 source-only controlled provider/process fixtures; no paid calls."""
 import copy
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -102,6 +103,31 @@ class Binding(unittest.TestCase):
         with patch.object(providers, '_import_native', return_value=core):
             self.assertTrue(providers.qualified_codex_role('author')[0])
             self.assertFalse(providers.qualified_codex_role('qa')[0])
+
+    def test_mode_a_qa_authority_is_separate_exact_and_fail_closed(self):
+        slots = SimpleNamespace(MODEL_ADAPTER={'gpt-6.1-sol': 'codex'},
+                                adapter_status=lambda *a: (True, 'qualified'))
+        issues = SimpleNamespace(model_command=lambda: None)
+        core = SimpleNamespace(live=lambda: (issues, slots))
+        def authority(**request):
+            return dict(request, executor_uid=1002, admitted=True, qualified=True,
+                        secured=True, independent_executor=True)
+        with patch.object(providers, '_import_native', return_value=core):
+            self.assertFalse(providers.role_ready('codex_routing_qa')[0])
+            for effort in ('medium', 'high'):
+                self.assertTrue(providers.qualified_codex_role('qa', effort=effort,
+                    reviewer_authority=authority)[0])
+            for change in ({'model': 'gpt-6.1-sol'}, {'role': 'author'},
+                           {'effort': 'low'}, {'executor': 'native:codex:1002:author'},
+                           {'admitted': False}, {'qualified': False},
+                           {'secured': False}, {'independent_executor': False},
+                           {'executor_uid': 0}):
+                self.assertFalse(providers.qualified_codex_role('qa',
+                    reviewer_authority=lambda **r: dict(authority(**r), **change))[0])
+            issues.mode_a_reviewer_authority = authority
+            self.assertTrue(providers.role_ready('codex_routing_qa')[0])
+            self.assertFalse(providers.qualified_codex_role('unknown')[0])
+            self.assertFalse(providers.qualified_codex_role('author', effort='high')[0])
 
     def test_bound_unready_does_not_hidden_fallback(self):
         t = bound(task(), counts={p.CURSOR: 2, p.AGY: 0})
@@ -239,6 +265,60 @@ class Capacity(unittest.TestCase):
         self.assertIsNone(reconcile(owned_reaped=False))
         for field in ('cleanup_restore_guard', 'cleanup_cgroup', 'cleanup_reap', 'receipt_persist', 'oauth_refresh'):
             self.assertIsNone(reconcile(native_receipt=dict(native, **{field: 'failed'})))
+
+
+class CodexCheckpoint(unittest.TestCase):
+    def test_injected_completion_and_import_failure_checkpoint_binding(self):
+        for fail_import in (False, True):
+            with self.subTest(fail_import=fail_import), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                root = Path(td); evidence = root / 'evidence'; evidence.mkdir()
+                private = root / 'private'; private.mkdir()
+                observer = SimpleNamespace(result=dict(changed_paths=['x.py'],
+                    payloads={'x.py': b'new'}, deleted=[]), failure=None,
+                    observe=lambda *a: None, persist=unittest.mock.Mock())
+                proc = SimpleNamespace(returncode=0, pid=12345,
+                    communicate=lambda **k: None, poll=lambda: 0)
+                def launch(*a, **kw):
+                    kw['stdout'].write(b'{"type":"turn.completed"}\n')
+                    return proc
+                def git(work, *args):
+                    return ('b' if args == ('rev-parse', 'HEAD') and imported[0] else 'a') * 40
+                imported = [False]
+                def import_source(**kw):
+                    imported[0] = True
+                    if fail_import: raise RuntimeError('import failure')
+                native = SimpleNamespace(export=lambda *a: {}, source_name=lambda n: True)
+                core = SimpleNamespace(live=lambda: (SimpleNamespace(
+                    model_command=lambda *a, **k: ['injected'], clean_env=lambda: {}), None))
+                patches = [
+                    patch.object(providers, 'role_ready', return_value=(True, {})),
+                    patch.object(providers, 'mark_intent_phase'),
+                    patch.object(h, 'bound_provider', return_value=('codex_author',)),
+                    patch.object(h, 'SourceRetention', return_value=observer),
+                    patch.object(h, 'owned_group_gone', return_value=True),
+                    patch.object(live, 'require_executor_uid'),
+                    patch.object(live, '_load_native', side_effect=lambda n: core if n == 'core' else native),
+                    patch.object(live.tempfile, 'mkdtemp', return_value=str(private)),
+                    patch.object(live, 'chown_private_tree'),
+                    patch.object(live, 'git', side_effect=git),
+                    patch.object(live, '_git_common_dir', return_value=root),
+                    patch.object(live, 'load_short_rules', return_value=('rules', 'a'*64, root)),
+                    patch.object(live, 'shared_agy_budget', return_value=SimpleNamespace(
+                        remaining=lambda *a: 1, charge=lambda *a: None)),
+                    patch.object(live, 'uid1002_preexec', return_value=None),
+                    patch.object(live.subprocess, 'Popen', side_effect=launch),
+                    patch.object(live, 'owner_safe_atomic_import', side_effect=import_source)]
+                for entry in patches: stack.enter_context(entry)
+                t = task(_capacity_successor=True)
+                if fail_import:
+                    with self.assertRaises(RuntimeError):
+                        live.codex_author_live(task=t, worktree=root, evidence_dir=evidence)
+                    observer.persist.assert_called_once()
+                    self.assertEqual(observer.persist.call_args.args[1].source_sha, 'a' * 40)
+                else:
+                    result = live.codex_author_live(task=t, worktree=root, evidence_dir=evidence)
+                    self.assertEqual(result['candidate_sha'], 'b' * 40)
+                    observer.persist.assert_not_called()
 
 
 class Retention(unittest.TestCase):

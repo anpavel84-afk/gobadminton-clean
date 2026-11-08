@@ -1236,7 +1236,10 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
             finally:
                 def reap_owned(process):
-                    native._stop(process)
+                    if callable(getattr(native, '_stop', None)):
+                        native._stop(process)
+                    else:
+                        _kill_owned_process_group(process)
                     # _stop alone does not kill an exited parent's descendants.
                     try:
                         os.killpg(process.pid, 9)
@@ -1365,19 +1368,26 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                     checkpoint='source-checkpoint/manifest.json', unvalidated=True)
             except Exception:
                 pass  # Native raw/error/charge receipt remains authoritative.
-        if (model_result is not None and not import_done and retention is not None
-                and retention.result is not None and retention.failure is None):
+        keep_private = False
+        if model_result is not None and not import_done:
             try:
+                # Revalidate current bytes even when the new observer failed.
+                # Never preserve from a live writer or bypass scope/secret checks.
+                from author_handoff import owned_group_gone
+                if retention is None or p is None or not owned_group_gone(p):
+                    raise ValueError('unpublished source safety unavailable')
+                retention.capture(base / 'work')
                 _preserve_unpublished_author_sources(evidence, work=base / 'work',
                     baseline=before, allowed=set(task.get('allowed_paths') or []),
                     native=native, token=token)
             except Exception:
-                pass
+                keep_private = True
         # Paid model completed but technical import failed: keep allowed sources
         # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
         if p is not None and p.poll() is None:
             _kill_owned_process_group(p)
-        shutil.rmtree(base, ignore_errors=True)
+        if not keep_private:
+            shutil.rmtree(base, ignore_errors=True)
 
 
 def _kill_owned_process_group(p):
@@ -4078,6 +4088,8 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     private = Path(tempfile.mkdtemp(prefix='gb-codex-author-', dir='/tmp'))
     process = None
     retention = None
+    import_done = False
+    source_sha = git(worktree, 'rev-parse', 'HEAD')
     try:
         source = private / 'source'; source.mkdir()
         job = private / 'job'; job.mkdir()
@@ -4138,12 +4150,13 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
         git(worktree, '-c', 'user.name=agentagency-dev', '-c', 'user.email=agentagency-dev@localhost',
             '-c', 'commit.gpgsign=false', 'commit', '-m', f'lean: issue-{task["issue"]} codex author')
         sha = git(worktree, 'rev-parse', 'HEAD')
+        import_done = True
         return dict(candidate_sha=sha, changed_paths=changed, provider='codex_author',
                     effective_model='gpt-6.1-sol:medium', root_model=False, uid=1002)
     finally:
         if process is not None and process.poll() is None:
             _kill_owned_process_group(process)
-        if retention and retention.result and not retention.failure:
-            try: retention.persist(evidence, operation(task, 'codex_author', git(worktree, 'rev-parse', 'HEAD')))
+        if not import_done and retention and retention.result and not retention.failure:
+            try: retention.persist(evidence, operation(task, 'codex_author', source_sha))
             except Exception: pass
         shutil.rmtree(private, ignore_errors=True)
