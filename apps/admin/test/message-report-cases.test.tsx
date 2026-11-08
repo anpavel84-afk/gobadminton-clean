@@ -1,13 +1,13 @@
 /**
- * Co-located Cases message-source clearing harness (allowlisted path).
+ * Cases message-source clearing harness under vitest include test/**/*.test.{ts,tsx}.
  * Mirrors apps/admin/test/cases.test.tsx review-source race coverage for message reports.
  */
 import { isValidElement } from "react";
 import type * as ReactModule from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Cases } from "./Cases";
-import type { Session } from "../lib/admin-client";
-import type * as AdminClientModule from "../lib/admin-client";
+import { Cases } from "../src/components/Cases";
+import type { Session } from "../src/lib/admin-client";
+import type * as AdminClientModule from "../src/lib/admin-client";
 
 const hooks = vi.hoisted(() => ({
   index: 0,
@@ -54,16 +54,16 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-vi.mock("./AttendanceDisputes", () => ({ AttendanceDisputes: () => null }));
-vi.mock("./RoleReputationCases", () => ({ RoleReputationCases: () => null }));
-vi.mock("./VenueReviewCases", () => ({ VenueReviewCases: () => null }));
+vi.mock("../src/components/AttendanceDisputes", () => ({ AttendanceDisputes: () => null }));
+vi.mock("../src/components/RoleReputationCases", () => ({ RoleReputationCases: () => null }));
+vi.mock("../src/components/VenueReviewCases", () => ({ VenueReviewCases: () => null }));
 
 const transport = vi.hoisted(() => ({
   calls: [] as { path: string }[],
   handler: null as null | ((path: string) => unknown | Promise<unknown>),
 }));
 
-vi.mock("../lib/admin-client", async (importOriginal) => {
+vi.mock("../src/lib/admin-client", async (importOriginal) => {
   const actual = await importOriginal<typeof AdminClientModule>();
   return {
     ...actual,

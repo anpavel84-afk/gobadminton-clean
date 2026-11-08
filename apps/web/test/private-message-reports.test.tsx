@@ -1,4 +1,6 @@
 import {
+  Children,
+  cloneElement,
   createElement,
   isValidElement,
   type ReactElement,
@@ -16,6 +18,7 @@ const hooks = vi.hoisted(() => ({
   slots: [] as unknown[],
   cursor: 0,
   effects: [] as Array<() => void>,
+  cleanups: [] as Array<(() => void) | undefined>,
 }));
 
 const mutation = vi.hoisted(() => ({
@@ -48,8 +51,18 @@ vi.mock("react", async (importOriginal) => {
       if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
       return hooks.slots[index];
     },
-    useEffect(effect: () => void) {
-      hooks.effects.push(effect);
+    useEffect(effect: () => void | (() => void), deps?: unknown[]) {
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      const nextDeps = deps ?? [];
+      if (!previous || nextDeps.some((value, i) => !Object.is(value, previous[i]))) {
+        hooks.slots[index] = nextDeps;
+        hooks.effects.push(() => {
+          hooks.cleanups[index]?.();
+          const cleanup = effect();
+          hooks.cleanups[index] = typeof cleanup === "function" ? cleanup : undefined;
+        });
+      }
     },
     useId() {
       return "test-id";
@@ -73,11 +86,11 @@ vi.mock("../src/components/consumer/messages/MessageComposition", () => ({
 }));
 
 vi.mock("../src/components/consumer/players/ProfileComposition", () => ({
-  ProfileDialog: (props: { children: ReactNode; title: string }) =>
+  ProfileDialog: (props: { children?: ReactNode; title: string }) =>
     createElement("div", { "data-dialog": props.title }, props.children),
 }));
 vi.mock("../src/components/players/ProfileComposition", () => ({
-  ProfileDialog: (props: { children: ReactNode; title: string }) =>
+  ProfileDialog: (props: { children?: ReactNode; title: string }) =>
     createElement("div", { "data-dialog": props.title }, props.children),
 }));
 
@@ -88,29 +101,90 @@ vi.mock("../src/components/Button", () => ({
   Button: (props: Record<string, unknown>) => createElement("button", props),
 }));
 
-type Node = { type: unknown; props: Record<string, unknown> };
+/** Sync rendered tree only — React 19 ReactNode includes Promise, which async/await would flatten. */
+type RenderedTree = Exclude<ReactNode, Promise<unknown>>;
 
-function nodes(value: unknown, out: Node[] = []): Node[] {
-  if (!value || typeof value !== "object") return out;
-  if (Array.isArray(value)) {
-    value.forEach((child) => nodes(child, out));
+type ChangeEvent = { target: { value: string; checked?: boolean } };
+type SubmitEvent = { preventDefault: () => void };
+
+type RenderedProps = {
+  children?: ReactNode;
+  className?: string;
+  value?: string;
+  name?: string;
+  type?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  "data-dialog"?: string;
+  "data-testid"?: string;
+  onClick?: () => void;
+  onChange?: (e: ChangeEvent) => void;
+  onSubmit?: (e: SubmitEvent) => void;
+};
+
+type RenderedElement = ReactElement<RenderedProps>;
+
+function isRenderedElement(node: ReactNode): node is RenderedElement {
+  return isValidElement<RenderedProps>(node);
+}
+
+function flushEffects() {
+  const queued = hooks.effects.splice(0);
+  for (const effect of queued) effect();
+}
+
+function expand(node: ReactNode): RenderedTree {
+  if (node == null || typeof node === "boolean") return node;
+  if (typeof node === "string" || typeof node === "number" || typeof node === "bigint") {
+    return node;
+  }
+  if (Array.isArray(node)) return node.map(expand);
+  if (!isRenderedElement(node)) return null;
+  if (typeof node.type === "function") {
+    return expand((node.type as (props: RenderedProps) => ReactNode)(node.props));
+  }
+  const { children } = node.props;
+  if (children == null) return node;
+  return cloneElement(
+    node,
+    undefined,
+    Children.map(children, (child) => expand(child)),
+  );
+}
+
+function walk(node: ReactNode, out: RenderedElement[] = []): RenderedElement[] {
+  if (node == null || typeof node === "boolean") return out;
+  if (Array.isArray(node)) {
+    for (const child of node) walk(child, out);
     return out;
   }
-  if (isValidElement(value as ReactElement)) {
-    const el = value as ReactElement;
-    out.push({ type: el.type, props: el.props as Record<string, unknown> });
-    nodes((el.props as { children?: unknown }).children, out);
-  }
+  if (!isRenderedElement(node)) return out;
+  out.push(node);
+  Children.forEach(node.props.children, (child) => walk(child, out));
   return out;
 }
 
-function textOf(value: unknown): string {
+function textOf(value: ReactNode): string {
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (Array.isArray(value)) return value.map(textOf).join("");
-  if (isValidElement(value as ReactElement)) {
-    return textOf((value as ReactElement).props.children);
-  }
+  if (isRenderedElement(value)) return textOf(value.props.children);
   return "";
+}
+
+function callChange(props: RenderedProps, value: string, checked?: boolean): void {
+  const onChange = props.onChange;
+  if (typeof onChange !== "function") {
+    throw new Error("expected onChange handler");
+  }
+  onChange({ target: { value, checked } });
+}
+
+function callSubmit(props: RenderedProps): void {
+  const onSubmit = props.onSubmit;
+  if (typeof onSubmit !== "function") {
+    throw new Error("expected onSubmit handler");
+  }
+  onSubmit({ preventDefault() {} });
 }
 
 const me = { id: "me", csrfToken: "csrf" } as Me;
@@ -132,70 +206,94 @@ const messages: ReportableMessage[] = [
   },
 ];
 
-// ConversationSafety useState order: open, dialog, reason, detail, reportMode, selectedMessageId, shareConsent, done
-const SLOT = {
-  dialog: 1,
-  reportMode: 4,
-  selectedMessageId: 5,
-  shareConsent: 6,
-} as const;
-
 describe("ConversationSafety exact message report selection/consent", () => {
   beforeEach(() => {
     hooks.slots = [];
     hooks.cursor = 0;
     hooks.effects = [];
+    hooks.cleanups = [];
     mutation.run.mockReset();
     mutation.busy = false;
     mutation.pending = false;
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      activeElement: null,
+    });
   });
 
-  function render() {
+  function renderTree(): RenderedTree {
     hooks.cursor = 0;
-    return ConversationSafety({
-      playerId: peer,
-      me,
-      onBlocked: () => undefined,
-      messages,
-      reportContext: { kind: "direct", conversationId: "c0000000-0000-4000-8000-000000000001" },
-    });
+    const tree = expand(
+      createElement(ConversationSafety, {
+        playerId: peer,
+        me,
+        onBlocked: () => undefined,
+        messages,
+        reportContext: { kind: "direct", conversationId: "c0000000-0000-4000-8000-000000000001" },
+      }),
+    );
+    flushEffects();
+    return tree;
   }
 
   it("requires explicit message selection and consent; never defaults to latest or full thread", () => {
-    render();
-    hooks.slots[SLOT.dialog] = "report";
-    hooks.slots[SLOT.reportMode] = "message";
-    hooks.slots[SLOT.selectedMessageId] = "";
-    hooks.slots[SLOT.shareConsent] = false;
-    const tree = render();
-    const copy = textOf(tree);
-    expect(copy).toMatch(/На выбранное сообщение/);
-    expect(copy).toMatch(/Выберите одно сообщение/);
-    expect(copy).not.toMatch(/full thread|весь разговор/i);
+    let tree = renderTree();
+    const reportButton = walk(tree).find(
+      (n) => n.type === "button" && textOf(n.props.children) === "Пожаловаться",
+    );
+    expect(reportButton).toBeTruthy();
+    reportButton!.props.onClick?.();
 
-    const form = nodes(tree).find((n) => n.type === "form");
+    tree = renderTree();
+    const dialog = walk(tree).find((n) => n.props["data-dialog"] === "Пожаловаться");
+    expect(dialog).toBeTruthy();
+    expect(textOf(dialog)).toMatch(/На выбранное сообщение/);
+    expect(textOf(dialog)).toMatch(/На игрока/);
+    expect(textOf(dialog)).not.toMatch(/full thread|весь разговор/i);
+
+    const modeRadios = walk(tree).filter(
+      (n) => n.type === "input" && n.props.type === "radio" && n.props.name === "report-mode",
+    );
+    expect(modeRadios).toHaveLength(2);
+    const messageMode = modeRadios[1]!;
+    expect(messageMode.props.disabled).toBe(false);
+    callChange(messageMode.props, "on");
+
+    tree = renderTree();
+    expect(textOf(tree)).toMatch(/Выберите одно сообщение/);
+    expect(textOf(tree)).not.toMatch(/full thread|весь разговор/i);
+    const previewMissing = walk(tree).find((n) => n.props["data-testid"] === "selected-message-preview");
+    expect(previewMissing).toBeFalsy();
+
+    const form = walk(tree).find((n) => n.type === "form");
     expect(form).toBeTruthy();
-    (form!.props.onSubmit as (e: { preventDefault(): void }) => void)({
-      preventDefault() {},
-    });
+    callSubmit(form!.props);
     expect(mutation.run).not.toHaveBeenCalled();
 
-    hooks.slots[SLOT.selectedMessageId] = messages[0]!.id;
-    hooks.slots[SLOT.shareConsent] = false;
-    const previewTree = render();
-    expect(textOf(previewTree)).toContain("incoming preview body");
-    const form2 = nodes(previewTree).find((n) => n.type === "form");
-    (form2!.props.onSubmit as (e: { preventDefault(): void }) => void)({
-      preventDefault() {},
-    });
+    const select = walk(tree).find((n) => n.type === "select");
+    expect(select).toBeTruthy();
+    const options = walk(select!).filter((n) => n.type === "option");
+    expect(options.map((n) => n.props.value)).toEqual(["", messages[0]!.id]);
+    callChange(select!.props, messages[0]!.id);
+
+    tree = renderTree();
+    expect(textOf(tree)).toContain("incoming preview body");
+    expect(textOf(tree)).not.toContain("own message");
+    const formUnconsented = walk(tree).find((n) => n.type === "form");
+    callSubmit(formUnconsented!.props);
     expect(mutation.run).not.toHaveBeenCalled();
 
-    hooks.slots[SLOT.shareConsent] = true;
-    const ready = render();
-    const form3 = nodes(ready).find((n) => n.type === "form");
-    (form3!.props.onSubmit as (e: { preventDefault(): void }) => void)({
-      preventDefault() {},
-    });
+    const consent = walk(tree).find(
+      (n) => n.type === "input" && n.props.type === "checkbox",
+    );
+    expect(consent).toBeTruthy();
+    callChange(consent!.props, "on", true);
+
+    tree = renderTree();
+    const formReady = walk(tree).find((n) => n.type === "form");
+    callSubmit(formReady!.props);
     expect(mutation.run).toHaveBeenCalledWith("/v1/reports", {
       targetKind: "message",
       messageId: messages[0]!.id,
@@ -204,7 +302,11 @@ describe("ConversationSafety exact message report selection/consent", () => {
       shareMessageWithSupport: true,
       conversationId: "c0000000-0000-4000-8000-000000000001",
     });
-    expect(mutation.run.mock.calls[0][1]).not.toHaveProperty("evidenceRefs");
-    expect(JSON.stringify(mutation.run.mock.calls[0][1])).not.toContain("own message");
+    const firstCall = mutation.run.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const payload = firstCall![1];
+    expect(payload).toBeDefined();
+    expect(payload).not.toHaveProperty("evidenceRefs");
+    expect(JSON.stringify(payload)).not.toContain("own message");
   });
 });

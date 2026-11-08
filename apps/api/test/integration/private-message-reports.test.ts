@@ -454,7 +454,8 @@ describeIntegration("MOD-V2-C2 private message reports", () => {
         shareMessageWithSupport: true,
       },
     });
-    expect(replay.statusCode).toBe(200);
+    // Same Idempotency-Key replays the sealed create receipt (original 201).
+    expect(replay.statusCode).toBe(201);
     expect(replay.json().reportId).toBe(reportId);
 
     const bindingCount = await pool.query(
