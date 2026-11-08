@@ -37,6 +37,33 @@ vi.mock("../src/components/consumer/games/GameDetailComposition", () => ({ GameH
 vi.mock("../src/components/consumer/games/GameShare", () => ({ GameShare: () => null }));
 vi.mock("../src/components/consumer/games/GameActionBar", () => ({ GameActionBar: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock("next/link", () => ({ default: ({ children, ...props }: { children: React.ReactNode }) => <a {...props}>{children}</a> }));
+// Contact-authority / map-lifetime boundary: mock rating leaf + hook. Real mounted
+// summary contracts live in venue-community-contexts (actual leaf/hook, no fake react).
+vi.mock("../src/lib/use-venue-community", () => ({
+  useVenueCommunitySummaries: (venueIds: readonly string[]) => ({
+    summaries: {},
+    state: "ready" as const,
+    ids: [...venueIds],
+  }),
+  stableVenueCommunityIds: (venueIds: readonly string[]) => [...venueIds],
+}));
+vi.mock("../src/components/consumer/venues/VenueCommunityRating", () => ({
+  VenueCommunityRating: ({
+    venueId,
+    href,
+  }: {
+    venueId: string;
+    href?: string | null;
+  }) => {
+    const link = href ?? `/venues/${encodeURIComponent(venueId)}#ratings`;
+    return (
+      <a className="gb-venue-community__compact-link" href={link} data-testid="venue-community-compact-link">
+        <span className="gb-venue-community__compact is-muted">Оценки сообщества</span>
+        <span className="gb-venue-community__compact-cta">Оценки и обсуждение</span>
+      </a>
+    );
+  },
+}));
 vi.mock("../src/lib/api-client", () => ({
   getGame: vi.fn(),
   getMe: vi.fn(),
@@ -72,12 +99,23 @@ function render(id = "a") { hooks.cursor = 0; return renderToStaticMarkup(GameDe
 function effects() { hooks.effects.splice(0).forEach(fn => fn()); }
 async function settle(id = "a") { for (let i = 0; i < 12; i++) { render(id); effects(); await Promise.resolve(); } return render(id); }
 const markup = (venue: GameDetail["venue"]) => renderToStaticMarkup(<GameVenueContacts venue={venue} />);
-/** Exact compact community link GameVenueContacts always emits beside contacts — not a contact URL. */
+/** Exact compact community link GameVenueContacts always emits — not a contact URL. */
 const ratingsHrefFor = (venueId: string) => `/venues/${encodeURIComponent(venueId)}#ratings`;
 const isRatingsHref = (href: string, venueId = publicVenue.id) => href === ratingsHrefFor(venueId);
 /** Contact anchors only — exclude the recognized /venues/:id#ratings leaf, never an arbitrary allowlist. */
 const contactAnchors = (html: string, venueId = publicVenue.id) =>
   [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>/g)].filter(match => !isRatingsHref(match[1] ?? "", venueId));
+const hasContactSection = (html: string) => html.includes("Контакты площадки") || html.includes('aria-label="Контакты площадки для игры"');
+const hasRatingSection = (html: string, venueId = publicVenue.id) =>
+  html.includes('data-testid="game-venue-community-summary"')
+  && html.includes(`href="${ratingsHrefFor(venueId)}"`)
+  && html.includes('data-testid="venue-community-compact-link"');
+/** Rating-only markup: public summary present, contact list omitted, no private leak fields. */
+const expectRatingOnly = (html: string, venueId = publicVenue.id) => {
+  expect(hasRatingSection(html, venueId)).toBe(true);
+  expect(hasContactSection(html)).toBe(false);
+  expect(contactAnchors(html, venueId)).toHaveLength(0);
+};
 beforeEach(() => {
   hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.cleanups = [];
   vi.stubGlobal("window", new EventTarget());
@@ -93,20 +131,22 @@ afterEach(() => { hooks.cleanups.forEach(fn => fn()); vi.unstubAllGlobals(); vi.
 describe("game-only venue contacts", () => {
   it("renders full response as safe links and escaped inert note", () => {
     const html = markup(privateVenue);
-    expect(html).toContain(`href="${ratingsHrefFor(privateVenue.id)}"`);
-    expect(html).toContain('data-testid="venue-community-compact-link"');
+    expect(hasRatingSection(html, privateVenue.id)).toBe(true);
+    expect(hasContactSection(html)).toBe(true);
     expect(html).toContain('href="tel:+79991234567"');
     expect(html).toContain('href="https://example.org/booking"');
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).toContain("&lt;img"); expect(html).not.toContain("<img");
     expect(contactAnchors(html, privateVenue.id)).toHaveLength(2);
   });
-  it.each([publicVenue, { ...publicVenue, contactPhone: null, contactWebsite: null, bookingNote: null }, { ...publicVenue, contactPhone: " ", contactWebsite: "", bookingNote: "\n " }])("omits entire section for legacy/null/empty", venue => { expect(markup(venue)).toBe(""); });
+  it.each([publicVenue, { ...publicVenue, contactPhone: null, contactWebsite: null, bookingNote: null }, { ...publicVenue, contactPhone: " ", contactWebsite: "", bookingNote: "\n " }])("omits contact section for legacy/null/empty but keeps public rating", venue => {
+    expectRatingOnly(markup(venue), venue.id);
+  });
   it("renders partial response without inventing other fields or public fallback", () => {
     const html = markup({ ...publicVenue, bookingNote: "Инструкция", publicContacts: { phone: "+79999999999", website: "https://public.test", messengers: [] } });
     expect(html).toContain("Инструкция");
-    expect(html).toContain(`href="${ratingsHrefFor(publicVenue.id)}"`);
-    expect(html).toContain('data-testid="venue-community-compact-link"');
+    expect(hasRatingSection(html)).toBe(true);
+    expect(hasContactSection(html)).toBe(true);
     expect(contactAnchors(html)).toHaveLength(0);
     expect(html).not.toContain("tel:");
     expect(html).not.toContain("public.test");
@@ -117,7 +157,9 @@ describe("game-only venue contacts", () => {
     expect(html).not.toContain("example.org/booking");
     expect(html).not.toContain("tel:");
   });
-  it.each(["javascript:alert(1)", "data:text/html,x", "//example.org", "https://user:pass@example.org", "https://@example.org", "https://example.org/\nfoo", "https://example.org/%0afoo", "https://example.org\\@evil.test"])("rejects unsafe website %s", value => { expect(markup({ ...publicVenue, contactWebsite: value })).toBe(""); });
+  it.each(["javascript:alert(1)", "data:text/html,x", "//example.org", "https://user:pass@example.org", "https://@example.org", "https://example.org/\nfoo", "https://example.org/%0afoo", "https://example.org\\@evil.test"])("rejects unsafe website %s", value => {
+    expectRatingOnly(markup({ ...publicVenue, contactWebsite: value }));
+  });
   it("renders the QA percent-encoded Cyrillic website destination", () => {
     expect(markup({ ...publicVenue, contactWebsite: "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B" })).toContain('href="https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B"');
   });
@@ -150,14 +192,20 @@ describe("game-only venue contacts", () => {
     "https://example.org/?q=%00", "https://example.org/#%09", "https://example.org/?q=%0A", "https://example.org/#%1F", "https://example.org/?q=%7F", "https://example.org/#%C2%85",
     "https://example.org/%5C", "https://example.org/?q=%5c",
     42, false, {}, null, undefined, "", "https://", "https://example.org/" + "a".repeat(281), "https://example.org/" + "я".repeat(47), "https://example.org/\ud800", "https://example.org/\udc00",
-  ])("rejects invalid website encoding or destination %s", value => { expect(markup({ ...publicVenue, contactWebsite: value as GameDetail["venue"]["contactWebsite"] })).toBe(""); });
-  it.each(["123", "+7999;ext=1234567", "javascript:123456789", "+79991234567\n", "1".repeat(41)])("rejects unsafe phone %s", value => { expect(markup({ ...publicVenue, contactPhone: value })).toBe(""); });
+  ])("rejects invalid website encoding or destination %s", value => {
+    expectRatingOnly(markup({ ...publicVenue, contactWebsite: value as GameDetail["venue"]["contactWebsite"] }));
+  });
+  it.each(["123", "+7999;ext=1234567", "javascript:123456789", "+79991234567\n", "1".repeat(41)])("rejects unsafe phone %s", value => {
+    expectRatingOnly(markup({ ...publicVenue, contactPhone: value }));
+  });
   it("removes private fields on role-change omission and refresh, and clears immediately on logout", async () => {
     expect(await settle()).toContain("PRIVATE_SENTINEL");
     vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: { ...game, venue: publicVenue } });
     window.dispatchEvent(new Event("focus"));
     expect(render()).not.toContain("PRIVATE_SENTINEL");
-    expect(await settle()).not.toContain("Контакты площадки");
+    const afterOmit = await settle();
+    expect(afterOmit).not.toContain("Контакты площадки");
+    expect(afterOmit).toContain('data-testid="game-venue-community-summary"');
     vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: game });
     window.dispatchEvent(new Event("focus")); expect(await settle()).toContain("PRIVATE_SENTINEL");
     vi.mocked(getMe).mockResolvedValue({ ok: false, status: 401, error: "guest" });
@@ -345,11 +393,13 @@ void publicTypeFence;
 // Authority matrix lives in ./fixtures/website-authority-matrix.ts (same #272 cases).
 
 describe("Astra original-authority website regression matrix", () => {
-  const rejected = (input: unknown) => expect(markup({ ...publicVenue, contactWebsite: input as GameDetail["venue"]["contactWebsite"] })).toBe("");
+  const rejected = (input: unknown) => {
+    expectRatingOnly(markup({ ...publicVenue, contactWebsite: input as GameDetail["venue"]["contactWebsite"] }));
+  };
   const accepted = (input: string, href: string) => {
     const html = markup({ ...publicVenue, contactWebsite: input });
-    expect(html).toContain(`href="${ratingsHrefFor(publicVenue.id)}"`);
-    expect(html).toContain('data-testid="venue-community-compact-link"');
+    expect(hasRatingSection(html)).toBe(true);
+    expect(hasContactSection(html)).toBe(true);
     const anchors = contactAnchors(html);
     expect(anchors).toHaveLength(1);
     const attribute = anchors[0]?.[1] ?? "";

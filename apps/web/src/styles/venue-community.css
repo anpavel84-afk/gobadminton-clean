@@ -181,6 +181,11 @@
   min-width: 0;
 }
 
+.gb-venue-picker-selected-community {
+  margin-top: 8px;
+  min-width: 0;
+}
+
 .gb-venue-community__compact-link:hover .gb-venue-community__compact-cta,
 .gb-venue-community__compact-link:focus-visible .gb-venue-community__compact-cta {
   text-decoration: underline;

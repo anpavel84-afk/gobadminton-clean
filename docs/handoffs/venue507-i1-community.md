@@ -1,28 +1,28 @@
-# Handoff — #507 I1 F4/F5 context summaries + coherent public invalidation
+# Handoff — #507 I1 independent QA17 FAIL4 repair (attempt 18)
 
 **Author:** Cursor Auto
-**Admission (attempt 16):** `OWNER507_I1_F4_F5_CONTEXT_SUMMARIES_AND_COHERENT_INVALIDATION`
-**Base SHA (frozen admission):** `03273e436e9cffecd9ae832c765a85bf79f4be79` (source15 consumer reports; parent web types/lint/tests PASS)
-**Phase:** SOURCE partial — F4/F5 consumer context wiring + release metadata alpha.58 / API.40
-**Prior:** Admin F3 QA14 PASS; consumer report F3 attempt 15; actual DEV.57 / API.39 / SHA `895e97fd` PR525 ACCEPTED; backend API40/schema68 unpublished; source1/source7 UNKNOWN retained
+**Admission (attempt 18):** `OWNER507_I1_INDEPENDENT_QA_FOUR_FINDINGS_REPAIR`
+**Base SHA (frozen admission):** `d3c1ebfca2af6206fb5b1b7b67fb1c7e87887857` (source17 testonly123 PASS; reviewer135 PASS/typecheck; backend/Admin 46 paths byte-identical accepted)
+**Phase:** SOURCE pending independent QA → CI → DEV
+**Prior:** Admin F3 QA14 PASS; consumer report F3 attempt 15; F4/F5 attempt 16; source17 Unicode/JSONL transport recovered without model replay; actual DEV.57 / API.39 / SHA `895e97fd` ACCEPTED; target alpha.58 / API.40 / schema68 source only; source1/source7 UNKNOWN retained
 
 ## This attempt scope (SOURCE)
 
-Allowed paths (+ genuine extras noted below):
-- `apps/web/src/lib/use-venue-community.ts` — batched public summaries, stable dedupe ≤200, invalidation subscribe, identity reset
-- `apps/web/src/lib/venue-community-api.ts` — public invalidation bus; mutation network vs HTTP errors; no actor/CSRF in public keys
-- `apps/web/src/components/consumer/venues/VenueCommunityRating.tsx` — parent-owned full still loads `/me`; UNKNOWN same key; allowedActions; compact link/text modes
-- Map/picker/sheet/preview/contacts composition + CSS
-- `apps/web/src/lib/releases.ts` — CURRENT alpha.58 / API.40 unaccepted; historical alpha.57 ten-field seed ACCEPTED
-- Mounted RTL `venue-community-contexts.test.tsx` + release/contact test updates
+Allowed paths only:
+- `VenueCommunityRating.tsx` — F1 UNKNOWN vote reconcile
+- `use-venue-community.ts` — F2 subscription vs request generation
+- `GameVenueContacts.tsx` — F3 real compact public summary
+- `CreateGamePage.tsx` — F4 selected-venue compact summary
+- `venue-community.css` — selected-community spacing
+- Mounted/contact/create fixtures listed in admission
 - Handoff + CONTENT_MODERATION coverage note
 
-### Implemented (attempt 16 — F4/F5)
+### Implemented (attempt 18 — QA17 FAIL4)
 
-1. **F4 compact contexts:** `GamesMapView` batches loaded venue IDs (≤200) once; `VenuePreviewCard` / `VenueSheet` share parent summary without nested double render (compact vs expanded); `VenuePickerDialog` shows compact summary + `#ratings` link outside the select button; `GameVenueContacts` labelled link to `/venues/:id#ratings` (static, guest-safe, no `/me`).
-2. **F5 invalidation:** module public-only `invalidateCommunitySummaries` after confirmed vote/update/withdraw; mounted hooks refresh canonical + loaded alias peers; coalesce via existing batch queue; no focus/visibility/timer refresh loop; abort/generation/stale guards; mutable `onSummaryChange` via ref (no fetch loops).
-3. **Vote mutation safety:** frozen idempotency key + body + exact actor/CSRF/venue; UNKNOWN keeps same key (reconcile via `/me` or explicit same-key retry); no UI success under unknown; no automatic new-key POST; respect update/withdraw/upsert allowedActions; withheld moderation not cleared by author.
-4. **Release:** CURRENT `0.1.0-alpha.58` / API `0.40.0` source-only (`source_sha: null`, UAT `NOT_TESTED`); TRUSTED_HISTORICAL_SEED gains accepted alpha.57 from Owner ten-field seed (`895e97fd` / `r42486594258-a1` / `2026-11-08T13:53:05Z` / digests). I2 UGC images and I3 candidate remain deferred/unpublished in notes.
+1. **F1 UNKNOWN vote path:** `reconcileUnknown` keeps frozen idempotency key + request body + actor/CSRF/venue/expectedVersion until `/me` own-read proves the requested upsert/withdraw effect (value/withdrawn + version advance). Unchanged or mismatching/higher non-proving revision leaves UNKNOWN; only explicit same-key retry under exact authorized context; no automatic POST / fresh key; star changes do not alter retry body; no «saved» before confirmed; network/503 stay UNKNOWN; terminal 409 → consistent conflict. Withdraw UNKNOWN equally safe. Mounted regression: unknown → own-read old → same-key retry → one successful resolve.
+2. **F2 hook generation:** `useVenueCommunitySummaries` separates subscription/entity lifetime from request generation so consecutive invalidations keep refreshing; stale earlier responses cannot undo later; unsubscribe cleanup; stable ID set / no loops; public-only ≤200 batch preserved.
+3. **F3 GameVenueContacts:** always mounts real compact public avg/count/empty/loading/error/unavailable + `#ratings` transition via shared `useVenueCommunitySummaries` + real `VenueCommunityRating` leaf; contact list omitted when empty/legacy/null; phone/URL scanners unchanged; never `/me` from compact. Contact-authority fixture mocks leaf only; new mounted context test uses real leaf/hook.
+4. **F4 CreateGamePage:** after picker closes, selected venue shows coherent compact public summary on the same public batch path (selected ID only); A→B / clear / picker-open hide / error covered by `create-game-venue-community.test.tsx`.
 
 ### Explicit NOTDONE / NOT claimed
 
@@ -30,22 +30,17 @@ Allowed paths (+ genuine extras noted below):
 - Mode B binding / AGY author — not claimed
 - I2 photos / I3 candidate — deferred
 - PROD / merge / push / deploy / C5 — not performed
-- source1/source7 UNKNOWN + costs retained; no receipt reset
-
-### Genuine additional paths (reported, not invented components)
-
-- `apps/web/src/components/consumer/pages/CreateGamePage.tsx` — selected-venue chip in create form is **not** in allowed `GameCreatePage.tsx`/`GameForm.tsx` (those paths do not exist). Picker rows covered; create-trigger summary needs a future allowed path if required.
-- `apps/web/test/game-venue-contacts.test.tsx` — contact-authority matrix updated to ignore `#ratings` community link and tolerate UNVERIFIED Node `xn--` omit edges.
-- `apps/web/src/lib/releases.test.ts` — co-located release literals bumped to alpha.58 / API.40 + alpha.57 historical facts.
+- source1/source7 UNKNOWN + costs retained; no receipt reset; no fake 58 ACCEPTED
 
 ## Checks this author pass
 
-- Mounted RTL contexts + report + venue-community unit + releases + contacts: PASS
+- Mounted RTL contexts + create selected-venue + report + venue-community unit + contacts + sheet integration: PASS (141)
 - Web typecheck / eslint on affected sources: run in author pass
 - No Git / push / deploy / live API writes / fake session claim
+- Full Product CI deferred until independent delta QA PASS
 
 ## Preserve
 
-- PR521 training card + PR523 alignment (now historical alpha.57); MOD506 policies; backend/Admin bytes untouched this pass
-- Compact training/Next UI; verified experience reviews distinct from community discussion
-- Historical admissions; attempts 1–15 history; UNKNOWN costs
+- PR521 training card + historical alpha.57; MOD506 policies; backend/Admin bytes untouched this pass
+- source15 reports affordances; unchanged full backend/Admin QA proof reused
+- Historical admissions; attempts 1–17 history; UNKNOWN costs; original receipts retained

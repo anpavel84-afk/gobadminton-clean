@@ -47,7 +47,10 @@ import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { VenuePickerDialog } from "../games/VenuePickerDialog";
 import { VenueBookingHelp } from "../games/VenueBookingHelp";
+import { VenueCommunityRating } from "../venues/VenueCommunityRating";
+import { useVenueCommunitySummaries } from "../../../lib/use-venue-community";
 import { resolveSelectedVenue } from "../../../lib/venue-picker-utils";
+import "../../../styles/venue-community.css";
 
 type Step = "setup" | "load-error" | "loading" | "auth" | "activity" | "form" | "preview" | "published" | "unknown" | "conflict";
 
@@ -473,6 +476,11 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
 }: ReturnType<typeof useCreateGameController> & Pick<CreateGamePageProps, "embedded" | "onClose"> & { invitePlayerId?: string | null }) {
   const [inviteOpen, setInviteOpen] = useState(true);
   const [sentInvitation, setSentInvitation] = useState<string | null>(null);
+  // Public compact summary for the closed-picker selected venue only (≤1 id; no catalog fetch /me).
+  const selectedCommunityIds = !draft.createNewVenue && selectedVenue && !venuePickerOpen
+    ? [selectedVenue.id]
+    : [];
+  const selectedCommunity = useVenueCommunitySummaries(selectedCommunityIds);
   // One publish action surface. The embedded variant renders it as a sticky popup footer.
   const publishActionBar = <GameActionBar>
     <Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Создаём…" : "Создать игру"}</Button>
@@ -514,6 +522,21 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
                 </span>
                 <span aria-hidden="true">⌄</span>
               </button>
+              {selectedVenue && !venuePickerOpen ? (
+                <div className="gb-venue-picker-selected-community" data-testid="create-game-selected-venue-community">
+                  <VenueCommunityRating
+                    venueId={selectedVenue.id}
+                    variant="compact"
+                    signedIn={false}
+                    csrfToken={null}
+                    authReturnPath={`/venues/${selectedVenue.id}`}
+                    href={`/venues/${encodeURIComponent(selectedVenue.id)}#ratings`}
+                    summary={selectedCommunity.summaries[selectedVenue.id] ?? null}
+                    summaryLoadState={selectedCommunity.state === "idle" ? "loading" : selectedCommunity.state}
+                    linkToRatings
+                  />
+                </div>
+              ) : null}
               {!embedded && selectedVenue && <Button variant="ghost" href={`/venues/${selectedVenue.id}`}>Открыть площадку</Button>}
               <small>{venueStatus === "loading" ? "Загружаем все площадки…" :
                 venueStatus === "error" ? "Каталог временно недоступен. Откройте список, чтобы повторить загрузку." :

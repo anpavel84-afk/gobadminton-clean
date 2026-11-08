@@ -225,6 +225,24 @@ export function VenueCommunityRating({
     );
   }
 
+  /** Own-read proves the frozen mutation only when value/withdraw + version advance match the request. */
+  function ownProvesPendingEffect(
+    pending: VotePending,
+    mine: { own: CommunityOwnVote | null },
+  ): boolean {
+    const current = mine.own;
+    if (pending.kind === "upsert") {
+      if (!current || current.withdrawn) return false;
+      if (current.value !== pending.value) return false;
+      // Version must advance past the expectedVersion we sent with this key.
+      return current.version > pending.expectedVersion;
+    }
+    // withdraw
+    if (!current) return true;
+    if (!current.withdrawn) return false;
+    return current.version > pending.expectedVersion;
+  }
+
   function applyVoteResult(result: { own: CommunityOwnVote | null; summary: CommunityRatingSummary }) {
     setOwn(result.own);
     setSummary(result.summary);
@@ -234,6 +252,13 @@ export function VenueCommunityRating({
     if (result.summary.canonicalVenueId) touch.push(result.summary.canonicalVenueId);
     if (result.own?.canonicalVenueId) touch.push(result.own.canonicalVenueId);
     invalidateCommunitySummaries(touch);
+  }
+
+  function isAmbiguousMutationFailure(error: unknown): boolean {
+    if (!isCommunityRatingMutationError(error)) return false;
+    if (error.kind === "network") return true;
+    // 503 and similar transport ambiguity stay UNKNOWN; terminal 409 is handled below.
+    return error.status === 503;
   }
 
   async function runPending(pending: VotePending, isRetry: boolean) {
@@ -263,7 +288,7 @@ export function VenueCommunityRating({
       setStatus(pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена");
     } catch (error) {
       if (gen !== generation.current || !contextMatches(pending)) return;
-      if (isCommunityRatingMutationError(error) && error.kind === "network") {
+      if (isAmbiguousMutationFailure(error)) {
         // UNKNOWN: keep same key + frozen body + authorized context; no automatic new POST.
         pendingRef.current = pending;
         setSaveState("unknown");
@@ -274,12 +299,15 @@ export function VenueCommunityRating({
         );
         return;
       }
+      // Terminal known conflict (e.g. 409) or other HTTP/invalid — clear pending; no fresh key auto-send.
       pendingRef.current = null;
       setSaveState("error");
       setStatus(
-        pending.kind === "withdraw"
-          ? "Не удалось убрать оценку"
-          : "Оценку пока не удалось сохранить",
+        isCommunityRatingMutationError(error) && error.status === 409
+          ? "Конфликт версии оценки. Обновите данные и попробуйте снова."
+          : pending.kind === "withdraw"
+            ? "Не удалось убрать оценку"
+            : "Оценку пока не удалось сохранить",
       );
     }
   }
@@ -329,17 +357,35 @@ export function VenueCommunityRating({
 
   async function reconcileUnknown() {
     const pending = pendingRef.current;
-    if (!pending || !contextMatches(pending) || !csrfToken || !actorId) return;
+    if (!pending || !contextMatches(pending) || !csrfToken || !actorId || saveState !== "unknown") {
+      return;
+    }
     const gen = generation.current;
     setSaveState("pending");
     setStatus("Проверяем актуальную оценку…");
     try {
       const mine = await fetchOwnCommunityRating(venueId);
       if (gen !== generation.current || !contextMatches(pending)) return;
+      // Read success alone never means mutation success — prove frozen effect first.
+      if (!ownProvesPendingEffect(pending, mine)) {
+        // Unchanged / mismatching / non-advancing revision: keep frozen key+body; no fresh POST.
+        pendingRef.current = pending;
+        setOwn(mine.own);
+        setSummary(mine.summary);
+        onSummaryChangeRef.current?.(mine.summary);
+        // Do not rewrite selected from a non-proving read while UNKNOWN retry body stays frozen.
+        setSaveState("unknown");
+        setStatus(
+          "Актуальная оценка не подтверждает прошлый запрос. Можно повторить тот же запрос.",
+        );
+        return;
+      }
       pendingRef.current = null;
       applyVoteResult(mine);
       setSaveState("saved");
-      setStatus("Показана актуальная оценка с сервера");
+      setStatus(
+        pending.kind === "withdraw" ? "Оценка убрана" : "Оценка сохранена",
+      );
     } catch {
       if (gen !== generation.current) return;
       setSaveState("unknown");

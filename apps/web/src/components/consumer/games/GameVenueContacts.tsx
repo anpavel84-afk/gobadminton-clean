@@ -1,5 +1,10 @@
+"use client";
+
 import type { GameDetail } from "../../../lib/consumer-types";
 import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../../../lib/original-http-authority";
+import { useVenueCommunitySummaries } from "../../../lib/use-venue-community";
+import { VenueCommunityRating } from "../venues/VenueCommunityRating";
+import "../../../styles/venue-community.css";
 
 function phoneLink(value: unknown): { text: string; href: string } | null {
   if (typeof value !== "string" || forbiddenUrlScalars(value)) return null;
@@ -17,26 +22,47 @@ function websiteLink(value: unknown): string | null {
 }
 
 /**
- * Game-detail venue contacts. Compact community summary is a labelled link to the
- * venue #ratings section (public read); no /me and no hook fetch inside this panel
- * so contact-authority SSR tests stay deterministic.
+ * Game-detail venue block: public compact community summary (batch path, no /me)
+ * plus optional private contact fields when present. Empty contacts omit the
+ * contact list only — rating section remains with honest load/error/empty states.
  */
 export function GameVenueContacts({ venue }: { venue: GameDetail["venue"] }) {
   const phone = phoneLink(venue.contactPhone), website = websiteLink(venue.contactWebsite);
   const note = typeof venue.bookingNote === "string" ? venue.bookingNote.trim() : "";
-  if (!phone && !website && !note) return null;
-  const linkStyle = { display: "inline-flex", alignItems: "center", minHeight: 44, maxWidth: "100%", overflowWrap: "anywhere" as const };
+  const hasContacts = Boolean(phone || website || note);
+  const community = useVenueCommunitySummaries([venue.id]);
   const ratingsHref = `/venues/${encodeURIComponent(venue.id)}#ratings`;
-  return <section className="gb-game-section" aria-label="Контакты площадки для игры" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-    <h2>Контакты площадки</h2>
-    <a className="gb-venue-community__compact-link" href={ratingsHref} data-testid="venue-community-compact-link" style={{ marginBottom: 12 }}>
-      <span className="gb-venue-community__compact is-muted">Оценки сообщества</span>
-      <span className="gb-venue-community__compact-cta">Оценки и обсуждение</span>
-    </a>
-    <dl className="gb-game-facts">
-      {phone && <div><dt>Телефон</dt><dd><a href={phone.href} style={linkStyle}>{phone.text}</a></dd></div>}
-      {website && <div><dt>Сайт</dt><dd style={{ minWidth: 0 }}><a href={website} target="_blank" rel="noopener noreferrer" style={linkStyle}>{website}</a></dd></div>}
-      {note && <div><dt>Информация о бронировании</dt><dd style={{ whiteSpace: "pre-wrap", minWidth: 0 }}>{note}</dd></div>}
-    </dl>
-  </section>;
+  const linkStyle = { display: "inline-flex", alignItems: "center", minHeight: 44, maxWidth: "100%", overflowWrap: "anywhere" as const };
+  return (
+    <>
+      <section
+        className="gb-game-section"
+        aria-label="Оценки площадки"
+        data-testid="game-venue-community-summary"
+        style={{ minWidth: 0, overflowWrap: "anywhere" }}
+      >
+        <VenueCommunityRating
+          venueId={venue.id}
+          variant="compact"
+          signedIn={false}
+          csrfToken={null}
+          authReturnPath={`/venues/${venue.id}`}
+          href={ratingsHref}
+          summary={community.summaries[venue.id] ?? null}
+          summaryLoadState={community.state === "idle" ? "loading" : community.state}
+          linkToRatings
+        />
+      </section>
+      {hasContacts ? (
+        <section className="gb-game-section" aria-label="Контакты площадки для игры" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+          <h2>Контакты площадки</h2>
+          <dl className="gb-game-facts">
+            {phone && <div><dt>Телефон</dt><dd><a href={phone.href} style={linkStyle}>{phone.text}</a></dd></div>}
+            {website && <div><dt>Сайт</dt><dd style={{ minWidth: 0 }}><a href={website} target="_blank" rel="noopener noreferrer" style={linkStyle}>{website}</a></dd></div>}
+            {note && <div><dt>Информация о бронировании</dt><dd style={{ whiteSpace: "pre-wrap", minWidth: 0 }}>{note}</dd></div>}
+          </dl>
+        </section>
+      ) : null}
+    </>
+  );
 }

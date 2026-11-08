@@ -50,7 +50,10 @@ export function useVenueCommunitySummaries(venueIds: readonly string[]) {
   const ids = useMemo(() => (key ? key.split(",") : []), [key]);
   const [map, setMap] = useState<Record<string, CommunityRatingSummary>>({});
   const [state, setState] = useState<CommunitySummaryLoadState>("idle");
-  const generation = useRef(0);
+  /** Subscription / entity-set lifetime — bumped only when `key` changes or effect cleans up. */
+  const subscriptionGeneration = useRef(0);
+  /** In-flight request generation — bumped per fetch so stale responses cannot undo later ones. */
+  const requestGeneration = useRef(0);
   const idsRef = useRef(ids);
   idsRef.current = ids;
   const mapRef = useRef(map);
@@ -58,7 +61,9 @@ export function useVenueCommunitySummaries(venueIds: readonly string[]) {
   const refreshAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const gen = ++generation.current;
+    const subGen = ++subscriptionGeneration.current;
+    requestGeneration.current += 1;
+    const loadGen = requestGeneration.current;
     refreshAbortRef.current?.abort();
     refreshAbortRef.current = null;
     // Identity change: drop prior venue rows immediately (no stale card flash).
@@ -73,18 +78,20 @@ export function useVenueCommunitySummaries(venueIds: readonly string[]) {
 
     void fetchCommunitySummaries(currentIds, controller.signal)
       .then((page) => {
-        if (gen !== generation.current) return;
+        if (subGen !== subscriptionGeneration.current || loadGen !== requestGeneration.current) return;
         setMap(indexSummaries(page.items, currentIds));
         setState("ready");
       })
       .catch((error: unknown) => {
-        if (gen !== generation.current) return;
+        if (subGen !== subscriptionGeneration.current || loadGen !== requestGeneration.current) return;
         if (error instanceof DOMException && error.name === "AbortError") return;
         setState("error");
       });
 
     const unsubscribe = subscribeCommunitySummaryInvalidation((touched) => {
-      if (gen !== generation.current) return;
+      // Reject only after this subscription's entity set was replaced / unmounted —
+      // do not tie listener lifetime to request generation (multi-invalidation refresh).
+      if (subGen !== subscriptionGeneration.current) return;
       const live = idsRef.current;
       if (live.length === 0) return;
       const liveCanonicals = new Set<string>();
@@ -98,16 +105,16 @@ export function useVenueCommunitySummaries(venueIds: readonly string[]) {
       refreshAbortRef.current?.abort();
       const refreshController = new AbortController();
       refreshAbortRef.current = refreshController;
-      const refreshGen = ++generation.current;
+      const refreshGen = ++requestGeneration.current;
       setState("loading");
       void fetchCommunitySummaries(live, refreshController.signal)
         .then((page) => {
-          if (refreshGen !== generation.current) return;
+          if (subGen !== subscriptionGeneration.current || refreshGen !== requestGeneration.current) return;
           setMap(indexSummaries(page.items, live));
           setState("ready");
         })
         .catch((error: unknown) => {
-          if (refreshGen !== generation.current) return;
+          if (subGen !== subscriptionGeneration.current || refreshGen !== requestGeneration.current) return;
           if (error instanceof DOMException && error.name === "AbortError") return;
           setState("error");
         });
@@ -118,6 +125,8 @@ export function useVenueCommunitySummaries(venueIds: readonly string[]) {
       refreshAbortRef.current?.abort();
       refreshAbortRef.current = null;
       unsubscribe();
+      // Invalidate late events from this subscription instance.
+      if (subscriptionGeneration.current === subGen) subscriptionGeneration.current += 1;
     };
   }, [key]);
 

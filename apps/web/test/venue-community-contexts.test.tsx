@@ -423,4 +423,241 @@ describe("#507 I1 F4/F5 community summary contexts", () => {
     expect(fetchMock.calls.every((c) => c.url.includes("/community-rating/me"))).toBe(true);
     expect(fetchMock.calls.some((c) => c.url.includes("/v1/venue-community-summaries"))).toBe(false);
   });
+
+  it("UNKNOWN own-read of unchanged vote keeps frozen key; explicit retry reuses same packet then resolves once", async () => {
+    let upsertAttempts = 0;
+    let average = 3.0;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V1, V1, "available", average, 2)] });
+      }
+      if (url.includes("/community-rating/me")) {
+        return jsonResponse({
+          own: {
+            venueId: V1,
+            canonicalVenueId: V1,
+            value: 2,
+            version: 1,
+            withdrawn: false,
+            moderationState: "clear",
+            allowedActions: { upsert: true, update: true, withdraw: true },
+          },
+          summary: summary(V1, V1, "available", average, 2),
+        });
+      }
+      if (url.includes("/community-rating") && init?.method === "PUT") {
+        upsertAttempts += 1;
+        if (upsertAttempts === 1) throw new TypeError("network down");
+        average = 4.0;
+        return jsonResponse({
+          own: {
+            venueId: V1,
+            canonicalVenueId: V1,
+            value: 4,
+            version: 2,
+            withdrawn: false,
+            moderationState: "clear",
+            allowedActions: { upsert: true, update: true, withdraw: true },
+          },
+          summary: summary(V1, V1, "available", average, 3),
+        });
+      }
+      throw new Error(url);
+    };
+
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+    render(createElement(VenueCommunityRating, {
+      venueId: V1,
+      variant: "full",
+      signedIn: true,
+      actorId: ACTOR,
+      csrfToken: CSRF,
+      authReturnPath: `/venues/${V1}`,
+    }));
+    await screen.findByText("Ваша оценка · 2 из 5");
+    await act(async () => {
+      screen.getByRole("radio", { name: "4 из 5" }).click();
+    });
+    await act(async () => {
+      screen.getByText("Сохранить изменение").click();
+    });
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(upsertAttempts).toBe(1);
+    const firstPut = fetchMock.calls.find((c) => c.method === "PUT");
+    const firstKey = (() => {
+      const headers = firstPut?.headers;
+      if (headers instanceof Headers) return headers.get("idempotency-key");
+      if (headers && typeof headers === "object") {
+        const record = headers as Record<string, string>;
+        return record["idempotency-key"] ?? record["Idempotency-Key"];
+      }
+      return undefined;
+    })();
+    const firstBody = firstPut?.body;
+
+    // Changing selected stars must not invent a fresh key or alter frozen retry body.
+    await act(async () => {
+      screen.getByRole("radio", { name: "5 из 5" }).click();
+    });
+    expect(screen.getByTestId("venue-community-vote-unknown")).toBeTruthy();
+    expect(upsertAttempts).toBe(1);
+
+    await act(async () => {
+      screen.getByText("Проверить актуальную оценку").click();
+    });
+    await waitFor(() => {
+      const unknown = screen.getByTestId("venue-community-vote-unknown");
+      expect(unknown.textContent ?? "").toMatch(/не подтверждает прошлый запрос/);
+    });
+    expect(upsertAttempts).toBe(1);
+    expect(screen.queryByText("Оценка сохранена")).toBeNull();
+    expect(screen.getByTestId("venue-community-vote-unknown")).toBeTruthy();
+
+    await act(async () => {
+      screen.getByText("Повторить тот же запрос").click();
+    });
+    await waitFor(() => expect(screen.getByText("Оценка сохранена")).toBeTruthy());
+    expect(upsertAttempts).toBe(2);
+    const putCalls = fetchMock.calls.filter((c) => c.method === "PUT");
+    expect(putCalls).toHaveLength(2);
+    const secondKey = (() => {
+      const headers = putCalls[1]?.headers;
+      if (headers instanceof Headers) return headers.get("idempotency-key");
+      if (headers && typeof headers === "object") {
+        const record = headers as Record<string, string>;
+        return record["idempotency-key"] ?? record["Idempotency-Key"];
+      }
+      return undefined;
+    })();
+    expect(secondKey).toBe(firstKey);
+    expect(putCalls[1]?.body).toBe(firstBody);
+    expect(JSON.parse(putCalls[1]?.body ?? "{}")).toMatchObject({ value: 4, expectedVersion: 1 });
+  });
+
+  it("two consecutive invalidations refresh mounted canonical+alias contexts; stale earlier cannot undo later", async () => {
+    let summaryCalls = 0;
+    const resolvers: Array<(value: Response) => void> = [];
+    fetchMock.handler = async (url) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        summaryCalls += 1;
+        const call = summaryCalls;
+        if (call === 1) {
+          return jsonResponse({
+            items: [
+              summary(ALIAS, CANON, "available", 4.0, 2),
+              summary(CANON, CANON, "available", 4.0, 2),
+            ],
+          });
+        }
+        return new Promise<Response>((resolve) => {
+          resolvers.push(resolve);
+        });
+      }
+      throw new Error(url);
+    };
+
+    const api = await import("../src/lib/venue-community-api");
+    const { useVenueCommunitySummaries } = await import("../src/lib/use-venue-community");
+    const { VenueCommunityRating } = await import(
+      "../src/components/consumer/venues/VenueCommunityRating"
+    );
+
+    function Host() {
+      const { summaries, state } = useVenueCommunitySummaries([ALIAS, CANON]);
+      return createElement(
+        "div",
+        null,
+        createElement(VenueCommunityRating, {
+          venueId: ALIAS,
+          variant: "compact",
+          signedIn: false,
+          csrfToken: null,
+          authReturnPath: `/venues/${ALIAS}`,
+          summary: summaries[ALIAS] ?? null,
+          summaryLoadState: state === "idle" ? "loading" : state,
+          linkToRatings: false,
+        }),
+        createElement(VenueCommunityRating, {
+          venueId: CANON,
+          variant: "compact",
+          signedIn: false,
+          csrfToken: null,
+          authReturnPath: `/venues/${CANON}`,
+          summary: summaries[CANON] ?? null,
+          summaryLoadState: state === "idle" ? "loading" : state,
+          linkToRatings: false,
+        }),
+      );
+    }
+
+    render(createElement(Host));
+    await waitFor(() => expect(screen.getAllByText(/4,0/).length).toBe(2));
+    expect(summaryCalls).toBe(1);
+
+    await act(async () => {
+      api.invalidateCommunitySummaries([CANON]);
+    });
+    await waitFor(() => expect(resolvers.length).toBe(1));
+    await act(async () => {
+      api.invalidateCommunitySummaries([ALIAS]);
+    });
+    await waitFor(() => expect(resolvers.length).toBe(2));
+
+    // Resolve earlier refresh first with stale average — must not undo the later one.
+    await act(async () => {
+      resolvers[0]?.(jsonResponse({
+        items: [
+          summary(ALIAS, CANON, "available", 3.1, 2),
+          summary(CANON, CANON, "available", 3.1, 2),
+        ],
+      }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/3,1/)).toBeNull();
+
+    await act(async () => {
+      resolvers[1]?.(jsonResponse({
+        items: [
+          summary(ALIAS, CANON, "available", 4.8, 5),
+          summary(CANON, CANON, "available", 4.8, 5),
+        ],
+      }));
+    });
+    await waitFor(() => expect(screen.getAllByText(/4,8/).length).toBe(2));
+    expect(summaryCalls).toBe(3);
+    expect(fetchMock.calls.every((c) => !c.url.includes("/community-rating/me"))).toBe(true);
+  });
+
+  it("GameVenueContacts without private contacts mounts real batch summary and never /me", async () => {
+    fetchMock.handler = async (url) => {
+      if (url.includes("/v1/venue-community-summaries")) {
+        return jsonResponse({ items: [summary(V1, V1, "available", 4.2, 5)] });
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+    const { GameVenueContacts } = await import(
+      "../src/components/consumer/games/GameVenueContacts"
+    );
+    render(createElement(GameVenueContacts, {
+      venue: {
+        id: V1,
+        name: "Зал",
+        address: "Адрес",
+        cityId: "city",
+        timezone: "UTC",
+      },
+    }));
+    await waitFor(() => expect(screen.getByText(/4,2/)).toBeTruthy());
+    expect(screen.getByTestId("game-venue-community-summary")).toBeTruthy();
+    expect(screen.getByTestId("venue-community-compact-link").getAttribute("href")).toBe(
+      `/venues/${encodeURIComponent(V1)}#ratings`,
+    );
+    expect(screen.queryByText("Контакты площадки")).toBeNull();
+    expect(fetchMock.calls.some((c) => c.url.includes("/community-rating/me"))).toBe(false);
+    expect(fetchMock.calls.filter((c) => c.url.includes("/v1/venue-community-summaries"))).toHaveLength(1);
+  });
 });
