@@ -68,3 +68,17 @@ export function projectFriendshipAvatar<
     peer: { ...body.peer, avatar: projectPublicAvatar(body.peer.avatar) },
   };
 }
+
+/** Game create/publish/cancel receipt with embedded organizer avatar. */
+export function projectGameOrganizerAvatar<
+  T extends { organizer?: { avatar?: PlayerAvatar | null } | null },
+>(body: T): T {
+  if (!body?.organizer || body.organizer.avatar == null) return body;
+  return {
+    ...body,
+    organizer: {
+      ...body.organizer,
+      avatar: projectPublicAvatar(body.organizer.avatar),
+    },
+  };
+}

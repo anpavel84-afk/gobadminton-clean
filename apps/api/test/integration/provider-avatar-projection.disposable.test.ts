@@ -15,6 +15,7 @@ import { CommentsModule } from "../../src/comments/comments.module";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv } from "../../src/config/env";
+import { GamesModule } from "../../src/games/games.module";
 import { MessagingModule } from "../../src/messaging/messaging.module";
 import {
   avatarForGameCreator,
@@ -94,6 +95,7 @@ run("D1 provider-avatar public quarantine · disposable", () => {
         ProfilesModule,
         SafetyModule,
         CommentsModule,
+        GamesModule,
         RadarModule,
         MessagingModule,
       ],
@@ -240,6 +242,59 @@ run("D1 provider-avatar public quarantine · disposable", () => {
         [actorId, idempotency.keyHash(key)],
       )
     ).rows[0];
+  }
+
+  async function gameReceiptRow(
+    actorId: string,
+    operation: "games.create" | "games.publish" | "games.cancel",
+    key: string,
+  ) {
+    return (
+      await pool.query<{
+        reservation_state: string;
+        status_code: number;
+        response_body: Record<string, unknown>;
+        request_hash: string;
+      }>(
+        `SELECT reservation_state, status_code, response_body, request_hash
+         FROM idempotency_records
+         WHERE actor_id=$1 AND operation=$2 AND key_hash=$3`,
+        [actorId, operation, idempotency.keyHash(key)],
+      )
+    ).rows[0];
+  }
+
+  function gameCreatePayload(venueId: string) {
+    const starts = new Date(Date.now() + 7 * 86400000);
+    const ends = new Date(starts.getTime() + 7200000);
+    const deadline = new Date(starts.getTime() - 86400000);
+    return {
+      hostDisplayName: "D1 Game Host",
+      hostPublicContact: "host@example.test",
+      venueId,
+      title: "D1 sealed game receipt",
+      startsAt: starts.toISOString(),
+      endsAt: ends.toISOString(),
+      timezone: "Europe/Moscow",
+      applicationDeadlineAt: deadline.toISOString(),
+      capacity: 4,
+      externalReservedCount: 0,
+      visibility: "public" as const,
+      formatKey: "doubles",
+      activityKind: "regular" as const,
+      levelRule: {
+        scaleId: "ntrp",
+        scaleVersion: 1,
+        allowedLevelIds: ["3.0"],
+      },
+      settlement: {
+        mode: "external" as const,
+        purpose: "no_trainer_fee" as const,
+        priceMinor: null,
+        currency: null,
+        terms: "Synthetic settlement",
+      },
+    };
   }
 
   it("four public projection branches return providerUrl=null via real entrypoints; OAuth sanitizer stays usable", async () => {
@@ -549,5 +604,163 @@ run("D1 provider-avatar public quarantine · disposable", () => {
     });
     expect(dmDenied.statusCode).toBe(401);
     expect((await dmReceiptRow(dmSender.userId, dmKey))!.response_body).toEqual(legacyDmBody);
+  });
+
+  it("sealed games.create/publish/cancel HTTP replay nulls organizer.avatar.providerUrl; stored bytes preserved", async () => {
+    const actor = await identity(
+      "D1 Game Receipt " + randomUUID(),
+      "https://avatars.yandex.net/game-receipt-" + randomUUID(),
+    );
+    const uploadedKey = "d".repeat(64) + ".png";
+    await pool.query(
+      `UPDATE player_social_profiles
+       SET avatar_key=$2, directory_visible=true, social_eligible=true
+       WHERE user_id=$1`,
+      [actor.userId, uploadedKey],
+    );
+    const uploadedUrl = `/v1/media/avatars/${uploadedKey}`;
+
+    // Reuse publishedGame venue insert pattern for a real catalog venue id.
+    const venueSeedGameId = await publishedGame(actor);
+    const venueId = (
+      await pool.query<{ venue_id: string }>("SELECT venue_id FROM games WHERE id=$1", [
+        venueSeedGameId,
+      ])
+    ).rows[0]!.venue_id;
+
+    type GameBody = {
+      id: string;
+      status: string;
+      version: number;
+      organizer: {
+        id: string | null;
+        displayName: string;
+        publicContact: string;
+        avatar: { uploadedUrl: string | null; providerUrl: string | null };
+      };
+    };
+
+    async function sealAndReplay(args: {
+      operation: "games.create" | "games.publish" | "games.cancel";
+      method: "POST";
+      url: string;
+      key: string;
+      payload: Record<string, unknown>;
+      expectedStatus: number;
+      expectedStatusField: string;
+    }) {
+      const headers = { ...actor.headers, "idempotency-key": args.key };
+      const first = await app.inject({
+        method: args.method,
+        url: args.url,
+        headers,
+        payload: args.payload,
+      });
+      expect(first.statusCode, first.body).toBe(args.expectedStatus);
+      const body = first.json() as GameBody;
+      expect(body.status).toBe(args.expectedStatusField);
+      expect(body.organizer.avatar).toEqual({ uploadedUrl, providerUrl: null });
+
+      const stored = await gameReceiptRow(actor.userId, args.operation, args.key);
+      expect(stored).toMatchObject({
+        reservation_state: "completed",
+        status_code: args.expectedStatus,
+      });
+      expect(stored!.response_body).toEqual(body);
+      const legacyProvider =
+        "https://avatars.yandex.net/legacy-game-" + args.operation + "-" + randomUUID();
+      expect(safeProviderAvatar(legacyProvider)).toBe(legacyProvider);
+      const legacyBody = {
+        ...body,
+        organizer: {
+          ...body.organizer,
+          avatar: { uploadedUrl: body.organizer.avatar.uploadedUrl, providerUrl: legacyProvider },
+        },
+      };
+      await pool.query(
+        `UPDATE idempotency_records
+         SET response_body=$1::jsonb
+         WHERE actor_id=$2 AND operation=$3 AND key_hash=$4`,
+        [
+          JSON.stringify(legacyBody),
+          actor.userId,
+          args.operation,
+          idempotency.keyHash(args.key),
+        ],
+      );
+      expect((await gameReceiptRow(actor.userId, args.operation, args.key))!.response_body).toEqual(
+        legacyBody,
+      );
+
+      const replay = await app.inject({
+        method: args.method,
+        url: args.url,
+        headers,
+        payload: args.payload,
+      });
+      expect(replay.statusCode).toBe(args.expectedStatus);
+      expect(replay.json().id).toBe(body.id);
+      expect(replay.json().status).toBe(body.status);
+      expect(replay.json().version).toBe(body.version);
+      expect(replay.json().organizer.displayName).toBe(body.organizer.displayName);
+      expect(replay.json().organizer.publicContact).toBe(body.organizer.publicContact);
+      expect(replay.json().organizer.avatar).toEqual({
+        uploadedUrl: body.organizer.avatar.uploadedUrl,
+        providerUrl: null,
+      });
+      const after = await gameReceiptRow(actor.userId, args.operation, args.key);
+      expect(after!.response_body).toEqual(legacyBody);
+      expect(after!.request_hash).toBe(stored!.request_hash);
+      return body;
+    }
+
+    const createKey = randomUUID();
+    const createPayload = gameCreatePayload(venueId);
+    const created = await sealAndReplay({
+      operation: "games.create",
+      method: "POST",
+      url: "/v1/games",
+      key: createKey,
+      payload: createPayload,
+      expectedStatus: 201,
+      expectedStatusField: "draft",
+    });
+
+    const publishKey = randomUUID();
+    const published = await sealAndReplay({
+      operation: "games.publish",
+      method: "POST",
+      url: `/v1/games/${created.id}/publish`,
+      key: publishKey,
+      payload: { expectedVersion: created.version },
+      expectedStatus: 200,
+      expectedStatusField: "published",
+    });
+
+    const cancelKey = randomUUID();
+    await sealAndReplay({
+      operation: "games.cancel",
+      method: "POST",
+      url: `/v1/games/${published.id}/cancel`,
+      key: cancelKey,
+      payload: { expectedVersion: published.version, reason: "synthetic_d1_cancel" },
+      expectedStatus: 200,
+      expectedStatusField: "cancelled",
+    });
+
+    // Access-loss control: revoke session after completed receipts (not empty-cookie-first).
+    await pool.query("UPDATE app_sessions SET revoked_at=now() WHERE id=$1", [actor.sessionId]);
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v1/games",
+      headers: { ...actor.headers, "idempotency-key": createKey },
+      payload: createPayload,
+    });
+    expect(denied.statusCode).toBe(401);
+    const createLegacy = (
+      await gameReceiptRow(actor.userId, "games.create", createKey)
+    )!.response_body as GameBody;
+    expect(createLegacy.organizer.avatar.providerUrl).toMatch(/^https:\/\/avatars\.yandex\.net\/legacy-game-games\.create-/);
+    expect(createLegacy.organizer.avatar.uploadedUrl).toBe(uploadedUrl);
   });
 });

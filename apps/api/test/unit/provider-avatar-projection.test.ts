@@ -3,6 +3,7 @@ import { safeProviderAvatar } from "../../src/profiles/avatar-presentation";
 import {
   projectCommentAvatar,
   projectConversationRequestAvatar,
+  projectGameOrganizerAvatar,
   projectOwnAvatarReceipt,
   projectPublicAvatar,
 } from "../../src/profiles/public-avatar-projection";
@@ -74,5 +75,23 @@ describe("D1 public provider-avatar quarantine", () => {
     expect(dm.conversation.id).toBe("conv");
     expect(dm.receipt).toEqual({ messageId: "m1", outcome: "created" });
     expect(dm.conversation.peer.avatar.providerUrl).toBeNull();
+
+    const uploaded = "/v1/media/avatars/" + "c".repeat(64) + ".png";
+    const game = projectGameOrganizerAvatar({
+      id: "g1",
+      status: "published",
+      version: 2,
+      organizer: {
+        id: null,
+        displayName: "Host",
+        publicContact: "host@example.test",
+        avatar: { uploadedUrl: uploaded, providerUrl: "https://avatars.yandex.net/game-host" },
+      },
+    });
+    expect(game.id).toBe("g1");
+    expect(game.status).toBe("published");
+    expect(game.version).toBe(2);
+    expect(game.organizer.displayName).toBe("Host");
+    expect(game.organizer.avatar).toEqual({ uploadedUrl: uploaded, providerUrl: null });
   });
 });

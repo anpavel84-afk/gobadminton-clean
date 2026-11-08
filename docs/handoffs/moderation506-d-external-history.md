@@ -1,67 +1,44 @@
 # #506 MOD-V2-D handoff — provider avatar quarantine + bounded Admin metadata
 
-Attempt 59. Author: Cursor Auto. Frozen base `cef05ed3e188b48bfdf7a30998c410ac0afb5ddf`. Coverage-repair only (no product/architecture change). Assignment `OWNER506_D_REAL_ENTRYPOINTS_AND_SEALED_LEGACY_HTTP_REPLAY_REGRESSION`. No push/merge/deploy by author. Whole #506 not DONE solely by this source.
+Attempt 61. Author: Cursor Auto. Frozen base `be37d222dfc4fef637d2eb35079faa01454f83d1`. Repair of exact two independent full D QA60 findings (no product/architecture repeat). Assignment `OWNER506_D_QA60_LEGACY_GAME_AVATAR_AND_APPLIED_FILTER_SCOPE_FIX`. No push/merge/deploy by author. Whole #506 not DONE solely by this source. Actual DEV55 accepted; D target 56 / API 0.39 unreleased.
 
-## D1 — public providerUrl quarantine (product already landed)
+## HIGH — games.create/publish/cancel receipt organizer.avatar.providerUrl
 
-Unreviewed VK/Yandex `providerUrl` is null at all four public projection branches:
+QA60: cached GameDto receipts could embed legacy `organizer.avatar.providerUrl`; `GamesController` returned `result.body` unsanitized after service authorization.
 
-1. Shared — `avatar-presentation.ts` `avatarForUser` / `avatarForPlayer` / `avatarForGameCreator` (profiles, games, messaging, friendships, radar list/redeem, inbox).
-2. Comment author — `comments.service.ts` `projectAuthor` + controller replay quarantine via `projectCommentAvatar`.
-3. Unified/batched Radar — `unified.service.ts` avatarMap.
-4. Geographic Radar — `geographic.service.ts` player.avatar.
+Fix (presentation only):
 
-Presentation helper: `profiles/public-avatar-projection.ts` (DTO/replay boundaries only — not a recursive idempotency sanitizer). Pure helper shape tests remain in `test/unit/provider-avatar-projection.test.ts` and are not a substitute for HTTP.
+- `projectGameOrganizerAvatar` in `profiles/public-avatar-projection.ts` (reuses `projectPublicAvatar` / PlayerAvatar quarantine).
+- Applied to all three controller responses after service auth: create, publish, cancel.
+- Preserves `statusCode` / id / status / version / uploadedUrl / other DTO fields; does not rewrite stored receipt bytes.
+- No GamesService / auth / lifecycle / venue / permissions / image-provider / cache-DB changes.
 
-Preserved:
+Coverage:
 
-- `safeProviderAvatar` for OAuth/identity INGEST (`vk`/`yandex` adapters, `identity.service`).
-- M1 uploadedUrl / initials / failed replacement.
-- Auth, block, directory, restriction gates on owning reads.
-- Historical receipt bytes untouched; HTTP/DTO presentation returns `providerUrl=null` while status/IDs/uploadedUrl preserved.
-- No remote download/classification/copy; no mass identity rewrite.
+- Unit: helper keeps uploadedUrl, nulls providerUrl, preserves id/status/version (`provider-avatar-projection.test.ts`).
+- Disposable HTTP (`provider-avatar-projection.disposable.test.ts`, `RUN_DB_INTEGRATION=1`): real create → publish → cancel with stable keys/bodies; embed legacy organizer.avatar.providerUrl into each completed receipt; same-key/body replay returns `providerUrl=null` with other fields + stored legacy bytes preserved; session revoke denies create replay (existing auth-loss pattern). Existing avatar/DM sealed replay + M1 uploadedUrl proof retained. GamesModule added to this disposable harness only.
 
-## Attempt 59 — disposable integration coverage repair
+## MEDIUM — ModerationJournal draft filter + load-more cursor mix
 
-File: `apps/api/test/integration/provider-avatar-projection.disposable.test.ts` (gated `RUN_DB_INTEGRATION=1`).
+QA60: load-more used live draft `filtersRef` with the old page cursor, so editing draft surface then clicking «Ещё» without «Обновить» mixed filter contexts.
 
-Gap fixed (d58): labels no longer assert locally constructed `{providerUrl:null}` constants or pure-helper DTO calls as projection proof; empty-cookie 401 is not used as the access-loss control.
+Fix:
 
-Now asserts:
+- Keep draft inputs separate from an **applied** filters snapshot of the loaded page.
+- «Обновить» / initial fresh load: first page with draft filters, then set applied = draft (replace, no cursor).
+- «Ещё»: uses applied filters + existing cursor only; disabled while draft ≠ applied (explicit refresh required; no auto-refetch loop).
+- Request generation + mounted guards avoid stale responses committing the wrong scope.
+- Role / step-up / session clearing / bounded responses / no raw metadata unchanged.
 
-1. **Four projections via real entrypoints** — own/public GET; published-game comment create+list; `POST /v1/players/query`; geographic activation + `POST /v1/radar/results/query`; plus `avatarForGameCreator` on a real published game. Stored `external_identities.avatar_url` + `safeProviderAvatar` ingest usability retained. Real OAuth provider login remains **NOT_TESTED**.
-2. **Sealed legacy HTTP replay** — real `PUT /v1/me/avatar` and `POST /v1/conversations/requests` complete receipts; disposable-DB embed of safe VK/Yandex `providerUrl` into stored `response_body` while preserving key/hash/status/outcome; same-key/body HTTP replay returns `providerUrl=null` with original resource IDs/status/version/uploadedUrl/receipt fields; stored legacy bytes not rewritten by projection.
-3. **Access loss** — session revoke after avatar receipt denies same-key replay; logout after DM receipt denies same-key replay (not empty-cookie-on-first-request).
+Coverage: mounted-state behavior regression in `moderation-journal.test.tsx` (Cases/journal harness): first filtered page → edit draft → More disabled → restore draft → More keeps applied+cursor and appends → refresh new filter replaces without mixed rows. Existing affordance checks retained.
 
-Allowed paths only for this attempt: the disposable test + this handoff. Product code / versions / contracts elsewhere unchanged.
+## Allowed paths only
 
-## D2 — bounded Admin metadata (unchanged product claim)
+`games.controller.ts`, `public-avatar-projection.ts`, avatar projection unit + disposable integration, `ModerationJournal.tsx` + behavior test, this handoff. No versions/contracts/migrations/schema/roles/provider/quota flags/API shape changes.
 
-- `GET /v1/admin/audit/moderation` sibling of `audit/security`.
-- Permission: existing `audit.security.read` + fresh step-up + `privilegedRead`/`appendAudit`.
-- Explicit column projection; keyset `beforeCheckedAt`+`beforeId`; filters surface/decision/policy/model/time.
-- Returns approval/binding IDs, surface, decision, provider/model/policy versions, timestamps, resource kind/id/version, human-decision refs; nested bindings capped at 20.
-- Honest scope: saved allow/review upsert/cache + bindings only — not append-only attempt history; rejects/temp/budgets not fabricated.
-- UI: `ModerationJournal` inside existing Security section; clears on session/permission/step-up loss.
-- Cases exact raw source remains assigned/independent/consented/step-up only. Metadata ≠ raw body.
-- pilot_viewer / support / content_manager do not gain this global metadata route.
+## Checks / NOT_TESTED
 
-## Contracts / version
-
-- Unchanged by attempt 59 (test + handoff only). Prior product slice already raised Admin inventory / API minor / app alpha as recorded historically; this attempt does not retouch them.
-
-## Checks run / NOT_TESTED
-
-- Author sandbox: **no** installed `node_modules`, **no** `DATABASE_URL` / loopback PostgreSQL → disposable HTTP suite **NOT_RUN** here.
-- Parent owns: `RUN_DB_INTEGRATION=1` disposable suite for this file + reused API types/lint + prior unmodified checks, then independent full D QA.
-- Unit helper shapes (`provider-avatar-projection.test.ts`) reused as unit coverage, not as HTTP proof.
-
-## Remaining NOT_TESTED / open
-
-- Independent QA, Product CI, guarded DEV smoke, Owner UAT.
-- Real OAuth provider login (not claimed from synthetic session).
-- Admin UI / Go Bad visual for D2 journal.
-- Legacy C2 NULL expiry raw unavailable — Owner question unanswered.
-- Private external processing OFF; no legal/retention policy invented.
-- #507 venue discussion remains separate.
-- Whole #506 not DONE by source alone.
+- Author: proportional unit + Admin journal behavior where runnable; disposable HTTP suite requires loopback DB (`RUN_DB_INTEGRATION=1`) — parent owns full changed HTTP/API/Admin types lint/unit/behavior; unchanged metadata3/M1/release/contracts proof reused.
+- Independent delta QA (two findings + actual delta), full CI7 → DEV56, Product CI, guarded DEV smoke, Owner UAT: **NOT_TESTED** here.
+- Real OAuth login / authorized DEV Admin session / physical device: **NOT_TESTED**.
+- Original QA FAIL/HOLD/recovery/cost history retained; not DONE / source PASS alone.

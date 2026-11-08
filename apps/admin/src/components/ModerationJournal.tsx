@@ -33,11 +33,27 @@ type Page = {
   nextBeforeId: string | null;
 };
 
+type Filters = {
+  surface: string;
+  decision: string;
+  policy: string;
+  model: string;
+};
+
 const decisionLabel: Record<string, string> = { allow: "Разрешено", review: "На проверку" };
 const bindingLabel: Record<string, string> = {
   bound: "Есть привязка",
   unbound_or_legacy: "Без привязки / устаревшее",
 };
+
+function sameFilters(a: Filters, b: Filters): boolean {
+  return (
+    a.surface === b.surface &&
+    a.decision === b.decision &&
+    a.policy === b.policy &&
+    a.model === b.model
+  );
+}
 
 export function ModerationJournal({
   session,
@@ -59,18 +75,52 @@ export function ModerationJournal({
   const [decision, setDecision] = useState("");
   const [policy, setPolicy] = useState("");
   const [model, setModel] = useState("");
+  /** Filters that produced the currently displayed page (cursor append scope). */
+  const [applied, setApplied] = useState<Filters | null>(null);
   const fresh = freshStepUp(session, now);
-  // Filters apply only on explicit refresh / load-more — keep them out of the effect deps.
-  const filtersRef = useRef({ surface, decision, policy, model });
-  filtersRef.current = { surface, decision, policy, model };
+  const draft = { surface, decision, policy, model };
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const appliedRef = useRef(applied);
+  appliedRef.current = applied;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const mounted = useRef(true);
+  const requestGeneration = useRef(0);
+  const draftDirty = applied !== null && !sameFilters(draft, applied);
 
-  async function load(cursor?: { beforeCheckedAt: string; beforeId: string }) {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestGeneration.current += 1;
+    };
+  }, []);
+
+  async function load(mode: "refresh" | "more") {
     await run(async () => {
       if (!freshStepUp(session, Date.now())) {
         setPage(null);
+        setApplied(null);
         throw new AdminError("ADMIN_STEP_UP_REQUIRED", 403);
       }
-      const filters = filtersRef.current;
+      const gen = ++requestGeneration.current;
+      const filters: Filters | null =
+        mode === "more" ? appliedRef.current : { ...draftRef.current };
+      if (!filters) return;
+      if (mode === "more" && !sameFilters(draftRef.current, filters)) return;
+
+      const cursor =
+        mode === "more" &&
+        pageRef.current?.nextBeforeId &&
+        pageRef.current?.nextBeforeCheckedAt
+          ? {
+              beforeCheckedAt: pageRef.current.nextBeforeCheckedAt,
+              beforeId: pageRef.current.nextBeforeId,
+            }
+          : undefined;
+      if (mode === "more" && !cursor) return;
+
       const params = new URLSearchParams();
       if (filters.surface.trim()) params.set("surface", filters.surface.trim());
       if (filters.decision) params.set("decision", filters.decision);
@@ -83,13 +133,23 @@ export function ModerationJournal({
       const qs = params.toString();
       try {
         const next = await adminRequest<Page>("audit/moderation" + (qs ? `?${qs}` : ""));
+        if (!mounted.current || gen !== requestGeneration.current) return;
+        if (mode === "refresh") {
+          if (!sameFilters(draftRef.current, filters)) return;
+          setApplied(filters);
+          setPage(next);
+          return;
+        }
+        if (!appliedRef.current || !sameFilters(appliedRef.current, filters)) return;
         setPage((prev) =>
           cursor
             ? { ...next, items: [...(prev?.items ?? []), ...next.items] }
             : next,
         );
       } catch (error) {
+        if (!mounted.current || gen !== requestGeneration.current) return;
         setPage(null);
+        setApplied(null);
         if (error instanceof AdminError && (error.status === 401 || error.code === "ADMIN_PERMISSION_DENIED" || error.code === "ADMIN_STEP_UP_REQUIRED")) {
           if (error.status === 401 || error.code === "ADMIN_PERMISSION_DENIED") onAuthorityLoss();
         }
@@ -101,9 +161,10 @@ export function ModerationJournal({
   useEffect(() => {
     if (!fresh) {
       setPage(null);
+      setApplied(null);
       return;
     }
-    void load();
+    void load("refresh");
     // Initial load when step-up becomes fresh; filters apply on explicit refresh.
   }, [session.principalId, session.stepUpAt, fresh]);
 
@@ -147,13 +208,19 @@ export function ModerationJournal({
             </label>
           </div>
           <div className="actions">
-            <button className="button outline" disabled={busy} onClick={() => void load()}>
+            <button className="button outline" disabled={busy} onClick={() => void load("refresh")}>
               Обновить
             </button>
           </div>
           {page ? (
             <>
               <p className="moderation-scope">{page.historyNote}</p>
+              {draftDirty ? (
+                <p className="notice" role="status">
+                  Фильтры изменены — нажмите «Обновить», чтобы загрузить первую страницу с новыми
+                  фильтрами. «Ещё» отключено, пока черновик не совпадает с загруженной выборкой.
+                </p>
+              ) : null}
               {page.items.length ? (
                 <ul className="events moderation-events">
                   {page.items.map((item) => (
@@ -189,13 +256,8 @@ export function ModerationJournal({
                 <div className="actions">
                   <button
                     className="button outline"
-                    disabled={busy}
-                    onClick={() =>
-                      void load({
-                        beforeCheckedAt: page.nextBeforeCheckedAt!,
-                        beforeId: page.nextBeforeId!,
-                      })
-                    }
+                    disabled={busy || draftDirty}
+                    onClick={() => void load("more")}
                   >
                     Ещё
                   </button>
