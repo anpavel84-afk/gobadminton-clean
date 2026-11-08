@@ -886,6 +886,10 @@ class Repair2Focused(unittest.TestCase):
                     self.assertEqual(limited['output_policy']['fsize_hard'], 4096)
 
     def test_exited_leader_owned_child_and_foreign_guard(self):
+        # Synthetic children run as the test host, including UID 1001 in CI.
+        host_uid = patch.object(live, 'CURSOR_UID', os.geteuid())
+        self.addCleanup(host_uid.stop)
+        host_uid.start()
         import ctypes
         import time
         libc=ctypes.CDLL(None, use_errno=True)
@@ -1088,6 +1092,12 @@ class ProtectedHighSuccessor(unittest.TestCase):
 class QAOutputBoundary(unittest.TestCase):
     """Tiny local Python children only; no installed native/provider calls."""
 
+    def setUp(self):
+        # Match synthetic child/drop and private-output ownership to this host.
+        host_uid = patch.object(live, 'CURSOR_UID', os.geteuid())
+        self.addCleanup(host_uid.stop)
+        host_uid.start()
+
     def test_real_child_inherits_hard_file_bound_and_valid_output(self):
         with tempfile.TemporaryDirectory() as td, patch.object(live, 'QA_OUTPUT_MAX', 4096):
             root = Path(td)
@@ -1146,10 +1156,13 @@ class QAOutputBoundary(unittest.TestCase):
         binding = os.urandom(64)
         valid = struct.pack('!9Q', os.getpid(), os.getpid(), 1, live.CURSOR_UID,
                             live.QA_OUTPUT_MAX, live.QA_OUTPUT_MAX, 0, 0, 1)
+        fake_pid = os.getpid() + 1000000
+        wrong_uid = struct.pack('!9Q', fake_pid, fake_pid, 1, live.CURSOR_UID + 1,
+                                live.QA_OUTPUT_MAX, live.QA_OUTPUT_MAX, 0, 0, 1)
         for raw in (b'', b'corrupt', os.urandom(64) + valid, binding + valid,
-                    binding + valid + b'extra'):
+                    binding + valid + b'extra', binding + wrong_uid):
             read_fd, write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
-            process = SimpleNamespace(pid=os.getpid() + 1000000, _lean_owned_identity_required=True)
+            process = SimpleNamespace(pid=fake_pid, _lean_owned_identity_required=True)
             try:
                 os.write(write_fd, raw); os.close(write_fd)
                 with patch.object(os, 'killpg', side_effect=AssertionError('foreign signal')):
