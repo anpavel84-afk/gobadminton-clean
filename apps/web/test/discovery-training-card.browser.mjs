@@ -233,13 +233,33 @@ await withChrome(async ({ call, evaluate }) => {
           overflowWrap: getComputedStyle(s).overflowWrap,
         }));
         const roles = [...card.querySelectorAll('.gb-discovery-host')].map((h) => h.getAttribute('data-role'));
-        const people = [...card.querySelectorAll('.gb-discovery-card__people > .gb-discovery-host')].map(rect);
+        const peopleHosts = [...card.querySelectorAll('.gb-discovery-card__people > .gb-discovery-host')];
+        const people = peopleHosts.map(rect);
         const peopleBand = card.querySelector('.gb-discovery-card__people');
-        const peopleActions = peopleBand?.querySelector('.gb-discovery-card__actions');
+        const peopleActions = peopleBand?.querySelector(':scope > .gb-discovery-card__actions');
+        const historyEl = peopleBand?.querySelector(':scope > .gb-discovery-card__history, :scope > .gb-discovery-card__band-spacer');
+        const roleNameMetrics = peopleHosts.map((host) => {
+          const strong = host.querySelector('strong');
+          const r = strong ? rect(strong) : null;
+          const cs = strong ? getComputedStyle(strong) : null;
+          return {
+            role: host.getAttribute('data-role'),
+            text: strong?.textContent || '',
+            rect: r,
+            clientWidth: strong?.clientWidth ?? 0,
+            clientHeight: strong?.clientHeight ?? 0,
+            scrollWidth: strong?.scrollWidth ?? 0,
+            scrollHeight: strong?.scrollHeight ?? 0,
+            lineHeight: cs ? parseFloat(cs.lineHeight) || 0 : 0,
+            whiteSpace: cs?.whiteSpace || null,
+            textOverflow: cs?.textOverflow || null,
+          };
+        });
         const slot = rect(imageSlot);
         const image = rect(imageEl?.tagName === 'IMG' ? imageEl : (imageEl?.querySelector('img') || imageEl));
         const cardBox = rect(card);
         const peopleBandRect = peopleBand ? rect(peopleBand) : null;
+        const peopleBandStyle = peopleBand ? getComputedStyle(peopleBand) : null;
         const unusedUnderPhoto = peopleBandRect && slot
           ? Math.max(0, peopleBandRect.y - slot.bottom)
           : null;
@@ -255,8 +275,11 @@ await withChrome(async ({ call, evaluate }) => {
           strongs,
           roles,
           people,
+          roleNameMetrics,
           peopleBand: peopleBandRect,
+          peopleBandGridColumns: peopleBandStyle?.gridTemplateColumns || null,
           peopleActions: peopleActions ? rect(peopleActions) : null,
+          history: historyEl ? rect(historyEl) : null,
           unusedUnderPhoto,
           crop: imgStyle ? { fit: imgStyle.objectFit, position: imgStyle.objectPosition } : null,
           overflowX: card.scrollWidth > card.clientWidth + 1,
@@ -267,6 +290,7 @@ await withChrome(async ({ call, evaluate }) => {
         cards,
         longTrainerVisible: document.body.innerText.includes(longTrainer),
         longOrganizerVisible: document.body.innerText.includes(longOrganizer),
+        sourceCssHasHistorySpan: ${JSON.stringify(/\.gb-discovery-card__people\s*>\s*\.gb-discovery-card__history/.test(discovery))},
         sameStringStillSeparate: (() => {
           const same = [...document.querySelectorAll('.gb-discovery-card')].find((c) =>
             c.querySelector('[data-trainer-profile="shared-looking-id"]')
@@ -286,10 +310,57 @@ await withChrome(async ({ call, evaluate }) => {
     assert.equal(metrics.sameStringStillSeparate, true, `${width}: coinciding id strings must stay separate roles`);
     assert.equal(metrics.missingTrainer, true, `${width}: missing trainer fixture`);
     assert.equal(metrics.typicalPeople, true, `${width}: compact people row present`);
+    assert.equal(metrics.sourceCssHasHistorySpan, true, `${width}: source CSS must span history on its own row`);
 
     const ordinary = metrics.cards[0];
     const typical = metrics.cards[1];
     assert.ok(ordinary && typical);
+
+    // #507: role names need usable width / normal text height (reject one-character-wide vertical letters).
+    for (const trainerCard of metrics.cards.filter((c) => c.activity === "trainer_led" && c.peopleBand)) {
+      assert.ok(trainerCard.peopleBandGridColumns, `${width}: people band grid-template-columns present`);
+      {
+        // Used values are pixel tracks (not authored minmax tokens).
+        const tracks = trainerCard.peopleBandGridColumns.trim().split(/\s+/).filter(Boolean);
+        if (width <= 390) {
+          assert.equal(
+            tracks.length,
+            1,
+            `${width}: mobile people band stays single-column, got ${trainerCard.peopleBandGridColumns}`,
+          );
+        } else {
+          // Author template keeps 4 tracks; empty 4th collapses when history spans its own row.
+          assert.ok(
+            tracks.length === 3 || tracks.length === 4,
+            `${width}: desktop people band roles+actions (+optional collapsed track), got ${trainerCard.peopleBandGridColumns}`,
+          );
+        }
+      }
+      for (const name of trainerCard.roleNameMetrics || []) {
+        if (!name.text || name.text.length < 4) continue;
+        assert.ok(
+          name.clientWidth >= 48,
+          `${width}:${name.role} role name width ${name.clientWidth}px too narrow for "${name.text.slice(0, 32)}"`,
+        );
+        const maxNameHeight = Math.max(56, (name.lineHeight || 18) * 3 + 4);
+        assert.ok(
+          name.clientHeight <= maxNameHeight,
+          `${width}:${name.role} role name height ${name.clientHeight}px looks vertical/stacked (max ${maxNameHeight}) for "${name.text.slice(0, 32)}"`,
+        );
+        assert.notEqual(name.whiteSpace, "nowrap", `${width}:${name.role} must wrap`);
+        assert.notEqual(name.textOverflow, "ellipsis", `${width}:${name.role} must not ellipsis`);
+      }
+      if (trainerCard.history && trainerCard.people?.[0] && width > 390) {
+        assert.ok(
+          trainerCard.history.y + 1 >= trainerCard.people[0].bottom - 2,
+          `${width}: history must sit on its own row below roles (history.y=${trainerCard.history.y}, role.bottom=${trainerCard.people[0].bottom})`,
+        );
+      }
+      assert.ok(
+        trainerCard.peopleBand.height <= 220,
+        `${width}: people band height ${trainerCard.peopleBand.height} still crushed/tall`,
+      );
+    }
 
     for (const row of metrics.cards) {
       assert.equal(row.layout, null);
@@ -331,9 +402,9 @@ await withChrome(async ({ call, evaluate }) => {
       assert.ok(Math.abs(ordinary.imageSlot.width - typical.imageSlot.width) <= 1, "regular/trainer same square crop width");
       assert.ok(Math.abs(ordinary.imageSlot.height - typical.imageSlot.height) <= 1, "regular/trainer same square crop height");
       // D2: no equal-height latch / no forced blank below photo. Compact typical grows only if needed.
-      // Upper-bound compactness for standard (typical DEMO) fixture only — not a global long-name cap.
+      // #507: history may occupy its own row under roles — allow that dedicated line, not a crushed vertical stack.
       const delta = typical.card.height - ordinary.card.height;
-      const maxDelta = width >= 1920 ? 64 : 80;
+      const maxDelta = width >= 1920 ? 140 : 160;
       assert.ok(
         delta <= maxDelta,
         `${width}: typical trainer must stay compact vs ordinary, delta=${delta} max=${maxDelta}`,

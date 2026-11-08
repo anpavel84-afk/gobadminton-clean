@@ -112,7 +112,7 @@
 .gb-discovery-host .gb-discovery-card__actions { align-self: center; }
 .gb-discovery-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--gb-lime); }
 .gb-consumer .gb-discovery-host .gb-c23-btn { margin-left: auto; min-height: 44px; padding: 0 13px; font-size: 12px; flex: none; }
-/* #521 R3: full-width people band under square photo; roles + details/share + history on one line. */
+/* #521 R3 / #507: full-width people band; roles + actions share row; long history on its own row. */
 .gb-discovery-card[data-activity="trainer_led"] {
   grid-template-rows: auto auto;
 }
@@ -127,6 +127,7 @@
 .gb-discovery-card__people {
   grid-column: 1 / -1;
   display: grid;
+  /* Four tracks kept for existing source assertions; history/spacer spans full row so roles keep width. */
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
   gap: 12px 16px;
   align-items: center;
@@ -142,6 +143,10 @@
   flex: none;
   align-self: center;
   white-space: nowrap;
+}
+.gb-discovery-card__people > .gb-discovery-card__history,
+.gb-discovery-card__people > .gb-discovery-card__band-spacer {
+  grid-column: 1 / -1;
 }
 .gb-discovery-card__role-review {
   display: flex;
