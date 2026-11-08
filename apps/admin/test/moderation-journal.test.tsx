@@ -104,15 +104,13 @@ const session: Session = {
   csrfToken: "csrf",
 };
 
-/** useState order in ModerationJournal.tsx */
-const SLOT = {
-  page: 0,
-  surface: 1,
-  decision: 2,
-  policy: 3,
-  model: 4,
-  applied: 5,
-} as const;
+const emptyStart = {
+  historyScope: "saved",
+  historyNote: "Старт без фильтра",
+  items: [] as const,
+  nextBeforeCheckedAt: null,
+  nextBeforeId: null,
+};
 
 const pageOne = {
   historyScope: "saved",
@@ -177,7 +175,29 @@ const refreshed = {
   nextBeforeId: null,
 };
 
+const currentScope = {
+  historyScope: "saved",
+  historyNote: "Текущий principal",
+  items: [
+    {
+      approvalId: "cur1",
+      surface: "comment_body",
+      decision: "allow",
+      providerKey: "fake",
+      providerModel: "fake",
+      policyVersion: "p1",
+      localPolicyVersion: "l1",
+      checkedAt: "2026-11-03T12:00:00.000Z",
+      bindingStatus: "bound" as const,
+      bindings: [],
+    },
+  ],
+  nextBeforeCheckedAt: null,
+  nextBeforeId: null,
+};
+
 let work: Promise<void> | undefined;
+let activeSession: Session = session;
 
 function flushEffects() {
   const queued = hooks.effects.splice(0);
@@ -187,7 +207,7 @@ function flushEffects() {
 function renderTree(busy = false) {
   hooks.index = 0;
   return ModerationJournal({
-    session,
+    session: activeSession,
     busy,
     now,
     run: (fn) => {
@@ -199,12 +219,41 @@ function renderTree(busy = false) {
   });
 }
 
-function button(label: string) {
-  const found = nodes(renderTree()).find(
+function treeText(busy = false) {
+  return textOf(renderTree(busy));
+}
+
+function button(label: string, busy = false) {
+  const found = nodes(renderTree(busy)).find(
     (n) => n.type === "button" && textOf(n.props.children) === label,
   );
   expect(found).toBeTruthy();
   return found!;
+}
+
+function control(label: string, busy = false) {
+  const parent = nodes(renderTree(busy)).find(
+    (n) =>
+      n.type === "label" &&
+      nodes(n.props.children).some((child) => child.type === "span" && textOf(child.props.children) === label),
+  );
+  expect(parent).toBeTruthy();
+  const field = nodes(parent!.props.children).find((n) => n.type === "input" || n.type === "select");
+  expect(field).toBeTruthy();
+  return field!;
+}
+
+function change(label: string, value: string) {
+  const field = control(label);
+  expect(field.props.disabled).toBe(false);
+  (field.props.onChange as (event: { target: { value: string } }) => void)({ target: { value } });
+}
+
+async function click(label: string) {
+  const node = button(label);
+  expect(node.props.disabled).toBe(false);
+  (node.props.onClick as () => void)();
+  await work;
 }
 
 describe("ModerationJournal affordances", () => {
@@ -243,10 +292,12 @@ describe("ModerationJournal applied-filter load-more scope", () => {
     transport.calls = [];
     transport.handler = null;
     work = undefined;
+    activeSession = session;
   });
 
-  it("ties More to applied filters and requires refresh after draft change", async () => {
+  it("ties More to applied filters via mounted input events and replaces rows on refresh", async () => {
     transport.handler = async (path) => {
+      if (path === "audit/moderation") return emptyStart;
       if (path === "audit/moderation?surface=game_title") return pageOne;
       if (
         path ===
@@ -259,58 +310,145 @@ describe("ModerationJournal applied-filter load-more scope", () => {
     };
 
     renderTree();
-    hooks.slots[SLOT.surface]!.value = "game_title";
-    renderTree(); // sync draftRef before initial refresh effect
     flushEffects();
     await work;
     renderTree();
-    expect(transport.calls).toEqual(["audit/moderation?surface=game_title"]);
-    expect(hooks.slots[SLOT.page]!.value).toEqual(pageOne);
-    expect(hooks.slots[SLOT.applied]!.value).toEqual({
-      surface: "game_title",
-      decision: "",
-      policy: "",
-      model: "",
-    });
+    expect(transport.calls).toEqual(["audit/moderation"]);
+    expect(treeText()).toContain("Старт без фильтра");
+    expect(treeText()).toContain("Сохранённых allow/review записей по фильтру нет.");
 
-    // Edit draft surface without refresh — More must stay disabled (no mixed cursor).
-    hooks.slots[SLOT.surface]!.value = "comment_body";
+    change("Поверхность", "game_title");
+    await click("Обновить");
+    expect(transport.calls).toEqual([
+      "audit/moderation",
+      "audit/moderation?surface=game_title",
+    ]);
+    expect(treeText()).toContain("Первая страница");
+    expect(treeText()).toContain("game_title · Разрешено");
+    expect(control("Поверхность").props.value).toBe("game_title");
+
+    // Draft surface edit through onChange — More disabled, no mixed cursor request.
+    change("Поверхность", "comment_body");
     const moreWhileDirty = button("Ещё");
     expect(moreWhileDirty.props.disabled).toBe(true);
-    expect(transport.calls).toEqual(["audit/moderation?surface=game_title"]);
-    expect(hooks.slots[SLOT.page]!.value).toEqual(pageOne);
+    expect(treeText()).toContain("Фильтры изменены");
+    expect(transport.calls).toEqual([
+      "audit/moderation",
+      "audit/moderation?surface=game_title",
+    ]);
+    expect(treeText()).toContain("Первая страница");
+    expect(treeText()).toContain("game_title · Разрешено");
+    expect(control("Поверхность").props.value).toBe("comment_body");
 
-    // Restore draft to applied, then More uses applied filters + old cursor and appends.
-    hooks.slots[SLOT.surface]!.value = "game_title";
-    const more = button("Ещё");
-    expect(more.props.disabled).toBe(false);
-    (more.props.onClick as () => void)();
-    await work;
-    renderTree();
+    // Restore draft to applied via onChange — More uses applied filters + old cursor and appends.
+    change("Поверхность", "game_title");
+    await click("Ещё");
     expect(transport.calls.at(-1)).toBe(
       "audit/moderation?surface=game_title&beforeCheckedAt=2026-11-01T11%3A00%3A00.000Z&beforeId=cursor-1",
     );
-    expect(hooks.slots[SLOT.page]!.value).toEqual({
-      ...pageTwo,
-      items: [...pageOne.items, ...pageTwo.items],
-    });
+    expect(transport.calls).toHaveLength(3);
+    expect(treeText()).toContain("Вторая страница");
+    expect(treeText()).toContain("game_title · Разрешено");
+    expect(treeText()).toContain("game_title · На проверку");
 
     // Draft new filter + Refresh → first page replace, no cursor, no mixed rows.
-    hooks.slots[SLOT.surface]!.value = "comment_body";
-    const refresh = button("Обновить");
-    (refresh.props.onClick as () => void)();
+    change("Поверхность", "comment_body");
+    await click("Обновить");
+    expect(transport.calls.at(-1)).toBe("audit/moderation?surface=comment_body");
+    expect(transport.calls).toHaveLength(4);
+    expect(treeText()).toContain("Новый фильтр");
+    expect(treeText()).toContain("comment_body · Разрешено");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+    expect(treeText()).not.toContain("game_title · На проверку");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("Вторая страница");
+  });
+
+  it("ignores a deferred stale response after principal change and keeps current rows", async () => {
+    let resolveOld!: (value: typeof pageOne) => void;
+    const deferredOld = new Promise<typeof pageOne>((resolve) => {
+      resolveOld = resolve;
+    });
+    let phase: "boot" | "old" | "current" = "boot";
+
+    transport.handler = async (path) => {
+      if (phase === "boot" && path === "audit/moderation") return emptyStart;
+      if (phase === "old" && path === "audit/moderation?surface=game_title") return deferredOld;
+      if (phase === "current" && path === "audit/moderation?surface=game_title") return currentScope;
+      throw new Error(`${phase}:${path}`);
+    };
+
+    renderTree();
+    flushEffects();
     await work;
     renderTree();
-    expect(transport.calls.at(-1)).toBe("audit/moderation?surface=comment_body");
-    expect(hooks.slots[SLOT.page]!.value).toEqual(refreshed);
-    expect(hooks.slots[SLOT.applied]!.value).toEqual({
-      surface: "comment_body",
-      decision: "",
-      policy: "",
-      model: "",
-    });
-    expect((hooks.slots[SLOT.page]!.value as typeof refreshed).items.map((i) => i.approvalId)).toEqual([
-      "b1",
+    expect(transport.calls).toEqual(["audit/moderation"]);
+
+    change("Поверхность", "game_title");
+    phase = "old";
+    const refresh = button("Обновить");
+    expect(refresh.props.disabled).toBe(false);
+    (refresh.props.onClick as () => void)();
+    expect(transport.calls.at(-1)).toBe("audit/moderation?surface=game_title");
+    expect(transport.calls).toHaveLength(2);
+
+    // External principal change through props — authorized scope reloads.
+    phase = "current";
+    activeSession = {
+      ...session,
+      principalId: "p2",
+      sessionId: "s2",
+    };
+    renderTree();
+    flushEffects();
+    await work;
+    expect(transport.calls).toEqual([
+      "audit/moderation",
+      "audit/moderation?surface=game_title",
+      "audit/moderation?surface=game_title",
     ]);
+    expect(treeText()).toContain("Текущий principal");
+    expect(treeText()).toContain("comment_body · Разрешено");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+
+    resolveOld(pageOne);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(treeText()).toContain("Текущий principal");
+    expect(treeText()).toContain("comment_body · Разрешено");
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+    expect(transport.calls).toHaveLength(3);
+
+    // Authority loss clears the journal surface; late deferred payload must not resurface after re-step-up.
+    activeSession = {
+      ...activeSession,
+      stepUpAt: new Date(now - 11 * 60 * 1000).toISOString(),
+    };
+    renderTree();
+    flushEffects();
+    expect(treeText()).toContain("Нужно подтверждение входа");
+    expect(treeText()).not.toContain("Текущий principal");
+    expect(treeText()).not.toContain("comment_body · Разрешено");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+
+    phase = "boot";
+    transport.handler = async (path) => {
+      if (path === "audit/moderation?surface=game_title") return emptyStart;
+      throw new Error(path);
+    };
+    activeSession = {
+      ...session,
+      principalId: "p2",
+      sessionId: "s2",
+      stepUpAt: new Date(now - 500).toISOString(),
+    };
+    renderTree();
+    flushEffects();
+    await work;
+    expect(treeText()).not.toContain("Первая страница");
+    expect(treeText()).not.toContain("game_title · Разрешено");
+    expect(treeText()).toContain("Старт без фильтра");
   });
 });
