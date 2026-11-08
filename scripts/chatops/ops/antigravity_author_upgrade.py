@@ -707,6 +707,8 @@ def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
              and re.fullmatch('[a-f0-9]{64}', previous.get('operation') or '')
              and previous['operation'] != operation,
              'prior readiness must be demoted; qualification operation must be new')
+    need(not os.path.lexists(BACKUP / 'promotions' / operation),
+         'qualification operation already promoted; never replay')
     if action == 'promote-dry':
         return {'phase': 'qualification-verified', 'ready': False, 'dry': True}
     if previous is not None:
@@ -718,7 +720,7 @@ def promote(action, bundle, commit, task_hash, operation, *, prepared=None):
     parent = BACKUP / 'promotions'
     if not parent.exists(): _mkdir_backup(parent)
     backup = parent / operation
-    if not backup.exists(): _mkdir_backup(backup)
+    _mkdir_backup(backup)
     before_marker = read(MARKER)
     put(backup / 'marker', before_marker, 0o600)
     journal = dict(schema='GB_AGY_AUTHOR_PROMOTION_V1', phase='prepared', operation=operation,

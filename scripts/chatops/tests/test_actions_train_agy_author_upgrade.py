@@ -186,6 +186,12 @@ class Upgrade(unittest.TestCase):
             U.promote('promote',self.bundle,self.commit,self.task_hash,new)
         self.assertEqual(U.read(U.BACKUP/'promotions'/old/'promotion-demoted.json'),prior)
         self.assertEqual(json.loads(U.read(U.PROMOTION_JOURNAL))['previous_operation'],old)
+        U.promote('demote',self.bundle,self.commit,self.task_hash,new)
+        before=self.files()
+        with patch.object(U,'promotion_plan',return_value=(marker,proof)):
+            with self.assertRaisesRegex(core.Refused,'already promoted'):
+                U.promote('promote',self.bundle,self.commit,self.task_hash,old)
+        self.assertEqual(self.files(),before)
 
     def test_promotion_requires_bound_native_route_qa_ci_and_acceptance(self):
         from test_actions_train_antigravity_author import N, rows, wire, CID
