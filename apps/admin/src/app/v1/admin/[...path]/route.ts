@@ -55,13 +55,14 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const caseDetail = /^cases\/[0-9a-f-]{36}$/.test(path);
   const caseEvidence = /^cases\/[0-9a-f-]{36}\/evidence(?:\/[0-9a-f-]{36})?$/.test(path);
   const caseSource = new RegExp("^cases/" + uuid + "/(?:review-reports|message-reports)/" + uuid + "$").test(path);
+  const caseCommunitySource = new RegExp("^cases/" + uuid + "/community-reports/" + uuid + "$").test(path);
   const caseCommand = /^cases\/[0-9a-f-]{36}\/commands$/.test(path);
   const userDetail = /^users\/[0-9a-f-]{36}\/restrictions$/.test(path);
   const userCommand = /^users\/[0-9a-f-]{36}\/restrictions\/commands$/.test(path);
   const gameDetail = /^games\/[0-9a-f-]{36}$/.test(path);
   const gameCommand = /^games\/[0-9a-f-]{36}\/moderation\/commands$/.test(path);
   const venueRoute = request.method === "GET" ? /^venues(?:\/(?:duplicates|[0-9a-f-]{36}(?:\/games)?))?$/.test(path) : /^venues(?:\/(?:[0-9a-f-]{36}\/commands|duplicates\/[0-9a-f-]{36}\/dismiss))?$/.test(path);
-  if (!(coverRoute || gallery || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence || caseSource : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
+  if (!(coverRoute || gallery || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence || caseSource || caseCommunitySource : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   if (!adminRequestOrigin(request, config, callback))
     return Response.json({ code: "ADMIN_ORIGIN_REJECTED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
@@ -104,9 +105,9 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
       const query = new URL(request.url).searchParams;
       for (const name of ["state", "code", "device_id"]) if (query.has(name)) url.searchParams.set(name, query.get(name)!);
     }
-    if (request.method === "GET" && (path === "games" || gameDetail || userDetail || path === "cases" || path === "reports" || path === "pilot-metrics" || path === "audit/moderation" || caseDetail || caseEvidence || caseSource)) {
+    if (request.method === "GET" && (path === "games" || gameDetail || userDetail || path === "cases" || path === "reports" || path === "pilot-metrics" || path === "audit/moderation" || caseDetail || caseEvidence || caseSource || caseCommunitySource)) {
       const query = new URL(request.url).searchParams;
-      const names = path === "reports" ? ["beforeId", "limit", "reportId"] : path === "cases" || /\/evidence$/.test(path) ? ["beforeId", "limit"] : caseDetail ? ["beforeVersion"] : caseEvidence || caseSource ? [] : path === "games" ? ["cursor", "limit"] : path === "pilot-metrics" ? ["cityId", "from", "to"] : path === "audit/moderation" ? ["surface", "decision", "policy", "model", "checkedFrom", "checkedTo", "beforeCheckedAt", "beforeId", "limit"] : userDetail ? ["beforeVersion"] : ["historyCursor"];
+      const names = path === "reports" ? ["beforeId", "limit", "reportId"] : path === "cases" || /\/evidence$/.test(path) ? ["beforeId", "limit"] : caseDetail ? ["beforeVersion"] : caseCommunitySource ? ["cursor", "limit"] : caseEvidence || caseSource ? [] : path === "games" ? ["cursor", "limit"] : path === "pilot-metrics" ? ["cityId", "from", "to"] : path === "audit/moderation" ? ["surface", "decision", "policy", "model", "checkedFrom", "checkedTo", "beforeCheckedAt", "beforeId", "limit"] : userDetail ? ["beforeVersion"] : ["historyCursor"];
       for (const [name, value] of query) {
         if (!names.includes(name) || value.length > 256 || query.getAll(name).length !== 1)
           return Response.json({code:"ADMIN_INVALID_REQUEST"},{status:400,headers:{"Cache-Control":"no-store"}});

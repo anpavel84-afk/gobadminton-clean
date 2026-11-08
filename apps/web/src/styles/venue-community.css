@@ -1,0 +1,229 @@
+/* #507 I1 scoped community ratings / discussion chrome — Style Guide tokens. */
+.gb-venue-community {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.gb-venue-community__panel {
+  padding: 28px;
+  border: 1px solid var(--gb-line, #dfe4dc);
+  border-radius: 18px;
+  background: var(--gb-white, #fff);
+  min-width: 0;
+}
+
+.gb-venue-community__heading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.gb-venue-community__heading h2 {
+  margin: 0 0 8px;
+  font-size: 23px;
+  letter-spacing: -0.025em;
+}
+
+.gb-venue-community__heading p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gb-ink-soft, #536159);
+}
+
+.gb-venue-community__report-trigger {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.gb-venue-community__report-form {
+  display: grid;
+  gap: 14px;
+}
+
+.gb-venue-community__rating-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.gb-venue-community__rating-number {
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+.gb-venue-community__starline {
+  color: var(--gb-purple, #7945de);
+  letter-spacing: 2px;
+  font-size: 20px;
+}
+
+.gb-venue-community__rating-empty {
+  font-size: 22px;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.gb-venue-community__rating-row p {
+  font-size: 13px;
+  margin: 5px 0 0;
+  color: var(--gb-ink-soft, #536159);
+}
+
+.gb-venue-community__own {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--gb-line, #dfe4dc);
+}
+
+.gb-venue-community__stars {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.gb-venue-community__star {
+  border: 1px solid var(--gb-line-dark, #cbd3ca);
+  border-radius: 12px;
+  width: 48px;
+  height: 48px;
+  background: #fff;
+  font-size: 29px;
+  color: #7b857c;
+  display: grid;
+  place-items: center;
+}
+
+.gb-venue-community__star[aria-checked="true"],
+.gb-venue-community__star.is-selected {
+  background: var(--gb-purple-soft, #eee6ff);
+  border-color: #b89be9;
+  color: var(--gb-purple, #7945de);
+}
+
+.gb-venue-community__help {
+  font-size: 12px;
+  color: var(--gb-ink-soft, #536159);
+  margin: 12px 0 0;
+}
+
+.gb-venue-community__guest {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 22px;
+  padding: 18px;
+  background: var(--gb-paper, #f5f6f2);
+  border-radius: 12px;
+}
+
+.gb-venue-community__guest p {
+  font-size: 13px;
+  margin: 0;
+}
+
+.gb-venue-community__notice {
+  background: var(--gb-paper, #f5f6f2);
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 12px;
+}
+
+.gb-venue-community__notice.is-pending {
+  background: #fff7d6;
+  color: #72590a;
+}
+
+.gb-venue-community__notice.is-error {
+  background: #fff0ed;
+  color: var(--gb-danger, #a13c32);
+}
+
+.gb-venue-community__notice.is-success {
+  background: #e1f5dd;
+  color: #245d21;
+}
+
+.gb-venue-community__skeleton {
+  border-radius: 10px;
+  background: linear-gradient(90deg, #edf1e9, #f7f8f5, #edf1e9);
+  height: 18px;
+  margin: 12px 0;
+}
+
+.gb-venue-community__skeleton.is-big {
+  height: 70px;
+}
+
+.gb-venue-community__compact {
+  font-size: 12px;
+  color: var(--gb-purple, #7945de);
+}
+
+.gb-venue-community__compact.is-muted {
+  color: var(--gb-ink-soft, #536159);
+}
+
+.gb-venue-community__compact-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+
+.gb-venue-picker-selected-community {
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.gb-venue-community__compact-link:hover .gb-venue-community__compact-cta,
+.gb-venue-community__compact-link:focus-visible .gb-venue-community__compact-cta {
+  text-decoration: underline;
+}
+
+.gb-venue-community__compact-cta {
+  font-size: 12px;
+  color: var(--gb-ink-soft, #536159);
+}
+
+.gb-venue-community__limitation {
+  font-size: 12px;
+  color: var(--gb-ink-soft, #536159);
+  margin: 0 0 12px;
+}
+
+@media (max-width: 600px) {
+  .gb-venue-community__panel {
+    padding: 20px 18px;
+  }
+
+  .gb-venue-community__rating-number {
+    font-size: 40px;
+  }
+
+  .gb-venue-community__guest {
+    display: block;
+    padding: 16px;
+  }
+
+  .gb-venue-community__guest .gb-button {
+    width: 100%;
+    margin-top: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gb-venue-community__skeleton {
+    animation: none;
+  }
+}

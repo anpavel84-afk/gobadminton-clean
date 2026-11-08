@@ -206,7 +206,29 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0065_moderation_venue_public_fields",
         "0066_moderation_venue_imports_credits",
         "0067_private_message_reports",
+        "0068_venue_community_votes_comments",
       ]);
+      expect(
+        (await pool.query("SELECT to_regclass('public.venue_community_votes')::text AS name")).rows[0]
+          ?.name,
+      ).toBe("venue_community_votes");
+      expect(
+        (await pool.query("SELECT to_regclass('public.venue_community_vote_revisions')::text AS name")).rows[0]
+          ?.name,
+      ).toBe("venue_community_vote_revisions");
+      expect(
+        (await pool.query("SELECT to_regclass('public.venue_community_decisions')::text AS name")).rows[0]
+          ?.name,
+      ).toBe("venue_community_decisions");
+      expect(
+        (
+          await pool.query(
+            `SELECT 1 FROM information_schema.columns
+             WHERE table_schema='public' AND table_name='entity_comments'
+               AND column_name='moderation_state'`,
+          )
+        ).rowCount,
+      ).toBe(1);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_review_slots')::text AS name")).rows[0]
           ?.name,

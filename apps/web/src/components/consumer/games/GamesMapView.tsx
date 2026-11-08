@@ -20,6 +20,7 @@ import { SurfacePanel } from "../Surfaces";
 import { GamesMapModuleLoading } from "./GamesMapModuleLoading";
 import { MapLayerFiltersControls, MapLayerFiltersProvider } from "./MapLayerFilters";
 import type { GamesVenueMap } from "./GamesVenueMap";
+import { useVenueCommunitySummaries } from "../../../lib/use-venue-community";
 
 /** A failed chunk stays unavailable; recovery uses the existing venue list. */
 function GamesMapModuleError({ onAvailability, onReturnToList }: ComponentProps<typeof GamesVenueMap>) {
@@ -102,6 +103,12 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const games = useMemo(() => (snapshot?.cityId === cityId ? snapshot.games : []).filter(game => activity === "all" || game.activityKind === activity), [snapshot, cityId, activity]);
   const all = useMemo(() => venueSchedules(venues, games, "", now), [venues, games, now]);
   const schedules = useMemo(() => venueSchedules(venues, games, day, now), [venues, games, day, now]);
+  // Schedule-only embed on VenuePage does not mount map cards — skip public batch.
+  const venueCommunityIds = useMemo(
+    () => (venueId ? [] : venues.map((item) => item.id)),
+    [venues, venueId],
+  );
+  const community = useVenueCommunitySummaries(venueCommunityIds);
   const previousCounts = useRef<Map<string, number> | null>(null);
   const counts = useMemo(() => {
     const next = snapshot?.cityId === cityId && snapshot.gamesReady ? new Map([...schedules].map(([id, games]) => [id, games.length])) : null;
@@ -169,11 +176,17 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
         {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
           preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} coverFallback={selectedCover.fallback} coverReady={selectedCover.ready} onCoverRetry={selectedCover.retry} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)}
-            galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange} />}>
+            galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
+            communitySummary={community.summaries[selectedVenue.id] ?? null}
+            communitySummaryState={community.state === "idle" ? "loading" : community.state}
+            showCommunityRating={!expanded && !desktop} />}>
           <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} coverFallback={selectedCover.fallback} coverReady={selectedCover.ready} onCoverRetry={selectedCover.retry} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
             galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
-            onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection} />
+            onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection}
+            communitySummary={community.summaries[selectedVenue.id] ?? null}
+            communitySummaryState={community.state === "idle" ? "loading" : community.state}
+            showCommunityRating={expanded || desktop} />
         </VenuePopup>}
         {!loading && snapshot?.cityId === cityId && snapshot.venuesFulfilled && !venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
         {(!mapAvailable || !mapBundle) && <details className="gb-games-map-fallback">

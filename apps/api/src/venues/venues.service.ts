@@ -4,7 +4,8 @@ import { readPublicVenueContacts, type PublicVenueContacts } from "./public-venu
 import { randomBytes, randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
-import { DATABASE_POOL } from "../tokens";
+import { APP_ENV, DATABASE_POOL } from "../tokens";
+import type { AppEnv } from "../config/env";
 import { conflict, notFound, unprocessable } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
@@ -13,6 +14,24 @@ import {
   type TextBatchApproval,
 } from "../moderation/moderation.service";
 import type { TextFieldCandidate } from "../moderation/text-policy";
+import { unrestrictedSql } from "../restrictions/policy";
+import {
+  parseCommunity,
+  parseVenueId,
+  parseVenueIdList,
+  unavailable,
+  unavailableSummary,
+  upsertCommunityRatingRequest,
+  withdrawCommunityRatingRequest,
+  type CommunityOwnVote,
+  type CommunityOwnVoteResponse,
+  type CommunitySummariesResponse,
+} from "./venue-community.policy";
+import {
+  batchCommunitySummaries,
+  lockCatalogShared,
+  resolveCanonicalVenue,
+} from "./venue-community.query";
 import {
   VENUE_NORMALIZATION_VERSION,
   extractIdentityDiscriminator,
@@ -139,6 +158,7 @@ type VenueRow = VenueProfileRow & {
 export class VenuesService {
   constructor(
     @Inject(DATABASE_POOL) private readonly pool: Pool,
+    @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly idempotency: IdempotencyService,
     private readonly mutations: MutationRunner,
     private readonly moderation: ContentModerationService,
@@ -903,6 +923,328 @@ export class VenuesService {
       if (matches.length >= FUZZY_NEIGHBOR_LIMIT) break;
     }
     return matches;
+  }
+
+  /** Guest batch community rating summaries (max 200). No own-vote / voter ids. */
+  async listCommunitySummaries(venueIdsRaw: string | undefined): Promise<CommunitySummariesResponse> {
+    const venueIds = parseVenueIdList(venueIdsRaw);
+    const client = await this.pool.connect();
+    try {
+      const items = await batchCommunitySummaries(
+        client,
+        venueIds,
+        this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+      );
+      return { items };
+    } finally {
+      client.release();
+    }
+  }
+
+  async getCommunityOwnVote(venueIdRaw: string, actorId: string): Promise<CommunityOwnVoteResponse> {
+    const venueId = parseVenueId(venueIdRaw);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      try {
+        const resolved = await resolveCanonicalVenue(client, venueId);
+        if (!resolved) {
+          await client.query("COMMIT");
+          return {
+            own: null,
+            summary: unavailableSummary(venueId, null),
+          };
+        }
+        const summary = (
+          await batchCommunitySummaries(
+            client,
+            [venueId],
+            this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+          )
+        )[0]!;
+        const own = await this.loadOwnVote(client, resolved.canonicalId, venueId, actorId);
+        await client.query("COMMIT");
+        return { own, summary };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  async upsertCommunityRating(
+    venueIdRaw: string,
+    actorId: string,
+    sessionId: string,
+    key: string,
+    input: unknown,
+  ): Promise<{ statusCode: number; body: CommunityOwnVoteResponse }> {
+    const venueId = parseVenueId(venueIdRaw);
+    const body = parseCommunity(upsertCommunityRatingRequest, input);
+    const requestHash = this.idempotency.requestHash({
+      venueId,
+      value: body.value,
+      expectedVersion: body.expectedVersion,
+      action: "upsert",
+    });
+    return this.mutations.runIdempotent<CommunityOwnVoteResponse>({
+      actorId,
+      sessionId,
+      operation: "venue_community.rating.upsert",
+      key,
+      requestHash,
+      requiredCapabilities: ["account.access", "profile.public"] as const,
+      authorizeReplay: async (client) => {
+        await lockCatalogShared(client);
+        const resolved = await resolveCanonicalVenue(client, venueId);
+        if (!resolved) unavailable();
+        await client.query(`SELECT id FROM venues WHERE id = $1 FOR SHARE`, [resolved.canonicalId]);
+      },
+      execute: async (client) => {
+        await lockCatalogShared(client);
+        const resolved = await resolveCanonicalVenue(client, venueId);
+        if (!resolved) unavailable();
+        await client.query(`SELECT id FROM venues WHERE id = $1 FOR SHARE`, [resolved.canonicalId]);
+        await client.query(
+          `SELECT id FROM users WHERE id = $1 FOR SHARE`,
+          [actorId],
+        );
+        const active = await client.query(
+          `SELECT 1 FROM users u
+           WHERE u.id = $1 AND u.status = 'active'
+             AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "u.id", ["account.access", "profile.public"])}`,
+          [actorId],
+        );
+        if (!active.rows[0]) {
+          throw conflict("RATING_ACTOR_INELIGIBLE", "Оценка недоступна для этого аккаунта");
+        }
+
+        const existing = (
+          await client.query<{
+            id: string;
+            value: number | null;
+            version: number;
+            moderation_state: "clear" | "withheld";
+            withdrawn_at: Date | null;
+          }>(
+            `SELECT id, value, version, moderation_state, withdrawn_at
+             FROM venue_community_votes
+             WHERE canonical_venue_id = $1 AND user_id = $2 AND merged_into_vote_id IS NULL
+             FOR UPDATE`,
+            [resolved.canonicalId, actorId],
+          )
+        ).rows[0];
+
+        if (!existing) {
+          if (body.expectedVersion !== 0) {
+            throw conflict("RATING_VERSION_CONFLICT", "Версия оценки устарела");
+          }
+          const inserted = (
+            await client.query<{ id: string; version: number }>(
+              `INSERT INTO venue_community_votes
+                 (canonical_venue_id, user_id, value, version, moderation_state, user_action_at)
+               VALUES ($1, $2, $3, 1, 'clear', clock_timestamp())
+               RETURNING id, version`,
+              [resolved.canonicalId, actorId, body.value],
+            )
+          ).rows[0]!;
+          await client.query(
+            `INSERT INTO venue_community_vote_revisions
+               (vote_id, resource_version, actor_user_id, action,
+                before_value, after_value, before_moderation_state, after_moderation_state,
+                before_withdrawn, after_withdrawn)
+             VALUES ($1, 1, $2, 'upsert', NULL, $3, NULL, 'clear', NULL, false)`,
+            [inserted.id, actorId, body.value],
+          );
+        } else {
+          if (existing.version !== body.expectedVersion) {
+            throw conflict("RATING_VERSION_CONFLICT", "Версия оценки устарела");
+          }
+          const nextVersion = existing.version + 1;
+          const wasWithdrawn = existing.withdrawn_at !== null;
+          await client.query(
+            `UPDATE venue_community_votes
+             SET value = $2,
+                 version = $3,
+                 withdrawn_at = NULL,
+                 user_action_at = clock_timestamp(),
+                 updated_at = clock_timestamp()
+             WHERE id = $1`,
+            [existing.id, body.value, nextVersion],
+          );
+          await client.query(
+            `INSERT INTO venue_community_vote_revisions
+               (vote_id, resource_version, actor_user_id, action,
+                before_value, after_value, before_moderation_state, after_moderation_state,
+                before_withdrawn, after_withdrawn)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, false)`,
+            [
+              existing.id,
+              nextVersion,
+              actorId,
+              wasWithdrawn || existing.value === null ? "upsert" : "update",
+              existing.value,
+              body.value,
+              existing.moderation_state,
+              wasWithdrawn,
+            ],
+          );
+        }
+
+        const summary = (
+          await batchCommunitySummaries(
+            client,
+            [venueId],
+            this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+          )
+        )[0]!;
+        const own = await this.loadOwnVote(client, resolved.canonicalId, venueId, actorId);
+        return { statusCode: existing ? 200 : 201, body: { own, summary } };
+      },
+    });
+  }
+
+  async withdrawCommunityRating(
+    venueIdRaw: string,
+    actorId: string,
+    sessionId: string,
+    key: string,
+    input: unknown,
+  ): Promise<{ statusCode: number; body: CommunityOwnVoteResponse }> {
+    const venueId = parseVenueId(venueIdRaw);
+    const body = parseCommunity(withdrawCommunityRatingRequest, input, "RATING_INPUT_INVALID");
+    const requestHash = this.idempotency.requestHash({
+      venueId,
+      expectedVersion: body.expectedVersion,
+      action: "withdraw",
+    });
+    return this.mutations.runIdempotent<CommunityOwnVoteResponse>({
+      actorId,
+      sessionId,
+      operation: "venue_community.rating.withdraw",
+      key,
+      requestHash,
+      requiredCapabilities: ["account.access", "profile.public"] as const,
+      authorizeReplay: async (client) => {
+        await lockCatalogShared(client);
+        const resolved = await resolveCanonicalVenue(client, venueId);
+        if (!resolved) unavailable();
+      },
+      execute: async (client) => {
+        await lockCatalogShared(client);
+        const resolved = await resolveCanonicalVenue(client, venueId);
+        if (!resolved) unavailable();
+        await client.query(`SELECT id FROM venues WHERE id = $1 FOR SHARE`, [resolved.canonicalId]);
+        const existing = (
+          await client.query<{
+            id: string;
+            value: number | null;
+            version: number;
+            moderation_state: "clear" | "withheld";
+            withdrawn_at: Date | null;
+          }>(
+            `SELECT id, value, version, moderation_state, withdrawn_at
+             FROM venue_community_votes
+             WHERE canonical_venue_id = $1 AND user_id = $2 AND merged_into_vote_id IS NULL
+             FOR UPDATE`,
+            [resolved.canonicalId, actorId],
+          )
+        ).rows[0];
+        if (!existing || existing.withdrawn_at) unavailable();
+        if (existing.version !== body.expectedVersion) {
+          throw conflict("RATING_VERSION_CONFLICT", "Версия оценки устарела");
+        }
+        const nextVersion = existing.version + 1;
+        await client.query(
+          `UPDATE venue_community_votes
+           SET value = NULL,
+               withdrawn_at = clock_timestamp(),
+               version = $2,
+               user_action_at = clock_timestamp(),
+               updated_at = clock_timestamp()
+           WHERE id = $1`,
+          [existing.id, nextVersion],
+        );
+        await client.query(
+          `INSERT INTO venue_community_vote_revisions
+             (vote_id, resource_version, actor_user_id, action,
+              before_value, after_value, before_moderation_state, after_moderation_state,
+              before_withdrawn, after_withdrawn)
+           VALUES ($1, $2, $3, 'withdraw', $4, NULL, $5, $5, false, true)`,
+          [existing.id, nextVersion, actorId, existing.value, existing.moderation_state],
+        );
+        const summary = (
+          await batchCommunitySummaries(
+            client,
+            [venueId],
+            this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,
+          )
+        )[0]!;
+        const own = await this.loadOwnVote(client, resolved.canonicalId, venueId, actorId);
+        return { statusCode: 200, body: { own, summary } };
+      },
+    });
+  }
+
+  private async loadOwnVote(
+    client: PoolClient,
+    canonicalId: string,
+    requestVenueId: string,
+    actorId: string,
+  ): Promise<CommunityOwnVote | null> {
+    const row = (
+      await client.query<{
+        value: number | null;
+        version: number;
+        moderation_state: "clear" | "withheld";
+        withdrawn_at: Date | null;
+      }>(
+        `SELECT value, version, moderation_state, withdrawn_at
+         FROM venue_community_votes
+         WHERE canonical_venue_id = $1 AND user_id = $2 AND merged_into_vote_id IS NULL`,
+        [canonicalId, actorId],
+      )
+    ).rows[0];
+    const eligible = (
+      await client.query(
+        `SELECT 1 FROM users u
+         WHERE u.id = $1 AND u.status = 'active'
+           AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "u.id", ["account.access", "profile.public"])}`,
+        [actorId],
+      )
+    ).rows[0];
+    const canWrite = Boolean(eligible);
+    if (!row) {
+      return {
+        venueId: requestVenueId,
+        canonicalVenueId: canonicalId,
+        value: null,
+        version: 0,
+        withdrawn: false,
+        moderationState: "clear",
+        allowedActions: {
+          upsert: canWrite,
+          update: false,
+          withdraw: false,
+        },
+      };
+    }
+    const withdrawn = row.withdrawn_at !== null;
+    return {
+      venueId: requestVenueId,
+      canonicalVenueId: canonicalId,
+      value: row.value,
+      version: row.version,
+      withdrawn,
+      moderationState: row.moderation_state,
+      allowedActions: {
+        upsert: canWrite && withdrawn,
+        update: canWrite && !withdrawn,
+        withdraw: canWrite && !withdrawn,
+      },
+    };
   }
 }
 

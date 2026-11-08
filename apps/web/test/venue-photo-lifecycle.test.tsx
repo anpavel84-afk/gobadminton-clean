@@ -244,6 +244,15 @@ vi.mock("../src/lib/api-client", async original => {
   };
   return { ...actual, ...partial };
 });
+// Photo/map harness isolates unrelated public summary leaf — real batch covered elsewhere.
+vi.mock("../src/lib/use-venue-community", () => ({
+  useVenueCommunitySummaries: (venueIds: readonly string[]) => ({
+    summaries: {},
+    state: "ready" as const,
+    ids: [...venueIds],
+  }),
+  stableVenueCommunityIds: (venueIds: readonly string[]) => [...venueIds],
+}));
 vi.mock("pmtiles", () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock("maplibre-gl", () => ({
   setWorkerUrl: vi.fn(), addProtocol: vi.fn(),

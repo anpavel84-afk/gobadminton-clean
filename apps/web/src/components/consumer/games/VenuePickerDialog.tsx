@@ -4,11 +4,13 @@ import { CloseButton } from "../CloseButton";
 import { VenueGallery } from "../venues/VenueGallery";
 import { venueCoverUrl } from "../venues/VenueCover";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
+import { VenueCommunityRating } from "../venues/VenueCommunityRating";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent } from "react";
 import type { VenueSummary } from "../../../lib/consumer-types";
 import { filterVenueOptions, sortVenueOptions } from "../../../lib/venue-picker-utils";
+import { useVenueCommunitySummaries } from "../../../lib/use-venue-community";
 
 type Props = {
   venues: VenueSummary[];
@@ -33,6 +35,8 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
   const dialogRef = useRef<HTMLElement>(null);
   const sorted = useMemo(() => sortVenueOptions(venues), [venues]);
   const visible = useMemo(() => filterVenueOptions(sorted, query), [sorted, query]);
+  const communityIds = useMemo(() => sorted.map((venue) => venue.id), [sorted]);
+  const community = useVenueCommunitySummaries(communityIds);
 
   useEffect(() => {
     const oldOverflow = document.body.style.overflow;
@@ -141,6 +145,19 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                   </span>
                   {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
                 </button>
+                <div className="gb-venue-picker-option-community">
+                  <VenueCommunityRating
+                    venueId={venue.id}
+                    variant="compact"
+                    signedIn={false}
+                    csrfToken={null}
+                    authReturnPath={`/venues/${venue.id}`}
+                    href={`/venues/${encodeURIComponent(venue.id)}#ratings`}
+                    summary={community.summaries[venue.id] ?? null}
+                    summaryLoadState={community.state === "idle" ? "loading" : community.state}
+                    linkToRatings
+                  />
+                </div>
                 {hasSource ? (
                   <div className="gb-venue-picker-option-source">
                     <VenueSourceCredit catalogSource={catalogSource} />

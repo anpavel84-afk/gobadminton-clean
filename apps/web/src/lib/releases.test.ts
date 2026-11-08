@@ -10,9 +10,9 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.56 with API 0.39.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.56");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.39.0");
+  it("bumps current descriptor to alpha.58 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.58");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(CURRENT_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
@@ -25,20 +25,51 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/VK|Яндекс|фото/i);
-    expect(prose).toMatch(/журнал|метаданн|модерац/i);
-    expect(prose).toMatch(/инициал|загружен/i);
+    expect(prose).toMatch(/оценк|сообществ/i);
+    expect(prose).toMatch(/обсуждени/i);
+    expect(prose).toMatch(/площадк/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(2);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/VK|Яндекс|метаданн|модерац/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/квадрат|компактн|210/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/оценк|обсуждени|площадк/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);
     expect(prose).not.toMatch(/134|138|140|Slow4G|5555|8656|все фото|prefetch|переписан|переписать|Изменить/i);
     expect(prose).not.toMatch(/новых типов уведомлен|новой модели разрешен|массовое переименование на диске уже|все файлы переименова/i);
     expect(prose).not.toMatch(/nonce|claim_nonce|Idempotency|MutationRunner|OpenAPI|Mode B|WebP|#507|\bB2b\b|\bB2a\b|RBAC|SQL/i);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.56" &&
+          row.source_sha === "524088767e2b7e77d569c2f0a47689db854ab7b0" &&
+          row.deployments[0]?.release_id === "r42465159954-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-08T09:11:48Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:58e9c86acd10434b1e748c4dfffe7aac0bd375070559c8458a40ffbd1113927c" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:7457fe35b99d31b9bc48e1dbf862ff39a23eb1a11cf471dfeb2dd1e5cb2932e4" &&
+          row.title === "Скрытие непроверенных фото из VK/Яндекс и журнал метаданных модерации" &&
+          row.api_contract_version === "0.39.0",
+      ),
+    ).toBe(true);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.57" &&
+          row.source_sha === "895e97fd5f60e4eaaa493cb911cd7d3d7fdd4c22" &&
+          row.deployments[0]?.release_id === "r42486594258-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-08T13:53:05Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:dde4e16f576ec4df2c69cee584dbfa91bba89afe99fa338378f9a629bc148b55" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:e9824a215dbc8746331d02181e38441883a6fc4348e1ded143c878c363fd6e2f" &&
+          row.title === "Карточка тренера в ленте и выравнивание кнопок действий в карточках игроков" &&
+          row.api_contract_version === "0.39.0",
+      ),
+    ).toBe(true);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
         (row) =>

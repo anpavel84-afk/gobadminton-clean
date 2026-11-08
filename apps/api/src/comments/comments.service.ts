@@ -42,6 +42,10 @@ import {
   unavailable,
   updateCommentRequest,
 } from "./comments.policy";
+import {
+  canonicalVenueFamilyIds,
+  resolveCanonicalVenue,
+} from "../venues/venue-community.query";
 
 type CommentRow = {
   id: string;
@@ -52,6 +56,7 @@ type CommentRow = {
   body: string | null;
   version: number;
   deleted_at: Date | null;
+  moderation_state?: "clear" | "withheld" | null;
   created_at: Date;
   updated_at: Date;
   reply_count?: string | number | null;
@@ -98,49 +103,33 @@ export class CommentsService {
     try {
       await client.query("BEGIN");
       try {
-        await this.lockAndAssertPublicParent(client, kind, entityId);
-        // Broad VENUE public list closed pending postgame eligibility (#394 Owner 02.11):
-        // verify public parent + normal params, never project legacy venue rows/counts/replies.
-        if (kind === "venue") {
-          if (query.cursor) {
-            decodeCursor(query.cursor, {
-              entityKind: kind,
-              entityId,
-              parentCommentId,
-              order,
-            });
-          }
-          await client.query("COMMIT");
-          return {
-            entityKind: kind,
-            entityId,
-            parentCommentId,
-            items: [],
-            nextCursor: null,
-            visibleCount: 0,
-            canCreate: false,
-          };
-        }
+        const listEntityId = await this.lockAndAssertPublicParent(client, kind, entityId);
         if (parentCommentId) {
-          await this.assertRootParent(client, kind, entityId, parentCommentId);
+          await this.assertRootParent(client, kind, listEntityId, parentCommentId, kind === "venue");
         }
         const cursor = query.cursor
           ? decodeCursor(query.cursor, {
             entityKind: kind,
-            entityId,
+            entityId: listEntityId,
             parentCommentId,
             order,
           })
           : null;
 
+        const familyIds = kind === "venue"
+          ? await canonicalVenueFamilyIds(client, listEntityId)
+          : [listEntityId];
         const listParams: unknown[] = viewerId
-          ? [kind, entityId, viewerId]
-          : [kind, entityId];
+          ? [kind, familyIds, viewerId]
+          : [kind, familyIds];
         let listParentSql = "c.parent_comment_id IS NULL";
         if (parentCommentId) {
           listParams.push(parentCommentId);
           listParentSql = `c.parent_comment_id = $${listParams.length}`;
         }
+        const withheldSql = viewerId
+          ? `AND (c.moderation_state = 'clear' OR c.author_user_id = $3::uuid)`
+          : `AND c.moderation_state = 'clear'`;
         let listCursorSql = "";
         if (cursor) {
           listParams.push(new Date(cursor.createdAt), cursor.id);
@@ -166,6 +155,9 @@ export class CommentsService {
                   OR (b.blocked_user_id = $3::uuid AND b.blocker_user_id = r.author_user_id)
              )`
           : "";
+        const replyWithheld = viewerId
+          ? `AND (r.moderation_state = 'clear' OR r.author_user_id = $3::uuid)`
+          : `AND r.moderation_state = 'clear'`;
 
         const rows = (
           await client.query<CommentRow>(
@@ -175,6 +167,8 @@ export class CommentsService {
                       WHERE r.parent_comment_id = c.id
                         AND r.entity_kind = c.entity_kind
                         AND r.entity_id = c.entity_id
+                        AND r.deleted_at IS NULL
+                        ${replyWithheld}
                         ${replyBlockExclude}
                     ) AS reply_count,
                     FALSE AS author_blocked,
@@ -201,9 +195,10 @@ export class CommentsService {
              LEFT JOIN player_social_profiles p ON p.user_id = c.author_user_id
              LEFT JOIN users u ON u.id = c.author_user_id
              WHERE c.entity_kind = $1
-               AND c.entity_id = $2
+               AND c.entity_id = ANY($2::uuid[])
                AND ${listParentSql}
                ${listCursorSql}
+               ${withheldSql}
                ${blockExclude}
              ORDER BY c.created_at ${order === "asc" ? "ASC" : "DESC"}, c.id ${order === "asc" ? "ASC" : "DESC"}
              LIMIT ${limitParam}`,
@@ -211,21 +206,25 @@ export class CommentsService {
           )
         ).rows;
 
-        const countParams: unknown[] = [kind, entityId];
+        const countParams: unknown[] = [kind, familyIds];
         let countParentSql = "c.parent_comment_id IS NULL";
         if (viewerId) countParams.push(viewerId);
         if (parentCommentId) {
           countParams.push(parentCommentId);
           countParentSql = `c.parent_comment_id = $${countParams.length}`;
         }
+        const countWithheld = viewerId
+          ? `AND (c.moderation_state = 'clear' OR c.author_user_id = $3::uuid)`
+          : `AND c.moderation_state = 'clear'`;
         // Visible count for this list scope (roots or one reply thread).
         const countRow = await client.query<{ n: string }>(
           `SELECT COUNT(*)::text AS n
            FROM entity_comments c
            WHERE c.entity_kind = $1
-             AND c.entity_id = $2
+             AND c.entity_id = ANY($2::uuid[])
              AND ${countParentSql}
              AND c.deleted_at IS NULL
+             ${countWithheld}
              ${viewerId ? `AND NOT EXISTS (
                SELECT 1 FROM user_blocks b
                WHERE (b.blocker_user_id = $3::uuid AND b.blocked_user_id = c.author_user_id)
@@ -237,14 +236,15 @@ export class CommentsService {
         // Also include visible replies in root-page total when listing roots.
         let visibleCount = Number(countRow.rows[0]?.n ?? 0);
         if (!parentCommentId) {
-          const totalParams: unknown[] = [kind, entityId];
+          const totalParams: unknown[] = [kind, familyIds];
           if (viewerId) totalParams.push(viewerId);
           const total = await client.query<{ n: string }>(
             `SELECT COUNT(*)::text AS n
              FROM entity_comments c
              WHERE c.entity_kind = $1
-               AND c.entity_id = $2
+               AND c.entity_id = ANY($2::uuid[])
                AND c.deleted_at IS NULL
+               ${countWithheld}
                ${viewerId ? `AND NOT EXISTS (
                  SELECT 1 FROM user_blocks b
                  WHERE (b.blocker_user_id = $3::uuid AND b.blocked_user_id = c.author_user_id)
@@ -255,14 +255,14 @@ export class CommentsService {
           visibleCount = Number(total.rows[0]?.n ?? 0);
         }
 
-        const canCreate = await this.resolveCanCreate(client, kind, entityId, viewerId);
+        const canCreate = await this.resolveCanCreate(client, kind, listEntityId, viewerId);
         await client.query("COMMIT");
         const page = rows.slice(0, limit);
         const hasMore = rows.length > limit;
         const last = page[page.length - 1];
         return {
           entityKind: kind,
-          entityId,
+          entityId: listEntityId,
           parentCommentId,
           items: page.map((row) => this.projectRow(row, viewerId)),
           nextCursor: hasMore && last
@@ -270,7 +270,7 @@ export class CommentsService {
               createdAt: last.created_at.toISOString(),
               id: last.id,
               entityKind: kind,
-              entityId,
+              entityId: listEntityId,
               parentCommentId,
               order,
             })
@@ -314,8 +314,8 @@ export class CommentsService {
       requestHash,
       requiredCapabilities: ["account.access", "profile.public"] as const,
       authorizeReplay: async (client: PoolClient) => {
-        await this.lockAndAssertPublicParent(client, kind, entityId);
-        await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
+        const scopeId = await this.lockAndAssertPublicParent(client, kind, entityId);
+        await this.assertCanWrite(client, kind, scopeId, actorId, parentCommentId);
       },
     };
 
@@ -330,22 +330,24 @@ export class CommentsService {
         ]);
       },
       execute: async (client, textApproval) => {
-        await this.lockAndAssertPublicParent(client, kind, entityId);
-        await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
+        const scopeId = await this.lockAndAssertPublicParent(client, kind, entityId);
+        await this.assertCanWrite(client, kind, scopeId, actorId, parentCommentId);
+        // New roots store canonical venue id; reply trigger may rewrite to root origin.
+        const writeEntityId = scopeId;
         const inserted = (
           await client.query<CommentRow>(
             `INSERT INTO entity_comments
                (entity_kind, entity_id, parent_comment_id, author_user_id, body, version)
              VALUES ($1, $2, $3, $4, $5, 1)
              RETURNING *`,
-            [kind, entityId, parentCommentId, actorId, text],
+            [kind, writeEntityId, parentCommentId, actorId, text],
           )
         ).rows[0]!;
         await client.query(
           `INSERT INTO entity_comment_revisions
              (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
            VALUES ($1, $2, $3, 1, $4, $5, false)`,
-          [inserted.id, kind, entityId, actorId, text],
+          [inserted.id, kind, inserted.entity_id, actorId, text],
         );
         await this.bindCommentPublication(client, textApproval, text, {
           commentId: inserted.id,
@@ -383,7 +385,6 @@ export class CommentsService {
       authorizeReplay: async (client: PoolClient) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
-        this.assertBroadVenueWriteClosed(row.entity_kind);
       },
     };
 
@@ -398,10 +399,10 @@ export class CommentsService {
       execute: async (client, textApproval) => {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
-        this.assertBroadVenueWriteClosed(row.entity_kind);
         if (row.version !== body.expectedVersion) {
           throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
         }
+        // Author edits never clear moderation withholding (column omitted from SET).
         const next = (
           await client.query<CommentRow>(
             `UPDATE entity_comments
@@ -489,11 +490,12 @@ export class CommentsService {
     return Boolean((await client.query("SELECT to_regclass('entity_comments') AS name")).rows[0]?.name);
   }
 
+  /** Returns the public parent id used for list/create scope (canonical venue for venue). */
   private async lockAndAssertPublicParent(
     client: PoolClient,
     kind: EntityCommentKind,
     entityId: string,
-  ): Promise<void> {
+  ): Promise<string> {
     if (!(await this.installed(client))) unavailable();
     if (kind === "game") {
       // Lock order: Actor (MutationRunner) → Game → comments.
@@ -536,39 +538,13 @@ export class CommentsService {
         [entityId],
       );
       if (!stillPublic.rows[0]) unavailable();
-      return;
+      return entityId;
     }
 
-    const venue = (
-      await client.query<{
-        id: string;
-        lifecycle_state: string;
-        canonical_venue_id: string | null;
-      }>(
-        `SELECT id, lifecycle_state, canonical_venue_id
-         FROM venues WHERE id = $1 FOR SHARE`,
-        [entityId],
-      )
-    ).rows[0];
-    if (!venue) unavailable();
-    const fresh = (
-      await client.query<{
-        id: string;
-        lifecycle_state: string;
-        canonical_venue_id: string | null;
-      }>(
-        `SELECT id, lifecycle_state, canonical_venue_id FROM venues WHERE id = $1`,
-        [entityId],
-      )
-    ).rows[0];
-    // Stale merged/retired ids reject indistinguishably; UI resolves aliases first.
-    if (
-      !fresh
-      || fresh.canonical_venue_id !== null
-      || !["unverified", "verified"].includes(fresh.lifecycle_state)
-    ) {
-      unavailable();
-    }
+    const resolved = await resolveCanonicalVenue(client, entityId);
+    if (!resolved) unavailable();
+    await client.query(`SELECT id FROM venues WHERE id = $1 FOR SHARE`, [resolved.canonicalId]);
+    return resolved.canonicalId;
   }
 
   private async assertRootParent(
@@ -576,7 +552,21 @@ export class CommentsService {
     kind: EntityCommentKind,
     entityId: string,
     parentCommentId: string,
+    venueFamily = false,
   ): Promise<CommentRow> {
+    if (kind === "venue" && venueFamily) {
+      const family = await canonicalVenueFamilyIds(client, entityId);
+      const parent = (
+        await client.query<CommentRow>(
+          `SELECT * FROM entity_comments
+           WHERE id = $1 AND entity_kind = $2 AND entity_id = ANY($3::uuid[])
+           FOR SHARE`,
+          [parentCommentId, kind, family],
+        )
+      ).rows[0];
+      if (!parent || parent.parent_comment_id !== null) unavailable();
+      return parent;
+    }
     const parent = (
       await client.query<CommentRow>(
         `SELECT * FROM entity_comments
@@ -587,21 +577,6 @@ export class CommentsService {
     ).rows[0];
     if (!parent || parent.parent_comment_id !== null) unavailable();
     return parent;
-  }
-
-  /**
-   * Broad VENUE create/reply/update remain CURRENT runtime-closed pending Owner-approved #507 I1.
-   * Not a permanent product-by-design ban; #507 supersedes permanent closure of general venue discussion.
-   * Owned delete/withdrawal stays on its own path and must not call this guard.
-   * When #507 opens allowed venue writes, the same comment_body gate must protect them.
-   */
-  private assertBroadVenueWriteClosed(kind: EntityCommentKind): void {
-    if (kind === "venue") {
-      throw forbidden(
-        "COMMENT_VENUE_WRITES_CLOSED",
-        "Комментарии к площадке временно недоступны",
-      );
-    }
   }
 
   /**
@@ -618,8 +593,8 @@ export class CommentsService {
     try {
       await client.query("BEGIN");
       try {
-        await this.lockAndAssertPublicParent(client, kind, entityId);
-        await this.assertCanWrite(client, kind, entityId, actorId, parentCommentId);
+        const scopeId = await this.lockAndAssertPublicParent(client, kind, entityId);
+        await this.assertCanWrite(client, kind, scopeId, actorId, parentCommentId);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -641,7 +616,6 @@ export class CommentsService {
       try {
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
-        this.assertBroadVenueWriteClosed(row.entity_kind);
         if (row.version !== expectedVersion) {
           throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
         }
@@ -676,9 +650,8 @@ export class CommentsService {
   }
 
   /**
-   * List projection of write eligibility — same capability + game-organizer block gates as create.
-   * Does not invent admin policy; read stays available when false.
-   * Broad VENUE create is always false while #507 I1 is pending (runtime closed, not permanent).
+   * List projection of write eligibility — same capability + block gates as create.
+   * Venue (#507 I1): registered active account, no attendance requirement.
    */
   private async resolveCanCreate(
     client: PoolClient,
@@ -687,7 +660,6 @@ export class CommentsService {
     viewerId: string | null,
   ): Promise<boolean> {
     if (!viewerId) return false;
-    if (kind === "venue") return false;
     if (this.env.USER_RESTRICTIONS_INTERNAL_ENABLED) {
       const allowed = await client.query(
         `SELECT 1 WHERE ${unrestrictedSql(true, "$1", ["account.access", "profile.public"])}`,
@@ -695,6 +667,11 @@ export class CommentsService {
       );
       if (!allowed.rows[0]) return false;
     }
+    const active = await client.query(
+      `SELECT 1 FROM users WHERE id = $1 AND status = 'active'`,
+      [viewerId],
+    );
+    if (!active.rows[0]) return false;
     if (kind === "game") {
       const organizer = (
         await client.query<{ created_by_user_id: string }>(
@@ -719,8 +696,6 @@ export class CommentsService {
     actorId: string,
     parentCommentId: string | null,
   ): Promise<void> {
-    // Fail-closed for VENUE create/reply (and authorizeReplay of prior successes).
-    this.assertBroadVenueWriteClosed(kind);
     if (kind === "game") {
       const organizer = (
         await client.query<{ created_by_user_id: string }>(
@@ -737,7 +712,13 @@ export class CommentsService {
       }
     }
     if (parentCommentId) {
-      const parent = await this.assertRootParent(client, kind, entityId, parentCommentId);
+      const parent = await this.assertRootParent(
+        client,
+        kind,
+        entityId,
+        parentCommentId,
+        kind === "venue",
+      );
       if (parent.author_user_id !== actorId) {
         const blocked = await this.pairBlocked(client, actorId, parent.author_user_id);
         if (blocked) {

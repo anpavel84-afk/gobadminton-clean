@@ -47,9 +47,9 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.57 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.57");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.39.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.58 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.58");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -64,9 +64,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/карточка|тренер|компакт/i);
-    expect(currentProse).toMatch(/организатор|отдельн|идентификатор/i);
-    expect(currentProse).toMatch(/Следующий|Давай сыграем|выравниван|статус/i);
+    expect(currentProse).toMatch(/оценк|сообществ/i);
+    expect(currentProse).toMatch(/обсуждени/i);
+    expect(currentProse).toMatch(/площадк/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,19 +85,13 @@ describe("releases catalogue integrity", () => {
       /электронной почте недоступен|после игры не запущен|Push-уведомления не активны|push-уведомления не активны/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/карточка|тренер|выравниван|кноп/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(
-      /тренер|организатор|компакт|фото|перенос/i,
-    );
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(
-      /Следующий|Давай сыграем|высот|статус/i,
-    );
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/WebP|507|Mode B|READY|ACTIVE|nonce|138|140|PROD|DEV/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/оценк|обсуждени|площадк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/квадрат|компактн|210|ролей|отзыв/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(4);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
-      /проверк|приёмк|юридическ|2027|iPhone|GoBad/i,
+      /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф/i,
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(
       /#507|\bB2b\b|\bB2a\b|\bMode B\b|nonce|claim_nonce|Idempotency/i,
@@ -254,10 +248,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(60);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(61);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(65);
+    ).toBe(66);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -288,6 +282,25 @@ describe("releases catalogue integrity", () => {
       && row.additions.length === 2
       && row.fixes.length === 0
       && row.known_limitations.length === 4
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.57"
+      && row.version_label === "0.1.0-alpha.57"
+      && row.source_sha === "895e97fd5f60e4eaaa493cb911cd7d3d7fdd4c22"
+      && row.deployments[0]?.release_id === "r42486594258-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T13:53:05Z"
+      && row.deployments[0]?.api_digest === "sha256:dde4e16f576ec4df2c69cee584dbfa91bba89afe99fa338378f9a629bc148b55"
+      && row.deployments[0]?.web_digest === "sha256:e9824a215dbc8746331d02181e38441883a6fc4348e1ded143c878c363fd6e2f"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.39.0"
+      && row.title === "Карточка тренера в ленте и выравнивание кнопок действий в карточках игроков"
+      && row.additions.length === 0
+      && row.fixes.length === 2
+      && row.known_limitations.length === 3
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>

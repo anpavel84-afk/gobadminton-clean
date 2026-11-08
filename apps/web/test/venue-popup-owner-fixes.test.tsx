@@ -150,7 +150,14 @@ describe("production venue popup presentation with real React", () => {
     const html = render(true, []);
     expect(html).toContain("Existing cover slot"); expect(html).not.toContain("PRIVATE_");
     expect(html).toMatch(/<button[^>]*>Создать игру на этой площадке/);
-    expect(links(html)).toEqual([]);
+    // Legitimate public #ratings compact link only — not an organization contact.
+    expect(links(html)).toEqual([{
+      href: `/venues/${encodeURIComponent(venue.id)}#ratings`,
+      target: undefined,
+      rel: undefined,
+      text: "Оценки загружаются…Оценки и обсуждение",
+    }]);
+    expect(html).toContain('class="gb-venue-community__compact-link"');
     expect(textContent(html).indexOf(venue.address)).toBeLessThan(textContent(html).indexOf("Контакты площадки"));
     expect(textContent(html).indexOf("Контакты площадки")).toBeLessThan(textContent(html).indexOf("Создать игру"));
     expect(render(false, [])).not.toContain("Создать игру на этой площадке");
