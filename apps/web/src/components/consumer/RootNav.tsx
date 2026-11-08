@@ -68,7 +68,7 @@ function MessagesAction() {
 }
 
 function ProfileAction() {
-  const { identity, imageGeneration } = useHeaderIdentity(usePathname());
+  const { identity, imageGeneration } = useHeaderIdentity();
   const name = identity?.name || "Профиль";
   return (
     <Link href="/profile" className="gb-header-profile" aria-label={identity ? `Профиль: ${name}` : "Профиль"}>

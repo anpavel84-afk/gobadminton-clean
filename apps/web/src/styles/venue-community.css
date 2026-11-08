@@ -15,27 +15,46 @@
 
 .gb-venue-community__heading {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 18px;
+  min-width: 0;
+}
+
+.gb-venue-community__heading > div {
+  flex: 1 1 12rem;
+  min-width: 0;
 }
 
 .gb-venue-community__heading h2 {
   margin: 0 0 8px;
   font-size: 23px;
   letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
 }
 
 .gb-venue-community__heading p {
   margin: 0;
   font-size: 13px;
   color: var(--gb-ink-soft, #536159);
+  overflow-wrap: anywhere;
 }
 
 .gb-venue-community__report-trigger {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
   font-size: 13px;
+}
+
+/* Known community anchors: clear sticky topbar (72 mobile / 84 desktop tokens). */
+.gb-venue-community #ratings,
+.gb-venue-community #discussion,
+.gb-venue-community #reviews {
+  scroll-margin-top: calc(var(--gb-header-height-desktop, 84px) + 12px);
 }
 
 .gb-venue-community__report-form {
@@ -200,6 +219,14 @@
   font-size: 12px;
   color: var(--gb-ink-soft, #536159);
   margin: 0 0 12px;
+}
+
+@media (max-width: 720px) {
+  .gb-venue-community #ratings,
+  .gb-venue-community #discussion,
+  .gb-venue-community #reviews {
+    scroll-margin-top: calc(var(--gb-header-height-mobile, 72px) + 12px);
+  }
 }
 
 @media (max-width: 600px) {

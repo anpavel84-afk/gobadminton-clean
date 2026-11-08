@@ -132,10 +132,19 @@ function installPartialDom() {
     setAttribute(name: string, value: string) { attrs.set(name, value); },
     removeAttribute(name: string) { attrs.delete(name); },
   };
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "", pathname: "/games", assign: vi.fn() } }));
+  // VenuePage known-section navigation uses window rAF; keep APIs on this harness window.
+  const requestAnimationFrame = (fn: FrameRequestCallback) =>
+    setTimeout(() => fn(0), 16) as unknown as number;
+  const cancelAnimationFrame = (id: number) => clearTimeout(id);
+  vi.stubGlobal("window", Object.assign(new EventTarget(), {
+    location: { search: "", pathname: "/games", assign: vi.fn(), hash: "" },
+    requestAnimationFrame,
+    cancelAnimationFrame,
+  }));
   vi.stubGlobal("document", Object.assign(new EventTarget(), {
     visibilityState: "visible",
     querySelector: () => null,
+    getElementById: () => null,
     documentElement,
   }));
 }

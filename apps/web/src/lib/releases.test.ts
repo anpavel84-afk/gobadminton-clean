@@ -10,8 +10,8 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.58 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.58");
+  it("bumps current descriptor to alpha.59 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.59");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -25,21 +25,38 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/оценк|сообществ/i);
-    expect(prose).toMatch(/обсуждени/i);
-    expect(prose).toMatch(/площадк/i);
+    expect(prose).toMatch(/жалоб|сводк/i);
+    expect(prose).toMatch(/якор|раздел/i);
+    expect(prose).toMatch(/площадк|шапк/i);
+    expect(prose).toMatch(/личн|аватар|Профиль|переход/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/квадрат|компактн|210/i);
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/оценк|обсуждени|площадк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/узк|перенос|жалоб|якор|шапк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/личн|аватар|Профиль|переход/i);
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/жалоб|якор|площадк|шапк/i);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);
     expect(prose).not.toMatch(/134|138|140|Slow4G|5555|8656|все фото|prefetch|переписан|переписать|Изменить/i);
     expect(prose).not.toMatch(/новых типов уведомлен|новой модели разрешен|массовое переименование на диске уже|все файлы переименова/i);
     expect(prose).not.toMatch(/nonce|claim_nonce|Idempotency|MutationRunner|OpenAPI|Mode B|WebP|#507|\bB2b\b|\bB2a\b|RBAC|SQL/i);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.58" &&
+          row.source_sha === "190187919cb3e36839aabc543e2c85d206de0cb4" &&
+          row.deployments[0]?.release_id === "r42508393660-a3" &&
+          row.deployments[0]?.accepted_at === "2026-11-08T18:34:32Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:ef01bfb584eedb24f5a0a9836053a7f0ba0ee9f3db2ff66ad345fd1c9246053c" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:8bd2a2f5134b6fe8ee919697b24fb8af546385e2be8a4501fff7473d6082fe10" &&
+          row.title === "Оценки сообщества площадки и открытое обсуждение" &&
+          row.api_contract_version === "0.40.0",
+      ),
+    ).toBe(true);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
         (row) =>
