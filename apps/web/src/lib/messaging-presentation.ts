@@ -20,8 +20,13 @@ export function socialError(r: Extract<ApiResult<unknown>, { ok: false }>) {
   if (r.status === 0 || r.status >= 500) return "Результат не подтверждён. Отправка могла завершиться. Проверьте результат перед следующим действием.";
   if (r.status === 401) return "Войдите снова, чтобы продолжить.";
   if (r.problem?.code === "GAME_FULL") return "Свободных мест нет. Участие не подтверждено.";
+  if (r.problem?.code === "PRIVATE_TEXT_CONTENT_REJECTED") {
+    return "Сообщение не отправлено. Измените текст и попробуйте снова.";
+  }
+  if (r.problem?.code === "PRIVATE_TEXT_RATE_LIMITED" || r.status === 429) {
+    return "Слишком много сообщений. Подождите немного и попробуйте снова.";
+  }
   if (r.status === 404 || r.status === 403) return "Это действие сейчас недоступно.";
-  if (r.status === 429) return "Слишком много попыток. Попробуйте немного позже.";
   if (r.status === 409) return "Условия изменились. Обновите данные перед следующим действием.";
   return "Не удалось выполнить действие. Проверьте данные и попробуйте снова.";
 }

@@ -2,13 +2,18 @@ import { Inject, Injectable, Optional } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
   badRequest,
-  conflict,
   notFound,
   unprocessable,
 } from "../auth/problem";
 import { IdempotencyService } from "../common/idempotency.service";
 import { MutationRunner } from "../common/mutation-runner.service";
 import { JobEnqueueService } from "../jobs/job-enqueue.service";
+import {
+  assertExactLivePayloadMatch,
+  assertPrivateMessageSendable,
+  throwClientMessageIdReused,
+  type StoredMessagePayloadRow,
+} from "../moderation/private-text-policy";
 import { DATABASE_POOL } from "../tokens";
 import {
   GAME_CHAT_CLIENT_MESSAGE_ID_MAX,
@@ -344,13 +349,8 @@ export class GameChatService {
       },
       execute: async (client) => {
         const now = new Date();
-        const prior = await client.query<{
-          id: string;
-          conversation_id: string;
-          seq: string | number;
-          created_at: Date;
-        }>(
-          `SELECT id, conversation_id, seq, created_at
+        const prior = await client.query<StoredMessagePayloadRow>(
+          `SELECT id, conversation_id, seq, created_at, kind, body_text, content_state
            FROM messages
            WHERE author_user_id = $1 AND client_message_id = $2`,
           [actorId, normalized.clientMessageId],
@@ -363,11 +363,12 @@ export class GameChatService {
           });
           const conversation = await this.ensureConversationRow(client, gameId);
           if (row.conversation_id !== conversation.id) {
-            throw conflict(
-              "CLIENT_MESSAGE_ID_REUSED",
-              "clientMessageId уже использован",
-            );
+            throwClientMessageIdReused();
           }
+          assertExactLivePayloadMatch(row, {
+            text: normalized.text,
+            kind: "text",
+          });
           await this.materializeActorMember(
             client,
             conversation.id,
@@ -402,6 +403,13 @@ export class GameChatService {
           actorId,
           access.role,
         );
+
+        await assertPrivateMessageSendable(client, {
+          authorUserId: actorId,
+          text: normalized.text,
+          now,
+          conversationId: conversation.id,
+        });
 
         const seq = Number(conversation.next_message_seq);
         const purgeAt = this.feature.purgeEligibleAt(now);
