@@ -1,7 +1,5 @@
-/**
- * Cases message-source clearing harness under vitest include test/**/*.test.{ts,tsx}.
- * Mirrors apps/admin/test/cases.test.tsx review-source race coverage for message reports.
- */
+// Cases message-source clearing harness under the Admin vitest include for .test.ts and .test.tsx files.
+// Mirrors apps/admin/test/cases.test.tsx review-source race coverage for message reports.
 import { isValidElement } from "react";
 import type * as ReactModule from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
