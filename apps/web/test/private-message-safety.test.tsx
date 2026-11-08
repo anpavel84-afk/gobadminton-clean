@@ -6,6 +6,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import type * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { socialError } from "../src/lib/messaging-presentation";
 import type { Me } from "../src/lib/consumer-types";
@@ -23,7 +24,7 @@ const foreground = vi.hoisted(() => ({
 }));
 
 vi.mock("react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react")>();
+  const actual = await importOriginal<typeof React>();
   return {
     ...actual,
     useState<T>(initial: T) {
