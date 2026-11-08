@@ -112,37 +112,78 @@ import {
 import { useSocialMutation } from "../src/components/consumer/messages/useSocialMutation";
 import { GameConversation } from "../src/components/consumer/messages/GameConversation";
 
+/** Sync rendered tree only — React 19 ReactNode includes Promise, which async/await would flatten. */
+type RenderedTree = Exclude<ReactNode, Promise<unknown>>;
+
+type ChangeEvent = { target: { value: string } };
+type SubmitEvent = { preventDefault: () => void };
+
+type RenderedProps = {
+  children?: ReactNode;
+  className?: string;
+  value?: string;
+  "aria-label"?: string;
+  "data-auth"?: string;
+  "data-profile-state"?: string;
+  onChange?: (e: ChangeEvent) => void;
+  onSubmit?: (e: SubmitEvent) => void;
+};
+
+type RenderedElement = ReactElement<RenderedProps>;
+
+function isRenderedElement(node: ReactNode): node is RenderedElement {
+  return isValidElement<RenderedProps>(node);
+}
+
+function callChange(props: RenderedProps, value: string): void {
+  const onChange = props.onChange;
+  if (typeof onChange !== "function") {
+    throw new Error("expected onChange handler");
+  }
+  onChange({ target: { value } });
+}
+
+function callSubmit(props: RenderedProps): void {
+  const onSubmit = props.onSubmit;
+  if (typeof onSubmit !== "function") {
+    throw new Error("expected onSubmit handler");
+  }
+  onSubmit({ preventDefault() {} });
+}
+
 function flushEffects() {
   const queued = hooks.effects.splice(0);
   for (const effect of queued) effect();
 }
 
-function expand(node: ReactNode): ReactNode {
+function expand(node: ReactNode): RenderedTree {
   if (node == null || typeof node === "boolean") return node;
-  if (Array.isArray(node)) return node.map(expand);
-  if (!isValidElement(node)) return node;
-  if (typeof node.type === "function") {
-    return expand(
-      (node.type as (props: Record<string, unknown>) => ReactNode)(
-        node.props as Record<string, unknown>,
-      ),
-    );
+  if (typeof node === "string" || typeof node === "number" || typeof node === "bigint") {
+    return node;
   }
-  const children = (node.props as { children?: ReactNode }).children;
+  if (Array.isArray(node)) return node.map(expand);
+  if (!isRenderedElement(node)) return null;
+  if (typeof node.type === "function") {
+    return expand((node.type as (props: RenderedProps) => ReactNode)(node.props));
+  }
+  const { children } = node.props;
   if (children == null) return node;
-  return cloneElement(node, undefined, Children.map(children, (child) => expand(child)));
+  return cloneElement(
+    node,
+    undefined,
+    Children.map(children, (child) => expand(child)),
+  );
 }
 
-function walk(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
+function walk(node: ReactNode, out: RenderedElement[] = []): RenderedElement[] {
   if (node == null || typeof node === "boolean") return out;
   if (Array.isArray(node)) {
     for (const child of node) walk(child, out);
     return out;
   }
-  if (!isValidElement(node)) return out;
-  out.push(node as ReactElement);
-  const props = node.props as { children?: ReactNode };
-  Children.forEach(props.children, (child) => walk(child, out));
+  if (!isRenderedElement(node)) return out;
+  out.push(node);
+  Children.forEach(node.props.children, (child) => walk(child, out));
   return out;
 }
 
@@ -310,14 +351,14 @@ describe("private message safety UX", () => {
       data: { publicPlayerId: "own" },
     } as never);
 
-    function renderTree() {
+    function renderTree(): RenderedTree {
       hooks.cursor = 0;
       const tree = expand(createElement(GameConversation, { id: "game-1", me, changed }));
       flushEffects();
       return tree;
     }
 
-    async function settleReady() {
+    async function settleReady(): Promise<RenderedTree> {
       renderTree();
       expect(foreground.load).toBeTruthy();
       const result = await foreground.load!({
@@ -328,15 +369,13 @@ describe("private message safety UX", () => {
       return renderTree();
     }
 
-    let tree = await settleReady();
+    let tree: RenderedTree = await settleReady();
     let nodes = walk(tree);
     let input = nodes.find(
       (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
     );
     expect(input).toBeTruthy();
-    (input!.props.onChange as (e: { target: { value: string } }) => void)({
-      target: { value: draft },
-    });
+    callChange(input!.props, draft);
     tree = renderTree();
     nodes = walk(tree);
     input = nodes.find(
@@ -347,7 +386,7 @@ describe("private message safety UX", () => {
     const form = nodes.find((n) => n.type === "form" && n.props.className === "composer");
     expect(form).toBeTruthy();
 
-    async function submitWithFailure(status: number, code: string) {
+    async function submitWithFailure(status: number, code: string): Promise<RenderedTree> {
       vi.mocked(apiFetch).mockResolvedValue({
         ok: false,
         status,
@@ -358,9 +397,7 @@ describe("private message safety UX", () => {
       nodes = walk(tree);
       const liveForm = nodes.find((n) => n.type === "form" && n.props.className === "composer");
       expect(liveForm).toBeTruthy();
-      (liveForm!.props.onSubmit as (e: { preventDefault: () => void }) => void)({
-        preventDefault() {},
-      });
+      callSubmit(liveForm!.props);
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
@@ -373,7 +410,7 @@ describe("private message safety UX", () => {
       (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
     );
     expect(input?.props.value).toBe(draft);
-    expect(nodes.some((n) => n.props?.className === "chat-access-loss")).toBe(false);
+    expect(nodes.some((n) => n.props.className === "chat-access-loss")).toBe(false);
 
     tree = await submitWithFailure(429, "PRIVATE_TEXT_RATE_LIMITED");
     nodes = walk(tree);
@@ -384,13 +421,13 @@ describe("private message safety UX", () => {
 
     tree = await submitWithFailure(403, "RESOURCE_UNAVAILABLE");
     nodes = walk(tree);
-    expect(nodes.some((n) => n.props?.className === "chat-access-loss")).toBe(true);
+    expect(nodes.some((n) => n.props.className === "chat-access-loss")).toBe(true);
     expect(
       nodes.some(
         (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
       ),
     ).toBe(false);
-    expect(nodes.some((n) => n.props?.className === "composer-restricted")).toBe(true);
+    expect(nodes.some((n) => n.props.className === "composer-restricted")).toBe(true);
 
     // Restore ready + draft, then 401 access loss also clears draft.
     hooks.slots = [];
@@ -402,9 +439,7 @@ describe("private message safety UX", () => {
     input = nodes.find(
       (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
     );
-    (input!.props.onChange as (e: { target: { value: string } }) => void)({
-      target: { value: draft },
-    });
+    callChange(input!.props, draft);
     tree = await submitWithFailure(401, "UNAUTHORIZED");
     nodes = walk(tree);
     expect(
@@ -412,7 +447,7 @@ describe("private message safety UX", () => {
         (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
       ),
     ).toBe(false);
-    expect(nodes.some((n) => n.props?.["data-auth"] === "1" || n.props?.["data-profile-state"])).toBe(
+    expect(nodes.some((n) => n.props["data-auth"] === "1" || n.props["data-profile-state"])).toBe(
       true,
     );
 
@@ -426,12 +461,10 @@ describe("private message safety UX", () => {
     input = nodes.find(
       (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
     );
-    (input!.props.onChange as (e: { target: { value: string } }) => void)({
-      target: { value: draft },
-    });
+    callChange(input!.props, draft);
     tree = await submitWithFailure(404, "RESOURCE_UNAVAILABLE");
     nodes = walk(tree);
-    expect(nodes.some((n) => n.props?.className === "chat-access-loss")).toBe(true);
+    expect(nodes.some((n) => n.props.className === "chat-access-loss")).toBe(true);
     expect(
       nodes.some(
         (n) => n.type === "input" && n.props["aria-label"] === "Сообщение участникам",
