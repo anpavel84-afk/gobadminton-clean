@@ -922,3 +922,145 @@ class Repair2Focused(unittest.TestCase):
                 try: os.waitpid(child,0)
                 except ChildProcessError: pass
             libc.prctl(36, old.value, 0, 0, 0)
+
+
+class ProtectedHighSuccessor(unittest.TestCase):
+    """Injected Root proof and transports only; no native/model calls."""
+
+    def authority(self, **request):
+        return dict(request, executor_uid=1002, admitted=True, qualified=True,
+                    secured=True, independent_executor=True, recipe_fingerprint='accepted')
+
+    @contextmanager
+    def fixture(self):
+        core = SimpleNamespace(live=lambda: (SimpleNamespace(model_command=lambda: None), None))
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            root = Path(td); work = root / 'work'; work.mkdir()
+            (work / 'x.py').write_bytes(b'partial')
+            t = bound(task()); original = 'a' * 40
+            current = h.operation(t, 'cursor_auto', original)
+            observer = h.SourceRetention(baseline={'x.py': hashlib.sha256(b'old').hexdigest()},
+                allowed=['x.py'], ignored=lambda n: False, source_name=lambda n: True, secrets=lambda: ())
+            observer.capture(work)
+            manifest = observer.persist(root, current)
+            failure = p.CapacityFailure(current, 'capacityhash', 'RATE_LIMIT', 'native_top_level_error')
+            proof = p.StopProof(current, failure.fingerprint, True, True, True, False,
+                str(root / 'source-checkpoint/manifest.json'), ('native-final',), 'preserved_diff')
+            stack.enter_context(patch.object(providers, '_import_native', return_value=core))
+            stack.enter_context(patch.object(providers, 'routing_qualifications', return_value=routes()))
+            config = {'author_routing': {'mode': 'on', 'pipeline_revision': 'c' * 40}}
+            admission = dict(issue=527, revision=t['revision'], task=t)
+            high_only = lambda **kw: self.authority(**kw) if kw['effort'] == 'high' else None
+            claim = run.claim_admission(admission, results_root=root, config=config, reviewer_authority=high_only)
+            claim.update(worktree=str(work), base_sha='b' * 40, attempts={'author': 1, 'qa': 0})
+            path = run.claim_path_for(admission, root); run.write_receipt(path, claim)
+            with patch.object(run, '_read_worktree_head_for_control', return_value=original):
+                proposal = run.record_capacity_proposal(path, t, providers.ProviderError('provider_control_failure'),
+                    root, lambda **kw: p.CapacityStop(failure, proof), reviewer_authority=high_only, qa_effort='high')
+            self.assertEqual(proposal['action'], 'REQUIRE_NEW_ADMISSION')
+            newtask = task(); newtask.update(handoff_from_revision=t['revision'],
+                checkpoint_fingerprint=manifest['fingerprint'], checkpoint_sha='c' * 40, base='c' * 40)
+            successor = dict(issue=527, revision='d' * 64, task=newtask)
+            def git(worktree, *args):
+                if args[:2] == ('rev-parse', 'HEAD'): return 'c' * 40
+                if args[0] == 'status': return ''
+                if args[0] == 'diff': return 'x.py\0'
+                raise AssertionError(args)
+            with patch.object(live, 'git', side_effect=git):
+                claim = run.claim_admission(successor, results_root=root, config=config,
+                                            reviewer_authority=self.authority)
+            claim['task'] = dict(claim['task'], _bound_author=claim['bound_author'],
+                                 revision=claim['revision'], worktree=str(work))
+            yield root, claim, run.claim_path_for(successor, root)
+
+    def test_successor_high_survives_both_proofs_through_live_and_capacity(self):
+        with self.fixture() as (root, claim, path):
+            protected = claim['reviewer_authority']; t = claim['task']
+            self.assertEqual(protected['effort'], 'high')
+            self.assertEqual(providers.accepted_qa_effort(self.authority), 'medium')
+            with patch.object(live, 'build_reviewer_authority', return_value=self.authority), \
+                    patch.object(live, 'agy_author_live', return_value={'candidate_sha': 'c' * 40}) as author, \
+                    patch.object(live, 'codex_qa_live', return_value={'verdict': 'PASS'}) as qa, \
+                    patch.object(providers, 'role_ready', wraps=providers.role_ready) as ready:
+                # Author availability is injected; reviewer proof remains the real predicate.
+                original_ready = ready._mock_wraps
+                ready.side_effect = lambda role, **kw: (True, {}) if role == 'agy_author' else original_ready(role, **kw)
+                adapters = run.default_live_adapters(results_root=root)
+                providers.invoke_cursor_author(task=t, worktree=t['worktree'], evidence_dir=root / 'author',
+                    launcher=adapters.author, reviewer_authority=self.authority, protected_reviewer=protected)
+                author.assert_called_once()
+                self.assertEqual(providers.select_qa_provider(t, issue=527,
+                    reviewer_authority=self.authority, protected_reviewer=protected)[0], 'codex_sol_medium')
+                adapters.qa(claim)
+                self.assertEqual(qa.call_args.kwargs['qa_effort'], 'high')
+                self.assertEqual(qa.call_args.kwargs['protected_reviewer'], protected)
+            with patch.object(providers, '_live_codex_qa', return_value=lambda **kw: dict(
+                    verdict='PASS', reviewed_sha=kw['candidate_sha'], findings=[], effort=kw['qa_effort'])):
+                result = providers.invoke_codex_qa(task=t, candidate_sha='c' * 40, evidence_dir=root / 'qa',
+                    reviewer_authority=self.authority, protected_reviewer=protected)
+                self.assertEqual(result['effort'], 'high')
+            # Enter the actual native QA preflight and stop before its transport.
+            with patch.object(live, 'require_executor_uid'), \
+                    patch.object(providers, 'role_ready', wraps=providers.role_ready) as ready, \
+                    patch.object(providers, 'prepare_qa_intent', side_effect=RuntimeError('fixture stop')):
+                with self.assertRaisesRegex(RuntimeError, 'fixture stop'):
+                    live.codex_qa_live(task=t, candidate_sha='c' * 40, evidence_dir=root / 'native-qa',
+                        reviewer_authority=self.authority, protected_reviewer=protected)
+                qa_checks = [c.kwargs['effort'] for c in ready.call_args_list
+                             if c.args[0] == 'codex_routing_qa']
+                self.assertEqual(qa_checks, ['high', 'high'])
+            current = h.operation(t, 'agy_author', 'c' * 40)
+            failure = p.CapacityFailure(current, 'secondhash', 'RATE_LIMIT', 'native_top_level_error')
+            proof = p.StopProof(current, failure.fingerprint, True, True, True, False,
+                'checkpoint2', ('native-final2',), 'preserved_diff')
+            with patch.object(run, '_read_worktree_head_for_control', return_value='c' * 40):
+                result = run.record_capacity_proposal(path, t, providers.ProviderError('provider_control_failure'),
+                    root, lambda **kw: p.CapacityStop(failure, proof), reviewer_authority=self.authority)
+            self.assertEqual(result['reviewer']['model'], 'gpt-6-sol:high')
+            self.assertEqual(run.read_receipt(path)['reviewer_authority'], protected)
+
+    def test_revoked_or_changed_high_holds_before_effects_with_medium_valid(self):
+        with self.fixture() as (root, claim, path):
+            for changed in (None, 'replacement'):
+                def authority(**kw):
+                    if kw['effort'] == 'medium': return self.authority(**kw)
+                    return None if changed is None else dict(self.authority(**kw), recipe_fingerprint=changed)
+                with patch.object(live, 'build_reviewer_authority', return_value=authority), \
+                        patch.object(live, 'agy_author_live') as author, \
+                        patch.object(live, 'codex_qa_live') as qa, \
+                        patch.object(providers, 'prepare_cursor_author_intent') as intent:
+                    adapters = run.default_live_adapters(results_root=root)
+                    for operation in (
+                        lambda: providers.invoke_cursor_author(task=claim['task'], worktree=root, evidence_dir=root,
+                            launcher=adapters.author, reviewer_authority=authority,
+                            protected_reviewer=claim['reviewer_authority']),
+                        lambda: adapters.qa(claim),
+                        lambda: providers.invoke_codex_qa(task=claim['task'], candidate_sha='c' * 40,
+                            evidence_dir=root, reviewer_authority=authority,
+                            protected_reviewer=claim['reviewer_authority'])):
+                        with self.assertRaises(providers.ProviderError): operation()
+                    author.assert_not_called(); qa.assert_not_called(); intent.assert_not_called()
+                with patch.object(run, '_read_worktree_head_for_control') as head:
+                    decoder = unittest.mock.Mock()
+                    result = run.record_capacity_proposal(path, claim['task'],
+                        providers.ProviderError('provider_control_failure'), root, decoder, reviewer_authority=authority)
+                    self.assertEqual(result['action'], 'HOLD'); decoder.assert_not_called(); head.assert_not_called()
+
+    def test_ordinary_medium_and_task_forgery_do_not_change_protected_authority(self):
+        core = SimpleNamespace(live=lambda: (SimpleNamespace(model_command=lambda: None), None))
+        t = bound(task()); t.update(effort='high', qa_effort='high',
+            reviewer_authority={'effort': 'high'}, protected_reviewer={'effort': 'high'})
+        with patch.object(providers, '_import_native', return_value=core):
+            self.assertEqual(providers.accepted_qa_effort(self.authority), 'medium')
+            medium = providers.role_ready('codex_routing_qa', reviewer_authority=self.authority)[1]
+            self.assertEqual(providers.select_qa_provider(t, issue=527,
+                reviewer_authority=self.authority, protected_reviewer=medium)[0], 'codex_sol_medium')
+            with patch.object(live, 'codex_qa_live', return_value={}) as qa:
+                claim = dict(issue=527, revision=t['revision'], task=t, bound_author=t['_bound_author'],
+                    reviewer_authority=medium, worktree='/fixture', candidate_sha='c' * 40)
+                live.qa_dispatch(claim, reviewer_authority=self.authority)
+                self.assertEqual(qa.call_args.kwargs['qa_effort'], 'medium')
+                self.assertEqual(qa.call_args.kwargs['protected_reviewer'], medium)
+            with self.assertRaises(providers.ProviderError):
+                providers.select_qa_provider(t, issue=527, reviewer_authority=lambda **kw: None,
+                                             protected_reviewer=medium)

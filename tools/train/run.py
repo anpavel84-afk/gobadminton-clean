@@ -1090,7 +1090,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 if adapters.author:
                     author_result = invoke_cursor_author(
                         task=task, worktree=worktree, evidence_dir=author_evidence,
-                        launcher=adapters.author, parent_lease=True, reviewer_authority=adapters.reviewer_authority)
+                        launcher=adapters.author, parent_lease=True, reviewer_authority=adapters.reviewer_authority,
+                        protected_reviewer=claim.get('reviewer_authority'))
                 else:
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
@@ -1099,7 +1100,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                     proposal = record_capacity_proposal(
                         path, task, err, author_evidence, adapters.author_capacity,
                         reviewer_authority=adapters.reviewer_authority,
-                        qa_effort=accepted_qa_effort(adapters.reviewer_authority))
+                        qa_effort=accepted_qa_effort(adapters.reviewer_authority, claim.get('reviewer_authority')))
                     if proposal.get('action') == 'REQUIRE_NEW_ADMISSION':
                         return {'status': 'blocked', 'claim': read_receipt(path),
                                 'claim_path': str(path), 'reason': 'new_capacity_admission_required'}
@@ -1294,7 +1295,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 # Codex capacity already done on prior wake — AGY only, no Codex rerun.
                 provider, reason = 'agy_qa', 'capacity_fallback_resume'
             else:
-                provider, reason, _meta = select_qa_provider(task, issue=claim['issue'], reviewer_authority=adapters.reviewer_authority)
+                provider, reason, _meta = select_qa_provider(task, issue=claim['issue'], reviewer_authority=adapters.reviewer_authority,
+                    protected_reviewer=claim.get('reviewer_authority'))
             claim['attempts'] = dict(claim.get('attempts') or {})
             qa_attempt = int(claim['attempts'].get('qa') or 0) + 1
             claim['attempts']['qa'] = qa_attempt
@@ -1337,7 +1339,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 else:
                     raw = invoke_codex_qa(
                         task=qa_task, candidate_sha=claim['candidate_sha'],
-                        evidence_dir=qa_evidence, launcher=None, reviewer_authority=adapters.reviewer_authority)
+                        evidence_dir=qa_evidence, launcher=None, reviewer_authority=adapters.reviewer_authority,
+                        protected_reviewer=claim.get('reviewer_authority'))
             except ProviderError as err:
                 if err.code in (
                         'wake_defer_capacity_fallback',
@@ -1715,6 +1718,9 @@ def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_a
     if error.code != 'provider_control_failure':
         return hold
     try:
+        protected_reviewer = claim.get('reviewer_authority')
+        if protected_reviewer is not None:
+            qa_effort = accepted_qa_effort(reviewer_authority, protected_reviewer)
         control = decoder(error=error, evidence_dir=evidence, task=task)
         from author_handoff import ACTUAL
         current = operation(task, ACTUAL[claim['bound_author']['decision']['provider']],
@@ -1723,12 +1729,13 @@ def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_a
             return hold
         chain = tuple(_restore_capacity_stop(s) for s in claim.get('capacity_chain', []))
         qa_ok, qa_meta = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=qa_effort)
-        if not qa_ok:
+        if not qa_ok or (protected_reviewer is not None and qa_meta != protected_reviewer):
             return hold
         reviewer = p.Reviewer(qa_meta['executor'], qa_meta['model'] + ':' + qa_meta['effort'], qa_ok, qa_ok, qa_ok)
         claim['reviewer_authority'] = qa_meta
         proposal = propose_handoff(current=current, failure=control.failure, proof=control.proof,
-            routes=routing_qualifications(task, reviewer_authority=reviewer_authority), reviewer=reviewer,
+            routes=routing_qualifications(task, reviewer_authority=reviewer_authority,
+                protected_reviewer=protected_reviewer), reviewer=reviewer,
             initial_provider=claim.get('initial_author_provider') or claim['bound_author']['decision']['initial_provider'],
             chain=chain, cumulative_attempts=claim['attempts']['author'],
             history_refs=tuple(claim.get('author_history_refs', [])) + (str(path), str(evidence)))
@@ -1739,6 +1746,8 @@ def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_a
         claim['capacity_proposal'] = proposal
         claim['phase'] = 'BLOCKED'
         claim['capacity_error'] = {'code': error.code, 'charge': error.charge}
+        if protected_reviewer is not None:
+            accepted_qa_effort(reviewer_authority, protected_reviewer)
         write_receipt(path, claim)
         return proposal
     except Exception:

@@ -2080,7 +2080,7 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
 
 
 def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
-                  reviewer_authority=None, qa_effort='medium', _probe=None):
+                  reviewer_authority=None, qa_effort='medium', _probe=None, protected_reviewer=None):
     """Actual protected Codex read-only QA; Lean routing uses gpt-6-sol.
 
     Match working launch_medium_qa: UID1002 real HOME + native CODEX_HOME,
@@ -2093,7 +2093,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     routing_qa = task.get('_bound_author', {}).get('mode') == 'on'
     if routing_qa and _probe is None:
         from providers import accepted_qa_effort
-        qa_effort = accepted_qa_effort(reviewer_authority)
+        qa_effort = accepted_qa_effort(reviewer_authority, protected_reviewer)
     authority_meta = None
     if _probe is not None:
         if os.geteuid() != 0 or _probe != _qa_probe_admission():
@@ -2104,7 +2104,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     if routing_qa and _probe is None:
         from providers import role_ready
         ready, authority_meta = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=qa_effort)
-        if not ready:
+        if not ready or (protected_reviewer is not None and authority_meta != protected_reviewer):
             raise ProviderError('independent_qa_unavailable_hold', charge='none')
     qa_model = 'gpt-6-sol' if routing_qa or _probe is not None else 'gpt-6.1-sol'
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
@@ -2181,7 +2181,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 # Frozen metadata is not a grant: fresh callback immediately before effect.
                 ready, fresh = role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
                                           effort=qa_effort)
-                if not ready or any(fresh.get(k) != v for k, v in recipe.items()):
+                if not ready or fresh != authority_meta or any(fresh.get(k) != v for k, v in recipe.items()):
                     raise ProviderError('qa_authority_changed_hold', charge='none')
             author_executor = ((_probe or {}).get('author_executor') or
                 task.get('_bound_author', {}).get('route_proofs', {}).get(
@@ -3989,7 +3989,10 @@ def qa_dispatch(claim, *, deadline=None, reviewer_authority=None):
     if claim.get('bound_author', {}).get('mode') == 'on':
         task['_bound_author'] = claim['bound_author']
         task['revision'] = claim['revision']
-        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'], evidence_dir=evidence, reviewer_authority=reviewer_authority)
+        from providers import accepted_qa_effort
+        qa_effort = accepted_qa_effort(reviewer_authority, claim.get('reviewer_authority'))
+        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'], evidence_dir=evidence, reviewer_authority=reviewer_authority,
+                             protected_reviewer=claim.get('reviewer_authority'), qa_effort=qa_effort)
     # Persisted capacity-fallback resume: skip already-completed Codex entirely.
     resume = claim.get('resume_provider') or runtime.get('resume_provider')
     if resume == 'agy_qa' or claim.get('wake') == 'capacity_fallback_budget':
@@ -4077,12 +4080,15 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         """Route by task.authorroute; Cursor default; AGY only when actually qualified."""
         from providers import select_author_provider
         task = kwargs.get('task') or {}
+        protected_reviewer = kwargs.pop('protected_reviewer', None)
         provider, _reason, _meta = select_author_provider(
-            task, issue=task.get('issue'), reviewer_authority=reviewer_authority)
+            task, issue=task.get('issue'), reviewer_authority=reviewer_authority,
+            protected_reviewer=protected_reviewer)
         if provider == 'agy_author':
             return agy_author_live(**kwargs)
         if provider == 'codex_author':
-            return codex_author_live(**kwargs, reviewer_authority=reviewer_authority)
+            return codex_author_live(**kwargs, reviewer_authority=reviewer_authority,
+                                     protected_reviewer=protected_reviewer)
         return cursor_author_live(**kwargs)
 
     def qa(claim):
@@ -4147,7 +4153,7 @@ def live_self_check():
     }
 
 
-def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True, reviewer_authority=None):
+def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True, reviewer_authority=None, protected_reviewer=None):
     """Qualified exact author via pinned native model_command in private source.
 
     Only a separately admitted capacity successor may reach this transport.
@@ -4158,7 +4164,8 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     if (bound_provider(task) or (None,))[0] != 'codex_author' or not task.get('_capacity_successor'):
         raise ProviderError('codex_capacity_admission_required', charge='none')
     from providers import accepted_qa_effort
-    if not role_ready('codex_author')[0] or not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=accepted_qa_effort(reviewer_authority))[0]:
+    accepted_qa_effort(reviewer_authority, protected_reviewer)
+    if not role_ready('codex_author')[0]:
         raise ProviderError('codex_role_unqualified', charge='none')
     require_executor_uid()
     issues, slots = _load_native('core').live()
@@ -4200,6 +4207,7 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
         if not budget_left_eligible(budget.remaining('codex', 'author', 'slot1')):
             raise ProviderError('codex_local_governance_hold', charge='none')
         with (evidence / 'events.jsonl').open('xb') as out, (evidence / 'stderr').open('xb') as err:
+            accepted_qa_effort(reviewer_authority, protected_reviewer)
             budget.charge('slot1', 'codex', 'author')
             mark_intent_phase(intent_path, 'launching', provider='codex_author',
                 model='gpt-6.1-sol', effort='medium', calls_charged=1, usage=None,

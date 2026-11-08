@@ -438,15 +438,24 @@ def parse_qa_verdict(raw, reviewed_sha, *, model=AGY_MODEL, provider=None):
             'reviewed_sha': reviewed_sha, 'source': 'lean_exact_json', 'charge': 'none'}
 
 
-def accepted_qa_effort(reviewer_authority):
+def accepted_qa_effort(reviewer_authority, protected_reviewer=None):
     """Root callback selects authority; no task/event effort is consulted."""
+    if protected_reviewer is not None:
+        if not isinstance(protected_reviewer, dict):
+            raise ProviderError('protected_reviewer_changed_hold', charge='none')
+        effort = protected_reviewer.get('effort')
+        ready, fresh = role_ready('codex_routing_qa',
+            reviewer_authority=reviewer_authority, effort=effort)
+        if not ready or fresh != protected_reviewer:
+            raise ProviderError('protected_reviewer_changed_hold', charge='none')
+        return effort
     for effort in ('medium', 'high'):
         if role_ready('codex_routing_qa', reviewer_authority=reviewer_authority, effort=effort)[0]:
             return effort
     raise ProviderError('independent_qa_unavailable_hold', charge='none')
 
 
-def select_qa_provider(task, *, issue, reviewer_authority=None):
+def select_qa_provider(task, *, issue, reviewer_authority=None, protected_reviewer=None):
     """Nonblocking routing: default Codex Medium; AGY only when READY+quota.
 
     Explicit not-ready fallback happens BEFORE any charge. Never invent READY.
@@ -455,9 +464,7 @@ def select_qa_provider(task, *, issue, reviewer_authority=None):
     AGY author never self-QAs — default QA remains Codex Sol Medium.
     """
     if task.get('_bound_author', {}).get('mode') == 'on':
-        if not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
-                          effort=accepted_qa_effort(reviewer_authority))[0]:
-            raise ProviderError('independent_qa_unavailable_hold', charge='none')
+        accepted_qa_effort(reviewer_authority, protected_reviewer)
         return 'codex_sol_medium', 'qualified_gpt_6_sol_qa', None
     routes = task.get('qaroute') or task.get('qa_route') or ['codex_sol_medium']
     if isinstance(routes, str):
@@ -549,7 +556,7 @@ def cursor_fallback_authorized(task):
     return 'cursor_auto' in author_routes(task)
 
 
-def select_author_provider(task, *, issue=None, reviewer_authority=None):
+def select_author_provider(task, *, issue=None, reviewer_authority=None, protected_reviewer=None):
     """Select qualified AGY or an explicitly authorized precharge fallback."""
     from author_handoff import bound_provider
     try:
@@ -562,9 +569,7 @@ def select_author_provider(task, *, issue=None, reviewer_authority=None):
                 'codex_author': 'codex_author'}[provider]
         if provider not in author_routes(task) or not role_ready(role)[0]:
             raise ProviderError('bound_author_unavailable_hold', charge='none')
-        if not role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
-                          effort=accepted_qa_effort(reviewer_authority))[0]:
-            raise ProviderError('independent_qa_unavailable_hold', charge='none')
+        accepted_qa_effort(reviewer_authority, protected_reviewer)
         return bound
     routes = author_routes(task)
     # Legacy ignored the Codex author alias; only a bound capacity admission
@@ -785,7 +790,7 @@ def _live_publish(kind):
     return lean_live.publish_push_pr
 
 
-def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_lease=True, reviewer_authority=None):
+def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_lease=True, reviewer_authority=None, protected_reviewer=None):
     """Bounded author call (compatibility name). Routes by select_author_provider.
 
     Live default selects cursor_author_live or agy_author_live. Never mislabels an
@@ -793,7 +798,8 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     the one writer lease — do not nest a second acquisition. Tests inject fakes.
     """
     provider, route_reason, _meta = select_author_provider(
-        task, issue=task.get('issue'), reviewer_authority=reviewer_authority)
+        task, issue=task.get('issue'), reviewer_authority=reviewer_authority, protected_reviewer=protected_reviewer)
+    forward_protected = launcher is not None or provider == 'codex_author'
     intent, intent_path = prepare_cursor_author_intent(task, worktree, evidence_dir)
     mark_intent_phase(
         intent_path, 'prepared', bound_author=task.get('_bound_author'), requested_provider=provider,
@@ -815,8 +821,11 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease),
                       provider=provider, effective_provider=provider)
     try:
+        if protected_reviewer is not None:
+            accepted_qa_effort(reviewer_authority, protected_reviewer)
         result = launcher(task=task, worktree=worktree, evidence_dir=evidence_dir,
-                          intent_path=str(intent_path), parent_lease=True)
+                          intent_path=str(intent_path), parent_lease=True,
+                          **({'protected_reviewer': protected_reviewer} if protected_reviewer is not None and forward_protected else {}))
     except TimeoutError as err:
         mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
         # Preserve Cursor UNKNOWN code; AGY author uses its own timeout UNKNOWN.
@@ -848,18 +857,24 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     return result
 
 
-def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None, reviewer_authority=None):
+def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None, reviewer_authority=None, protected_reviewer=None):
     """Independent Codex Sol Medium QA. Live default = live.codex_qa_live."""
+    if task.get('_bound_author', {}).get('mode') == 'on' or protected_reviewer is not None:
+        qa_effort = accepted_qa_effort(reviewer_authority, protected_reviewer)
+    else:
+        qa_effort = 'medium'
     intent, intent_path = prepare_qa_intent(task, candidate_sha, 'codex_sol_medium', evidence_dir)
     if launcher is None:
         try:
             live_launcher = _live_codex_qa()
-            launcher = lambda **kw: live_launcher(**kw, reviewer_authority=reviewer_authority)
+            launcher = lambda **kw: live_launcher(**kw, reviewer_authority=reviewer_authority, protected_reviewer=protected_reviewer, qa_effort=qa_effort)
         except Exception as err:
             mark_intent_phase(intent_path, 'HOLD_launcher_absent', error=type(err).__name__)
             raise ProviderError('codex_launcher_absent', type(err).__name__) from err
     mark_intent_phase(intent_path, 'launching')
     try:
+        if protected_reviewer is not None:
+            accepted_qa_effort(reviewer_authority, protected_reviewer)
         raw_or_result = launcher(task=task, candidate_sha=candidate_sha,
                                  evidence_dir=evidence_dir, intent_path=str(intent_path))
     except TimeoutError as err:
@@ -946,9 +961,11 @@ AUTHOR_PASS_CLAIMS = {
 }
 
 
-def routing_qualifications(task, *, reviewer_authority=None):
+def routing_qualifications(task, *, reviewer_authority=None, protected_reviewer=None):
     """Existing native authority only; missing exact QA model keeps B2 on HOLD."""
     import author_routing as p
+    if protected_reviewer is not None:
+        accepted_qa_effort(reviewer_authority, protected_reviewer)
     admitted = author_routes(task)
     result = {}
     for provider, role, model, executor in (
@@ -959,9 +976,11 @@ def routing_qualifications(task, *, reviewer_authority=None):
         ready, _ = role_ready(role, reviewer_authority=reviewer_authority)
         if provider == p.CODEX:
             try:
-                ready = ready and role_ready('codex_routing_qa', reviewer_authority=reviewer_authority,
-                    effort=accepted_qa_effort(reviewer_authority))[0]
+                if ready:
+                    accepted_qa_effort(reviewer_authority, protected_reviewer)
             except ProviderError:
+                if protected_reviewer is not None:
+                    raise
                 ready = False
         result[provider] = p.Route(provider, ACTUAL_AUTHOR[provider] in admitted,
                                   ready, ready, executor, model)
