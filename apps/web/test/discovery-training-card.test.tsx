@@ -7,7 +7,12 @@ import type { Game, GameRoleReputationCard } from "../src/lib/consumer-types";
 
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
 
-/** Exact DiscoveryGameCard SSR payload for the sibling browser geometry helper. */
+const LONG_TRAINER =
+  "Alexey Morozov (demo trainer) · Extended Qualifier String That Must Fully Wrap Across Widths";
+const LONG_ORGANIZER =
+  "Other Organizer With Extremely Long Display Name For Wrap Verification Across Widths";
+
+/** Exact DiscoveryGameCard SSR payloads for the sibling browser geometry helper. */
 export function renderTrainingCardBrowserFixtures() {
   const venue = {
     id: "venue-1",
@@ -45,17 +50,17 @@ export function renderTrainingCardBrowserFixtures() {
       terms: "Аренду делим поровну. Длинные условия участия для проверки переноса строк без обрезки CTA.",
     },
   };
-  const trainer: Game = {
+  const trainerDistinct: Game = {
     ...regular,
     id: "game-trainer",
     title: "Demo Morozov Coaching Hour with a long title for layout stress",
     activityKind: "trainer_led",
     trainer: {
       profileId: "trainer-profile-am",
-      displayName: "Alexey Morozov (demo trainer)",
+      displayName: LONG_TRAINER,
       declarationSource: "self_declared",
     },
-    organizer: { id: "org-user-other", displayName: "Other Organizer With Long Name", publicContact: "private" },
+    organizer: { id: "org-user-other", displayName: LONG_ORGANIZER, publicContact: "private" },
     settlement: {
       mode: "external",
       purpose: "trainer_fee",
@@ -65,12 +70,29 @@ export function renderTrainingCardBrowserFixtures() {
       terms: "Оплата тренеру по договорённости · Synthetic long settlement terms that must remain visible with share and details after reputation loads.",
     },
   };
+  /** Coinciding UUID strings across namespaces must still render two role rows. */
+  const trainerSameStringIds: Game = {
+    ...trainerDistinct,
+    id: "game-trainer-same-string",
+    trainer: {
+      profileId: "shared-looking-id",
+      displayName: LONG_TRAINER,
+      declarationSource: "self_declared",
+    },
+    organizer: { id: "shared-looking-id", displayName: "Alexey Morozov", publicContact: "private" },
+  };
+  const trainerMissing: Game = {
+    ...trainerDistinct,
+    id: "game-trainer-missing",
+    trainer: null,
+    organizer: { id: "org-user-other", displayName: LONG_ORGANIZER, publicContact: "private" },
+  };
   const reputation: GameRoleReputationCard = {
-    gameId: trainer.id,
+    gameId: trainerDistinct.id,
     organization: {
       roleHandle: "o".repeat(32),
       role: "organization",
-      subjectDisplayName: "Other Organizer With Long Name",
+      subjectDisplayName: LONG_ORGANIZER,
       heldGamesCount: 3,
       countScope: "confirmed_history",
       historyMayBeIncomplete: true,
@@ -81,7 +103,7 @@ export function renderTrainingCardBrowserFixtures() {
     training: {
       roleHandle: "t".repeat(32),
       role: "training",
-      subjectDisplayName: "Alexey Morozov (demo trainer)",
+      subjectDisplayName: LONG_TRAINER,
       heldGamesCount: 1,
       countScope: "confirmed_history",
       historyMayBeIncomplete: true,
@@ -92,7 +114,11 @@ export function renderTrainingCardBrowserFixtures() {
   };
   return {
     regularHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: regular })),
-    trainerHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainer, reputation })),
+    trainerHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct, reputation })),
+    trainerSameStringIdsHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerSameStringIds })),
+    trainerMissingHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerMissing })),
+    longTrainerName: LONG_TRAINER,
+    longOrganizerName: LONG_ORGANIZER,
   };
 }
 
@@ -158,15 +184,16 @@ const trainerDistinct: Game = {
   },
 };
 
-const trainerSameId: Game = {
+/** Coinciding string values across different id namespaces — must NOT merge roles. */
+const trainerSameStringIds: Game = {
   ...trainerDistinct,
   id: "game-trainer-same",
   trainer: {
-    profileId: "shared-person-id",
-    displayName: "Alexey Morozov (demo trainer)",
+    profileId: "shared-looking-id",
+    displayName: LONG_TRAINER,
     declarationSource: "self_declared",
   },
-  organizer: { id: "shared-person-id", displayName: "Alexey Morozov", publicContact: "private" },
+  organizer: { id: "shared-looking-id", displayName: "Alexey Morozov", publicContact: "private" },
 };
 
 const trainerMissing: Game = {
@@ -214,9 +241,28 @@ describe("#521 discovery training card unified desktop row", () => {
   it("removes content-height stacked latch; CSS keeps desktop row for all cards", () => {
     expect(cardSource).not.toMatch(/useFeedCardLayout|mediaBudget|data-layout/);
     expect(cardSource).not.toMatch(/setLayout\("stacked"\)|scrollHeight/);
+    expect(cardSource).not.toMatch(/sameKnownPerson|combinedIdentity|trainer-organizer/);
     expect(discoveryCss).not.toMatch(/data-layout="stacked"|aspect-ratio:\s*16\s*\/\s*10/);
     expect(discoveryCss).toMatch(/grid-template-columns:\s*minmax\(210px,\s*min\(300px,\s*36%\)\)\s*minmax\(0,\s*1fr\)/);
     expect(discoveryCss).toMatch(/@media \(max-width:\s*720px\)[\s\S]*\.gb-discovery-card,\s*\.gb-discovery-skeleton\s*\{\s*display:\s*block/);
+  });
+
+  it("allows complete trainer/organizer name wrap without ellipsis clipping", () => {
+    expect(discoveryCss).toMatch(/\.gb-discovery-host strong\s*\{[^}]*overflow-wrap:\s*anywhere/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-host strong\s*\{[^}]*white-space:\s*normal/);
+    expect(discoveryCss).not.toMatch(
+      /\.gb-discovery-host strong\s*\{[^}]*(?:text-overflow:\s*ellipsis|white-space:\s*nowrap)/,
+    );
+    const html = renderToStaticMarkup(createElement(DiscoveryGameCard, {
+      game: {
+        ...trainerDistinct,
+        trainer: { ...trainerDistinct.trainer!, displayName: LONG_TRAINER },
+        organizer: { ...trainerDistinct.organizer, displayName: LONG_ORGANIZER },
+      },
+    }));
+    expect(html).toContain(LONG_TRAINER);
+    expect(html).toContain(LONG_ORGANIZER);
+    expect(html).not.toContain("…");
   });
 
   it("keeps ordinary and trainer cards on the same article contract without stacked layout attr", () => {
@@ -243,18 +289,23 @@ describe("#521 discovery training card unified desktop row", () => {
     expect(training).toContain("Отзывы");
   });
 
-  it("compacts only when trainer profileId and organizer.id are the same stable key", () => {
-    const same = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerSameId }));
+  it("always shows trainer and organizer separately even when id strings coincide", () => {
+    const same = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerSameStringIds }));
     const distinct = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct }));
-    expect(same).toContain('data-role="trainer-organizer"');
-    expect(same).toContain('data-trainer-profile="shared-person-id"');
-    expect(same).toContain('data-organizer-id="shared-person-id"');
-    expect(same).toContain("Тренер · самостоятельно указано · Организатор");
+    for (const html of [same, distinct]) {
+      expect(html).toContain('data-role="trainer"');
+      expect(html).toContain('data-role="organizer"');
+      expect(html).not.toContain('data-role="trainer-organizer"');
+      expect(html).not.toContain("Тренер · самостоятельно указано · Организатор");
+      expect(html).toContain("Тренер · самостоятельно указано");
+      expect(html).toContain("Организатор");
+    }
+    expect(same).toContain('data-trainer-profile="shared-looking-id"');
+    expect(same).toContain('data-organizer-id="shared-looking-id"');
+    expect(same).toContain(LONG_TRAINER);
     expect(same).toContain("Alexey Morozov");
-    expect(same.match(/data-role="trainer"/g) ?? []).toHaveLength(0);
-    expect(distinct).toContain('data-role="trainer"');
-    expect(distinct).toContain('data-role="organizer"');
-    expect(distinct).not.toContain("data-role=\"trainer-organizer\"");
+    expect(same.match(/data-role="trainer"/g)?.length).toBe(1);
+    expect(same.match(/data-role="organizer"/g)?.length).toBe(1);
     expect(distinct).not.toContain("MorozovOther");
   });
 

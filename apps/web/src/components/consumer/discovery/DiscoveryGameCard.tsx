@@ -10,14 +10,9 @@ import { formatSeats, isTrainerLed, settlementTerms } from "../../../lib/game-pr
 import { discoveryFormat, discoveryGameWhen } from "../../../lib/discovery-presentation";
 import { DiscoveryIcon } from "./DiscoveryComposition";
 
-/** Stable public identities only — never merge trainer/organizer by displayName strings.
- * Trainer profileId and organizer user id are different namespaces; equal only if the
- * contract later exposes a shared person key. */
-function sameKnownPerson(game: Game): boolean {
-  const trainerId = game.trainer?.profileId?.trim() ?? "";
-  const organizerId = game.organizer.id?.trim() ?? "";
-  return Boolean(trainerId && organizerId && trainerId === organizerId);
-}
+/** Trainer profileId and organizer.id are different namespaces.
+ * No confirmed common person key exists in the allowed contract, so roles are
+ * always rendered separately — never merged by id equality or displayName. */
 
 export function DiscoveryGameCard({
   game,
@@ -31,7 +26,6 @@ export function DiscoveryGameCard({
   const host = game.organizer.displayName;
   const when = discoveryGameWhen(game);
   const format = discoveryFormat(game.formatKey);
-  const combinedIdentity = trainer && game.trainer && sameKnownPerson(game);
   const trainerMarker =
     trainer && game.trainer
       ? `С тренером. Тренер · самостоятельно указано: ${game.trainer.displayName}`
@@ -51,7 +45,7 @@ export function DiscoveryGameCard({
       <p className="gb-discovery-address"><DiscoveryIcon name="pin" />{game.venue.address}</p>
       <div className="gb-discovery-meta"><span>Уровень: {game.levelRule.allowedLevelIds.join(", ")}</span>{format && <span>{format}</span>}</div>
       <p className="gb-discovery-terms">{settlementTerms(game.settlement)}</p>
-      {trainer && game.trainer && !combinedIdentity ? (
+      {trainer && game.trainer ? (
         <div className="gb-discovery-host" data-role="trainer" data-trainer-profile={game.trainer.profileId}>
           <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
           <span><small>Тренер · самостоятельно указано</small><strong>{game.trainer.displayName}</strong></span>
@@ -64,13 +58,12 @@ export function DiscoveryGameCard({
       ) : null}
       <div
         className="gb-discovery-host"
-        data-role={combinedIdentity ? "trainer-organizer" : "organizer"}
+        data-role="organizer"
         data-organizer-id={game.organizer.id ?? undefined}
-        data-trainer-profile={combinedIdentity && game.trainer ? game.trainer.profileId : undefined}
       >
         <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
         <span>
-          <small>{combinedIdentity ? "Тренер · самостоятельно указано · Организатор" : "Организатор"}</small>
+          <small>Организатор</small>
           <strong>{host}</strong>
         </span>
         <div className="gb-discovery-card__actions"><Link className="gb-c23-btn gb-c23-btn--outline" href={`/games/${game.id}`} aria-label={`Подробнее: ${game.title}`}><span>Подробнее</span><DiscoveryIcon name="arrow" /></Link><GameShare gameId={game.id} /></div>

@@ -98,11 +98,14 @@
 .gb-discovery-address { margin: 0; display: flex; align-items: center; gap: 7px; color: var(--gb-ink-soft); font-size: 13px; }
 .gb-discovery-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 8px; color: var(--gb-ink-soft); font-size: 12px; }
 .gb-discovery-terms { margin: 0 0 12px; color: var(--gb-ink-soft); font-size: 12px; }
-.gb-discovery-host { padding-top: 12px; border-top: 1px solid var(--gb-line); display: flex; align-items: center; gap: 10px; }
+.gb-discovery-host { padding-top: 12px; border-top: 1px solid var(--gb-line); display: flex; align-items: flex-start; gap: 10px; }
 .gb-discovery-host > span:nth-child(2) { min-width: 0; flex: 1 1 0; }
 .gb-discovery-host small, .gb-discovery-host strong { display: block; }
 .gb-discovery-host small { color: var(--gb-ink-soft); font-size: 10px; }
-.gb-discovery-host strong { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* #521: full trainer/organizer names wrap; never ellipsis-hide. CTA stays flex:none beside the name. */
+.gb-discovery-host strong { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; white-space: normal; }
+.gb-discovery-host .gb-discovery-avatar { margin-top: 2px; }
+.gb-discovery-host .gb-discovery-card__actions { align-self: center; }
 .gb-discovery-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--gb-lime); }
 .gb-consumer .gb-discovery-host .gb-c23-btn { margin-left: auto; min-height: 44px; padding: 0 13px; font-size: 12px; flex: none; }
 .gb-discovery-host .gb-c23-btn--dark .gb-discovery-icon { filter: brightness(0) invert(1); }

@@ -1,55 +1,58 @@
 # Handoff — #521 unified trainer/ordinary discovery game card
 
-**Assignment:** `OWNER521_UNIFIED_TRAINER_GAME_LIST_CARD_NEAREST_DEV_RELEASE`
-**Author:** cursor:auto · attempt 1 · base `524088767e2b7e77d569c2f0a47689db854ab7b0`
+**Assignment:** `OWNER521_QA1_IDENTITIES_LONG_NAMES_RELEASE_TESTS_BROWSER_REPAIR`
+**Author:** cursor:auto · attempt 2 · base `f398ca3770c7143aed325138a4a3ee9bcb2cdc1d`
 **App candidate:** `0.1.0-alpha.57` · API wire unchanged `0.39.0` · `source_sha` null · Owner UAT **NOT_TESTED**
-**Refs:** #521 · Owner screenshot (training card full-width banner vs ordinary compact row)
-**Scope:** source only · single writer · do not touch #507 WT/branch
+**Refs:** #521 · QA1 three findings FAIL · parent lint/release FAIL · Owner screenshot
+**Scope:** source only · single writer · do not touch #507 WT/branch · DEV56 only → target DEV57 card fix · no Git/push/deploy/PROD
 
-## Cause
+## QA1 findings addressed
 
-Desktop `useFeedCardLayout` latched `data-layout="stacked"` when `content.scrollHeight > mediaBudget + 8`. Extra trainer/organizer/reputation blocks made training cards flip to a full-width landscape media banner. Ordinary cards stayed in the compact photo-left row.
+1. **HIGH — identity namespaces:** Removed `sameKnownPerson` / id-equality merge. `trainer.profileId` and `organizer.id` are different namespaces; no confirmed common person key in the allowed contract. Trainer and organizer rows are **always** shown separately, even when UUID/name strings coincide. No private user id / new API for UI dedupe; names are not identity. Stable `data-trainer-profile` / `data-organizer-id` attributes retained; compact layout / reputation / CTA preserved.
+2. **MEDIUM — long names:** Host `strong` uses `overflow-wrap: anywhere` + `white-space: normal` (no nowrap/ellipsis). Full names wrap at 390/820/1280 without clipping CTA.
+3. **MEDIUM — release pins:** `releases.test.tsx` + `releases-server.test.ts` updated to CURRENT `0.1.0-alpha.57` / #521 card delta; API stays `0.39.0`; historical seeds/dates/hashes/first-alpha invariants preserved. Delta is #521 only (not #507).
 
-## Fix (source only)
+## Parent lint / browser repair
 
-1. Removed the height observer / latch. Feed cards no longer switch layout from content height.
-2. Desktop CSS: one shared grid `minmax(210px, min(300px, 36%)) + 1fr` for ordinary and trainer cards; media stays a left column with cover crop. Cards may grow in height; content is not clipped to force a square.
-3. Mobile ≤720 keeps existing full-width image composition.
-4. Trainer + organizer use stable ids (`data-trainer-profile`, `data-organizer-id`); names are never merged. Same known person only when those ids are equal → one compact dual-role row. Missing trainer profile → truthful «Профиль недоступен». Reputation/share/details/seats/terms kept; no new GETs/roles/API.
+- ESLint `URL`/`Event` undef: file globals comment scoped for Node24 CDP helper (not lint disable).
+- Browser helper rewritten to qualified Chromium CDP at `/opt/gobadminton-qa/chromium-headless-1243/chrome-headless-shell` (no Playwright dep / no sandbox-disable flags / no shared Chrome kill). Exact SSR markup from Vitest fixture + real tokens/consumer/discovery/role-reputation CSS; host viewport/padding only. Abort network GETs; screenshots/metrics/receipt under provided `outputdir` argv (not repo). Viewports 390/820/1280; long names; same-string-ids / distinct / missing trainer; reputation append + resize. If Chromium unavailable → honest **NOT_TESTED** (parent executes). Geometry proof only — not DEV/Owner UAT.
 
 ## Release notes
 
 - `CURRENT_APPLICATION_VERSION` → `0.1.0-alpha.57`
-- `API_CONTRACT_VERSION_NOTE` stays `0.39.0` (web-only layout)
-- CURRENT delta describes only this #521 layout/roles fix
-- Historical seed / older acceptances / first alpha preserved byte-for-byte; no invented SHA/date/receipt
+- `API_CONTRACT_VERSION_NOTE` stays `0.39.0` (web-only card)
+- CURRENT delta describes only this #521 layout/roles/wrap fix
+- Historical seed / older acceptances / first alpha preserved; no invented SHA/date/receipt
 - #507 unpublished numbering left for post-accept renumber; #507 branch not edited
 
-## Paths touched (allowed only)
+## Paths touched (allowed only · 10)
 
 - `apps/web/src/components/consumer/discovery/DiscoveryGameCard.tsx`
 - `apps/web/src/styles/discovery.css`
 - `apps/web/test/discovery-training-card.test.tsx`
 - `apps/web/test/discovery-training-card.browser.mjs`
-- `apps/web/test/fr01-discovery.test.ts`
-- `apps/web/test/owner-a-discovery.test.ts`
+- `apps/web/test/fr01-discovery.test.ts` (unchanged contract; retained)
+- `apps/web/test/owner-a-discovery.test.ts` (unchanged contract; retained)
 - `apps/web/src/lib/releases.ts`
 - `docs/handoffs/game521-training-card.md`
+- `apps/web/test/releases.test.tsx`
+- `apps/web/test/releases-server.test.ts`
 
 ## Materials
 
-- Owner screenshot `codex-clipboard-64fd0b67-a320-4bf0-af61-69790fed12e9.png` (sha256 `60cd4f0f0e0e51fba80865a207ef676c0047aa19ced67e0f57f6d96c830b5fe6`)
+- Owner screenshot `owner521-reference.png` (sha256 `60cd4f0f0e0e51fba80865a207ef676c0047aa19ced67e0f57f6d96c830b5fe6`) — **verified local image available for independent QA this pass**
+- QA1 findings JSON + parent lint/release FAIL logs + existing CDP pattern
 
 ## Checks
 
-- Author sandbox unit: `discovery-training-card` + `fr01-discovery` + `owner-a-discovery` — **PASS** (30).
-- Author sandbox browser helper: Playwright/`.tools` **unavailable** here → geometry run **NOT_TESTED** (helper ready; parent executes). Not a self PASS/DEV claim.
-- Parent: browser helper + Product CI 7/7 → protected DEV release/smoke.
-- Integration: `releases.test.tsx` / `releases-server.test.ts` still pin alpha.56 in this tree — recheck/bump with CURRENT 57 (outside author allowed paths).
-- Remaining: independent Sol Medium QA → CI → merge `dev` → server DEV ACCEPTED. UAT=NOT_TESTED.
+- Targeted web types/lint/card+release tests expected after parent install.
+- Browser helper: Chromium path may be absent in author sandbox → **NOT_TESTED** here; helper ready for parent with real Chromium. Not a self PASS/DEV claim.
+- Remaining: independent Sol Medium QA → CI 7/7 → guarded DEV57. UAT=NOT_TESTED.
+- Preserve original 1/7 UNKNOWN/costs and #507 pending work.
 
 ## Explicit non-claims
 
-- No #507 community/API.40/schema68 notes, no PROD/C5/new OPS/service/architecture/API/roles.
+- No #507 community/API.40/schema68 notes, no PROD/C5/new OPS/service/architecture/API/roles/deps/media pipeline.
 - No Mode B / AGY READY, no self DEV ACCEPTED, no invented acceptance seed.
 - No private image publication; media approval pipeline unchanged.
+- No height-observer / stacked latch return; source regular-grid static accepted by QA1 retained.
