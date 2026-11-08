@@ -25,4 +25,9 @@ export class AdminCasesController {
   this.cases.enabled();
   return this.cases.readReviewReport(request,parse(uuid,id),parse(uuid,reportId));
  }
+ @Get("cases/:id/message-reports/:reportId") @Header("Cache-Control","no-store")
+ messageReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Req() request:FastifyRequest){
+  this.cases.enabled();
+  return this.cases.readMessageReport(request,parse(uuid,id),parse(uuid,reportId));
+ }
 }

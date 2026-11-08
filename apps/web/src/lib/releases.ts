@@ -2,10 +2,10 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.54" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.55" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
-export const API_CONTRACT_VERSION_NOTE = "0.37.0" as const;
+export const API_CONTRACT_VERSION_NOTE = "0.38.0" as const;
 
 export type FeatureAvailability =
   | "available"
@@ -424,16 +424,16 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.54",
-  "title": "Локальная защита личных сообщений и сохранение черновика при отказе",
+  "application_version": "0.1.0-alpha.55",
+  "title": "Жалоба на выбранное сообщение с явным согласием и чтением источника в обращении",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [
-    "В личных сообщениях и чате игры перед отправкой действует локальная проверка опасных ссылок, явных угроз и простого повтора; при отказе или временном ограничении частоты сообщение не уходит, а черновик остаётся для правки"
+    "В личной переписке и чате игры можно пожаловаться на одно уже загруженное входящее сообщение с явным согласием на передачу назначенному специалисту; в обращении источник читается только пока исходное сообщение ещё доступно по своему сроку"
   ],
   "fixes": [],
   "known_limitations": [
-    "Это не полная модерация переписки: жалоба на точное сообщение и внешняя проверка личных текстов ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
+    "Это не полная модерация переписки: внешняя проверка личных текстов выключена; при отсутствии конечного срока хранения исходного сообщения точный текст для разбора недоступен",
     "На тестовом стенде до 1 января 2027 UTC временно сняты количественные ограничения на проверки фото и текста; сами проверки содержимого продолжаются",
     "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены; служебный разбор отзывов после обычного входа ещё не проверен",
     "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
@@ -2158,6 +2158,35 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "environment": "dev",
         "status": "ACCEPTED",
         "accepted_at": "2026-11-08T03:29:11Z",
+        "kind": "pipeline"
+      }
+    ]
+  },
+  {
+    "application_version": "0.1.0-alpha.54",
+    "title": "Локальная защита личных сообщений и сохранение черновика при отказе",
+    "owner_uat": "NOT_TESTED",
+    "additions": [
+      "В личных сообщениях и чате игры перед отправкой действует локальная проверка опасных ссылок, явных угроз и простого повтора; при отказе или временном ограничении частоты сообщение не уходит, а черновик остаётся для правки"
+    ],
+    "fixes": [],
+    "known_limitations": [
+      "Это не полная модерация переписки: жалоба на точное сообщение и внешняя проверка личных текстов ещё не в этом выпуске; проверка личных сообщений снаружи выключена",
+      "На тестовом стенде до 1 января 2027 UTC временно сняты количественные ограничения на проверки фото и текста; сами проверки содержимого продолжаются",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены; служебный разбор отзывов после обычного входа ещё не проверен",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно"
+    ],
+    "source_sha": "cce49ce72daed8c81f89ddc845deabbb8ac5d7aa",
+    "version_label": "0.1.0-alpha.54",
+    "api_contract_version": "0.37.0",
+    "deployments": [
+      {
+        "release_id": "r42449222181-a1",
+        "api_digest": "sha256:03cdab10c3c780b0bcd69b12bf8fbc013742e21f017fa2b076acd1c77b00bf3c",
+        "web_digest": "sha256:fbc040efc941c25dc238ab51b986962f818d901e17a797a7e232193a51754896",
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "accepted_at": "2026-11-08T05:18:57Z",
         "kind": "pipeline"
       }
     ]

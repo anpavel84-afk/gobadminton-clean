@@ -324,11 +324,27 @@ export const abuseReports = pgTable("abuse_reports", {
   reporterUserId: uuid("reporter_user_id").notNull(),
   targetKind: text("target_kind").notNull(),
   targetUserId: uuid("target_user_id").notNull(),
-  targetPublicPlayerId: uuid("target_public_player_id").notNull(),
+  // Nullable for game_review / message typed reports (migration 0053/0067).
+  targetPublicPlayerId: uuid("target_public_player_id"),
   reasonCode: text("reason_code").notNull(),
   detail: text("detail"),
   evidenceRefs: jsonb("evidence_refs").notNull(),
   state: text("state").notNull().default("submitted"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** C2 exact-message report binding; private body stays in messages. Migration 0067. */
+export const messageReportBindings = pgTable("message_report_bindings", {
+  reportId: uuid("report_id").primaryKey(),
+  messageId: uuid("message_id").notNull(),
+  conversationId: uuid("conversation_id").notNull(),
+  conversationKind: text("conversation_kind").notNull(),
+  gameId: uuid("game_id"),
+  messageSeq: bigint("message_seq", { mode: "bigint" }).notNull(),
+  authorUserId: uuid("author_user_id").notNull(),
+  contentFingerprint: text("content_fingerprint").notNull(),
+  shareConsent: boolean("share_consent").notNull(),
+  reporterUserId: uuid("reporter_user_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

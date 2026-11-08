@@ -2,9 +2,13 @@ import { Inject, Injectable } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
-import { conflict, forbidden, notFound } from "../auth/problem";
+import { conflict, forbidden, notFound, problem } from "../auth/problem";
 import { APP_ENV } from "../tokens";
 import type { AppEnv } from "../config/env";
+import {
+  evaluateMessageExactSourceAvailability,
+  messageReportContentFingerprint,
+} from "../moderation/message-report-source";
 import { AdminService } from "./admin.service";
 import { appendAudit, type AuditActor } from "./admin-db";
 import { hasPermission, type AdminRole } from "./rbac";
@@ -36,9 +40,12 @@ export class AdminCasesService {
   private async report(c:PoolClient,id:string) {
     const r=(await c.query("SELECT id,target_kind,target_public_player_id,reason_code,state,created_at FROM abuse_reports WHERE id=$1",[id])).rows[0];
     if(!r)throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
-    // game_review queue/evidence: minimal typed metadata only — never detail/text/identities.
+    // game_review / message queue/evidence: minimal typed metadata only — never detail/text/identities.
     if(r.target_kind==="game_review") {
       return {id:r.id,targetKind:"game_review" as const,reasonCode:r.reason_code,state:r.state,createdAt:r.created_at};
+    }
+    if(r.target_kind==="message") {
+      return {id:r.id,targetKind:"message" as const,reasonCode:r.reason_code,state:r.state,createdAt:r.created_at};
     }
     return {id:r.id,targetKind:r.target_kind,targetPublicPlayerId:r.target_public_player_id,reasonCode:r.reason_code,state:r.state,createdAt:r.created_at};
   }
@@ -58,6 +65,16 @@ export class AdminCasesService {
       throw forbidden("REVIEWER_PARTICIPANT_CONFLICT","Участник игры не может быть независимым проверяющим");
     }
     return reviewerUserId;
+  }
+  /** DM message report: reviewer must not be reporter or message author (no game COI). */
+  private async assertIndependentMessageReviewer(c:PoolClient,actor:AuditActor,affectedUserIds:string[],gameId:string|null) {
+    if(gameId) return this.assertIndependentReviewer(c,actor,gameId,affectedUserIds);
+    const principal=(await c.query<{user_id:string;status:string}>("SELECT user_id, status FROM admin_principals WHERE id=$1 FOR UPDATE",[actor.principalId])).rows[0];
+    if(!principal || principal.status!=="active") throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
+    if(affectedUserIds.includes(principal.user_id)) {
+      throw forbidden("REVIEWER_SUBJECT_CONFLICT","Проверяющий не может быть стороной обращения");
+    }
+    return principal.user_id;
   }
   async reports(request:FastifyRequest,page:Page & {reportId?:string}) {
     this.enabled(); return this.admin.privilegedRead(request,"user.lookup",async(c,a)=>{
@@ -182,6 +199,106 @@ export class AdminCasesService {
         recordedAt:revision.recorded_at,
         reasonCode:reportMeta.reasonCode,
         reportState:reportMeta.state,
+      };
+    },true);
+  }
+  /**
+   * Assigned independent reviewer + evidence.assigned.read + fresh step-up may read the
+   * consented exact live message while original purge_eligible_at is finite and future.
+   * NULL/expired/purged => sourceAvailable=false (no TTL mutation, no body copy).
+   * Managers still require current assignment. Audit is IDs/metadata only.
+   */
+  async readMessageReport(request:FastifyRequest,caseId:string,reportId:string) {
+    this.enabled();
+    return this.admin.privilegedRead(request,"user.lookup",async(c,a)=>{
+      if(!hasPermission(a.roles as AdminRole[],"evidence.assigned.read")) {
+        throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
+      }
+      const r=await this.scoped(c,a,caseId);
+      if(r.assigned_to!==a.principalId) throw notFound("CASE_UNAVAILABLE","Обращение недоступно");
+      const link=(await c.query("SELECT id FROM support_case_links WHERE case_id=$1 AND report_id=$2",[caseId,reportId])).rows[0];
+      if(!link) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const reportMeta=await this.report(c,reportId);
+      if(reportMeta.targetKind!=="message") throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const binding=(await c.query<{
+        message_id:string;conversation_id:string;conversation_kind:string;game_id:string|null;
+        message_seq:string|number;author_user_id:string;content_fingerprint:string;reporter_user_id:string;share_consent:boolean;
+      }>(`SELECT message_id, conversation_id, conversation_kind, game_id, message_seq,
+                 author_user_id, content_fingerprint, reporter_user_id, share_consent
+          FROM message_report_bindings WHERE report_id=$1`,[reportId])).rows[0];
+      if(!binding || binding.share_consent!==true) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      await this.assertIndependentMessageReviewer(
+        c,
+        a,
+        [binding.author_user_id,binding.reporter_user_id],
+        binding.game_id,
+      );
+      const message=(await c.query<{
+        id:string;body_text:string|null;content_state:string;purge_eligible_at:Date|null;created_at:Date;seq:string|number;conversation_id:string;
+      }>(`SELECT id, body_text, content_state, purge_eligible_at, created_at, seq, conversation_id
+          FROM messages WHERE id=$1 AND conversation_id=$2 AND seq=$3 AND author_user_id=$4`,
+        [binding.message_id,binding.conversation_id,binding.message_seq,binding.author_user_id])).rows[0];
+      if(!message) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const secret=this.env.CONTENT_MODERATION_FINGERPRINT_SECRET;
+      if(!secret) {
+        throw problem(503,"MODERATION_TEMPORARILY_UNAVAILABLE","Проверка сообщений временно недоступна");
+      }
+      const currentFingerprint =
+        message.content_state === "live" && message.body_text
+          ? messageReportContentFingerprint(secret, {
+              messageId: message.id,
+              conversationId: message.conversation_id,
+              seq: message.seq,
+              bodyText: message.body_text,
+            })
+          : undefined;
+      const availability = evaluateMessageExactSourceAvailability({
+        contentState: message.content_state,
+        bodyText: message.body_text,
+        purgeEligibleAt: message.purge_eligible_at,
+        expectedFingerprint: binding.content_fingerprint,
+        currentFingerprint,
+      });
+      await appendAudit(c,{
+        actor:a,
+        action:"admin.case.message_report_read",
+        targetType:"case",
+        targetId:caseId,
+        permission:"evidence.assigned.read",
+        reason:"operations_read",
+        after:{
+          reportId,
+          messageId:binding.message_id,
+          conversationId:binding.conversation_id,
+          sourceAvailable:availability.available,
+          ...(availability.available?{}:{unavailableReason:availability.reason}),
+        },
+      });
+      const base = {
+        caseId,
+        reportId,
+        messageId:binding.message_id,
+        conversationId:binding.conversation_id,
+        conversationKind:binding.conversation_kind as "direct"|"game",
+        gameId:binding.game_id,
+        seq:String(binding.message_seq),
+        recordedAt:message.created_at,
+        reasonCode:reportMeta.reasonCode,
+        reportState:reportMeta.state,
+      };
+      if(!availability.available) {
+        return {
+          ...base,
+          sourceAvailable:false as const,
+          unavailableReason:availability.reason,
+          text:null,
+        };
+      }
+      return {
+        ...base,
+        sourceAvailable:true as const,
+        unavailableReason:null,
+        text:message.body_text,
       };
     },true);
   }

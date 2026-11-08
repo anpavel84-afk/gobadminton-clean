@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.37.0",
+    "version": "0.38.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -21718,11 +21718,18 @@
               }
             }
           },
-          "default": {
-            "$ref": "#/components/responses/Problem"
-          },
           "422": {
             "description": "Validation or PUBLIC_TEXT_CONTENT_REJECTED (optional Problem.fields.text). Prior approved tip unchanged; client keeps unsent input. No matched tokens/categories/scores.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "MODERATION_RATE_LIMITED",
             "content": {
               "application/json": {
                 "schema": {
@@ -21741,15 +21748,8 @@
               }
             }
           },
-          "429": {
-            "description": "MODERATION_RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -23720,6 +23720,101 @@
           }
         }
       }
+    },
+    "/admin/cases/{id}/message-reports/{reportId}": {
+      "get": {
+        "operationId": "adminReadCaseMessageReport",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Assigned reviewer reads consented exact private message while original purge window is open",
+        "description": "Only currently assigned independent reviewer with evidence.assigned.read and fresh step-up. case.manage alone or unassigned staff is insufficient. Returns live message body only when purge_eligible_at is finite and future; NULL/expired/purged yields sourceAvailable=false without copying body into case_evidence_items. Audited read; no mutation. Safe 403/404 on reassignment/COI/cross-case.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "reportId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact consented message source or honest limited-availability metadata; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCaseMessageReportSource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Problem details",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable / cross-case / unassigned",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -25545,48 +25640,102 @@
         }
       },
       "CreateAbuseReport": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "targetKind",
-          "targetPublicPlayerId",
-          "reasonCode"
-        ],
-        "properties": {
-          "targetKind": {
-            "type": "string",
-            "const": "player"
-          },
-          "targetPublicPlayerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "reasonCode": {
-            "type": "string",
-            "enum": [
-              "harassment",
-              "spam",
-              "fake_profile",
-              "inappropriate",
-              "other"
-            ]
-          },
-          "detail": {
-            "type": [
-              "string",
-              "null"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "targetKind",
+              "targetPublicPlayerId",
+              "reasonCode"
             ],
-            "maxLength": 1000
+            "properties": {
+              "targetKind": {
+                "type": "string",
+                "const": "player"
+              },
+              "targetPublicPlayerId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reasonCode": {
+                "type": "string",
+                "enum": [
+                  "harassment",
+                  "spam",
+                  "fake_profile",
+                  "inappropriate",
+                  "other"
+                ]
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 1000
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              }
+            }
           },
-          "evidenceRefs": {
-            "type": "array",
-            "maxItems": 10,
-            "items": {
-              "type": "string",
-              "maxLength": 200
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "targetKind",
+              "messageId",
+              "reasonCode",
+              "shareMessageWithSupport"
+            ],
+            "description": "Exact selected-message report. Server resolves author/content/context; client excerpts, author IDs and evidenceRefs are not authority. Exactly one of conversationId (DM) or gameId (game chat).",
+            "properties": {
+              "targetKind": {
+                "type": "string",
+                "const": "message"
+              },
+              "messageId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "conversationId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "gameId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reasonCode": {
+                "type": "string",
+                "enum": [
+                  "harassment",
+                  "spam",
+                  "fake_profile",
+                  "inappropriate",
+                  "other"
+                ]
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 1000
+              },
+              "shareMessageWithSupport": {
+                "type": "boolean",
+                "const": true
+              }
             }
           }
-        }
+        ]
       },
       "AbuseReportReceipt": {
         "type": "object",
@@ -32038,6 +32187,52 @@
               "createdAt",
               "caseId"
             ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "targetKind": {
+                "type": "string",
+                "const": "message"
+              },
+              "targetPublicPlayerId": {
+                "type": "null"
+              },
+              "reasonCode": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "caseId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "targetKind",
+              "reasonCode",
+              "state",
+              "createdAt",
+              "caseId"
+            ]
           }
         ]
       },
@@ -32302,7 +32497,8 @@
             "type": "string",
             "enum": [
               "player",
-              "game_review"
+              "game_review",
+              "message"
             ],
             "description": "Optional; present on report links from abuse_reports.target_kind. Omitted for game links."
           }
@@ -38564,6 +38760,99 @@
           },
           "outcomeReminders": {
             "type": "boolean"
+          }
+        }
+      },
+      "AdminCaseMessageReportSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "caseId",
+          "reportId",
+          "messageId",
+          "conversationId",
+          "conversationKind",
+          "gameId",
+          "seq",
+          "sourceAvailable",
+          "unavailableReason",
+          "text",
+          "recordedAt",
+          "reasonCode",
+          "reportState"
+        ],
+        "properties": {
+          "caseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "messageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversationKind": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "game"
+            ]
+          },
+          "gameId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seq": {
+            "type": "string"
+          },
+          "sourceAvailable": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "purged",
+              "tombstoned",
+              "null_expiry",
+              "expired",
+              "empty_body",
+              "fingerprint_mismatch",
+              null
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2000
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reasonCode": {
+            "type": "string"
+          },
+          "reportState": {
+            "type": "string"
           }
         }
       }

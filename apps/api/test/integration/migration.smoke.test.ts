@@ -889,6 +889,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       expect((await pool.query("SELECT to_regclass('public.game_personal_notes')::text AS name")).rows[0]?.name).toBe("game_personal_notes");
       expect((await pool.query("SELECT to_regclass('public.game_personal_note_revisions')::text AS name")).rows[0]?.name).toBe("game_personal_note_revisions");
       expect((await pool.query("SELECT to_regclass('public.game_review_report_bindings')::text AS name")).rows[0]?.name).toBe("game_review_report_bindings");
+      expect((await pool.query("SELECT to_regclass('public.message_report_bindings')::text AS name")).rows[0]?.name).toBe("message_report_bindings");
       expect(
         (
           await pool.query<{ consrc: string }>(
@@ -899,6 +900,26 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
           )
         ).rows[0]?.consrc,
       ).toMatch(/game_review/);
+      expect(
+        (
+          await pool.query<{ consrc: string }>(
+            `SELECT pg_get_constraintdef(oid) AS consrc
+             FROM pg_constraint
+             WHERE conrelid = 'public.abuse_reports'::regclass
+               AND conname = 'abuse_reports_target_kind_check'`,
+          )
+        ).rows[0]?.consrc,
+      ).toMatch(/message/);
+      expect(
+        (
+          await pool.query(
+            `SELECT tgname FROM pg_trigger
+             WHERE tgrelid = 'public.message_report_bindings'::regclass
+               AND tgname = 'message_report_bindings_immutable'
+               AND NOT tgisinternal`,
+          )
+        ).rows,
+      ).toHaveLength(1);
       // 0053 exact revision tuple FK (not fake CHECK TRUE) + immutable trigger.
       expect(
         (
