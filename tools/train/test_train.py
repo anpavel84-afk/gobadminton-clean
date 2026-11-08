@@ -1485,6 +1485,7 @@ class RuntimeUpgradeTests(unittest.TestCase):
                 return Path(path).read_bytes(),{}
             with mock.patch.multiple(lean_install,CURRENT=current,CONFIG=config,STATE_ROOT=root), \
                     mock.patch.object(lean_install.os,'geteuid',return_value=0), \
+                    mock.patch.object(lean_install.os,'chown'), \
                     mock.patch.object(lean_install,'_regular_root_bytes',side_effect=read), \
                     mock.patch.object(lean_install,'collect_blobs',return_value=blobs), \
                     mock.patch.object(lean_install,'write_release',return_value=(dest,True)), \
@@ -1496,6 +1497,7 @@ class RuntimeUpgradeTests(unittest.TestCase):
                 self.assertFalse((root/'state').exists())
             with mock.patch.multiple(lean_install,CURRENT=current,CONFIG=config,STATE_ROOT=root), \
                     mock.patch.object(lean_install.os,'geteuid',return_value=0), \
+                    mock.patch.object(lean_install.os,'chown'), \
                     mock.patch.object(lean_install,'_regular_root_bytes',side_effect=read), \
                     mock.patch.object(lean_install,'collect_blobs',return_value=blobs), \
                     mock.patch.object(lean_install,'write_release',return_value=(dest,True)), \
