@@ -43,6 +43,7 @@ import {
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
 import {
+  DesktopBrowseActionsShell,
   isBrowseConfirmedPlayInterestOutcome,
   PlayerBrowsePlayInterest,
   type BrowsePlayInterestApi,
@@ -1880,9 +1881,9 @@ export function PlayerBrowseDeck({
   );
 
   const desktopActions = (
-    <div className="pb-profile-bottom">
-      <div className="pb-profile-actions">
-        <div className="pb-friend-slot">{friendship}</div>
+    <DesktopBrowseActionsShell
+      primarySlot={friendship}
+      nextControl={(
         <button
           type="button"
           className="pb-btn-next"
@@ -1891,9 +1892,8 @@ export function PlayerBrowseDeck({
         >
           Следующий <Chevron dir="right" />
         </button>
-      </div>
-      <p className="pb-action-caption">Совпадение — когда оба хотите сыграть. Не дружба.</p>
-    </div>
+      )}
+    />
   );
 
   return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}${mobileFullscreen ? " pb-browse--fs" : ""}`} data-surface="player-browse-deck" data-browse-desktop={desktop ? "true" : "false"} data-mobile-fs={mobileFullscreen ? "true" : "false"}>

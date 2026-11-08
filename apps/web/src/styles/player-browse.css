@@ -2117,24 +2117,30 @@
     margin-top: 8px;
   }
 
+  /* #523: grid so reserved status stays above primary only; Next shares the button row
+     top/bottom/height — align-items:stretch on a flex row made Next as tall as status+button. */
   .gb-player-browse[data-browse-desktop="true"] .pb-profile-actions {
-    display: flex;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 0;
     align-items: stretch;
   }
 
-  .gb-player-browse[data-browse-desktop="true"] .pb-friend-slot {
-    flex: 1;
-    min-width: 0;
+  .gb-player-browse[data-browse-desktop="true"] .pb-friend-slot,
+  .gb-player-browse[data-browse-desktop="true"] .pb-action-slot--desktop {
+    display: contents;
   }
 
-  .gb-player-browse[data-browse-desktop="true"] .pb-action-slot--desktop,
   .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop {
     width: 100%;
     margin: 0;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-action-status {
+    grid-column: 1;
+    grid-row: 1;
     margin: 0 0 6px;
     color: #9bac9b;
     font-size: 11px;
@@ -2149,15 +2155,20 @@
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop {
+    grid-column: 1;
+    grid-row: 2;
     display: block;
     min-height: 48px;
+    align-self: stretch;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-btn-request,
   .gb-player-browse[data-browse-desktop="true"] .pb-btn-withdraw,
   .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop .btn {
     width: 100%;
+    box-sizing: border-box;
     min-height: 48px;
+    height: 100%;
     border-radius: 10px;
     font-size: 12px;
   }
@@ -2169,11 +2180,16 @@
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-btn-next {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: stretch;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 10px;
+    box-sizing: border-box;
     min-height: 48px;
+    height: 100%;
     min-width: 138px;
     padding: 12px 16px;
     border: 1px solid #4b6050;
