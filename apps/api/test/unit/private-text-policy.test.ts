@@ -96,6 +96,30 @@ describe("private-text-policy private-local-safety-v1", () => {
     );
   });
 
+  it("does not treat contraction apostrophes as quote delimiters (OWNER506 probe)", () => {
+    // Reproduced purehelper FN: unquoted contractions hid "i'll kill you".
+    expect(
+      evaluatePrivateTextContent("I'll kill you if you're late"),
+    ).toEqual({ kind: "reject", reason: "obvious_direct_threat" });
+    // Quoted attribution with contractions/names around/inside still allows.
+    expect(
+      evaluatePrivateTextContent(
+        "O'Brien said 'I'll kill you if you're late' — reporting",
+      ).kind,
+    ).toBe("allow");
+    expect(
+      evaluatePrivateTextContent(
+        'Peer wrote "I\'ll kill you" in chat — please review',
+      ).kind,
+    ).toBe("allow");
+    // Mixed: attributed quote stripped; unquoted remainder still checked.
+    expect(
+      evaluatePrivateTextContent(
+        'He wrote "you\'re late" but I\'ll kill you anyway',
+      ),
+    ).toEqual({ kind: "reject", reason: "obvious_direct_threat" });
+  });
+
   it("normalizes whitespace for phrase match without inventing storage transforms", () => {
     expect(normalizePrivateTextForMatch("  Я   ТЕБЯ\nУБЬЮ  ")).toBe(
       "я тебя убью",

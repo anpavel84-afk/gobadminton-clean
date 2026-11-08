@@ -73,16 +73,60 @@ export function normalizePrivateTextForMatch(raw: string): string {
     .trim();
 }
 
+/** Letter for word-internal apostrophe detection (contractions / names). */
+function isLetterChar(ch: string | undefined): boolean {
+  return ch !== undefined && /\p{L}/u.test(ch);
+}
+
+/**
+ * Apostrophe between two letters (I'll, you're, O'Brien) is not a quote boundary.
+ * Standalone `'` used as explicit quotation marks still pair and strip.
+ */
+function isWordInternalApostrophe(text: string, index: number): boolean {
+  return (
+    text[index] === "'" &&
+    isLetterChar(text[index - 1]) &&
+    isLetterChar(text[index + 1])
+  );
+}
+
+/**
+ * Strip paired ASCII single-quoted spans using only non-word-internal `'`.
+ * Finite left-to-right pairing; unpaired leftover delimiter is left in place.
+ * Body length is already bounded by callers (≤2000); no nested/backtracking regex.
+ */
+function stripAsciiSingleQuotedSpans(text: string): string {
+  const delimiters: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "'" && !isWordInternalApostrophe(text, i)) {
+      delimiters.push(i);
+    }
+  }
+  if (delimiters.length < 2) return text;
+
+  let out = "";
+  let last = 0;
+  for (let p = 0; p + 1 < delimiters.length; p += 2) {
+    const open = delimiters[p]!;
+    const close = delimiters[p + 1]!;
+    out += text.slice(last, open) + " ";
+    last = close + 1;
+  }
+  out += text.slice(last);
+  return out;
+}
+
 /**
  * Drop clearly delimited quoted spans so attributed reports/quotations are not
  * treated as the author's own direct threat. Unquoted remainder is still checked.
+ * Word-internal apostrophes in contractions/names are not quote delimiters.
  */
 function stripClearlyQuotedSpans(normalized: string): string {
-  return normalized
+  const withoutPaired = normalized
     .replace(/«[^»]*»/g, " ")
     .replace(/"[^"]*"/g, " ")
-    .replace(/'[^']*'/g, " ")
-    .replace(/„[^“]*“/g, " ")
+    .replace(/„[^“]*“/g, " ");
+  return stripAsciiSingleQuotedSpans(withoutPaired)
     .replace(/\s+/g, " ")
     .trim();
 }
