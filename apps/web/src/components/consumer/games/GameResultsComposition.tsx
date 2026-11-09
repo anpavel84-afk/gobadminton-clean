@@ -37,6 +37,8 @@ import {
   useGameResultsMutation,
 } from "./useGameResultsMutation";
 import { GameFeedbackPanel } from "./GameFeedbackPanel";
+import { getOwnVenueReviewEligibility, type OwnVenueEligibilityBasis } from "../../../lib/venue-reviews-api";
+import { VenueReviewComposer, venueReviewEligibilityHelp } from "../venues/VenueReviewComposer";
 import "../../../styles/postgame.css";
 
 type Tab = ResultsSection;
@@ -78,6 +80,68 @@ function GameResultsMutationHost({
 }) {
   const mutation = useGameResultsMutation(actorId, gameId, csrf, onSuccess, onRefresh);
   return <>{children(mutation)}</>;
+}
+
+/** One fixed-game review owner, retained independently of feedback tabs and results refresh. */
+function GameVenueReviewEntry({ gameId, venueId, actorId, csrfToken, results, active }: {
+  gameId: string;
+  venueId: string | null;
+  actorId: string;
+  csrfToken: string;
+  results: GameResults;
+  active: boolean;
+}) {
+  const [eligibility, setEligibility] = useState<{
+    venueId: string | null; results: GameResults;
+    basis?: OwnVenueEligibilityBasis; state: "ready" | "error";
+  } | null>(null);
+  const [openedVenue, setOpenedVenue] = useState<string | null>(null);
+  const [revoked, setRevoked] = useState(false);
+  useEffect(() => {
+    const fence = () => { setRevoked(true); setOpenedVenue(null); setEligibility(null); };
+    window.addEventListener("gb-private-expired", fence);
+    window.addEventListener("gb-session-changed", fence);
+    return () => {
+      window.removeEventListener("gb-private-expired", fence);
+      window.removeEventListener("gb-session-changed", fence);
+    };
+  }, []);
+  useEffect(() => {
+    if (!venueId || !csrfToken || revoked) return;
+    const controller = new AbortController();
+    setEligibility(null);
+    void getOwnVenueReviewEligibility(venueId, controller.signal).then(result => {
+      if (controller.signal.aborted) return;
+      if (!result.ok && (result.status === 401 || result.status === 403)) {
+        setRevoked(true); setOpenedVenue(null); setEligibility(null);
+        return;
+      }
+      setEligibility({ venueId, results, state: result.ok ? "ready" : "error",
+        basis: result.ok ? result.data.bases.find(b => b.gameId === gameId) : undefined });
+    }).catch(() => {
+      if (!controller.signal.aborted) setEligibility({ venueId, results, state: "error" });
+    });
+    return () => controller.abort();
+  }, [venueId, gameId, actorId, csrfToken, results, revoked]);
+  const current = eligibility?.venueId === venueId && eligibility?.results === results ? eligibility : null;
+  const maySubmit = !revoked && Boolean(csrfToken && venueId) && current?.state === "ready"
+    && current.basis?.admission === "may_submit";
+  return <>
+    {active && !revoked ? <SurfacePanel tone="bordered" className="gb-postgame__panel">
+      <SectionHeader title="Отзыв о площадке после игры" />
+      {openedVenue ? <p role="status">Открыт отзыв по этой игре.</p>
+        : maySubmit ? <Button onClick={() => setOpenedVenue(venueId)}>Оставить отзыв о площадке</Button>
+          : <p role="status">{!venueId ? venueReviewEligibilityHelp(undefined)
+          : !current ? "Проверяем допуск по этой игре…"
+            : current.state === "error" ? "Не удалось проверить допуск по этой игре."
+              : venueReviewEligibilityHelp(current.basis)}</p>}
+    </SurfacePanel> : null}
+    {/* Never derive this owner's lifetime/packet from a later eligibility or public game read. */}
+    {openedVenue && !revoked ? <VenueReviewComposer
+      venueId={openedVenue} gameId={gameId} actorId={actorId} csrfToken={csrfToken} eligibilityRefresh={results}
+      onClose={() => setOpenedVenue(null)}
+    /> : null}
+  </>;
 }
 
 function initials(name: string): string {
@@ -1014,11 +1078,16 @@ export function GameResultsComposition({ gameId }: { gameId: string }) {
                 contextId: row.contextId,
                 displayName: row.displayName,
               }))}
-              venueId={game?.venue?.id ?? null}
             />
           ) : null}
         </>
       ) : null}
+
+      {me && results?.gameId === gameId && state !== "forbidden" && state !== "auth" ? <GameVenueReviewEntry
+        key={`${me.id}:${me.csrfToken}:${gameId}`}
+        gameId={gameId} venueId={game?.id === gameId ? game.venue.id : null} actorId={me.id} csrfToken={me.csrfToken}
+        results={results} active={tab === "feedback"}
+      /> : null}
 
       {markTarget?.mode === "single" && (
         <ProfileDialog

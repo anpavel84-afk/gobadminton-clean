@@ -42,7 +42,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function ready() { await screen.findByText("Можно поделиться опытом"); }
 function composer(props: Partial<Parameters<typeof VenueReviewComposer>[0]> = {}) {
-  return createElement(VenueReviewComposer, { venueId: venue, actorId: actor, csrfToken: "session-one", onClose: vi.fn(), ...props });
+  return createElement(VenueReviewComposer, { venueId: venue, gameId: basis.gameId, actorId: actor, csrfToken: "session-one", onClose: vi.fn(), ...props });
 }
 // jsdom has no native CloseWatcher: model its noncancelable cancel + actual close.
 function forceNativeClose(dialog: HTMLElement) {
@@ -67,7 +67,7 @@ describe("venue reviews UI contracts", () => {
     expect(composer).toMatch(/Участник игры/);
   });
 
-  it("VenuePage composes the public experience panel through shared community content and retains the generic CTA", async () => {
+  it.each([false, true])("keeps the shared public panel read-only for signed-in=%s", async signedIn => {
     const page = readFileSync(path.join(root, "VenuePage.tsx"), "utf8");
     const community = readFileSync(path.join(root, "VenueCommunityContent.tsx"), "utf8");
     expect(page).toMatch(/import \{ VenueCommunityContent \} from "\.\/VenueCommunityContent"/);
@@ -76,12 +76,17 @@ describe("venue reviews UI contracts", () => {
     expect(community).toMatch(/<VenueReviewsPanel\b[^>]*venueId=\{venueId\}/);
     expect(page).not.toMatch(/напишите комментарий/i);
     const login = vi.fn();
-    render(createElement(VenueReviewsPanel, { venueId: venue, onLogin: login }));
-    const panel = screen.getByRole("region", { name: "Опыт на площадке" });
+    render(createElement(VenueReviewsPanel, { venueId: venue, onLogin: login, canWrite: signedIn,
+      csrfToken: signedIn ? "session-one" : null, actorId: signedIn ? actor : null }));
+    const panel = screen.getByRole("region", { name: "Отзывы после игры" });
     expect(await within(panel).findByText("Публичный опыт после игры")).toBeTruthy();
     expect(api.reviews).toHaveBeenCalledWith(venue, { limit: 5 });
-    fireEvent.click(within(panel).getByRole("button", { name: /^Поделиться опытом$/ }));
-    expect(login).toHaveBeenCalledTimes(1);
+    expect(within(panel).queryByRole("button", { name: /Поделиться|Оставить|Войти/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByLabelText("Игра, после которой оставляете отзыв")).toBeNull();
+    expect(login).not.toHaveBeenCalled();
+    expect(api.eligibility).not.toHaveBeenCalled();
+    expect(api.send).not.toHaveBeenCalled();
   });
 });
 
@@ -152,7 +157,7 @@ describe("mounted review operation ownership", () => {
     await waitFor(() => expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true));
     expect(unresolved).toHaveBeenLastCalledWith(false);
     fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
-    expect(api.send).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1));
     expect(unresolved).toHaveBeenLastCalledWith(true);
     const firstCall = api.send.mock.calls[0];
     if (!firstCall) throw new Error("Missing admitted review send");
@@ -203,14 +208,16 @@ describe("mounted review operation ownership", () => {
     fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
     await waitFor(() => expect(api.send).toHaveBeenCalledTimes(2));
     expect(api.send.mock.calls[1]).toEqual(original);
-    await screen.findByText(/Публикация — после независимой проверки и паузы 48 часов/);
+    await screen.findByText("Отправлен; ещё не опубликован.");
+    expect(screen.getByText("Публичный отзыв не виден.")).toBeTruthy();
+    expect(api.eligibility).toHaveBeenCalledTimes(2); // Open + new write; UNKNOWN retry does not recompute it.
     expect(unresolved).toHaveBeenLastCalledWith(false);
     expect((footerClose as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(footerClose);
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["gb-session-changed", "gb-private-expired", "actor", "logout", "csrf", "venue"])("fences late send and prior retry on %s", async boundary => {
+  it.each(["gb-session-changed", "gb-private-expired", "actor", "logout", "csrf", "venue", "game"])("fences late send and prior retry on %s", async boundary => {
     const pending = deferred<Awaited<ReturnType<typeof ReviewApi.createVenueReview>>>();
     api.send.mockReturnValueOnce(pending.promise);
     const submitted = vi.fn(), unresolved = vi.fn();
@@ -218,17 +225,18 @@ describe("mounted review operation ownership", () => {
     const view = render(composer(props)); await ready();
     fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Текст" } });
     fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1));
     expect(unresolved).toHaveBeenLastCalledWith(true);
     forceNativeClose(screen.getByRole("dialog", { name: "Как вам площадка?" }));
     expect(screen.getByTestId("venue-review-resume")).toBeTruthy();
     if (boundary.startsWith("gb-")) act(() => { window.dispatchEvent(new Event(boundary)); });
     else view.rerender(composer({ ...props, ...(boundary === "actor" ? { actorId: "another-actor" } : boundary === "logout" ? { actorId: null, csrfToken: "" }
-      : boundary === "csrf" ? { csrfToken: "session-two" } : { venueId: "another-venue" }) }));
+      : boundary === "csrf" ? { csrfToken: "session-two" } : boundary === "game" ? { gameId: "another-game" } : { venueId: "another-venue" }) }));
     await act(async () => pending.resolve(receipt));
     expect(submitted).not.toHaveBeenCalled();
     expect(screen.queryByText("Сохранено только вам.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Проверить отправку" })).toBeNull();
-    expect(api.send).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1));
     expect(unresolved).toHaveBeenLastCalledWith(false);
     expect(screen.queryByTestId("venue-review-resume")).toBeNull();
   });
@@ -240,6 +248,7 @@ describe("mounted review operation ownership", () => {
     render(composer({ onSubmitted: submitted, onClose: close })); await ready();
     fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Точный текст" } });
     fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1));
     const dialog = screen.getByRole("dialog");
     forceNativeClose(dialog);
     await act(async () => pending.resolve(receipt));
@@ -271,4 +280,83 @@ describe("mounted review operation ownership", () => {
     if (checkbox) expect(checkbox.checked).toBe(false);
     expect(api.send).not.toHaveBeenCalled();
   });
+});
+
+describe("fixed-game admission", () => {
+  it("uses only the fixed game and fresh basis for a private write", async () => {
+    api.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [
+      { ...basis, gameId: "other-game", outcomeVersion: 99 }, basis,
+    ] } });
+    api.send.mockResolvedValueOnce(receipt);
+    render(composer()); await ready();
+    expect(screen.queryByLabelText("Игра, после которой оставляете отзыв")).toBeNull();
+    expect((screen.getByLabelText("Оставить только себе") as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Мой опыт" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await screen.findByText("Сохранено только вам.");
+    expect(api.eligibility).toHaveBeenCalledTimes(2);
+    expect(api.send.mock.calls[0]?.[0]).toEqual({ venueId: venue, gameId: basis.gameId,
+      audience: "self_draft", text: "Мой опыт", topics: ["surface"],
+      expectedBasisVersions: { outcomeVersion: 7, attendanceVersion: 12 } });
+    expect((screen.getByRole("button", { name: /^Сохранить$/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it.each([
+    { bases: [{ ...basis, gameId: "other-game" }], message: "Не удалось подтвердить возможность отзыва по этой игре." },
+    { bases: [{ ...basis, admission: "hold" as const, helpHint: "attendance_clarifying" as const }], message: /Уточняем посещение/ },
+    { bases: [{ ...basis, admission: "deny" as const, reason: "window_closed" }], message: /Срок подачи отзыва по этой игре истёк/ },
+    { bases: [{ ...basis, admission: "missing_history" as const }], message: /Не удалось подтвердить историческую площадку/ },
+  ])("never substitutes another game for an unavailable basis: $message", async ({ bases, message }) => {
+    api.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [...bases, { ...basis, gameId: "another-eligible" }] } });
+    render(composer());
+    await screen.findByText(message);
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Текст" } });
+    expect((screen.getByRole("button", { name: /^Сохранить$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+
+  it.each(["hold", "versions", "missing"])("rechecks a new write and stops stale %s", async change => {
+    render(composer()); await ready();
+    api.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: change === "missing" ? [] : [
+      change === "hold" ? { ...basis, admission: "hold", helpHint: "attendance_clarifying" }
+        : { ...basis, attendanceVersion: 13 },
+    ] } });
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Сохранённый текст" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(api.eligibility).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect((screen.getByLabelText("Ваш опыт на площадке") as HTMLTextAreaElement).disabled).toBe(false));
+    expect(api.send).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Ваш опыт на площадке") as HTMLTextAreaElement).value).toBe("Сохранённый текст");
+    if (change === "versions") {
+      expect(screen.getByText(/Данные игры изменились/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+      await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1));
+      expect(api.send.mock.calls[0]?.[0].expectedBasisVersions.attendanceVersion).toBe(13);
+    }
+  });
+
+  it("invalidates already granted public consent when the projection is edited", async () => {
+    render(composer()); await ready();
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Первый текст" } });
+    fireEvent.click(screen.getByLabelText("Всем на странице площадки"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    await waitFor(() => expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true));
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Изменённый текст" } });
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole("button", { name: /^Сохранить$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.send).not.toHaveBeenCalled();
+  });
+});
+
+
+it("shows the exact receipt's pending revision and independent public visibility", async () => {
+  api.send.mockResolvedValueOnce({ ...receipt, data: { ...receipt.data, status: "revision_waiting",
+    publicVisible: true, notBefore: "2026-11-10T12:00:00Z" } });
+  render(composer()); await ready();
+  fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Мой текст" } });
+  fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+  await screen.findByText("Новая версия ожидает проверки.");
+  expect(screen.getByText("Публичная версия отзыва доступна.")).toBeTruthy();
+  expect(screen.getByText(/Публикация возможна не ранее 2026-11-10T12:00:00Z; она не гарантирована/)).toBeTruthy();
+  expect(screen.queryByText(/Срок подачи/)).toBeNull();
 });

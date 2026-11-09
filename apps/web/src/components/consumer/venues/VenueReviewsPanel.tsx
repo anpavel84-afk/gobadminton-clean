@@ -6,7 +6,6 @@ import {
   type PublicVenueReviewItem,
 } from "../../../lib/venue-reviews-api";
 import { Button } from "../Button";
-import { VenueReviewComposer } from "./VenueReviewComposer";
 import { VenueReviewsDialog } from "./VenueReviewsDialog";
 import "../../../styles/venue-reviews.css";
 
@@ -19,16 +18,10 @@ const TOPIC_LABEL: Record<string, string> = {
 };
 
 /**
- * Public venue experience list + share entry. Guest read allowed; write needs session CSRF.
+ * Published anonymous venue reviews. Public surfaces never own a write operation.
  */
 export function VenueReviewsPanel({
   venueId,
-  csrfToken = null,
-  canWrite = false,
-  onLogin,
-  embedded = false,
-  actorId = null,
-  onUnresolvedChange,
 }: {
   venueId: string;
   csrfToken?: string | null;
@@ -41,7 +34,6 @@ export function VenueReviewsPanel({
   const [state, setState] = useState<LoadState>("idle");
   const [items, setItems] = useState<PublicVenueReviewItem[]>([]);
   const [count, setCount] = useState(0);
-  const [composer, setComposer] = useState(false);
   const [gallery, setGallery] = useState(false);
   const epoch = useRef(0);
 
@@ -68,10 +60,10 @@ export function VenueReviewsPanel({
   }, [venueId]);
 
   return (
-    <section className="gb-venue-reviews" aria-label="Опыт на площадке">
+    <section className="gb-venue-reviews" aria-label="Отзывы после игры">
       <header>
         <p className="gb-venue-reviews__badge gb-venue-reviews__badge--muted">После игры</p>
-        <h2 className="gb-venue-reviews__title">{embedded ? "Отзывы после игры" : "Опыт на площадке"}</h2>
+        <h2 className="gb-venue-reviews__title">Отзывы после игры</h2>
         <p className="gb-venue-reviews__lede">
           Публичные отзывы — от участников с подтверждённым посещением. Автор показан как «Участник
           игры», без профиля и деталей встречи.
@@ -110,29 +102,7 @@ export function VenueReviewsPanel({
             Все отзывы · {count}
           </Button>
         ) : null}
-        {canWrite && csrfToken ? (
-          <Button onClick={() => setComposer(true)}>Поделиться опытом</Button>
-        ) : (
-          <Button
-            variant="outline"
-            onClick={() => {
-              if (onLogin) onLogin();
-            }}
-          >
-            Поделиться опытом
-          </Button>
-        )}
       </div>
-      {composer && csrfToken ? (
-        <VenueReviewComposer
-          venueId={venueId}
-          actorId={actorId}
-          onUnresolvedChange={onUnresolvedChange}
-          csrfToken={csrfToken}
-          onClose={() => setComposer(false)}
-          onSubmitted={reload}
-        />
-      ) : null}
       {gallery ? (
         <VenueReviewsDialog venueId={venueId} onClose={() => setGallery(false)} />
       ) : null}
