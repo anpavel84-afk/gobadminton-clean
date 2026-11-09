@@ -159,12 +159,15 @@ describe("GamesDiscovery compact filters #458", () => {
     const reopened = await screen.findByRole("dialog");
     expect(within(reopened).getByText("Москва · 11 ноября · С тренером")).toBeTruthy();
     const reset = within(reopened).getByRole("button", { name: "Сбросить уровень" });
-    expect(reset).not.toBeDisabled();
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reset);
     expect(trigger.getAttribute("data-active")).toBeNull();
     expect(document.querySelector('[data-level-filter="active"]')).toBeNull();
     expect(within(reopened).getByText("Москва · 11 ноября · С тренером")).toBeTruthy();
-    expect(within(reopened).getByRole("button", { name: "Сбросить уровень" })).toBeDisabled();
+    expect(
+      (within(reopened).getByRole("button", { name: "Сбросить уровень" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
     await waitFor(() => expect(document.activeElement?.tagName).toBe("SELECT"));
   });
 
