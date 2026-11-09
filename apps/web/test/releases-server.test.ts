@@ -257,7 +257,7 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("preserves the exact trusted alpha.67 receipt before the unaccepted alpha.68 descriptor", () => {
+  it("preserves the exact trusted alpha.67 receipt before the accepted alpha.68 receipt", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.67");
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -277,9 +277,39 @@ describe("history seed integrity", () => {
     expect(row.owner_uat).toBe("NOT_TESTED");
   });
 
-  it("keeps seventy-six confirmed seed deployments including accepted alpha.1–alpha.67 and dedupes identical live rows", () => {
+  it("preserves the exact ten-field trusted alpha.68 receipt before the unaccepted alpha.69 descriptor", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.68");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(3477);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "aaae52c792c34f83c85dc6237750770691e743fd36ed085b716a2f978b73aaaf",
+    );
+    expect(row.source_sha).toBe("2c33ce49d5b8ad704bf78524b8149c94e4d3e62e");
+    expect(row.version_label).toBe("0.1.0-alpha.68");
+    expect(row.api_contract_version).toBe("0.40.0");
+    expect(row.deployments).toHaveLength(1);
+    expect(row.deployments[0]?.release_id).toBe("r42627002935-a1");
+    expect(row.deployments[0]?.accepted_at).toBe("2026-11-09T13:42:50Z");
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.67")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(row.title).toBe("Порядок ролей и действий в карточке тренировки");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toHaveLength(1);
+    expect(row.fixes.join(" ")).toMatch(/В нижней строке карточки тренировки сначала показан тренер, затем организатор и «Отзывы и история»/i);
+    expect(row.fixes.join(" ")).toMatch(/кнопки «Подробнее» и «Поделиться» расположены у правого края/i);
+    expect(row.known_limitations).toHaveLength(10);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.owner_uat).toBe("NOT_TESTED");
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(72);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(77);
+  });
+
+  it("keeps seventy-seven confirmed seed deployments including accepted alpha.1–alpha.68 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(76);
+    expect(seedCount).toBe(77);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -345,10 +375,18 @@ describe("history seed integrity", () => {
       origin: "seed",
     }]);
     const ordered = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
-    expect(ordered.slice(0, 3).map((row) => row.application_version)).toEqual([
-      "0.1.0-alpha.67", "0.1.0-alpha.66", "0.1.0-alpha.65",
+    expect(ordered.slice(0, 4).map((row) => row.application_version)).toEqual([
+      "0.1.0-alpha.68", "0.1.0-alpha.67", "0.1.0-alpha.66", "0.1.0-alpha.65",
     ]);
     expect(ordered[0]).toMatchObject({
+      source_sha: "2c33ce49d5b8ad704bf78524b8149c94e4d3e62e",
+      release_id: "r42627002935-a1",
+      accepted_at: "2026-11-09T13:42:50.000Z",
+      status: "ACCEPTED",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+    });
+    expect(ordered[1]).toMatchObject({
       source_sha: "04fdc58b53e79996ccdb21a7396c5d1525cfbd10",
       release_id: "r42613449482-a1",
       accepted_at: "2026-11-09T12:05:53.000Z",
@@ -359,7 +397,7 @@ describe("history seed integrity", () => {
     expect(buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).some(
       (row) => row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(false);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(71);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(72);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -443,7 +481,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.64"
       || row.application_version === "0.1.0-alpha.65"
       || row.application_version === "0.1.0-alpha.66"
-      || row.application_version === "0.1.0-alpha.67",
+      || row.application_version === "0.1.0-alpha.67"
+      || row.application_version === "0.1.0-alpha.68",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -520,12 +559,12 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.68");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.69");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Порядок ролей и действий в карточке тренировки");
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Компактные фильтры на экране «Игры»");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -798,6 +837,7 @@ describe("history seed integrity", () => {
       "2026-11-09T10:21:55Z",
       "2026-11-09T11:28:13Z",
       "2026-11-09T12:05:53Z",
+      "2026-11-09T13:42:50Z",
     ]);
   });
 
