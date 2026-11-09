@@ -91,16 +91,13 @@ function renderPlayers526MobileFixture() {
               "data-radar": "on",
               "data-fixture": "players-526-finder",
             },
-            createElement(
-              Button,
-              {
-                type: "button",
-                variant: "dark",
-                className: "pb-finder-cta",
-                "aria-label": "Свайп",
-              },
-              createElement("span", { className: "pb-finder-cta__label" }, "Свайп"),
-            ),
+            createElement(Button, {
+              type: "button",
+              variant: "dark",
+              className: "pb-finder-cta",
+              "aria-label": "Свайп",
+              children: createElement("span", { className: "pb-finder-cta__label" }, "Свайп"),
+            }),
             createElement(
               "div",
               {
