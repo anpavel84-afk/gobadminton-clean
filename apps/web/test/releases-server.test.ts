@@ -301,7 +301,8 @@ describe("history seed integrity", () => {
     expect(row.fixes.join(" ")).toMatch(/В нижней строке карточки тренировки сначала показан тренер, затем организатор и «Отзывы и история»/i);
     expect(row.fixes.join(" ")).toMatch(/кнопки «Подробнее» и «Поделиться» расположены у правого края/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
@@ -346,7 +347,8 @@ describe("history seed integrity", () => {
     expect(fixes).toMatch(/выбранный уровень сохраняется после закрытия.*сброс затрагивает только уровень/i);
     expect(fixes).toMatch(/Выбор города, дня и типа игры, уровень в профиле и работа сервера остаются прежними/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
@@ -385,7 +387,8 @@ describe("history seed integrity", () => {
     expect(row.fixes).toHaveLength(1);
     expect(row.fixes.join(" ")).toMatch(/Незавершённые отправки и их точный повтор сохраняются.*явное восстановление/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
@@ -427,7 +430,8 @@ describe("history seed integrity", () => {
     expect(radarFix).toMatch(/При задержке или ошибке.*краткий статус/i);
     expect(gamesFix).toMatch(/заголовка и счётчика на телефоне.*отступы горизонтальных переключателей типа игры.*даты на компьютере.*размеры элементов компактного фильтра/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
@@ -723,6 +727,15 @@ describe("history seed integrity", () => {
       "Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.",
     ]);
     expect(CURRENT_NAMED_RELEASE.title).toBe("Отзыв о площадке из итогов конкретной игры");
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(10);
+    expect(CURRENT_NAMED_RELEASE.known_limitations[0]).toBe(
+      "Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно",
+    );
+    const currentLimitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
+    expect(currentLimitations).not.toMatch(/вход.*отзыв.*ещё не\s*доступ/i);
+    expect(currentLimitations).not.toMatch(/карте площадок.*ещё не\s*доступ/i);
+    expect(currentLimitations).not.toMatch(/публичного автора без замены/i);
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
