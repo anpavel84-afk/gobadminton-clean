@@ -1507,6 +1507,9 @@
   white-space: nowrap;
 }
 /* Shared GamesViewAction rendered in-flow inside the zone: not a second fixed overlay. */
+.gb-player-browse .pb-mobile-finder-zone .pb-finder-map-group {
+  display: contents;
+}
 .gb-player-browse .pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action {
   position: static;
   display: flex;
