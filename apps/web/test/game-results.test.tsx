@@ -1,7 +1,13 @@
+/** @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { managerRosterRowStatusLabel } from "../src/components/consumer/games/GameResultsComposition";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import type * as ReviewApi from "../src/lib/venue-reviews-api";
+import type * as ResultsApi from "../src/lib/api-client";
+import type { Game, Me } from "../src/lib/consumer-types";
+import { GameResultsComposition, managerRosterRowStatusLabel } from "../src/components/consumer/games/GameResultsComposition";
 import {
   attendanceLabel,
   canOfferAttendanceWrites,
@@ -72,7 +78,7 @@ describe("PG-1b game results helpers", () => {
     expect(page).toContain("GameResultsPage");
     expect(composition).toContain("Участники / Итоги");
     expect(composition).toContain("GameFeedbackPanel");
-    expect(composition).toContain("venueId={game?.venue?.id ?? null}");
+    expect(composition).toContain("GameVenueReviewEntry");
     expect(composition).toContain("useGameResultsMutation");
     expect(composition).toContain("parseResultsSection");
     expect(composition).toContain("selectTab");
@@ -364,5 +370,136 @@ describe("PG-1b game results helpers", () => {
     expect(composition).toContain("listOpenAttendanceDisputes");
     expect(composition).toContain("resetDraft: true");
     expect(composition).toContain("gb-postgame__dispute-picks");
+  });
+});
+
+
+const reviewApi = vi.hoisted(() => ({ eligibility: vi.fn<typeof ReviewApi.getOwnVenueReviewEligibility>(),
+  send: vi.fn<typeof ReviewApi.createVenueReview>() }));
+const resultsApi = vi.hoisted(() => ({ me: vi.fn<typeof ResultsApi.getMe>(), game: vi.fn<typeof ResultsApi.getGame>(),
+  results: vi.fn<typeof ResultsApi.getGameResults>(), refresh: null as null | (() => void) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams("section=feedback") }));
+vi.mock("../src/lib/api-client", async original => ({ ...await original<typeof ResultsApi>(),
+  getMe: resultsApi.me, getGame: resultsApi.game, getGameResults: resultsApi.results }));
+vi.mock("../src/lib/venue-reviews-api", async original => ({ ...await original<typeof ReviewApi>(),
+  getOwnVenueReviewEligibility: reviewApi.eligibility, createVenueReview: reviewApi.send }));
+vi.mock("../src/components/consumer/games/useGameResultsMutation", () => ({
+  useGameResultsMutation: (_actor: string, _game: string, _csrf: string, _success: unknown, refresh: () => void) => {
+    resultsApi.refresh = refresh;
+    return { busy: false, pending: false, notice: null };
+  },
+}));
+const reviewBasis: ReviewApi.OwnVenueEligibilityBasis = { gameId: "current-game", gameTitle: "Сыгранная игра",
+  admission: "may_submit", reason: null, helpHint: null, outcomeVersion: 4, attendanceVersion: 9, firstEligibleAt: null };
+const reviewResults: GameResults = { gameId: "current-game",
+  outcome: { value: "held", version: 4, reason: null, provenance: null }, allowedActions: { canRecordOutcome: false } };
+const reviewGame = { id: "current-game", title: "Игра", venue: { id: "venue-one", name: "Зал" } } as Game;
+const reviewActor: Me = { id: "actor-one", csrfToken: "session-one", displayName: "Игрок", locale: "ru", linkedProviders: [] };
+const reviewReceipt: ReviewApi.VenueReviewMutationReceipt = { id: "review-one", version: 1, status: "self_draft",
+  receiptToken: "receipt", reviewHandle: "handle", publicVisible: false, notBefore: null };
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  resultsApi.refresh = null;
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+  resultsApi.me.mockResolvedValue({ ok: true, status: 200, data: reviewActor });
+  resultsApi.game.mockResolvedValue({ ok: true, status: 200, data: reviewGame });
+  resultsApi.results.mockResolvedValue({ ok: true, status: 200, data: reviewResults });
+  reviewApi.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [reviewBasis] } });
+  reviewApi.send.mockResolvedValue({ ok: true, status: 201, data: reviewReceipt });
+});
+afterEach(cleanup);
+
+describe("results fixed-game venue review", () => {
+  it("offers the exact server-admitted game beside private feedback and writes privately", async () => {
+    render(createElement(GameResultsComposition, { gameId: "current-game" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Оставить отзыв о площадке" }));
+    await screen.findByText("Можно поделиться опытом");
+    expect(screen.queryByText("Поделиться опытом о площадке")).toBeNull();
+    expect(screen.queryByLabelText("Игра, после которой оставляете отзыв")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Точный отзыв" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await screen.findByText("Сохранено только вам.");
+    expect(reviewApi.send.mock.calls[0]?.[0]).toMatchObject({ gameId: "current-game", venueId: "venue-one",
+      audience: "self_draft", expectedBasisVersions: { outcomeVersion: 4, attendanceVersion: 9 } });
+    expect(reviewApi.eligibility).toHaveBeenCalledTimes(3); // Entry, open, new write.
+  });
+
+  it.each([
+    { bases: [{ ...reviewBasis, gameId: "other-eligible" }], message: /Не удалось подтвердить возможность/ },
+    { bases: [{ ...reviewBasis, admission: "hold" as const, helpHint: "attendance_clarifying" as const }], message: /Уточняем посещение/ },
+    { bases: [{ ...reviewBasis, admission: "deny" as const, reason: "window_closed" }], message: /Срок подачи отзыва/ },
+    { bases: [{ ...reviewBasis, admission: "hold" as const, helpHint: "attendance_unmarked" as const }], message: /Посещение ещё не отмечено/ },
+  ])("hides entry when exact eligibility is unavailable: $message", async ({ bases, message }) => {
+    reviewApi.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases } });
+    render(createElement(GameResultsComposition, { gameId: "current-game" }));
+    await screen.findByText(message);
+    expect(screen.queryByRole("button", { name: "Оставить отзыв о площадке" })).toBeNull();
+    expect(reviewApi.send).not.toHaveBeenCalled();
+  });
+
+  it("rechecks when opening instead of trusting an earlier positive entry", async () => {
+    render(createElement(GameResultsComposition, { gameId: "current-game" }));
+    const entry = await screen.findByRole("button", { name: "Оставить отзыв о площадке" });
+    reviewApi.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [] } });
+    fireEvent.click(entry);
+    await screen.findByText("Не удалось подтвердить возможность отзыва по этой игре.");
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Текст" } });
+    expect((screen.getByRole("button", { name: /^Сохранить$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(reviewApi.send).not.toHaveBeenCalled();
+  });
+
+  it("refreshes admission in an idle open form without losing its draft", async () => {
+    render(createElement(GameResultsComposition, { gameId: "current-game" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Оставить отзыв о площадке" }));
+    await screen.findByText("Можно поделиться опытом");
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Мой черновик" } });
+    reviewApi.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [
+      { ...reviewBasis, admission: "hold", helpHint: "attendance_clarifying" },
+    ] } });
+    resultsApi.results.mockResolvedValueOnce({ ok: true, status: 200, data: { ...reviewResults } });
+    await act(async () => { resultsApi.refresh?.(); });
+    await screen.findByText(/Уточняем посещение/);
+    expect((screen.getByLabelText("Ваш опыт на площадке") as HTMLTextAreaElement).value).toBe("Мой черновик");
+    expect((screen.getByRole("button", { name: /^Сохранить$/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(reviewApi.send).not.toHaveBeenCalled();
+  });
+
+  it("retains the admitted owner across tab change and same-session refresh with missing public game", async () => {
+    reviewApi.send.mockResolvedValueOnce({ ok: false, status: 503, error: "unconfirmed" });
+    const view = render(createElement(GameResultsComposition, { gameId: "current-game" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Оставить отзыв о площадке" }));
+    await screen.findByText("Можно поделиться опытом");
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Замороженный текст" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await screen.findByText(/Не удалось подтвердить отправку/);
+    const packet = structuredClone(reviewApi.send.mock.calls[0]);
+    const dialog = screen.getByRole("dialog");
+    resultsApi.game.mockResolvedValueOnce({ ok: false, status: 503, error: "unavailable" });
+    resultsApi.results.mockResolvedValueOnce({ ok: true, status: 200, data: { ...reviewResults } });
+    reviewApi.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [] } });
+    await act(async () => { resultsApi.refresh?.(); });
+    view.rerender(createElement(GameResultsComposition, { gameId: "current-game" }));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    fireEvent.click(screen.getByRole("tab", { name: "Посещение" }));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
+    await screen.findByText("Сохранено только вам.");
+    expect(reviewApi.send.mock.calls[1]).toEqual(packet);
+    expect(reviewApi.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a late positive entry read after session change", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof ReviewApi.getOwnVenueReviewEligibility>>) => void;
+    reviewApi.eligibility.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    render(createElement(GameResultsComposition, { gameId: "current-game" }));
+    await waitFor(() => expect(reviewApi.eligibility).toHaveBeenCalledTimes(1));
+    act(() => window.dispatchEvent(new Event("gb-session-changed")));
+    await act(async () => resolve({ ok: true, status: 200, data: { bases: [reviewBasis] } }));
+    expect(screen.queryByRole("button", { name: "Оставить отзыв о площадке" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(reviewApi.send).not.toHaveBeenCalled();
   });
 });
