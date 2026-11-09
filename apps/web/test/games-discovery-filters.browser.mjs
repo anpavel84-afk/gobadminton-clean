@@ -188,7 +188,7 @@ html,body{margin:0;padding:0;background:#f4f6f1}
 main.gb-consumer{padding:16px;width:${width}px;max-width:100%;box-sizing:border-box;min-height:100dvh}
 </style>
 <style>${cssBundle.replaceAll("env(safe-area-inset-bottom, 0px)", `${safeAreaBottom}px`).replaceAll("env(safe-area-inset-bottom)", `${safeAreaBottom}px`)}</style>
-</head><body><main class="gb-consumer">${bodyHtml}</main></body></html>`;
+</head><body class="gb-consumer-body"><main class="gb-consumer">${bodyHtml}</main></body></html>`;
 }
 
 if (!chromeAvailable()) {
@@ -204,7 +204,9 @@ const consumerRaw = await readFile(new URL("../src/styles/consumer.css", import.
 const consumer = consumerRaw.replace(/@import\s+["'][^"']+["']\s*;?/g, "/* inlined tokens separately */");
 const discovery = await readFile(new URL("../src/styles/discovery.css", import.meta.url), "utf8");
 const levelGuide = await readFile(new URL("../src/styles/level-guide.css", import.meta.url), "utf8");
-const cssBundle = `${consumerTokens}\n${consumer}\n${discovery}\n${levelGuide}`;
+/* layout.tsx loads mobile-controls.css last; omit → incomplete fixture (D5 44px!important miss). */
+const mobileControls = await readFile(new URL("../src/styles/mobile-controls.css", import.meta.url), "utf8");
+const cssBundle = `${consumerTokens}\n${consumer}\n${discovery}\n${levelGuide}\n${mobileControls}`;
 const fixtures = await ssrFixtures();
 
 await withChrome(async ({ call, evaluate }) => {

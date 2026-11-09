@@ -188,8 +188,7 @@
   background: var(--gb-white);
 }
 .gb-discovery-filters-dialog__reset {
-  /* #547 D5: Astra compact mock targets 48px; keep ≥44 touch floor. */
-  min-height: 48px;
+  /* #547 D5: Astra compact mock targets 48px; keep ≥44 touch floor elsewhere. */
   padding: 0;
   border: 0;
   background: transparent;
@@ -212,8 +211,13 @@
   outline-offset: 2px;
 }
 .gb-discovery-filters-dialog__footer .gb-c23-btn {
-  min-height: 48px;
   min-width: 120px;
+}
+/* #547 D5 cascade: dialog-scoped !important outranks layout-final mobile-controls 44px floor
+ * (specificity > `.gb-consumer-body :is(…,button,.gb-c23-btn,…)`); compact filters only. */
+.gb-discovery-filters-dialog .gb-discovery-filters-dialog__footer .gb-discovery-filters-dialog__reset,
+.gb-discovery-filters-dialog .gb-discovery-filters-dialog__footer .gb-c23-btn {
+  min-height: 48px !important;
 }
 .gb-discovery-feed-heading {
   display: flex;

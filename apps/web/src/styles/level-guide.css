@@ -233,9 +233,11 @@
   background: transparent;
 }
 
-/* #547 D5: compact select matches reviewed 48px mock; base select keeps 44px floor elsewhere. */
+/* #547 D5: compact select matches reviewed 48px mock; base select keeps 44px floor elsewhere.
+ * Scoped !important beats layout-final mobile-controls `.gb-consumer-body … { min-height:44px !important }`
+ * without changing that global mobile floor. */
 .gb-level-guide[data-presentation="compact"] .gb-level-guide__field select {
-  min-height: 48px;
+  min-height: 48px !important;
 }
 
 .gb-level-guide[data-presentation="compact"] .gb-level-guide__field select:focus-visible {
