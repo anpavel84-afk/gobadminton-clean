@@ -6,10 +6,13 @@ import type { Me } from "../../../lib/consumer-types";
 import {
   getPlayInterestState,
   isBrowseConfirmedPlayInterestOutcome,
+  isValidConfirmedPlayInterestReceipt,
   playInterestCommand,
   playInterestStatus,
 } from "../../../lib/play-interests";
 import { canOfferPlayInterest } from "../../../lib/player-browse";
+import { privateActor } from "../../../lib/foreground-updates";
+import type { BrowseMatchConfirmation, MatchPlayer } from "./PlayerBrowseMatch";
 import { privateViews } from "../../../lib/private-view";
 import { AuthEntry } from "./ProfileComposition";
 import { useSocialMutation } from "../messages/useSocialMutation";
@@ -26,6 +29,9 @@ export { isBrowseConfirmedPlayInterestOutcome };
 
 type Props = {
   me: Me | null;
+  peerName?: string;
+  selfPresentation?: MatchPlayer | null;
+  onMatchConfirmed?: (confirmation: BrowseMatchConfirmation) => void;
   authState: "loading" | "ready" | "guest" | "error";
   peerId: string;
   returnPath: string;
@@ -161,6 +167,9 @@ export function DesktopBrowseActionsFixture({
 
 export function PlayerBrowsePlayInterest({
   me,
+  peerName,
+  selfPresentation,
+  onMatchConfirmed,
   authState,
   peerId,
   returnPath,
@@ -194,18 +203,32 @@ export function PlayerBrowsePlayInterest({
   const externalAdmitRef = useRef(externalAdmitSend);
   externalAdmitRef.current = externalAdmitSend;
 
+  const admittedMatch = useRef<Omit<BrowseMatchConfirmation, "receipt" | "token"> | null>(null);
+  const actorRef = useRef("");
+  actorRef.current = me ? privateActor(me) : "";
+
   // Distinct pending scope — never reuses friendship `${me}:friends:${peer}` storage.
   // When externalAdmitSend is set, send POST lives on the page host; local mutation remains for withdraw.
   const mutation = useSocialMutation<PlayInterestReceipt>(
     me ? `${me.id}:play-interest:${peerId}` : `guest:play-interest:${peerId}`,
     me?.csrfToken ?? "",
-    (receipt) => {
+    (receipt, pending) => {
       setCheckNotice("");
       if (isBrowseConfirmedPlayInterestOutcome(receipt.outcome)) onConfirmedInterest(receipt);
+      const captured = admittedMatch.current;
+      admittedMatch.current = null;
+      if (captured && pending?.method === "POST" && pending.path === "/v1/play-interests"
+        && (pending.body as { targetPublicPlayerId?: string }).targetPublicPlayerId === captured.peer.publicPlayerId
+        && captured.actor === actorRef.current && captured.privateGeneration === privateViews.currentGeneration
+        && isValidConfirmedPlayInterestReceipt(receipt)) {
+        onMatchConfirmed?.({ ...captured, token: pending.key, receipt });
+      }
       void loadInterest(true);
     },
     () => { void loadInterest(true); },
     Boolean(me),
+    { validateSuccess: (receipt, pending) => pending?.path === "/v1/play-interests"
+      ? isValidConfirmedPlayInterestReceipt(receipt) : true },
   );
 
   async function loadInterest(soft = false) {
@@ -241,6 +264,7 @@ export function PlayerBrowsePlayInterest({
     const release = privateViews.retain(privateViews.currentGeneration);
     const expire = () => {
       generation.current += 1;
+      admittedMatch.current = null;
       setView(null);
       setLoadState("guest");
       onRelationship(null);
@@ -291,7 +315,13 @@ export function PlayerBrowsePlayInterest({
     if (admit) return admit(current);
     const command = playInterestCommand(current, peerId, "send");
     if (!command || !current.capabilities.canSend) return false;
-    return mutation.run(command.path, command.body);
+    admittedMatch.current = selfPresentation && peerName ? {
+      actor: privateActor(me), privateGeneration: privateViews.currentGeneration, admittedAt: performance.now(),
+      peer: { publicPlayerId: peerId, displayName: peerName }, self: { ...selfPresentation },
+    } : null;
+    const started = mutation.run(command.path, command.body);
+    if (!started) admittedMatch.current = null;
+    return started;
   }
 
   function runWithdraw() {
