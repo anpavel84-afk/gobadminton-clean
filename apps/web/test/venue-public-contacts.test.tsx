@@ -35,8 +35,9 @@ function walk(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]
 }
 function render(value:unknown,gamesReady=true){
  const v={...venue,publicContacts:value} as VenueSummary;
- const tree=manual(() => VenueSheet({venue:v,games:[],gamesReady,now:0,onCollapse:()=>{},onDeselect:()=>{}}));
- return {nodes:walk(tree),html:renderToStaticMarkup(tree)};
+ const onCommunitySectionChange=vi.fn<NonNullable<React.ComponentProps<typeof VenueSheet>["onCommunitySectionChange"]>>();
+ const tree=manual(() => VenueSheet({venue:v,games:[],gamesReady,now:0,onCollapse:()=>{},onDeselect:()=>{},onCommunitySectionChange}));
+ return {nodes:walk(tree),html:renderToStaticMarkup(tree),onCommunitySectionChange};
 }
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();});
 describe("VenueSheet public organization contacts",()=>{
@@ -47,7 +48,7 @@ describe("VenueSheet public organization contacts",()=>{
   const result=await listAllCityVenues("city");expect(result.ok).toBe(true);if(!result.ok)throw new Error(result.error);
   expect(result.data[0]?.publicContacts).toEqual(publicContacts);
   const {nodes,html}=render(result.data[0]?.publicContacts);
-  const anchors=nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('/'));
+  const anchors=nodes.filter(n=>n.type==='a');
   expect(anchors.map(n=>n.props.href)).toEqual(["tel:+79991234567","https://xn--e1afmkfd.xn--p1ai/contact","https://t.me/club","https://wa.me/79991234567","https://vk.com/club"]);
   expect(anchors.map(n=>renderToStaticMarkup(n).replace(/<[^>]*>/g,""))).toEqual(["+7 (999) 123-45-67","xn--e1afmkfd.xn--p1ai↗","Telegram","WhatsApp","ВКонтакте"]);
   expect(anchors[0]?.props.target).toBeUndefined();
@@ -62,19 +63,21 @@ describe("VenueSheet public organization contacts",()=>{
   }
  });
  it("retains safe neighbors and independently enforces URL policy",()=>{
-  const ratingsHref=`/venues/${encodeURIComponent(venue.id)}#ratings`;
-  const isCommunityRatingsLink=(n:React.ReactElement<Record<string,unknown>>)=>{
-   const href=String(n.props.href??"");
-   const className=String(n.props.className??"");
-   return href===ratingsHref && className.split(/\s+/).includes("gb-venue-community__compact-link");
-  };
   const bad=["https://a@b/","https://b:444/","https://b/\n","https://b/\\x","javascript:x","https://example.com/"+"я".repeat(100)];
   for(const website of bad){
-   const {html,nodes}=render({phone:"+1234567",website,messengers:[]});
+   const {html,nodes,onCommunitySectionChange}=render({phone:"+1234567",website,messengers:[]});
    expect(html).toContain('tel:+1234567');
-   // Exact known public #ratings marker only — never skip arbitrary internal/substring URLs.
-   expect(nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('tel:') && !isCommunityRatingsLink(n))).toHaveLength(0);
-   expect(nodes.some(n=>n.type==='a' && isCommunityRatingsLink(n))).toBe(true);
+   expect(nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('tel:'))).toHaveLength(0);
+   const compactRatings=nodes.filter(n=>n.type==='span' && n.props['data-testid']==='venue-community-compact');
+   expect(compactRatings).toHaveLength(1);
+   expect(compactRatings[0]?.props.children).toBe("Оценки загружаются…");
+   const rateButton=nodes.find(n=>n.type==='button' && n.props.children==='Оценить');
+   expect(rateButton?.props.type).toBe('button');
+   if(typeof rateButton?.props.onClick!=='function')throw new Error("Missing in-surface ratings button handler");
+   expect(onCommunitySectionChange).not.toHaveBeenCalled();
+   rateButton.props.onClick();
+   expect(onCommunitySectionChange).toHaveBeenCalledTimes(1);
+   expect(onCommunitySectionChange).toHaveBeenCalledWith("ratings");
   }
   for(const [raw,expected] of [[" HTTP://Example.COM:80/a/../b ","http://example.com/b"],["https://[::1]/","https://[::1]/"],["https://127.0.0.1/","https://127.0.0.1/"],[" ".repeat(310)+"https://example.com/","https://example.com/"]]){
    expect(render({phone:null,website:raw,messengers:[]}).nodes.some(n=>n.props.href===expected)).toBe(true);
