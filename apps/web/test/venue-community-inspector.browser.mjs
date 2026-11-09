@@ -71,6 +71,7 @@ async function connectOwnedChrome() {
   }
 }
 const city = 'a0000000-0000-4000-8000-000000000001';
+const nextCity = 'a0000000-0000-4000-8000-000000000002';
 const id = '10000000-0000-4000-8000-000000000001';
 const actor = '30000000-0000-4000-8000-000000000001';
 const commentId = '20000000-0000-4000-8000-000000000001';
@@ -150,6 +151,57 @@ try {
       window.dispatchEvent(new window.CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}}));
     });
     await content.getByRole('radio',{name:'4 из 5',exact:true}).waitFor();
+    const ownerProbe=await content.evaluateHandle(owner=>{
+      const selector=`[data-venue-community="${owner.dataset.venueCommunity}"]`;
+      const probe={owner,mounts:1,unmounts:0,historyEvents:[]};
+      const countOwners=node=>node.nodeType===1 ? Number(node.matches(selector))+node.querySelectorAll(selector).length : 0;
+      const observer=new window.MutationObserver(records=>{
+        for(const record of records) {
+          for(const node of record.addedNodes) probe.mounts+=countOwners(node);
+          for(const node of record.removedNodes) probe.unmounts+=countOwners(node);
+        }
+      });
+      observer.observe(document.body,{childList:true,subtree:true});
+      const onPop=event=>probe.historyEvents.push({trusted:event.isTrusted,nextOwned:event.state?.__NA===true});
+      window.addEventListener('popstate',onPop);
+      return Object.assign(probe,{stop(){observer.disconnect();window.removeEventListener('popstate',onPop);}});
+    });
+    // Seed same-document history before any operation is pending. Keep the
+    // actual Next-owned state on every entry so native Back can restore it.
+    // Back visits: city B, city B again, city A (cancel), clean city B (settled).
+    assert.equal(await page.evaluate(cityB=>{
+      const state=window.history.state;
+      if(state?.__NA!==true) return false;
+      const current=new URL(window.location.href);
+      const requested=new URL(current);requested.searchParams.set('cityId',cityB);
+      const settled=new URL(requested);
+      settled.searchParams.delete('selectedVenue');settled.searchParams.delete('communityCity');settled.hash='';
+      window.history.replaceState(state,'',settled);
+      for(const url of [current,requested,requested,current]) window.history.pushState(state,'',url);
+      return true;
+    },nextCity),true,'history setup preserves the live Next-owned state');
+    async function nativeBack(expectedEvents) {
+      await page.goBack();
+      await page.waitForFunction(({probe,count})=>probe.historyEvents.length===count,
+        {probe:ownerProbe,count:expectedEvents},{timeout:2000});
+      assert.deepEqual(await ownerProbe.evaluate(probe=>probe.historyEvents),
+        Array.from({length:expectedEvents},()=>({trusted:true,nextOwned:true})),
+        'each city intent comes from native Back with Next-owned state');
+    }
+    async function assertRetainedOwner() {
+      assert.equal(await content.count(),1);
+      assert.equal(await content.evaluate((node,probe)=>node===probe.owner,ownerProbe),true,'same selected owner');
+      assert.deepEqual(await ownerProbe.evaluate(probe=>({mounts:probe.mounts,unmounts:probe.unmounts})),
+        {mounts:1,unmounts:0},'selected owner never remounts');
+      const held=new URL(page.url());
+      assert.equal(held.searchParams.get('view'),'map');
+      assert.equal(held.searchParams.get('cityId'),city,'held city is not silently relabeled');
+      assert.equal(held.searchParams.get('day'),'2026-11-20');
+      assert.equal(held.searchParams.get('activity'),'regular');
+      assert.equal(held.searchParams.get('selectedVenue'),id);
+      assert.equal(held.searchParams.get('communityCity'),city);
+      assert.equal(held.hash,'#ratings');
+    }
     await content.getByRole('radio',{name:'4 из 5',exact:true}).click();
     await content.getByRole('button',{name:'Отправить оценку',exact:true}).click();
     await content.getByTestId('venue-community-vote-unknown').waitFor();
@@ -188,33 +240,26 @@ try {
     // Repeated city navigation must retain the old mounted catalog and packet,
     // including when the requested city already matches React state.
     for (let attempt=0;attempt<2;attempt++) {
-      await page.evaluate(cityB=>{
-        const url=new URL(window.location.href);url.searchParams.set('cityId',cityB);
-        window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
-      },'a0000000-0000-4000-8000-000000000002');
+      await nativeBack(attempt+1);
       await page.getByText(/Смена города отложена/).waitFor();
       await page.waitForFunction(expected=>new URL(window.location.href).searchParams.get('cityId')===expected,city,{timeout:2000});
-      assert.equal(await content.count(),1);
-      assert.equal(new URL(page.url()).searchParams.get('cityId'),city,'held city is not silently relabeled');
-      const held=new URL(page.url());
-      assert.equal(held.searchParams.get('day'),'2026-11-20');
-      assert.equal(held.searchParams.get('activity'),'regular');
-      assert.equal(held.searchParams.get('selectedVenue'),id);
-      assert.equal(held.searchParams.get('communityCity'),city);
-      assert.equal(held.hash,'#ratings');
+      await assertRetainedOwner();
       assert.equal(writes.filter(write=>write.method==='PUT').length,1,'held navigation never retries');
     }
     // Cancel the requested city transition while still unresolved, so the rest of
     // the original same-venue fixture can proceed after this operation settles.
-    await page.evaluate(cityA=>{
-      const url=new URL(window.location.href);url.searchParams.set('cityId',cityA);
-      window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
-    },city);
+    await nativeBack(3);
     await page.getByText(/Смена города отложена/).waitFor({state:'hidden'});
+    await assertRetainedOwner();
+    await content.getByTestId('venue-community-vote-unknown').waitFor();
+    assert.equal(writes.filter(write=>write.method==='PUT').length,1,'cancellation never retries');
     await content.getByRole('button',{name:'Повторить тот же запрос',exact:true}).click();
     await content.getByRole('button',{name:'Сохранить изменение',exact:true}).waitFor();
     const retried=writes.filter(write=>write.method==='PUT');
+    assert.equal(retried.length,2,'one explicit retry after city intent cancellation');
     assert.deepEqual(retried[1],frozen,'retry retains exact actor-bound body/key/path');
+    await page.getByText(/Смена города отложена/).waitFor({state:'hidden'});
+    await assertRetainedOwner();
     await page.setViewportSize({width,height:900});
     const report=content.getByTestId('venue-community-report-aggregate');
     await report.focus(); await page.keyboard.press('Enter');
@@ -322,16 +367,24 @@ try {
     // All operations have settled: the next city navigation must work normally,
     // remove the old owner/catalog, and still allow the ordinary list return.
     const settledWrites=writes.length;
-    const nextCity='a0000000-0000-4000-8000-000000000002';
-    await page.evaluate(cityB=>{
-      const url=new URL(window.location.href);url.searchParams.set('cityId',cityB);
-      window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
-    },nextCity);
+    await assertRetainedOwner();
+    await nativeBack(4);
     await page.waitForFunction(expected=>new URL(window.location.href).searchParams.get('cityId')===expected,nextCity,{timeout:2000});
     await content.waitFor({state:'detached'});
     await page.getByText('В каталоге города пока нет площадок.',{exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('cityId'),nextCity);
     assert.equal(await content.count(),0,'settled city transition releases the old owner');
+    assert.deepEqual(await ownerProbe.evaluate(probe=>({mounts:probe.mounts,unmounts:probe.unmounts})),
+      {mounts:1,unmounts:1},'normal city navigation releases exactly the retained owner');
+    const settled=new URL(page.url());
+    assert.equal(settled.searchParams.get('view'),'map');
+    assert.equal(settled.searchParams.get('day'),'2026-11-20');
+    assert.equal(settled.searchParams.get('activity'),'regular');
+    assert.equal(settled.searchParams.get('selectedVenue'),null);
+    assert.equal(settled.searchParams.get('communityCity'),null);
+    assert.equal(settled.hash,'');
+    await ownerProbe.evaluate(probe=>probe.stop());
+    await ownerProbe.dispose();
     await back.click();
     await page.getByRole('button',{name:'Где играем: Санкт-Петербург. Сменить город',exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('view'),'list');
