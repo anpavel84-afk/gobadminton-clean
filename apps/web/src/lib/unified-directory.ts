@@ -55,6 +55,13 @@ export type DirectoryView = {
   capabilityUnavailable: boolean;
   authenticationRequired: boolean;
 };
+/** Local read lifecycle only: no DTO, origin, proof or actor is published. */
+export type DirectoryQueryScope = Readonly<{ filterKey: string; activationKey: string | null }>;
+export type DirectoryQueryEvent =
+  | { type: "dispatched"; token: number; scope: DirectoryQueryScope }
+  | { type: "skipped"; scope: DirectoryQueryScope; reason: "unavailable" | "pending" | "cooldown" }
+  | { type: "settled"; token: number; scope: DirectoryQueryScope; outcome: "success" | "failure" | "invalid" | "obsolete" };
+export type DirectoryQueryObserver = (event: DirectoryQueryEvent) => void;
 /** Overlay only live private Radar rows; the public API remains catalog authority.
  * The existing More boundary precedes the remainder until all Radar ranks load.
  */
@@ -137,6 +144,7 @@ export class UnifiedDirectoryController {
   private nextInitial = 0;
   private retryAt = 0;
   private pending = false;
+  private querySequence = 0;
   private activationOriginKey: string | null = null;
   /**
    * True only while the authorized snapshot still matches filters/activation AND
@@ -314,15 +322,19 @@ export class UnifiedDirectoryController {
       });
     }
   }
-  async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {
-    if (!this.me || !this.visible || this.view.capabilityUnavailable || this.view.authenticationRequired) return;
+  async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null, observer?: DirectoryQueryObserver) {
+    const scope: DirectoryQueryScope = { filterKey: JSON.stringify(filters), activationKey };
+    // Presentation observers must never interfere with source gates or read settlement.
+    const emit = (event: DirectoryQueryEvent) => { try { observer?.(event); } catch { /* display only */ } };
+    const skipped = (reason: "unavailable" | "pending" | "cooldown") => emit({ type: "skipped", scope, reason });
+    if (!this.me || !this.visible || this.view.capabilityUnavailable || this.view.authenticationRequired) { skipped("unavailable"); return; }
     const cityChanged = this.filters != null && this.filters.cityId !== filters.cityId;
     if (cityChanged) this.camera = null;
     const changed = JSON.stringify(this.filters) !== JSON.stringify(filters) ||
       this.activationOriginKey !== activationKey;
     // A filter/activation change aborts and fences the old in-flight response.
     if (this.pending) {
-      if (!changed) return;
+      if (!changed) { skipped("pending"); return; }
       this.invalidate();
       this.set({ mode: "ordinary" });
     }
@@ -337,6 +349,7 @@ export class UnifiedDirectoryController {
         this.set({ stale: true, notice: "Обновить участников Radar можно через несколько секунд. Пока доступен обычный каталог." });
       }
       // Unchanged early request during cooldown must not falsely stale/blank a still-valid window.
+      skipped("cooldown");
       return;
     }
     const keepWindow = !changed
@@ -367,11 +380,17 @@ export class UnifiedDirectoryController {
     this.nextInitial = this.clock() + 30000;
     const epoch = this.epoch; this.pending = true;
     if (!keepWindow) this.set({ busy: true });
+    const token = ++this.querySequence;
+    const settled = (outcome: "success" | "failure" | "invalid" | "obsolete") => emit({ type: "settled", token, scope, outcome });
+    emit({ type: "dispatched", token, scope });
     const result = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, filters, origin, limit: 50 }) });
-    if (!this.valid(epoch)) return;
+    if (!this.valid(epoch)) { settled("obsolete"); return; }
     // Settle failure gates before any busy:false publication (Retry-After / resource-404 races).
-    if (!result.ok) { this.pending = false; this.fail(result, keepWindow); return; }
-    if (!this.acceptable(result.data)) { this.pending = false; this.invalidate("Список устарел. Обновите участников Radar.", true); return; }
+    if (!result.ok) { this.pending = false; this.fail(result, keepWindow); settled("failure"); return; }
+    if (!this.acceptable(result.data) || !object(result.data.totals) || !finite(result.data.totals.radarTotal) ||
+        !object(result.data.page) || !instant(result.data.generatedAt)) {
+      this.pending = false; this.invalidate("Список устарел. Обновите участников Radar.", true); settled("invalid"); return;
+    }
     // Never retain the transient raw foreground input once the server issued a private reference.
     this.origin = result.data.query.originRef ? { kind: "reference", originRef: result.data.query.originRef } : { kind: "none" };
     const notice = result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям.";
@@ -382,6 +401,7 @@ export class UnifiedDirectoryController {
         busy: false, mode: "unified", stale: false, capabilityUnavailable: false,
         snapshot: result.data, rows: result.data.items, notice,
       });
+      settled(this.valid(epoch) && this.renderable(filters, activationKey) ? "success" : "obsolete");
       return;
     }
     const queryRefChanged = result.data.query.queryRef !== previousQueryRef;
@@ -397,12 +417,12 @@ export class UnifiedDirectoryController {
         signal: this.abort.signal,
         body: JSON.stringify({ contractVersion: UNIFIED_WIRE, queryRef: result.data.query.queryRef, limit: 100 }),
       });
-      if (!this.valid(epoch)) return;
+      if (!this.valid(epoch)) { settled("obsolete"); return; }
       this.pending = false;
-      if (!mapResult.ok) { this.fail(mapResult, true); return; }
+      if (!mapResult.ok) { this.fail(mapResult, true); settled("failure"); return; }
       if (!this.acceptable(mapResult.data) || mapResult.data.query.queryRef !== result.data.query.queryRef) {
         this.invalidate("Список изменился. Обновите участников Radar.", true);
-        return;
+        settled("invalid"); return;
       }
       mapItems = mapResult.data.items;
       mapPins = mapResult.data.items.filter(row => row.radar !== null).slice(0, 200);
@@ -434,6 +454,7 @@ export class UnifiedDirectoryController {
         previewBusy: false,
       } : {}),
     });
+    settled(this.valid(epoch) && this.renderable(filters, activationKey) ? "success" : "obsolete");
     // New queryRef needs a fresh proof redemption; same-ref preview may stay until its own TTL.
     if (keepRow && !keepPreview) void this.select(keepRow);
   }
@@ -441,11 +462,11 @@ export class UnifiedDirectoryController {
     const now = this.clock();
     // A queryRef can outlive an individual participant's Radar lease. Refuse
     // entire late response before admitting even one expired private marker.
-    return data.contractVersion === UNIFIED_WIRE &&
-      data.cityId === this.filters?.cityId &&
+    return object(data) && object(data.query) && text(data.query.queryRef) && Array.isArray(data.items) &&
+      data.contractVersion === UNIFIED_WIRE && data.cityId === this.filters?.cityId &&
       Number.isFinite(Date.parse(data.validUntil)) && Date.parse(data.validUntil) > now &&
-      data.items.every(row => !row.radar ||
-        (Number.isFinite(Date.parse(row.radar.validUntil)) && Date.parse(row.radar.validUntil) > now));
+      data.items.every(row => object(row) && (!row.radar ||
+        (object(row.radar) && Number.isFinite(Date.parse(row.radar.validUntil)) && Date.parse(row.radar.validUntil) > now)));
   }
   async refresh() { if (this.filters && !this.pending) await this.query(this.filters, this.origin, this.activationOriginKey); }
   async more() {

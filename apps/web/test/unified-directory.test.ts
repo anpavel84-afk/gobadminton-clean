@@ -729,3 +729,32 @@ describe("whole-schedule admission and cancellation fences", () => {
     resolve(ok(privatePreview));await a;expect(c.view.preview?.player.publicPlayerId).toBe("other");c.close();await c.select(c.view.rows[1]!);expect(reads).toBe(3);
   });
 });
+
+
+describe("local query lifecycle observer", () => {
+  it("identifies the dispatched read and accepted settlement without DTO or proof fields", async () => {
+    const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => now); c.bind(me);
+    const observer = vi.fn();
+    await c.query(filters, { kind: "current_activation", activationId: "a" }, "a:1", observer);
+    const scope = { filterKey: JSON.stringify(filters), activationKey: "a:1" };
+    expect(observer.mock.calls.map(([event]) => event)).toEqual([
+      { type: "dispatched", token: 1, scope },
+      { type: "settled", token: 1, scope, outcome: "success" },
+    ]);
+    expect(c.renderable(filters, "a:1")).toBe(true);
+    await c.query(filters, { kind: "current_activation", activationId: "a" }, "a:1", observer);
+    expect(observer).toHaveBeenLastCalledWith({ type: "skipped", scope, reason: "cooldown" });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it("labels obsolete settlement and preserves the ordinary/privacy fence", async () => {
+    let resolve!: (value: ReturnType<typeof ok>) => void;
+    const request = vi.fn(() => new Promise<ReturnType<typeof ok>>(done => { resolve = done; })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => now); c.bind(me);
+    const observer = vi.fn();
+    const read = c.query(filters, { kind: "current_activation", activationId: "a" }, "a:1", observer);
+    c.ordinary(); resolve(ok(snapshot())); await read;
+    expect(observer).toHaveBeenLastCalledWith({ type: "settled", token: 1, scope: { filterKey: JSON.stringify(filters), activationKey: "a:1" }, outcome: "obsolete" });
+    expect(c.view.rows).toEqual([]); expect(c.view.snapshot).toBeNull();
+  });
+});

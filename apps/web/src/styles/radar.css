@@ -111,3 +111,33 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* R2: one static, wrapping status above the existing catalog; no motion or panel. */
+.radar-search-episode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  min-width: 0;
+  margin-block: 0 1rem;
+  color: var(--gb-ink-soft);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.radar-search-episode p { margin: 0; min-width: 0; }
+.radar-search-episode button {
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0.5rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--gb-ink);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  white-space: normal;
+  cursor: pointer;
+}
+.radar-search-episode button:focus-visible { outline: 2px solid var(--gb-ink); outline-offset: 3px; border-radius: 4px; }
