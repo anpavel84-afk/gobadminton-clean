@@ -10,6 +10,8 @@ type Phase = "checking" | "guest" | "off" | "permission" | "locating" | "denied"
 export type RadarView = {
   phase: Phase; me: Me | null; status: RadarStatus | null; items: RadarItem[]; loading: boolean; selected: string | null; preview: RadarPreview | null; previewLoading: boolean; notice: string; now: number;
   exposureMode: RadarExposureMode | null; demoCityId: string | null; confirmedOn: boolean; pendingStop: boolean;
+  /** Local explicit permission admission only; absent on cold/legacy view fixtures. */
+  admittedStartSequence?: number;
 };
 /** Private directory access requires current confirmation, never retained status alone. */
 export function confirmedDirectoryActivation(view: RadarView) {
@@ -21,7 +23,7 @@ type Fetcher = typeof apiFetch;
 const CURRENT = "/v1/me/radar/activations/current";
 /** Only memory owns fixes/proofs. Every async read is fenced by epoch and selection. */
 export class RadarController {
-  view: RadarView = { phase: "checking", me: null, status: null, items: [], loading: false, selected: null, preview: null, previewLoading: false, notice: "", now: Date.now(), exposureMode: null, demoCityId: null, confirmedOn: false, pendingStop: false };
+  view: RadarView = { phase: "checking", me: null, status: null, items: [], loading: false, selected: null, preview: null, previewLoading: false, notice: "", now: Date.now(), exposureMode: null, demoCityId: null, confirmedOn: false, pendingStop: false, admittedStartSequence: 0 };
   duration: RadarDuration = "15m";
   private intentUntil = Infinity;
   private continuationConsented = false;
@@ -129,10 +131,10 @@ export class RadarController {
         void this.reconcile();
         return;
       }
-      this.set({ phase: "permission", notice: radarHonestyNotice("synthetic_demo") });
+      this.set({ phase: "permission", notice: radarHonestyNotice("synthetic_demo"), admittedStartSequence: (this.view.admittedStartSequence ?? 0) + 1 });
       return;
     }
-    if (this.view.exposureMode === "live") this.set({ phase: "permission", notice: "" });
+    if (this.view.exposureMode === "live") this.set({ phase: "permission", notice: "", admittedStartSequence: (this.view.admittedStartSequence ?? 0) + 1 });
   }
   usesSyntheticLocation(): boolean {
     return this.view.exposureMode === "synthetic_demo" && isAdmittedDemoCity(this.view.demoCityId);

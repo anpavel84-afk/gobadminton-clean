@@ -1,6 +1,7 @@
 "use client";
 
 import "../../../styles/radar-geographic.css";
+import "../../../styles/radar.css";
 import "../../../styles/player-browse.css";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -9,7 +10,7 @@ import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
 import { isSocialDirectoryDisabled } from "../../../lib/player-presentation";
 import { parseBrowseView, PLAYER_BROWSE_DESKTOP_MQ, writeBrowseViewSearch, type PlayerBrowseView } from "../../../lib/player-browse";
-import { confirmedDirectoryActivation } from "../../../lib/radar-controller";
+import { confirmedDirectoryActivation, type RadarController } from "../../../lib/radar-controller";
 import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
@@ -18,7 +19,7 @@ import { UnifiedPlayerPreview } from "../radar/UnifiedPlayerPreview";
 import { useUnifiedDirectory, useRadarConfig } from "../radar/RadarSessionProvider";
 import type { UnifiedFilters } from "@gobadminton/contracts";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
-import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type ScopedCatalogCursor } from "../../../lib/unified-directory";
+import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type ScopedCatalogCursor, type UnifiedDirectoryController, type DirectoryQueryObserver } from "../../../lib/unified-directory";
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
 import { PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
@@ -34,6 +35,88 @@ import { GamesViewAction } from "../games/GamesViewAction";
  */
 function directoryInFlowNotice(_notice: string): string | null {
   return null;
+}
+
+type SearchDisplay = "loading" | "slow" | "error" | "zero";
+/** Page-owned presentation. Source subscriptions catch even synchronously batched phases. */
+export function useRadarSearchEpisode(controller: RadarController | null, unified: UnifiedDirectoryController | null, filterKey: string) {
+  type Episode = {
+    actor: NonNullable<ReturnType<RadarController["snapshot"]>["me"]>;
+    activationKey: string | null; token: number | null; attempted: boolean;
+    display: SearchDisplay | null; timer?: ReturnType<typeof setTimeout>;
+  };
+  const episode = useRef<Episode | null>(null);
+  const [display, setDisplay] = useState<SearchDisplay | null>(null);
+  useLayoutEffect(() => {
+    if (!controller || !unified) return;
+    // Historical starts (including an in-flight activation) are never page-entry intent.
+    let baseline = controller.snapshot().admittedStartSequence ?? 0;
+    const clearTimer = (current: Episode) => { if (current.timer !== undefined) clearTimeout(current.timer); current.timer = undefined; };
+    const discard = () => {
+      if (episode.current) clearTimer(episode.current);
+      episode.current = null; setDisplay(null);
+    };
+    const sync = () => {
+      const view = controller.snapshot();
+      const sequence = view.admittedStartSequence ?? 0;
+      if (sequence !== baseline) {
+        baseline = sequence; discard();
+        if (view.me) episode.current = { actor: view.me, activationKey: null, token: null, attempted: false, display: null };
+      }
+      const current = episode.current;
+      if (!current) return;
+      if (!view.me || view.me.id !== current.actor.id || view.me.csrfToken !== current.actor.csrfToken || view.pendingStop ||
+          !["permission", "locating", "activating", "active", "error"].includes(view.phase)) { discard(); return; }
+      if (view.phase === "error") {
+        clearTimer(current); current.display = "error"; setDisplay("error"); return;
+      }
+      if (view.phase === "active") {
+        const id = confirmedDirectoryActivation(view);
+        const key = id && view.status && "version" in view.status ? `${id}:${view.status.version}` : null;
+        if (!key || (current.activationKey && current.activationKey !== key)) { discard(); return; }
+        current.activationKey = key;
+      }
+      if ((view.phase === "activating" || view.phase === "active") && current.display === null) {
+        current.display = "loading"; setDisplay("loading");
+        current.timer = setTimeout(() => {
+          if (episode.current !== current) return;
+          current.timer = undefined; current.display = "slow"; setDisplay("slow");
+        }, 15000);
+      }
+    };
+    const unsubscribe = controller.subscribe(sync);
+    const unsubscribeDirectory = unified.subscribe(() => {
+      const current = episode.current;
+      if (current?.display === "zero" && (!unified.renderable(JSON.parse(filterKey) as UnifiedFilters, current.activationKey) || unified.view.snapshot?.totals.radarTotal !== 0)) discard();
+    });
+    return () => { unsubscribe(); unsubscribeDirectory(); discard(); };
+  }, [controller, unified, filterKey]);
+  const observeFirstRead = useCallback((): DirectoryQueryObserver | undefined => {
+    const current = episode.current;
+    if (!current || !controller || !unified || !current.activationKey || current.attempted) return;
+    const key = current.activationKey;
+    return event => {
+      if (episode.current !== current || event.scope.filterKey !== filterKey || event.scope.activationKey !== key) return;
+      const view = controller.snapshot();
+      const id = confirmedDirectoryActivation(view);
+      if (!view.me || view.me.id !== current.actor.id || view.me.csrfToken !== current.actor.csrfToken ||
+          !id || !view.status || !("version" in view.status) || `${id}:${view.status.version}` !== key) return;
+      const stopTimer = () => { if (current.timer !== undefined) clearTimeout(current.timer); current.timer = undefined; };
+      if (event.type === "dispatched") { current.attempted = true; current.token = event.token; return; }
+      if (event.type === "skipped") {
+        current.attempted = true; stopTimer(); current.display = "error"; setDisplay("error"); return;
+      }
+      if (event.token !== current.token) return;
+      stopTimer();
+      if (event.outcome === "obsolete") { episode.current = null; setDisplay(null); return; }
+      if (event.outcome === "success" && unified.renderable(JSON.parse(filterKey) as UnifiedFilters, key)) {
+        // Only this fresh, controller-accepted read can clear a late watchdog fallback.
+        if (unified.view.snapshot?.totals.radarTotal === 0) { current.display = "zero"; setDisplay("zero"); }
+        else { episode.current = null; setDisplay(null); }
+      } else { current.display = "error"; setDisplay("error"); }
+    };
+  }, [controller, unified, filterKey]);
+  return { display, observeFirstRead };
 }
 
 /** Desktop MQ + readiness; gate mobile fullscreen until MQ is known (no desktop flash). */
@@ -101,6 +184,7 @@ export function PlayersDirectoryPage({
   const eligibleCity = unifiedAvailable && config?.cities.some(c => c.cityId === queryCity) === true;
   const filterKey = JSON.stringify(queryFilters);
 
+  const { display: radarSearch, observeFirstRead } = useRadarSearchEpisode(controller, directory.controller, filterKey);
   const activationKey = activationId && view.status && "version" in view.status ? `${activationId}:${view.status.version}` : null;
   useEffect(() => {
     const unified = directory.controller;
@@ -117,7 +201,7 @@ export function PlayersDirectoryPage({
         if (!controller || confirmedDirectoryActivation(controller.snapshot()) !== activationId) { unified.ordinary(); return; }
         // Soft refresh stays !busy while pending; rely on matches + controller pending/cooldown gates.
         if (!unified.matches(queryFilters, activationKey)) {
-          void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+          void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey, observeFirstRead());
         }
         // Schedule from controller refresh/cooldown/Retry-After (not a fixed 30s interval).
         const delay = Math.max(500, unified.nextRefreshAt() - Date.now());
@@ -128,7 +212,7 @@ export function PlayersDirectoryPage({
     // Re-arm on settlement so 429 Retry-After / 409/410 recover when allowed without hammering.
     const unsubscribe = unified.subscribe(arm);
     return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); unsubscribe(); };
-  }, [controller, directory.controller, activationId, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey]);
+  }, [controller, directory.controller, activationId, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey, observeFirstRead]);
   const [reload, setReload] = useState(0);
   // Radar toggles do not change the ordinary query or its pagination.
   const ordinaryScope = JSON.stringify({ city: cityId, areaKey, name, lookingOnly, trainerOnly });
@@ -563,6 +647,15 @@ export function PlayersDirectoryPage({
         {!desktop && (
           <div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
         )}
+        {radarSearch && <div className="radar-search-episode">
+          <p role="status" aria-live="polite" aria-atomic="true">{radarSearch === "loading" ? "Ищем ближайших игроков…" : radarSearch === "slow" ? "Поиск занимает больше времени." : radarSearch === "zero" ? "Участников Radar пока нет." : "Не удалось проверить Radar."}</p>
+          {(radarSearch === "slow" || radarSearch === "error") && <button type="button" onClick={() => {
+            // Open the existing header recovery owner; never start/replay a request here.
+            const trigger = document.querySelector<HTMLButtonElement>(".gb-topbar .gb-radar-indicator__link");
+            trigger?.focus();
+            if (trigger?.getAttribute("aria-expanded") !== "true") trigger?.click();
+          }}>Статус Radar</button>}
+        </div>}
         <div className="players-catalog-grid" aria-label="Каталог игроков">
           {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
           {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
