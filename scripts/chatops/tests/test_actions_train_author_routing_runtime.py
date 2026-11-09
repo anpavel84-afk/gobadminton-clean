@@ -484,7 +484,7 @@ class Capacity(unittest.TestCase):
                 receipt_refs=('native-final',), actual_effects='RECONCILED', owned_reaped=True)
             kwargs.update(changes)
             return h.reconciled_stop(s.failure.binding, s.failure, **kwargs)
-        self.assertIsNotNone(reconcile())
+        self.assertIsNone(reconcile())  # fabricated caller refs have no protected authority
         self.assertIsNone(reconcile(actual_effects='UNKNOWN'))
         self.assertIsNone(reconcile(owned_reaped=False))
         for extra in ({}, {'no_source_effect':True},
@@ -518,7 +518,11 @@ class CodexCheckpoint(unittest.TestCase):
                 native = SimpleNamespace(export=lambda *a: {}, source_name=lambda n: True)
                 core = SimpleNamespace(live=lambda: (SimpleNamespace(
                     model_command=lambda *a, **k: ['injected'], clean_env=lambda: {}), None))
+                custody = SimpleNamespace(checkpoint=None, close=unittest.mock.Mock())
+                guard = SimpleNamespace(quarantine=unittest.mock.Mock(), close=unittest.mock.Mock())
                 patches = [
+                    patch.object(h, 'RootSourceCustody', return_value=custody),
+                    patch.object(h, 'DirectSourceCustody', return_value=guard),
                     patch.object(providers, 'role_ready', return_value=(True, {})),
                     patch.object(providers, 'mark_intent_phase'),
                     patch.object(h, 'bound_provider', return_value=('codex_author',)),
@@ -541,8 +545,8 @@ class CodexCheckpoint(unittest.TestCase):
                 if fail_import:
                     with self.assertRaises(RuntimeError):
                         live.codex_author_live(task=t, worktree=root, evidence_dir=evidence)
-                    observer.persist.assert_called_once()
-                    self.assertEqual(observer.persist.call_args.args[1].source_sha, 'a' * 40)
+                    guard.quarantine.assert_called_once()
+                    observer.persist.assert_not_called()
                 else:
                     result = live.codex_author_live(task=t, worktree=root, evidence_dir=evidence)
                     self.assertEqual(result['candidate_sha'], 'b' * 40)
@@ -1606,12 +1610,13 @@ class AGYPrechargeBoundary(unittest.TestCase):
             stack.enter_context(patch.object(live, '_load_native', return_value=SimpleNamespace()))
             stack.enter_context(patch.object(live, 'git', side_effect=['a'*40, '']))
             stack.enter_context(patch.object(live, 'shared_agy_budget', return_value=budget))
+            stack.enter_context(patch.object(h.RootSourceCustody, 'preflight', side_effect=h.RetentionError('unsupported')))
             staging=stack.enter_context(patch.object(live, '_agy_materialize_qa_snapshot'))
             launch=stack.enter_context(patch.object(live.subprocess, 'Popen'))
             invoke=Mock()
             with self.assertRaises(providers.ProviderError) as error:
                 live.agy_author_live(task=t, worktree=root, evidence_dir=root,
-                    intent_path=root/'intent.json', _invoke=invoke)
+                    intent_path=root/'intent.json')
             self.assertEqual(error.exception.code, 'agy_source_custody_unsupported')
             self.assertEqual(error.exception.charge, 'none')
             for effect in (budget.charge, staging, launch, invoke): effect.assert_not_called()
@@ -1633,3 +1638,139 @@ class AGYPrechargeBoundary(unittest.TestCase):
                     evidence_dir=root, intent_path=root/'intent.json')
             self.assertEqual(error.exception.code, 'bound_agy_local_governance_hold')
             fallback.assert_not_called()
+
+
+class ClosedCustodyFollowup(unittest.TestCase):
+    def observer(self, work):
+        return h.SourceRetention(baseline={'x.py': hashlib.sha256(b'old').hexdigest()},
+            allowed=['x.py'], ignored=lambda n:False, source_name=lambda n:True, secrets=lambda:())
+
+    def test_capture_persist_and_ack_faults_keep_source_outside_native_cleanup(self):
+        import shutil
+        for fault in ('capture', 'persist', 'ack'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as td:
+                root=Path(td); base=root/'native'; work=base/'ws'; work.mkdir(parents=True, mode=0o700)
+                home=base/'home'; home.mkdir(); (home/'auth').write_bytes(b'PRIVATE_AUTH')
+                capdir=root/'sink'; capdir.mkdir(mode=0o700)
+                cap=os.open(capdir, os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC)
+                channel=unittest.mock.Mock()
+                client=h.CustodyClient(channel, cap, h.operation(task(), 'agy_author', 'a'*40),
+                    ['x.py'], os.geteuid(), 'nonce', 'boot')
+                (work/'x.py').write_bytes(b'old')
+                observer=self.observer(work); observer.prepare(work)
+                client.anchor(work); client.ready=True
+                (work/'x.py').write_bytes(b'partial')
+                with ExitStack() as stack:
+                    if fault in ('capture','persist'):
+                        stack.enter_context(patch.object(observer, fault, side_effect=OSError('private text')))
+                    else:
+                        stack.enter_context(patch.object(client, 'request', side_effect=OSError('ACK lost')))
+                    with self.assertRaises(h.RetentionError): client.terminal_checkpoint(observer, work)
+                self.assertTrue(client.quarantined)
+                with patch.object(observer, 'capture', side_effect=AssertionError('read after quarantine')):
+                    with self.assertRaises(h.RetentionError): client.terminal_checkpoint(observer, work)
+                shutil.rmtree(base)  # native finally is destructive
+                self.assertEqual((capdir/'fallback/0').read_bytes(), b'partial')
+                self.assertFalse((capdir/'home').exists())
+                self.assertNotIn(b'PRIVATE_AUTH', b''.join(p.read_bytes() for p in capdir.rglob('*') if p.is_file()))
+                self.assertFalse(os.get_inheritable(cap))
+                client.close()
+
+    def test_link_and_private_directory_are_not_quarantined(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); work=root/'ws'; work.mkdir(mode=0o700)
+            outside=root/'auth'; outside.write_bytes(b'private')
+            (work/'x.py').symlink_to(outside)
+            sink=root/'sink'; sink.mkdir()
+            guard=h.SourceQuarantine(os.open(sink, os.O_RDONLY|os.O_DIRECTORY), ['x.py'], os.geteuid())
+            guard.anchor(work); guard.quarantine(); guard.quarantine()
+            self.assertEqual((sink/'fallback/0').read_bytes(), b'')
+            self.assertEqual(outside.read_bytes(), b'private')
+            guard.close()
+
+    def test_qa_free_phrases_never_classify_capacity(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            for events in (None, b'{"type":"error","error":"ordinary failure"}\n'):
+                if events is not None: (root/'events.jsonl').write_bytes(events)
+                (root/'stderr').write_text(live.CODEX_CAPACITY_MSG)
+                (root/'final.txt').write_text(live.CODEX_CAPACITY_MSG)
+                self.assertFalse(live._codex_capacity_technical(root))
+                with self.assertRaises(providers.ProviderError) as e:
+                    live._qa_resume_agy_capacity({}, {}, root)
+                self.assertEqual(e.exception.code, 'qa_capacity_control_unsupported')
+
+    def test_typed_outer_control_is_not_a_free_text_decoder(self):
+        from dataclasses import asdict
+        binding=h.operation(task(), 'agy_author', 'a'*40)
+        raw=(json.dumps(dict(event='init', init=dict(model=providers.AGY_MODEL)))+'\n'+
+             json.dumps(dict(event='result', result=dict(status='ERROR')))+'\n').encode()
+        stderr=b'AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"fixed"}\n'
+        producer=dict(binding=asdict(binding), cli_sha256=providers.AGY_CLI_SHA256,
+            control_origin='pinned-agy-outer-stderr-v1', exit_code=3, model=providers.AGY_MODEL,
+            raw_sha256=hashlib.sha256(raw).hexdigest(), stderr_sha256=hashlib.sha256(stderr).hexdigest())
+        self.assertIsNotNone(providers.typed_agy_capacity(stderr, raw, producer=producer, binding=binding))
+        for patcher in ({'exit_code':0}, {'cli_sha256':'0'*64}, {'control_origin':'stdout'}, {'binding':{}}):
+            self.assertIsNone(providers.typed_agy_capacity(stderr, raw, producer=dict(producer, **patcher), binding=binding))
+        self.assertIsNone(h.protected_capacity_decoder(task=task(), evidence_dir='unused', current=binding))
+        self.assertEqual(h.adjudicate_capacity_recovery(binding, nonce='made-up')['action'], 'HOLD')
+
+    def test_sdk_capabilities_do_not_reach_exec_or_proc_child(self):
+        # Actual fork/exec, no native/provider/auth. Dumpability is changed only
+        # inside the disposable SDK child. A model child shares its UID.
+        r,w=os.pipe()
+        pid=os.fork()
+        if pid == 0:
+            os.close(r)
+            try:
+                h.CustodyClient.protect_sdk()
+                sdk=os.getpid()
+                cap=os.open(__file__, os.O_RDONLY|os.O_CLOEXEC)
+                code='import os; p="/proc/%s/fd/%s"; print(os.path.exists(p))' % (sdk,cap)
+                checked=subprocess.run([sys.executable,'-c',code], capture_output=True, close_fds=True,
+                    env={'PATH':'/usr/bin:/bin'}, timeout=5)
+                os.write(w, checked.stdout.strip())
+            finally: os._exit(0)
+        os.close(w)
+        try: observed=os.read(r,128)
+        finally: os.close(r); os.waitpid(pid,0)
+        self.assertEqual(observed,b'False')
+
+
+class ClosedKernelIPC(unittest.TestCase):
+    def test_actual_fork_credentials_nonce_and_foreign_pid(self):
+        import socket
+        for wrong in ('none','pid','nonce'):
+            with self.subTest(wrong=wrong):
+                server,peer=socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|socket.SOCK_CLOEXEC)
+                try:
+                    server.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED,1)
+                except PermissionError as error:
+                    # Sandbox disallows the required credential API. This is an
+                    # explicit precharge unsupported boundary, not transport proof.
+                    server.close(); peer.close()
+                    self.assertEqual(error.errno, 1)
+                    continue
+                r=object.__new__(h.RootSourceCustody)
+                r.server=server; r.uid=os.geteuid(); r.nonce='fixed'; r.boot='boot'
+                r.binding=h.operation(task(),'agy_author','a'*40)
+                r.record={}; r._record=unittest.mock.Mock()
+                pid=os.fork()
+                if pid == 0:
+                    server.close()
+                    payload=dict(op='HOLD',nonce='wrong' if wrong=='nonce' else 'fixed',boot='boot',
+                                 binding=h.fingerprint(__import__('dataclasses').asdict(r.binding)))
+                    peer.send(json.dumps(payload).encode()); peer.close(); os._exit(0)
+                peer.close(); r.pid=pid+1 if wrong=='pid' else pid
+                try:
+                    if wrong=='none':
+                        # Peer has exited: send ACK fails after authenticated HOLD
+                        # persistence, proving identity checks ran before mutation.
+                        try: r.service()
+                        except BrokenPipeError: pass
+                        r._record.assert_called_once()
+                        self.assertTrue(r.record['fault'])
+                    else:
+                        with self.assertRaises(h.RetentionError): r.service()
+                        r._record.assert_not_called()
+                finally: server.close(); os.waitpid(pid,0)

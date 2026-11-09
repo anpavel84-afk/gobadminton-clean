@@ -1078,3 +1078,43 @@ def qualified_codex_role(role, *, reviewer_authority=None, effort='medium'):
                       'model': model + ':' + effort, 'executor': executor}
     except Exception:
         return False, 'native Codex role unavailable'
+
+
+def typed_agy_capacity(stderr, raw, *, producer, binding):
+    """Decode only a Root-authenticated pinned outer control capture.
+
+    This parser supplies no origin authority: producer must first be read from
+    the protected operation receipt by author_handoff's closed decoder.
+    """
+    from dataclasses import asdict
+    from author_handoff import fingerprint
+    import author_routing as policy
+    if (type(producer) is not dict or producer.get('binding') != asdict(binding)
+            or producer.get('cli_sha256') != AGY_CLI_SHA256
+            or producer.get('control_origin') != 'pinned-agy-outer-stderr-v1'
+            or producer.get('exit_code') != 3 or producer.get('model') != AGY_MODEL
+            or producer.get('raw_sha256') != hashlib.sha256(raw).hexdigest()
+            or producer.get('stderr_sha256') != hashlib.sha256(stderr).hexdigest()
+            or len(raw) > 2 << 20 or len(stderr) > 2 << 20):
+        return None
+    try:
+        events = [loads(line) for line in raw.splitlines() if line.strip()]
+        if (not events or events[0].get('event') != 'init' or events[-1].get('event') != 'result'
+                or events[0].get('init', {}).get('model') != AGY_MODEL
+                or events[-1].get('result', {}).get('status') != 'ERROR'
+                or sum(e.get('event') == 'init' for e in events) != 1
+                or sum(e.get('event') == 'result' for e in events) != 1):
+            return None
+        controls = [loads(line[len(b'AGY_ERROR: '):]) for line in stderr.splitlines()
+                    if line.startswith(b'AGY_ERROR: ')]
+        if len(controls) != 1: return None
+        c = controls[0]
+        if (c.get('status') != 'RESOURCE_EXHAUSTED' or type(c.get('error_code')) is not int
+                or c['error_code'] != 429 or c.get('code_kind') != 'http'
+                or c.get('retryable') is not True or not isinstance(c.get('error_id'), str)
+                or not 1 <= len(c['error_id']) <= 128):
+            return None
+        return policy.CapacityFailure(binding, fingerprint(dict(producer=producer, control=c)),
+                                      'QUOTA_EXHAUSTED', 'native_top_level_error')
+    except (ValueError, TypeError, KeyError, ProviderError):
+        return None
