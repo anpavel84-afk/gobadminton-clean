@@ -883,7 +883,7 @@ class Repair2Focused(unittest.TestCase):
                 with patch.object(live, 'QA_OUTPUT_MAX', 4096):
                     limited = live._qa_recipe()
                     self.assertNotEqual(limited['recipe_fingerprint'], baseline['recipe_fingerprint'])
-                    self.assertEqual(limited['output_policy']['fsize_hard'], 4096)
+                    self.assertEqual(limited['output_policy']['capture_max'], 4096)
 
     def test_exited_leader_owned_child_and_foreign_guard(self):
         # Synthetic children run as the test host, including UID 1001 in CI.
@@ -1098,29 +1098,72 @@ class QAOutputBoundary(unittest.TestCase):
         self.addCleanup(host_uid.stop)
         host_uid.start()
 
-    def test_real_child_inherits_hard_file_bound_and_valid_output(self):
-        with tempfile.TemporaryDirectory() as td, patch.object(live, 'QA_OUTPUT_MAX', 4096):
+    def test_real_private_file_and_parent_pipe_bounds(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(live, 'QA_OUTPUT_MAX', 4096), \
+                patch.object(live, 'QA_NATIVE_FSIZE_MAX', 16384):
             root = Path(td)
-            for kind in ('stdout', 'file', 'valid'):
-                output = root / (kind + '.out')
-                code = (
-                    'import os,resource,sys; '
-                    'assert resource.getrlimit(resource.RLIMIT_FSIZE)==(4096,4096); '
-                    'assert resource.getrlimit(resource.RLIMIT_CORE)==(0,0); '
-                    'os.fork() == 0 and None; '
-                    + ("os.write(1,b'x'*8192); os.write(1,b'x')" if kind == 'stdout' else
-                       "f=open(sys.argv[1],'wb',buffering=0); f.write(b'x'*8192); f.write(b'x')" if kind == 'file' else
-                       "os.write(1,b'valid')"))
-                with output.open('wb') as stream:
-                    result = subprocess.run([sys.executable, '-c', code, str(root / 'direct')],
-                        stdout=stream, stderr=subprocess.DEVNULL, preexec_fn=live._qa_preexec(), timeout=3)
-                if kind == 'valid':
-                    self.assertEqual(result.returncode, 0)
-                    self.assertIn(b'valid', live._qa_output_bytes(output))
-                else:
-                    target = output if kind == 'stdout' else root / 'direct'
-                    self.assertLessEqual(target.stat().st_size, 4096)
-                    with self.assertRaises(live.LiveError): live._qa_output_bytes(target)
+            for kind in ('private', 'stdout', 'stderr', 'final', 'symlink'):
+                with self.subTest(kind=kind):
+                    final = root / 'final'
+                    if final.exists() or final.is_symlink(): final.unlink()
+                    code = (
+                        'import os,resource,sys; '
+                        'assert resource.getrlimit(resource.RLIMIT_FSIZE)==(16384,16384); '
+                        'assert resource.getrlimit(resource.RLIMIT_CORE)==(0,0); '
+                        '\ntry:\n resource.setrlimit(resource.RLIMIT_FSIZE,(32768,32768))\n'
+                        'except ValueError: pass\nelse: raise AssertionError("raised hard cap")\n'
+                        + ("open(sys.argv[1]+'native','wb').write(b'x'*8192); os.write(1,b'valid')" if kind == 'private' else
+                           "os.write(1,b'x'*8192)" if kind == 'stdout' else
+                           "os.write(2,b'x'*8192)" if kind == 'stderr' else
+                           "open(sys.argv[1],'wb').write(b'x'*8192)" if kind == 'final' else
+                           "os.symlink('/dev/null',sys.argv[1])"))
+                    process = subprocess.Popen([sys.executable, '-c', code, str(final)],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                        preexec_fn=live._qa_preexec())
+                    # Capture the exact owned identity before this tiny leader exits.
+                    fields = Path('/proc', str(process.pid), 'stat').read_text().rsplit(')',1)[1].split()
+                    process._lean_owned_identity = dict(pid=process.pid,pgrp=process.pid,start_ticks=fields[19])
+                    with (root/'out').open('wb') as out, (root/'err').open('wb') as err:
+                        if kind == 'private':
+                            live._qa_capture(process,out,err,final,3)
+                            self.assertEqual(process.returncode,0)
+                            self.assertEqual((root/'out').read_bytes(),b'valid')
+                            self.assertEqual(Path(str(final)+'native').stat().st_size,8192)
+                        else:
+                            with self.assertRaises(live.LiveError):
+                                live._qa_capture(process,out,err,final,3)
+                    self.assertLess((root/'out').stat().st_size,4096)
+                    self.assertLess((root/'err').stat().st_size,4096)
+                    self.assertTrue(h.owned_group_gone(process))
+
+    def test_capture_rejects_final_replacement_and_stops_owned_process(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); final = root/'final'
+            code = ('import os,sys,time; open(sys.argv[1],"wb").write(b"valid"); '
+                    'os.write(1,b"ready"); time.sleep(30)')
+            process = subprocess.Popen([sys.executable,'-c',code,str(final)],
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,
+                preexec_fn=live._qa_preexec())
+            fields = Path('/proc',str(process.pid),'stat').read_text().rsplit(')',1)[1].split()
+            process._lean_owned_identity = dict(pid=process.pid,pgrp=process.pid,start_ticks=fields[19])
+            read = os.read
+            def replace(fd, size):
+                raw = read(fd,size)
+                if fd == process.stdout.fileno() and raw:
+                    # Ensure capture has observed the original inode before replacement.
+                    replacement = root/'replacement'; replacement.write_bytes(b'changed')
+                    os.replace(replacement,final)
+                return raw
+            # Wait only for tiny child's readiness, without consuming its pipe.
+            import selectors
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout,selectors.EVENT_READ)
+                self.assertTrue(selector.select(3))
+            with (root/'out').open('wb') as out, (root/'err').open('wb') as err, \
+                    patch.object(live.os,'read',side_effect=replace):
+                with self.assertRaises(live.LiveError):
+                    live._qa_capture(process,out,err,final,3)
+            self.assertTrue(h.owned_group_gone(process))
 
     def test_preexec_packet_normal_identity_and_no_inherited_writer(self):
         binding = os.urandom(64)
@@ -1142,7 +1185,7 @@ class QAOutputBoundary(unittest.TestCase):
             self.assertEqual(early['start_ticks'], actual['start_ticks'])
             with self.assertRaises(ValueError):
                 live._qa_process_identity(process, argv + ['wrong-cli'])
-            with patch.object(live, 'QA_OUTPUT_MAX', live.QA_OUTPUT_MAX + 1):
+            with patch.object(live, 'QA_NATIVE_FSIZE_MAX', live.QA_NATIVE_FSIZE_MAX + 1):
                 with self.assertRaises(ValueError): live._qa_process_identity(process, argv)
             process._lean_owned_identity = dict(early, start_ticks='1')
             with self.assertRaises(ValueError): live._qa_process_identity(process, argv)
@@ -1155,10 +1198,10 @@ class QAOutputBoundary(unittest.TestCase):
         import struct
         binding = os.urandom(64)
         valid = struct.pack('!9Q', os.getpid(), os.getpid(), 1, live.CURSOR_UID,
-                            live.QA_OUTPUT_MAX, live.QA_OUTPUT_MAX, 0, 0, 1)
+                            live.QA_NATIVE_FSIZE_MAX, live.QA_NATIVE_FSIZE_MAX, 0, 0, 1)
         fake_pid = os.getpid() + 1000000
         wrong_uid = struct.pack('!9Q', fake_pid, fake_pid, 1, live.CURSOR_UID + 1,
-                                live.QA_OUTPUT_MAX, live.QA_OUTPUT_MAX, 0, 0, 1)
+                                live.QA_NATIVE_FSIZE_MAX, live.QA_NATIVE_FSIZE_MAX, 0, 0, 1)
         for raw in (b'', b'corrupt', os.urandom(64) + valid, binding + valid,
                     binding + valid + b'extra', binding + wrong_uid):
             read_fd, write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
@@ -1218,6 +1261,7 @@ class QAOutputBoundary(unittest.TestCase):
 
     def test_capture_reaps_before_collection_and_rejects_each_oversize(self):
         candidate = 'b' * 40
+        real_popen = subprocess.Popen
         for oversized in (None, 'events.jsonl', 'stderr', 'final.txt', 'early-exit'):
             with self.subTest(oversized=oversized), tempfile.TemporaryDirectory() as td:
                 root = Path(td); evidence = root / 'qa-output'
@@ -1229,13 +1273,18 @@ class QAOutputBoundary(unittest.TestCase):
                 def launch(*args, **kw):
                     self.assertIsNotNone(kw['preexec_fn'])
                     (evidence / 'intent.json').write_text('{}')
-                    kw['stdout'].write('{"type":"turn.completed"}\n')
-                    kw['stdout'].flush()
+                    self.assertEqual(kw['stdout'], subprocess.PIPE)
+                    self.assertEqual(kw['stderr'], subprocess.PIPE)
                     (private / 'tmp' / 'final.txt').write_bytes(final)
                     if oversized and oversized != 'early-exit':
                         dest = private / 'tmp' / 'final.txt' if oversized == 'final.txt' else evidence / oversized
                         dest.write_bytes(b'x' * 513)
-                    return process
+                    if oversized == 'early-exit': return process
+                    code = 'import os; os.write(1,b\'{"type":"turn.completed"}\\n\')'
+                    if oversized in ('events.jsonl', 'stderr'):
+                        code = 'import os; os.write(%d,b\'x\'*513)' % (1 if oversized == 'events.jsonl' else 2)
+                    return real_popen([sys.executable,'-c',code], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, start_new_session=True)
                 reader = live._qa_output_bytes
                 def collect(*args, **kw):
                     self.assertTrue(stopped, 'collected before owned group reaped')
@@ -1253,7 +1302,12 @@ class QAOutputBoundary(unittest.TestCase):
                     stack.enter_context(patch.object(live, '_qa_cleanup_identity', return_value={}))
                     stack.enter_context(patch.object(live, '_qa_process_identity', return_value={},
                         side_effect=FileNotFoundError('exited leader') if oversized == 'early-exit' else None))
-                    stack.enter_context(patch.object(live, '_kill_owned_process_group', side_effect=lambda p: stopped.append(True)))
+                    def stop(p):
+                        stopped.append(True)
+                        if hasattr(p, 'poll') and p.poll() is None:
+                            os.killpg(p.pid, 9)
+                            p.wait(timeout=3)
+                    stack.enter_context(patch.object(live, '_kill_owned_process_group', side_effect=stop))
                     stack.enter_context(patch.object(live, '_qa_output_bytes', side_effect=collect))
                     mark = stack.enter_context(patch.object(providers, 'mark_intent_phase'))
                     parser = stack.enter_context(patch.object(providers, 'parse_codex_final', wraps=providers.parse_codex_final))
