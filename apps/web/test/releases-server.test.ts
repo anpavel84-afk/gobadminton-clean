@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   TRUSTED_DEV_API_BASE_URL,
@@ -12,7 +13,9 @@ import {
   parseWebHealth,
 } from "../src/lib/releases-server";
 import {
+  API_CONTRACT_VERSION_NOTE,
   CURRENT_APPLICATION_VERSION,
+  CURRENT_NAMED_RELEASE,
   FIRST_ALPHA_FEATURES,
   FIRST_NAMED_APPLICATION_VERSION,
   TRUSTED_HISTORICAL_SEED,
@@ -254,9 +257,29 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps seventy-five confirmed seed deployments including accepted alpha.1–alpha.66 and dedupes identical live rows", () => {
+  it("preserves the exact trusted alpha.67 receipt before the unaccepted alpha.68 descriptor", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.67");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(3408);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "9e29ba2f9283a98ffa316158f17c47fa08a15ca0cbd968c3acd2f381f5e3232f",
+    );
+    expect(row.source_sha).toBe("04fdc58b53e79996ccdb21a7396c5d1525cfbd10");
+    expect(row.deployments[0]?.release_id).toBe("r42613449482-a1");
+    expect(row.deployments[0]?.accepted_at).toBe("2026-11-09T12:05:53Z");
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.66")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(row.fixes).toHaveLength(1);
+    expect(row.title).toBe("Начало загрузки фотографии площадки при открытии страницы");
+    expect(row.owner_uat).toBe("NOT_TESTED");
+  });
+
+  it("keeps seventy-six confirmed seed deployments including accepted alpha.1–alpha.67 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(75);
+    expect(seedCount).toBe(76);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -321,10 +344,22 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     }]);
+    const ordered = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
+    expect(ordered.slice(0, 3).map((row) => row.application_version)).toEqual([
+      "0.1.0-alpha.67", "0.1.0-alpha.66", "0.1.0-alpha.65",
+    ]);
+    expect(ordered[0]).toMatchObject({
+      source_sha: "04fdc58b53e79996ccdb21a7396c5d1525cfbd10",
+      release_id: "r42613449482-a1",
+      accepted_at: "2026-11-09T12:05:53.000Z",
+      status: "ACCEPTED",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+    });
     expect(buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).some(
       (row) => row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(false);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(70);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(71);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -407,7 +442,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.63"
       || row.application_version === "0.1.0-alpha.64"
       || row.application_version === "0.1.0-alpha.65"
-      || row.application_version === "0.1.0-alpha.66",
+      || row.application_version === "0.1.0-alpha.66"
+      || row.application_version === "0.1.0-alpha.67",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -484,7 +520,12 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.67");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.68");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
+    expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
+    expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Порядок ролей и действий в карточке тренировки");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
