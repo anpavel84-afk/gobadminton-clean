@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   buildVenueCommunityReportBody,
   isVenueCommunityReportReceipt,
@@ -21,6 +21,7 @@ export type VenueCommunityReportDialogProps = {
   csrfToken: string | null;
   authReturnPath: string;
   onClose: () => void;
+  onUnresolvedChange?: (value: boolean) => void;
 };
 
 type AuthBind = { actorId: string; csrfToken: string };
@@ -66,12 +67,18 @@ export function VenueCommunityReportDialog({
   csrfToken,
   authReturnPath,
   onClose,
+  onUnresolvedChange,
 }: VenueCommunityReportDialogProps) {
-  const signedIn = Boolean(actorId && csrfToken);
+  const [revoked, setRevoked] = useState(false);
+  const sessionLive = useRef(true);
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const signedIn = Boolean(actorId && csrfToken && !revoked);
   const [reasonCode, setReasonCode] = useState<VenueCommunityReportReasonCode>("inappropriate");
   const [detail, setDetail] = useState("");
   const [done, setDone] = useState(false);
   const [authOpen, setAuthOpen] = useState(!signedIn);
+  const [nativeHidden, setNativeHidden] = useState(false);
+  const [reopenSignal, setReopenSignal] = useState(0);
   /**
    * Bumps when CSRF rotates for the same actor/subject so UNKNOWN stays on the prior
    * storage scope (no clear/replay) while the new context can start cleanly.
@@ -107,6 +114,9 @@ export function VenueCommunityReportDialog({
       subjectKey,
     };
     admittedAuthRef.current = null;
+    if (nativeHidden) setNativeHidden(false);
+    sessionLive.current = true;
+    if (revoked) setRevoked(false);
     if (csrfRotated) csrfEpochRef.current += 1;
     if (detail) setDetail("");
     if (done) setDone(false);
@@ -114,7 +124,22 @@ export function VenueCommunityReportDialog({
     if (!signedIn && !authOpen) setAuthOpen(true);
   }
 
-  const scope = `vc-report:${liveActor}:${subjectKey}:g${csrfEpochRef.current}`;
+  useEffect(() => {
+    const revoke = () => {
+      sessionLive.current = false;
+      admittedAuthRef.current = null;
+      setRevoked(true); setAuthOpen(true); setDetail(""); setDone(false);
+      setNativeHidden(false);
+      setSessionGeneration(value => value + 1);
+    };
+    window.addEventListener("gb-session-changed", revoke);
+    window.addEventListener("gb-private-expired", revoke);
+    return () => {
+      window.removeEventListener("gb-session-changed", revoke);
+      window.removeEventListener("gb-private-expired", revoke);
+    };
+  }, []);
+  const scope = `vc-report:${liveActor}:${subjectKey}:g${csrfEpochRef.current}${sessionGeneration ? `:s${sessionGeneration}` : ""}`;
 
   const authMatches = Boolean(signedIn && actorId && csrfToken);
 
@@ -129,6 +154,7 @@ export function VenueCommunityReportDialog({
     (failure) => {
       if (failure?.status === 401) {
         admittedAuthRef.current = null;
+        setNativeHidden(false);
         setAuthOpen(true);
         setDetail("");
         setDone(false);
@@ -137,7 +163,7 @@ export function VenueCommunityReportDialog({
     true,
     {
       validatePending: (pending) => {
-        if (pending.path !== "/v1/reports") return false;
+        if (!sessionLive.current || pending.path !== "/v1/reports") return false;
         if (!venueCommunityReportSubjectMatchesBody(subjectRef.current, pending.body)) {
           return false;
         }
@@ -146,12 +172,17 @@ export function VenueCommunityReportDialog({
         return admitted.actorId === actorId && admitted.csrfToken === csrfToken;
       },
       validateSuccess: (data, pending) => {
-        if (!isVenueCommunityReportReceipt(data)) return false;
+        if (!sessionLive.current || !admittedAuthRef.current || !isVenueCommunityReportReceipt(data)) return false;
         if (!pending || pending.path !== "/v1/reports") return false;
         return venueCommunityReportSubjectMatchesBody(subjectRef.current, pending.body);
       },
     },
   );
+
+  useEffect(() => {
+    onUnresolvedChange?.(!revoked && Boolean(mutation.busy || mutation.pending));
+  }, [mutation.busy, mutation.pending, revoked, onUnresolvedChange]);
+  useEffect(() => () => onUnresolvedChange?.(false), [onUnresolvedChange]);
 
   function submit() {
     if (!signedIn || !actorId || !csrfToken || mutation.busy || mutation.pending || done) {
@@ -168,8 +199,11 @@ export function VenueCommunityReportDialog({
   }
 
   function requestClose() {
-    // In-flight close hides UI only — does not cancel the server request.
-    if (mutation.busy) return;
+    // Closing cannot discard an admitted request or its exact UNKNOWN retry.
+    if (!revoked && (mutation.busy || mutation.pending)) {
+      mutation.setNotice("Проверьте результат жалобы перед закрытием окна.");
+      return;
+    }
     setDetail("");
     onClose();
   }
@@ -203,11 +237,23 @@ export function VenueCommunityReportDialog({
   const formVisible = authMatches && !done;
 
   return (
+    <>
+    {nativeHidden ? <Button
+      data-testid="venue-community-report-resume"
+      autoFocus
+      style={{ minHeight: 44, minWidth: 44 }}
+      onClick={() => { setNativeHidden(false); setReopenSignal(value => value + 1); }}
+    >Проверить отправку</Button> : null}
     <ProfileDialog
       title={subjectTitle(subject)}
       onClose={requestClose}
       className="profile-dialog--community"
       lockBodyScroll
+      onNativeClose={() => {
+        if (mutation.busy || mutation.pending) setNativeHidden(true);
+        else onClose();
+      }}
+      reopenSignal={reopenSignal}
     >
       {done ? (
         <p role="status" data-testid="venue-community-report-success">
@@ -269,5 +315,6 @@ export function VenueCommunityReportDialog({
         }}
       />
     </ProfileDialog>
+    </>
   );
 }

@@ -3,16 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import type { ActivityKind, Venue } from "../../../lib/consumer-types";
 import { ConsumerShell } from "../ConsumerShell";
 import { Button } from "../Button";
-import { SurfacePanel } from "../Surfaces";
 import { VenueGallery } from "./VenueGallery";
 import { VenuePublicProfile } from "./VenuePublicProfile";
 import { VenuePublicContacts } from "../games/VenueSheet";
 import { GamesMapView } from "../games/GamesMapView";
 import { gamesMapReturnPath } from "../../../lib/games-venue-map";
 import { shouldSkipUnauthenticatedPrivateGet } from "../../../lib/session-presence";
-import { VenueReviewsPanel } from "./VenueReviewsPanel";
-import { VenueCommunityRating } from "./VenueCommunityRating";
-import { CommentsSection } from "../comments/CommentsSection";
+import { VenueCommunityContent } from "./VenueCommunityContent";
 import type { Me } from "../../../lib/consumer-types";
 import "../../../styles/venue-community.css";
 
@@ -37,6 +34,13 @@ export function VenuePage({venueId,initialVenue=null,initialUnavailable=false}:{
   // Navigation/retry consumes this exemption permanently for this mounted instance.
   const initialRequest=useRef(result?{venueId,reload:0}:null);
   const [me,setMe]=useState<Me|null>(null);
+  const [authRevision,setAuthRevision]=useState(0);
+  useEffect(()=>{
+    const fence=()=>{setMe(null);setAuthRevision(value=>value+1);};
+    window.addEventListener("gb-session-changed",fence);
+    window.addEventListener("gb-private-expired",fence);
+    return ()=>{window.removeEventListener("gb-session-changed",fence);window.removeEventListener("gb-private-expired",fence);};
+  },[]);
   // A prop change hides the old profile before the next effect runs.
   const current=result?.venueId===venueId&&result.reload===reload?result:null;
   const venue=current?.venue ?? null;
@@ -59,15 +63,17 @@ export function VenuePage({venueId,initialVenue=null,initialUnavailable=false}:{
     // Explicit guest hint: clear local identity without a direct /v1/me probe.
     if(shouldSkipUnauthenticatedPrivateGet("/v1/me","GET")){setMe(null);return;}
     const controller=new AbortController();
+    let active=true;
     void fetch("/v1/me",{cache:"no-store",credentials:"include",signal:controller.signal})
       .then(async (r)=>{
+        if(!active||controller.signal.aborted)return;
         if(!r.ok){setMe(null);return;}
         const body=await r.json() as Me;
-        setMe(body);
+        if(active&&!controller.signal.aborted)setMe(body);
       })
-      .catch(()=>{setMe(null);});
-    return ()=>controller.abort();
-  },[venueId]);
+      .catch(()=>{if(active)setMe(null);});
+    return ()=>{active=false;controller.abort();};
+  },[venueId,authRevision]);
   // Late fragment: venue markup arrives after fetch; re-apply known hashes with CSS scroll-margin.
   useEffect(() => {
     if (!venue) return;
@@ -104,7 +110,7 @@ export function VenuePage({venueId,initialVenue=null,initialUnavailable=false}:{
       {venue ? <h1>{venue.name}</h1> : null}
       {venue ? <p className="gb-venue-page__address">{venue.address}</p> : null}
     </header>
-    {venue?<><div className="gb-venue-layout"><div className="gb-venue-layout__main"><div className="gb-venue-media"><VenueGallery venue={venue} size="page" /></div><VenuePublicProfile venue={venue} omitContacts /><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/><div className="gb-venue-community"><VenueCommunityRating venueId={venue.id} signedIn={Boolean(me?.id && me.csrfToken)} actorId={me?.id ?? null} csrfToken={me?.csrfToken ?? null} authReturnPath={authReturnPath} /><CommentsSection kind="venue" entityId={venue.id} me={me} title="Обсуждение площадки" description="Вопросы и впечатления о площадке · не проверенные отзывы после игры" authReturnPath={`${authReturnPath}#discussion`} parentPublic sectionId="discussion" /><SurfacePanel tone="bordered" aria-label="Отзывы после игры" id="reviews"><VenueReviewsPanel venueId={venue.id} csrfToken={me?.csrfToken ?? null} canWrite={Boolean(me?.id && me.csrfToken)} onLogin={()=>{ window.location.href=`/auth?returnTo=${encodeURIComponent(authReturnPath)}`; }} /></SurfacePanel></div></div><aside className="gb-venue-layout__rail" aria-label="Контекст площадки"><VenuePublicContacts value={venue.publicContacts} /><div className="gb-venue-rail-note"><strong>На карте</strong><p>Вернитесь к карте, чтобы увидеть площадку среди публичных игр города.</p><Button variant="outline" href={context.returnTo}>К карте</Button></div></aside></div>
+    {venue?<><div className="gb-venue-layout"><div className="gb-venue-layout__main"><div className="gb-venue-media"><VenueGallery venue={venue} size="page" /></div><VenuePublicProfile venue={venue} omitContacts /><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/><VenueCommunityContent venueId={venue.id} me={me} authReturnPath={authReturnPath} /></div><aside className="gb-venue-layout__rail" aria-label="Контекст площадки"><VenuePublicContacts value={venue.publicContacts} /><div className="gb-venue-rail-note"><strong>На карте</strong><p>Вернитесь к карте, чтобы увидеть площадку среди публичных игр города.</p><Button variant="outline" href={context.returnTo}>К карте</Button></div></aside></div>
     </>:error?<div role="alert"><p>Площадка недоступна.</p><Button onClick={()=>setReload(v=>v+1)}>Повторить</Button></div>:<p role="status">Загружаем площадку…</p>}
   </div></ConsumerShell>;
 }

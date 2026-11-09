@@ -205,7 +205,7 @@ beforeEach(async () => {
     }),
   };
   vi.stubGlobal("window", Object.assign(new EventTarget(), {
-    location: { origin: "https://dev.gobadminton.ru", href: "https://dev.gobadminton.ru/games?view=map", pathname: "/games", search: "?view=map", assign: vi.fn() },
+    location: { origin: "https://dev.gobadminton.ru", href: "https://dev.gobadminton.ru/games?view=map", pathname: "/games", hash: "", search: "?view=map", assign: vi.fn() },
     history,
     setTimeout, clearTimeout,
     getComputedStyle: (target: FocusTarget) => ({ visibility: target.visibility }),
@@ -214,7 +214,7 @@ beforeEach(async () => {
   vi.stubGlobal("document", Object.assign(new EventTarget(), {
     activeElement: trigger as unknown,
     querySelector: (selector: string) => {
-      if (selector === ".gb-venue-picker, dialog[open]") return nestedDialog ? { className: nestedDialog } : null;
+      if (selector === ".gb-venue-picker, dialog[open], .gb-comment__menu-panel[role=menu]") return nestedDialog ? { className: nestedDialog } : null;
       if (selector === ".gb-venue-popup .gb-venue-handle") return handle;
       if (selector === ".gb-venue-preview-button") return firstControl;
       if (selector === "dialog[open], [role=dialog]") return null;

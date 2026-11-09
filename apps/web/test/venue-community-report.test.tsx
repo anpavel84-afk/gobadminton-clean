@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Me } from "../src/lib/consumer-types";
@@ -158,6 +158,14 @@ function polyfillDialog() {
       this.removeAttribute("open");
     };
   }
+}
+
+function forceNativeClose(dialog: HTMLElement) {
+  const cancel = new Event("cancel", { cancelable: false });
+  fireEvent(dialog, cancel);
+  expect(cancel.defaultPrevented).toBe(false);
+  dialog.removeAttribute("open");
+  fireEvent(dialog, new Event("close"));
 }
 
 function me(actorId: string, csrf: string): Me {
@@ -512,5 +520,195 @@ describe("#507 I1 F3 consumer venue_community report UI", () => {
     // Game threads may keep player-author safety; venue_community report control must stay absent.
     expect(within(menu).queryByTestId("venue-community-report-comment")).toBeNull();
     expect(document.body.innerHTML).not.toContain("venue_community");
+  });
+  it("uses the same aggregate report subject inside the embedded community", async () => {
+    transport.handler = async path => path.includes("experience-reviews")
+      ? {ok:true,status:200,data:{venueId:VENUE_ID,publishedCount:0,items:[],nextCursor:null,canWriteHint:false}}
+      : {ok:true,status:201,data:{reportId:"50000000-0000-4000-8000-000000000001",status:"submitted",createdAt:"2026-11-09T12:00:00Z"}};
+    const { VenueCommunityContent } = await import("../src/components/consumer/venues/VenueCommunityContent");
+    render(createElement(VenueCommunityContent,{venueId:VENUE_ID,me:me(ACTOR_A,CSRF_A),authReturnPath:"/games?view=map",embedded:true}));
+    await screen.findByText("4,2");
+    fireEvent.click(screen.getByTestId("venue-community-report-aggregate"));
+    fireEvent.click(await screen.findByTestId("venue-community-report-submit"));
+    await screen.findByTestId("venue-community-report-success");
+    expect(transport.calls.find(call=>call.path==="/v1/reports")).toMatchObject({body:{targetKind:"venue_community",subjectKind:"aggregate",venueId:VENUE_ID},csrfToken:CSRF_A});
+    expect(document.querySelector(`[data-venue-community="${VENUE_ID}"]`)).toBeTruthy();
+  });
+
+});
+
+
+describe("report lifecycle propagation", () => {
+  beforeEach(() => { polyfillDialog(); transport.calls = []; transport.handler = null; sessionStorage.clear(); });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  it.each(["aggregate", "own_vote", "venue_comment"] as const)("holds %s report through pending/503/close and retries exact context", async subjectKind => {
+    const { VenueCommunityReportDialog } = await import("../src/components/consumer/venues/VenueCommunityReportDialog");
+    let settle!: (result: unknown) => void;
+    transport.handler = () => new Promise(resolve => { settle = resolve; });
+    const unresolved = vi.fn(), close = vi.fn();
+    const subject = subjectKind === "aggregate" ? { subjectKind, venueId: VENUE_ID }
+      : subjectKind === "own_vote" ? { subjectKind, venueId: VENUE_ID, expectedVersion: 9 }
+      : { subjectKind, venueId: VENUE_ID, commentId: COMMENT_ID, expectedVersion: 4 };
+    render(createElement(VenueCommunityReportDialog, { subject, actorId: ACTOR_A, csrfToken: CSRF_A,
+      authReturnPath: "/games?view=map", onClose: close, onUnresolvedChange: unresolved }));
+    fireEvent.change(screen.getByTestId("venue-community-report-detail"), { target: { value: "Точное описание" } });
+    fireEvent.click(screen.getByTestId("venue-community-report-submit"));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    const first = structuredClone(transport.calls[0]);
+    const dialog = screen.getByRole("dialog");
+    const busyCancel = new Event("cancel", { cancelable: true });
+    fireEvent(dialog, busyCancel);
+    expect(busyCancel.defaultPrevented).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    await act(async () => settle({ ok: false, status: 503, error: "unknown" }));
+    forceNativeClose(dialog);
+    expect(close).not.toHaveBeenCalled(); expect(unresolved).toHaveBeenLastCalledWith(true);
+    expect(dialog.hasAttribute("open")).toBe(false);
+    expect(document.body.style.overflow).toBe("");
+    const resume = screen.getByTestId("venue-community-report-resume");
+    expect(resume.closest("dialog")).toBeNull();
+    expect(document.activeElement).toBe(resume);
+    fireEvent.click(resume);
+    expect(transport.calls).toHaveLength(1);
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(document.body.style.overflow).toBe("hidden");
+    expect((screen.getByTestId("venue-community-report-detail") as HTMLTextAreaElement).value).toBe("Точное описание");
+    expect((screen.getByTestId("venue-community-report-detail") as HTMLTextAreaElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Проверить отправку" }));
+    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls[1]).toEqual(first);
+    expect(first).toMatchObject({ path: "/v1/reports", method: "POST", csrfToken: CSRF_A,
+      body: { subjectKind, venueId: VENUE_ID, detail: "Точное описание" } });
+    await act(async () => settle({ ok: true, status: 201, data: {
+      reportId: "50000000-0000-4000-8000-000000000001", status: "submitted", createdAt: "2026-11-09T12:00:00Z" } }));
+    expect(unresolved).toHaveBeenLastCalledWith(false);
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps late success hidden until explicit resume without another report write", async () => {
+    const { VenueCommunityReportDialog } = await import("../src/components/consumer/venues/VenueCommunityReportDialog");
+    let settle!: (result: unknown) => void;
+    transport.handler = () => new Promise(resolve => { settle = resolve; });
+    render(createElement(VenueCommunityReportDialog, { subject: { subjectKind: "aggregate", venueId: VENUE_ID },
+      actorId: ACTOR_A, csrfToken: CSRF_A, authReturnPath: "/games?view=map", onClose: vi.fn() }));
+    fireEvent.click(screen.getByTestId("venue-community-report-submit"));
+    const dialog = screen.getByRole("dialog");
+    forceNativeClose(dialog);
+    await act(async () => settle({ ok: true, status: 201, data: {
+      reportId: "50000000-0000-4000-8000-000000000001", status: "submitted", createdAt: "2026-11-09T12:00:00Z" } }));
+    expect(dialog.hasAttribute("open")).toBe(false);
+    expect(document.body.style.overflow).toBe("");
+    expect(transport.calls).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("venue-community-report-resume"));
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(screen.getByTestId("venue-community-report-success")).toBeTruthy();
+    expect(transport.calls).toHaveLength(1);
+  });
+
+  it.each(["actor", "csrf", "subject", "logout", "gb-session-changed", "gb-private-expired"])("discards native-hidden report resume and ignores late success after %s", async boundary => {
+    const { VenueCommunityReportDialog } = await import("../src/components/consumer/venues/VenueCommunityReportDialog");
+    let settle!: (result: unknown) => void;
+    transport.handler = path => path === "/v1/reports" ? new Promise(resolve => { settle = resolve; })
+      : { ok: false, status: 503, error: "auth discovery unavailable" };
+    const props = { subject: { subjectKind: "own_vote" as const, venueId: VENUE_ID, expectedVersion: 9 },
+      actorId: ACTOR_A, csrfToken: CSRF_A, authReturnPath: "/games?view=map", onClose: vi.fn() };
+    const view = render(createElement(VenueCommunityReportDialog, props));
+    fireEvent.change(screen.getByTestId("venue-community-report-detail"), { target: { value: "PRIVATE REPORT" } });
+    fireEvent.click(screen.getByTestId("venue-community-report-submit"));
+    forceNativeClose(screen.getByRole("dialog"));
+    expect(screen.getByTestId("venue-community-report-resume")).toBeTruthy();
+    if (boundary.startsWith("gb-")) act(() => { window.dispatchEvent(new Event(boundary)); });
+    else view.rerender(createElement(VenueCommunityReportDialog, { ...props,
+      ...(boundary === "actor" ? { actorId: ACTOR_B } : boundary === "csrf" ? { csrfToken: CSRF_B }
+        : boundary === "logout" ? { actorId: null, csrfToken: null } : { subject: { ...props.subject, expectedVersion: 10 } }),
+    }));
+    expect(screen.queryByTestId("venue-community-report-resume")).toBeNull();
+    expect(screen.queryByDisplayValue("PRIVATE REPORT")).toBeNull();
+    await act(async () => settle({ ok: true, status: 201, data: {
+      reportId: "50000000-0000-4000-8000-000000000001", status: "submitted", createdAt: "2026-11-09T12:00:00Z" } }));
+    expect(screen.queryByTestId("venue-community-report-resume")).toBeNull();
+    expect(screen.queryByTestId("venue-community-report-success")).toBeNull();
+    expect(transport.calls.filter(call => call.path === "/v1/reports")).toHaveLength(1);
+  });
+
+  it("ORs independent rating, report and review operations; each resolution leaves the others held", async () => {
+    const { VenueCommunityContent } = await import("../src/components/consumer/venues/VenueCommunityContent");
+    const ratingApi = await import("../src/lib/venue-community-api");
+    const summary = { venueId: VENUE_ID, canonicalVenueId: VENUE_ID, state: "available" as const, average: 4.2, count: 5 };
+    const own = { venueId: VENUE_ID, canonicalVenueId: VENUE_ID, value: 4, version: 3, withdrawn: false, moderationState: "clear" as const, allowedActions: { upsert: true, update: true, withdraw: true } };
+    vi.mocked(ratingApi.fetchOwnCommunityRating).mockResolvedValue({ own, summary });
+    let reportSettle!: (result: unknown) => void;
+    let reviewAttempts = 0, voteAttempts = 0;
+    const ratingWrites: Array<{ path: string; method: string | undefined; body: string | null; csrf: string | null; key: string | null }> = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path !== `/v1/venues/${VENUE_ID}/community-rating` || init?.method !== "PUT") {
+        throw new Error(`Unexpected rating fetch ${init?.method} ${path}`);
+      }
+      const headers = new Headers(init.headers);
+      ratingWrites.push({ path, method: init.method, body: typeof init.body === "string" ? init.body : null,
+        csrf: headers.get("x-csrf-token"), key: headers.get("idempotency-key") });
+      voteAttempts += 1;
+      return new Response(JSON.stringify(voteAttempts === 1 ? { error: "unknown rating" }
+        : { own: { ...own, value: 5, version: 4 }, summary }), { status: voteAttempts === 1 ? 503 : 200 });
+    }));
+    transport.handler = (path, init) => {
+      if (path.includes("experience-reviews")) return { ok: true, status: 200, data: { items: [], publishedCount: 0 } };
+      if (path.includes("eligibility")) return { ok: true, status: 200, data: { bases: [{ gameId: "game-one", gameTitle: "Игра", admission: "may_submit", outcomeVersion: 2, attendanceVersion: 6 }] } };
+      if (path === "/v1/me/venue-reviews" && init?.method === "POST") return ++reviewAttempts === 1
+        ? { ok: false, status: 503, error: "unknown review" }
+        : { ok: true, status: 201, data: { status: "self_draft", receiptToken: "receipt" } };
+      if (path === "/v1/reports") return new Promise(resolve => { reportSettle = resolve; });
+      throw new Error(path);
+    };
+    const unresolved = vi.fn();
+    render(createElement(VenueCommunityContent, { venueId: VENUE_ID, me: me(ACTOR_A, CSRF_A), authReturnPath: "/games?view=map", onUnresolvedChange: unresolved }));
+    await waitFor(() => expect((screen.getByRole("radio", { name: "5 из 5" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("radio", { name: "5 из 5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить изменение" }));
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(ratingWrites).toHaveLength(1);
+    const firstRating = ratingWrites[0];
+    if (!firstRating) throw new Error("Missing admitted rating PUT");
+    expect(firstRating).toEqual({ path: `/v1/venues/${VENUE_ID}/community-rating`, method: "PUT",
+      body: JSON.stringify({ value: 5, expectedVersion: 3 }), csrf: CSRF_A, key: expect.any(String) });
+    expect(firstRating.key).toBeTruthy();
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByTestId("venue-community-report-aggregate"));
+    fireEvent.click(await screen.findByTestId("venue-community-report-submit"));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    await act(async () => reportSettle({ ok: false, status: 503, error: "unknown report" }));
+    const reportDialog = screen.getByRole("dialog", { name: "Пожаловаться на сводку оценок" });
+    forceNativeClose(reportDialog);
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByTestId("venue-community-report-resume"));
+    expect(transport.calls.filter(call => call.path === "/v1/reports")).toHaveLength(1);
+    expect(reportDialog.hasAttribute("open")).toBe(true);
+    fireEvent.click(within(reportDialog).getByRole("button", { name: "Проверить отправку" }));
+    await act(async () => reportSettle({ ok: true, status: 201, data: { reportId: "50000000-0000-4000-8000-000000000001", status: "submitted", createdAt: "2026-11-09T12:00:00Z" } }));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent(reportDialog, new Event("cancel", { cancelable: true }));
+    expect(screen.getByTestId("venue-community-vote-unknown")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Поделиться опытом" }));
+    await screen.findByText("Можно поделиться опытом");
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Отзыв" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await screen.findByText("Не удалось подтвердить отправку. Текст сохранён");
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    const reviewDialog = screen.getByRole("dialog", { name: "Как вам площадка?" });
+    forceNativeClose(reviewDialog);
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByTestId("venue-review-resume"));
+    expect(reviewAttempts).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
+    await screen.findByText("Сохранено только вам.");
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent(screen.getByRole("dialog", { name: "Как вам площадка?" }), new Event("cancel", { cancelable: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Повторить тот же запрос" }));
+    await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(false));
+    expect(ratingWrites).toHaveLength(2);
+    expect(ratingWrites[1]).toEqual(firstRating);
   });
 });

@@ -68,15 +68,20 @@ describe("#394 CommentsSection", () => {
       resolve(__dirname, "../src/components/consumer/venues/VenuePage.tsx"),
       "utf8",
     );
-    expect(venueSrc).toContain("VenueReviewsPanel");
-    expect(venueSrc).toContain("VenueCommunityRating");
-    expect(venueSrc).toContain("CommentsSection");
-    expect(venueSrc).toContain('kind="venue"');
-    expect(venueSrc).toContain("Обсуждение площадки");
-    expect(venueSrc).toContain('sectionId="discussion"');
-    expect(venueSrc).toMatch(/SurfacePanel/);
-    expect(venueSrc).not.toContain("Обсуждение и фотографии");
-    expect(venueSrc).not.toContain("Добавление фотографий к публикациям появится позже");
+    expect(venueSrc).toContain('<VenueCommunityContent');
+    const communitySrc = readFileSync(
+      resolve(__dirname, "../src/components/consumer/venues/VenueCommunityContent.tsx"),
+      "utf8",
+    );
+    expect(communitySrc).toContain("<VenueReviewsPanel");
+    expect(communitySrc).toContain("<VenueCommunityRating");
+    expect(communitySrc).toContain("<CommentsSection");
+    expect(communitySrc).toContain('kind="venue"');
+    expect(communitySrc).toContain("Обсуждение площадки");
+    expect(communitySrc).toContain('sectionId={id("discussion")}');
+    expect(communitySrc).toMatch(/SurfacePanel/);
+    expect(communitySrc).not.toContain("Обсуждение и фотографии");
+    expect(communitySrc).not.toContain("Добавление фотографий к публикациям появится позже");
 
     const gameHtml = renderToStaticMarkup(
       createElement(CommentsSection, {

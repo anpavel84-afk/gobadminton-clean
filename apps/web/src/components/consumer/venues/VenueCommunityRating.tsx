@@ -39,6 +39,9 @@ type Props = {
    * Default true adds the labelled link to `#ratings`.
    */
   linkToRatings?: boolean;
+  sectionId?: string;
+  onUnresolvedChange?: (unresolved: boolean) => void;
+  onReportUnresolvedChange?: (unresolved: boolean) => void;
   onSummaryChange?: (summary: CommunityRatingSummary) => void;
 };
 
@@ -82,8 +85,12 @@ export function VenueCommunityRating({
   href = null,
   linkToRatings = true,
   onSummaryChange,
+  sectionId = "ratings",
+  onUnresolvedChange,
+  onReportUnresolvedChange,
 }: Props) {
   const headingId = useId();
+  const ratingReturnPath = `${authReturnPath.split("#")[0]}#ratings`;
   const [summary, setSummary] = useState<CommunityRatingSummary | null>(summaryProp ?? null);
   const [own, setOwn] = useState<CommunityOwnVote | null>(null);
   /** Own GET readiness — failure must not become an empty writeable vote. */
@@ -103,6 +110,7 @@ export function VenueCommunityRating({
   const [reportSubject, setReportSubject] = useState<VenueCommunityReportSubject | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const compactOnly = variant === "compact";
+  useEffect(() => { onUnresolvedChange?.(saveState === "pending" || saveState === "unknown"); }, [saveState, onUnresolvedChange]);
   const parentOwnsSummary = summaryLoadState !== undefined;
   const onSummaryChangeRef = useRef(onSummaryChange);
   onSummaryChangeRef.current = onSummaryChange;
@@ -476,7 +484,7 @@ export function VenueCommunityRating({
     || !writeAllowed;
 
   return (
-    <section className="gb-venue-community__panel" id="ratings" aria-labelledby={headingId}>
+    <section className="gb-venue-community__panel" id={sectionId} aria-labelledby={headingId}>
       <div className="gb-venue-community__heading">
         <div>
           <h2 id={headingId}>Оценки сообщества</h2>
@@ -578,7 +586,10 @@ export function VenueCommunityRating({
                       : event.key === "End"
                         ? 5
                         : Math.max(1, Math.min(5, selected + (event.key === "ArrowRight" ? 1 : -1) || n));
+                    userPickedRef.current = true;
                     setSelected(next || n);
+                    setSaveState("idle"); setStatus("");
+                    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next - 1]?.focus();
                   }}
                 >
                   {n <= selected ? "★" : "☆"}
@@ -658,7 +669,7 @@ export function VenueCommunityRating({
         ) : (
           <div className="gb-venue-community__guest">
             <p>Войдите, чтобы поставить свою оценку.</p>
-            <Button href={`/auth?returnTo=${encodeURIComponent(`${authReturnPath}#ratings`)}`}>
+            <Button href={`/auth?returnTo=${encodeURIComponent(ratingReturnPath)}`}>
               Войти и оценить
             </Button>
           </div>
@@ -666,16 +677,17 @@ export function VenueCommunityRating({
       ) : null}
       {reportSubject ? (
         <VenueCommunityReportDialog
+          onUnresolvedChange={onReportUnresolvedChange}
           subject={reportSubject}
           actorId={actorId}
           csrfToken={csrfToken}
-          authReturnPath={`${authReturnPath}#ratings`}
+          authReturnPath={ratingReturnPath}
           onClose={() => setReportSubject(null)}
         />
       ) : null}
       {authOpen ? (
         <AuthChooser
-          returnPath={`${authReturnPath}#ratings`}
+          returnPath={ratingReturnPath}
           onClose={() => setAuthOpen(false)}
         />
       ) : null}

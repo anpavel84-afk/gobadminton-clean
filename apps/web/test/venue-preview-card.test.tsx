@@ -17,6 +17,9 @@ vi.mock("react", async importOriginal => {
     typeof initial === "function" ? (initial as () => T)() : initial;
   return {
     ...ReactActual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : ReactActual.useContext(context);
+    },
     useId: () => (hooks.active ? "venue-title" : ReactActual.useId()),
     useState<T>(initial: T | (() => T)) {
       if (!hooks.active) return ReactActual.useState(initial);

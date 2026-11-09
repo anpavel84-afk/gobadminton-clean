@@ -2,33 +2,54 @@ import { Children, isValidElement } from "react";
 import type * as React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VenueSummary } from "../src/lib/consumer-types";
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
+const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, active: false,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useId: () => "venue-title",
-  useState<T>(initial: T) {
-    const index = hooks.cursor++; const slots = hooks.slots;
-    if (!(index in slots)) slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
-    return [slots[index], (next: T | ((old: T) => T)) => {
-      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-}));
+
+function manual<T>(render: () => T): T {
+  const previous = hooks.active; hooks.active = true;
+  try { return render(); } finally { hooks.active = previous; }
+}
+vi.mock("react", async importOriginal => {
+  const actual = await importOriginal<typeof React>();
+  return {
+    ...actual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList) {
+      if (!hooks.active) return actual.useCallback(fn, deps);
+      const i = hooks.cursor++;
+      const previous = hooks.slots[i] as { deps: React.DependencyList; fn: T } | undefined;
+      if (!previous || deps.some((value, n) => !Object.is(value, previous.deps[n]))) hooks.slots[i] = { deps, fn };
+      return (hooks.slots[i] as { fn: T }).fn;
+    },
+    useId: () => hooks.active ? "venue-title" : actual.useId(),
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return actual.useState(initial);
+      const index = hooks.cursor++; const slots = hooks.slots;
+      if (!(index in slots)) slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      return [slots[index], (next: T | ((old: T) => T)) => {
+        slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) { if (!hooks.active) return actual.useRef(initial); const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return actual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return actual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+  };
+});
 
 import { CreateGamePage, CreateGamePresentation } from "../src/components/consumer/pages/CreateGamePage";
 import { GameLevelRange } from "../src/components/consumer/games/GameLevelRange";
@@ -48,19 +69,19 @@ function elements(node: React.ReactNode): React.ReactElement<Record<string, unkn
 }
 let pageProps: React.ComponentProps<typeof CreateGamePage> = {};
 function render() {
-  hooks.cursor = 0; const page = CreateGamePage(pageProps);
-  const tree = CreateGamePresentation(page.props as React.ComponentProps<typeof CreateGamePresentation>);
+  hooks.cursor = 0; const page = manual(() => CreateGamePage(pageProps));
+  const tree = manual(() => CreateGamePresentation(page.props as React.ComponentProps<typeof CreateGamePresentation>));
   hooks.effects.splice(0).forEach(effect => effect()); return tree;
 }
 function fromCta() {
   // Separate component instance: do not mix sheet and form hook slots.
   const sheetProps = { venue, games: [], gamesReady: true, now: 0, active: false, embedded: true, onCollapse() {}, onDeselect() {} };
-  const tree = VenueSheet(sheetProps);
+  const tree = manual(() => VenueSheet(sheetProps));
   const cta = elements(tree).find(node => node.type === "button" && Children.toArray(node.props.children as React.ReactNode).includes("Создать игру на этой площадке"));
   if (!cta) throw new Error("Missing create CTA");
   expect(cta.props.href).toBeUndefined(); (cta.props.onClick as () => void)();
   hooks.cursor = 0;
-  const create = elements(VenueSheet(sheetProps)).find(node => node.type === CreateGamePage);
+  const create = elements(manual(() => VenueSheet(sheetProps))).find(node => node.type === CreateGamePage);
   if (!create) throw new Error("Missing embedded create");
   pageProps = create.props as React.ComponentProps<typeof CreateGamePage>;
   const route = new URL(venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString()), "https://dev.gobadminton.ru");
@@ -72,7 +93,7 @@ function fromCta() {
 beforeEach(() => {
   pageProps = {}; mode = "ready"; catalog = [venue]; finishCatalog = undefined; requests.length = 0;
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "" }, sessionStorage: { getItem: () => null, removeItem() {} } }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://dev.gobadminton.ru", pathname: "/games", hash: "", search: "", href: "https://dev.gobadminton.ru/games" }, sessionStorage: { getItem: () => null, removeItem() {} } }));
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     requests.push({ url, method: init?.method ?? "GET" });
     let status = 200; let body: unknown;
@@ -134,9 +155,9 @@ it("wires GameLevelRange into create form and payload preview", async () => {
   expect(level?.props.value).toBe("3.0, 3.5");
   (level!.props.onChange as (next: string) => void)("4.0, 4.5, 5.0");
   hooks.cursor = 0;
-  const page = CreateGamePage(pageProps);
+  const page = manual(() => CreateGamePage(pageProps));
   expect(page.props.previewPayload?.levelRule.allowedLevelIds).toEqual(["4.0", "4.5", "5.0"]);
-  const tree = CreateGamePresentation(page.props as React.ComponentProps<typeof CreateGamePresentation>);
+  const tree = manual(() => CreateGamePresentation(page.props as React.ComponentProps<typeof CreateGamePresentation>));
   const again = elements(tree).find((node) => node.type === GameLevelRange);
   expect(again?.props.value).toBe("4.0, 4.5, 5.0");
 });

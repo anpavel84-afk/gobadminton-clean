@@ -6,34 +6,54 @@ import type { Game, VenueSummary } from "../src/lib/consumer-types";
 import { capacityStatusLabel } from "../src/lib/game-presentation";
 import { discoveryGameWhen } from "../src/lib/discovery-presentation";
 
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
+const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, active: false,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useId: () => "desktop-game-desc",
-  useState<T>(initial: T) {
-    const index = hooks.cursor++; const slots = hooks.slots;
-    if (!(index in slots)) slots[index] = initial;
-    return [slots[index], (next: T | ((old: T) => T)) => {
-      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-  useCallback(fn: unknown) { return fn; },
-}));
+
+function manual<T>(render: () => T): T {
+  const previous = hooks.active; hooks.active = true;
+  try { return render(); } finally { hooks.active = previous; }
+}
+vi.mock("react", async importOriginal => {
+  const actual = await importOriginal<typeof React>();
+  return {
+    ...actual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList) {
+      if (!hooks.active) return actual.useCallback(fn, deps);
+      const i = hooks.cursor++;
+      const previous = hooks.slots[i] as { deps: React.DependencyList; fn: T } | undefined;
+      if (!previous || deps.some((value, n) => !Object.is(value, previous.deps[n]))) hooks.slots[i] = { deps, fn };
+      return (hooks.slots[i] as { fn: T }).fn;
+    },
+    useId: () => hooks.active ? "desktop-game-desc" : actual.useId(),
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return actual.useState(initial);
+      const index = hooks.cursor++; const slots = hooks.slots;
+      if (!(index in slots)) slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      return [slots[index], (next: T | ((old: T) => T)) => {
+        slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) { if (!hooks.active) return actual.useRef(initial); const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return actual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return actual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+  };
+});
 
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 
@@ -91,7 +111,7 @@ it("renders compact desktop composition without GameHero classes or fabricated e
   const game = fixture();
   const when = discoveryGameWhen(game);
   hooks.cursor = 0;
-  const tree = DesktopInspectorGame({ game, onVenueClick: () => {} });
+  const tree = manual(() => DesktopInspectorGame({ game, onVenueClick: () => {} }));
   const html = renderToStaticMarkup(tree);
   expect(html).toContain('data-view="game"');
   expect(html).toContain("gb-desktop-inspector-game");
@@ -127,7 +147,7 @@ it("shows real trainer disclosure and rent note only for trainer_led with traine
     settlement: { mode: "external", purpose: "trainer_fee", priceMinor: null, currency: null, terms: "Оплата на месте", priceStatus: "by_agreement" },
   });
   hooks.cursor = 0;
-  const trainerHtml = renderToStaticMarkup(DesktopInspectorGame({ game: trainerGame }));
+  const trainerHtml = renderToStaticMarkup(manual(() => DesktopInspectorGame({ game: trainerGame })));
   expect(trainerHtml).toContain("Ирина Т.");
   expect(trainerHtml).toContain("gb-desktop-inspector-game__trainer");
   expect(trainerHtml).toContain(">Тренер<");
@@ -143,7 +163,7 @@ it("shows real trainer disclosure and rent note only for trainer_led with traine
   expect(trainerHtml).toContain("gb-desktop-inspector-game__rental-note");
   expect(trainerHtml).toContain("Условия аренды площадки уточняйте у организатора.");
 
-  const regularHtml = renderToStaticMarkup(DesktopInspectorGame({ game: fixture() }));
+  const regularHtml = renderToStaticMarkup(manual(() => DesktopInspectorGame({ game: fixture() })));
   expect(regularHtml).not.toContain("Самостоятельно указано");
   expect(regularHtml).not.toContain("gb-desktop-inspector-game__trainer");
   expect(regularHtml).not.toContain("gb-desktop-inspector-game__rental-note");
@@ -156,7 +176,7 @@ it("expands a real long description via Подробнее without inventing cop
   const description = "A".repeat(200);
   const game = fixture({ activityKind: "trainer_led", trainingDescription: description, trainer: { profileId: "t", displayName: "Тренер", declarationSource: "self_declared" } });
   hooks.cursor = 0;
-  let tree = DesktopInspectorGame({ game });
+  let tree = manual(() => DesktopInspectorGame({ game }));
   let html = renderToStaticMarkup(tree);
   expect(html).toContain("Подробнее");
   expect(html).toContain("С тренером");
@@ -165,7 +185,7 @@ it("expands a real long description via Подробнее without inventing cop
   expect(more).toBeDefined();
   (more!.props.onClick as () => void)();
   hooks.cursor = 0;
-  tree = DesktopInspectorGame({ game });
+  tree = manual(() => DesktopInspectorGame({ game }));
   html = renderToStaticMarkup(tree);
   expect(html).toContain(description);
   expect(html).toContain("Свернуть");
@@ -185,31 +205,31 @@ it("VenueSheet uses DesktopInspectorGame on desktop and keeps GameHero on mobile
 
   stubWindow(true);
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
-  VenueSheet(props);
+  manual(() => VenueSheet(props));
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
-  let tree = VenueSheet(props);
+  let tree = manual(() => VenueSheet(props));
   click(tree, "Показать игры");
   hooks.cursor = 0;
-  tree = VenueSheet(props);
+  tree = manual(() => VenueSheet(props));
   click(tree, "Demo Beginner Mix");
   hooks.cursor = 0;
-  tree = VenueSheet(props);
+  tree = manual(() => VenueSheet(props));
   expect(elements(tree).some(node => node.type === DesktopInspectorGame)).toBe(true);
   expect(elements(tree).some(node => node.type === GameHero)).toBe(false);
 
   stubWindow(false);
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
-  VenueSheet(props);
+  manual(() => VenueSheet(props));
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
-  tree = VenueSheet(props);
+  tree = manual(() => VenueSheet(props));
   click(tree, "Показать игры");
   hooks.cursor = 0;
-  tree = VenueSheet(props);
+  tree = manual(() => VenueSheet(props));
   click(tree, "Demo Beginner Mix");
   hooks.cursor = 0;
-  tree = VenueSheet(props);
+  tree = manual(() => VenueSheet(props));
   expect(elements(tree).some(node => node.type === GameHero)).toBe(true);
   expect(elements(tree).some(node => node.type === GameTerms)).toBe(true);
   expect(elements(tree).some(node => node.type === DesktopInspectorGame)).toBe(false);

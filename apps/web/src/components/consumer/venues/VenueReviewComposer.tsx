@@ -47,12 +47,16 @@ function helpCopy(basis: OwnVenueEligibilityBasis | undefined): string | null {
 export function VenueReviewComposer({
   venueId,
   csrfToken,
+  actorId,
+  onUnresolvedChange,
   preferredGameId,
   onClose,
   onSubmitted,
 }: {
   venueId: string;
   csrfToken: string;
+  actorId: string | null;
+  onUnresolvedChange?: (value: boolean) => void;
   preferredGameId?: string;
   onClose: () => void;
   onSubmitted?: () => void;
@@ -68,160 +72,199 @@ export function VenueReviewComposer({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
-  const [unknownKey, setUnknownKey] = useState<string | null>(null);
-  const [csrf, setCsrf] = useState(csrfToken);
+  const [nativeHidden, setNativeHidden] = useState(false);
+  const [reopenSignal, setReopenSignal] = useState(0);
+  type Packet = {
+    body: Parameters<typeof createVenueReview>[0]; key: string;
+    actorId: string; csrf: string; generation: number;
+  };
+  const [packet, setPacket] = useState<Packet | null>(null);
+  const packetRef = useRef<Packet | null>(null);
   const epoch = useRef(0);
   const mounted = useRef(true);
+  const sendLock = useRef(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const previewSequence = useRef(0);
+  const context = useRef({ venueId, actorId, csrfToken, preferredGameId, revoked: false });
+  // Fence before effects: a late response must never settle a different actor or venue.
+  if (context.current.venueId !== venueId || context.current.actorId !== actorId
+    || context.current.csrfToken !== csrfToken || context.current.preferredGameId !== preferredGameId) {
+    context.current = { venueId, actorId, csrfToken, preferredGameId, revoked: false };
+    epoch.current += 1;
+    previewSequence.current += 1;
+    packetRef.current = null;
+    sendLock.current = false;
+    setPacket(null); setBusy(false); setPreviewBusy(false);
+    setNativeHidden(false);
+    setConsent(false); setPreviewHash(null); setReceipt(null); setNotice(null);
+    setText(""); setAudience("self_draft"); setBases([]); setState("loading");
+  }
+  const draftKey = JSON.stringify([text, topic, gameId, audience]);
+  const draft = useRef(draftKey);
+  if (draft.current !== draftKey) {
+    draft.current = draftKey;
+    previewSequence.current += 1;
+    setConsent(false); setPreviewHash(null); setPreviewBusy(false);
+  }
+  const csrf = context.current.revoked ? "" : csrfToken;
+  const unknownKey = packet?.key ?? null;
+  const locked = busy || Boolean(packet);
+  useEffect(() => {
+    onUnresolvedChange?.(Boolean(busy || packet));
+  }, [busy, packet, onUnresolvedChange]);
+  useEffect(() => () => onUnresolvedChange?.(false), [onUnresolvedChange]);
 
   useEffect(() => {
     mounted.current = true;
     const request = ++epoch.current;
-    setState("loading");
-    setNotice(null);
-    void getOwnVenueReviewEligibility(venueId).then((result) => {
-      if (!mounted.current || request !== epoch.current) return;
+    setState(context.current.revoked ? "auth" : "loading");
+    if (!context.current.revoked) void getOwnVenueReviewEligibility(venueId).then((result) => {
+      if (!mounted.current || request !== epoch.current || context.current.revoked) return;
       if (!result.ok) {
         setState(result.status === 401 ? "auth" : "error");
         return;
       }
       setBases(result.data.bases);
       const eligible = result.data.bases.filter((b) => b.admission === "may_submit");
-      const preferred =
-        preferredGameId && eligible.some((b) => b.gameId === preferredGameId)
-          ? preferredGameId
-          : eligible[0]?.gameId ?? "";
-      setGameId(preferred);
+      setGameId(preferredGameId && eligible.some((b) => b.gameId === preferredGameId)
+        ? preferredGameId : eligible[0]?.gameId ?? "");
       setState("ready");
     });
+    return () => { mounted.current = false; epoch.current += 1; };
+  }, [venueId, preferredGameId, actorId, csrfToken]);
+
+  useEffect(() => {
+    const fence = () => {
+      context.current.revoked = true;
+      epoch.current += 1; previewSequence.current += 1;
+      packetRef.current = null; sendLock.current = false;
+      setPacket(null); setBusy(false); setPreviewBusy(false);
+      setNativeHidden(false);
+      setConsent(false); setPreviewHash(null); setReceipt(null); setText("");
+      setAudience("self_draft"); setState("auth");
+      setNotice("Сессия изменилась. Повтор прежней отправки недоступен; её результат не подтверждён.");
+    };
+    window.addEventListener("gb-private-expired", fence);
+    window.addEventListener("gb-session-changed", fence);
     return () => {
-      mounted.current = false;
-      epoch.current += 1;
+      window.removeEventListener("gb-private-expired", fence);
+      window.removeEventListener("gb-session-changed", fence);
     };
-  }, [venueId, preferredGameId]);
-
-  useEffect(() => {
-    setCsrf(csrfToken);
-  }, [csrfToken]);
-
-  useEffect(() => {
-    setConsent(false);
-    setPreviewHash(null);
-  }, [text, topic, gameId, audience, venueId, csrf]);
-
-  useEffect(() => {
-    const onExpire = () => {
-      epoch.current += 1;
-      setCsrf("");
-      setConsent(false);
-      setAudience("self_draft");
-      setState("auth");
-      setNotice("Сессия истекла. Согласие сброшено.");
-    };
-    window.addEventListener("gb-private-expired", onExpire);
-    return () => window.removeEventListener("gb-private-expired", onExpire);
   }, []);
 
   const selected = bases.find((b) => b.gameId === gameId);
   const help = helpCopy(selected);
-  const canSubmit =
-    Boolean(gameId) &&
-    selected?.admission === "may_submit" &&
-    text.trim().length >= 1 &&
-    text.trim().length <= 500 &&
-    (audience === "self_draft" || (consent && previewHash));
+  const canSubmit = Boolean(gameId) && selected?.admission === "may_submit"
+    && text.trim().length >= 1 && text.trim().length <= 500
+    && (audience === "self_draft" || (consent && previewHash));
+  function current(generation: number) {
+    return mounted.current && !context.current.revoked && generation === epoch.current;
+  }
 
   async function ensurePreview(): Promise<string | null> {
-    if (audience !== "public_venue" || !csrf) return null;
-    const topics = topic ? [topic] : [];
-    const result = await previewVenueReviewConsent(
-      { venueId, text: text.trim(), topics },
-      csrf,
-    );
-    if (!result.ok) {
-      setNotice(result.error || "Не удалось подготовить публичный просмотр.");
+    if (audience !== "public_venue" || !csrf || locked) return null;
+    const generation = epoch.current;
+    const revision = ++previewSequence.current;
+    const admittedDraft = draft.current;
+    setPreviewBusy(true);
+    try {
+      const result = await previewVenueReviewConsent({ venueId, text: text.trim(), topics: topic ? [topic] : [] }, csrf);
+      if (!current(generation) || revision !== previewSequence.current || draft.current !== admittedDraft) return null;
+      if (!result.ok) {
+        setNotice(result.error || "Не удалось подготовить публичный просмотр.");
+        return null;
+      }
+      setPreviewHash(result.data.consentProjectionHash);
+      setConsent(true);
+      return result.data.consentProjectionHash;
+    } catch {
+      if (current(generation) && revision === previewSequence.current) setNotice("Не удалось подготовить публичный просмотр.");
       return null;
+    } finally {
+      if (current(generation) && revision === previewSequence.current) setPreviewBusy(false);
     }
-    setPreviewHash(result.data.consentProjectionHash);
-    return result.data.consentProjectionHash;
   }
 
   async function onSubmit() {
-    if (!canSubmit || !selected || !csrf) return;
-    setBusy(true);
-    setNotice(null);
-    const key = unknownKey ?? crypto.randomUUID().replace(/-/g, "");
-    setUnknownKey(key);
-    try {
-      let hash = previewHash;
-      if (audience === "public_venue") {
-        hash = hash ?? (await ensurePreview());
-        if (!hash || !consent) {
-          setBusy(false);
-          return;
-        }
-      }
-      const topics = topic ? ([topic] as VenueTopic[]) : [];
-      const result = await createVenueReview(
-        {
-          venueId,
-          gameId,
-          audience,
-          expectedBasisVersions: {
-            outcomeVersion: selected.outcomeVersion,
-            attendanceVersion: selected.attendanceVersion,
-          },
-          text: text.trim(),
-          topics,
-          ...(audience === "public_venue" ? { consentProjectionHash: hash! } : {}),
+    if (sendLock.current || !csrf || !actorId || context.current.revoked) return;
+    let admitted = packetRef.current;
+    if (!admitted) {
+      if (!canSubmit || !selected || previewBusy) return;
+      admitted = {
+        key: crypto.randomUUID().replace(/-/g, ""), actorId, csrf, generation: epoch.current,
+        body: {
+          venueId, gameId, audience,
+          expectedBasisVersions: { outcomeVersion: selected.outcomeVersion, attendanceVersion: selected.attendanceVersion },
+          text: text.trim(), topics: topic ? [topic] : [],
+          ...(audience === "public_venue" && previewHash ? { consentProjectionHash: previewHash } : {}),
         },
-        csrf,
-        key,
-      );
-      if (!mounted.current) return;
+      };
+      packetRef.current = admitted;
+      setPacket(admitted);
+    }
+    if (!current(admitted.generation) || admitted.actorId !== actorId || admitted.csrf !== csrf || admitted.body.venueId !== venueId) return;
+    const pending = admitted;
+    sendLock.current = true;
+    setBusy(true); setNotice(null);
+    const matches = () => current(pending.generation) && packetRef.current === pending;
+    try {
+      // Exact in-memory packet only; retry never reads mutable controls or fresh credentials.
+      const result = await createVenueReview(pending.body, pending.csrf, pending.key);
+      if (!matches()) return;
       if (!result.ok) {
-        const moderationNotice = publicTextModerationNotice(result);
-        if (moderationNotice) {
-          setNotice(moderationNotice);
-          if (result.problem?.code === "PUBLIC_TEXT_CONTENT_REJECTED") {
-            setUnknownKey(null);
-          }
-          setBusy(false);
+        if (result.status === 0 || result.status >= 500) {
+          setNotice(publicTextModerationNotice(result) || "Не удалось подтвердить отправку. Текст сохранён");
           return;
         }
-        if (result.status === 0 || result.status >= 500) {
-          setNotice("Не удалось подтвердить отправку. Текст сохранён");
-        } else if (result.status === 409) {
-          setNotice(
-            "Версия изменилась. Перечитайте данные и отправьте снова тем же ключом после сверки.",
-          );
-        } else {
-          setNotice(result.error || "Отправка недоступна для выбранной игры.");
-          setUnknownKey(null);
+        packetRef.current = null; setPacket(null);
+        setNotice(publicTextModerationNotice(result) || (result.status === 409
+          ? "Версия изменилась. Закройте окно и перечитайте данные перед новой отправкой."
+          : result.error || "Отправка недоступна для выбранной игры."));
+        if (result.status === 409) setState("error");
+        if (result.status === 401 || result.status === 403) {
+          context.current.revoked = true;
+          setNativeHidden(false); setText(""); setReceipt(null);
+          setConsent(false); setPreviewHash(null); setState("auth");
         }
-        setBusy(false);
         return;
       }
+      packetRef.current = null; setPacket(null);
       setReceipt(result.data.receiptToken);
-      setUnknownKey(null);
-      setNotice(
-        result.data.status === "self_draft"
-          ? "Сохранено только вам."
-          : "Отправлен; ещё не опубликован. Публикация — после независимой проверки и паузы 48 часов.",
-      );
+      setNotice(result.data.status === "self_draft" ? "Сохранено только вам."
+        : "Отправлен; ещё не опубликован. Публикация — после независимой проверки и паузы 48 часов.");
       onSubmitted?.();
     } catch {
-      setNotice("Не удалось подтвердить отправку. Текст сохранён");
+      if (matches()) setNotice("Не удалось подтвердить отправку. Текст сохранён");
     } finally {
-      if (mounted.current) setBusy(false);
+      if (mounted.current && pending.generation === epoch.current) { sendLock.current = false; setBusy(false); }
     }
+  }
+  function requestClose() {
+    if (sendLock.current || packetRef.current) {
+      setNotice("Проверьте результат отправки перед закрытием окна.");
+      return;
+    }
+    onClose();
   }
 
   return (
+    <>
+    {nativeHidden && !context.current.revoked ? <Button
+      data-testid="venue-review-resume"
+      autoFocus
+      style={{ minHeight: 44, minWidth: 44 }}
+      onClick={() => { setNativeHidden(false); setReopenSignal(value => value + 1); }}
+    >Проверить отправку</Button> : null}
     <ProfileDialog
       title="Как вам площадка?"
-      onClose={onClose}
+      onClose={requestClose}
       className="profile-dialog--postgame"
       lockBodyScroll
+      onNativeClose={() => {
+        if (sendLock.current || packetRef.current) setNativeHidden(true);
+        else onClose();
+      }}
+      reopenSignal={reopenSignal}
       describedBy="gb-venue-review-composer-hint"
     >
       <div className="gb-venue-reviews gb-venue-reviews__composer-body">
@@ -231,6 +274,8 @@ export function VenueReviewComposer({
         {state === "loading" ? <p role="status">Загружаем доступные игры…</p> : null}
         {state === "auth" ? <p role="status">Войдите, чтобы поделиться опытом.</p> : null}
         {state === "error" ? <p role="alert">Не удалось проверить допуск.</p> : null}
+        {previewBusy ? <p role="status">Подготавливаем публичный просмотр…</p> : null}
+        {state !== "ready" && notice ? <p role="status">{notice}</p> : null}
         {state === "ready" ? (
           <>
             <span
@@ -254,7 +299,7 @@ export function VenueReviewComposer({
                 id="venue-review-game"
                 value={gameId}
                 onChange={(e) => setGameId(e.target.value)}
-                disabled={busy}
+                disabled={locked}
               >
                 <option value="">Выберите игру</option>
                 {bases.map((b) => (
@@ -290,7 +335,7 @@ export function VenueReviewComposer({
                 id="venue-review-topic"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value as VenueTopic | "")}
-                disabled={busy}
+                disabled={locked}
               >
                 {TOPICS.map((t) => (
                   <option key={t.value} value={t.value}>
@@ -306,7 +351,7 @@ export function VenueReviewComposer({
                 value={text}
                 maxLength={500}
                 onChange={(e) => setText(e.target.value)}
-                disabled={busy}
+                disabled={locked}
               />
               <p className="gb-venue-reviews__count">{text.trim().length} / 500</p>
               <p className="gb-venue-reviews__hint">
@@ -320,7 +365,7 @@ export function VenueReviewComposer({
                   name="venue-audience"
                   checked={audience === "self_draft"}
                   onChange={() => setAudience("self_draft")}
-                  disabled={busy}
+                  disabled={locked}
                 />
                 <span>Оставить только себе</span>
               </label>
@@ -330,7 +375,7 @@ export function VenueReviewComposer({
                   name="venue-audience"
                   checked={audience === "public_venue"}
                   onChange={() => setAudience("public_venue")}
-                  disabled={busy}
+                  disabled={locked}
                 />
                 <span>Всем на странице площадки</span>
               </label>
@@ -344,13 +389,11 @@ export function VenueReviewComposer({
                   <input
                     type="checkbox"
                     checked={consent}
-                    disabled={busy || !text.trim()}
+                    disabled={locked || previewBusy || !text.trim()}
                     onChange={(e) => {
                       const next = e.target.checked;
                       if (next) {
-                        void ensurePreview().then((hash) => {
-                          if (hash) setConsent(true);
-                        });
+                        void ensurePreview();
                         return;
                       }
                       setConsent(false);
@@ -368,14 +411,14 @@ export function VenueReviewComposer({
             ) : null}
             <div className="gb-venue-reviews__actions">
               <Button
-                disabled={busy || (!canSubmit && !unknownKey) || !csrf}
+                disabled={busy || previewBusy || (!canSubmit && !unknownKey) || !csrf || !actorId}
                 onClick={() => {
                   void onSubmit();
                 }}
               >
                 {unknownKey ? "Проверить отправку" : "Сохранить"}
               </Button>
-              <Button variant="ghost" disabled={busy} onClick={onClose}>
+              <Button variant="ghost" disabled={locked} onClick={requestClose}>
                 Закрыть
               </Button>
             </div>
@@ -383,5 +426,6 @@ export function VenueReviewComposer({
         ) : null}
       </div>
     </ProfileDialog>
+    </>
   );
 }

@@ -3,7 +3,7 @@ import { CloseButton } from "../CloseButton";
 import { DesktopOverlayHeader } from "../DesktopOverlayHeader";
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
-import type { Game, VenueSummary } from "../../../lib/consumer-types";
+import type { Game, VenueSummary, Me } from "../../../lib/consumer-types";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
 import { CreateGamePage } from "../pages/CreateGamePage";
@@ -14,8 +14,10 @@ import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import { DesktopInspectorGame } from "./DesktopInspectorGame";
 import { VenueGameActions } from "./VenueGameActions";
-import { useVenuePopupModalLifecycle } from "./VenuePopup";
+import { useVenuePopupModalLifecycle, useVenuePopupContentVisible } from "./VenuePopup";
 import { useDesktopMapInspector } from "./DesktopMapInspector";
+import { VenueCommunityContent, type VenueCommunitySection } from "../venues/VenueCommunityContent";
+import { Button } from "../Button";
 import { VenueCommunityRating } from "../venues/VenueCommunityRating";
 import type { CommunityRatingSummary } from "../../../lib/venue-community-api";
 import "../../../styles/venue-popup.css";
@@ -47,7 +49,10 @@ export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; time
   </button>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true, communitySection = null, onCommunitySectionChange, me = null, authReturnPath, onUnresolvedChange }: {
+  communitySection?: VenueCommunitySection | null;
+  onCommunitySectionChange?: (section: VenueCommunitySection | null) => void;
+  me?: Me | null; authReturnPath?: string; onUnresolvedChange?: (value: boolean) => void;
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
@@ -63,6 +68,9 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   showCommunityRating?: boolean;
 }) {
   const desktop = useDesktopMapInspector();
+  const contentVisible = useVenuePopupContentVisible();
+  const communityOpened = useRef(false);
+  if (communitySection) communityOpened.current = true;
   const [view, setView] = useState<"info" | "schedule" | "game" | "create">("info");
   const [selectedDate, setSelectedDate] = useState("");
   const [gameId, setGameId] = useState<string | null>(null);
@@ -87,6 +95,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   useVenuePopupModalLifecycle({
     active, embedded, panelRef: panel, initialFocusRef: close,
     onEscape: () => {
+      if (communitySection) { onCommunitySectionChange?.(null); return; }
       if (desktop && currentView === "create") { setView("info"); return; }
       if (desktop && (currentView === "game" || currentView === "schedule")) {
         if (currentView === "game") backFromGame();
@@ -99,7 +108,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     lockBody: !desktop,
   });
   const openCreate = () => setView("create");
-  const desktopBack = currentView !== "info" ? {
+  const desktopBack = communitySection ? { label: "К площадке", ariaLabel: "К площадке", onClick: () => onCommunitySectionChange?.(null) } : currentView !== "info" ? {
     label: currentView === "game" ? "К площадке" : "К площадке",
     ariaLabel: currentView === "game" ? "К площадке" : "К информации о площадке",
     onClick: () => currentView === "game" ? backFromGame() : setView("info"),
@@ -110,7 +119,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       ? <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>
       : null;
   const infoBody = <div className="gb-venue-sheet-info">
-    <VenueGallery
+    {contentVisible && <VenueGallery
       venue={venue}
       className="gb-venue-sheet-cover"
       coverSlot={coverSlot}
@@ -120,7 +129,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       showCredit
       index={galleryIndex}
       onIndexChange={onGalleryIndexChange}
-    />
+    />}
     {venue.profile?.description ? <p className="gb-venue-sheet-description">{venue.profile.description}</p> : null}
     <h3>{venue.name}</h3><p>{venue.address}</p>
     {showCommunityRating ? (
@@ -133,9 +142,14 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         href={`/venues/${encodeURIComponent(venue.id)}#ratings`}
         summary={communitySummary}
         summaryLoadState={communitySummaryState}
-        linkToRatings
+        linkToRatings={false}
       />
     ) : null}
+    {onCommunitySectionChange && <nav className="gb-venue-community-actions" data-community-actions aria-label="Сообщество площадки">
+      <Button variant="outline" onClick={() => onCommunitySectionChange("ratings")}>Оценить</Button>
+      <Button variant="outline" onClick={() => onCommunitySectionChange("discussion")}>Обсуждение</Button>
+      <Button variant="ghost" onClick={() => onCommunitySectionChange("reviews")}>Отзывы после игры</Button>
+    </nav>}
     <VenuePublicContacts value={venue.publicContacts} />
     {!gamesReady && <p role="status">Расписание временно недоступно</p>}
     {gamesReady && games.length === 0 && (desktop
@@ -162,11 +176,11 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   </div>;
   return <>
     {!embedded && !desktop && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={panel} className="gb-venue-sheet" data-view={currentView} data-desktop={desktop ? "true" : undefined} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded && !desktop ? "true" : undefined} aria-labelledby={label}>
+    <div ref={panel} className="gb-venue-sheet" data-view={communitySection ? "community" : currentView} data-desktop={desktop ? "true" : undefined} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded && !desktop ? "true" : undefined} aria-labelledby={label}>
       {!embedded && !desktop && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
       {desktop ? (
         <DesktopOverlayHeader
-          title={venue.name}
+          title={communitySection ? "Сообщество" : venue.name}
           titleId={label}
           kicker={currentView === "info" ? "Площадка" : undefined}
           back={desktopBack}
@@ -175,16 +189,26 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         />
       ) : (
         <header className="gb-venue-sheet-header">
-          {currentView !== "info" && <button type="button" className="gb-venue-sheet-back" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => currentView === "game" ? backFromGame() : setView("info")}>
+          {(communitySection || currentView !== "info") && <button type="button" className="gb-venue-sheet-back" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => communitySection ? onCommunitySectionChange?.(null) : currentView === "game" ? backFromGame() : setView("info")}>
             <span aria-hidden="true">←</span>
           </button>}
           <div className="gb-venue-sheet-heading">
-            <h2 id={label}>{venue.name}</h2>
-            {currentView !== "info" && <p className="gb-venue-sheet-header-address">{venue.address}</p>}
+            <h2 id={label}>{communitySection ? "К площадке" : venue.name}</h2>
+            {!communitySection && currentView !== "info" && <p className="gb-venue-sheet-header-address">{venue.address}</p>}
           </div>
           <CloseButton ref={close} className="gb-venue-sheet-close" onClick={onCloseClick} />
         </header>
       )}
+      <div className="gb-venue-sheet-community-body" hidden={!communitySection} inert={!communitySection}>
+        {communityOpened.current && <>
+          <div className="gb-venue-community-identity"><h3>{venue.name}</h3><p>{venue.address}</p></div>
+          <nav className="gb-venue-community-actions" aria-label="Разделы сообщества">
+            {(["ratings", "discussion", "reviews"] as const).map((value, index) => <Button key={value} variant="ghost" onClick={() => onCommunitySectionChange?.(value)}>{["Оценки", "Обсуждение", "После игры"][index]}</Button>)}
+          </nav>
+          <VenueCommunityContent venueId={venue.id} me={me} embedded section={communitySection} authReturnPath={authReturnPath ?? `/venues/${venue.id}`} onUnresolvedChange={onUnresolvedChange} />
+        </>}
+      </div>
+      <div className="gb-venue-sheet-overview" hidden={Boolean(communitySection)} inert={Boolean(communitySection)}>
       {desktop && currentView === "info" ? <>
         <div className="gb-desktop-overlay-body">{infoBody}</div>
         {infoPrimary ? <footer className="gb-desktop-overlay-footer">{infoPrimary}</footer> : null}
@@ -197,6 +221,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       ) : currentView === "info" ? infoBody : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? (
         <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
       ) : scheduleBody}
+      </div>
     </div>
   </>;
 }

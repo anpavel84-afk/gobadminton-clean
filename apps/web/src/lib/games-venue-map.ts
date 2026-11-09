@@ -112,3 +112,29 @@ export function sameVenueCounts(previous: Map<string, number> | null, next: Map<
 export function stableVenueCounts(previous: Map<string, number> | null, next: Map<string, number> | null): Map<string, number> | null {
   return sameVenueCounts(previous, next) ? previous : next;
 }
+
+/** Public selection intent only; schedule-only GamesMapView.venueId is unrelated. */
+export function mapCommunityReturnPath(path: string, search: string, venueId: string, cityId: string, day: string, activity: string) {
+  const [base = "/games?view=map"] = gamesMapReturnPath(`${path}${search}`).split("#");
+  const [route, query] = base.split("?");
+  const source = new URLSearchParams(query);
+  const params = new URLSearchParams();
+  for (const key of ["view", "cityId", "day", "activity", "trainer"]) {
+    const value = source.get(key);
+    if (value !== null) params.set(key, value);
+  }
+  if (route === "/games") params.set("view", "map");
+  params.set("selectedVenue", venueId);
+  params.set("communityCity", cityId);
+  params.set("cityId", cityId);
+  params.set("day", day);
+  params.set("activity", activity);
+  return `${route}?${params}`;
+}
+export function mapCommunitySelection(search: string, hash: string, cityId: string) {
+  const params = new URLSearchParams(search);
+  const venueId = params.get("selectedVenue");
+  const section = hash.slice(1);
+  if (!venueId || params.get("communityCity") !== cityId || !["ratings", "discussion", "reviews"].includes(section)) return null;
+  return { venueId, section: section as "ratings" | "discussion" | "reviews" };
+}

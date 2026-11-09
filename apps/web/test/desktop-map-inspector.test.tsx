@@ -4,33 +4,54 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
+const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, active: false,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useId: () => "venue-title",
-  useState<T>(initial: T) {
-    const index = hooks.cursor++; const slots = hooks.slots;
-    if (!(index in slots)) slots[index] = initial;
-    return [slots[index], (next: T | ((old: T) => T)) => {
-      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-}));
+
+function manual<T>(render: () => T): T {
+  const previous = hooks.active; hooks.active = true;
+  try { return render(); } finally { hooks.active = previous; }
+}
+vi.mock("react", async importOriginal => {
+  const actual = await importOriginal<typeof React>();
+  return {
+    ...actual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList) {
+      if (!hooks.active) return actual.useCallback(fn, deps);
+      const i = hooks.cursor++;
+      const previous = hooks.slots[i] as { deps: React.DependencyList; fn: T } | undefined;
+      if (!previous || deps.some((value, n) => !Object.is(value, previous.deps[n]))) hooks.slots[i] = { deps, fn };
+      return (hooks.slots[i] as { fn: T }).fn;
+    },
+    useId: () => hooks.active ? "venue-title" : actual.useId(),
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return actual.useState(initial);
+      const index = hooks.cursor++; const slots = hooks.slots;
+      if (!(index in slots)) slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      return [slots[index], (next: T | ((old: T) => T)) => {
+        slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) { if (!hooks.active) return actual.useRef(initial); const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return actual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return actual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+  };
+});
 
 import { DesktopMapInspector, DESKTOP_MAP_INSPECTOR_MQ, useDesktopMapInspector } from "../src/components/consumer/games/DesktopMapInspector";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
@@ -82,9 +103,9 @@ it("exposes the Owner desktop breakpoint constant", () => {
 });
 
 it("DesktopMapInspector stays inert when closed and dismisses via dim", () => {
-  expect(DesktopMapInspector({ open: false, onDismiss: () => {}, children: <p>x</p> })).toBeNull();
+  expect(manual(() => DesktopMapInspector({ open: false, onDismiss: () => {}, children: <p>x</p> }))).toBeNull();
   const dismiss = vi.fn();
-  const tree = DesktopMapInspector({ open: true, label: "Панель", onDismiss: dismiss, children: <p>content</p> });
+  const tree = manual(() => DesktopMapInspector({ open: true, label: "Панель", onDismiss: dismiss, children: <p>content</p> }));
   const html = renderToStaticMarkup(tree!);
   expect(html).toContain('data-desktop-inspector="true"');
   expect(html).toContain("content");
@@ -100,18 +121,18 @@ it("VenuePopup uses the desktop rail without compact handle when the breakpoint 
   const change = vi.fn();
   const deselect = vi.fn();
   hooks.cursor = 0;
-  VenuePopup({
+  manual(() => VenuePopup({
     expanded: false, onExpandedChange: change, onDeselect: deselect,
     preview: <div>compact</div>,
     children: <div className="gb-venue-sheet" data-view="info">sheet</div>,
-  });
+  }));
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
-  const desktopTree = VenuePopup({
+  const desktopTree = manual(() => VenuePopup({
     expanded: false, onExpandedChange: change, onDeselect: deselect,
     preview: <div>compact</div>,
     children: <div className="gb-venue-sheet" data-view="info">sheet</div>,
-  });
+  }));
   const html = renderToStaticMarkup(desktopTree);
   expect(html).toContain("gb-desktop-map-inspector");
   expect(html).toContain("gb-venue-popup--desktop");
@@ -128,16 +149,16 @@ it("VenuePopup uses the desktop rail without compact handle when the breakpoint 
 it("empty verified schedule shows honest empty copy without invented amenities or ratings", () => {
   stubWindow(true);
   hooks.cursor = 0;
-  VenueSheet({
+  manual(() => VenueSheet({
     venue, games: [], gamesReady: true, now: 0, embedded: true, active: true,
     onCollapse: () => {}, onDeselect: () => {},
-  });
+  }));
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
-  const tree = VenueSheet({
+  const tree = manual(() => VenueSheet({
     venue, games: [], gamesReady: true, now: 0, embedded: true, active: true,
     onCollapse: () => {}, onDeselect: () => {},
-  });
+  }));
   const html = renderToStaticMarkup(tree);
   expect(html).toContain("На этой площадке пока нет игр");
   expect(html).toContain("Ближайшие игры");
@@ -151,10 +172,10 @@ it("empty verified schedule shows honest empty copy without invented amenities o
 });
 
 it("loading schedule never claims the venue has no games", () => {
-  const tree = VenueSheet({
+  const tree = manual(() => VenueSheet({
     venue, games: [], gamesReady: false, now: 0, embedded: true, active: true,
     onCollapse: () => {}, onDeselect: () => {},
-  });
+  }));
   const html = renderToStaticMarkup(tree);
   expect(html).toContain("Расписание временно недоступно");
   expect(html).not.toContain("На этой площадке пока нет игр");
@@ -166,17 +187,17 @@ it("desktop Close deselects while mobile Close still collapses", () => {
   const deselect = vi.fn();
   stubWindow(false);
   hooks.cursor = 0;
-  let tree = VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect });
+  let tree = manual(() => VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect }));
   hooks.effects.splice(0).forEach(effect => effect());
   const mobileClose = elements(tree).find(node => node.type === CloseButton);
   expect(mobileClose?.props.onClick).toBe(collapse);
 
   stubWindow(true);
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
-  tree = VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect });
+  tree = manual(() => VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect }));
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
-  tree = VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect });
+  tree = manual(() => VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect }));
   // CloseButton lives inside DesktopOverlayHeader; assert the header onClose wiring.
   const desktopHeader = elements(tree).find(node => node.type === DesktopOverlayHeader);
   expect(desktopHeader?.props.onClose).toBe(deselect);
@@ -187,7 +208,7 @@ it("useDesktopMapInspector follows matchMedia changes", () => {
   hooks.cursor = 0;
   let value = false;
   function Probe() {
-    value = useDesktopMapInspector();
+    value = manual(() => useDesktopMapInspector());
     return null;
   }
   Probe();
@@ -206,28 +227,39 @@ it("retains the same content child across desktop breakpoint changes", () => {
   const child = <div className="gb-venue-sheet" data-view="create" data-draft="kept">draft</div>;
   stubWindow(false);
   hooks.cursor = 0;
-  VenuePopup({
+  manual(() => VenuePopup({
     expanded: true, onExpandedChange: change, onDeselect: deselect,
     preview: <div>preview</div>, children: child,
-  });
+  }));
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
-  const mobile = VenuePopup({
+  const mobile = manual(() => VenuePopup({
     expanded: true, onExpandedChange: change, onDeselect: deselect,
     preview: <div>preview</div>, children: child,
-  });
+  }));
   const mobileContent = elements(mobile).find(node => node.props.className === "gb-venue-popup-content");
-  expect(mobileContent?.props.children).toBe(child);
+  expect(mobileContent).toBeDefined();
+  const mobileProvider = mobileContent?.props.children;
+  expect(isValidElement<{ children: ReactNode; value: boolean }>(mobileProvider)).toBe(true);
+  if (!isValidElement<{ children: ReactNode; value: boolean }>(mobileProvider)) throw new Error("Missing visibility provider");
+  expect(mobileProvider.props.children).toBe(child);
+  expect(mobileProvider.props.value).toBe(true);
 
   mediaMatches = true;
   mediaListeners.forEach(fn => fn());
   hooks.cursor = 0;
-  const desktop = VenuePopup({
+  const desktop = manual(() => VenuePopup({
     expanded: true, onExpandedChange: change, onDeselect: deselect,
     preview: <div>preview</div>, children: child,
-  });
+  }));
   const desktopContent = elements(desktop).find(node => node.props.className === "gb-venue-popup-content");
-  expect(desktopContent?.props.children).toBe(child);
+  expect(desktopContent).toBeDefined();
+  const desktopProvider = desktopContent?.props.children;
+  expect(isValidElement<{ children: ReactNode; value: boolean }>(desktopProvider)).toBe(true);
+  if (!isValidElement<{ children: ReactNode; value: boolean }>(desktopProvider)) throw new Error("Missing visibility provider");
+  expect(desktopProvider.type).toBe(mobileProvider.type);
+  expect(desktopProvider.props.children).toBe(child);
+  expect(desktopProvider.props.value).toBe(true);
   expect(renderToStaticMarkup(desktop)).toContain('data-desktop-inspector="true"');
   expect(renderToStaticMarkup(desktop)).toContain('data-draft="kept"');
 });

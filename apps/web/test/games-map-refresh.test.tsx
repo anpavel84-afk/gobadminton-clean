@@ -6,34 +6,55 @@ import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
 // TR1-M3 preserves transport refresh semantics. Explicit effect/state harness: real component, transport, pagination, timers and cards.
 // No browser dependency is installed in this source checkout.
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
+const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, active: false,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useState<T>(initial: T) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) hooks.slots[index] = initial;
-    return [hooks.slots[index], (next: T | ((old: T) => T)) => {
-      hooks.slots[index] = typeof next === "function" ? (next as (old: T) => T)(hooks.slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-  // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
-  useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) { hooks.cursor++; return getSnapshot(); },
-}));
+
+function manual<T>(render: () => T): T {
+  const previous = hooks.active; hooks.active = true;
+  try { return render(); } finally { hooks.active = previous; }
+}
+vi.mock("react", async importOriginal => {
+  const actual = await importOriginal<typeof React>();
+  return {
+    ...actual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList) {
+      if (!hooks.active) return actual.useCallback(fn, deps);
+      const i = hooks.cursor++;
+      const previous = hooks.slots[i] as { deps: React.DependencyList; fn: T } | undefined;
+      if (!previous || deps.some((value, n) => !Object.is(value, previous.deps[n]))) hooks.slots[i] = { deps, fn };
+      return (hooks.slots[i] as { fn: T }).fn;
+    },
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return actual.useState(initial);
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) hooks.slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      return [hooks.slots[index], (next: T | ((old: T) => T)) => {
+        hooks.slots[index] = typeof next === "function" ? (next as (old: T) => T)(hooks.slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) { if (!hooks.active) return actual.useRef(initial); const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return actual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return actual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+    // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
+    useSyncExternalStore<T>(subscribe: (onChange: () => void) => () => void, getSnapshot: () => T, getServerSnapshot?: () => T) { if (!hooks.active) return actual.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot); hooks.cursor++; return getSnapshot(); },
+  };
+});
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("next/dynamic", () => ({ default: () => () => <div>Map</div> }));
 vi.mock("../src/components/consumer/discovery/DiscoveryGameCard", () => ({
@@ -58,7 +79,7 @@ let responseGame: Game;
 let responseVenues: VenueSummary[] | null;
 function render(cityId = "city", day = "", venueId?: string, withReturn = false) {
   hooks.cursor = 0;
-  const tree = GamesMapView({ cityId, day, venueId, onReturnToList: withReturn ? () => {} : undefined });
+  const tree = manual(() => GamesMapView({ cityId, day, venueId, onReturnToList: withReturn ? () => {} : undefined }));
   for (const effect of hooks.effects.splice(0)) effect();
   return tree;
 }
@@ -71,10 +92,11 @@ beforeEach(() => {
   requests = []; inFlight = 0; maxInFlight = 0; fail = false; ignoreAbort = false;
   responseGame = game;
   responseVenues = null;
-  vi.stubGlobal("window", new EventTarget());
-  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://example.test", pathname: "/games", search: "?view=map", hash: "", href: "https://example.test/games?view=map" } }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", documentElement: { getAttribute: (name: string) => name === "data-gb-session-presence" ? "absent" : null }, querySelector: () => null }));
   vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
     const parsed = new URL(url, "https://example.test");
+    if (parsed.pathname === "/v1/me") return Promise.resolve(new Response(JSON.stringify({ title: "Unauthorized" }), { status: 401 }));
     // Public community batch is shared, may omit per-waiter AbortSignal — not catalog transport.
     if (parsed.pathname === "/v1/venue-community-summaries") {
       const ids = (parsed.searchParams.get("venueIds") ?? "").split(",").filter(Boolean);
@@ -135,7 +157,7 @@ it("reloads once on visibility return despite focus burst and rejects hidden ref
   window.dispatchEvent(new Event("online"));
   document.dispatchEvent(new Event("visibilitychange"));
   expect(requests).toHaveLength(4);
-  Object.assign(document, { visibilityState: "visible" });
+  Object.assign(document, { visibilityState: "visible", documentElement: { getAttribute: (name: string) => name === "data-gb-session-presence" ? "absent" : null }, querySelector: () => null });
   document.dispatchEvent(new Event("visibilitychange"));
   window.dispatchEvent(new Event("focus"));
   window.dispatchEvent(new Event("focus"));
@@ -231,7 +253,7 @@ it("ignores late responses from an aborted transport without continuing its pagi
 
 it("selects a venue preview then opens its sheet without navigation and preserves the venueId schedule branch", async () => {
   const assign = vi.fn<(url: string) => void>();
-  Object.assign(window, { location: { pathname: "/games", search: "?view=map&day=2026-10-18", assign } });
+  Object.assign(window, { location: { ...window.location, pathname: "/games", search: "?view=map&day=2026-10-18", href: "https://example.test/games?view=map&day=2026-10-18", assign } });
   render(); await vi.advanceTimersByTimeAsync(40000);
   const tree = render();
   const clickVenue = (node: React.ReactNode): void => {

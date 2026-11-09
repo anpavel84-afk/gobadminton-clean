@@ -118,14 +118,14 @@ class Node extends EventTarget {
   closest(selector: string): Node | null { return this.matches(selector) ? this : this.parentNode?.closest(selector) ?? null; }
   querySelectorAll(selector: string): Node[] { return [...new Set([...this.children, ...this.rendered])].flatMap(node => [...(node.matches(selector) ? [node] : []), ...node.querySelectorAll(selector)]); }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
-  getBoundingClientRect() { return { width: 400, height: this.className.includes("full-measure") ? 700 : this.className.includes("compact-measure") ? 172 : 400, top: 0 }; }
+  getBoundingClientRect() { return { width: 400, height: this.className.includes("full-measure") ? 700 : this.className.includes("compact-measure") ? Number(this.style.height) : 400, top: 0 }; }
   setPointerCapture(id: number) { this.captured.add(id); }
   hasPointerCapture(id: number) { return this.captured.has(id); }
   releasePointerCapture(id: number) { this.captured.delete(id); }
 }
 const body = new Node("body");
 const created: Node[] = [];
-const dom = Object.assign(new EventTarget(), { body, activeElement: null as Node | null, visibilityState: "visible",
+const dom = Object.assign(new EventTarget(), { body, documentElement: { getAttribute: (name: string) => name === "data-gb-session-presence" ? "absent" : null }, activeElement: null as Node | null, visibilityState: "visible",
   createElement(tag: string) { const node = new Node(tag); created.push(node); return node; },
   createElementNS(_namespace: string, tag: string) { return new Node(tag); },
   querySelector: (selector: string) => body.querySelector(selector),
@@ -294,7 +294,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] }); maps.length = 0; markerButtons.length = 0; currentCity = MOSCOW_BUNDLE.cityId; navigation.mockClear(); returnToList.mockClear();
   transport.venues.mockReset().mockResolvedValue({ ok: true, data: [venue, { ...venue, id: "unselected", name: "Другой зал" }] });
   transport.games.mockReset().mockResolvedValue({ ok: true, data: [game] }); transport.apiFetch.mockReset();
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: new URL(MOSCOW_BUNDLE.prefix).origin, assign: navigation }, matchMedia: () => ({ matches: false }), innerHeight: 800, getComputedStyle: (node: Node) => ({ visibility: node.visibility }) }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { pathname: "/games", search: "?view=map", hash: "", href: "https://dev.gobadminton.ru/games?view=map", origin: new URL(MOSCOW_BUNDLE.prefix).origin, assign: navigation }, matchMedia: () => ({ matches: false }), innerHeight: 800, getComputedStyle: (node: Node) => ({ visibility: node.visibility }) }));
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem() {}, removeItem() {} });
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16)); vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -364,15 +364,18 @@ it("fatal map failure exposes a real fallback button and opens the same photo re
   expect(output(renderer)).toContain("Адрес"); expect(output(renderer)).toContain("Контакты площадки");
   expect(maps).toHaveLength(1); expect(navigation).not.toHaveBeenCalled();
 });
-it.each(["onPointerCancel", "onLostPointerCapture"])("cleans capture on %s and preserves compact guard after Sheet unmount", async event => {
+it.each(["onPointerCancel", "onLostPointerCapture"])("cleans capture on %s and preserves compact guard while the retained Sheet is hidden", async event => {
   const { renderer } = await start(); const image = photo();
   const handle = gesture(renderer, "onPointerDown", 0, 600); gesture(renderer, "onPointerMove", 0, 500, 100);
   expect(handle.hasPointerCapture(1)).toBe(true); gesture(renderer, event, 0, 500, 110);
   expect(handle.hasPointerCapture(1)).toBe(false); await vi.advanceTimersByTimeAsync(220); renderer.render();
-  expect(renderer.nodes().some(node => node.className === "gb-venue-sheet")).toBe(false);
+  const content = renderer.nodes().find(node => node.className === "gb-venue-popup-content");
+  expect(content?.props.hidden).toBe(true); expect(content?.props.inert).toBe(true);
+  expect(renderer.nodes().some(node => node.className === "gb-venue-sheet")).toBe(true);
+  expect(renderer.nodes().some(node => node.className.includes("gb-venue-sheet-cover"))).toBe(false);
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   gesture(renderer, "onPointerDown", 0, 600); gesture(renderer, "onPointerMove", 80, 601, 100);
-  expect(surface(renderer).style.height).toBe("172px"); expect(surface(renderer).props["data-moving"]).toBe(false);
+  expect(surface(renderer).style.height).toBe("224px"); expect(surface(renderer).props["data-moving"]).toBe(false);
   const prevent = vi.fn(); const stop = vi.fn();
   handler(surface(renderer), "onClickCapture", { detail: 1, preventDefault: prevent, stopPropagation: stop });
   expect(prevent).toHaveBeenCalledOnce();
@@ -424,13 +427,19 @@ it("retains empty and unavailable schedule messages", async () => {
   transport.games.mockResolvedValue({ ok: false }); window.dispatchEvent(new Event("focus")); await settle(renderer);
   expect(output(renderer)).toContain("Расписание временно недоступно"); expect(output(renderer)).not.toContain("Показать игры на этой площадке");
 });
-it("consumes the drag click once after the closing Sheet has unmounted", async () => {
+it("consumes the drag click once after the closing Sheet is hidden", async () => {
   const { renderer } = await start(); const image = photo(); click(renderer, "Развернуть площадку");
+  const retainedSheet = renderer.nodes().find(node => node.className === "gb-venue-sheet");
+  expect(retainedSheet).toBeDefined();
   gesture(renderer, "onPointerDown", 0, 100); gesture(renderer, "onPointerMove", 0, 600, 100); gesture(renderer, "onPointerUp", 0, 600, 110);
   expect(surface(renderer).props["data-expanded"]).toBe(false);
   expect(renderer.nodes().some(node => node.className === "gb-venue-sheet")).toBe(true);
   await vi.advanceTimersByTimeAsync(220); renderer.render();
-  expect(renderer.nodes().some(node => node.className === "gb-venue-sheet")).toBe(false);
+  const content = renderer.nodes().find(node => node.className === "gb-venue-popup-content");
+  expect(content?.props.hidden).toBe(true); expect(content?.props.inert).toBe(true);
+  expect(renderer.nodes().some(node => node.className === "gb-venue-sheet")).toBe(true);
+  expect(renderer.nodes().some(node => node.className.includes("gb-venue-sheet-cover"))).toBe(false);
+  expect(renderer.nodes().find(node => node.className === "gb-venue-sheet")).toBe(retainedSheet);
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   const prevent = vi.fn(); const stop = vi.fn();
   handler(surface(renderer), "onClickCapture", { detail: 1, preventDefault: prevent, stopPropagation: stop });

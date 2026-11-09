@@ -3,33 +3,48 @@ import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[], maps: [] as FakeMap[], width: 400, buttons: [] as HTMLButtonElement[], markerCreates: 0, markerRemove: vi.fn(), resizeCallback: () => {}, lngLat: vi.fn(), jump: vi.fn(), replace: vi.fn() }));
-vi.mock("react", async original => ({
-  ...await original<typeof React>(),
-  useId: () => "venue-integration",
-  useRef(initial: unknown) { const i = h.cursor++; return h.slots[i] ??= { current: initial }; },
-  useState(initial: unknown) {
-    const i = h.cursor++; const slots = h.slots; if (!(i in slots)) slots[i] = initial;
-    return [slots[i], (next: unknown) => { slots[i] = typeof next === "function" ? next(slots[i]) : next; }];
-  },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = h.cursor++; const prev = h.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, value: fn() };
-    return (h.slots[i] as { value: unknown }).value;
-  },
-  useCallback(fn: unknown, deps: unknown[]) {
-    const i = h.cursor++; const prev = h.slots[i] as { deps: unknown[]; fn: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, fn };
-    return (h.slots[i] as { fn: unknown }).fn;
-  },
-  useContext(context: { _currentValue: unknown }) { return context._currentValue; },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const i = h.cursor++; const prev = h.slots[i] as unknown[] | undefined;
-    if (!prev || deps.some((v, n) => v !== prev[n])) { h.slots[i] = deps; h.effects.push(() => { h.cleanups[i]?.(); h.cleanups[i] = effect() || (() => {}); }); }
-  },
-  // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
-  useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) { h.cursor++; return getSnapshot(); },
-}));
+const h = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, active: false, effects: [] as (() => void)[], cleanups: [] as (() => void)[], maps: [] as FakeMap[], width: 400, buttons: [] as HTMLButtonElement[], markerCreates: 0, markerRemove: vi.fn(), resizeCallback: () => {}, lngLat: vi.fn(), jump: vi.fn(), replace: vi.fn() }));
+
+function manual<T>(render: () => T): T {
+  const previous = h.active; h.active = true;
+  try { return render(); } finally { h.active = previous; }
+}
+vi.mock("react", async original => {
+  const actual = await original<typeof React>();
+  return {
+    ...actual,
+    useContext<T>(context: React.Context<T>) {
+      return h.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList) {
+      if (!h.active) return actual.useCallback(fn, deps);
+      const i = h.cursor++;
+      const previous = h.slots[i] as { deps: React.DependencyList; fn: T } | undefined;
+      if (!previous || deps.some((value, n) => !Object.is(value, previous.deps[n]))) h.slots[i] = { deps, fn };
+      return (h.slots[i] as { fn: T }).fn;
+    },
+    useId: () => h.active ? "venue-integration" : actual.useId(),
+    useRef(initial: unknown) { if (!h.active) return actual.useRef(initial); const i = h.cursor++; return h.slots[i] ??= { current: initial }; },
+    useState(initial: unknown) {
+      if (!h.active) return actual.useState(initial);
+      const i = h.cursor++; const slots = h.slots; if (!(i in slots)) slots[i] = typeof initial === "function" ? initial() : initial;
+      return [slots[i], (next: unknown) => { slots[i] = typeof next === "function" ? next(slots[i]) : next; }];
+    },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!h.active) return actual.useMemo(fn, deps);
+      const i = h.cursor++; const prev = h.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, value: fn() };
+      return (h.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!h.active) return actual.useEffect(effect, deps);
+      const i = h.cursor++; const prev = h.slots[i] as unknown[] | undefined;
+      if (!prev || deps.some((v, n) => v !== prev[n])) { h.slots[i] = deps; h.effects.push(() => { h.cleanups[i]?.(); h.cleanups[i] = effect() || (() => {}); }); }
+    },
+    // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
+    useSyncExternalStore<T>(subscribe: (onChange: () => void) => () => void, getSnapshot: () => T, getServerSnapshot?: () => T) { if (!h.active) return actual.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot); h.cursor++; return getSnapshot(); },
+  };
+});
 vi.mock("../src/components/consumer/radar/RadarPage", () => ({ RadarPage: () => null }));
 // This suite verifies map lifetime and venue navigation, not authenticated Game UI.
 // Its global hook-array fixture intentionally does not model nested client actions.
@@ -101,12 +116,14 @@ vi.mock("next/dynamic", async () => {
 });
 vi.mock("../src/lib/api-client", () => ({
   apiFetch: vi.fn(() => { throw new Error("Unexpected apiFetch in map-only harness"); }),
+  getMe: vi.fn(async () => ({ ok: false, status: 401, error: "Unauthorized" })),
   listAllCityVenues: () => transport.venues(),
   listAllUpcomingCityGames: () => transport.games(),
 }));
 const transport = vi.hoisted(() => ({ venues: vi.fn(), games: vi.fn() }));
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
+import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { GamesVenueMap } from "../src/components/consumer/games/GamesVenueMap";
@@ -146,7 +163,7 @@ beforeEach(() => {
   transport.games.mockReset(); transport.venues.mockReset();
   errorCard.mockClear(); availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear(); h.buttons = []; h.lngLat.mockClear(); h.replace.mockClear(); h.jump.mockClear();
   vi.stubGlobal("HTMLElement", class {});
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://dev.gobadminton.ru", assign: navigation.assign }, history: navigation }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { pathname: "/games", search: "?view=map", hash: "", href: "https://dev.gobadminton.ru/games?view=map", origin: "https://dev.gobadminton.ru", assign: navigation.assign }, history: navigation }));
   window.addEventListener("gb-map-return", navigation.returnFlag);
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: navigation.setItem, removeItem() {} });
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16));
@@ -189,16 +206,23 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   const countsSeen: (Map<string, number> | null)[] = [];
   const cycle = (day = "") => {
     h.cursor = 0;
-    const tree = GamesMapView({ cityId: MOSCOW_BUNDLE.cityId, day });
+    const tree = manual(() => GamesMapView({ cityId: MOSCOW_BUNDLE.cityId, day }));
     h.effects.splice(0).forEach(fn => fn());
     const parent = { slots: h.slots, cleanups: h.cleanups };
     let sawSheet = false;
     const visit = (node: React.ReactNode): void => {
       if (!isValidElement<React.ComponentProps<typeof GamesVenueMap> & { children?: React.ReactNode }>(node)) return;
-      if (node.type === GamesVenueMap) {
+      if (typeof node.type === "object" && node.type !== null && ("_context" in node.type || ("Provider" in node.type && "_currentValue" in node.type))) {
+        const provider = node.type as { _context?: { _currentValue: unknown }; _currentValue?: unknown };
+        const context = provider._context ?? provider;
+        const previous = context._currentValue;
+        context._currentValue = (node.props as { value?: unknown }).value;
+        try { Children.forEach(node.props.children, visit); }
+        finally { context._currentValue = previous; }
+      } else if (node.type === GamesVenueMap) {
         countsSeen.push(node.props.counts); childMounted = true;
         h.slots = child.slots; h.cleanups = child.cleanups; h.cursor = 0;
-        const mapTree = GamesVenueMap(node.props);
+        const mapTree = manual(() => GamesVenueMap(node.props));
         const attach = (item: React.ReactNode): void => {
           if (!isValidElement<{ ref?: { current: unknown }; children?: React.ReactNode }>(item)) return;
           if (item.props.ref) item.props.ref.current = { getBoundingClientRect: () => ({ width: 400, height: 400 }) };
@@ -209,11 +233,11 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
         h.slots = parent.slots; h.cleanups = parent.cleanups;
       } else if (node.type === VenuePopup) {
         h.slots = popupState.slots; h.cleanups = popupState.cleanups; h.cursor = 0;
-        popupTree = VenuePopup(node.props as unknown as React.ComponentProps<typeof VenuePopup>);
+        popupTree = manual(() => VenuePopup(node.props as unknown as React.ComponentProps<typeof VenuePopup>));
         popupRendered = true;
         for (const item of elements(popupTree)) {
           const ref = item.props.ref as { current: unknown } | undefined;
-          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : 172 }) };
+          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : (item.props.style as React.CSSProperties | undefined)?.height ?? 224 }) };
         }
         h.effects.splice(0).forEach(fn => fn()); popupState.slots = h.slots; popupState.cleanups = h.cleanups;
         h.slots = parent.slots; h.cleanups = parent.cleanups;
@@ -221,7 +245,7 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
       } else if (node.type === VenueSheet) {
         h.slots = sheet.slots; h.cleanups = sheet.cleanups; h.cursor = 0;
         sawSheet = true; sheetMounted = true;
-        sheetTree = VenueSheet(node.props as unknown as React.ComponentProps<typeof VenueSheet>);
+        sheetTree = manual(() => VenueSheet(node.props as unknown as React.ComponentProps<typeof VenueSheet>));
         h.effects.splice(0).forEach(fn => fn()); sheet.slots = h.slots; sheet.cleanups = h.cleanups;
         h.slots = parent.slots; h.cleanups = parent.cleanups;
       } else Children.forEach(node.props.children, visit);
@@ -255,10 +279,13 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   const firstPosition = elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style;
   pointer("onPointerMove", 200, 2000); cycle();
   expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style).not.toEqual(firstPosition);
-  expect(sheetTree).toBeNull(); // do not mount expanded cover at first swipe movement
+  expect(sheetTree).not.toBeNull(); // retain the sheet while the cover stays compact
+  expect(elements(sheetTree).some(node => node.type === VenueGallery)).toBe(false);
+  const retainedSheetSlots = sheet.slots;
   expect(transport.games).toHaveBeenCalledTimes(callsBefore); expect(transport.venues).toHaveBeenCalledTimes(venueCallsBefore);
   pointer("onPointerUp", 200, 2200); cycle();
-  expect(sheetTree).toBeNull(); // keep cover in compact DOM until settle
+  expect(sheet.slots).toBe(retainedSheetSlots);
+  expect(elements(sheetTree).some(node => node.type === VenueGallery)).toBe(false); // keep cover compact until settle
   await vi.advanceTimersByTimeAsync(220); const expanded = cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
   if (!popup) throw new Error("No sheet");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
@@ -272,10 +299,14 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   sheetClick("К расписанию"); cycle();
   expect(renderToStaticMarkup(sheetTree)).toContain("Игры на этой площадке");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
-  // Collapse the same surface; its click guard survives the content unmount.
+  // Collapse the same surface; retain its sheet state and click guard.
   pointer("onPointerDown", 100, 3000); pointer("onPointerMove", 650, 4000); cycle();
   pointer("onPointerUp", 650, 4200); cycle(); await vi.advanceTimersByTimeAsync(220);
-  const collapsed = cycle(); expect(sheetTree).toBeNull();
+  const collapsed = cycle();
+  expect(sheetTree).not.toBeNull(); expect(sheet.slots).toBe(retainedSheetSlots);
+  expect(elements(sheetTree).some(node => node.type === VenueGallery)).toBe(false);
+  const collapsedContent = elements(popupTree).find(node => node.props.className === "gb-venue-popup-content");
+  expect(collapsedContent?.props.hidden).toBe(true); expect(collapsedContent?.props.inert).toBe(true);
   const shell = elements(popupTree).find(node => node.props.className === "gb-venue-popup");
   if (!shell) throw new Error("No persistent popup");
   const click = { detail: 1, preventDefault: vi.fn(), stopPropagation: vi.fn() };
@@ -286,7 +317,9 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   // Reopen into detail, then invalidate the session before the new transport settles.
   const nextPreview = elements(collapsed).find(node => node.type === VenuePreviewCard);
   if (!nextPreview) throw new Error("No collapsed preview");
-  (nextPreview.props.onOpen as () => void)(); cycle(); sheetClick("Показать игры"); cycle(); sheetClick("Вечерняя игра"); cycle();
+  (nextPreview.props.onOpen as () => void)(); cycle();
+  expect(renderToStaticMarkup(sheetTree)).toContain("Игры на этой площадке");
+  sheetClick("Вечерняя игра"); cycle();
   window.dispatchEvent(new Event("gb-session-changed")); cycle();
   expect(renderToStaticMarkup(sheetTree)).toContain("Расписание временно недоступно");
   expect(renderToStaticMarkup(sheetTree)).not.toContain("Вечерняя игра");

@@ -17,6 +17,9 @@ vi.mock("react", async importOriginal => {
     typeof initial === "function" ? (initial as () => T)() : initial;
   return {
     ...ReactActual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : ReactActual.useContext(context);
+    },
     useId: () => (hooks.active ? "venue-title" : ReactActual.useId()),
     useState<T>(initial: T | (() => T)) {
       if (!hooks.active) return ReactActual.useState(initial);
@@ -116,7 +119,7 @@ beforeEach(() => {
   excludedTargets = []; nestedDialog = null;
   props = { venue, games: [fixture("b"), fixture("a"), fixture("c", "2026-10-26T12:00:00Z")], gamesReady: true, now: Date.parse("2026-10-24T22:30:00Z"), onCollapse: collapse, onDeselect: deselect };
   vi.stubGlobal("window", Object.assign(new EventTarget(), { getComputedStyle: (target: FocusTarget) => ({ visibility: target.visibility }) }));
-  vi.stubGlobal("document", { activeElement: initiator, body: { style: { overflow: "auto" } }, querySelector: (selector: string) => selector === ".gb-venue-picker, dialog[open]" ? nestedDialog ? { className: nestedDialog } : null : ({ focus }) });
+  vi.stubGlobal("document", { activeElement: initiator, body: { style: { overflow: "auto" } }, querySelector: (selector: string) => selector === ".gb-venue-picker, dialog[open], .gb-comment__menu-panel[role=menu]" ? nestedDialog ? { className: nestedDialog } : null : ({ focus }) });
   vi.stubGlobal("HTMLElement", FocusTarget);
 });
 afterEach(() => { hooks.cleanups.forEach(fn => fn?.()); vi.useRealTimers(); vi.unstubAllGlobals(); });
