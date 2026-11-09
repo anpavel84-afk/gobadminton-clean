@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.67" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.68" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.40.0" as const;
@@ -424,13 +424,13 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.67",
-  "title": "Начало загрузки фотографии площадки при открытии страницы",
+  "application_version": "0.1.0-alpha.68",
+  "title": "Порядок ролей и действий в карточке тренировки",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "Фотография площадки может начать загружаться из исходного HTML страницы, не дожидаясь клиентского запроса данных"
+    "В нижней строке карточки тренировки сначала показан тренер, затем организатор и «Отзывы и история»; кнопки «Подробнее» и «Поделиться» расположены у правого края"
   ],
   "known_limitations": [
     "Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны",
@@ -2581,6 +2581,42 @@ export const TRUSTED_HISTORICAL_SEED: readonly HistoricalReleaseSeed[] = [
         "accepted_at": "2026-11-09T11:28:13Z",
         "api_digest": "sha256:5818268d0b33971a3850f0427fb311b2db985a1aa041325e9ac98729dd3229a3",
         "web_digest": "sha256:46a699717627b52a610c493f0d9ded762bd2f52d1c951370b96eabb272cac49f",
+        "kind": "pipeline"
+      }
+    ]
+  },
+
+  {
+    "application_version": "0.1.0-alpha.67",
+    "title": "Начало загрузки фотографии площадки при открытии страницы",
+    "owner_uat": "NOT_TESTED",
+    "additions": [],
+    "fixes": [
+      "Фотография площадки может начать загружаться из исходного HTML страницы, не дожидаясь клиентского запроса данных"
+    ],
+    "known_limitations": [
+      "Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны",
+      "Нативный мобильный онбординг (#522) ещё не реализован",
+      "Фотографии в обсуждении и предложение официального фото площадки ещё не доступны",
+      "На тестовом стенде до 1 января 2027 UTC временно сняты количественные ограничения на проверки фото и текста; сами проверки содержимого продолжаются",
+      "Физический iPhone, провайдер доставки, GoBad и приёмка владельцем ещё не выполнены; служебный разбор отзывов после обычного входа ещё не проверен",
+      "Юридические реквизиты и рабочий контакт поддержки ещё не подтверждены; удаление аккаунта пока недоступно",
+      "Пользовательская проверка с реальным аккаунтом при первом открытии и перезагрузке страниц на ширине 390 и 1280 пикселей ещё не выполнена",
+      "#506: пользовательская проверка маскирования публичных комментариев, редактирования с действующими правами и разбора жалоб после обычного входа ещё не выполнена; обработка личных сообщений и закрытых чатов не заявляется завершённой",
+      "Пользовательская проверка карточки тренировки и экрана «Дружеский матч» с реальными ролями, обычным входом и сетевыми ответами ещё не выполнена",
+      "Пользовательская проверка загрузки фотографии площадки в установленной версии ещё не выполнена"
+    ],
+    "version_label": "0.1.0-alpha.67",
+    "source_sha": "04fdc58b53e79996ccdb21a7396c5d1525cfbd10",
+    "api_contract_version": "0.40.0",
+    "deployments": [
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42613449482-a1",
+        "accepted_at": "2026-11-09T12:05:53Z",
+        "api_digest": "sha256:156265ba851c3263fa96e31ff712b90beff967d6ae5475649ee61f07ce02fb97",
+        "web_digest": "sha256:55bf1c16aed777c42df2cd0bda651d80b40686d83a35f4a009f2c85511ba7a45",
         "kind": "pipeline"
       }
     ]

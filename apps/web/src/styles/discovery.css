@@ -113,7 +113,7 @@
 .gb-discovery-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--gb-lime); }
 /* Shared discovery CardActions (ordinary host + trainer people band) — one primary CTA family. */
 .gb-consumer .gb-discovery-card__actions .gb-c23-btn { margin-left: auto; min-height: 44px; padding: 0 13px; font-size: 12px; flex: none; }
-/* #521 R3: full-width people band; summary = roles + actions + disclosure; reviews/history collapse. */
+/* #521 Owner footer order: full-width people band; summary = roles + disclosure + actions (right edge). */
 .gb-discovery-card[data-activity="trainer_led"] {
   grid-template-rows: auto auto;
 }

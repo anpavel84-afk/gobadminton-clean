@@ -145,8 +145,28 @@ describe("releases catalogue integrity", () => {
     expect(row.owner_uat).toBe("NOT_TESTED");
   });
 
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.67 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.67");
+  it("preserves the exact trusted alpha.67 receipt before the unaccepted alpha.68 descriptor", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.67");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(3408);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "9e29ba2f9283a98ffa316158f17c47fa08a15ca0cbd968c3acd2f381f5e3232f",
+    );
+    expect(row.source_sha).toBe("04fdc58b53e79996ccdb21a7396c5d1525cfbd10");
+    expect(row.deployments[0]?.release_id).toBe("r42613449482-a1");
+    expect(row.deployments[0]?.accepted_at).toBe("2026-11-09T12:05:53Z");
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.66")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(row.fixes).toHaveLength(1);
+    expect(row.title).toBe("Начало загрузки фотографии площадки при открытии страницы");
+    expect(row.owner_uat).toBe("NOT_TESTED");
+  });
+
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.68 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.68");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -162,8 +182,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/Начало загрузки фотографии площадки при открытии страницы/i);
-    expect(currentProse).toMatch(/Фотография площадки.*исходного HTML/i);
+    expect(currentProse).toMatch(/Порядок ролей и действий в карточке тренировки/i);
+    expect(currentProse).toMatch(/сначала показан тренер, затем организатор и «Отзывы и история»/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -183,12 +203,12 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Начало загрузки фотографии площадки при открытии страницы");
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Порядок ролей и действий в карточке тренировки");
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/Фотография площадки может начать загружаться из исходного HTML страницы/i);
-    expect(fixes).toMatch(/не дожидаясь клиентского запроса данных/i);
-    expect(fixes).not.toMatch(/Отзывы и история|подтверждённом взаимном желании|роли тренера|квадратные фотографии/i);
+    expect(fixes).toMatch(/В нижней строке карточки тренировки сначала показан тренер, затем организатор и «Отзывы и история»/i);
+    expect(fixes).toMatch(/кнопки «Подробнее» и «Поделиться» расположены у правого края/i);
+    expect(fixes).not.toMatch(/исходного HTML|подтверждённом взаимном желании|роли тренера и организатора показаны согласованно|квадратные фотографии|маскирование|публичного автора/i);
     expect(fixes).not.toMatch(/быстрее|ускорен|\d+\s*(мс|ms|сек|%)/i);
     expect(fixes).not.toMatch(/нецензурные выражения.*замаскированными|Маскирование/i);
     expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
@@ -369,10 +389,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(70);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(71);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(75);
+    ).toBe(76);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -972,18 +992,19 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders the current venue photo fix without stale release claims", async () => {
+  it("renders the current training card footer fix without stale release claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("Начало загрузки фотографии площадки при открытии страницы");
+    expect(html).toContain("Порядок ролей и действий в карточке тренировки");
     for (const fix of CURRENT_NAMED_RELEASE.fixes) {
       expect(html).toContain(fix);
       expect(html.split(fix).length - 1).toBe(1);
     }
-    expect(html).toContain("исходного HTML страницы");
-    expect(html).toContain("не дожидаясь клиентского запроса данных");
-    expect(html).not.toContain("Отзывы и история");
+    expect(html).toContain("сначала показан тренер, затем организатор и «Отзывы и история»");
+    expect(html).toContain("кнопки «Подробнее» и «Поделиться» расположены у правого края");
+    expect(html).not.toContain("Начало загрузки фотографии площадки при открытии страницы");
+    expect(html).not.toContain("исходного HTML страницы");
     expect(html).not.toContain("Карточка тренировки и подтверждение дружеского матча");
     expect(html).not.toContain("роли тренера и организатора показаны согласованно");
     expect(html).not.toContain("При подтверждённом взаимном желании сыграть");
