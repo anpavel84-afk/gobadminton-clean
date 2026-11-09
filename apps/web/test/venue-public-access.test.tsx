@@ -238,7 +238,7 @@ it("bounds the server request and does not share a DTO between route requests", 
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("renders a matching seed on first mount and retains it without a duplicate initial public GET", async () => {
+it("renders a matching seed on first mount and retains it without a duplicate initial public detail GET", async () => {
   const root = <VenuePage venueId="a" initialVenue={a} />;
   render(root);
   expect(text).toContain("Зал А");
@@ -246,7 +246,8 @@ it("renders a matching seed on first mount and retains it without a duplicate in
   await settle(root);
   expect(text).toContain("Количество кортов4");
   expect(calls.filter(path => path === "/v1/venues/a")).toEqual([]);
-  expect(calls.filter(path => path.startsWith("/v1/venues?"))).toEqual([]);
+  // The existing map schedule still loads the city catalog; only the detail GET is avoided.
+  expect(calls.some(path => path.startsWith("/v1/venues?"))).toBe(true);
   assertPublic();
 });
 

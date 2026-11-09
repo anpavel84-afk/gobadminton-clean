@@ -104,17 +104,19 @@ it("renders the requested route's actual cover src, name and catalog credit in i
   const page = await VenueRoute({ params: Promise.resolve({ venueId: initialVenue.id }) });
   // Real route + VenuePage + gallery render; no hook effects or image load callbacks run.
   const html = ssr(page);
-  const images = html.match(/<img\b[^>]*>/g) ?? [];
+  // Scope the primary gallery to its real wrapper; the profile also renders secondary photos.
+  const hero = html.match(/<div class="gb-venue-media">([\s\S]*?)<\/div><div class="gb-venue-public-profile">/)?.[1] ?? "";
+  const images = hero.match(/<img\b[^>]*>/g) ?? [];
   expect(images.some(image => image.includes(`src="${url("b")}"`))).toBe(true);
   expect(images.some(image => image.includes(`src="${url("a")}"`))).toBe(false);
   expect(html).toContain("Публичный зал SSR");
-  expect(html).toContain("Источник: badminton4u.ru");
-  expect(html).toContain('href="https://badminton4u.ru/clubs/208"');
-  expect(html).toContain("Публичный клуб");
-  // Photo credit is preserved in the public RSC seed; existing gallery waits for decode to display it.
-  expect(page.props.initialVenue?.cover?.credit).toEqual(initialVenue.cover?.credit);
-  expect(html).toContain("Загружаем фотографию…");
-  expect(html).not.toContain("Фото: Главная");
+  expect(hero).toContain("Источник: badminton4u.ru");
+  expect(hero).toContain('href="https://badminton4u.ru/clubs/208"');
+  expect(hero).toContain("Публичный клуб");
+  // Provenance and credits survive in the public RSC seed; the hero waits for decode to display photo credit.
+  expect(page.props.initialVenue).toEqual(initialVenue);
+  expect(hero).toContain("Загружаем фотографию…");
+  expect(hero).not.toContain("Фото: Главная");
   expect(html).not.toContain("csrfToken");
   expect(upstream).toHaveBeenCalledTimes(1);
 });
