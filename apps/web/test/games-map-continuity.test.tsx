@@ -50,6 +50,7 @@ vi.mock("next/dynamic", async () => {
   return { default: () => module.GamesVenueMap };
 });
 vi.mock("../src/lib/api-client", () => ({
+  getMe: async () => ({ ok: false }),
   apiFetch: vi.fn(() => { throw new Error("Unexpected apiFetch in map-only harness"); }),
   listAllCityVenues: () => transport.venues(),
   listAllUpcomingCityGames: () => transport.games(),
@@ -79,12 +80,12 @@ beforeEach(() => {
   vi.useFakeTimers(); h.slots = []; h.cursor = 0; h.effects = []; h.cleanups = []; h.maps = []; h.width = 400;
   transport.games.mockReset(); transport.venues.mockReset();
   errorCard.mockClear(); availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear(); h.buttons = []; h.lngLat.mockClear(); h.replace.mockClear();
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://dev.gobadminton.ru" } }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://dev.gobadminton.ru", pathname: "/games", search: "?view=map", hash: "" } }));
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem() {}, removeItem() {} });
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16));
   vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   vi.stubGlobal("ResizeObserver", class { constructor(fn: () => void) { h.resizeCallback = fn; } observe() {} disconnect() {} });
-  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", activeElement: null, createElement: () => { const button = { addEventListener() {}, setAttribute() {}, replaceChildren: h.replace, append() {}, focus() { Object.assign(document, { activeElement: button }); } } as unknown as HTMLButtonElement; h.buttons.push(button); return button; } }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", activeElement: null, querySelector: () => null, createElement: () => { const button = { addEventListener() {}, setAttribute() {}, replaceChildren: h.replace, append() {}, focus() { Object.assign(document, { activeElement: button }); } } as unknown as HTMLButtonElement; h.buttons.push(button); return button; } }));
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, arrayBuffer: async () => new TextEncoder().encode('{"version":8,"sources":{},"layers":[]}') })));
   vi.stubGlobal("crypto", { subtle: { digest: async () => new Uint8Array(MOSCOW_BUNDLE.styleHash.match(/../g)!.map(hex => parseInt(hex, 16))).buffer } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -152,4 +153,40 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   expect(hasAlert(cycle("2026-10-20"))).toBe(true);
   expect(countsSeen.at(-1)).toBeNull(); expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
   child.cleanups.forEach(fn => fn?.()); expect(map.remove).toHaveBeenCalledOnce();
+});
+
+
+it("guards selected venue close and switch while UNKNOWN, while collapse keeps the same owner key", async () => {
+  const { VenuePopup } = await import("../src/components/consumer/games/VenuePopup");
+  const { VenueSheet } = await import("../src/components/consumer/games/VenueSheet");
+  const first={...venue,cityId:MOSCOW_BUNDLE.cityId,address:"Synthetic",timezone:"Europe/Moscow"};
+  const second={...first,id:"other"};
+  transport.venues.mockResolvedValue({ok:true,data:[first,second]});
+  transport.games.mockResolvedValue({ok:true,data:[]});
+  function cycle() {
+    h.cursor=0;
+    const tree=GamesMapView({cityId:MOSCOW_BUNDLE.cityId,day:"2026-11-20",activity:"regular"});
+    h.effects.splice(0).forEach(fn=>fn());
+    return tree;
+  }
+  function find<P>(tree: React.ReactNode, type: unknown): React.ReactElement<P> | undefined {
+    if (!isValidElement<{children?:React.ReactNode}>(tree)) return;
+    if(tree.type===type) return tree as React.ReactElement<P>;
+    for(const child of Children.toArray(tree.props.children)) {const result=find<P>(child,type);if(result)return result;}
+  }
+  cycle();await vi.advanceTimersByTimeAsync(0);
+  let tree=cycle();
+  find<React.ComponentProps<typeof GamesVenueMap>>(tree,GamesVenueMap)!.props.onSelect(first);
+  tree=cycle();
+  const popup=find<React.ComponentProps<typeof VenuePopup>>(tree,VenuePopup)!;
+  const sheet=find<React.ComponentProps<typeof VenueSheet>>(tree,VenueSheet)!;
+  sheet.props.onUnresolvedChange!(true);
+  popup.props.onDeselect(); tree=cycle();
+  expect(find(tree,VenuePopup)?.key).toBe(first.id);
+  find<React.ComponentProps<typeof GamesVenueMap>>(tree,GamesVenueMap)!.props.onSelect(second);
+  tree=cycle();expect(find(tree,VenuePopup)?.key).toBe(first.id);
+  popup.props.onExpandedChange(false);tree=cycle();expect(find(tree,VenuePopup)?.key).toBe(first.id);
+  sheet.props.onUnresolvedChange!(false);
+  find<React.ComponentProps<typeof VenuePopup>>(tree,VenuePopup)!.props.onDeselect();
+  expect(find(cycle(),VenuePopup)).toBeUndefined();
 });

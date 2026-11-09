@@ -252,3 +252,11 @@ describe("production pure create selection", () => {
     expect(safeAuthReturnPath("//evil.example")).toBe("/games");
   });
 });
+
+it("offers direct community sections independently of an unavailable schedule", () => {
+  const html = ssr(<VenueSheet venue={venue} games={[]} gamesReady={false} now={0} onCollapse={noop} onDeselect={noop} onCommunitySectionChange={noop} />);
+  expect(textContent(html)).toContain("Оценить");
+  expect(textContent(html)).toContain("Обсуждение");
+  expect(textContent(html)).toContain("Отзывы после игры");
+  expect(links(html).some(link => link.href?.endsWith("#ratings"))).toBe(false);
+});

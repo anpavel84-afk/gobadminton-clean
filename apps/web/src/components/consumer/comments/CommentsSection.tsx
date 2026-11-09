@@ -36,6 +36,7 @@ type Props = {
   title?: string;
   /** Optional DOM id for page anchors (e.g. venue #discussion). */
   sectionId?: string;
+  onUnresolvedChange?: (unresolved: boolean) => void;
 };
 
 /** In-memory actor+csrf identity — never logged or written to storage keys/DOM. */
@@ -95,6 +96,7 @@ export function CommentsSection({
   parentPublic,
   title = "Комментарии",
   sectionId,
+  onUnresolvedChange,
 }: Props) {
   const headingId = useId();
   const [authOpen, setAuthOpen] = useState(false);
@@ -388,6 +390,8 @@ export function CommentsSection({
       },
     },
   );
+
+  useEffect(() => { onUnresolvedChange?.(Boolean(mutation.busy || mutation.pending)); }, [mutation.busy, mutation.pending, onUnresolvedChange]);
 
   async function loadReplies(parentId: string, reset = false) {
     const current = generation.current;
@@ -741,10 +745,14 @@ function CommentArticle({
   useEffect(() => {
     if (!menuOpen) return;
     const outside = (event: PointerEvent) => {
+      if (document.querySelector("dialog[open]")) return;
       if (!menuRef.current?.contains(event.target as Node)) onCloseMenu();
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); onCloseMenu(); }
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+        event.preventDefault(); onCloseMenu();
+        menuRef.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus();
+      }
     };
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
@@ -802,7 +810,6 @@ function CommentArticle({
                         disabled={locked}
                         data-testid="venue-community-report-comment"
                         onClick={() => {
-                          onCloseMenu();
                           onReportVenueComment();
                         }}
                       >

@@ -26,11 +26,13 @@ export function VenueReviewsPanel({
   csrfToken = null,
   canWrite = false,
   onLogin,
+  embedded = false,
 }: {
   venueId: string;
   csrfToken?: string | null;
   canWrite?: boolean;
   onLogin?: () => void;
+  embedded?: boolean;
 }) {
   const [state, setState] = useState<LoadState>("idle");
   const [items, setItems] = useState<PublicVenueReviewItem[]>([]);
@@ -65,7 +67,7 @@ export function VenueReviewsPanel({
     <section className="gb-venue-reviews" aria-label="Опыт на площадке">
       <header>
         <p className="gb-venue-reviews__badge gb-venue-reviews__badge--muted">После игры</p>
-        <h2 className="gb-venue-reviews__title">Опыт на площадке</h2>
+        <h2 className="gb-venue-reviews__title">{embedded ? "Отзывы после игры" : "Опыт на площадке"}</h2>
         <p className="gb-venue-reviews__lede">
           Публичные отзывы — от участников с подтверждённым посещением. Автор показан как «Участник
           игры», без профиля и деталей встречи.

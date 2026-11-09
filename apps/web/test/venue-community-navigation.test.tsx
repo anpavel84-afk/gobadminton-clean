@@ -220,3 +220,16 @@ describe("VenuePage community fragment navigation", () => {
     noHash.unmount();
   });
 });
+
+it("restores only an allowlisted physical map venue intent for the current city, preserving manual context", async () => {
+  const { mapCommunityReturnPath, mapCommunitySelection } = await import("../src/lib/games-venue-map");
+  const path = mapCommunityReturnPath("/games", "?view=map&cityId=manual-city&trainer=keep", "physical-venue", "manual-city", "2026-11-20", "trainer_led");
+  const query = path.slice(path.indexOf("?"));
+  expect(new URLSearchParams(query).get("trainer")).toBe("keep");
+  expect(new URLSearchParams(query).get("day")).toBe("2026-11-20");
+  expect(new URLSearchParams(query).get("activity")).toBe("trainer_led");
+  expect(mapCommunitySelection(query,"#discussion","manual-city")).toEqual({venueId:"physical-venue",section:"discussion"});
+  expect(mapCommunitySelection(query,"#discussion","different-city")).toBeNull();
+  expect(mapCommunitySelection(query,"#arbitrary","manual-city")).toBeNull();
+  expect(mapCommunitySelection("?venueId=schedule-only","#ratings","manual-city")).toBeNull();
+});

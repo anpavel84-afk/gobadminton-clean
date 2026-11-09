@@ -513,4 +513,18 @@ describe("#507 I1 F3 consumer venue_community report UI", () => {
     expect(within(menu).queryByTestId("venue-community-report-comment")).toBeNull();
     expect(document.body.innerHTML).not.toContain("venue_community");
   });
+  it("uses the same aggregate report subject inside the embedded community", async () => {
+    transport.handler = async path => path.includes("experience-reviews")
+      ? {ok:true,status:200,data:{venueId:VENUE_ID,publishedCount:0,items:[],nextCursor:null,canWriteHint:false}}
+      : {ok:true,status:201,data:{reportId:"50000000-0000-4000-8000-000000000001",status:"submitted",createdAt:"2026-11-09T12:00:00Z"}};
+    const { VenueCommunityContent } = await import("../src/components/consumer/venues/VenueCommunityContent");
+    render(createElement(VenueCommunityContent,{venueId:VENUE_ID,me:me(ACTOR_A,CSRF_A),authReturnPath:"/games?view=map",embedded:true}));
+    await screen.findByText("4,2");
+    fireEvent.click(screen.getByTestId("venue-community-report-aggregate"));
+    fireEvent.click(await screen.findByTestId("venue-community-report-submit"));
+    await screen.findByTestId("venue-community-report-success");
+    expect(transport.calls.find(call=>call.path==="/v1/reports")).toMatchObject({body:{targetKind:"venue_community",subjectKind:"aggregate",venueId:VENUE_ID},csrfToken:CSRF_A});
+    expect(document.querySelector(`[data-venue-community="${VENUE_ID}"]`)).toBeTruthy();
+  });
+
 });

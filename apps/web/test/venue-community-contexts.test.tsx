@@ -1568,3 +1568,61 @@ describe("#507 I1a20 unified frozen outcome invariant", () => {
     expect(deletes).toBe(3);
   });
 });
+
+describe("Slice A shared community owner", () => {
+  it("shows the same server comment and anonymous published review in page and embedded contexts with unique IDs", async () => {
+    const { VenueCommunityContent } = await import("../src/components/consumer/venues/VenueCommunityContent");
+    fetchMock.handler = async url => {
+      if (url.includes("venue-community-summaries")) return new Response(JSON.stringify({items:[summary(V1,V1,"available",4.2,5)]}));
+      if (url.includes("experience-reviews")) return new Response(JSON.stringify({venueId:V1,publishedCount:1,items:[{reviewHandle:"published",authorLabel:"Участник игры",text:"Published projection",topics:[],publishedRevision:1,publishedAt:"2026-11-01T12:00:00Z"}],nextCursor:null,canWriteHint:false}));
+      if (url.includes("/comments")) return new Response(JSON.stringify({entityKind:"venue",entityId:V1,parentCommentId:null,visibleCount:1,canCreate:false,nextCursor:null,items:[{id:"comment",entityKind:"venue",entityId:V1,parentCommentId:null,body:"Actual server ***** text",deleted:false,version:1,createdAt:"2026-11-01T12:00:00Z",updatedAt:"2026-11-01T12:00:00Z",edited:false,mine:false,author:null,replyCount:0}]}));
+      throw new Error(`Unexpected read ${url}`);
+    };
+    render(createElement("div", null,
+      createElement(VenueCommunityContent,{venueId:V1,me:null,authReturnPath:`/venues/${V1}`}),
+      createElement(VenueCommunityContent,{venueId:V1,me:null,authReturnPath:"/games?view=map",embedded:true}),
+    ));
+    await waitFor(() => expect(screen.getAllByText("Published projection")).toHaveLength(2));
+    expect(screen.getAllByText("Actual server ***** text")).toHaveLength(2);
+    const ids = [...document.querySelectorAll("[id]")].map(node => node.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(fetchMock.calls.every(call => !call.method || call.method === "GET")).toBe(true);
+    expect(fetchMock.calls.some(call => call.url.includes("/community-rating/me"))).toBe(false);
+    expect(screen.getAllByRole("button",{name:"Поделиться опытом"})).toHaveLength(2);
+  });
+});
+
+it("retains the exact vote operation while its popup collapses and expands", async () => {
+  const { fireEvent } = await import("@testing-library/react");
+  const { VenuePopup } = await import("../src/components/consumer/games/VenuePopup");
+  const { VenueCommunityRating } = await import("../src/components/consumer/venues/VenueCommunityRating");
+  const pendingChanged = vi.fn();
+  fetchMock.handler = async (url, init) => {
+    if (init?.method === "PUT") return new Response("{}",{status:503});
+    if (url.includes("venue-community-summaries")) return new Response(JSON.stringify({items:[summary(V1,V1,"available",4.2,5)]}));
+    if (url.includes("/community-rating/me")) return new Response(JSON.stringify({summary:summary(V1,V1,"available",4.2,5),own:{venueId:V1,canonicalVenueId:V1,value:null,version:0,withdrawn:false,moderationState:"clear",allowedActions:{upsert:true,update:false,withdraw:false}}}));
+    throw new Error(url);
+  };
+  function Host() {
+    const [expanded,setExpanded] = useState(true);
+    return createElement(VenuePopup,{expanded,onExpandedChange:setExpanded,onDeselect:()=>{},preview:createElement("span",null,"Preview"),retainContent:true,
+      children:createElement(VenueCommunityRating,{venueId:V1,signedIn:true,actorId:ACTOR,csrfToken:CSRF,authReturnPath:"/games?view=map",onUnresolvedChange:pendingChanged}),
+    });
+  }
+  render(createElement(Host));
+  await waitFor(()=>expect((screen.getByRole("radio",{name:"4 из 5"}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("radio",{name:"4 из 5"}));
+  fireEvent.click(screen.getByRole("button",{name:"Отправить оценку"}));
+  await screen.findByTestId("venue-community-vote-unknown");
+  const operation = fetchMock.calls.find(call=>call.method === "PUT");
+  expect(operation).toBeTruthy(); expect(pendingChanged).toHaveBeenLastCalledWith(true);
+  fireEvent.click(screen.getByRole("button",{name:"Свернуть площадку"}));
+  expect(document.querySelectorAll('[data-testid="venue-community-vote-unknown"]')).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button",{name:"Развернуть площадку"}));
+  fireEvent.click(screen.getByRole("button",{name:"Повторить тот же запрос"}));
+  await waitFor(()=>expect(fetchMock.calls.filter(call=>call.method === "PUT")).toHaveLength(2));
+  const retry = fetchMock.calls.filter(call=>call.method === "PUT")[1]!;
+  expect(retry.body).toBe(operation!.body);
+  expect(new Headers(retry.headers).get("idempotency-key")).toBe(new Headers(operation!.headers).get("idempotency-key"));
+  expect(fetchMock.calls.filter(call=>call.url.includes("/community-rating/me"))).toHaveLength(1);
+});
