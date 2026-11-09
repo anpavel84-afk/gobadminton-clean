@@ -68,22 +68,30 @@ function MessagesAction() {
 }
 
 function ProfileAction() {
-  const { identity, imageGeneration } = useHeaderIdentity();
-  const name = identity?.name || "Профиль";
+  const { identity, imageGeneration, loading } = useHeaderIdentity();
+  const name = identity?.name || (loading ? "Загрузка…" : "Профиль");
   return (
-    <Link href="/profile" className="gb-header-profile" aria-label={identity ? `Профиль: ${name}` : "Профиль"}>
-      <HeaderAvatar key={imageGeneration} identity={identity} />
-      <span className="gb-header-profile-label" title={identity?.name}>{name}</span>
+    <Link href="/profile" className="gb-header-profile" aria-busy={loading || undefined} aria-label={identity ? `Профиль: ${name}` : loading ? "Профиль: загрузка" : "Профиль"}>
+      <HeaderAvatar key={imageGeneration} identity={identity} loading={loading} />
+      <span className="gb-header-profile-label" style={{ width: 156 }} title={identity?.name}>{name}</span>
     </Link>
   );
 }
 
-function HeaderAvatar({ identity }: { identity: ReturnType<typeof useHeaderIdentity>["identity"] }) {
+function HeaderAvatar({ identity, loading }: { identity: ReturnType<typeof useHeaderIdentity>["identity"]; loading: boolean }) {
   const [failedUrls, setFailedUrls] = useState<string[]>([]);
+  const imageRef = useRef<HTMLImageElement>(null);
   const image = headerAvatarUrls(identity?.avatar).find(url => !failedUrls.includes(url));
+  // An SSR image may fail before React attaches onError during hydration.
+  useEffect(() => {
+    const element = imageRef.current;
+    if (image && element?.complete && element.naturalWidth === 0) {
+      setFailedUrls(previous => previous.includes(image) ? previous : [...previous, image]);
+    }
+  }, [image]);
   return <span className="gb-header-avatar" aria-hidden="true">{image
-    ? <img key={image} src={image} alt="" referrerPolicy="no-referrer" onError={() => setFailedUrls(previous => previous.includes(image) ? previous : [...previous, image])} />
-    : identity?.name ? initialsFromName(identity.name) : "?"}</span>;
+    ? <img ref={imageRef} key={image} src={image} alt="" referrerPolicy="no-referrer" onError={() => setFailedUrls(previous => previous.includes(image) ? previous : [...previous, image])} />
+    : identity?.name ? initialsFromName(identity.name) : loading ? "…" : "?"}</span>;
 }
 
 export function DesktopNav({ active }: { active: ConsumerNavActive }) {

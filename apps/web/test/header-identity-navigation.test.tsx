@@ -3,9 +3,10 @@
  * #532 — mounted header identity: remount/route, deferred races, session switch,
  * expiry, profile refresh, multi-subscriber coalesce, SSR isolation.
  */
-import { cleanup, render, screen, act, waitFor } from "@testing-library/react";
-import { createElement } from "react";
+import { cleanup, render, screen, act, waitFor, fireEvent } from "@testing-library/react";
+import { createElement, type ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Me, OwnSocialProfile, PlayerAvatar } from "../src/lib/consumer-types";
 
@@ -32,6 +33,7 @@ vi.mock("../src/lib/api-client", async (importOriginal) => {
 });
 
 import {
+  HeaderIdentityProvider,
   headerAvatarUrls,
   resetHeaderIdentityStoreForTests,
   useHeaderIdentity,
@@ -466,5 +468,140 @@ describe("header image sink bounds (reuse)", () => {
     "https://name:secret@avatars.yandex.net/photo",
   ])("denies unknown or credential-bearing provider %s", (providerUrl) => {
     expect(headerAvatarUrls({ uploadedUrl: null, providerUrl })).toEqual([]);
+  });
+});
+
+
+describe("new document bootstrap / hydration", () => {
+  const boot = {
+    identity: { name: "Анна Альфа", avatar: { uploadedUrl: uploadedA, providerUrl: null } },
+    imageGeneration: 0, loading: false, ownerId: "u1",
+  };
+  const documentTree = () => createElement(HeaderIdentityProvider, {
+    snapshot: boot, children: createElement(HeaderProbe),
+  });
+
+  it("shows confirmed identity in server HTML and every hydration paint while me and social are delayed", async () => {
+    const pendingMe = deferred<{ ok: true; status: number; data: Me }>();
+    const pendingSocial = deferred<{ ok: true; status: number; data: OwnSocialProfile }>();
+    transport.getMe.mockReturnValue(pendingMe.promise);
+    transport.getMySocialProfile.mockReturnValue(pendingSocial.promise);
+    const container = document.createElement("main");
+    // A new document, not a keyed remount: no memory is allowed to supply its identity.
+    resetHeaderIdentityStoreForTests();
+    container.innerHTML = renderToStaticMarkup(documentTree());
+    document.body.append(container);
+    const labels = [container.textContent];
+    const observer = new MutationObserver(() => labels.push(container.textContent));
+    observer.observe(container, { subtree: true, childList: true, characterData: true });
+    const errors: unknown[] = [];
+    const root = hydrateRoot(container, documentTree(), { onRecoverableError: error => errors.push(error) });
+    try {
+      await flushCoalesce();
+      expect(container.textContent).toBe("Профиль: Анна Альфа");
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(uploadedA);
+      await act(async () => { pendingMe.resolve({ ok: true, status: 200, data: me("u1", "private@example.test") }); });
+      expect(container.textContent).toBe("Профиль: Анна Альфа");
+      await act(async () => { pendingSocial.resolve({ ok: true, status: 200, data: social("Анна Альфа", boot.identity.avatar) }); });
+      expect(new Set(labels)).toEqual(new Set(["Профиль: Анна Альфа"]));
+      expect(errors).toEqual([]);
+      expect(transport.meCalls).toBe(1);
+      expect(transport.socialCalls).toBe(1);
+      expect(container.querySelector("[data-generation]")?.getAttribute("data-generation")).toBe("0");
+    } finally {
+      observer.disconnect();
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("drops request A before waiting for account B's social profile, never falling back to provider name", async () => {
+    const pendingSocial = deferred<{ ok: false; status: number; error: string }>();
+    transport.getMe.mockResolvedValue({ ok: true, status: 200, data: me("u2", "private@example.test") });
+    transport.getMySocialProfile.mockReturnValue(pendingSocial.promise);
+    render(documentTree());
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль: Анна Альфа");
+    await flushCoalesce();
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль");
+    expect(screen.getByTestId("probe").querySelector("img")).toBeNull();
+    await act(async () => pendingSocial.resolve({ ok: false, status: 503, error: "offline" }));
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль");
+  });
+
+  it("clears server identity immediately on logout and fences pending responses", async () => {
+    const pendingMe = deferred<{ ok: true; status: number; data: Me }>();
+    transport.getMe.mockReturnValue(pendingMe.promise);
+    render(documentTree());
+    await flushCoalesce();
+    await act(async () => { window.dispatchEvent(new CustomEvent("gb-session-changed", { detail: { sessionPresence: "absent" } })); });
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль");
+    await act(async () => pendingMe.resolve({ ok: true, status: 200, data: me("u1", "Анна") }));
+    expect(screen.getByTestId("probe").querySelector("img")).toBeNull();
+  });
+
+  it("works when browser storage APIs throw and retains server presentation only on a transient same-document failure", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    transport.getMe.mockResolvedValue({ ok: false, status: 503, error: "offline" });
+    render(documentTree());
+    await flushCoalesce();
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль: Анна Альфа");
+    transport.getMe.mockResolvedValue({ ok: false, status: 401, error: "revoked" });
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await flushCoalesce();
+    expect(screen.getByTestId("probe").querySelector("img")).toBeNull();
+    expect(screen.getByTestId("probe").textContent).toBe("Профиль");
+  });
+});
+
+
+vi.mock("next/link", () => ({ default: ({ children, ...props }: ComponentProps<"a">) => createElement("a", props, children) }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/help" }));
+vi.mock("../src/components/consumer/radar/RadarSessionProvider", () => ({ RadarStatusAffordance: () => null }));
+import { DesktopNav } from "../src/components/consumer/RootNav";
+
+describe("full-document profile action", () => {
+  it("keeps a named accessible profile target and avatar through delayed revalidation and bounded image fallback", async () => {
+    const pending = deferred<{ ok: true; status: number; data: Me }>();
+    transport.getMe.mockReturnValue(pending.promise);
+    render(createElement(HeaderIdentityProvider, {
+      snapshot: { identity: { name: "Анна", avatar: { uploadedUrl: uploadedA, providerUrl: "https://avatars.yandex.net/photo" } }, imageGeneration: 0, loading: false, ownerId: "u1" },
+      children: createElement(DesktopNav, { active: "games" }),
+    }));
+    const profile = screen.getByRole("link", { name: "Профиль: Анна" });
+    expect(profile.getAttribute("href")).toBe("/profile");
+    await flushCoalesce();
+    const image = profile.querySelector("img")!;
+    fireEvent.error(image);
+    expect(profile.querySelector("img")?.getAttribute("src")).toBe("https://avatars.yandex.net/photo");
+    fireEvent.error(profile.querySelector("img")!);
+    expect(profile.querySelector("img")).toBeNull();
+    expect(profile.querySelector(".gb-header-avatar")?.textContent).toBe("А");
+    expect(profile.getAttribute("aria-label")).toBe("Профиль: Анна");
+  });
+
+  it("falls back when an SSR avatar failed before React could attach onError", () => {
+    vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(0);
+    transport.getMe.mockReturnValue(new Promise(() => {}));
+    render(createElement(HeaderIdentityProvider, {
+      snapshot: { identity: { name: "Анна", avatar: { uploadedUrl: uploadedA, providerUrl: "https://avatars.yandex.net/photo" } }, imageGeneration: 0, loading: false, ownerId: "u1" },
+      children: createElement(DesktopNav, { active: "games" }),
+    }));
+    const profile = screen.getByRole("link", { name: "Профиль: Анна" });
+    expect(profile.querySelector("img")).toBeNull();
+    expect(profile.querySelector(".gb-header-avatar")?.textContent).toBe("А");
+  });
+
+  it("uses an intentional loading action on the first document without established identity", async () => {
+    transport.getMe.mockReturnValue(new Promise(() => {}));
+    render(createElement(DesktopNav, { active: "games" }));
+    const profile = screen.getByRole("link", { name: "Профиль: загрузка" });
+    expect(profile.getAttribute("aria-busy")).toBe("true");
+    expect(profile.getAttribute("href")).toBe("/profile");
+    expect(profile.querySelector(".gb-header-avatar")?.textContent).toBe("…");
+    expect(profile.querySelector(".gb-header-profile-label")?.textContent).toBe("Загрузка…");
+    await flushCoalesce();
+    expect(profile.getAttribute("aria-busy")).toBe("true");
   });
 });
