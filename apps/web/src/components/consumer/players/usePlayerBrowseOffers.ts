@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PlayInterestReceipt, PlayInterestView } from "@gobadminton/contracts/friendship-types";
+import type { BrowseMatchConfirmation, MatchPlayer } from "./PlayerBrowseMatch";
+import { privateActor } from "../../../lib/foreground-updates";
 import { getMe, getMySocialProfile } from "../../../lib/api-client";
 import type { Me, OwnSocialProfile, PublicPlayer } from "../../../lib/consumer-types";
 import {
@@ -169,6 +171,7 @@ function restoreUnresolvedPeers(
 }
 
 type Props = {
+  onMatchConfirmed?: (confirmation: BrowseMatchConfirmation) => void;
   finderActive: boolean;
   ordinaryScope: string;
   catalogPlayers: PublicPlayer[];
@@ -185,6 +188,7 @@ type Props = {
  * Mutation instances stay peer-immutable inside PlayerBrowseOfferOpHost — not here.
  */
 export function usePlayerBrowseOffers({
+  onMatchConfirmed,
   finderActive,
   ordinaryScope,
   catalogPlayers,
@@ -213,6 +217,10 @@ export function usePlayerBrowseOffers({
   const [unresolved, setUnresolved] = useState<UnresolvedOffer[]>([]);
   const [activeOperation, setActiveOperation] = useState<BrowseOfferOperation | null>(null);
 
+  const matchSelf = useRef<MatchPlayer | null>(null);
+  const admittedMatchSelf = useRef<{ token: string; admittedAt: number; self: MatchPlayer } | null>(null);
+  const matchCallback = useRef(onMatchConfirmed);
+  matchCallback.current = onMatchConfirmed;
   const actorIdRef = useRef<string | null>(null);
   const privateGenRef = useRef(0);
   const opPhaseRef = useRef<BrowseOfferPhase>("idle");
@@ -259,6 +267,8 @@ export function usePlayerBrowseOffers({
   useEffect(() => {
     let live = true;
     setAuthState("loading");
+    matchSelf.current = null;
+    admittedMatchSelf.current = null;
     setMe(null);
     setOwnPublicPlayerId(null);
     setOwnSocialStatus("loading");
@@ -293,6 +303,8 @@ export function usePlayerBrowseOffers({
     })();
     const expire = () => {
       live = false;
+      matchSelf.current = null;
+      admittedMatchSelf.current = null;
       actorIdRef.current = null;
       privateGenRef.current = privateViews.currentGeneration;
       admitLockRef.current = false;
@@ -344,6 +356,8 @@ export function usePlayerBrowseOffers({
         social.ok ? social.data : null,
         social.ok,
       );
+      matchSelf.current = social.ok && social.data.publicPlayerId
+        ? { publicPlayerId: social.data.publicPlayerId, displayName: social.data.displayName } : null;
       setOwnPublicPlayerId(mapped.publicPlayerId);
       setOwnSocialStatus(mapped.status);
     })();
@@ -615,10 +629,17 @@ export function usePlayerBrowseOffers({
     setOpPhase(relationship);
     setOpNotice("");
     opPhaseRef.current = relationship;
+    const captured = admittedMatchSelf.current;
+    admittedMatchSelf.current = null;
+    if (captured?.token === op.token) matchCallback.current?.({
+      actor: privateActor({ id: op.actorId, csrfToken: op.csrf }), privateGeneration: op.privateGeneration,
+      token: op.token, admittedAt: captured.admittedAt, peer: { publicPlayerId: op.peerId, displayName: op.peerName }, self: captured.self, receipt,
+    });
   }, [opMatchesCurrentActor, bumpPeerMutation]);
 
   const onOperationFailed = useCallback((op: BrowseOfferOperation, notice: string) => {
     if (activeTokenRef.current !== op.token) return;
+    admittedMatchSelf.current = null;
     admitLockRef.current = false;
     setActiveOperation(null);
     activeTokenRef.current = null;
@@ -632,6 +653,7 @@ export function usePlayerBrowseOffers({
 
   const onOperationUnknown = useCallback((op: BrowseOfferOperation, notice: string) => {
     if (activeTokenRef.current !== op.token) return;
+    admittedMatchSelf.current = null;
     admitLockRef.current = false;
     setActiveOperation(null);
     activeTokenRef.current = null;
@@ -671,6 +693,7 @@ export function usePlayerBrowseOffers({
       body: command.body,
       method: "POST",
     };
+    admittedMatchSelf.current = matchSelf.current ? { token, admittedAt: performance.now(), self: { ...matchSelf.current } } : null;
     admitLockRef.current = true;
     activeTokenRef.current = token;
     peerNamesRef.current.set(input.peerId, input.peerName);

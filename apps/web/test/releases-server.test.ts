@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps seventy-three confirmed seed deployments including accepted alpha.1–alpha.64 and dedupes identical live rows", () => {
+  it("keeps seventy-four confirmed seed deployments including accepted alpha.1–alpha.65 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(73);
+    expect(seedCount).toBe(74);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -289,7 +289,26 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     }]);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(68);
+    const alpha65 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
+      (row) => row.application_version === "0.1.0-alpha.65",
+    );
+    expect(alpha65).toEqual([{
+      environment: "dev",
+      source_sha: "9efe1bc4467a1a74379aee9d4fe870b134130754",
+      application_version: "0.1.0-alpha.65",
+      version_label: "0.1.0-alpha.65",
+      title: "Маскирование нецензурных выражений в открытых обсуждениях",
+      release_id: "r42598731549-a1",
+      accepted_at: "2026-11-09T10:21:55.000Z",
+      status: "ACCEPTED",
+      kind: "pipeline",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+    }]);
+    expect(buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).some(
+      (row) => row.application_version === CURRENT_APPLICATION_VERSION,
+    )).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(69);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -370,7 +389,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.61"
       || row.application_version === "0.1.0-alpha.62"
       || row.application_version === "0.1.0-alpha.63"
-      || row.application_version === "0.1.0-alpha.64",
+      || row.application_version === "0.1.0-alpha.64"
+      || row.application_version === "0.1.0-alpha.65",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -447,7 +467,7 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.65");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.66");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -717,6 +737,7 @@ describe("history seed integrity", () => {
       "2026-11-09T00:42:02Z",
       "2026-11-09T08:06:21Z",
       "2026-11-09T09:37:22Z",
+      "2026-11-09T10:21:55Z",
     ]);
   });
 

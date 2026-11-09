@@ -62,17 +62,10 @@ function reviewCue(count: number): string {
   return count > 0 ? ` · Отзывы · ${count}` : " · Отзывы";
 }
 
-function roleReviewAriaLabel(
-  role: RoleKind,
-  name: string,
-  count: number,
-  trainerSelfDeclared: boolean,
-): string {
+function roleReviewAriaLabel(role: RoleKind, name: string, count: number): string {
   const kind = role === "training" ? "Отзывы о тренировках" : "Отзывы об организации";
   const headed = count > 0 ? `${kind} · ${count}` : kind;
-  if (role === "training" && trainerSelfDeclared) {
-    return `${headed}: ${name}. Тренер · самостоятельно указано`;
-  }
+  // Public accessible copy stays plain «Тренер» / role name — no false verified claim.
   return `${headed}: ${name}`;
 }
 
@@ -305,6 +298,8 @@ export type RoleReputationCompactView = {
   trainingTrigger: RoleReputationCompactTrigger | null;
   organizationTrigger: RoleReputationCompactTrigger | null;
   historyLabel: string | null;
+  /** True while RoleReviewsDialog is open — keep disclosure region mounted for focus return. */
+  dialogOpen: boolean;
 };
 
 /** Compact discovery/card footer actions outside the title Link — no nested interactive controls. */
@@ -336,7 +331,6 @@ export function RoleReputationCardActions({
             "training",
             trainerName || training.subjectDisplayName || "Тренер",
             training.publishedReviewCount,
-            true,
           ),
           cue: reviewCue(training.publishedReviewCount),
           count: training.publishedReviewCount,
@@ -351,7 +345,6 @@ export function RoleReputationCardActions({
             "organization",
             organizerName || organization.subjectDisplayName || "Организатор",
             organization.publishedReviewCount,
-            false,
           ),
           cue: reviewCue(organization.publishedReviewCount),
           count: organization.publishedReviewCount,
@@ -381,6 +374,7 @@ export function RoleReputationCardActions({
           trainingTrigger,
           organizationTrigger,
           historyLabel,
+          dialogOpen: open != null,
         })}
         {dialog}
       </>

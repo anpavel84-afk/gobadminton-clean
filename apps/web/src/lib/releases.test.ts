@@ -50,8 +50,30 @@ describe("releases current descriptor literals", () => {
     expect(row.owner_uat).toBe("NOT_TESTED");
   });
 
-  it("bumps current descriptor to alpha.65 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.65");
+  it("preserves the exact ten-field trusted alpha.65 receipt and historical public comment mask", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.65");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(3075);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "dbf3195231dcbea1dee7a363698d3f9133599fd9c5584c21e84247a08bb2469f",
+    );
+    expect(row.title).toBe("Маскирование нецензурных выражений в открытых обсуждениях");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toHaveLength(1);
+    const fixes = row.fixes.join(" ");
+    expect(fixes).toMatch(/обсуждениях игр и площадок.*нецензурные выражения показываются замаскированными/i);
+    expect(fixes).toMatch(/в ответах.*после редактирования.*повторной отправке того же комментария/i);
+    expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
+    expect(row.known_limitations).toHaveLength(8);
+    expect(row.known_limitations.join(" ")).toMatch(/#506.*проверка маскирования.*ещё не выполнена/i);
+    expect(row.owner_uat).toBe("NOT_TESTED");
+  });
+
+  it("bumps current descriptor to alpha.66 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.66");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -65,25 +87,30 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/Маскирование.*открытых обсуждениях/i);
-    expect(prose).toMatch(/обсуждениях игр и площадок/i);
+    expect(prose).toMatch(/Карточка тренировки и подтверждение дружеского матча/i);
+    expect(prose).toMatch(/Отзывы и история|Дружеский матч/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/обсуждениях игр и площадок/i);
-    expect(fixes).toMatch(/нецензурные выражения показываются замаскированными/i);
-    expect(fixes).toMatch(/в ответах.*после редактирования/i);
-    expect(fixes).toMatch(/повторной отправке того же комментария/i);
+    expect(fixes).toMatch(/роли тренера и организатора показаны согласованно/i);
+    expect(fixes).toMatch(/«Отзывы и история» изначально свёрнут.*раскрывает отзывы и историю отдельно по ролям/i);
+    expect(fixes).toMatch(/метка «С тренером» читается целиком/i);
+    expect(fixes).toMatch(/квадратные фотографии на широком экране и мобильные кнопки действий/i);
+    expect(fixes).toMatch(/подтверждённом взаимном желании сыграть.*«Дружеский матч».*именами обоих игроков и продолжением поиска/i);
+    expect(fixes).toMatch(/переход к общению зависит от текущих прав/i);
+    expect(fixes).toMatch(/высоту экрана и безопасные отступы/i);
+    expect(fixes).not.toMatch(/нецензурные выражения.*замаскированными|Маскирование/i);
     expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
     expect(fixes).not.toMatch(/не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Маскирование нецензурных выражений в открытых обсуждениях");
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(8);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Карточка тренировки и подтверждение дружеского матча");
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(9);
     const limitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
     expect(limitations).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
     expect(limitations).toMatch(/#506.*проверка маскирования.*редактирования с действующими правами.*разбора жалоб.*ещё не выполнена/i);
     expect(limitations).toMatch(/#522|карте площадок|отзыв после конкретной игры|публичного автора без замены/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/карточки тренировки.*«Дружеский матч».*реальными ролями, обычным входом и сетевыми ответами ещё не выполнена/i);
     expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("accepted_at");
     expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("deployments");
     expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("api_digest");
