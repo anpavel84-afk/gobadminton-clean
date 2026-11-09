@@ -69,6 +69,7 @@ CI_POLL_S = 30
 CI_WAIT_BUDGET_S = 1200
 DEPLOY_WAIT_BUDGET_S = 900
 AUTHOR_TIMEOUT_S = 1200
+QA_NATIVE_FSIZE_MAX = 512 << 20  # Existing native_cursor finite private-file policy.
 QA_OUTPUT_MAX = 2 << 20  # Equality is possible truncation, never accepted.
 QA_TIMEOUT_S = 1800
 
@@ -182,8 +183,9 @@ def uid1002_preexec():
 
 
 def _qa_output_policy():
-    return dict(fsize_soft=QA_OUTPUT_MAX, fsize_hard=QA_OUTPUT_MAX,
-                core_soft=0, core_hard=0, guard='uid1002+nnp+rlimit-v1')
+    return dict(fsize_soft=QA_NATIVE_FSIZE_MAX, fsize_hard=QA_NATIVE_FSIZE_MAX,
+                capture_max=QA_OUTPUT_MAX, final_max=QA_OUTPUT_MAX,
+                core_soft=0, core_hard=0, guard='uid1002+nnp+pipe-capture-v2')
 
 
 # Fixed packet is below Linux PIPE_BUF; only trusted preexec owns the writer.
@@ -236,7 +238,7 @@ def _qa_cleanup_identity(process, fd, binding):
             raise ValueError('packet')
         pid, pgrp, ticks, uid, soft, hard, core_soft, core_hard, nnp = layout.unpack(raw[len(binding):])
         if (pid != process.pid or pid <= 1 or pgrp != pid or ticks <= 0
-                or uid != CURSOR_UID or (soft, hard) != (QA_OUTPUT_MAX, QA_OUTPUT_MAX)
+                or uid != CURSOR_UID or (soft, hard) != (QA_NATIVE_FSIZE_MAX, QA_NATIVE_FSIZE_MAX)
                 or (core_soft, core_hard, nnp) != (0, 0, 1)):
             raise ValueError('identity')
         identity = dict(pid=pid, pgrp=pgrp, start_ticks=str(ticks), uid=uid,
@@ -303,6 +305,67 @@ def _qa_output_bytes(path, *, scope=None, private=False):
         return raw
     finally:
         os.close(fd)
+
+
+def _qa_capture(process, stdout_file, stderr_file, final_private, timeout):
+    """Parent-only bounded pipe drain; private native files have a separate cap."""
+    import selectors
+    import stat
+    deadline = time.monotonic() + timeout
+    final_identity = None
+    def watch_final():
+        nonlocal final_identity
+        try:
+            info = final_private.lstat()
+        except FileNotFoundError:
+            if final_identity is not None:
+                raise LiveError('qa_output_unstable_hold')
+            return
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != CURSOR_UID
+                or info.st_mode & 0o022 or info.st_nlink != 1
+                or not 0 <= info.st_size < QA_OUTPUT_MAX):
+            raise LiveError('qa_output_metadata_hold')
+        current = (info.st_dev, info.st_ino)
+        if final_identity is not None and current != final_identity:
+            raise LiveError('qa_output_unstable_hold')
+        final_identity = current
+    try:
+        with selectors.DefaultSelector() as selector:
+            for pipe, output in ((process.stdout, stdout_file), (process.stderr, stderr_file)):
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ, [output, 0])
+            leader_stopped = False
+            while True:
+                if not leader_stopped and process.poll() is not None:
+                    _kill_owned_process_group(process)
+                    leader_stopped = True
+                if not selector.get_map() and leader_stopped:
+                    break
+                watch_final()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(process.args, timeout)
+                for key, _ in selector.select(min(0.05, remaining)):
+                    output, count = key.data
+                    chunk = os.read(key.fd, min(65536, QA_OUTPUT_MAX - count))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if count + len(chunk) >= QA_OUTPUT_MAX:
+                        raise LiveError('qa_output_capture_hold')
+                    output.write(chunk)
+                    output.flush()
+                    key.data[1] += len(chunk)
+            watch_final()
+            process.wait(timeout=max(0.001, deadline - time.monotonic()))
+    except (OSError, ValueError) as err:
+        raise LiveError('qa_output_capture_hold') from err
+    finally:
+        try:
+            _kill_owned_process_group(process)
+        finally:
+            process.stdout.close()
+            process.stderr.close()
 
 
 def require_executor_uid():
@@ -2337,8 +2400,8 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 pipeline_revision=host.installed_release_sha(), source_before=head,
                 readonly_bytes_before=source_bytes_before)
         with (evidence / 'prompt.md').open() as i, \
-                (evidence / 'events.jsonl').open('w') as o, \
-                (evidence / 'stderr').open('w') as e:
+                (evidence / 'events.jsonl').open('wb') as o, \
+                (evidence / 'stderr').open('wb') as e:
             # Freeze parent intent + trusted Root/shared recipe identity before fork.
             # Packet bytes never become runtime approval; only the parent reads them.
             launch_binding = os.urandom(32) + hashlib.sha256(json.dumps(dict(
@@ -2350,7 +2413,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
             try:
                 try:
                     p = subprocess.Popen(
-                        cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
+                        cmd, stdin=i, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                         umask=0o022, close_fds=True, pass_fds=(identity_write,), env=child_env,
                         preexec_fn=_qa_preexec(identity_write, launch_binding))
                 finally:
@@ -2366,9 +2429,9 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                                   error='qa_runtime_identity_hold', no_blind_replay=True)
                 raise ProviderError('qa_runtime_identity_hold', charge='unknown') from err
             try:
-                p.wait(timeout=QA_TIMEOUT_S + 30)
+                _qa_capture(p, o, e, final_private, QA_TIMEOUT_S + 30)
             except subprocess.TimeoutExpired as err:
-                # Raw events already on disk via stdout inheritance; kill owned pg only.
+                # Parent retained only bounded raw chunks; kill owned pg only.
                 _kill_owned_process_group(p)
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout',
                                   no_blind_replay=True)
@@ -4680,7 +4743,7 @@ def _qa_process_identity(process, argv):
     status = (proc / 'status').read_text().splitlines()
     uid = int(next(line for line in status if line.startswith('Uid:')).split()[2])
     limits = (proc / 'limits').read_text().splitlines()
-    for label, expected in (('Max file size', QA_OUTPUT_MAX), ('Max core file size', 0)):
+    for label, expected in (('Max file size', QA_NATIVE_FSIZE_MAX), ('Max core file size', 0)):
         line = next(line for line in limits if line.startswith(label)).split()
         if line[-3:-1] != [str(expected), str(expected)]:
             raise ValueError('qa process output limits mismatch')
