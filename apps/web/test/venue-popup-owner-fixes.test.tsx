@@ -1,7 +1,9 @@
+/** @vitest-environment jsdom */
 import { createRef, type ComponentProps, type ReactNode } from "react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PathnameContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VenuePublicContacts, VenueSheet, VenueSheetGameRow } from "../src/components/consumer/games/VenueSheet";
 import { CreateGamePage, CreateGamePresentation, emptyDraft } from "../src/components/consumer/pages/CreateGamePage";
 import { initialCreateVenue, selectCreateVenue } from "../src/lib/venue-popup-create";
@@ -10,7 +12,9 @@ import { safeAuthReturnPath } from "../src/lib/auth-return";
 import { formatSeats } from "../src/lib/game-presentation";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
-// Real React SSR throughout. No hook substitution, component mocks or event/effect claims.
+// Real React SSR for presentation; DOM rendering for community action callbacks.
+// No hook substitution or component mocks.
+afterEach(cleanup);
 const venue: VenueSummary = { id: "venue", cityId: "city", name: "Зал", address: "Адрес", timezone: "Europe/Moscow" };
 const gamePhoto = `/v1/media/game-covers/${"a".repeat(64)}.png`;
 const venuePhoto = `/v1/media/venue-covers/${"b".repeat(64)}.png`;
@@ -146,18 +150,16 @@ describe("production venue popup presentation with real React", () => {
   });
   it("uses only venue.publicContacts, keeps coverSlot and gates the local CTA", () => {
     const supplied = { ...venue, publicContacts: null, bookingNote: "PRIVATE_BOOKING", contact_phone: "PRIVATE_PHONE" };
-    const render = (ready: boolean, games: Game[]) => ssr(<VenueSheet venue={supplied} games={games} gamesReady={ready} now={0} active={false} coverSlot={<div>Existing cover slot</div>} onCollapse={noop} onDeselect={noop} />);
+    const render = (ready: boolean, games: Game[]) => ssr(<VenueSheet venue={supplied} games={games} gamesReady={ready} now={0} active={false} coverSlot={<div>Existing cover slot</div>} onCollapse={noop} onDeselect={noop} onCommunitySectionChange={noop} />);
     const html = render(true, []);
     expect(html).toContain("Existing cover slot"); expect(html).not.toContain("PRIVATE_");
     expect(html).toMatch(/<button[^>]*>Создать игру на этой площадке/);
-    // Legitimate public #ratings compact link only — not an organization contact.
-    expect(links(html)).toEqual([{
-      href: `/venues/${encodeURIComponent(venue.id)}#ratings`,
-      target: undefined,
-      rel: undefined,
-      text: "Оценки загружаются…Оценки и обсуждение",
-    }]);
-    expect(html).toContain('class="gb-venue-community__compact-link"');
+    expect(links(html)).toEqual([]);
+    expect(html).toMatch(/<nav[^>]*aria-label="Сообщество площадки"/);
+    for (const label of ["Оценить", "Обсуждение", "Отзывы после игры"]) {
+      expect(html).toMatch(new RegExp(`<button[^>]*>${label}</button>`));
+    }
+    expect(html).not.toContain('gb-venue-community__compact-link');
     expect(textContent(html).indexOf(venue.address)).toBeLessThan(textContent(html).indexOf("Контакты площадки"));
     expect(textContent(html).indexOf("Контакты площадки")).toBeLessThan(textContent(html).indexOf("Создать игру"));
     expect(render(false, [])).not.toContain("Создать игру на этой площадке");
@@ -166,6 +168,19 @@ describe("production venue popup presentation with real React", () => {
       expect(markup).toContain(`aria-label="${label}"`);
       expect(markup).toContain(`${label}<span aria-hidden="true">→</span></button>`);
     }
+  });
+  it("routes community buttons to the selected venue section inside the map", () => {
+    const onSection = vi.fn();
+    const { container } = render(<VenueSheet venue={venue} games={[]} gamesReady={false} now={0} active={false}
+      communitySummaryState="ready"
+      onCollapse={noop} onDeselect={noop} onCommunitySectionChange={onSection} />);
+    const actions = within(within(container).getByRole("navigation", { name: "Сообщество площадки" }));
+    for (const [label, section] of [["Оценить", "ratings"], ["Обсуждение", "discussion"], ["Отзывы после игры", "reviews"]] as const) {
+      fireEvent.click(actions.getByRole("button", { name: label }));
+      expect(onSection).toHaveBeenLastCalledWith(section);
+    }
+    expect(onSection).toHaveBeenCalledTimes(3);
+    expect(container.querySelector('a[href^="/venues/"]')).toBeNull();
   });
   it.each(["form", "preview"] as const)("shares actual fields and actions in embedded/full %s", step => {
     const props = presentation({ step });
@@ -251,4 +266,12 @@ describe("production pure create selection", () => {
     expect(new URL(path, "https://gobadminton.invalid").searchParams.get("venueId")).toBe(id);
     expect(safeAuthReturnPath("//evil.example")).toBe("/games");
   });
+});
+
+it("offers direct community sections independently of an unavailable schedule", () => {
+  const html = ssr(<VenueSheet venue={venue} games={[]} gamesReady={false} now={0} onCollapse={noop} onDeselect={noop} onCommunitySectionChange={noop} />);
+  expect(textContent(html)).toContain("Оценить");
+  expect(textContent(html)).toContain("Обсуждение");
+  expect(textContent(html)).toContain("Отзывы после игры");
+  expect(links(html).some(link => link.href?.endsWith("#ratings"))).toBe(false);
 });

@@ -363,3 +363,12 @@
 .gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] .gb-venue-gallery__frame > .gb-venue-preview-cover {
   transition: none;
 }
+/* D1: independent actions share the title column and the whole row focus state. */
+.gb-venue-picker-option-row:focus-within { background:#f2f7f3; }
+.gb-venue-picker-option-actions { display:flex; flex-wrap:wrap; align-items:flex-start; gap:0 12px; padding:0 22px 8px calc(22px + 80px + 12px); min-width:0; }
+.gb-venue-picker-option-actions .gb-venue-picker-option-community-link { padding:0; min-height:44px; }
+.gb-venue-picker-option-actions .gb-venue-picker-photos { padding:0; background:transparent; max-width:100%; }
+.gb-venue-picker-option-actions .gb-venue-picker-photos__summary { padding:0; color:var(--gb-purple,#7945de); }
+.gb-venue-picker-option-actions .gb-venue-picker-photos[open] { flex-basis:100%; }
+@media(max-width:720px) { .gb-venue-picker-option-actions { padding-left:calc(16px + 80px + 12px); padding-right:16px; } }
+@media(min-width:1024px) { .gb-venue-picker-option-actions { padding-left:calc(40px + 80px + 12px); padding-right:40px; } }

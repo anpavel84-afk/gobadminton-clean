@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supportedLocation } from "../../../lib/discovery-city";
 import { getMe, listGames, listRoleReputationSummaries } from "../../../lib/api-client";
@@ -34,7 +34,18 @@ export function GamesDiscoveryPage() {
   const [authOpen, setAuthOpen] = useState(false);
   const { location: resolvedLocation } = useDiscoveryCity();
   const [urlCity, setUrlCity] = useState<string | null>(null);
-  const location = useMemo(() => supportedLocation(urlCity) ?? resolvedLocation, [urlCity, resolvedLocation]);
+  const requestedLocation = useMemo(() => supportedLocation(urlCity) ?? resolvedLocation, [urlCity, resolvedLocation]);
+  const mapUnresolved = useRef(false);
+  const [mapHeld, setMapHeld] = useState(false);
+  const [mapHoldNotice, setMapHoldNotice] = useState("");
+  const retainedLocation = useRef(requestedLocation);
+  if (!mapUnresolved.current) retainedLocation.current = requestedLocation;
+  const location = retainedLocation.current;
+  const onMapUnresolvedChange = useCallback((value: boolean) => {
+    mapUnresolved.current = value;
+    setMapHeld(value);
+    if (!value) setMapHoldNotice("");
+  }, []);
   const [selectedDay, setSelectedDay] = useState("");
   const [activityFilter, setActivityFilter] = useState<"all" | ActivityKind>("all");
   const [trainerRoleHandle, setTrainerRoleHandle] = useState("");
@@ -47,7 +58,17 @@ export function GamesDiscoveryPage() {
   useEffect(() => {
     const readContext = () => {
     const query = new URLSearchParams(window.location.search);
-    setView(query.get("view") === "map" ? "map" : "list");
+    if (mapUnresolved.current) {
+      if (query.get("view") !== "map") setMapHoldNotice("Проверьте результат текущей операции перед возвратом к списку.");
+      const heldUrl = new URL(window.location.href);
+      heldUrl.searchParams.set("view", "map");
+      if (retainedLocation.current) heldUrl.searchParams.set("cityId", retainedLocation.current.cityId);
+      // Correct every history navigation in the handler: repeated intent may not
+      // change React state, so the passive URL effect need not run again.
+      if (heldUrl.href !== window.location.href) window.history.replaceState(window.history.state, "", heldUrl);
+    } else setView(query.get("view") === "map" ? "map" : "list");
+    // Read the original query, not the held URL: keep the requested city until
+    // all operations settle, or a later navigation explicitly cancels it.
     setUrlCity(query.get("cityId"));
     const day = query.get("day");
     setSelectedDay(day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "");
@@ -71,7 +92,7 @@ export function GamesDiscoveryPage() {
     else url.searchParams.delete("trainer");
     if (location) url.searchParams.set("cityId", location.cityId);
     window.history.replaceState(window.history.state, "", url);
-  }, [view, selectedDay, activityFilter, trainerRoleHandle, contextReady, location]);
+  }, [view, selectedDay, activityFilter, trainerRoleHandle, contextReady, location, requestedLocation]);
 
   const previousView = useRef(view);
   useEffect(() => {
@@ -90,6 +111,10 @@ export function GamesDiscoveryPage() {
   }, [view]);
 
   function changeView(next: "list" | "map") {
+    if (next === "list" && mapUnresolved.current) {
+      setMapHoldNotice("Проверьте результат текущей операции перед возвратом к списку.");
+      return;
+    }
     if (next === "map") {
       listScroll.current = window.scrollY;
       try { sessionStorage.setItem(`gb-games-list-scroll:${key}`, String(window.scrollY)); } catch { /* Optional storage. */ }
@@ -325,7 +350,9 @@ export function GamesDiscoveryPage() {
         {view === "list" && <CreateBanner busy={creating} onClick={() => void goCreate()} />}
       </section>}
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
-      {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} onReturnToList={() => changeView("list")} /></GamesMapViewport> : null}
+      {mapHoldNotice && <p role="alert">{mapHoldNotice}</p>}
+      {mapHeld && requestedLocation?.cityId !== location.cityId && <p role="alert">Смена города отложена. Открыта площадка города {location.nameRu}; сначала проверьте результат операции.</p>}
+      {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} onUnresolvedChange={onMapUnresolvedChange} onReturnToList={() => changeView("list")} /></GamesMapViewport> : null}
       {view === "map" && trainerRoleHandle ? <p className="gb-discovery-helper" role="status" data-map-filter-honesty="trainer">Карта показывает все тренировки и игры выбранного города. Фильтр личного тренера действует в списке; при возврате к списку он сохранится.</p> : null}
       {view === "map" && levelFilterActive ? <p className="gb-discovery-helper" role="status" data-map-filter-honesty="level">{LEVEL_GUIDE_MAP_HONESTY}</p> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>

@@ -1,6 +1,9 @@
 "use client";
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import { DesktopMapInspector, useDesktopMapInspector } from "./DesktopMapInspector";
+
+const VenuePopupContentVisible = createContext(true);
+export function useVenuePopupContentVisible() { return useContext(VenuePopupContentVisible); }
 
 type Drag = { id: number; x: number; y: number; lastY: number; time: number; velocity: number; origin: boolean; start: number; travel: number; axis: "pending" | "vertical"; target: HTMLButtonElement };
 type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement; galleryOwned?: boolean };
@@ -29,7 +32,7 @@ export function useVenuePopupModalLifecycle({
     initialFocusRef?.current?.focus();
     const keydown = (event: KeyboardEvent) => {
       // The portal/native dialog owns its own keyboard and focus lifecycle.
-      if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
+      if (document.querySelector(".gb-venue-picker, dialog[open], .gb-comment__menu-panel[role=menu]")) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); escape.current(); return; }
       // Desktop inspector (lockBody=false) must not trap Tab — focus moves between map and panel.
       if (!lockBody || event.key !== "Tab") return;
@@ -59,13 +62,15 @@ export function useVenuePopupModalLifecycle({
 }
 
 /** The handle retains its old expanded gesture. Only the compact surface gains full-card swipes. */
-export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, children, labels }: {
+export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, children, labels, retainContent = false }: {
   expanded: boolean; onExpandedChange: (value: boolean) => void; onDeselect: () => void;
   preview: ReactNode; children: ReactNode;
   /** Narrow neutral copy for non-venue sheets; gesture/geometry stay identical. */
+  retainContent?: boolean;
   labels?: { dialog?: string; expandHandle?: string; collapseHandle?: string };
 }) {
   const desktop = useDesktopMapInspector();
+  const compactHeight = retainContent ? 224 : 172;
   const dialogLabel = labels?.dialog ?? "Выбранная площадка";
   const expandHandle = labels?.expandHandle ?? "Развернуть площадку";
   const collapseHandle = labels?.collapseHandle ?? "Свернуть площадку";
@@ -137,7 +142,7 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   const compactPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (expanded || moving || settling || drag.current || compactDrag.current ||
         !event.isPrimary || event.button !== 0 ||
-        (event.target as HTMLElement).closest?.(".gb-venue-handle")) return;
+        (event.target as HTMLElement).closest?.(".gb-venue-handle, [data-community-actions], input, select, textarea, a, button:not(.gb-venue-preview-button)")) return;
     const travel = (full.current?.getBoundingClientRect().height ?? 0) -
       (compact.current?.getBoundingClientRect().height ?? 0);
     if (travel <= 0) return;
@@ -254,10 +259,11 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
         role={!desktop && expanded ? "dialog" : undefined}
         aria-modal={!desktop && expanded ? "true" : undefined}
         aria-label={!desktop && expanded ? dialogLabel : undefined}
+        data-community-host={retainContent || undefined}
         data-expanded={desktop || expanded}
         data-desktop={desktop ? "true" : undefined}
         data-moving={desktop ? undefined : moving}
-        style={desktop ? undefined : { height: position === null ? (expanded ? "88dvh" : "172px") : `calc(172px + ${position}px)`, transition: moving ? "none" : "height 220ms cubic-bezier(.2,.8,.2,1)" }}
+        style={desktop ? undefined : { height: position === null ? (expanded ? "88dvh" : `${compactHeight}px`) : `calc(${compactHeight}px + ${position}px)`, transition: moving ? "none" : "height 220ms cubic-bezier(.2,.8,.2,1)" }}
         // A swipe's synthetic click has no new pointerdown. A later real tap does.
         // Clear only stale suppression at the start of a fresh press so the first
         // expanded Close/Back tap is never swallowed after an iPhone swipe.
@@ -286,7 +292,7 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
         data-compact-morph={desktop ? undefined : compactMorph}
         data-settling={desktop ? undefined : settling}>
         {/* Stable slots: CSS hides measure/handle/preview inside the desktop rail. */}
-        <div ref={compact} className="gb-venue-popup-compact-measure" aria-hidden="true" />
+        <div ref={compact} className="gb-venue-popup-compact-measure" style={{ height: compactHeight }} aria-hidden="true" />
         <div ref={full} className="gb-venue-popup-full-measure" aria-hidden="true" />
         <button type="button" className="gb-venue-handle" aria-label={(desktop || expanded) ? collapseHandle : expandHandle}
           tabIndex={desktop ? -1 : undefined}
@@ -342,7 +348,7 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
           {/* Keep the surface slot mounted; omit compact children on desktop (CSS also hides). */}
           {desktop ? null : preview}
         </div>
-        {(desktop || visible) && <div className="gb-venue-popup-content">{children}</div>}
+        {(retainContent || desktop || visible) && <div className="gb-venue-popup-content" hidden={!desktop && !visible} inert={!desktop && !visible}><VenuePopupContentVisible.Provider value={desktop || visible}>{children}</VenuePopupContentVisible.Provider></div>}
       </div>
     </DesktopMapInspector>
   </>;

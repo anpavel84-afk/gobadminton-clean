@@ -5,6 +5,8 @@ import { createElement, useState, type ComponentProps, type ReactNode } from "re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
 import type { VenueSummary } from "../src/lib/consumer-types";
+import type * as VenueCoverModule from "../src/components/consumer/venues/VenueCover";
+import type * as VenuePickerDialogModule from "../src/components/consumer/games/VenuePickerDialog";
 
 function renderWithPath(node: ReactNode) {
   return render(createElement(PathnameContext.Provider, { value: "/games/create" }, node));
@@ -29,7 +31,8 @@ vi.mock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({
   }),
 }));
 
-vi.mock("../src/components/consumer/venues/VenueCover", () => ({
+vi.mock("../src/components/consumer/venues/VenueCover", async importOriginal => ({
+  ...await importOriginal<typeof VenueCoverModule>(),
   VenueCover: () => createElement("span", { "data-cover": "stub" }),
 }));
 
@@ -390,4 +393,22 @@ describe("#507 I1 F4 CreateGamePage selected-venue community summary", () => {
     expect(link.getAttribute("href")).toBe(`/venues/${encodeURIComponent(V_A)}#ratings`);
     expect(link.className.split(/\s+/)).toContain("gb-venue-community__compact-link");
   });
+  it("keeps picker photo and community actions outside selection while search/select/cancel still work", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const { VenuePickerDialog } = await vi.importActual<typeof VenuePickerDialogModule>("../src/components/consumer/games/VenuePickerDialog");
+    fetchMock.handler = async () => jsonResponse({items:[{venueId:V_A,canonicalVenueId:V_A,state:"empty",average:null,count:0},{venueId:V_B,canonicalVenueId:V_B,state:"empty",average:null,count:0}]});
+    const select=vi.fn(), close=vi.fn();
+    renderWithPath(createElement(VenuePickerDialog,{venues:[venueA,venueB],selectedId:"",status:"ready",onSelect:select,onClose:close,onRetry:()=>{}}));
+    await screen.findAllByTestId("venue-picker-community-link");
+    const row=document.querySelector(".gb-venue-picker-option-row")!;
+    const option=row.querySelector(".gb-venue-picker-option")!;
+    expect(option.querySelector("a,summary,button")).toBeNull();
+    expect(row.querySelector(".gb-venue-picker-option-actions summary")).toBeTruthy();
+    fireEvent.click(row.querySelector("summary")!); expect(select).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("searchbox",{name:"Поиск площадки"}),{target:{value:venueA.name}});
+    expect(document.querySelectorAll(".gb-venue-picker-option")).toHaveLength(1);
+    fireEvent.click(document.querySelector(".gb-venue-picker-option")!);expect(select).toHaveBeenCalledWith(venueA);
+    fireEvent.click(screen.getByRole("button",{name:"Закрыть выбор площадки"}));expect(close).toHaveBeenCalledOnce();
+  });
+
 });

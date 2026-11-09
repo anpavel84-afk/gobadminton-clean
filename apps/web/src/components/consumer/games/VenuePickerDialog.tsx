@@ -159,6 +159,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                     </span>
                     {selectedId === venue.id && <span className="gb-venue-picker-check" aria-hidden="true">✓</span>}
                   </button>
+                  <div className="gb-venue-picker-option-actions">
                   <a
                     className="gb-venue-picker-option-community-link"
                     href={ratingsPath}
@@ -179,6 +180,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
                       </div>
                     </details>
                   ) : null}
+                  </div>
                 </div>
                 {hasSource ? (
                   <div className="gb-venue-picker-option-source">

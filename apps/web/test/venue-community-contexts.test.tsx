@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
-import { cleanup, render, screen, waitFor, act } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { createElement, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
+import type * as ApiClientModule from "../src/lib/api-client";
 
 const V1 = "10000000-0000-4000-8000-000000000001";
 const V2 = "10000000-0000-4000-8000-000000000002";
@@ -57,6 +58,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.resetModules();
 });
@@ -1566,5 +1568,264 @@ describe("#507 I1a20 unified frozen outcome invariant", () => {
     });
     await waitFor(() => expect(screen.getByText("Оценка убрана")).toBeTruthy());
     expect(deletes).toBe(3);
+  });
+});
+
+describe("Slice A shared community owner", () => {
+  it("shows the same server comment and anonymous published review in page and embedded contexts with unique IDs", async () => {
+    const { VenueCommunityContent } = await import("../src/components/consumer/venues/VenueCommunityContent");
+    fetchMock.handler = async url => {
+      if (url.includes("venue-community-summaries")) return new Response(JSON.stringify({items:[summary(V1,V1,"available",4.2,5)]}));
+      if (url.includes("experience-reviews")) return new Response(JSON.stringify({venueId:V1,publishedCount:1,items:[{reviewHandle:"published",authorLabel:"Участник игры",text:"Published projection",topics:[],publishedRevision:1,publishedAt:"2026-11-01T12:00:00Z"}],nextCursor:null,canWriteHint:false}));
+      if (url.includes("/comments")) return new Response(JSON.stringify({entityKind:"venue",entityId:V1,parentCommentId:null,visibleCount:1,canCreate:false,nextCursor:null,items:[{id:"comment",entityKind:"venue",entityId:V1,parentCommentId:null,body:"Actual server ***** text",deleted:false,version:1,createdAt:"2026-11-01T12:00:00Z",updatedAt:"2026-11-01T12:00:00Z",edited:false,mine:false,author:null,replyCount:0}]}));
+      throw new Error(`Unexpected read ${url}`);
+    };
+    render(createElement("div", null,
+      createElement(VenueCommunityContent,{venueId:V1,me:null,authReturnPath:`/venues/${V1}`}),
+      createElement(VenueCommunityContent,{venueId:V1,me:null,authReturnPath:"/games?view=map",embedded:true}),
+    ));
+    await waitFor(() => expect(screen.getAllByText("Published projection")).toHaveLength(2));
+    expect(screen.getAllByText("Actual server ***** text")).toHaveLength(2);
+    const ids = [...document.querySelectorAll("[id]")].map(node => node.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(fetchMock.calls.every(call => !call.method || call.method === "GET")).toBe(true);
+    expect(fetchMock.calls.some(call => call.url.includes("/community-rating/me"))).toBe(false);
+    expect(screen.getAllByRole("button",{name:"Поделиться опытом"})).toHaveLength(2);
+  });
+});
+
+it("retains the exact vote operation while its popup collapses and expands", async () => {
+  const { fireEvent } = await import("@testing-library/react");
+  const { VenuePopup } = await import("../src/components/consumer/games/VenuePopup");
+  const { VenueCommunityRating } = await import("../src/components/consumer/venues/VenueCommunityRating");
+  const pendingChanged = vi.fn();
+  fetchMock.handler = async (url, init) => {
+    if (init?.method === "PUT") return new Response("{}",{status:503});
+    if (url.includes("venue-community-summaries")) return new Response(JSON.stringify({items:[summary(V1,V1,"available",4.2,5)]}));
+    if (url.includes("/community-rating/me")) return new Response(JSON.stringify({summary:summary(V1,V1,"available",4.2,5),own:{venueId:V1,canonicalVenueId:V1,value:null,version:0,withdrawn:false,moderationState:"clear",allowedActions:{upsert:true,update:false,withdraw:false}}}));
+    throw new Error(url);
+  };
+  function Host() {
+    const [expanded,setExpanded] = useState(true);
+    return createElement(VenuePopup,{expanded,onExpandedChange:setExpanded,onDeselect:()=>{},preview:createElement("span",null,"Preview"),retainContent:true,
+      children:createElement(VenueCommunityRating,{venueId:V1,signedIn:true,actorId:ACTOR,csrfToken:CSRF,authReturnPath:"/games?view=map",onUnresolvedChange:pendingChanged}),
+    });
+  }
+  render(createElement(Host));
+  await waitFor(()=>expect((screen.getByRole("radio",{name:"4 из 5"}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("radio",{name:"4 из 5"}));
+  fireEvent.click(screen.getByRole("button",{name:"Отправить оценку"}));
+  await screen.findByTestId("venue-community-vote-unknown");
+  const operation = fetchMock.calls.find(call=>call.method === "PUT");
+  expect(operation).toBeTruthy(); expect(pendingChanged).toHaveBeenLastCalledWith(true);
+  fireEvent.click(screen.getByRole("button",{name:"Свернуть площадку"}));
+  expect(document.querySelectorAll('[data-testid="venue-community-vote-unknown"]')).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button",{name:"Развернуть площадку"}));
+  fireEvent.click(screen.getByRole("button",{name:"Повторить тот же запрос"}));
+  await waitFor(()=>expect(fetchMock.calls.filter(call=>call.method === "PUT")).toHaveLength(2));
+  const retry = fetchMock.calls.filter(call=>call.method === "PUT")[1]!;
+  expect(retry.body).toBe(operation!.body);
+  expect(new Headers(retry.headers).get("idempotency-key")).toBe(new Headers(operation!.headers).get("idempotency-key"));
+  expect(fetchMock.calls.filter(call=>call.url.includes("/community-rating/me"))).toHaveLength(1);
+});
+
+
+// Real React mounts and effects for both authorities; presentation children expose
+// their existing callbacks, while mutation packet behavior is tested with real forms.
+describe("mounted map and discovery lifecycle authorities", () => {
+  const cityA = "a0000000-0000-4000-8000-000000000001";
+  const cityB = "a0000000-0000-4000-8000-000000000002";
+  const discoveryCity = Object.freeze({
+    location: Object.freeze({ cityId: cityA, nameRu: "Москва", timezone: "Europe/Moscow" }),
+  });
+  const mapVenue = { id: V1, cityId: cityA, name: "Исходная площадка", address: "Адрес",
+    latitude: 55.7, longitude: 37.6, timezone: "Europe/Moscow", dataStatus: "verified", provenance: "PUBLIC" };
+  const mounted = vi.fn(), unmounted = vi.fn();
+  const mockedModules = ["next/dynamic", "next/navigation", "../src/lib/api-client",
+    "../src/components/consumer/ConsumerShell", "../src/components/consumer/discovery/DiscoveryCityProvider",
+    "../src/components/consumer/venues/SelectedVenueCover", "../src/components/consumer/games/VenuePreviewCard",
+    "../src/components/consumer/games/VenueSheet", "../src/components/consumer/games/VenuePopup"];
+  beforeEach(() => {
+    mounted.mockClear(); unmounted.mockClear();
+    window.history.replaceState(null, "", `/games?view=map&cityId=${cityA}&day=2026-11-20&activity=regular`);
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+    window.matchMedia = globalThis.matchMedia;
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 0));
+    vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    vi.doMock("../src/components/consumer/games/VenuePopup", () => ({ VenuePopup: ({ children }: { children: ReactNode }) => createElement("section", null, children) }));
+    vi.doMock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+    vi.doMock("next/dynamic", () => ({ default: () => (props: { onSelect: (venue: typeof mapVenue) => void; onReturnToList: () => void; cityId: string; venues: typeof mapVenue[] }) =>
+      createElement("div", { "data-testid": "map-city", "data-city": props.cityId },
+        createElement("button", { disabled: !props.venues.length, onClick: () => props.onSelect(mapVenue) }, "Выбрать площадку"),
+        createElement("button", { onClick: props.onReturnToList }, "Возврат из ошибки модуля")) }));
+    vi.doMock("../src/lib/api-client", async original => ({ ...await original<typeof ApiClientModule>(),
+      getMe: async () => ({ ok: true, data: { id: ACTOR, csrfToken: CSRF } }),
+      listAllCityVenues: async (city: string) => ({ ok: true, data: city === cityA ? [mapVenue] : [] }),
+      listAllUpcomingCityGames: async () => ({ ok: true, data: [] }),
+      listGames: async () => ({ ok: true, data: { items: [], nextCursor: null } }),
+      listRoleReputationSummaries: async () => ({ ok: true, data: { items: [] } }),
+    }));
+    vi.doMock("../src/components/consumer/ConsumerShell", () => ({ ConsumerShell: ({ children }: { children: ReactNode }) => createElement("main", null, children) }));
+    vi.doMock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({ useDiscoveryCity: () => discoveryCity, DiscoveryCityNotice: () => null }));
+    vi.doMock("../src/components/consumer/venues/SelectedVenueCover", () => ({ SelectedVenueCover: () => null,
+      useSelectedVenueCover: () => ({ compact: { current: null }, info: { current: null }, ready: false, fallback: null, retry() {} }) }));
+    vi.doMock("../src/components/consumer/games/VenuePreviewCard", () => ({ VenuePreviewCard: () => null }));
+    vi.doMock("../src/components/consumer/games/VenueSheet", async () => {
+      const { useEffect } = await import("react");
+      return { VenueSheet: (props: { venue: typeof mapVenue; onUnresolvedChange: (value: boolean) => void }) => {
+        useEffect(() => { mounted(); return () => { unmounted(); }; }, []);
+        return createElement("div", { "data-testid": "selected-owner" }, props.venue.name,
+          createElement("button", { onClick: () => props.onUnresolvedChange(true) }, "Операция UNKNOWN"),
+          createElement("button", { onClick: () => props.onUnresolvedChange(false) }, "Операция разрешена"));
+      } };
+    });
+    fetchMock.handler = async () => jsonResponse({ items: [] });
+  });
+  afterEach(() => {
+    cleanup();
+    mockedModules.forEach(module => vi.doUnmock(module));
+    vi.resetModules();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("routes visible and module-error returns through the mounted map guard and freezes a changed city", async () => {
+    const { GamesMapView } = await import("../src/components/consumer/games/GamesMapView");
+    const back = vi.fn();
+    const view = render(createElement(GamesMapView, { cityId: cityA, day: "2026-11-20", onReturnToList: back }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать площадку" }));
+    await screen.findByTestId("selected-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Операция UNKNOWN" }));
+    fireEvent.click(screen.getByRole("button", { name: /К списку/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Возврат из ошибки модуля" }));
+    expect(back).not.toHaveBeenCalled();
+    view.rerender(createElement(GamesMapView, { cityId: cityB, day: "2026-11-20", onReturnToList: back }));
+    expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
+    expect(screen.getByTestId("selected-owner").textContent).toContain("Исходная площадка");
+    expect(unmounted).not.toHaveBeenCalled(); expect(mounted).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Смена города отложена/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Операция разрешена" }));
+    await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    fireEvent.click(screen.getByRole("button", { name: /К списку/ }));
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it("parent Escape and popstate city/list transitions cannot unmount the pending owner", async () => {
+    const { GamesDiscoveryPage } = await import("../src/components/consumer/pages/GamesDiscoveryPage");
+    render(createElement(GamesDiscoveryPage));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать площадку" }));
+    await screen.findByTestId("selected-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Операция UNKNOWN" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("selected-owner")).toBeTruthy();
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
+    act(() => {
+      window.history.pushState(null, "", `/games?view=list&cityId=${cityB}&day=2026-11-20&activity=regular&selectedVenue=${V1}&communityCity=${cityA}#ratings`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+      expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
+    });
+    // The same requested city must be corrected even without a state change.
+    act(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("cityId", cityB);
+      window.history.pushState(window.history.state, "", url);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+    });
+    const held = new URL(window.location.href);
+    expect(held.searchParams.get("day")).toBe("2026-11-20");
+    expect(held.searchParams.get("activity")).toBe("regular");
+    expect(held.searchParams.get("selectedVenue")).toBe(V1);
+    expect(held.searchParams.get("communityCity")).toBe(cityA);
+    expect(held.hash).toBe("#ratings");
+    expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
+    expect(screen.getByTestId("selected-owner")).toBeTruthy();
+    expect(unmounted).not.toHaveBeenCalled();
+    expect(screen.getByText(/Смена города отложена/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Операция разрешена" }));
+    await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityB);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("map-city")).toBeNull());
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("list");
+  });
+
+  it("cancels held city intent without losing the actor-bound UNKNOWN retry, then allows normal city navigation", async () => {
+    vi.doMock("../src/components/consumer/games/VenueSheet", async () => {
+      const { useEffect } = await import("react");
+      const { VenueCommunityRating } = await import("../src/components/consumer/venues/VenueCommunityRating");
+      return { VenueSheet: (props: { venue: typeof mapVenue; me: { id: string; csrfToken: string } | null; onUnresolvedChange: (value: boolean) => void }) => {
+        useEffect(() => { mounted(); return () => { unmounted(); }; }, []);
+        return createElement("div", { "data-testid": "selected-owner" }, props.venue.name,
+          createElement(VenueCommunityRating, { venueId: props.venue.id, signedIn: !!props.me,
+            actorId: props.me?.id, csrfToken: props.me?.csrfToken ?? null,
+            authReturnPath: "/games?view=map", onUnresolvedChange: props.onUnresolvedChange }));
+      } };
+    });
+    let attempts = 0;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("venue-community-summaries")) return jsonResponse({ items: [summary(V1, V1, "available", 4.2, 5)] });
+      if (url.includes("/community-rating/me")) return jsonResponse({ own: ownRow({ value: null, version: 0 }), summary: summary(V1, V1, "available", 4.2, 5) });
+      if (url.includes("/community-rating") && init?.method === "PUT") {
+        attempts += 1;
+        return attempts === 1 ? jsonResponse({}, 503) : jsonResponse({ own: ownRow({ value: 4, version: 1 }), summary: summary(V1, V1, "available", 4.2, 6) });
+      }
+      throw new Error(`Unexpected request ${url}`);
+    };
+    const { GamesDiscoveryPage } = await import("../src/components/consumer/pages/GamesDiscoveryPage");
+    render(createElement(GamesDiscoveryPage));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать площадку" }));
+    await waitFor(() => expect((screen.getByRole("radio", { name: "4 из 5" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("radio", { name: "4 из 5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Отправить оценку" }));
+    await screen.findByTestId("venue-community-vote-unknown");
+    const owner = screen.getByTestId("selected-owner");
+    const frozen = fetchMock.calls.find(call => call.method === "PUT")!;
+    expect(new Headers(frozen.headers).get("x-csrf-token")).toBe(CSRF);
+    expect(JSON.parse(frozen.body!)).toEqual({ value: 4, expectedVersion: 0 });
+    expect(idempotencyKeyOf(frozen)).toBeTruthy();
+
+    const navigate = (city: string) => act(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("cityId", city);
+      window.history.pushState(window.history.state, "", url);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    navigate(cityB);
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+    expect(screen.getByText(/Смена города отложена.*Москва/)).toBeTruthy();
+    navigate(cityB);
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+    navigate(cityA);
+    expect(screen.queryByText(/Смена города отложена/)).toBeNull();
+    expect(screen.getByTestId("selected-owner")).toBe(owner);
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(unmounted).not.toHaveBeenCalled();
+    expect(attempts).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить тот же запрос" }));
+    await screen.findByRole("button", { name: "Сохранить изменение" });
+    const retry = fetchMock.calls.filter(call => call.method === "PUT");
+    expect(retry).toHaveLength(2);
+    expect(retry[1]?.url).toBe(frozen.url);
+    expect(retry[1]?.body).toBe(frozen.body);
+    expect(idempotencyKeyOf(retry[1])).toBe(idempotencyKeyOf(frozen));
+    expect(new Headers(retry[1]?.headers).get("x-csrf-token")).toBe(CSRF);
+    expect(fetchMock.calls.filter(call => call.url.includes("/community-rating/me"))).toHaveLength(1);
+    expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
+    expect(screen.getByTestId("selected-owner")).toBe(owner);
+
+    navigate(cityB);
+    await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityB);
+    expect(screen.queryByTestId("selected-owner")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /К списку/ }));
+    await screen.findByRole("button", { name: "Где играем: Санкт-Петербург. Сменить город" });
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("list");
+    expect(attempts).toBe(2);
   });
 });

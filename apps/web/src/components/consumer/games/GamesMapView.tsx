@@ -1,10 +1,10 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
-import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
-import type { ActivityKind, Game, VenueSummary } from "../../../lib/consumer-types";
-import { venueSchedules, startVenueMapRefresh, stableVenueCounts } from "../../../lib/games-venue-map";
+import { getMe, listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
+import type { ActivityKind, Game, VenueSummary, Me } from "../../../lib/consumer-types";
+import { venueSchedules, startVenueMapRefresh, stableVenueCounts, mapCommunityReturnPath, mapCommunitySelection } from "../../../lib/games-venue-map";
 import { mapBundleForCity } from "../../../lib/radar-map-assets";
 import { VenueScheduleCard } from "./VenueScheduleCard";
 import "../../../styles/venue-schedule-card.css";
@@ -20,6 +20,7 @@ import { SurfacePanel } from "../Surfaces";
 import { GamesMapModuleLoading } from "./GamesMapModuleLoading";
 import { MapLayerFiltersControls, MapLayerFiltersProvider } from "./MapLayerFilters";
 import type { GamesVenueMap } from "./GamesVenueMap";
+import type { VenueCommunitySection } from "../venues/VenueCommunityContent";
 import { useVenueCommunitySummaries } from "../../../lib/use-venue-community";
 
 /** A failed chunk stays unavailable; recovery uses the existing venue list. */
@@ -46,7 +47,19 @@ export function warmGamesVenueMapModule(): Promise<void> {
 }
 
 /** Public venues never depend on Radar consent, a location fix or a people query. */
-export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnToList }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void }) {
+export function GamesMapView({ cityId: requestedCityId, day, venueId, activity = "all", onReturnToList, onUnresolvedChange: notifyUnresolved }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void; onUnresolvedChange?: (value: boolean) => void }) {
+  const unresolved = useRef(false);
+  const [holdNotice, setHoldNotice] = useState("");
+  const [selectionUnresolved, setSelectionUnresolved] = useState(false);
+  const retainedCity = useRef(requestedCityId);
+  if (!unresolved.current) retainedCity.current = requestedCityId;
+  const cityId = retainedCity.current;
+  const onUnresolvedChange = useCallback((value: boolean) => {
+    unresolved.current = value;
+    setSelectionUnresolved(value);
+    if (!value) setHoldNotice("");
+    notifyUnresolved?.(value);
+  }, [notifyUnresolved]);
   const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean; venuesFulfilled: boolean } | null>(null);
   const [mapAvailable, setMapAvailable] = useState(true);
   const [mapErrorCardShown, setMapErrorCardShown] = useState(false);
@@ -116,18 +129,60 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   }, [schedules, snapshot, cityId]);
   const desktop = useDesktopMapInspector();
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
+  const [communitySection, setCommunitySection] = useState<VenueCommunitySection | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  const [authEpoch, setAuthEpoch] = useState(0);
+  const canLeaveSelection = () => {
+    if (unresolved.current || document.querySelector("dialog[open]")) {
+      setHoldNotice("Завершите текущую операцию или проверьте её результат перед закрытием площадки.");
+      return false;
+    }
+    setHoldNotice(""); return true;
+  };
+  useEffect(() => {
+    if (venueId || !selectedVenueId) { setMe(null); return; }
+    let live = true;
+    void getMe().then(result => { if (live) setMe(result.ok ? result.data : null); });
+    const fence = () => { live = false; setMe(null); setAuthEpoch(value => value + 1); };
+    window.addEventListener("gb-session-changed", fence);
+    window.addEventListener("gb-private-expired", fence);
+    return () => { live = false; window.removeEventListener("gb-session-changed", fence); window.removeEventListener("gb-private-expired", fence); };
+  }, [venueId, selectedVenueId, authEpoch]);
+  const restored = useRef(false);
+  useEffect(() => {
+    if (venueId || restored.current || !snapshot?.venuesFulfilled || snapshot.cityId !== cityId) return;
+    restored.current = true;
+    const intent = mapCommunitySelection(window.location.search, window.location.hash, cityId);
+    if (!intent || !snapshot.venues.some(value => value.id === intent.venueId && value.cityId === cityId)) return;
+    setSelectedVenueId(intent.venueId); setCommunitySection(intent.section); setExpanded(true);
+  }, [snapshot, cityId, venueId]);
+
   const [expanded, setExpanded] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
-  const clearVenueSelection = () => { setSelectedVenueId(null); setExpanded(false); setGalleryIndex(0); };
+  const clearVenueSelection = () => { if (!canLeaveSelection()) return; setCommunitySection(null); unresolved.current = false; setSelectedVenueId(null); setExpanded(false); setGalleryIndex(0);
+    if (window.location.href && window.history?.replaceState) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("selectedVenue"); url.searchParams.delete("communityCity");
+      if (["#ratings", "#discussion", "#reviews"].includes(url.hash)) url.hash = "";
+      window.history.replaceState(window.history.state, "", url);
+    }
+  };
   // Sync handoff via same-turn CustomEvent: player sheet closes before venue state commits.
   // Desktop opens the right inspector immediately; mobile keeps the compact preview first.
   const selectVenue = (venue: VenueSummary) => {
+    if (venue.id !== selectedVenueId && !canLeaveSelection()) return;
+    if (venue.id !== selectedVenueId) { setCommunitySection(null); unresolved.current = false; }
+    if (venue.id === selectedVenueId) return;
     window.dispatchEvent(new Event("gb-map-select-venue"));
     setExpanded(desktop);
     setGalleryIndex(0);
     setSelectedVenueId(venue.id);
   };
-  const selectedVenue = venues.find(item => item.id === selectedVenueId);
+  const returnToList = () => { if (canLeaveSelection()) onReturnToList?.(); };
+  const retainedSelection = useRef<VenueSummary | undefined>(undefined);
+  const catalogSelection = venues.find(item => item.id === selectedVenueId);
+  if (catalogSelection && !unresolved.current) retainedSelection.current = catalogSelection;
+  const selectedVenue = unresolved.current && retainedSelection.current?.id === selectedVenueId ? retainedSelection.current : catalogSelection;
   const selectedCover = useSelectedVenueCover(cityId, selectedVenue);
   const onGalleryIndexChange = (index: number) => setGalleryIndex(index);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
@@ -149,11 +204,13 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (!escapeSelection.current || event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      if (event.defaultPrevented) return;
+      if (unresolved.current) { event.preventDefault(); setHoldNotice("Проверьте результат текущей операции перед закрытием площадки."); return; }
       escapeSelection.current = undefined;
-      event.preventDefault(); setSelectedVenueId(null);
+      event.preventDefault(); clearVenueSelection();
     };
-    window.addEventListener("keydown", escape, true);
-    return () => window.removeEventListener("keydown", escape, true);
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
   }, []);
   const venue = venues.find(venue => venue.id === venueId);
   if (venueId) return <section aria-label="Расписание площадки">
@@ -167,14 +224,16 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const mapBundle = mapBundleForCity(cityId);
   return <MapLayerFiltersProvider>
     <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
-      {(!mapErrorCardShown || !mapBundle) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
+      {(!mapErrorCardShown || !mapBundle) && onReturnToList && <GamesMapBackButton onClick={returnToList} />}
       {mapBundle && mapAvailable && <MapLayerFiltersControls />}
+      {selectionUnresolved && cityId !== requestedCityId && <p role="alert">Смена города отложена. Открытая площадка относится к предыдущему городу; сначала проверьте результат операции.</p>}
+      {holdNotice && <p className="gb-venue-community-hold" role="alert">{holdNotice}</p>}
       {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
       {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
       {<>
-        {mapBundle ? <MapView key={cityId} cityId={cityId} venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
-        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
-          preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} coverFallback={selectedCover.fallback} coverReady={selectedCover.ready} onCoverRetry={selectedCover.retry} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+        {mapBundle ? <MapView key={cityId} cityId={cityId} venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={returnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+        {selectedVenue && <VenuePopup retainContent key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={value => { if (!value && document.querySelector("dialog[open]")) return; setExpanded(value); }} onDeselect={clearVenueSelection}
+          preview={<VenuePreviewCard onCommunityOpen={section => { setCommunitySection(section); setExpanded(true); }} embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} coverFallback={selectedCover.fallback} coverReady={selectedCover.ready} onCoverRetry={selectedCover.retry} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)}
             galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
             communitySummary={community.summaries[selectedVenue.id] ?? null}
@@ -183,6 +242,8 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
           <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} coverFallback={selectedCover.fallback} coverReady={selectedCover.ready} onCoverRetry={selectedCover.retry} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
             galleryIndex={galleryIndex} onGalleryIndexChange={onGalleryIndexChange}
+            communitySection={communitySection} onCommunitySectionChange={setCommunitySection} me={me} onUnresolvedChange={onUnresolvedChange}
+            authReturnPath={typeof window === "undefined" ? "/games?view=map" : mapCommunityReturnPath(window.location.pathname, window.location.search, selectedVenue.id, cityId, day, activity)}
             onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection}
             communitySummary={community.summaries[selectedVenue.id] ?? null}
             communitySummaryState={community.state === "idle" ? "loading" : community.state}
