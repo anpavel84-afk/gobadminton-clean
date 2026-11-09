@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import { createElement, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
@@ -1590,7 +1590,18 @@ describe("Slice A shared community owner", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(fetchMock.calls.every(call => !call.method || call.method === "GET")).toBe(true);
     expect(fetchMock.calls.some(call => call.url.includes("/community-rating/me"))).toBe(false);
-    expect(screen.getAllByRole("button",{name:"Поделиться опытом"})).toHaveLength(2);
+    const reviewPanels = screen.getAllByRole("region", { name: "Отзывы после игры" });
+    expect(reviewPanels).toHaveLength(2);
+    for (const panel of reviewPanels) {
+      expect(within(panel).getByText("Published projection")).toBeTruthy();
+      expect(within(panel).getByText("Участник игры")).toBeTruthy();
+      expect(within(panel).queryByRole("button", { name: /Поделиться|Оставить|Войти/ })).toBeNull();
+      expect(within(panel).queryByRole("link", { name: /Поделиться|Оставить|Войти/ })).toBeNull();
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByLabelText("Игра, после которой оставляете отзыв")).toBeNull();
+    expect(screen.queryByLabelText("Ваш опыт на площадке")).toBeNull();
+    expect(fetchMock.calls.some(call => call.url.includes("/v1/me/venue-reviews"))).toBe(false);
   });
 });
 

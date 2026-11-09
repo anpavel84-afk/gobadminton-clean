@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as React from "react";
+import type * as VenueReviewsApiModule from "../src/lib/venue-reviews-api";
 import type { AttendanceDispute, AttendanceRecord, GameResults } from "../src/lib/consumer-types";
 import {
   gameResultsMutationScope,
@@ -135,6 +136,19 @@ vi.mock("../src/lib/api-client", () => ({
   getAttendanceHistory: vi.fn(),
   getAttendanceDispute: vi.fn(),
 }));
+
+vi.mock("../src/lib/venue-reviews-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof VenueReviewsApiModule>();
+  return {
+    ...actual,
+    // PG-3 fixtures grant no venue-review admission, even after API mock resets.
+    getOwnVenueReviewEligibility: async (): ReturnType<typeof actual.getOwnVenueReviewEligibility> => ({
+      ok: true,
+      status: 200,
+      data: { bases: [] },
+    }),
+  };
+});
 
 /** Empty section → default attendance; stable replace for URL-driven tab sync. */
 const nav = vi.hoisted(() => ({

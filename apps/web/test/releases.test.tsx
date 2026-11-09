@@ -189,10 +189,11 @@ describe("releases catalogue integrity", () => {
     expect(row.fixes.join(" ")).toMatch(/В нижней строке карточки тренировки сначала показан тренер, затем организатор и «Отзывы и история»/i);
     expect(row.fixes.join(" ")).toMatch(/кнопки «Подробнее» и «Поделиться» расположены у правого края/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(74);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(79);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
   });
 
   it("preserves the exact ten-field trusted alpha.69 receipt before the accepted alpha.70 receipt", () => {
@@ -220,8 +221,8 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-3).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-4).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -234,13 +235,14 @@ describe("releases catalogue integrity", () => {
     expect(fixes).toMatch(/выбранный уровень сохраняется после закрытия.*сброс затрагивает только уровень/i);
     expect(fixes).toMatch(/Выбор города, дня и типа игры, уровень в профиле и работа сервера остаются прежними/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(74);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(79);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
   });
 
-  it("preserves the exact ten-field trusted alpha.70 receipt before the unaccepted alpha.71 descriptor", () => {
+  it("preserves the exact ten-field trusted alpha.70 receipt before the accepted alpha.71 receipt", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.70");
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -265,22 +267,66 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-2).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-3).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
     expect(row.fixes).toHaveLength(1);
     expect(row.fixes.join(" ")).toMatch(/Незавершённые отправки и их точный повтор сохраняются.*явное восстановление/i);
     expect(row.known_limitations).toHaveLength(10);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(74);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(79);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
   });
 
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.71 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.71");
+  it("preserves the exact ten-field accepted alpha.71 receipt before the unaccepted alpha.72 descriptor", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.71");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(4142);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "e0586b64cf87dfeb84a22f7ecc5f03a923cc2b496d4008cd7fe537fbf86744a4",
+    );
+    expect(row.source_sha).toBe("aeaee2dc4de8a0972015df039a153fa4ef06027f");
+    expect(row.version_label).toBe("0.1.0-alpha.71");
+    expect(row.api_contract_version).toBe("0.40.0");
+    expect(row.deployments).toEqual([{
+      environment: "dev",
+      status: "ACCEPTED",
+      release_id: "r42719450513-a1",
+      accepted_at: "2026-11-09T23:24:13Z",
+      api_digest: "sha256:188f4f74e4d40c6569d25742b0ce43d8c184086712ffe9516f860c2a4d9968c6",
+      web_digest: "sha256:1283daafd31b8ca62a2dec15ae14591b10009db30a65eaa9d7561df8c2280921",
+      kind: "pipeline",
+    }]);
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(TRUSTED_HISTORICAL_SEED.slice(-3).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71",
+    ]);
+    expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toHaveLength(2);
+    const [radarFix, gamesFix] = row.fixes;
+    expect(radarFix).toMatch(/После включения Radar и подтверждения активации.*короткая строка поиска/i);
+    expect(radarFix).toMatch(/Поиск завершается после ответа на текущий запрос ближайших игроков.*ближайшие участники.*едином списке.*когда расстояние известно.*иначе.*порядок по городу/i);
+    expect(radarFix).toMatch(/При задержке или ошибке.*краткий статус/i);
+    expect(gamesFix).toMatch(/заголовка и счётчика на телефоне.*отступы горизонтальных переключателей типа игры.*даты на компьютере.*размеры элементов компактного фильтра/i);
+    expect(row.known_limitations).toHaveLength(10);
+    expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(row.owner_uat).toBe("NOT_TESTED");
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(80);
+  });
+
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.72 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.72");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -296,8 +342,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/Поиск участников Radar и отображение фильтров игр/i);
-    expect(currentProse).toMatch(/переключателей типа игры/i);
+    expect(currentProse).toMatch(/Отзыв о площадке из итогов конкретной игры/i);
+    expect(currentProse).toMatch(/Общая кнопка и выбор другой игры.*убраны/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -317,14 +363,14 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Поиск участников Radar и отображение фильтров игр");
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Отзыв о площадке из итогов конкретной игры");
+    expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
+      "Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.",
+    ]);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    const [radarFix, gamesFix] = CURRENT_NAMED_RELEASE.fixes;
-    expect(radarFix).toMatch(/После включения Radar и подтверждения активации.*короткая строка поиска/i);
-    expect(radarFix).toMatch(/Поиск завершается после ответа на текущий запрос ближайших игроков.*ближайшие участники.*едином списке.*когда расстояние известно.*иначе.*порядок по городу/i);
-    expect(radarFix).toMatch(/При задержке или ошибке.*краткий статус/i);
-    expect(gamesFix).toMatch(/заголовка и счётчика на телефоне.*отступы горизонтальных переключателей типа игры.*даты на компьютере.*размеры элементов компактного фильтра/i);
+    expect(fixes).toMatch(/при подтверждённом сервером допуске/i);
+    expect(fixes).toMatch(/опубликованные отзывы остаются доступны для чтения/i);
+    expect(fixes).not.toMatch(/автоматическ|автоотправ|сам.*публику|14.*дн|I2|I3|UGC|#549|нативн.*прилож|#507.*(?:DONE|заверш|выполн)/i);
     // D1 cause remains UNKNOWN; reset 2.0/session-only checks do not prove a repaired cause or persistence.
     expect(fixes).not.toMatch(/D1|причин|сброс|reset|2\.0|сесси|session|URL|storage|после перезагрузки|сохраняется после закрытия/i);
     expect(fixes).not.toMatch(/карточ|фотограф|фото|галере/i);
@@ -352,7 +398,13 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/проверка загрузки фотографии площадки в установленной версии ещё не выполнена/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#506.*проверка маскирования.*редактирования с действующими правами.*разбора жалоб.*ещё не выполнена/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/карте площадок.*отзыв после конкретной игры.*публичного автора без замены/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations[0]).toBe(
+      "Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно",
+    );
+    const currentLimitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
+    expect(currentLimitations).not.toMatch(/вход.*отзыв.*ещё не\s*доступ/i);
+    expect(currentLimitations).not.toMatch(/карте площадок.*ещё не\s*доступ/i);
+    expect(currentLimitations).not.toMatch(/публичного автора без замены/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
     );
@@ -511,10 +563,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(74);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(75);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(79);
+    ).toBe(80);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -1114,20 +1166,19 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders the current Radar and games filter fixes without stale release claims", async () => {
+  it("renders the current postgame review fix without stale release claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("Поиск участников Radar и отображение фильтров игр");
+    expect(html).toContain("Отзыв о площадке из итогов конкретной игры");
     for (const fix of CURRENT_NAMED_RELEASE.fixes) {
       expect(html).toContain(fix);
       expect(html.split(fix).length - 1).toBe(1);
     }
-    expect(html).toContain("После включения Radar и подтверждения активации появляется короткая строка поиска");
-    expect(html).toContain("Поиск завершается после ответа на текущий запрос ближайших игроков");
-    expect(html).toContain("иначе сохраняется порядок по городу");
-    expect(html).toContain("При задержке или ошибке показан краткий статус");
-    expect(html).toContain("отступы горизонтальных переключателей типа игры");
+    expect(html).toContain("Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.");
+    expect(html).not.toContain("Поиск участников Radar и отображение фильтров игр");
+    expect(html).not.toContain("После включения Radar и подтверждения активации");
+    expect(html).not.toContain("отступы горизонтальных переключателей типа игры");
     expect(html).not.toContain("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(html).not.toContain("Незавершённые отправки и их точный повтор сохраняются");
     expect(html).not.toContain("Компактные фильтры на экране «Игры»");

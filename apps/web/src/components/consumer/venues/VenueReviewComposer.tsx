@@ -9,6 +9,7 @@ import {
   type OwnVenueEligibilityBasis,
   type VenueAudience,
   type VenueTopic,
+  type VenueReviewMutationReceipt,
 } from "../../../lib/venue-reviews-api";
 import { Button } from "../Button";
 import { ProfileDialog } from "../players/ProfileComposition";
@@ -20,8 +21,8 @@ const TOPICS: Array<{ value: VenueTopic; label: string }> = [
   { value: "amenities", label: "Удобства" },
 ];
 
-function helpCopy(basis: OwnVenueEligibilityBasis | undefined): string | null {
-  if (!basis) return null;
+export function venueReviewEligibilityHelp(basis: OwnVenueEligibilityBasis | undefined): string | null {
+  if (!basis) return "Не удалось подтвердить возможность отзыва по этой игре.";
   if (basis.helpHint === "attendance_unmarked") {
     return "Посещение ещё не отмечено. Можно попросить уточнение в итогах игры — без самостоятельной отметки.";
   }
@@ -35,7 +36,7 @@ function helpCopy(basis: OwnVenueEligibilityBasis | undefined): string | null {
     return "Срок подачи отзыва по этой игре истёк.";
   }
   if (basis.admission !== "may_submit") {
-    return "Сейчас нельзя поделиться опытом по выбранной игре.";
+    return `Сейчас нельзя оставить отзыв по этой игре.${basis.reason ? ` Причина: ${basis.reason}.` : ""}`;
   }
   return null;
 }
@@ -49,7 +50,8 @@ export function VenueReviewComposer({
   csrfToken,
   actorId,
   onUnresolvedChange,
-  preferredGameId,
+  gameId,
+  eligibilityRefresh,
   onClose,
   onSubmitted,
 }: {
@@ -57,21 +59,22 @@ export function VenueReviewComposer({
   csrfToken: string;
   actorId: string | null;
   onUnresolvedChange?: (value: boolean) => void;
-  preferredGameId?: string;
+  gameId: string;
+  eligibilityRefresh?: object;
   onClose: () => void;
   onSubmitted?: () => void;
 }) {
   const [bases, setBases] = useState<OwnVenueEligibilityBasis[]>([]);
-  const [gameId, setGameId] = useState(preferredGameId ?? "");
   const [topic, setTopic] = useState<VenueTopic | "">("surface");
   const [text, setText] = useState("");
   const [audience, setAudience] = useState<VenueAudience>("self_draft");
   const [consent, setConsent] = useState(false);
   const [previewHash, setPreviewHash] = useState<string | null>(null);
+  const [previewAuthorLabel, setPreviewAuthorLabel] = useState("Участник игры");
   const [state, setState] = useState<"loading" | "ready" | "error" | "auth">("loading");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<VenueReviewMutationReceipt | null>(null);
   const [nativeHidden, setNativeHidden] = useState(false);
   const [reopenSignal, setReopenSignal] = useState(0);
   type Packet = {
@@ -85,11 +88,11 @@ export function VenueReviewComposer({
   const sendLock = useRef(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   const previewSequence = useRef(0);
-  const context = useRef({ venueId, actorId, csrfToken, preferredGameId, revoked: false });
+  const context = useRef({ venueId, actorId, csrfToken, gameId, revoked: false });
   // Fence before effects: a late response must never settle a different actor or venue.
   if (context.current.venueId !== venueId || context.current.actorId !== actorId
-    || context.current.csrfToken !== csrfToken || context.current.preferredGameId !== preferredGameId) {
-    context.current = { venueId, actorId, csrfToken, preferredGameId, revoked: false };
+    || context.current.csrfToken !== csrfToken || context.current.gameId !== gameId) {
+    context.current = { venueId, actorId, csrfToken, gameId, revoked: false };
     epoch.current += 1;
     previewSequence.current += 1;
     packetRef.current = null;
@@ -116,22 +119,35 @@ export function VenueReviewComposer({
 
   useEffect(() => {
     mounted.current = true;
+    return () => { mounted.current = false; epoch.current += 1; };
+  }, [venueId, gameId, actorId, csrfToken]);
+
+  useEffect(() => {
+    // A same-context refresh may update an idle form, never an admitted operation.
+    if (packetRef.current || sendLock.current || receipt) return;
+    previewSequence.current += 1;
+    setPreviewBusy(false); setConsent(false); setPreviewHash(null);
+    const controller = new AbortController();
     const request = ++epoch.current;
     setState(context.current.revoked ? "auth" : "loading");
-    if (!context.current.revoked) void getOwnVenueReviewEligibility(venueId).then((result) => {
-      if (!mounted.current || request !== epoch.current || context.current.revoked) return;
+    if (!context.current.revoked && actorId && csrfToken) void getOwnVenueReviewEligibility(venueId, controller.signal).then((result) => {
+      if (controller.signal.aborted || !mounted.current || request !== epoch.current || context.current.revoked) return;
       if (!result.ok) {
-        setState(result.status === 401 ? "auth" : "error");
+        if (result.status === 401 || result.status === 403) {
+          context.current.revoked = true;
+          setText(""); setConsent(false); setPreviewHash(null);
+          setState("auth");
+        } else setState("error");
         return;
       }
       setBases(result.data.bases);
-      const eligible = result.data.bases.filter((b) => b.admission === "may_submit");
-      setGameId(preferredGameId && eligible.some((b) => b.gameId === preferredGameId)
-        ? preferredGameId : eligible[0]?.gameId ?? "");
       setState("ready");
+    }).catch(() => {
+      if (!controller.signal.aborted && mounted.current && request === epoch.current) setState("error");
     });
-    return () => { mounted.current = false; epoch.current += 1; };
-  }, [venueId, preferredGameId, actorId, csrfToken]);
+    else setState("auth");
+    return () => controller.abort();
+  }, [venueId, gameId, actorId, csrfToken, eligibilityRefresh]);
 
   useEffect(() => {
     const fence = () => {
@@ -153,8 +169,8 @@ export function VenueReviewComposer({
   }, []);
 
   const selected = bases.find((b) => b.gameId === gameId);
-  const help = helpCopy(selected);
-  const canSubmit = Boolean(gameId) && selected?.admission === "may_submit"
+  const help = venueReviewEligibilityHelp(selected);
+  const canSubmit = state === "ready" && !receipt && Boolean(gameId) && selected?.admission === "may_submit"
     && text.trim().length >= 1 && text.trim().length <= 500
     && (audience === "self_draft" || (consent && previewHash));
   function current(generation: number) {
@@ -174,6 +190,7 @@ export function VenueReviewComposer({
         setNotice(result.error || "Не удалось подготовить публичный просмотр.");
         return null;
       }
+      setPreviewAuthorLabel(result.data.authorLabel);
       setPreviewHash(result.data.consentProjectionHash);
       setConsent(true);
       return result.data.consentProjectionHash;
@@ -187,30 +204,53 @@ export function VenueReviewComposer({
 
   async function onSubmit() {
     if (sendLock.current || !csrf || !actorId || context.current.revoked) return;
-    let admitted = packetRef.current;
-    if (!admitted) {
-      if (!canSubmit || !selected || previewBusy) return;
-      admitted = {
-        key: crypto.randomUUID().replace(/-/g, ""), actorId, csrf, generation: epoch.current,
-        body: {
-          venueId, gameId, audience,
-          expectedBasisVersions: { outcomeVersion: selected.outcomeVersion, attendanceVersion: selected.attendanceVersion },
-          text: text.trim(), topics: topic ? [topic] : [],
-          ...(audience === "public_venue" && previewHash ? { consentProjectionHash: previewHash } : {}),
-        },
-      };
-      packetRef.current = admitted;
-      setPacket(admitted);
-    }
-    if (!current(admitted.generation) || admitted.actorId !== actorId || admitted.csrf !== csrf || admitted.body.venueId !== venueId) return;
-    const pending = admitted;
+    let pending = packetRef.current;
+    if (!pending && (!canSubmit || !selected || previewBusy)) return;
+    const generation = epoch.current;
+    const admittedDraft = draft.current;
+    const admittedPreview = previewSequence.current;
     sendLock.current = true;
     setBusy(true); setNotice(null);
-    const matches = () => current(pending.generation) && packetRef.current === pending;
     try {
+      if (!pending) {
+        // Recheck only a new write. UNKNOWN retries retain their entire admitted packet.
+        const result = await getOwnVenueReviewEligibility(venueId);
+        if (!current(generation) || draft.current !== admittedDraft || previewSequence.current !== admittedPreview) return;
+        if (!result.ok) {
+          setNotice(result.error || "Не удалось проверить допуск.");
+          setState(result.status === 401 || result.status === 403 ? "auth" : "error");
+          if (result.status === 401 || result.status === 403) {
+            context.current.revoked = true;
+            setText(""); setConsent(false); setPreviewHash(null);
+          }
+          return;
+        }
+        setBases(result.data.bases);
+        const fresh = result.data.bases.find(b => b.gameId === gameId);
+        if (fresh?.admission !== "may_submit") return;
+        if (fresh.outcomeVersion !== selected?.outcomeVersion
+          || fresh.attendanceVersion !== selected?.attendanceVersion) {
+          setNotice("Данные игры изменились. Проверьте обновлённый допуск перед новой отправкой.");
+          return;
+        }
+        pending = {
+          key: crypto.randomUUID().replace(/-/g, ""), actorId, csrf, generation,
+          body: {
+            venueId, gameId, audience,
+            expectedBasisVersions: { outcomeVersion: fresh.outcomeVersion, attendanceVersion: fresh.attendanceVersion },
+            text: text.trim(), topics: topic ? [topic] : [],
+            ...(audience === "public_venue" && previewHash ? { consentProjectionHash: previewHash } : {}),
+          },
+        };
+        packetRef.current = pending;
+        setPacket(pending);
+      }
+      if (!current(pending.generation) || pending.actorId !== actorId || pending.csrf !== csrf
+        || pending.body.venueId !== venueId || pending.body.gameId !== gameId) return;
+      const admitted = pending;
       // Exact in-memory packet only; retry never reads mutable controls or fresh credentials.
-      const result = await createVenueReview(pending.body, pending.csrf, pending.key);
-      if (!matches()) return;
+      const result = await createVenueReview(admitted.body, admitted.csrf, admitted.key);
+      if (!current(admitted.generation) || packetRef.current !== admitted) return;
       if (!result.ok) {
         if (result.status === 0 || result.status >= 500) {
           setNotice(publicTextModerationNotice(result) || "Не удалось подтвердить отправку. Текст сохранён");
@@ -219,7 +259,7 @@ export function VenueReviewComposer({
         packetRef.current = null; setPacket(null);
         setNotice(publicTextModerationNotice(result) || (result.status === 409
           ? "Версия изменилась. Закройте окно и перечитайте данные перед новой отправкой."
-          : result.error || "Отправка недоступна для выбранной игры."));
+          : result.error || "Отправка недоступна для этой игры."));
         if (result.status === 409) setState("error");
         if (result.status === 401 || result.status === 403) {
           context.current.revoked = true;
@@ -229,14 +269,15 @@ export function VenueReviewComposer({
         return;
       }
       packetRef.current = null; setPacket(null);
-      setReceipt(result.data.receiptToken);
-      setNotice(result.data.status === "self_draft" ? "Сохранено только вам."
-        : "Отправлен; ещё не опубликован. Публикация — после независимой проверки и паузы 48 часов.");
+      setReceipt(result.data);
+      setNotice(null);
       onSubmitted?.();
     } catch {
-      if (matches()) setNotice("Не удалось подтвердить отправку. Текст сохранён");
+      if (current(generation)) setNotice(pending
+        ? "Не удалось подтвердить отправку. Текст сохранён"
+        : "Не удалось проверить допуск. Текст сохранён");
     } finally {
-      if (mounted.current && pending.generation === epoch.current) { sendLock.current = false; setBusy(false); }
+      if (mounted.current && generation === epoch.current) { sendLock.current = false; setBusy(false); }
     }
   }
   function requestClose() {
@@ -271,7 +312,7 @@ export function VenueReviewComposer({
         <p id="gb-venue-review-composer-hint" className="gb-venue-reviews__lede">
           По умолчанию текст только вам. Публичный отзыв — без профиля, игры и состава.
         </p>
-        {state === "loading" ? <p role="status">Загружаем доступные игры…</p> : null}
+        {state === "loading" ? <p role="status">Проверяем допуск по этой игре…</p> : null}
         {state === "auth" ? <p role="status">Войдите, чтобы поделиться опытом.</p> : null}
         {state === "error" ? <p role="alert">Не удалось проверить допуск.</p> : null}
         {previewBusy ? <p role="status">Подготавливаем публичный просмотр…</p> : null}
@@ -291,42 +332,14 @@ export function VenueReviewComposer({
             </span>
             <p className="gb-venue-reviews__lede">
               {audience === "self_draft" ? "Только вам" : "Публично на странице площадки"}
-              {selected?.gameTitle ? ` · выбранная игра: «${selected.gameTitle}»` : null}
+              {selected?.gameTitle ? ` · игра: «${selected.gameTitle}»` : null}
             </p>
-            <div className="gb-venue-reviews__field">
-              <label htmlFor="venue-review-game">Игра, после которой оставляете отзыв</label>
-              <select
-                id="venue-review-game"
-                value={gameId}
-                onChange={(e) => setGameId(e.target.value)}
-                disabled={locked}
-              >
-                <option value="">Выберите игру</option>
-                {bases.map((b) => (
-                  <option key={b.gameId} value={b.gameId}>
-                    {(b.gameTitle || "Игра") +
-                      (b.admission === "may_submit"
-                        ? " · присутствие подтверждено"
-                        : " · пока недоступно")}
-                  </option>
-                ))}
-              </select>
-              <p className="gb-venue-reviews__hint">
-                Список игр виден только вам. В публичном отзыве не будет названия игры, состава и
-                точного времени.
-              </p>
-            </div>
+            <p className="gb-venue-reviews__hint">
+              Отзыв относится только к этой игре. В публичном отзыве не будет названия игры, состава и точного времени.
+            </p>
             {help ? (
               <p role="status" className="gb-venue-reviews__lede">
                 {help}
-                {selected?.helpHint === "attendance_unmarked" ? (
-                  <>
-                    {" "}
-                    <a href={gameId ? `/games/${encodeURIComponent(gameId)}/results` : "/me/games"}>
-                      К итогам игры
-                    </a>
-                  </>
-                ) : null}
               </p>
             ) : null}
             <div className="gb-venue-reviews__field">
@@ -383,7 +396,8 @@ export function VenueReviewComposer({
             {audience === "public_venue" ? (
               <div className="gb-venue-reviews__preview">
                 <strong>Как увидят другие</strong>
-                <p className="gb-venue-reviews__card-meta">Участник игры</p>
+                <p className="gb-venue-reviews__card-meta">{previewHash ? previewAuthorLabel : "Участник игры"}
+                  {topic ? ` · ${TOPICS.find(t => t.value === topic)?.label}` : ""}</p>
                 <p className="gb-venue-reviews__card-text">{text.trim() || "—"}</p>
                 <label style={{ display: "flex", gap: 10, marginTop: 12, minHeight: 44 }}>
                   <input
@@ -396,7 +410,8 @@ export function VenueReviewComposer({
                         void ensurePreview();
                         return;
                       }
-                      setConsent(false);
+                      previewSequence.current += 1;
+                      setConsent(false); setPreviewHash(null);
                     }}
                   />
                   <span>
@@ -407,7 +422,20 @@ export function VenueReviewComposer({
             ) : null}
             {notice ? <p role="status">{notice}</p> : null}
             {receipt ? (
-              <p className="gb-venue-reviews__hint">Квитанция ожидания: {receipt}</p>
+              <div role="status">
+                <p>{receipt.status === "self_draft" ? "Сохранено только вам."
+                  : receipt.status === "submitted" || receipt.status === "submitted_waiting"
+                    ? "Отправлен; ещё не опубликован."
+                    : receipt.status === "revision_waiting" ? "Новая версия ожидает проверки."
+                      : receipt.status === "needs_correction" ? "Нужны исправления."
+                        : receipt.status === "withdrawn" ? "Отзыв отозван."
+                          : receipt.status === "removed" ? "Отзыв снят с публикации."
+                            : receipt.status === "published" ? "Статус: опубликован."
+                              : `Статус отзыва: ${receipt.status}`}</p>
+                <p>{receipt.publicVisible ? "Публичная версия отзыва доступна." : "Публичный отзыв не виден."}</p>
+                {receipt.notBefore ? <p>Публикация возможна не ранее {receipt.notBefore}; она не гарантирована.</p> : null}
+                {receipt.receiptToken ? <p className="gb-venue-reviews__hint">Квитанция: {receipt.receiptToken}</p> : null}
+              </div>
             ) : null}
             <div className="gb-venue-reviews__actions">
               <Button
