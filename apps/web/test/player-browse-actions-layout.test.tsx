@@ -165,3 +165,25 @@ describe("player browse desktop actions layout (#523)", () => {
     expect(mobile).toContain("Пропустить");
   });
 });
+
+describe("mobile Players map CTA reuses GamesViewAction (#526)", () => {
+  const pageSource = readFileSync(
+    join(root, "../src/components/consumer/pages/PlayersDirectoryPage.tsx"),
+    "utf8",
+  );
+  const zoneAt = pageSource.indexOf("const mobileFinderZone");
+  const zone = pageSource.slice(zoneAt, pageSource.indexOf("const catalogFilters", zoneAt));
+  it("renders one shared lime-tile action in the finder zone with the same link and name", () => {
+    expect(zone).toContain("<GamesViewAction");
+    expect(zone).toContain('href="/players/radar"');
+    expect(zone).toContain('labelShort="На карте"');
+    expect(zone).toContain('aria-label="Игроки на карте"');
+    expect(zone).toContain("{activationId ?");
+    expect(zone).not.toContain("gb-c23-btn--outline");
+  });
+  it("keeps the action in flow inside the zone so it cannot overlap Свайп or navigation", () => {
+    const rule = css.slice(css.indexOf(".pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action {"));
+    expect(rule.slice(0, 200)).toContain("position: static");
+    expect(css).toContain(".pb-mobile-finder-zone .gb-map-cta-label--short");
+  });
+});

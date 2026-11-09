@@ -388,13 +388,14 @@ export function PlayersDirectoryPage({
         <span className="pb-finder-cta__label">Свайп</span>
       </Button>
       {activationId ? (
-        <Link
+        <GamesViewAction
+          view="list"
           href="/players/radar"
-          className="gb-c23-btn gb-c23-btn--outline pb-finder-map-secondary"
+          labelFull="Игроки на карте"
+          labelShort="На карте"
+          className="pb-finder-map-secondary"
           aria-label="Игроки на карте"
-        >
-          На карте
-        </Link>
+        />
       ) : null}
     </div>
   ) : null;

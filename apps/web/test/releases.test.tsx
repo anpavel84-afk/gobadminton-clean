@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.62 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.62");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.63 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.63");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);

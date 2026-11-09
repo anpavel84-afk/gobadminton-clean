@@ -2,7 +2,7 @@
  * Safe for client imports. Server fetch/guard helpers live in releases-server.ts.
  */
 
-export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.62" as const;
+export const CURRENT_APPLICATION_VERSION = "0.1.0-alpha.63" as const;
 /** Literal first named alpha — never rewritten when CURRENT_APPLICATION_VERSION bumps. */
 export const FIRST_NAMED_APPLICATION_VERSION = "0.1.0-alpha.1" as const;
 export const API_CONTRACT_VERSION_NOTE = "0.40.0" as const;
@@ -424,15 +424,14 @@ export const FIRST_NAMED_RELEASE: NamedReleaseNotes = {
 
 /** Current build descriptor — delta notes; SHA/date filled only after trusted acceptance. */
 export const CURRENT_NAMED_RELEASE: NamedReleaseNotes = {
-  "application_version": "0.1.0-alpha.62",
-  "title": "Мобильные карточки игр и тренировок, собственная отметка посещения и кнопка блокировки",
+  "application_version": "0.1.0-alpha.63",
+  "title": "Единая кнопка «На карте» в мобильном каталоге игроков",
   "source_sha": null,
   "owner_uat": "NOT_TESTED",
   "additions": [],
   "fixes": [
-    "На узком экране карточки обычной игры и тренировки используют одинаковую компоновку и действия: стрелка 44px без видимого текста «Подробнее» и кнопка «поделиться»; на широком экране текстовая кнопка сохраняется",
-    "Текущая отметка собственного посещения больше не требует подтверждать её самому себе и не показывает уведомление с требованием ответа на свою отметку; авторство, реальные подтверждения, история и возможность уточнить или оспорить отметку сохраняются",
-    "В профиле игрока подпись кнопки блокировки больше не разрывается внутри слова на узком экране"
+    "В мобильном каталоге игроков при включённом Radar кнопка карты использует тот же светлый значок сложенной карты и подпись «На карте», что и в играх; рядом с «Свайп» и нижней навигацией она не накладывается, согласие на Radar и права доступа не менялись",
+    "Уточнение к описанию alpha.62: на узком экране унифицированы кнопки действий карточек игры и тренировки, а не вся компоновка карточек целиком; новая приёмка DEV этим уточнением не заявляется"
   ],
   "known_limitations": [
     "Общая ownership состояния сообщества на карте, вход в отзыв после конкретной игры и снятие публичного writer без замены ещё не в этом срезе",

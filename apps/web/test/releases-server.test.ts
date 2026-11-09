@@ -399,7 +399,7 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.62");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.63");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
