@@ -212,19 +212,42 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
   }
 
   async function confirmWithTransition(gameId: string, userId: string) {
+    // Game create already seats the organizer (participations_game_user_uidx). Reuse that
+    // row and backdate confirmed_at / confirmed transition so eligibility matches domain
+    // (transition_as_of_start or current_confirmed within the ended window).
     const part = await pool.query<{ id: string }>(
       `INSERT INTO participations (game_id, user_id, status, confirmed_at)
        VALUES ($1, $2, 'confirmed', clock_timestamp() - interval '4 hours')
+       ON CONFLICT (game_id, user_id) DO UPDATE
+         SET status = 'confirmed',
+             confirmed_at = EXCLUDED.confirmed_at,
+             updated_at = now()
        RETURNING id`,
       [gameId, userId],
     );
     const id = part.rows[0]!.id;
-    await pool.query(
-      `INSERT INTO participation_transitions
-         (participation_id, from_status, to_status, actor_id, reason_code, aggregate_version, game_version, at)
-       VALUES ($1, NULL, 'confirmed', $2, 'test_confirm', 1, 1, clock_timestamp() - interval '4 hours')`,
-      [id, userId],
+    const existingConfirm = await pool.query<{ id: string }>(
+      `SELECT id FROM participation_transitions
+       WHERE participation_id = $1 AND to_status = 'confirmed'
+       ORDER BY at ASC, id ASC
+       LIMIT 1`,
+      [id],
     );
+    if (existingConfirm.rows[0]) {
+      await pool.query(
+        `UPDATE participation_transitions
+         SET at = clock_timestamp() - interval '4 hours'
+         WHERE id = $1`,
+        [existingConfirm.rows[0].id],
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO participation_transitions
+           (participation_id, from_status, to_status, actor_id, reason_code, aggregate_version, game_version, at)
+         VALUES ($1, NULL, 'confirmed', $2, 'test_confirm', 1, 1, clock_timestamp() - interval '4 hours')`,
+        [id, userId],
+      );
+    }
     return id;
   }
 
