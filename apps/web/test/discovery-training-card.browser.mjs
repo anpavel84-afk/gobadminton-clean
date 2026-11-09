@@ -278,10 +278,15 @@ await withChrome(async ({ call, evaluate }) => {
         const cardBox = rect(card);
         const peopleBandRect = peopleBand ? rect(peopleBand) : null;
         const peopleSummaryRect = peopleSummary ? rect(peopleSummary) : null;
+        const peopleBandStyle = peopleBand ? getComputedStyle(peopleBand) : null;
         const unusedUnderPhoto = peopleBandRect && slot
           ? Math.max(0, peopleBandRect.y - slot.bottom)
           : null;
         const visibleControls = [...card.querySelectorAll('a,button')].filter((el) => el.getClientRects().length > 0);
+        const summaryChildren = peopleSummary
+          ? [...peopleSummary.children].filter((el) => el.getClientRects().length > 0)
+          : [];
+        const summaryChildHeights = summaryChildren.map((el) => Math.round(el.getBoundingClientRect().height));
         return {
           index,
           activity: card.getAttribute('data-activity'),
@@ -314,6 +319,12 @@ await withChrome(async ({ call, evaluate }) => {
           peopleBand: peopleBandRect,
           peopleSummary: peopleSummaryRect,
           peopleBandGridColumns: summaryStyle?.gridTemplateColumns || null,
+          peopleBandPaddingTop: peopleBandStyle ? parseFloat(peopleBandStyle.paddingTop) || 0 : null,
+          peopleBandPaddingBottom: peopleBandStyle ? parseFloat(peopleBandStyle.paddingBottom) || 0 : null,
+          peopleBandBorderTop: peopleBandStyle ? parseFloat(peopleBandStyle.borderTopWidth) || 0 : null,
+          peopleSummaryGap: summaryStyle ? parseFloat(summaryStyle.rowGap || summaryStyle.gap) || 0 : null,
+          peopleSummaryChildCount: summaryChildren.length,
+          peopleSummaryChildHeights: summaryChildHeights,
           peopleActions: actions ? rect(actions) : null,
           history: historyEl ? rect(historyEl) : null,
           unusedUnderPhoto,
@@ -457,6 +468,34 @@ await withChrome(async ({ call, evaluate }) => {
           trainerCard.peopleBand.height <= maxPeopleBandHeight,
           `${width}/${state}: collapsed people band height ${trainerCard.peopleBand.height} too tall (max ${maxPeopleBandHeight})`,
         );
+        if (width <= 390) {
+          // Regression: four 44px rows + gaps + vertical pad + border must stay under the same strict 240.
+          assert.equal(
+            trainerCard.peopleSummaryChildCount,
+            4,
+            `${width}/${state}: collapsed mobile summary must stack 4 rows (roles+actions+disclosure)`,
+          );
+          for (const h of trainerCard.peopleSummaryChildHeights || []) {
+            assert.ok(
+              h >= 44,
+              `${width}/${state}: collapsed mobile summary child height ${h} must keep ≥44px target`,
+            );
+          }
+          const padY =
+            (trainerCard.peopleBandPaddingTop ?? 0) + (trainerCard.peopleBandPaddingBottom ?? 0);
+          const gapY = trainerCard.peopleSummaryGap ?? 0;
+          const borderY = trainerCard.peopleBandBorderTop ?? 0;
+          const stack =
+            44 * 4 + gapY * 3 + padY + borderY;
+          assert.ok(
+            stack <= maxPeopleBandHeight,
+            `${width}/${state}: authored mobile spacing stack ${stack} (padY=${padY}, gap=${gapY}, border=${borderY}) exceeds max ${maxPeopleBandHeight}`,
+          );
+          assert.ok(
+            trainerCard.peopleBand.height <= stack + 1,
+            `${width}/${state}: measured peopleBand.height ${trainerCard.peopleBand.height} exceeds authored stack ${stack}`,
+          );
+        }
       }
     }
 
