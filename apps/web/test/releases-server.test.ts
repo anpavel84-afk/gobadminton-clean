@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps seventy-two confirmed seed deployments including accepted alpha.1–alpha.63 and dedupes identical live rows", () => {
+  it("keeps seventy-three confirmed seed deployments including accepted alpha.1–alpha.64 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(72);
+    expect(seedCount).toBe(73);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -273,7 +273,23 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     }]);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(67);
+    const alpha64 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
+      (row) => row.application_version === "0.1.0-alpha.64",
+    );
+    expect(alpha64).toEqual([{
+      environment: "dev",
+      source_sha: "9660409cea06718ef13ec3fbb792679f11619ece",
+      application_version: "0.1.0-alpha.64",
+      version_label: "0.1.0-alpha.64",
+      title: "Профиль без мерцания при открытии страниц",
+      release_id: "r42594145053-a1",
+      accepted_at: "2026-11-09T09:37:22.000Z",
+      status: "ACCEPTED",
+      kind: "pipeline",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+    }]);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(68);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -353,7 +369,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.60"
       || row.application_version === "0.1.0-alpha.61"
       || row.application_version === "0.1.0-alpha.62"
-      || row.application_version === "0.1.0-alpha.63",
+      || row.application_version === "0.1.0-alpha.63"
+      || row.application_version === "0.1.0-alpha.64",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -430,7 +447,7 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.64");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.65");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -699,6 +716,7 @@ describe("history seed integrity", () => {
       "2026-11-08T22:56:54Z",
       "2026-11-09T00:42:02Z",
       "2026-11-09T08:06:21Z",
+      "2026-11-09T09:37:22Z",
     ]);
   });
 
