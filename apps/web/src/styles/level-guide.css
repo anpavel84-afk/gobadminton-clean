@@ -225,12 +225,43 @@
   overflow-wrap: anywhere;
 }
 
+/* #458 discovery compact presentation — dialog owns chrome; profile unchanged. */
+.gb-level-guide[data-presentation="compact"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.gb-level-guide[data-presentation="compact"] .gb-level-guide__field select:focus-visible {
+  outline: 2px solid var(--gb-purple, #7945de);
+  outline-offset: 2px;
+}
+
+.gb-level-guide[data-presentation="compact"] .gb-level-guide__panel {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
 @media (max-width: 430px) {
   .gb-level-guide {
     padding: 10px 12px;
   }
 
+  .gb-level-guide[data-presentation="compact"] {
+    padding: 0;
+  }
+
   .gb-level-guide__panel {
     max-height: min(48vh, 320px);
+  }
+
+  .gb-level-guide[data-presentation="compact"] .gb-level-guide__panel {
+    max-height: none;
+  }
+
+  .gb-level-guide[data-presentation="compact"] .gb-level-guide__field select {
+    font-size: 16px;
   }
 }

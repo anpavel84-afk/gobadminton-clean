@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { SocialLevel } from "../../lib/consumer-types";
 import {
   LEVEL_GUIDE_DISCLAIMER,
@@ -16,9 +16,13 @@ import {
   shouldOfferPreservedLevel,
 } from "../../lib/level-guide";
 import { PILOT_LEVEL_OPTIONS } from "../../lib/player-presentation";
+import { Button } from "./Button";
+import { CloseButton } from "./CloseButton";
+import { DiscoveryIcon } from "./discovery/DiscoveryComposition";
 import "../../styles/level-guide.css";
 
 export type LevelGuideSurface = "profile" | "discovery";
+export type LevelGuidePresentation = "default" | "compact";
 
 export type LevelGuideProps = {
   surface: LevelGuideSurface;
@@ -30,6 +34,11 @@ export type LevelGuideProps = {
   preservedLevel?: SocialLevel | null;
   /** Optional accessible name override. */
   labelledBy?: string;
+  /**
+   * Discovery-only compact presentation for the #458 filters dialog.
+   * Default keeps profile and legacy discovery panel unchanged.
+   */
+  presentation?: LevelGuidePresentation;
 };
 
 /**
@@ -43,6 +52,7 @@ export function LevelGuide({
   disabled = false,
   preservedLevel = null,
   labelledBy,
+  presentation = "default",
 }: LevelGuideProps) {
   const uid = useId();
   const selectId = `${uid}-select`;
@@ -52,6 +62,7 @@ export function LevelGuide({
   const selectedSkill = value.kind === "ntrp" ? levelGuideSkillFor(value.levelId) : null;
   const showPreserved = shouldOfferPreservedLevel(preservedLevel);
   const preservedLabel = preservedLevel ? formatPreservedLevelChoiceLabel(preservedLevel) : "";
+  const compact = surface === "discovery" && presentation === "compact";
 
   function pick(nextControl: string) {
     if (disabled) return;
@@ -62,19 +73,22 @@ export function LevelGuide({
     <section
       className="gb-level-guide"
       data-surface={surface}
+      data-presentation={presentation}
       data-level-guide="true"
       aria-labelledby={labelledBy ?? `${uid}-title`}
     >
-      <div className="gb-level-guide__head">
-        <div>
-          <small className="gb-level-guide__eyebrow">
-            {surface === "profile" ? "Игровой уровень" : "Подбор игры"}
-          </small>
-          <h3 className="gb-level-guide__title" id={labelledBy ? undefined : `${uid}-title`}>
-            {surface === "profile" ? "Помощь с выбором уровня" : "Фильтр по моему уровню"}
-          </h3>
+      {!compact ? (
+        <div className="gb-level-guide__head">
+          <div>
+            <small className="gb-level-guide__eyebrow">
+              {surface === "profile" ? "Игровой уровень" : "Подбор игры"}
+            </small>
+            <h3 className="gb-level-guide__title" id={labelledBy ? undefined : `${uid}-title`}>
+              {surface === "profile" ? "Помощь с выбором уровня" : "Фильтр по моему уровню"}
+            </h3>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <label className="gb-level-guide__field" htmlFor={selectId}>
         <span>{surface === "profile" ? "Ориентировочный уровень" : "Уровень для фильтра списка"}</span>
@@ -108,16 +122,18 @@ export function LevelGuide({
         </select>
       </label>
 
-      <div className="gb-level-guide__actions">
-        <button
-          type="button"
-          data-active={value.kind === "none" ? "true" : undefined}
-          disabled={disabled}
-          onClick={() => pick(LEVEL_GUIDE_DONT_KNOW)}
-        >
-          {surface === "profile" ? "Не знаю" : "Сбросить фильтр"}
-        </button>
-      </div>
+      {!compact ? (
+        <div className="gb-level-guide__actions">
+          <button
+            type="button"
+            data-active={value.kind === "none" ? "true" : undefined}
+            disabled={disabled}
+            onClick={() => pick(LEVEL_GUIDE_DONT_KNOW)}
+          >
+            {surface === "profile" ? "Не знаю" : "Сбросить фильтр"}
+          </button>
+        </div>
+      ) : null}
 
       {selectedSkill ? (
         <p className="gb-level-guide__selected" role="status">
@@ -135,9 +151,17 @@ export function LevelGuide({
         <p className="gb-level-guide__hint" role="status">
           {surface === "profile"
             ? "Можно пропустить — уровень сохранится только после «Сохранить»."
-            : "Фильтр не активен. Выбор не подставляется из профиля автоматически."}
+            : compact
+              ? "Фильтр не активен. Выбор уровня — по желанию."
+              : "Фильтр не активен. Выбор не подставляется из профиля автоматически."}
         </p>
       )}
+
+      {compact ? (
+        <p className="gb-level-guide__hint" data-compact-scope="true">
+          Только загруженные игры · ntrp v1. Другие шкалы не считаются совместимыми.
+        </p>
+      ) : null}
 
       <details className="gb-level-guide__help">
         <summary>Что означают уровни</summary>
@@ -164,5 +188,152 @@ export function LevelGuide({
         </div>
       </details>
     </section>
+  );
+}
+
+export type DiscoveryLevelFiltersProps = {
+  cityName: string;
+  dayLabel: string;
+  activityLabel: string;
+  levelFilter: string;
+  onLevelFilterChange: (levelId: string) => void;
+};
+
+/**
+ * #458 compact discovery filters: one 44px icon trigger + Guide480 / mobile bottom sheet.
+ * Controlled `levelFilter` stays on the page; dialog mount/close does not reset it.
+ */
+export function DiscoveryLevelFilters({
+  cityName,
+  dayLabel,
+  activityLabel,
+  levelFilter,
+  onLevelFilterChange,
+}: DiscoveryLevelFiltersProps) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const backdropPointerDown = useRef(false);
+  const titleId = useId();
+  const dialogId = useId();
+  const activeDescId = useId();
+  const levelActive = Boolean(levelFilter);
+  const levelLabel = levelActive ? (levelGuideSkillFor(levelFilter)?.label ?? levelFilter) : "";
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!open || !dialog) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    if (typeof dialog.showModal === "function" && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        /* already open / unsupported */
+      }
+    }
+    const focusFrame = requestAnimationFrame(() => {
+      dialog.querySelector<HTMLSelectElement>("select")?.focus({ preventScroll: true });
+    });
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.body.style.overflow = previousOverflow;
+      if (dialog.open) {
+        try {
+          dialog.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (triggerRef.current?.isConnected) {
+        triggerRef.current.focus({ preventScroll: true });
+      }
+    };
+  }, [open]);
+
+  function closeFilters() {
+    setOpen(false);
+  }
+
+  function resetLevel() {
+    onLevelFilterChange("");
+    requestAnimationFrame(() => {
+      dialogRef.current?.querySelector<HTMLSelectElement>("select")?.focus({ preventScroll: true });
+    });
+  }
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="gb-discovery-filters-trigger"
+        aria-label="Фильтры"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? dialogId : undefined}
+        aria-describedby={levelActive ? activeDescId : undefined}
+        data-active={levelActive ? "true" : undefined}
+        onClick={() => setOpen(true)}
+      >
+        <DiscoveryIcon name="filter" />
+      </button>
+      {levelActive ? (
+        <span id={activeDescId} className="gb-discovery-filters-trigger__desc" hidden>
+          {`Уровень ${levelLabel}`}
+        </span>
+      ) : null}
+      {open ? (
+        <dialog
+          ref={dialogRef}
+          id={dialogId}
+          className="gb-discovery-filters-dialog"
+          aria-labelledby={titleId}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeFilters();
+          }}
+          onPointerDown={(event) => {
+            backdropPointerDown.current = event.target === event.currentTarget;
+          }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget && backdropPointerDown.current) closeFilters();
+            backdropPointerDown.current = false;
+          }}
+        >
+          <header className="gb-discovery-filters-dialog__header">
+            <div className="gb-discovery-filters-dialog__chrome">
+              <CloseButton aria-label="Закрыть фильтры" onClick={closeFilters} />
+            </div>
+            <h2 id={titleId}>Фильтры</h2>
+            <p className="gb-discovery-filters-dialog__summary">
+              {cityName} · {dayLabel} · {activityLabel}
+            </p>
+          </header>
+          <div className="gb-discovery-filters-dialog__body">
+            <LevelGuide
+              surface="discovery"
+              presentation="compact"
+              labelledBy={titleId}
+              value={levelFilter ? { kind: "ntrp", levelId: levelFilter } : { kind: "none" }}
+              onChange={(choice) => onLevelFilterChange(choice.kind === "ntrp" ? choice.levelId : "")}
+            />
+          </div>
+          <footer className="gb-discovery-filters-dialog__footer">
+            <button
+              type="button"
+              className="gb-discovery-filters-dialog__reset"
+              disabled={!levelActive}
+              onClick={resetLevel}
+            >
+              Сбросить уровень
+            </button>
+            <Button type="button" variant="dark" onClick={closeFilters}>
+              К списку
+            </Button>
+          </footer>
+        </dialog>
+      ) : null}
+    </>
   );
 }

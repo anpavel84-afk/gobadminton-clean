@@ -47,6 +47,50 @@ describe("LevelGuide control", () => {
     expect(html).toContain("aria-pressed");
   });
 
+  it("LG458 compact discovery drops panel chrome and keeps 13 help definitions", () => {
+    const html = renderToStaticMarkup(
+      createElement(LevelGuide, {
+        surface: "discovery",
+        presentation: "compact",
+        labelledBy: "filters-title",
+        value: { kind: "none" },
+        onChange: () => undefined,
+      }),
+    );
+    expect(html).toContain('data-presentation="compact"');
+    expect(html).not.toContain("Подбор игры");
+    expect(html).not.toContain("Фильтр по моему уровню");
+    expect(html).not.toContain("Сбросить фильтр");
+    expect(html).toContain("Фильтр не активен. Выбор уровня — по желанию.");
+    expect(html).toContain("Только загруженные игры · ntrp v1");
+    expect(html).toContain(LEVEL_GUIDE_DISCLAIMER);
+    expect(html).toContain("уже загруженным");
+    expect(ntrpHalfstepIds()).toHaveLength(13);
+    for (const id of ntrpHalfstepIds()) expect(html).toContain(`value="${id}"`);
+  });
+
+  it("LG458 compact does not change profile keep / foreign-scale presentation", () => {
+    const existing: SocialLevel = {
+      scaleId: "custom-club",
+      scaleVersion: 1,
+      levelId: "gold",
+      provenance: "self_declared",
+    };
+    const html = renderToStaticMarkup(
+      createElement(LevelGuide, {
+        surface: "profile",
+        presentation: "compact",
+        value: { kind: "keep", level: existing },
+        preservedLevel: existing,
+        onChange: () => undefined,
+      }),
+    );
+    // Compact is discovery-only; profile still renders default chrome even if prop is passed.
+    expect(html).toContain("Помощь с выбором уровня");
+    expect(html).toContain(formatPreservedLevelChoiceLabel(existing));
+    expect(html).toContain("Не знаю");
+  });
+
   it("preserves unknown custom option without forcing ntrp wrap in the control", () => {
     const existing: SocialLevel = {
       scaleId: "custom-club",

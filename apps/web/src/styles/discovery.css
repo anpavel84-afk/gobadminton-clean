@@ -64,12 +64,140 @@
   .gb-discovery-feed > .gb-discovery-more,
   .gb-discovery-feed > .gb-discovery-state { padding-bottom: 72px; }
 }
-.gb-discovery-filters { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 32px; }
+.gb-discovery-filters { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 32px; }
 .gb-discovery-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
 .gb-consumer .gb-discovery-chip { min-height: 44px; padding: 0 15px; border: 1px solid var(--gb-line); border-radius: 999px; background: var(--gb-white); color: var(--gb-ink-soft); font-size: 13px; font-weight: 500; cursor: pointer; }
 .gb-discovery-chip[aria-pressed="true"] { border-color: var(--gb-ink); color: var(--gb-white); background: var(--gb-ink); }
 .gb-discovery-chip:disabled { cursor: not-allowed; color: var(--gb-ink-soft); background: var(--gb-paper); border-style: dashed; }
 .gb-discovery-sort { display: flex; align-items: center; gap: 8px; color: var(--gb-ink-soft); font-size: 13px; white-space: nowrap; }
+/* #458 compact filters trigger — separate from legacy .gb-discovery-sort (hidden on mobile). */
+.gb-discovery-filters-trigger {
+  box-sizing: border-box;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--gb-line);
+  border-radius: 12px;
+  background: var(--gb-white);
+  color: var(--gb-ink);
+  cursor: pointer;
+}
+.gb-discovery-filters-trigger:focus-visible {
+  outline: 3px solid var(--c23-focus, #7945de);
+  outline-offset: 2px;
+}
+.gb-discovery-filters-trigger[data-active="true"] {
+  border-color: var(--gb-ink);
+  background: var(--gb-paper);
+}
+.gb-discovery-filters-trigger[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gb-ink);
+  box-shadow: 0 0 0 2px var(--gb-white);
+}
+.gb-discovery-filters-dialog {
+  box-sizing: border-box;
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--gb-line);
+  border-radius: 28px;
+  background: var(--gb-white);
+  color: var(--gb-ink);
+  box-shadow: var(--gb-shadow-elevated);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.gb-discovery-filters-dialog::backdrop {
+  background: rgba(19, 34, 26, 0.55);
+}
+.gb-discovery-filters-dialog__header {
+  position: relative;
+  padding: 24px 40px 16px;
+  border-bottom: 1px solid var(--gb-line);
+}
+.gb-discovery-filters-dialog__chrome {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 44px;
+  margin: 0 0 8px;
+}
+.gb-discovery-filters-dialog__chrome .gb-close-button {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+}
+.gb-discovery-filters-dialog__header h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 26px;
+  font-weight: 700;
+}
+.gb-discovery-filters-dialog__summary {
+  margin: 8px 0 0;
+  color: var(--gb-ink-soft);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.gb-discovery-filters-dialog__body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px 40px;
+  display: grid;
+  gap: 16px;
+}
+.gb-discovery-filters-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 40px 16px;
+  border-top: 1px solid var(--gb-line);
+  background: var(--gb-white);
+}
+.gb-discovery-filters-dialog__reset {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gb-ink-soft);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.gb-discovery-filters-dialog__reset:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.gb-discovery-filters-dialog__reset:focus-visible,
+.gb-discovery-filters-dialog__footer .gb-c23-btn:focus-visible {
+  outline: 3px solid var(--c23-focus, #7945de);
+  outline-offset: 2px;
+}
+.gb-discovery-filters-dialog__footer .gb-c23-btn {
+  min-height: 44px;
+  min-width: 120px;
+}
 .gb-discovery-feed-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .gb-discovery-feed-heading small, .gb-discovery-map-card header small { display: block; margin-bottom: 5px; color: var(--gb-purple); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
 .gb-discovery-feed-heading h2 { margin: 0; font-size: 34px; line-height: 1.1; font-weight: 700; letter-spacing: -.03em; }
@@ -337,10 +465,24 @@
   .gb-discovery-create { min-height: 82px; grid-column: 1 / -1; }
   .gb-discovery-create__plus { width: 52px; height: 52px; }
   .gb-discovery-filters { margin: 2px 0 28px; padding: 3px; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
-  .gb-discovery-chips { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain; }
+  .gb-discovery-chips { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain; min-width: 0; flex: 1 1 auto; }
   .gb-discovery-chips > * { flex-shrink: 0; }
   .gb-discovery-chip { white-space: nowrap; }
   .gb-discovery-sort { display: none; }
+  .gb-discovery-filters-trigger { display: inline-grid; }
+  .gb-discovery-filters-dialog {
+    width: 100%;
+    max-width: none;
+    margin: auto 0 0;
+    max-height: calc(100dvh - 24px);
+    border-radius: 28px 28px 0 0;
+  }
+  .gb-discovery-filters-dialog__header { padding: 16px 20px 12px; }
+  .gb-discovery-filters-dialog__chrome .gb-close-button { top: 16px; right: 16px; }
+  .gb-discovery-filters-dialog__body { padding: 16px 20px; }
+  .gb-discovery-filters-dialog__footer {
+    padding: 12px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+  }
   .gb-discovery-feed-heading h2 { font-size: 30px; }
   .gb-discovery-feed-actions { flex-direction: column; align-items: end; font-size: 11px; }
   .gb-discovery-card, .gb-discovery-skeleton { display: block; }
