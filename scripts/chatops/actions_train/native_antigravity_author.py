@@ -550,6 +550,7 @@ _FAILURE_FIELDS = (
     'cleanup_cgroup', 'cleanup_evidence', 'cleanup_reap', 'receipt_persist',
     'processing_stage', 'safe_exception_class',
     'stdout_sha256', 'stderr_sha256', 'transcript_sha256',
+    'custody', 'cleanup_source_custody', 'cleanup_private_home', 'cleanup_private_out',
 )
 
 
@@ -877,7 +878,43 @@ def _repair_private_removal(saved, function, name, exc_info):
         else: raise exc_info[1]  # open/scandir require a fresh rmtree traversal.
 
 
-def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir=None):
+def _custody_cleanup_allowed(custody, work):
+    """Trusted caller capability only; TaskJSON/receipt fields cannot grant it.
+
+    None retains standalone native behavior. The Root wrapper always supplies
+    its authenticated parent IPC client. Any capability failure vetoes deletion.
+    """
+    if custody is None: return True
+    try: return custody.cleanup_authorized(work) is True
+    except BaseException: return False
+
+
+def _cleanup_private_with_veto(base, saved, repair, failed, preserve_ws):
+    if not preserve_ws:
+        try: shutil.rmtree(base, onerror=repair)
+        except BaseException:
+            failed('private_tree')
+            try:
+                _repair_private_tree(saved)
+                shutil.rmtree(base, onerror=repair)
+            except BaseException: pass
+        return
+    # EXACT ws only. Never recurse into it, even if malformed or containing
+    # links/.agents/secrets. Independently erase home/auth/out. Root later moves
+    # the opaque ws into inaccessible custody after its own stop proof.
+    for name in ('home', 'out'):
+        try:
+            with _private_root(saved) as fd:
+                try: info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError: continue
+                if stat.S_ISDIR(info.st_mode):
+                    shutil.rmtree(base/name, onerror=repair)
+                else: os.unlink(name, dir_fd=fd)
+        except BaseException: failed('private_'+name)
+
+
+def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir=None,
+           custody=None):
     active = bridge.store.data['active']
     task = canonical_task_payload(active['task'])
     model = choice['effective_model']
@@ -1051,6 +1088,7 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         _decoded_credentials(proposed, tokens)
         receipt = proposed
         save('validated')
+        need(_custody_cleanup_allowed(custody, work), 'AGY_CUSTODY_HOLD')
         try:
             _restore_author_guard(guard, bridge.work)
         except BaseException:
@@ -1106,15 +1144,11 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                 def repair(function, name, exc_info):
                     failed('private_tree')
                     _repair_private_removal(private_guard, function, name, exc_info)
-                try: shutil.rmtree(base, onerror=repair)
-                except BaseException:
-                    failed('private_tree')
-                    # A partial removal/denied directory still gets an independent
-                    # retry with permission repair; the invocation remains failed.
-                    try:
-                        _repair_private_tree(private_guard)
-                        shutil.rmtree(base, onerror=repair)
-                    except BaseException: pass
+                preserve_ws = not _custody_cleanup_allowed(custody, base/'ws')
+                if preserve_ws:
+                    receipt['custody'] = 'HOLD_UNACKNOWLEDGED_EXACT_WS'
+                    failed('source_custody')
+                _cleanup_private_with_veto(base, private_guard, repair, failed, preserve_ws)
             try:
                 _remove_cgroup(cgroup)
                 # The shared helper can return after unsuccessful bounded retries.

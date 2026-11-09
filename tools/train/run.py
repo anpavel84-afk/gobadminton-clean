@@ -304,8 +304,10 @@ class WriterLease:
     """
 
     def __init__(self, issue, allowed_paths, *, parent_owns=False, registry=None,
-                 lock_dir=None, integration_lock=None):
+                 lock_dir=None, integration_lock=None, frozen_admission=None):
         self.issue = int(issue)
+        self._claim_binding = ((frozen_admission.get('revision'), digest(frozen_admission.get('task')))
+                               if frozen_admission is not None else None)
         self.allowed_paths = list(allowed_paths)
         self.parent_owns = parent_owns
         self.registry = registry
@@ -340,7 +342,38 @@ class WriterLease:
             raise LeanError('source_writer_busy')
         self.registry_obj = reg
         self._owned = True
+        self._pid = os.getpid()
+        self._uid = os.geteuid()
         return True
+
+    def verify_capacity(self, claim):
+        """Authenticate the existing kernel lease, including replacement and fork vetoes."""
+        reg = self.registry_obj
+        _need(self._owned and not self.parent_owns and self._pid == os.getpid()
+              and self._claim_binding is not None
+              and self._claim_binding == (claim.get('revision'), digest(claim.get('task')))
+              and self.issue == int(claim['issue'])
+              and self.allowed_paths == claim['task']['allowed_paths']
+              and reg is not None and reg.fd is not None and reg.slot == LEASE_SLOT,
+              'capacity_writer_unowned')
+        info = os.fstat(reg.fd)
+        actual = (self.lock_dir / (LEASE_SLOT + '.lease')).lstat()
+        _need((info.st_dev, info.st_ino) == (actual.st_dev, actual.st_ino)
+              and info.st_uid == self._uid, 'capacity_writer_replaced')
+        held = loads(os.pread(reg.fd, 1 << 20, 0))
+        _need(held == reg.record and held.get('issue') == self.issue
+              and held.get('writer') is True
+              and held.get('allowed_paths') == self.allowed_paths,
+              'capacity_writer_identity')
+        fd = os.open(self.lock_dir / (LEASE_SLOT + '.lease'), os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            raise LeanError('capacity_writer_unlocked')
+        finally:
+            os.close(fd)
 
     def release(self):
         if self._owned and self.registry_obj is not None:
@@ -469,6 +502,13 @@ def claim_admission(admission, *, results_root=None, force=False, config=None, r
             current_provider=current, mode=mode)
     if mode == 'on' and record['task'].get('handoff_from_revision'):
         record = bind_capacity_successor(record, root, routing_config, reviewer_authority=reviewer_authority)
+    # Sample protected policy only for a genuinely new accepted claim.
+    if mode == 'on' and admission.get('owner_id') == OWNER_ID and admission.get('snapshot'):
+        from author_handoff import prospective_capacity_policy
+        prospective = prospective_capacity_policy(record['bound_author']['pipeline'])
+        if prospective:
+            record['capacity_policy'] = prospective
+            record['owner_authorization'] = admission['snapshot']
     write_receipt(claim_path, record)
     return record
 
@@ -942,7 +982,7 @@ def _author_provenance(claim, author_result, worktree, candidate_sha, operation,
 
 
 def execute_claim(admission, adapters, *, results_root, config=None, parent_lease=False,
-                  max_repair=None):
+                  max_repair=None, _writer_lease=None):
     """Finite resumable flow for one admitted Issue. Same path for live + tests.
 
     OD-016: no arbitrary productive author-pass ceiling. Bound a finite WAKE by
@@ -971,14 +1011,18 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
     if claim.get('phase') in TERMINAL_PHASES:
         return {'status': 'already_terminal', 'claim': claim, 'claim_path': str(path)}
 
-    lease = WriterLease(
+    lease = _writer_lease or WriterLease(
         claim['issue'], task.get('allowed_paths') or [],
         parent_owns=parent_lease,
         registry=adapters.lock_registry,
         lock_dir=adapters.lock_dir,
-        integration_lock=adapters.integration_lock,
+        integration_lock=adapters.integration_lock, frozen_admission=claim,
     )
-    lease.acquire()
+    if _writer_lease is None:
+        lease.acquire()
+    else:
+        _need(isinstance(lease, WriterLease), 'capacity_writer_required')
+        lease.verify_capacity(claim)
     try:
         # Resume durable external waits without marking RUNNING/UNKNOWN.
         claim = read_receipt(path)
@@ -1086,22 +1130,46 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                        author_attempt=author_n,
                        author_evidence_dir=str(author_evidence),
                        evidence_root=str(evidence))
+            def capacity_author_launch(**kwargs):
+                # A saved successor is not perpetual launch authority. Reuse the
+                # protected claim/operation + owned lease check at the adapter
+                # boundary, before the backup can charge any budget/model call.
+                if claim.get('capacity_successor'):
+                    try:
+                        from author_handoff import capacity_claim, operation, ACTUAL
+                        capacity_claim(lease, path, operation(
+                            task, ACTUAL[claim['bound_author']['decision']['provider']],
+                            _read_worktree_head(adapters, worktree)))
+                    except Exception as err:
+                        raise ProviderError('capacity_policy_prelaunch_hold', charge='none') from err
+                return adapters.author(**kwargs, capacity_lease=lease, capacity_claim_path=path)
+
             try:
                 if adapters.author:
                     author_result = invoke_cursor_author(
                         task=task, worktree=worktree, evidence_dir=author_evidence,
-                        launcher=adapters.author, parent_lease=True, reviewer_authority=adapters.reviewer_authority,
+                        launcher=capacity_author_launch
+                        if claim.get('capacity_policy') or claim.get('capacity_successor') else adapters.author,
+                        parent_lease=True, reviewer_authority=adapters.reviewer_authority,
                         protected_reviewer=claim.get('reviewer_authority'))
                 else:
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
+                if err.code == 'capacity_policy_prelaunch_hold':
+                    claim = mark_phase(path, 'BLOCKED', stage='author', error=err.code,
+                                       capacity_hold=err.code, no_model_launched=True)
+                    return {'status': 'blocked', 'reason': err.code,
+                            'claim': claim, 'claim_path': str(path)}
                 if (task.get('_bound_author', {}).get('mode') == 'on'
                         and adapters.author_capacity is not None):
                     proposal = record_capacity_proposal(
                         path, task, err, author_evidence, adapters.author_capacity,
                         reviewer_authority=adapters.reviewer_authority,
-                        qa_effort=accepted_qa_effort(adapters.reviewer_authority, claim.get('reviewer_authority')))
+                        qa_effort=accepted_qa_effort(adapters.reviewer_authority, claim.get('reviewer_authority')),
+                        lease=lease)
                     if proposal.get('action') == 'REQUIRE_NEW_ADMISSION':
+                        if claim.get('capacity_policy'):
+                            return derive_capacity_successor(path, task, lease, adapters, root, config)
                         return {'status': 'blocked', 'claim': read_receipt(path),
                                 'claim_path': str(path), 'reason': 'new_capacity_admission_required'}
                 if err.code == 'preflight_no_call':
@@ -1275,7 +1343,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                     return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
                             'reason': 'deadline'}
                 return execute_claim(admission, adapters, results_root=root, config=config,
-                                    parent_lease=True)
+                                    parent_lease=True, _writer_lease=lease if claim.get('capacity_policy') else None)
             else:
                 mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci)
                 return {'status': 'blocked', 'claim': read_receipt(path), 'claim_path': str(path),
@@ -1396,7 +1464,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                     return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
                             'reason': 'deadline'}
                 return execute_claim(admission, adapters, results_root=root, config=config,
-                                    parent_lease=True, max_repair=max_repair)
+                                    parent_lease=True, max_repair=max_repair,
+                                    _writer_lease=lease if claim.get('capacity_policy') else None)
 
         # --- merge dev: retain candidate SHA; capture distinct merge SHA ---
         claim = read_receipt(path)
@@ -1474,7 +1543,8 @@ def _scan_resumable(results_root):
         return found
     for path in root.glob('issue-*/**/claim.json'):
         rec = read_receipt(path)
-        if rec and rec.get('phase') in WAITING_PHASES:
+        if rec and (rec.get('phase') in WAITING_PHASES or
+                    (rec.get('phase') == 'CLAIMED' and rec.get('capacity_successor'))):
             found.append(rec)
     found.sort(key=lambda r: int(r.get('claimed_at') or 0))
     return found
@@ -1700,12 +1770,11 @@ def main(argv=None):
     return 0 if result.get('status') not in ('denied', 'queue_unavailable') else 1
 
 
-def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_authority=None, qa_effort='medium'):
-    """Persist finite handoff proposal; never execute a backup in this operation.
+def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_authority=None, qa_effort='medium', lease=None):
+    """Reconcile a prospective operation under its owned lease, then propose.
 
-    decoder is installed trusted code for a SUPPORTED control schema, not a task
-    callable or parser for stdout text. Live currently supplies no such decoder.
-    Its StopProof must already reconcile final native receipts/checkpoint bytes.
+    Installed decoder accepts only protected typed control and reconciled custody.
+    A proposal never executes a backup in this operation.
     """
     from dataclasses import asdict, is_dataclass
     import author_routing as p
@@ -1721,6 +1790,15 @@ def record_capacity_proposal(path, task, error, evidence, decoder, *, reviewer_a
         protected_reviewer = claim.get('reviewer_authority')
         if protected_reviewer is not None:
             qa_effort = accepted_qa_effort(reviewer_authority, protected_reviewer)
+        if claim.get('capacity_policy'):
+            from author_handoff import adjudicate_capacity_recovery, operation, ACTUAL
+            _need(isinstance(lease, WriterLease), 'capacity_writer_required')
+            lease.verify_capacity(claim)
+            current = operation(task, ACTUAL[claim['bound_author']['decision']['provider']],
+                                _read_worktree_head_for_control(claim))
+            result = adjudicate_capacity_recovery(current, lease=lease, claim_path=path)
+            if result.get('action') != 'RECORDED':
+                return hold
         control = decoder(error=error, evidence_dir=evidence, task=task)
         from author_handoff import ACTUAL
         current = operation(task, ACTUAL[claim['bound_author']['decision']['provider']],
@@ -1847,6 +1925,12 @@ def bind_capacity_successor(record, root, routing_config, *, reviewer_authority=
         author_history_refs=proposal['history_refs'], worktree=worktree,
         base_sha=previous['base_sha'], candidate_sha=task['checkpoint_sha'],
         attempts={'author': proposal['cumulative_attempts'], 'qa': previous['attempts'].get('qa', 0)})
+    for key in ('repair_findings', 'findings_fingerprints', 'pr', 'existing_pr',
+                'publication_branch', 'publish', 'runtime', 'capacity_policy', 'owner_authorization'):
+        if key in previous:
+            record[key] = previous[key]
+    if previous.get('pr'):
+        record['existing_pr'] = previous['pr']
     # Unique admission is sealed in the existing claim history before any launch.
     previous['capacity_successor_revision'] = record['revision']
     write_receipt(previous_path, previous)
@@ -1855,6 +1939,42 @@ def bind_capacity_successor(record, root, routing_config, *, reviewer_authority=
 
 def re_full_revision(value):
     return len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def derive_capacity_successor(path, task, lease, adapters, root, config):
+    """Internal accepted-authorization derivation; no fabricated Owner comment."""
+    from author_handoff import import_capacity_checkpoint, fingerprint
+    previous = read_receipt(path)
+    try:
+        lease.verify_capacity(previous)
+        _need(previous.get('owner_authorization') and previous.get('capacity_policy'),
+              'capacity_original_authorization_missing')
+        from providers import routing_qualifications
+        import author_routing as routing_policy
+        target = previous['capacity_proposal']['provider']
+        routes = routing_qualifications(previous['task'], reviewer_authority=adapters.reviewer_authority,
+            protected_reviewer=previous.get('reviewer_authority'))
+        _need(routing_policy._route(routes, target) is not None, 'capacity_backup_unavailable')
+        accepted_qa_effort(adapters.reviewer_authority, previous.get('reviewer_authority'))
+        checkpoint_sha, checkpoint = import_capacity_checkpoint(previous, lease)
+        successor_task = dict(previous['task'], handoff_from_revision=previous['revision'],
+            checkpoint_fingerprint=checkpoint['fingerprint'], checkpoint_sha=checkpoint_sha,
+            base=checkpoint_sha)
+        revision = fingerprint(dict(schema='GB_CAPACITY_ADMISSION_V1',
+            previous_revision=previous['revision'], task=successor_task,
+            authorization=previous['owner_authorization'], proof=previous['capacity_proposal']))
+        admission = dict(issue=previous['issue'], revision=revision,
+            comment_id=previous['comment_id'], task=successor_task)
+        successor = claim_admission(admission, results_root=root, config=config,
+                                    reviewer_authority=adapters.reviewer_authority)
+        return dict(status='wake_resume', reason='capacity_successor', claim=successor,
+                    claim_path=str(claim_path_for(admission, root)))
+    except Exception as err:
+        previous = read_receipt(path)
+        previous['capacity_hold'] = getattr(err, 'code', type(err).__name__)
+        write_receipt(path, previous)
+        return dict(status='blocked', reason='capacity_successor_hold', claim=previous,
+                    claim_path=str(path))
 
 
 if __name__ == '__main__':

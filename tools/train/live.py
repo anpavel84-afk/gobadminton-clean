@@ -1260,6 +1260,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     and writer lease. Never exec user-writable external Python as Root; never
     reuse Root HOME/API secrets beyond the memory token in the child env.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import prepare_cursor_author_intent, mark_intent_phase, ProviderError
     require_executor_uid()
     evidence = Path(evidence_dir)
@@ -1289,6 +1291,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     import_done = False
     retention = None
     source_rejected = False
+    source_custody = None
     try:
         for name in CURSOR_PRIVATE_DIRS:
             (base / name).mkdir(mode=0o700)
@@ -1322,6 +1325,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             + '\nWork only in ' + str(base / 'work') + '.\n'
             + 'ACTUAL INPUT MATERIALS:\n' + json.dumps(materials)
         )
+        prompt += public_context
         if task.get('repair_findings'):
             prompt += '\nADDRESS THESE FINDINGS EXACTLY:\n' + json.dumps(task['repair_findings'])
         (evidence / 'prompt.txt').write_text(prompt)
@@ -1392,6 +1396,13 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             return checked.returncode == 0
         retention = SourceRetention(baseline=before, allowed=task['allowed_paths'],
             ignored=ignored, source_name=native.source_name, secrets=lambda: (token,))
+        from author_handoff import RootSourceCustody, DirectSourceCustody, operation
+        source_custody = RootSourceCustody(operation(dict(task,
+            _author_operation=task.get('_author_operation') or hashlib.sha256(str(intent_path).encode()).hexdigest(),
+            runtime_base_sha=task.get('runtime_base_sha') or task.get('base') or git(worktree, 'rev-parse', 'HEAD')),
+            'cursor_auto', git(worktree, 'rev-parse', 'HEAD')), task['allowed_paths'],
+            uid=CURSOR_UID, task_hash=hashlib.sha256(prompt.encode()).hexdigest())
+        retention.custody = DirectSourceCustody(source_custody)
         retention.prepare(base / 'work')
         mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
         stream = evidence / 'stream.jsonl'
@@ -1439,6 +1450,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 from author_handoff import owned_group_gone
                 if not owned_group_gone(p):
                     raise ProviderError('cursor_owned_reap_hold', charge='unknown')
+        if retention.failure:
+            raise ProviderError('cursor_source_custody_hold', charge='unknown')
         if p.returncode != 0:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', exit=p.returncode)
             raise ProviderError('cursor_exit_nonzero', str(p.returncode))
@@ -1551,7 +1564,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         }
         raise
     finally:
-        if retention is not None and retention.result is not None and not import_done:
+        if source_custody is None and retention is not None and retention.result is not None and not import_done:
             try:
                 from author_handoff import operation
                 retention.persist(evidence, operation(dict(task,
@@ -1564,7 +1577,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             except Exception:
                 pass  # Native raw/error/charge receipt remains authoritative.
         checkpoint_invalid = source_rejected or (retention is not None and retention.failure is not None)
-        if model_result is not None and not import_done and not source_rejected:
+        if source_custody is None and model_result is not None and not import_done and not source_rejected:
             try:
                 # Revalidate current bytes even when the new observer failed.
                 # Never preserve from a live writer or bypass scope/secret checks.
@@ -1586,7 +1599,22 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         finally:
             if p is not None and p.poll() is None:
                 _kill_owned_process_group(p)
-            shutil.rmtree(base, ignore_errors=True)
+            if source_custody is not None:
+                try:
+                    if p is not None and not source_custody.checkpoint:
+                        retention.custody.quarantine()
+                finally:
+                    retention.custody.close(); source_custody.close()
+            if source_custody is None or source_custody.checkpoint or retention.custody.quarantined:
+                shutil.rmtree(base, ignore_errors=True)
+            else:
+                # Custody fault: keep EXACT work, erase private siblings independently.
+                for child in base.iterdir():
+                    if child.name == 'work': continue
+                    if child.is_dir() and not child.is_symlink(): shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        try: child.unlink()
+                        except OSError: pass
 
 
 def _kill_owned_process_group(p):
@@ -1642,7 +1670,7 @@ AGY_QA_INPUTS = AGY_QA_WORKTREES / '.product-qa-inputs'
 AGY_SLOT = 'slot2'
 AGY_IPC_MAX = 4096
 AGY_IPC_FIELDS = frozenset({
-    'ok', 'charged', 'error_type', 'error_code', 'error',
+    'ok', 'charged', 'error_type', 'error_code', 'error', 'retention_status',
 })
 
 
@@ -1668,43 +1696,14 @@ def _codex_turn_completed(events_path):
 
 
 def _codex_capacity_technical(evidence_dir):
-    """Exact Codex capacity + turn.failed/error, no completed verdict.
+    """No authenticated typed Codex QA capacity producer is installed.
 
-    Completed technical failure — not content FAIL / EXPLICIT_SAFETY_REFUSAL.
+    Bounded reads retain output-policy checks, but free text/events/final files
+    cannot authorize an additional paid QA call, regardless of exit status.
     """
-    evidence = Path(evidence_dir)
-    blobs = []
     for name in ('events.jsonl', 'stderr', 'final.txt'):
-        path = evidence / name
-        try:
-            blobs.append(_qa_output_bytes(path).decode(errors='replace'))
-        except FileNotFoundError:
-            pass
-    text = '\n'.join(blobs)
-    if CODEX_CAPACITY_MSG not in text:
-        return False
-    if _codex_turn_completed(evidence / 'events.jsonl'):
-        return False
-    events = evidence / 'events.jsonl'
-    try:
-        raw = _qa_output_bytes(events)
-    except FileNotFoundError:
-        return CODEX_CAPACITY_MSG in text
-    for line in raw.decode(errors='replace').splitlines():
-        if not line.strip():
-            continue
-        try:
-            obj = loads(line)
-        except (ValueError, LiveError):
-            continue
-        if not isinstance(obj, dict):
-            continue
-        typ = obj.get('type')
-        if typ in ('turn.failed', 'error') or obj.get('error'):
-            return True
-        msg = str(obj.get('message') or obj.get('error') or '')
-        if CODEX_CAPACITY_MSG in msg:
-            return True
+        try: _qa_output_bytes(Path(evidence_dir) / name)
+        except FileNotFoundError: pass
     return False
 
 
@@ -1787,6 +1786,8 @@ def _agy_build_prompt(task, candidate_sha, *, rules_text, source, base_sha,
             diff_names = ''
             diff_stat = ''
     prompt = rules_text + '\n'
+    from providers import public_release_context
+    prompt += public_release_context(task)
     prompt += (
         f'OWNER AUTHORIZED INDEPENDENT SOURCE QA. issue={issue} '
         f'attempt={attempt} candidate={candidate_sha} base={base_sha or ""}. '
@@ -2027,7 +2028,7 @@ def _agy_drop_to_executor():
 def _agy_ipc_pack(payload):
     """Bounded JSON own fixed fields only — no paths/commands from child."""
     out = {}
-    for key in ('ok', 'charged', 'error_type', 'error_code', 'error'):
+    for key in ('ok', 'charged', 'error_type', 'error_code', 'error', 'retention_status'):
         if key in payload:
             out[key] = payload[key]
     raw = json.dumps(out, separators=(',', ':')).encode()
@@ -2045,6 +2046,10 @@ def _agy_ipc_unpack(raw):
         raise LiveError('agy_child_ipc_failed', type(err).__name__) from err
     if not isinstance(obj, dict) or set(obj) - AGY_IPC_FIELDS:
         raise LiveError('agy_child_ipc_failed', 'unexpected_fields')
+    if 'retention_status' in obj:
+        from author_handoff import valid_retention_status
+        if not valid_retention_status(obj['retention_status']):
+            raise LiveError('agy_child_ipc_failed', 'invalid_retention_status')
     return obj
 
 
@@ -2077,7 +2082,7 @@ def _agy_collect_native_evidence(child_ev, root_ev):
             return
     root_ev.mkdir(parents=True, exist_ok=True)
     for name in ('stream.raw', 'native-receipt.json',
-                 'shared-charge-receipt.json', 'child-ipc-status.json'):
+                 'shared-charge-receipt.json', 'child-ipc-status.json', 'source-retention.json'):
         src = child_ev / name
         if src.is_file() and not src.is_symlink():
             (root_ev / name).write_bytes(src.read_bytes())
@@ -2284,6 +2289,8 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     Verify exit0 AND turn.completed AND canonical exact SHA final. No author
     worktree checkout on HEAD mismatch — precise HOLD. Timeout kills owned pg.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
     from author_handoff import fingerprint
     require_executor_uid()
@@ -2339,6 +2346,8 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         f'TASK: {json.dumps({k: task.get(k) for k in ("issue","goal","acceptance","allowed_paths")}, ensure_ascii=False)}\n'
         'PASS => findings must be []. Findings list only actionable defects.\n'
     )
+    from providers import public_release_context
+    prompt += public_release_context(task)
     (evidence / 'prompt.md').write_text(prompt)
     # Prompt/events/stderr stay Root-opened FDs (inherited). CLI -o final must NOT
     # target Root 0700 evidence ancestors — use private 1002 TMPDIR tree instead.
@@ -2557,6 +2566,8 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     to Codex. Ineligible/shared-budget-unavailable ⇒ no-call technical HOLD.
     Ordinary AGY-before-any-Codex may still fall back to Medium before charge.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import (
         prepare_qa_intent, mark_intent_phase, parse_agy_stream, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
@@ -2907,6 +2918,8 @@ def _agy_author_prompt(task, *, rules_text, materials=None):
     prompt = rules_text + '\n'
     prompt += 'EXACT OWNER ASSIGNMENT (Lean Mode B AGY author live binding)\n'
     prompt += json.dumps(body, ensure_ascii=False, indent=2) + '\n'
+    from providers import public_release_context
+    prompt += public_release_context(task)
     prompt += (
         'Work ONLY in the current private export cwd (model workspace). '
         'Do not use staging paths, external task checkout paths, or model Git metadata.\n'
@@ -3020,7 +3033,7 @@ def _agy_author_trusted_payloads(native, staging, receipt, allowed):
 
 
 def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True,
-                    _invoke=None):
+                    _invoke=None, capacity_lease=None, capacity_claim_path=None):
     """Native AGY AUTHOR live binding beside cursor_author_live / agy_qa_live.
 
     UID978 edits a separate staging snapshot (never 1002 Git metadata / Slot2 journal).
@@ -3029,6 +3042,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
     charges role=author once at launch. Fallback to Cursor ONLY pre-launch when AGY
     is unavailable (no charge). After paid/unknown transport failure: HOLD with raw.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import (
         prepare_cursor_author_intent, mark_intent_phase, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
@@ -3128,6 +3143,15 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                           fallback_provider='cursor_auto')
         return cursor_fallback()
 
+    from author_handoff import RootSourceCustody, RetentionError
+    try:
+        if _invoke is None:
+            RootSourceCustody.preflight()
+    except (RetentionError, OSError) as err:
+        mark_intent_phase(intent_path, 'preflight_no_call', error='agy_source_custody_unsupported',
+                          no_model_launched=True)
+        raise ProviderError('agy_source_custody_unsupported', charge='none') from err
+
     # Fresh 978 staging from current HEAD; frozen base retained for full review diff.
     try:
         staging_snap = _agy_materialize_qa_snapshot(
@@ -3189,7 +3213,11 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
 
     charge_receipt = native_ev / 'shared-charge-receipt.json'
 
+    custody_client = None
     def charge():
+        from author_handoff import require_agy_source_custody
+        if _invoke is None:
+            require_agy_source_custody(custody_client)
         if charge_receipt.is_file():
             raise ProviderError('agy_double_charge_refused')
         budget.charge(AGY_SLOT, 'agy', 'author')
@@ -3215,6 +3243,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         }
 
     native_receipt = {}
+    root_custody = None
     changed = []
     payloads = {}
     deleted = []
@@ -3267,17 +3296,28 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
 
             # os.fork + bounded JSON IPC (same pattern as _agy_product_invoke).
             # Parent never unpickles child UID data; receipt/raw use fixed paths.
+            from author_handoff import RootSourceCustody, operation
+            custody_binding = operation(dict(task,
+                _author_operation=task.get('_author_operation') or fingerprint,
+                runtime_base_sha=base_sha), 'agy_author', head_before)
+            root_custody = RootSourceCustody(custody_binding, task['allowed_paths'],
+                uid=AGY_UID, task_hash=native.canonical_task_digest(canon_task))
             r_fd, w_fd = os.pipe()
             pid = os.fork()
             if pid == 0:
                 os.close(r_fd)
                 status = 0
                 charged_flag = False
+                retention_status = None
                 try:
                     if os.geteuid() == 0:
                         _agy_drop_to_executor()
-                    from author_handoff import SourceRetention, operation
+                    custody_client = root_custody.client()
+                    custody_client.protect_sdk()
+                    from author_handoff import (SourceRetention, operation, require_agy_source_custody,
+                        PrivateRetentionSecrets, retention_failure, finish_retention)
                     retention = None
+                    retention_setup_failure = None
                     launch = subprocess.Popen
                     try:
                         baseline = {n: hashlib.sha256(native._source(staging / n, staging)).hexdigest()
@@ -3288,10 +3328,10 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         def retention_secrets():
                             tokens = list(old_tokens)
                             tokens += native._credentials(native.trusted(native.AUTH, owner=AGY_UID))
-                            if observed_work.get('home'):
-                                tokens += native._credentials(native.trusted(
-                                    Path(observed_work['home']) / '.gemini/antigravity-cli/antigravity-oauth-token',
-                                    owner=AGY_UID))
+                            # Fixed copied AUTH is anchored before Popen, rather
+                            # than trusted() through sticky /tmp. Refresh tokens
+                            # are reread before every source scan.
+                            tokens += observed_work['secrets']()
                             return tokens
                         def original_ignored(name):
                             result = subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
@@ -3302,32 +3342,46 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                             return result.returncode == 0
                         retention = SourceRetention(baseline=baseline, allowed=task['allowed_paths'],
                             ignored=original_ignored, source_name=native._source_name, secrets=retention_secrets,
-                            control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()))
-                        observed_popen = retention.popen(subprocess.Popen, native.reap)
+                            control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()),
+                            checkpoint=None)
+                        retention.custody = custody_client
                         def launch(*a, **k):
-                            observed_work['home'] = k['env']['HOME']
-                            return observed_popen(*a, **k)
-                    except Exception:
-                        retention = None
-                        launch = subprocess.Popen
+                            require_agy_source_custody(custody_client)
+                            if k.get('pass_fds') or not k.get('close_fds'):
+                                raise ProviderError('custody_descriptor_inheritance', charge='none')
+                            return retention.popen(subprocess.Popen, native.reap)(*a, **k)
+                        def custody_atomic(path, value):
+                            phase = value.get('phase')
+                            if phase == 'prepared' and not custody_client.ready:
+                                work = Path(value['rules_context']['cwd'])
+                                observed_work['work'] = work
+                                observed_work['secrets'] = PrivateRetentionSecrets(
+                                    native, work, work.parent/'home', uid=AGY_UID)
+                                retention.prepare(work)  # guard + durable Root ACK BEFORE charge
+                            elif phase == 'validated' or (phase == 'failed_no_automatic_replay' and custody_client.ready):
+                                # Original native owned reap has completed. cgroup-absent
+                                # remains HOLD for routing; it is never relabelled quiet.
+                                custody_client.terminal_checkpoint(retention,
+                                    observed_work['work'])
+                            from providers import atomic_write
+                            atomic_write(path, value, 0o600)  # preserve original native receipt
+                    except Exception as err:
+                        retention_setup_failure = retention_failure('setup', err)
+                        raise ProviderError('agy_retention_setup_no_call', charge='none') from err
                     try:
                         native.invoke(
                             bridge, rt, prompt, choice,
                             popen=launch,
-                            atomic=lambda path, value: (
-                                Path(path).write_text(
-                                    json.dumps(value, sort_keys=True) + '\n')
-                            ),
+                            atomic=custody_atomic,
+                            custody=custody_client,
                             permitted=lambda n, allowed: n in set(allowed or []),
                             evidence_dir=native_ev,
                         )
                     finally:
                         # Native final receipt/cleanup is separate from UNVALIDATED bytes.
-                        if retention is not None and retention.result is not None and retention.failure is None:
-                            try:
-                                retention.persist(native_ev, operation(dict(task, _author_operation=task.get('_author_operation') or fingerprint, runtime_base_sha=base_sha), 'agy_author', head_before))
-                            except Exception:
-                                pass  # No checkpoint => HOLD; never change native outcome.
+                        retention_status = dict(schema='GB_SOURCE_RETENTION_STATUS_V1',
+                            checkpoint='UNVALIDATED' if custody_client.terminal else 'INVALID',
+                            failure=None if custody_client.terminal else retention_failure('persist'))
                     charged_flag = _agy_read_charge_receipt(charge_receipt)[0]
                     payload = {'ok': True, 'charged': charged_flag}
                 except BaseException as err:
@@ -3340,6 +3394,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         'error': str(err)[:500],
                         'error_code': getattr(err, 'code', None),
                     }
+                if retention_status is not None:
+                    payload['retention_status'] = retention_status
                 try:
                     ipc_status.write_text(
                         json.dumps(
@@ -3359,23 +3415,52 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 os._exit(status)
 
             os.close(w_fd)
+            root_custody.parent(pid)
             raw_ipc = b''
             # Bounded select wait (same UNKNOWN semantics as prior join timeout).
             import select as _select
-            ready, _, _ = _select.select([r_fd], [], [], AUTHOR_TIMEOUT_S + 30)
+            deadline = time.monotonic() + AUTHOR_TIMEOUT_S + 30
+            ready = []
+            try:
+                while time.monotonic() < deadline:
+                    events, _, _ = _select.select([r_fd, root_custody.server], [], [],
+                        max(0, deadline - time.monotonic()))
+                    if r_fd in events:
+                        ready = [r_fd]; break
+                    if root_custody.server in events:
+                        root_custody.service()
+            except BaseException:
+                # SDK's timeout/EOF path rescues source-only through its FD.
+                root_custody.server.close()
+                root_custody.record.update(fault=True)
+                root_custody._record()
+                ready, _, _ = _select.select([r_fd], [], [], 15)
             if not ready:
+                # Stop only identities bound by Root before rescue. Any failure
+                # leaves opaque ws in place under HOLD; never collect live bytes.
+                try: root_custody.stop_owned()
+                except (OSError, RetentionError): pass
                 try:
                     os.close(r_fd)
                 except OSError:
                     pass
                 try:
-                    os.kill(pid, 9)
+                    from author_handoff import _proc_identity
+                    import signal
+                    sdk_fd = os.pidfd_open(pid)
+                    try:
+                        if _proc_identity(pid) == root_custody.sdk_identity:
+                            signal.pidfd_send_signal(sdk_fd, signal.SIGKILL)
+                    finally: os.close(sdk_fd)
                 except OSError:
                     pass
                 try:
                     os.waitpid(pid, 0)
                 except OSError:
                     pass
+                try: root_custody.rescue(sdk_exited=True)
+                except (OSError, RetentionError): pass  # Explicit unresolved HOLD, no deletion.
+                finally: root_custody.close()
                 record_agy_charge(
                     int(task['issue']),
                     {'phase': 'timeout', 'operation_fingerprint': fingerprint},
@@ -3387,7 +3472,11 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 raw_ipc = os.read(r_fd, AGY_IPC_MAX)
             finally:
                 os.close(r_fd)
-            os.waitpid(pid, 0)
+            _, child_status = os.waitpid(pid, 0)
+            if child_status and not root_custody.checkpoint:
+                try: root_custody.rescue(sdk_exited=True)
+                except (OSError, RetentionError): pass  # Source remains in ws, HOLD.
+            # Keep Root descriptors/record until the fixed capacity producer runs.
 
             try:
                 msg = _agy_ipc_unpack(raw_ipc) if raw_ipc else {}
@@ -3399,11 +3488,25 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 except LiveError:
                     msg = {}
             _agy_collect_native_evidence(native_ev, evidence)
+            # Preserve finite retention status even when its child-side disk
+            # write failed. This is diagnostics only, never a routing grant.
+            retention_status = msg.get('retention_status')
+            if retention_status is not None:
+                from providers import atomic_write
+                atomic_write(evidence / 'source-retention-ipc.json', retention_status, 0o600)
             # Fixed receipt path only — never child-supplied paths.
             native_receipt = _agy_author_read_native_receipt(native_ev)
             if not native_receipt and receipt_path.is_file():
                 native_receipt = _agy_author_read_native_receipt(native_ev)
             raw_bytes = _agy_author_collect_raw(native_ev, native_receipt, evidence)
+            try:
+                if child_status:
+                    root_custody.produce_capacity_operation(native_receipt,
+                        lease=capacity_lease, claim_path=capacity_claim_path)
+            except (OSError, RetentionError, ValueError):
+                pass  # Missing/unsafe evidence stays HOLD, never authorizes fallback.
+            finally:
+                root_custody.close()
             if native_receipt:
                 (evidence / 'native-receipt.json').write_text(
                     json.dumps(native_receipt, sort_keys=True, indent=2) + '\n')
@@ -3424,6 +3527,13 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         operation_fingerprint=fingerprint,
                         calls_charged=1, no_blind_replay=True,
                         no_fallback_after_paid=True)
+                    from author_handoff import _recovery_inputs
+                    try:
+                        control = _recovery_inputs(custody_binding)
+                    except Exception:
+                        control = None
+                    if control is not None:
+                        raise ProviderError('provider_control_failure', charge='charged')
                     raise ProviderError(
                         'agy_author_protocol_or_provider_failed',
                         msg.get('error_type') or 'failed', charge='charged')
@@ -3483,6 +3593,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
             operation_fingerprint=fingerprint, no_blind_replay=True)
         raise ProviderError('agy_author_launch_unknown', type(err).__name__,
                             charge='unknown') from err
+    finally:
+        if root_custody is not None: root_custody.close()
 
     allowed = set(task.get('allowed_paths') or [])
     if not changed or not set(changed) <= allowed:
@@ -4173,27 +4285,8 @@ def _agy_capacity_fallback_evidence(evidence, candidate_sha):
 
 def _qa_resume_agy_capacity(claim, task, evidence, *, deadline=None):
     """Invoke only qualified+explicit AGY after Codex capacity — no Codex rerun."""
-    from providers import role_ready, ProviderError
-    if not _agy_in_independent_fallback(task):
-        raise ProviderError('agy_capacity_fallback_not_admitted')
-    ok, _ready = role_ready('agy_qa')
-    if not ok:
-        raise ProviderError('agy_fallback_not_ready')
-    need_s = QA_TIMEOUT_S + 60
-    if deadline is not None and (deadline - time.monotonic()) < need_s:
-        # Still short: re-defer without AGY charge / without Codex replay.
-        raise ProviderError(
-            'wake_defer_capacity_fallback',
-            f'remaining<{need_s}', charge='charged')
-    fallback = _agy_capacity_fallback_evidence(evidence, claim['candidate_sha'])
-    agy_task = dict(task)
-    agy_task['attempt'] = f'capacity-fallback-{task.get("attempt") or 1}'
-    agy_task['qaroute'] = ['agy_qa']
-    # Runtime-only constraint: never reverse-fallback to Codex on this path.
-    agy_task['capacity_alternative_only'] = True
-    return agy_qa_live(
-        task=agy_task, candidate_sha=claim['candidate_sha'],
-        evidence_dir=fallback, capacity_alternative_only=True)
+    from providers import ProviderError
+    raise ProviderError('qa_capacity_control_unsupported', charge='none')
 
 
 def qa_dispatch(claim, *, deadline=None, reviewer_authority=None):
@@ -4243,23 +4336,8 @@ def qa_dispatch(claim, *, deadline=None, reviewer_authority=None):
     try:
         return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'],
                              evidence_dir=evidence, reviewer_authority=reviewer_authority)
-    except ProviderError as err:
-        if err.code != 'codex_capacity_technical':
-            raise
-        # Preserve Codex output; only explicit independentfallback→agy may continue.
-        if not _agy_in_independent_fallback(task):
-            raise
-        ok, _ready = role_ready('agy_qa')
-        if not ok:
-            raise
-        need_s = QA_TIMEOUT_S + 60
-        if deadline is not None and (deadline - time.monotonic()) < need_s:
-            # Honest known no-call deferral — next fresh wake; no AGY paid call.
-            raise ProviderError(
-                'wake_defer_capacity_fallback',
-                f'remaining<{need_s}', charge='charged') from err
-        return _qa_resume_agy_capacity(
-            claim, task, evidence, deadline=deadline)
+    except ProviderError:
+        raise  # No producer-authenticated QA capacity control is installed.
 
 
 def update_monitor_backlog(queue_result, *, monitor_path=None):
@@ -4288,6 +4366,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
     """Trusted LIVE default adapters for host run_once. Tests must inject fakes."""
     import run as lean_run
     reviewer_authority = build_reviewer_authority()
+    from author_handoff import protected_capacity_decoder
 
     def fetch_admissions():
         result = fetch_project_admissions(config=None)
@@ -4318,11 +4397,14 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         from providers import select_author_provider
         task = kwargs.get('task') or {}
         protected_reviewer = kwargs.pop('protected_reviewer', None)
+        capacity_lease = kwargs.pop('capacity_lease', None)
+        capacity_claim_path = kwargs.pop('capacity_claim_path', None)
         provider, _reason, _meta = select_author_provider(
             task, issue=task.get('issue'), reviewer_authority=reviewer_authority,
             protected_reviewer=protected_reviewer)
         if provider == 'agy_author':
-            return agy_author_live(**kwargs)
+            return agy_author_live(**kwargs, capacity_lease=capacity_lease,
+                                   capacity_claim_path=capacity_claim_path)
         if provider == 'codex_author':
             return codex_author_live(**kwargs, reviewer_authority=reviewer_authority,
                                      protected_reviewer=protected_reviewer)
@@ -4355,6 +4437,7 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
 
     return lean_run.Adapters(
         reviewer_authority=reviewer_authority,
+        author_capacity=protected_capacity_decoder,
         fetch_admissions=fetch_admissions,
         gh_api=gh_api,
         author=author,
@@ -4396,6 +4479,8 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     Only a separately admitted capacity successor may reach this transport.
     No chat-author qualification assumptions, external hook, or QA self-PASS.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import ProviderError, role_ready, mark_intent_phase
     from author_handoff import bound_provider, SourceRetention, operation, owned_group_gone
     if (bound_provider(task) or (None,))[0] != 'codex_author' or not task.get('_capacity_successor'):
@@ -4414,8 +4499,9 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     retention = None
     import_done = False
     source_sha = git(worktree, 'rev-parse', 'HEAD')
+    source_custody = None
     try:
-        source = private / 'source'; source.mkdir()
+        source = private / 'source'; source.mkdir(mode=0o700)
         job = private / 'job'; job.mkdir()
         from types import SimpleNamespace
         bridge = SimpleNamespace(work=worktree, git=lambda *a, **k: git(worktree, *a), env=git_env())
@@ -4431,7 +4517,9 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
                 '--json', '-o', str(job / 'final.txt'), '-']
         rules, rules_sha, _ = load_short_rules()
         prompt = rules + '\nAuthor only. No commit/push/deploy. TASK DATA:\n' + json.dumps({
-            k: v for k, v in task.items() if not k.startswith('_')})
+            k: task[k] for k in ('issue', 'goal', 'acceptance', 'allowed_paths',
+                'assignment', 'revision', 'findings', 'repair_findings', 'ci_failure')
+            if k in task}) + public_context
         def ignored(name):
             r = run_argv(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
                 '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
@@ -4440,11 +4528,16 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
             return r.returncode == 0
         retention = SourceRetention(baseline=before, allowed=task['allowed_paths'],
             ignored=ignored, source_name=native.source_name, secrets=lambda: ())
+        from author_handoff import RootSourceCustody, DirectSourceCustody
+        source_custody = RootSourceCustody(operation(task, 'codex_author', source_sha),
+            task['allowed_paths'], uid=CURSOR_UID, task_hash=hashlib.sha256(prompt.encode()).hexdigest())
+        retention.custody = DirectSourceCustody(source_custody)
         budget = shared_agy_budget(int(task['issue']))
         if not budget_left_eligible(budget.remaining('codex', 'author', 'slot1')):
             raise ProviderError('codex_local_governance_hold', charge='none')
         with (evidence / 'events.jsonl').open('xb') as out, (evidence / 'stderr').open('xb') as err:
             accepted_qa_effort(reviewer_authority, protected_reviewer)
+            retention.prepare(source)
             budget.charge('slot1', 'codex', 'author')
             mark_intent_phase(intent_path, 'launching', provider='codex_author',
                 model='gpt-6.1-sol', effort='medium', calls_charged=1, usage=None,
@@ -4481,10 +4574,24 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     finally:
         if process is not None and process.poll() is None:
             _kill_owned_process_group(process)
-        if not import_done and retention and retention.result and not retention.failure:
+        if source_custody is None and not import_done and retention and retention.result and not retention.failure:
             try: retention.persist(evidence, operation(task, 'codex_author', source_sha))
             except Exception: pass
-        shutil.rmtree(private, ignore_errors=True)
+        if source_custody is not None:
+            try:
+                if process is not None and not source_custody.checkpoint:
+                    retention.custody.quarantine()
+            finally:
+                retention.custody.close(); source_custody.close()
+        if source_custody is None or source_custody.checkpoint or getattr(retention.custody, 'quarantined', False) is True:
+            shutil.rmtree(private, ignore_errors=True)
+        else:
+            for child in private.iterdir():
+                if child.name == 'source': continue
+                if child.is_dir() and not child.is_symlink(): shutil.rmtree(child, ignore_errors=True)
+                else:
+                    try: child.unlink()
+                    except OSError: pass
 
 # Root-only authority delivery. None of these inputs comes from an event/task.
 _QA_RESULTS = Path('/var/lib/gobadminton-lean/results')
