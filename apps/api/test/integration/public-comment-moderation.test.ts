@@ -365,15 +365,48 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
     expect(failed.statusCode).toBe(503);
     expect(await snapshot()).toEqual(before);
 
-    await pool.query(`UPDATE entity_comments SET moderation_state='withheld' WHERE id=$1`, [id]);
+    // SQL-only visibility fixture, not an Admin authorization or restore-flow test.
+    // Keep source text and revision history intact; do not fabricate approvals or staff receipts.
+    async function setFixtureModerationState(state: "withheld" | "clear", expectedVersion: number) {
+      const revision = await pool.query<{ resource_version: number }>(
+        `WITH transitioned AS (
+           UPDATE entity_comments
+           SET moderation_state=$2, version=version+1, updated_at=clock_timestamp()
+           WHERE id=$1 AND version=$3
+           RETURNING id, entity_kind, entity_id, version, author_user_id, body
+         )
+         INSERT INTO entity_comment_revisions
+           (comment_id, entity_kind, entity_id, resource_version, actor_user_id,
+            before_body, after_body, tombstone)
+         SELECT id, entity_kind, entity_id, version, author_user_id, body, body, false
+         FROM transitioned
+         RETURNING resource_version`,
+        [id, state, expectedVersion],
+      );
+      expect(revision.rows).toEqual([{ resource_version: expectedVersion + 1 }]);
+      return revision.rows[0]!.resource_version;
+    }
+    const withheldVersion = await setFixtureModerationState("withheld", 2);
+    expect(withheldVersion).toBe(3);
     const hidden = await app.inject({ method: "GET", url });
     expect(hidden.json().items.some((item: { id: string }) => item.id === id)).toBe(false);
     const own = await app.inject({ method: "GET", url, headers: { cookie: author.cookie } });
     expect(own.json().items.find((item: { id: string }) => item.id === id).body).toBe(editedMask);
-    await pool.query(`UPDATE entity_comments SET moderation_state='clear' WHERE id=$1`, [id]);
+    const restoredVersion = await setFixtureModerationState("clear", withheldVersion);
+    expect(restoredVersion).toBe(4);
+    const afterFixture = await snapshot();
+    expect(afterFixture.stored).toEqual([{ body: edited, version: restoredVersion }]);
+    expect(afterFixture.revisions).toEqual([
+      ...before.revisions,
+      { resource_version: withheldVersion, before_body: edited, after_body: edited, tombstone: false },
+      { resource_version: restoredVersion, before_body: edited, after_body: edited, tombstone: false },
+    ]);
+    expect(afterFixture.approvals).toEqual(before.approvals);
+    expect(afterFixture.receipts).toEqual(before.receipts);
     const deleted = await app.inject({ method: "DELETE", url: `/v1/comments/${id}`, headers: headers(author),
-      payload: { expectedVersion: 2 } });
+      payload: { expectedVersion: restoredVersion } });
     expect(deleted.statusCode).toBe(200);
+    expect(deleted.json().version).toBe(5);
     expect(deleted.json().body).toBeNull();
     const tombstones = await app.inject({ method: "GET", url });
     expect(tombstones.json().items.find((item: { id: string }) => item.id === id).body).toBeNull();
