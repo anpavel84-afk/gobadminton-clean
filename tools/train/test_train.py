@@ -3109,7 +3109,7 @@ class Od018TransportSeamTests(unittest.TestCase):
                                       return_value={'unexpected': 'second Codex call'}) as codex:
                 with self.assertRaises(providers.ProviderError) as ctx:
                     lean_live._qa_resume_agy_capacity(claim, task, ev)
-                self.assertEqual(ctx.exception.code, 'agy_capacity_alternative_ineligible')
+                self.assertEqual(ctx.exception.code, 'qa_capacity_control_unsupported')
                 self.assertEqual(ctx.exception.charge, 'none')
                 self.assertEqual(codex.call_count, 0)
 
@@ -3860,6 +3860,29 @@ class CursorNamespaceUid1002Tests(unittest.TestCase):
             self.assertTrue(intent.get('no_model_launched'))
 
 
+@contextmanager
+def _synthetic_source_custody():
+    # These legacy post-model controller fixtures already model process ownership
+    # and source validation. No Root path/config access belongs in this seam.
+    import author_handoff
+    class Direct:
+        def __new__(cls, root):
+            if root is not None: raise AssertionError('synthetic Root seam only')
+            return None
+    original_mkdtemp = tempfile.mkdtemp
+    def private_temp(suffix=None, prefix=None, dir=None):
+        # Redirect only these three synthetic fixtures' explicit /tmp requests.
+        return original_mkdtemp(suffix=suffix, prefix=prefix,
+                                dir=tempfile.gettempdir() if dir == '/tmp' else dir)
+    with mock.patch.object(author_handoff, 'RootSourceCustody', return_value=None), \
+         mock.patch.object(author_handoff, 'DirectSourceCustody', Direct), \
+         mock.patch.object(tempfile, 'mkdtemp', side_effect=private_temp), \
+         mock.patch.object(author_handoff, 'owned_group_gone', return_value=True), \
+         mock.patch.object(lean_live, '_kill_owned_process_group'), \
+         mock.patch.object(lean_live.os, 'killpg', side_effect=ProcessLookupError):
+        yield
+
+
 class RootEnvBindingDefectTests(unittest.TestCase):
     """OD-018 author20: UID1002 snapshot, fresh origin/dev refspec, unpublished preserve."""
 
@@ -4087,6 +4110,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             body = inspect.getsource(lean_live.create_task_worktree)
             self.assertIn('+refs/heads/dev:refs/remotes/origin/dev', body)
 
+    @_synthetic_source_custody()
     def test_post_model_snapshot_fail_preserves_unpublished_charged_blocked(self):
         """Model completed + snapshot fail → UNVALIDATED sources, charged source_import, BLOCKED."""
         with tempfile.TemporaryDirectory() as td:
@@ -4204,6 +4228,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             self.assertNotEqual(claim['phase'], 'RUNNING')
             self.assertFalse(claim.get('no_model_launched'))
 
+    @_synthetic_source_custody()
     def test_root_atomic_import_fchown_0600_and_newdir_ownership(self):
         """Root importer fchown before replace; fresh source dirs user-owned; mode kept."""
         with tempfile.TemporaryDirectory(dir='/tmp') as td:
@@ -4335,6 +4360,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 p == str(existing.parent) for p, _u, _g in dir_chowns))
             self.assertTrue(any(c and c[0] == 'add' for c in git_calls))
 
+    @_synthetic_source_custody()
     def test_post_model_git_fail_charged_source_import_blocked(self):
         """Model completed + local git failure → ProviderError source_import charged BLOCKED."""
         with tempfile.TemporaryDirectory(dir='/tmp') as td:
@@ -4383,6 +4409,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 }
 
             def boom_git(cwd, *args, **kwargs):
+                if args == ('rev-parse', 'HEAD'): return 'b' * 40
                 raise lean_live.LiveError(
                     'subprocess_failed', 'git:add: Permission denied')
 
@@ -4515,6 +4542,171 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 with self.assertRaises(lean_run.LeanError) as ctx2:
                     lean_run.execute_claim(adm_u, adapters2, results_root=td_u)
                 self.assertEqual(ctx2.exception.code, 'no_automatic_paid_replay')
+
+class CapacityOwnedLeaseRegression(unittest.TestCase):
+    def test_real_controller_lease_rejects_foreign_released_replaced_and_boolean(self):
+        import importlib.util
+        path=_TRAIN_DIR.parents[1]/'scripts/chatops/actions_train/live/slots.py'
+        spec=importlib.util.spec_from_file_location('capacity_lease_slots',path)
+        slots=importlib.util.module_from_spec(spec); spec.loader.exec_module(slots)
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); (root/'registry.lock').touch()
+            claim=dict(issue=527,revision='a'*64,task=dict(allowed_paths=['x.py']))
+            lease=lean_run.WriterLease(527,['x.py'],registry=slots.LockRegistry,lock_dir=root,
+                                       frozen_admission=claim)
+            lease.acquire()
+            try:
+                self.assertTrue(lease.verify_capacity(claim))
+                for foreign in (dict(claim,issue=526),dict(claim,revision='b'*64),
+                                dict(claim,task=dict(allowed_paths=['y.py']))):
+                    with self.assertRaises(lean_run.LeanError): lease.verify_capacity(foreign)
+                boolean=lean_run.WriterLease(527,['x.py'],parent_owns=True,lock_dir=root)
+                boolean.acquire()
+                with self.assertRaises(lean_run.LeanError): boolean.verify_capacity(claim)
+                held=root/'slot1.lease'; held.rename(root/'original.lease'); held.write_text('{}')
+                with self.assertRaises(lean_run.LeanError): lease.verify_capacity(claim)
+                held.unlink(); (root/'original.lease').rename(held)
+            finally:
+                lease.release()
+            with self.assertRaises(lean_run.LeanError): lease.verify_capacity(claim)
+
+
+class CapacityPrelaunchPolicyRegression(unittest.TestCase):
+    """Real saved successor/next wake; synthetic Root IO, no provider or Root execution."""
+
+    def test_saved_successor_rechecks_current_policy_before_backup(self):
+        import importlib.util
+        from contextlib import ExitStack
+        from dataclasses import asdict
+        import author_handoff as h
+        import author_routing as policy
+
+        spec = importlib.util.spec_from_file_location('prelaunch_fixture_slots',
+            _TRAIN_DIR.parents[1] / 'scripts/chatops/actions_train/live/slots.py')
+        slots = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(slots)
+        for change in ('unchanged', 'revoked', 'missing', 'generation', 'pipeline', 'unproven'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                root = Path(td)
+                adapters, state = make_flow_adapters(td)
+                adapters.lock_registry = slots.LockRegistry
+                (Path(adapters.lock_dir) / 'registry.lock').touch()
+                adapters.fetch_admissions = lambda: []
+                pipeline = 'c' * 40
+                captured = dict(schema='GB_ROOT_CAPACITY_POLICY_V1', enabled=True,
+                                pipeline_revision=pipeline, generation='f' * 64)
+                current = {'author_capacity_recovery_policy': dict(captured)}
+                config = dict(author_routing=dict(mode='on', pipeline_revision=pipeline))
+                reviewer = dict(executor='qa:separate', model='gpt-6-sol', effort='medium')
+                ready = lambda *a, **kw: (True, dict(reviewer))
+                stack.enter_context(patch.object(lean_run, 'role_ready', side_effect=ready))
+                stack.enter_context(patch.object(providers, 'role_ready', side_effect=ready))
+                stack.enter_context(patch.object(lean_live, '_qa_root_config', return_value=current))
+
+                def protected(ref, **kw):
+                    ref = Path(ref)
+                    self.assertTrue(ref.is_relative_to(root))
+                    return ref.read_bytes()
+
+                stack.enter_context(patch.object(lean_live, '_qa_protected_bytes', side_effect=protected))
+                routes = {policy.AGY: policy.Route(policy.AGY, True, True, True,
+                                                   'agy:fixture', policy.AGY_MODEL)}
+                stack.enter_context(patch.object(providers, 'routing_qualifications', return_value=routes))
+                comment, _ = owner_task_comment(issue=527, complexity='standard', work_kind='ops',
+                                                authorroute=['agy_author', 'cursor_auto'])
+                adm = lean_run.admit_comment(comment, {'number': 527, 'state': 'open'}, {'id': REPO_ID})
+                old = lean_run.claim_admission(adm, results_root=root, config=config)
+                self.assertEqual(old['bound_author']['decision']['provider'], policy.AGY)
+                work = adapters.worktree(old['task'])
+                source = Path(work) / 'apps/web/src/x.ts'
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b'partial')
+                runtime = dict(old['task'], issue=527, revision=old['revision'],
+                               runtime_base_sha=state['frozen_base'], _author_operation='original-operation')
+                operation = h.operation(runtime, 'agy_author', state['frozen_base'])
+                retention = h.SourceRetention(
+                    baseline={'apps/web/src/x.ts': hashlib.sha256(b'old').hexdigest()},
+                    allowed=['apps/web/src/x.ts'], ignored=lambda n: False,
+                    source_name=lambda n: True, secrets=lambda: ())
+                retention.capture(work)
+                checkpoint = retention.persist(root, operation)
+                routes[policy.CURSOR] = policy.Route(policy.CURSOR, True, True, True, 'cursor:fixture', 'auto')
+                failure = policy.CapacityFailure(operation, 'typed429-evidence', 'RATE_LIMIT', 'native_top_level_error')
+                stop = policy.StopProof(operation, failure.fingerprint, True, True, True, False,
+                    str(root / 'source-checkpoint/manifest.json'), ('original-paid-receipt',), 'preserved_diff')
+                proposal = h.propose_handoff(current=operation, failure=failure, proof=stop,
+                    routes=routes, reviewer=policy.Reviewer('qa:separate', 'gpt-6-sol:medium', True, True, True),
+                    initial_provider=policy.AGY, cumulative_attempts=1,
+                    history_refs=('original-paid-receipt', 'usage-UNKNOWN'))
+                proposal = json.loads(json.dumps(proposal, default=asdict))
+                self.assertEqual(proposal['action'], 'REQUIRE_NEW_ADMISSION')
+                old.update(phase='BLOCKED', worktree=work, base_sha=state['frozen_base'],
+                           attempts={'author': 1, 'qa': 0}, capacity_proposal=proposal,
+                           capacity_error={'code': 'provider_control_failure', 'charge': 'charged'})
+                old_path = lean_run.claim_path_for(adm, root)
+                lean_run.write_receipt(old_path, old)
+                checkpoint_sha = _sha(200)
+
+                def imported(claim, lease):
+                    lease.verify_capacity(claim)
+                    state['heads'][work] = checkpoint_sha
+                    return checkpoint_sha, checkpoint
+
+                def git(cwd, *args):
+                    self.assertEqual(str(cwd), work)
+                    if args[:2] == ('rev-parse', 'HEAD'): return checkpoint_sha
+                    if args[0] == 'status': return ''
+                    if args[0] == 'diff': return 'apps/web/src/x.ts\0'
+                    raise AssertionError(args)
+
+                stack.enter_context(patch.object(h, 'import_capacity_checkpoint', side_effect=imported))
+                stack.enter_context(patch.object(lean_live, 'git', side_effect=git))
+                lease = lean_run.WriterLease(527, old['task']['allowed_paths'],
+                    registry=slots.LockRegistry, lock_dir=adapters.lock_dir, frozen_admission=old)
+                lease.acquire()
+                try:
+                    derived = lean_run.derive_capacity_successor(old_path, runtime, lease, adapters, root, config)
+                finally:
+                    lease.release()
+                self.assertEqual(derived['reason'], 'capacity_successor', derived)
+                successor = derived['claim']
+                self.assertEqual(successor['phase'], 'CLAIMED')
+                self.assertEqual(successor['capacity_policy'], captured)
+                predecessor = old_path.read_bytes()
+                if change == 'revoked': current['author_capacity_recovery_policy']['enabled'] = False
+                elif change == 'missing': current.clear()
+                elif change == 'generation': current['author_capacity_recovery_policy']['generation'] = 'e' * 64
+                elif change == 'pipeline': current['author_capacity_recovery_policy']['pipeline_revision'] = 'd' * 40
+                elif change == 'unproven':
+                    stack.enter_context(patch.object(lean_live, '_qa_root_config', side_effect=OSError('unproven')))
+                # Keep the paid adapter synthetic; transport routing/intent and
+                # execute_claim precharge guard run normally, including real flock.
+                stack.enter_context(patch.object(lean_run, '_author_provenance', return_value={'fixture': True}))
+                out = lean_run.run_once({'event_name': 'schedule'}, adapters=adapters,
+                                        results_root=root, config=config)
+                result = out['results'][0]
+                self.assertEqual(old_path.read_bytes(), predecessor)
+                self.assertEqual(result['claim']['capacity_chain'], successor['capacity_chain'])
+                self.assertEqual(result['claim']['author_history_refs'], proposal['history_refs'])
+                self.assertEqual(result['claim']['owner_authorization'], successor['owner_authorization'])
+                self.assertEqual(result['claim']['capacity_policy'], captured)
+                self.assertEqual(result['claim']['attempts']['author'], 2)
+                if change == 'unchanged':
+                    self.assertEqual(result['status'], 'dev_accepted_uat_pending', result)
+                    self.assertEqual(state['author_calls'], 1)
+                    self.assertEqual(result['claim']['author_provider'], 'cursor_auto')
+                else:
+                    self.assertEqual(result['status'], 'blocked', result)
+                    self.assertEqual(result['claim']['phase'], 'BLOCKED')
+                    self.assertEqual(result['reason'], 'capacity_policy_prelaunch_hold')
+                    self.assertTrue(result['claim']['no_model_launched'])
+                    self.assertEqual(state['author_calls'], 0)
+                    self.assertEqual(state['qa_calls'], 0)
+                    self.assertEqual(state['publish_calls'], 0)
+                    # A further wake cannot replay this held successor.
+                    lean_run.run_once({'event_name': 'schedule'}, adapters=adapters,
+                                      results_root=root, config=config)
+                    self.assertEqual(state['author_calls'], 0)
 
 
 if __name__ == '__main__':
