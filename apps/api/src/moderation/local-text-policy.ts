@@ -116,43 +116,109 @@ const TRANSLIT_PAIRS: Array<[RegExp, string]> = [
   [/zalup/gi, "залуп"],
 ];
 
-/** Bounded Unicode NFKC + case + ё→е + digit/leet + latin↔cyrillic confusables. */
-export function normalizeForLocalPolicy(raw: string): string {
-  let s = raw.normalize("NFKC").toLowerCase().replaceAll("ё", "е");
-  for (const [re, repl] of TRANSLIT_PAIRS) s = s.replace(re, repl);
-  let out = "";
-  for (const ch of s) {
-    out += HOMOGLYPH[ch] ?? ch;
+/** UTF-16 offsets into the original submission, never normalized storage bytes. */
+export type LocalTextSpan = { start: number; end: number };
+
+const graphemes = new Intl.Segmenter("ru", { granularity: "grapheme" });
+
+/** The same normalization pipeline optionally carries original-byte provenance. */
+function normalizePolicy(raw: string, trackSpans = false): {
+  text: string;
+  spans: LocalTextSpan[];
+} {
+  let text = raw.normalize("NFKC").toLowerCase().replaceAll("ё", "е");
+  let spans: LocalTextSpan[] = [];
+  if (trackSpans) {
+    // NFKC can expand ligatures or compose combining marks. Keep the whole source
+    // grapheme behind each resulting UTF-16 unit; untouched text is sliced from raw.
+    for (const { segment, index } of graphemes.segment(raw)) {
+      const normalized = segment.normalize("NFKC").toLowerCase();
+      for (let i = 0; i < normalized.length; i += 1) {
+        spans.push({ start: index, end: index + segment.length });
+      }
+    }
   }
-  return out;
+  for (const [re, replacement] of TRANSLIT_PAIRS) {
+    const previousSpans = spans;
+    const nextSpans: LocalTextSpan[] = [];
+    let cursor = 0;
+    text = text.replace(re, (match: string, offset: number) => {
+      if (trackSpans) {
+        nextSpans.push(...previousSpans.slice(cursor, offset));
+        const span = {
+          start: previousSpans[offset]!.start,
+          // Optional transliteration apostrophe is a separator, not a letter to hide.
+          end: previousSpans[offset + match.length - (match.endsWith("'") ? 2 : 1)]!.end,
+        };
+        for (let i = 0; i < replacement.length; i += 1) nextSpans.push(span);
+        cursor = offset + match.length;
+      }
+      return replacement;
+    });
+    if (trackSpans) spans = nextSpans.concat(previousSpans.slice(cursor));
+  }
+  let out = "";
+  for (const ch of text) out += HOMOGLYPH[ch] ?? ch;
+  return { text: out, spans };
 }
 
-/**
- * Reconstruct tokens: whitespace/punct split, then merge single-letter runs within a
- * bounded window (separated-letter evasion) without deleting all document whitespace.
- */
-export function tokenizeNormalized(normalized: string): string[] {
-  const parts = normalized.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const tokens: string[] = [];
+/** Bounded Unicode NFKC + case + ё→е + digit/leet + latin↔cyrillic confusables. */
+export function normalizeForLocalPolicy(raw: string): string {
+  return normalizePolicy(raw).text;
+}
+
+type PolicyToken = { text: string; parts: LocalTextSpan[] };
+
+/** Reconstruct only bounded single-letter runs; retain the constituent ranges. */
+function policyTokens(normalized: string): PolicyToken[] {
+  const parts = [...normalized.matchAll(/[\p{L}\p{N}]+/gu)].map((match) => ({
+    text: match[0],
+    parts: [{ start: match.index, end: match.index + match[0].length }],
+  }));
+  const tokens: PolicyToken[] = [];
   let i = 0;
   while (i < parts.length) {
-    if (parts[i]!.length === 1) {
-      let merged = parts[i]!;
+    const first = parts[i]!;
+    if (first.text.length === 1) {
+      let merged = first.text;
       let j = i + 1;
-      // Bound reconstructed span to 12 single-letter fragments.
-      while (j < parts.length && parts[j]!.length === 1 && merged.length < 12) {
-        merged += parts[j]!;
+      // Preserve ru-profanity-v1's exact 12-fragment reconstruction semantics.
+      while (j < parts.length && parts[j]!.text.length === 1 && merged.length < 12) {
+        merged += parts[j]!.text;
         j += 1;
       }
-      if (merged.length >= 3) tokens.push(merged);
-      else tokens.push(parts[i]!);
-      i = merged.length >= 3 ? j : i + 1;
-      continue;
+      if (merged.length >= 3) {
+        tokens.push({ text: merged, parts: parts.slice(i, j).flatMap((part) => part.parts) });
+        i = j;
+        continue;
+      }
     }
-    tokens.push(parts[i]!);
+    tokens.push(first);
     i += 1;
   }
   return tokens;
+}
+
+export function tokenizeNormalized(normalized: string): string[] {
+  return policyTokens(normalized).map((token) => token.text);
+}
+
+/** Original source ranges detected by the existing dictionary, allowlist and matcher. */
+export function localProfanitySpans(raw: string): LocalTextSpan[] {
+  const normalized = normalizePolicy(raw, true);
+  const spans: LocalTextSpan[] = [];
+  for (const token of policyTokens(normalized.text)) {
+    if (!tokenMatchesProfanity(token.text)) continue;
+    for (const part of token.parts) {
+      for (let i = part.start; i < part.end; i += 1) {
+        const span = normalized.spans[i]!;
+        const previous = spans[spans.length - 1];
+        if (previous && span.start <= previous.end) previous.end = Math.max(previous.end, span.end);
+        else spans.push({ ...span });
+      }
+    }
+  }
+  return spans;
 }
 
 function tokenMatchesProfanity(token: string): boolean {
