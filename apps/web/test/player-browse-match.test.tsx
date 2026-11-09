@@ -8,6 +8,7 @@ import type { ApiResult } from "../src/lib/api-client";
 import type { Me, OwnSocialProfile, PublicPlayer } from "../src/lib/consumer-types";
 import type { ContactState } from "../src/lib/messaging-types";
 import type { PlayInterestReceipt } from "@gobadminton/contracts/friendship-types";
+import type * as PlayerBrowseMedia from "../src/components/consumer/players/PlayerBrowseMedia";
 
 const transport = vi.hoisted(() => ({ apiFetch: vi.fn(), getMe: vi.fn(), getMySocialProfile: vi.fn(), listPlayers: vi.fn(), getContactState: vi.fn(), desktop: true }));
 vi.mock("next/link", () => ({ default: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => createElement("a", props) }));
@@ -28,7 +29,7 @@ vi.mock("../src/lib/player-browse", async original => ({ ...await original<Recor
 // Only media I/O is replaced. The real deck selection, admission, flight completion,
 // PlayInterest, useOffers and page result ownership execute unchanged.
 vi.mock("../src/components/consumer/players/PlayerBrowseMedia", async original => {
-  const actual = await original<typeof import("../src/components/consumer/players/PlayerBrowseMedia")>();
+  const actual = await original<typeof PlayerBrowseMedia>();
   return { ...actual, prepareBrowsePeerMedia: async (peer: PublicPlayer) => ({ ok: true, media: {
     peerId: peer.publicPlayerId, peer, mediaKey: actual.browsePeerMediaKey(peer),
     avatar: { kind: "initials", text: "Т" }, cover: { kind: "default", node: null, authoritative: true },
@@ -85,7 +86,7 @@ afterEach(() => { cleanup(); foregroundUpdates.clear(); vi.unstubAllGlobals(); }
 
 async function readyPage(desktop: boolean) {
   transport.desktop = desktop;
-  render(createElement(PlayersDirectoryPage, { initialBrowseView: "cards" }));
+  render(<PlayersDirectoryPage initialBrowseView="cards" />);
   const send = await screen.findByRole("button", { name: "Давай сыграем" });
   await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
   return send;

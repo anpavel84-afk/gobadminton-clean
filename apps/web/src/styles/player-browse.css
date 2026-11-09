@@ -2847,7 +2847,7 @@ dialog.profile-dialog.pb-match-dialog {
   border-radius: 28px; background: #fff; box-shadow: 0 24px 80px #13221a30;
   overflow: auto;
 }
-.pb-match-dialog::backdrop { background: #13221a8f; backdrop-filter: blur(5px); }
+.pb-match-dialog::backdrop { background: #13221a8f; }
 .pb-match-dialog > header { display: none; }
 .pb-match-dialog > .profile-dialog__body { padding: 0; overflow: visible; }
 .pb-match-shell, .pb-match-shell * { box-sizing: border-box; }
