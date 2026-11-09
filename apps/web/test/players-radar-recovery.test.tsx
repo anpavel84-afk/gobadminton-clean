@@ -2,7 +2,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { RadarController } from "../src/lib/radar-controller";
+import { confirmedDirectoryActivation, RadarController } from "../src/lib/radar-controller";
 import { UnifiedDirectoryController, type RadarConfig } from "../src/lib/unified-directory";
 import type { Me } from "../src/lib/consumer-types";
 import type { apiFetch, ApiResult } from "../src/lib/api-client";
@@ -64,7 +64,7 @@ const episodeConfig: RadarConfig = {
   exposureMode: "live", publishingV2: { enabled: true }, cities: [],
   unifiedDirectory: { enabled: true, contractVersion: "players-unified-radar-v1", policyVersion: "radar-geographic-sharing-v2", pageLimit: 50, mapPageLimit: 100, models: ["regional_grid_100m_v1"], disclosure: { id: "test", sha256: "test", text: "Consent", locale: "ru" } },
 };
-async function episodeHarness(initial: "off" | "active" = "off") {
+async function episodeHarness(initial: "off" | "active" = "off", deferActivation = false) {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
   const stamp = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
   const active = { state: "active", activationId: "activation", version: 1, contractVersion: "players-unified-radar-v1", policyVersion: "radar-geographic-sharing-v2", exposureMode: "live", ownerHere: true, startedAt: stamp(0), expiresAt: stamp(900), hardExpiresAt: stamp(1800), foregroundUntil: stamp(90), locationValidUntil: stamp(360), nextLocationUpdateAt: stamp(300) };
@@ -72,9 +72,12 @@ async function episodeHarness(initial: "off" | "active" = "off") {
   const pending = new Promise<ApiResult<UnifiedSnapshot>>(resolve => { resolveRead = resolve; });
   let resolveStop!: (value: ApiResult<unknown>) => void;
   const stop = new Promise<ApiResult<unknown>>(resolve => { resolveStop = resolve; });
+  let resolveActivation!: (value: ApiResult<unknown>) => void;
+  const activation = new Promise<ApiResult<unknown>>(resolve => { resolveActivation = resolve; });
   const sourceRequest = vi.fn(async (path: string, init?: { method?: string }) => {
     if (path === "/v1/me") return { ok: true, status: 200, data: episodeMe };
     if (init?.method === "DELETE") return stop;
+    if (deferActivation && path === "/v1/me/radar/activations" && init?.method === "POST") return activation;
     return { ok: true, status: 200, data: path.endsWith("/current") && !init?.method ? { ...active, state: initial } : active };
   }) as unknown as typeof apiFetch;
   const controller = new RadarController(sourceRequest); controller.setResultView("none"); controller.configure(episodeConfig);
@@ -89,7 +92,7 @@ async function episodeHarness(initial: "off" | "active" = "off") {
     totals: { matchingTotal: radarTotal, radarTotal, ordinaryOnlyTotal: 0, completeness: "exact_at_asOf" }, map: { availability: "missing", mapId: null, version: null },
   });
   const start = async () => { await act(async () => { controller.permission(); await controller.activate(fix); }); };
-  return { controller, unified, readRequest, sourceRequest, resolveRead, resolveStop, data, fix, start };
+  return { controller, unified, readRequest, sourceRequest, resolveRead, resolveStop, resolveActivation, active, data, fix, start };
 }
 describe("R2 page-owned explicit search episode", () => {
   it("ignores historical ON admission, ordinary refresh and renew", async () => {
@@ -118,6 +121,73 @@ describe("R2 page-owned explicit search episode", () => {
     await act(async () => { h.resolveRead({ ok: true, status: 200, data: h.data() }); await read; });
     expect(hook.result.current.display).toBe("zero");
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it("waits beyond 15s for activation POST confirmation before starting search and its watchdog", async () => {
+    const h = await episodeHarness("off", true);
+    const hook = renderHook(() => useRadarSearchEpisode(h.controller, h.unified, episodeKey));
+    let activation!: Promise<void>;
+    await act(async () => { h.controller.permission(); activation = h.controller.activate(h.fix); });
+    expect(h.sourceRequest).toHaveBeenCalledWith("/v1/me/radar/activations", expect.objectContaining({ method: "POST" }));
+    expect(vi.mocked(h.sourceRequest).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(h.controller.view.phase).toBe("activating");
+    expect(h.controller.view.confirmedOn).toBe(false);
+    expect(confirmedDirectoryActivation(h.controller.snapshot())).toBeNull();
+    expect(hook.result.current.display).toBeNull();
+    expect(hook.result.current.observeFirstRead()).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+    const sourceCalls = vi.mocked(h.sourceRequest).mock.calls.length;
+    act(() => vi.advanceTimersByTime(16000));
+    expect(h.controller.view.phase).toBe("activating");
+    expect(h.controller.view.confirmedOn).toBe(false);
+    expect(hook.result.current.display).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(h.sourceRequest).toHaveBeenCalledTimes(sourceCalls);
+    expect(h.readRequest).not.toHaveBeenCalled();
+    await act(async () => { h.resolveActivation({ ok: true, status: 200, data: h.active }); await activation; });
+    expect(h.controller.view.phase).toBe("active");
+    expect(h.controller.view.confirmedOn).toBe(true);
+    expect(confirmedDirectoryActivation(h.controller.snapshot())).toBe("activation");
+    expect(hook.result.current.display).toBe("loading");
+    expect(vi.getTimerCount()).toBe(1);
+    let read!: Promise<void>;
+    act(() => { read = h.unified.query(episodeFilters, { kind: "current_activation", activationId: "activation" }, "activation:1", hook.result.current.observeFirstRead()); });
+    act(() => vi.advanceTimersByTime(14999));
+    expect(hook.result.current.display).toBe("loading");
+    expect(h.readRequest).toHaveBeenCalledTimes(1);
+    const fresh = h.data();
+    await act(async () => { h.resolveRead({ ok: true, status: 200, data: fresh }); await read; });
+    expect(h.unified.view.snapshot).toBe(fresh);
+    expect(hook.result.current.display).toBe("zero");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([503, 0])("keeps failed activation POST (%s) in Radar controls without inline search or watchdog", async status => {
+    const h = await episodeHarness("off", true);
+    const hook = renderHook(() => useRadarSearchEpisode(h.controller, h.unified, episodeKey));
+    let activation!: Promise<void>;
+    await act(async () => { h.controller.permission(); activation = h.controller.activate(h.fix); });
+    expect(h.sourceRequest).toHaveBeenCalledWith("/v1/me/radar/activations", expect.objectContaining({ method: "POST" }));
+    expect(vi.mocked(h.sourceRequest).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(h.controller.view.phase).toBe("activating");
+    expect(hook.result.current.display).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    const sourceCalls = vi.mocked(h.sourceRequest).mock.calls.length;
+    act(() => vi.advanceTimersByTime(16000));
+    expect(h.controller.view.confirmedOn).toBe(false);
+    expect(hook.result.current.display).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { h.resolveActivation({ ok: false, status, error: status ? "unavailable" : "unknown" }); await activation; });
+    expect(h.controller.view.phase).toBe("error");
+    expect(h.controller.view.notice).toBe("Не удалось проверить Radar. Проверьте статус перед следующим действием.");
+    expect(h.controller.view.confirmedOn).toBe(false);
+    expect(confirmedDirectoryActivation(h.controller.snapshot())).toBeNull();
+    expect(hook.result.current.display).toBeNull();
+    expect(hook.result.current.observeFirstRead()).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => vi.advanceTimersByTime(16000));
+    expect(hook.result.current.display).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(h.sourceRequest).toHaveBeenCalledTimes(sourceCalls);
+    expect(h.readRequest).not.toHaveBeenCalled();
   });
   it("watchdog only ends display; a matching late read clears fallback and commits the same list", async () => {
     const h = await episodeHarness();

@@ -68,7 +68,10 @@ export function useRadarSearchEpisode(controller: RadarController | null, unifie
       if (!view.me || view.me.id !== current.actor.id || view.me.csrfToken !== current.actor.csrfToken || view.pendingStop ||
           !["permission", "locating", "activating", "active", "error"].includes(view.phase)) { discard(); return; }
       if (view.phase === "error") {
-        clearTimer(current); current.display = "error"; setDisplay("error"); return;
+        clearTimer(current);
+        // Activation failures belong to Radar controls until ON has been confirmed.
+        if (current.activationKey) { current.display = "error"; setDisplay("error"); }
+        return;
       }
       if (view.phase === "active") {
         const id = confirmedDirectoryActivation(view);
@@ -76,7 +79,7 @@ export function useRadarSearchEpisode(controller: RadarController | null, unifie
         if (!key || (current.activationKey && current.activationKey !== key)) { discard(); return; }
         current.activationKey = key;
       }
-      if ((view.phase === "activating" || view.phase === "active") && current.display === null) {
+      if (view.phase === "active" && current.activationKey && current.display === null) {
         current.display = "loading"; setDisplay("loading");
         current.timer = setTimeout(() => {
           if (episode.current !== current) return;
