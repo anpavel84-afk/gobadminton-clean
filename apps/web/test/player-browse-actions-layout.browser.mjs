@@ -696,6 +696,13 @@ await withChrome(async ({ call, evaluate }) => {
       safeProbe = await evaluate(SAFE_AREA_BOTTOM_PROBE);
     }
 
+    // Independent of MAX(padding, min-height, probe): raw nav padding must be base 8 + inset.
+    const expectedNavPaddingBottom = 8 + SAFE_AREA_BOTTOM_PX;
+    assert.equal(
+      safeProbe.navPaddingBottom,
+      expectedNavPaddingBottom,
+      `${width} #526 navPaddingBottom must be ${expectedNavPaddingBottom} (8+${SAFE_AREA_BOTTOM_PX}) from raw getComputedStyle(nav).paddingBottom; got ${safeProbe.navPaddingBottom} (mode=${safePlan.mode})`,
+    );
     assert.equal(
       safeProbe.computedSafeBottom,
       SAFE_AREA_BOTTOM_PX,
@@ -730,6 +737,8 @@ await withChrome(async ({ call, evaluate }) => {
       safeArea: {
         mode: safePlan.mode,
         inset: SAFE_AREA_BOTTOM_PX,
+        navPaddingBottom: safeProbe.navPaddingBottom,
+        expectedNavPaddingBottom: 8 + SAFE_AREA_BOTTOM_PX,
         computedSafeBottom: safeProbe.computedSafeBottom,
         cdpAccepted: !!safePlan.cdpAccepted,
         cdpError: safePlan.cdpError || null,
@@ -762,6 +771,8 @@ console.log(JSON.stringify({
     width: s.width,
     mode: s.safeArea?.mode,
     inset: s.safeArea?.inset,
+    navPaddingBottom: s.safeArea?.navPaddingBottom,
+    expectedNavPaddingBottom: s.safeArea?.expectedNavPaddingBottom,
     computedSafeBottom: s.safeArea?.computedSafeBottom,
     shot: s.shot,
   })),
