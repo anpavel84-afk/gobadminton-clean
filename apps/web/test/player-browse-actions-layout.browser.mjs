@@ -14,16 +14,41 @@ const CHROME = "/opt/gobadminton-qa/chromium-headless-1243/chrome-headless-shell
 const DESKTOP_VIEWPORTS = [1280, 1920];
 const MOBILE_VIEWPORT = 390;
 const PLAYERS526_VIEWPORTS = [320, 390, 1280];
-const webRoot = fileURLToPath(new URL("..", import.meta.url));
-const outDir = process.argv[2] || join(tmpdir(), `gb523-526-browser-${process.pid}`);
+/** Nonzero safe-area scenarios for #526 mobile map CTA / Свайп / bottom-nav clearance. */
+const PLAYERS526_SAFEAREA_VIEWPORTS = [320, 390];
+const SAFE_AREA_BOTTOM_PX = 34;
+const stripTrail = (p) => p.replace(/\/+$/, "");
+const webRoot = stripTrail(fileURLToPath(new URL("..", import.meta.url))); // apps/web
+const repoRoot = stripTrail(fileURLToPath(new URL("../../..", import.meta.url))); // CLEAN repo root
+const privateTmp = tmpdir();
+
+function resolveEvidenceDir(arg) {
+  const candidate = arg && String(arg).trim() ? String(arg).trim() : join(privateTmp, `gb523-526-browser-${process.pid}`);
+  const resolved = stripTrail(candidate.startsWith("/") ? candidate : join(process.cwd(), candidate));
+  // Never write evidence under exported work/source (prior import rejection).
+  const underSource =
+    resolved === repoRoot ||
+    resolved.startsWith(`${repoRoot}/`) ||
+    resolved === webRoot ||
+    resolved.startsWith(`${webRoot}/`);
+  if (underSource) {
+    return join(privateTmp, `gb523-526-browser-${process.pid}`);
+  }
+  return resolved;
+}
+
+const outDir = resolveEvidenceDir(process.argv[2]);
 mkdirSync(outDir, { recursive: true });
 
 const receipt = {
   scope: "#523 desktop actions + #526 Players map CTA via owned Chromium CDP; not DEV/Owner UAT",
   chrome: CHROME,
   viewports: [...DESKTOP_VIEWPORTS, MOBILE_VIEWPORT, ...PLAYERS526_VIEWPORTS],
+  safeAreaBottomPx: SAFE_AREA_BOTTOM_PX,
+  safeAreaViewports: [...PLAYERS526_SAFEAREA_VIEWPORTS],
   shots: [],
   metrics: [],
+  safeAreaScenarios: [],
   pass: false,
   status: "PENDING",
   signedInSend: "NOT_TESTED",
@@ -239,6 +264,7 @@ const PLAYERS526_MOBILE_METRICS = `(() => {
     horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
     docScrollWidth: document.documentElement.scrollWidth,
     innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
   };
 })()`;
 
@@ -279,10 +305,149 @@ const PLAYERS526_DESKTOP_METRICS = `(() => {
   };
 })()`;
 
+/** Probe real computed safe-area-bottom (env + nav padding derived from CSS). */
+const SAFE_AREA_BOTTOM_PROBE = `(() => {
+  const probe = document.createElement('div');
+  probe.setAttribute('data-gb-safe-area-probe', '1');
+  probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;padding-bottom:env(safe-area-inset-bottom, 0px)';
+  document.documentElement.appendChild(probe);
+  const probeEnvPadBottom = parseFloat(getComputedStyle(probe).paddingBottom) || 0;
+  probe.remove();
+  const nav = document.querySelector('.gb-bottom-nav');
+  const navCs = nav ? getComputedStyle(nav) : null;
+  const navPaddingBottom = navCs ? parseFloat(navCs.paddingBottom) || 0 : null;
+  const navMinHeight = navCs ? parseFloat(navCs.minHeight) || 0 : null;
+  const zone = document.querySelector('.pb-mobile-finder-zone');
+  const zoneBottomCss = zone ? getComputedStyle(zone).bottom : null;
+  // foundation: padding-bottom calc(8px + env(...)); min-height calc(76px + env(...))
+  const fromNavPad = navPaddingBottom == null ? null : Math.max(0, Math.round(navPaddingBottom - 8));
+  const fromNavMin = navMinHeight == null ? null : Math.max(0, Math.round(navMinHeight - 76));
+  const computedSafeBottom = Math.max(
+    Math.round(probeEnvPadBottom),
+    fromNavPad ?? 0,
+    fromNavMin ?? 0,
+  );
+  return {
+    probeEnvPadBottom,
+    navPaddingBottom,
+    navMinHeight,
+    zoneBottomCss,
+    fromNavPad,
+    fromNavMin,
+    computedSafeBottom,
+    viewportHeight: window.innerHeight,
+    navRect: nav ? (() => {
+      const r = nav.getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, height: r.height };
+    })() : null,
+  };
+})()`;
+
+/** Honest fixture-only substitution: replace env(safe-area-inset-bottom[, 0px]) with Npx in bundled CSS. */
+function fixtureSafeAreaBottomCss(css, insetPx) {
+  return css
+    .replace(/env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/gi, `${insetPx}px`)
+    .replace(/env\(\s*safe-area-inset-bottom\s*\)/gi, `${insetPx}px`);
+}
+
+async function clearSafeAreaInsets(call) {
+  try {
+    await call("Emulation.setSafeAreaInsets", { top: 0, left: 0, bottom: 0, right: 0 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prefer CDP Emulation.setSafeAreaInsets; verify computed inset.
+ * If CDP missing or computed stays 0, use explicit fixture CSS env() → Npx substitution.
+ * Returns { css, mode, inset, cdpAccepted, cdpError }.
+ */
+async function resolveSafeAreaCss({ call }, cssBundle, insetPx) {
+  if (!insetPx) {
+    await clearSafeAreaInsets(call);
+    return {
+      css: cssBundle,
+      mode: "zero-inset",
+      inset: 0,
+      cdpAccepted: false,
+      cdpError: null,
+    };
+  }
+
+  let cdpAccepted = false;
+  let cdpError = null;
+  try {
+    await call("Emulation.setSafeAreaInsets", {
+      top: 0,
+      left: 0,
+      bottom: insetPx,
+      right: 0,
+    });
+    cdpAccepted = true;
+  } catch (err) {
+    cdpError = err?.message || String(err);
+  }
+
+  if (cdpAccepted) {
+    return {
+      css: cssBundle,
+      mode: "cdp-Emulation.setSafeAreaInsets",
+      inset: insetPx,
+      cdpAccepted: true,
+      cdpError: null,
+      pendingComputedVerify: true,
+    };
+  }
+
+  await clearSafeAreaInsets(call);
+  return {
+    css: fixtureSafeAreaBottomCss(cssBundle, insetPx),
+    mode: "fixture-env(safe-area-inset-bottom)-substitution",
+    inset: insetPx,
+    cdpAccepted: false,
+    cdpError,
+    mechanism: `Replaced env(safe-area-inset-bottom[, 0px]) with ${insetPx}px inside in-memory CSS bundle for this fixture page only; app source CSS untouched.`,
+  };
+}
+
+async function assertPlayers526MobileGeometry(width, geo, { safeAreaLabel = "zero-inset" } = {}) {
+  const tag = `${width} #526${safeAreaLabel !== "zero-inset" ? ` ${safeAreaLabel}` : ""}`;
+  assert.equal(geo.hasZone, true, `${tag} missing finder zone`);
+  assert.equal(geo.hasSwipe, true, `${tag} missing Свайп`);
+  assert.equal(geo.hasMap, true, `${tag} missing map action`);
+  assert.equal(geo.hasNav, true, `${tag} missing bottom nav`);
+  assert.equal(geo.swipeLabel, "Свайп", `${tag} Свайп aria`);
+  assert.equal(geo.mapAria, "Игроки на карте", `${tag} accessible map name`);
+  assert.equal(geo.mapHref, "/players/radar", `${tag} map href`);
+  assert.equal(geo.shortVisible, true, `${tag} «На карте» must be visible`);
+  assert.equal(geo.shortText, "На карте", `${tag} short label text`);
+  assert.equal(geo.fullHidden, true, `${tag} full label stays hidden on mobile`);
+  assert.equal(geo.limeTile, true, `${tag} lime folded-map tile`);
+  assert.ok(geo.navDisplay !== "none", `${tag} bottom nav must display on mobile`);
+  assert.equal(geo.overlapSwipeMap, false, `${tag} Свайп/map overlap ${JSON.stringify(geo)}`);
+  assert.equal(geo.overlapZoneNav, false, `${tag} zone/nav overlap ${JSON.stringify(geo)}`);
+  assert.equal(geo.mapClearOfNav, true, `${tag} map must clear bottom nav`);
+  assert.equal(geo.swipeClearOfNav, true, `${tag} Свайп must clear bottom nav`);
+  assert.equal(geo.horizontalOverflow, false, `${tag} horizontal overflow scrollWidth=${geo.docScrollWidth}`);
+  assert.ok(geo.swipe.height >= 44, `${tag} Свайп hit target`);
+  assert.ok(geo.mapLink && geo.mapLink.height >= 44, `${tag} map hit target`);
+  // Map CTA / Свайп remain above nav and within the viewport.
+  assert.ok(geo.nav && typeof geo.nav.top === "number", `${tag} nav rect`);
+  assert.ok(geo.map && geo.map.top >= 0 && geo.map.bottom <= geo.innerHeight + 1, `${tag} map within viewport`);
+  assert.ok(geo.swipe && geo.swipe.top >= 0 && geo.swipe.bottom <= geo.innerHeight + 1, `${tag} swipe within viewport`);
+  assert.ok(geo.map && geo.nav && geo.map.bottom <= geo.nav.top + 1, `${tag} map above nav`);
+  assert.ok(geo.swipe && geo.nav && geo.swipe.bottom <= geo.nav.top + 1, `${tag} swipe above nav`);
+}
+
 if (!chromeAvailable()) {
   receipt.status = "NOT_TESTED";
   receipt.players526 = "NOT_TESTED";
-  receipt.reason = `Qualified Chromium missing at ${CHROME}; parent executes helper. Geometry assertions preserved in source. Exact command: node apps/web/test/player-browse-actions-layout.browser.mjs <evidence-dir>`;
+  receipt.reason =
+    `Qualified Chromium missing at ${CHROME}; parent executes helper. ` +
+    `Geometry assertions preserved in source (zero-inset 320/390/1280 + safe-area-bottom=${SAFE_AREA_BOTTOM_PX} at 320/390). ` +
+    `Exact parent command: node apps/web/test/player-browse-actions-layout.browser.mjs "$TMPDIR/gb523-526-browser-evidence"`;
   writeFileSync(join(outDir, "capture-receipt.json"), JSON.stringify(receipt, null, 2));
   console.log(JSON.stringify({
     status: "NOT_TESTED",
@@ -290,7 +455,9 @@ if (!chromeAvailable()) {
     outDir,
     signedInSend: "NOT_TESTED",
     players526: "NOT_TESTED",
-    command: `node apps/web/test/player-browse-actions-layout.browser.mjs ${outDir}`,
+    safeAreaBottomPx: SAFE_AREA_BOTTOM_PX,
+    safeAreaViewports: PLAYERS526_SAFEAREA_VIEWPORTS,
+    command: `node apps/web/test/player-browse-actions-layout.browser.mjs "$TMPDIR/gb523-526-browser-evidence"`,
   }));
   process.exit(0);
 }
@@ -421,13 +588,14 @@ await withChrome(async ({ call, evaluate }) => {
     receipt.metrics.push({ width, kind: "mobile", mobile });
   }
 
-  // #526 Players map CTA: real GamesViewAction fixture at 320 / 390 / 1280.
+  // #526 Players map CTA: real GamesViewAction fixture at 320 / 390 / 1280 (zero safe-area inset).
   for (const width of PLAYERS526_VIEWPORTS) {
     const height = width >= 1280 ? 900 : 844;
     const mobileMode = width < 1024;
     const bodyHtml = mobileMode
       ? fixtures.players526.mobileRadarOnHtml
       : fixtures.players526.desktopHtml;
+    await clearSafeAreaInsets(call);
     await call("Emulation.setDeviceMetricsOverride", {
       width,
       height,
@@ -443,31 +611,19 @@ await withChrome(async ({ call, evaluate }) => {
     if (mobileMode) {
       await evaluate(MEASURE_FINDER_ZONE);
       await sleep(50);
+      const safeProbe = await evaluate(SAFE_AREA_BOTTOM_PROBE);
       const geo = await evaluate(PLAYERS526_MOBILE_METRICS);
-      assert.equal(geo.hasZone, true, `${width} #526 missing finder zone`);
-      assert.equal(geo.hasSwipe, true, `${width} #526 missing Свайп`);
-      assert.equal(geo.hasMap, true, `${width} #526 missing map action`);
-      assert.equal(geo.hasNav, true, `${width} #526 missing bottom nav`);
-      assert.equal(geo.swipeLabel, "Свайп", `${width} #526 Свайп aria`);
-      assert.equal(geo.mapAria, "Игроки на карте", `${width} #526 accessible map name`);
-      assert.equal(geo.mapHref, "/players/radar", `${width} #526 map href`);
-      assert.equal(geo.shortVisible, true, `${width} #526 «На карте» must be visible`);
-      assert.equal(geo.shortText, "На карте", `${width} #526 short label text`);
-      assert.equal(geo.fullHidden, true, `${width} #526 full label stays hidden on mobile`);
-      assert.equal(geo.limeTile, true, `${width} #526 lime folded-map tile`);
-      assert.ok(geo.navDisplay !== "none", `${width} #526 bottom nav must display on mobile`);
-      assert.equal(geo.overlapSwipeMap, false, `${width} #526 Свайп/map overlap ${JSON.stringify(geo)}`);
-      assert.equal(geo.overlapZoneNav, false, `${width} #526 zone/nav overlap ${JSON.stringify(geo)}`);
-      assert.equal(geo.mapClearOfNav, true, `${width} #526 map must clear bottom nav`);
-      assert.equal(geo.swipeClearOfNav, true, `${width} #526 Свайп must clear bottom nav`);
-      assert.equal(geo.horizontalOverflow, false, `${width} #526 horizontal overflow scrollWidth=${geo.docScrollWidth}`);
-      assert.ok(geo.swipe.height >= 44, `${width} #526 Свайп hit target`);
-      assert.ok(geo.mapLink && geo.mapLink.height >= 44, `${width} #526 map hit target`);
+      await assertPlayers526MobileGeometry(width, geo, { safeAreaLabel: "zero-inset" });
       const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       const shotName = `players526-mobile-${width}.png`;
       writeFileSync(join(outDir, shotName), Buffer.from(shot.data, "base64"));
       receipt.shots.push(shotName);
-      receipt.metrics.push({ width, kind: "players526-mobile", geo });
+      receipt.metrics.push({
+        width,
+        kind: "players526-mobile",
+        safeArea: { mode: "zero-inset", inset: 0, computedSafeBottom: safeProbe.computedSafeBottom, probe: safeProbe },
+        geo,
+      });
     } else {
       const geo = await evaluate(PLAYERS526_DESKTOP_METRICS);
       assert.equal(geo.hasDesktopCta, true, `${width} #526 missing desktop map CTA`);
@@ -487,6 +643,108 @@ await withChrome(async ({ call, evaluate }) => {
       receipt.metrics.push({ width, kind: "players526-desktop", geo });
     }
   }
+
+  // #526 nonzero safe-area-bottom 34px at 320 AND 390 — CDP preferred; honest fixture env() fallback.
+  for (const width of PLAYERS526_SAFEAREA_VIEWPORTS) {
+    const height = 844;
+    const bodyHtml = fixtures.players526.mobileRadarOnHtml;
+    await call("Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+
+    let safePlan = await resolveSafeAreaCss({ call }, cssBundle, SAFE_AREA_BOTTOM_PX);
+    let frameTree = (await call("Page.getFrameTree")).frameTree;
+    await call("Page.setDocumentContent", {
+      frameId: frameTree.frame.id,
+      html: pageHtml(width, bodyHtml, safePlan.css, { wrapConsumer: false }),
+    });
+    await sleep(150);
+    await evaluate(MEASURE_FINDER_ZONE);
+    await sleep(50);
+
+    let safeProbe = await evaluate(SAFE_AREA_BOTTOM_PROBE);
+
+    // CDP command alone is not proof — require computed nonzero/34. Else honest fixture fallback.
+    if (
+      safePlan.mode === "cdp-Emulation.setSafeAreaInsets" &&
+      safeProbe.computedSafeBottom < SAFE_AREA_BOTTOM_PX
+    ) {
+      const cdpComputed = safeProbe.computedSafeBottom;
+      await clearSafeAreaInsets(call);
+      safePlan = {
+        css: fixtureSafeAreaBottomCss(cssBundle, SAFE_AREA_BOTTOM_PX),
+        mode: "fixture-env(safe-area-inset-bottom)-substitution",
+        inset: SAFE_AREA_BOTTOM_PX,
+        cdpAccepted: true,
+        cdpError: null,
+        cdpComputedBeforeFallback: cdpComputed,
+        mechanism:
+          `CDP Emulation.setSafeAreaInsets accepted but computed safe-area stayed ${cdpComputed}; ` +
+          `fell back to replacing env(safe-area-inset-bottom[, 0px]) with ${SAFE_AREA_BOTTOM_PX}px in in-memory CSS bundle only.`,
+      };
+      frameTree = (await call("Page.getFrameTree")).frameTree;
+      await call("Page.setDocumentContent", {
+        frameId: frameTree.frame.id,
+        html: pageHtml(width, bodyHtml, safePlan.css, { wrapConsumer: false }),
+      });
+      await sleep(150);
+      await evaluate(MEASURE_FINDER_ZONE);
+      await sleep(50);
+      safeProbe = await evaluate(SAFE_AREA_BOTTOM_PROBE);
+    }
+
+    assert.equal(
+      safeProbe.computedSafeBottom,
+      SAFE_AREA_BOTTOM_PX,
+      `${width} #526 safe-area-bottom must compute to ${SAFE_AREA_BOTTOM_PX} (mode=${safePlan.mode}) probe=${JSON.stringify(safeProbe)}`,
+    );
+    assert.ok(
+      safeProbe.navRect && safeProbe.navRect.height >= 76 + SAFE_AREA_BOTTOM_PX - 1,
+      `${width} #526 nav must grow with safe-area; nav=${JSON.stringify(safeProbe.navRect)}`,
+    );
+
+    const geo = await evaluate(PLAYERS526_MOBILE_METRICS);
+    await assertPlayers526MobileGeometry(width, geo, {
+      safeAreaLabel: `safe-area-bottom=${SAFE_AREA_BOTTOM_PX}`,
+    });
+    // Nonzero clearance: with inset 34, nav top sits above viewport bottom.
+    assert.ok(
+      geo.nav && geo.nav.bottom <= geo.innerHeight + 1,
+      `${width} #526 safe34 nav bottom within viewport`,
+    );
+    assert.ok(
+      geo.nav && geo.innerHeight - geo.nav.top >= 76 + SAFE_AREA_BOTTOM_PX - 2,
+      `${width} #526 safe34 nav occupies safe-area height geo.nav=${JSON.stringify(geo.nav)}`,
+    );
+
+    const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    const shotName = `players526-mobile-${width}-safearea${SAFE_AREA_BOTTOM_PX}.png`;
+    writeFileSync(join(outDir, shotName), Buffer.from(shot.data, "base64"));
+    receipt.shots.push(shotName);
+    const scenario = {
+      width,
+      kind: "players526-mobile-safearea",
+      safeArea: {
+        mode: safePlan.mode,
+        inset: SAFE_AREA_BOTTOM_PX,
+        computedSafeBottom: safeProbe.computedSafeBottom,
+        cdpAccepted: !!safePlan.cdpAccepted,
+        cdpError: safePlan.cdpError || null,
+        cdpComputedBeforeFallback: safePlan.cdpComputedBeforeFallback ?? null,
+        mechanism: safePlan.mechanism || null,
+        probe: safeProbe,
+      },
+      geo,
+      shot: shotName,
+    };
+    receipt.metrics.push(scenario);
+    receipt.safeAreaScenarios.push(scenario);
+  }
+
+  await clearSafeAreaInsets(call);
 });
 
 receipt.pass = true;
@@ -498,10 +756,21 @@ console.log(JSON.stringify({
   status: receipt.status,
   pass: true,
   viewports: receipt.viewports,
+  safeAreaViewports: receipt.safeAreaViewports,
+  safeAreaBottomPx: receipt.safeAreaBottomPx,
+  safeAreaScenarios: receipt.safeAreaScenarios.map((s) => ({
+    width: s.width,
+    mode: s.safeArea?.mode,
+    inset: s.safeArea?.inset,
+    computedSafeBottom: s.safeArea?.computedSafeBottom,
+    shot: s.shot,
+  })),
   shots: receipt.shots,
   outDir,
   signedInSend: "NOT_TESTED",
   players526: receipt.players526,
   note: "component geometry only; not DEV/Owner UAT / signed-in send / geolocation",
 }));
-console.log("#523+#526 browser geometry OK (523: 1280/1920/390; 526: 320/390/1280); signed-in send NOT_TESTED.");
+console.log(
+  `#523+#526 browser geometry OK (523: 1280/1920/390; 526: 320/390/1280 zero-inset; 526 safe-area-bottom=${SAFE_AREA_BOTTOM_PX} at 320/390); signed-in send NOT_TESTED.`,
+);
