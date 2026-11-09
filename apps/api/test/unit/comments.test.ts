@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { loadEnv } from "../../src/config/env";
+import { CommentsService } from "../../src/comments/comments.service";
 import { CommentsController } from "../../src/comments/comments.controller";
 import {
+  type CommentView,
   COMMENT_TEXT_MAX,
   createCommentRequest,
   decodeCursor,
@@ -126,5 +128,75 @@ describe("#394 comments policy and transport", () => {
     expect(reply.status).toHaveBeenCalledWith(201);
     await controller.listGame({} as never, gameId);
     expect(list).toHaveBeenCalledWith("game", gameId, null, expect.any(Object));
+  });
+});
+
+
+describe("#506 public comment response boundary", () => {
+  const raw = 'Он написал «БЛЯДЬ», организация слабая. José 🙂';
+  const masked = 'Он написал «*****», организация слабая. José 🙂';
+  const actorId = "10000000-0000-4000-8000-000000000011";
+  const sessionId = "10000000-0000-4000-8000-000000000012";
+  const receiptBody = Object.freeze({
+    id: commentId, entityKind: "game" as const, entityId: gameId,
+    parentCommentId: null, body: raw, deleted: false, version: 1,
+    createdAt: "2026-11-09T00:00:00.000Z", updatedAt: "2026-11-09T00:00:00.000Z",
+    edited: false, mine: true, replyCount: 0,
+    author: { publicPlayerId: null, displayName: "Игрок", avatar: { uploadedUrl: null, providerUrl: null }, profilePublic: false },
+  });
+
+  function fixture(body: CommentView = receiptBody, statusCode = 201) {
+    const result = Object.freeze({ statusCode, body });
+    const mutations = {
+      runWithExternalPrepare: vi.fn().mockResolvedValue(result),
+      runIdempotent: vi.fn().mockResolvedValue(result),
+    };
+    const moderation = { approveTexts: vi.fn(), bindTexts: vi.fn() };
+    const service = new CommentsService(
+      {} as never, env, mutations as never,
+      new IdempotencyService({} as never, env), {} as never, moderation as never,
+    );
+    return { service, mutations, moderation, result };
+  }
+
+  it.each(["game", "venue"] as const)("masks historical %s create/reply receipt without preparing or mutating it", async (kind) => {
+    const { service, moderation, result, mutations } = fixture();
+    for (const parentCommentId of [null, commentId]) {
+      const response = await service.create(kind, gameId, actorId, sessionId, "synthetic-replay-key", {
+        text: raw, parentCommentId,
+      });
+      expect(response.statusCode).toBe(201);
+      expect(response.body.body).toBe(masked);
+      expect(response.body).toEqual({ ...receiptBody, body: masked });
+      expect(result.body.body).toBe(raw);
+      expect(mutations.runWithExternalPrepare.mock.calls.at(-1)?.[0].authorizeReplay).toBeTypeOf("function");
+    }
+    expect(moderation.approveTexts).not.toHaveBeenCalled();
+    expect(moderation.bindTexts).not.toHaveBeenCalled();
+  });
+
+  it("masks a historical edit receipt and keeps its status/version", async () => {
+    const { service, result } = fixture(receiptBody, 200);
+    const response = await service.update(commentId, actorId, sessionId, "synthetic-update-key", {
+      text: raw, expectedVersion: 1,
+    });
+    expect(response).toEqual({ statusCode: 200, body: { ...receiptBody, body: masked } });
+    expect(result.body.body).toBe(raw);
+  });
+
+  it("keeps tombstone null even if an old receipt contains a body", async () => {
+    const { service, result } = fixture(Object.freeze({ ...receiptBody, deleted: true }), 200);
+    const response = await service.remove(commentId, actorId, sessionId, "synthetic-delete-key", { expectedVersion: 1 });
+    expect(response.body.body).toBeNull();
+    expect(result.body.body).toBe(raw);
+  });
+
+  it("propagates authorization/replay failure before returning a public body", async () => {
+    const { service, mutations, moderation } = fixture();
+    mutations.runWithExternalPrepare.mockRejectedValue(new Error("replay fence"));
+    await expect(service.create("game", gameId, actorId, sessionId, "synthetic-denied-key", {
+      text: raw, parentCommentId: null,
+    })).rejects.toThrow("replay fence");
+    expect(moderation.approveTexts).not.toHaveBeenCalled();
   });
 });

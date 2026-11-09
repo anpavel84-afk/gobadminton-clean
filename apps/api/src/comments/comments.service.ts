@@ -9,6 +9,7 @@ import {
   ContentModerationService,
   type TextBatchApproval,
 } from "../moderation/moderation.service";
+import { maskPublicCommentBody } from "../moderation/public-comment-presentation";
 import {
   emptyAvatar,
   safeUploadedAvatar,
@@ -320,7 +321,7 @@ export class CommentsService {
     };
 
     // Durable same-key claim before provider I/O; concurrent losers never approveTexts.
-    return this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
+    const result = await this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
       ...receipt,
       prepare: async () => {
         // Parent/actor/block fences before any provider I/O; no locks held across network.
@@ -358,6 +359,7 @@ export class CommentsService {
         return { statusCode: 201, body: projected };
       },
     });
+    return this.presentMutation(result);
   }
 
   async update(
@@ -388,7 +390,7 @@ export class CommentsService {
       },
     };
 
-    return this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
+    const result = await this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
       ...receipt,
       prepare: async () => {
         await this.authorizeUpdatePreflight(commentId, actorId, body.expectedVersion);
@@ -428,6 +430,7 @@ export class CommentsService {
         return { statusCode: 200, body: await this.loadProjected(client, commentId, actorId) };
       },
     });
+    return this.presentMutation(result);
   }
 
   async remove(
@@ -444,7 +447,7 @@ export class CommentsService {
       expectedVersion: body.expectedVersion,
       op: "delete",
     });
-    return this.mutations.runIdempotent<CommentView>({
+    const result = await this.mutations.runIdempotent<CommentView>({
       actorId,
       sessionId,
       operation: "comments.delete",
@@ -484,6 +487,7 @@ export class CommentsService {
         return { statusCode: 200, body: await this.loadProjected(client, commentId, actorId) };
       },
     });
+    return this.presentMutation(result);
   }
 
   private async installed(client: PoolClient): Promise<boolean> {
@@ -816,10 +820,27 @@ export class CommentsService {
       )
     ).rows[0];
     if (!row) unavailable();
-    return this.projectRow(row, viewerId);
+    // Keep receipt bytes unchanged; presentMutation masks the final authorized response once.
+    return this.projectRow(row, viewerId, false);
   }
 
-  private projectRow(row: CommentRow, viewerId: string | null): CommentView {
+  /** Also quarantine legacy raw receipts after MutationRunner's authorized replay.
+   * Copy rather than mutate: the durable receipt and its original status stay intact.
+   */
+  private presentMutation(result: { statusCode: number; body: CommentView }): {
+    statusCode: number;
+    body: CommentView;
+  } {
+    return {
+      ...result,
+      body: {
+        ...result.body,
+        body: result.body.deleted ? null : maskPublicCommentBody(result.body.body),
+      },
+    };
+  }
+
+  private projectRow(row: CommentRow, viewerId: string | null, presentBody = true): CommentView {
     const deleted = row.deleted_at !== null;
     const author = this.projectAuthor(row);
     return {
@@ -827,7 +848,7 @@ export class CommentsService {
       entityKind: row.entity_kind,
       entityId: row.entity_id,
       parentCommentId: row.parent_comment_id,
-      body: deleted ? null : row.body,
+      body: deleted ? null : presentBody ? maskPublicCommentBody(row.body) : row.body,
       deleted,
       version: row.version,
       createdAt: row.created_at.toISOString(),

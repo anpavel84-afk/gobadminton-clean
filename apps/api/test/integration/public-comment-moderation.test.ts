@@ -9,7 +9,7 @@ import {
 } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
@@ -20,6 +20,8 @@ import { loadEnv } from "../../src/config/env";
 import { createDatabase } from "../../src/database/client";
 import { GamesModule } from "../../src/games/games.module";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
+import { LOCAL_TEXT_POLICY_VERSION } from "../../src/moderation/local-text-policy";
+import { PUBLIC_TEXT_POLICY_VERSION } from "../../src/moderation/text-policy";
 import { ModerationModule } from "../../src/moderation/moderation.module";
 import {
   MODERATION_MODEL,
@@ -263,6 +265,119 @@ describeIntegration("MOD-V2-B1a public comment moderation", () => {
       venueId: venue.json().id as string,
     };
   }
+
+  it.each(["game", "venue"] as const)("%s masks public DTOs and raw receipts without changing source/evidence", async (kind) => {
+    const { gameId, venueId } = await createPublishedGame(author);
+    const url = kind === "game" ? `/v1/games/${gameId}/comments` : `/v1/venues/${venueId}/comments`;
+    const raw = `Он написал «БЛЯДЬ», организация слабая. José 🙂 ${gameId}; х у блядь й`;
+    const masked = `Он написал «*****», организация слабая. José 🙂 ${gameId}; х у ***** й`;
+    const edited = `Он написал «pizda», это недопустимо. Волан! ${gameId}`;
+    const editedMask = `Он написал «*****», это недопустимо. Волан! ${gameId}`;
+    const providerInputs: string[][] = [];
+    fake.textFixture = async (input) => {
+      providerInputs.push([...input.texts]);
+      return safeTextBatchDecision(input.texts.length);
+    };
+    const createKey = key();
+    const created = await app.inject({ method: "POST", url, headers: headers(author, createKey),
+      payload: { text: raw, parentCommentId: null } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().body).toBe(masked);
+    const id = created.json().id as string;
+    const replied = await app.inject({ method: "POST", url, headers: headers(peer),
+      payload: { text: edited, parentCommentId: id } });
+    expect(replied.statusCode).toBe(201);
+    expect(replied.json().body).toBe(editedMask);
+    const editKey = key();
+    const updated = await app.inject({ method: "PUT", url: `/v1/comments/${id}`, headers: headers(author, editKey),
+      payload: { text: edited, expectedVersion: 1 } });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().body).toBe(editedMask);
+    expect(updated.json().version).toBe(2);
+    // The fake sees complete original context, including the quote. Never display bytes.
+    expect(providerInputs).toContainEqual([raw]);
+    expect(providerInputs).toContainEqual([edited]);
+    expect(providerInputs.flat()).not.toContain(masked);
+    expect(providerInputs.flat()).not.toContain(editedMask);
+
+    async function snapshot() {
+      const stored = await pool.query(`SELECT body, version FROM entity_comments WHERE id=$1`, [id]);
+      const revisions = await pool.query(
+        `SELECT resource_version, before_body, after_body, tombstone FROM entity_comment_revisions
+         WHERE comment_id=$1 ORDER BY resource_version`, [id]);
+      const approvals = await pool.query(
+        `SELECT b.resource_version, b.approval_id, a.content_fingerprint, a.policy_version,
+                a.local_policy_version, a.provider_model, a.checked_at, a.decision
+         FROM content_moderation_bindings b JOIN content_moderation_approvals a ON a.id=b.approval_id
+         WHERE b.entity_id=$1 AND b.surface_key='comment_body' ORDER BY b.resource_version`, [id]);
+      const receipts = await pool.query(
+        `SELECT operation, request_hash, status_code, response_body FROM idempotency_records
+         WHERE actor_id=$1 AND response_body->>'id'=$2 ORDER BY operation`, [author.userId, id]);
+      return { stored: stored.rows, revisions: revisions.rows, approvals: approvals.rows, receipts: receipts.rows };
+    }
+    const before = await snapshot();
+    expect(before.stored).toEqual([{ body: edited, version: 2 }]);
+    expect(before.revisions).toEqual([
+      { resource_version: 1, before_body: null, after_body: raw, tombstone: false },
+      { resource_version: 2, before_body: raw, after_body: edited, tombstone: false },
+    ]);
+    for (const [index, text] of [raw, edited].entries()) {
+      const fingerprint = createHmac("sha256", "comment-mod-synthetic-fingerprint-secret!!")
+        .update("moderation-fingerprint:v1:text:comment_body:").update(text, "utf8").digest("hex");
+      expect(before.approvals[index]).toMatchObject({ content_fingerprint: fingerprint,
+        resource_version: index + 1, policy_version: PUBLIC_TEXT_POLICY_VERSION,
+        local_policy_version: LOCAL_TEXT_POLICY_VERSION, provider_model: MODERATION_MODEL, decision: "allow" });
+    }
+    // Legacy-shaped raw CommentViews remain durable receipts; the final response masks copies.
+    expect(before.receipts.map((row) => row.response_body.body)).toEqual([raw, edited]);
+    const calls = fake.textCalls;
+    fake.textFixture = async () => { throw new ModerationProviderError("unavailable", 3); };
+    for (const cookie of [undefined, author.cookie]) {
+      const listed = await app.inject({ method: "GET", url, headers: cookie ? { cookie } : {} });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json().items.find((item: { id: string }) => item.id === id).body).toBe(editedMask);
+      const replies = await app.inject({ method: "GET", url: `${url}?parentCommentId=${id}`,
+        headers: cookie ? { cookie } : {} });
+      expect(replies.json().items.find((item: { id: string }) => item.id === replied.json().id).body).toBe(editedMask);
+    }
+    const replay = await app.inject({ method: "POST", url, headers: headers(author, createKey),
+      payload: { text: raw, parentCommentId: null } });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json()).toEqual(created.json());
+    const editReplay = await app.inject({ method: "PUT", url: `/v1/comments/${id}`, headers: headers(author, editKey),
+      payload: { text: edited, expectedVersion: 1 } });
+    expect(editReplay.statusCode).toBe(200);
+    expect(editReplay.json()).toEqual(updated.json());
+    expect(fake.textCalls).toBe(calls);
+    expect(await snapshot()).toEqual(before);
+
+    const foreign = await app.inject({ method: "PUT", url: `/v1/comments/${id}`, headers: headers(peer),
+      payload: { text: raw, expectedVersion: 2 } });
+    expect(foreign.statusCode).toBe(404);
+    expect(fake.textCalls).toBe(calls);
+    fake.textFixture = async (input) => flaggedTextBatch(input.texts.length);
+    const rejected = await app.inject({ method: "PUT", url: `/v1/comments/${id}`, headers: headers(author),
+      payload: { text: "Отклонённая замена", expectedVersion: 2 } });
+    expect(rejected.statusCode).toBe(422);
+    fake.textFixture = async () => { throw new ModerationProviderError("unavailable", 3); };
+    const failed = await app.inject({ method: "PUT", url: `/v1/comments/${id}`, headers: headers(author),
+      payload: { text: "Замена при сбое провайдера", expectedVersion: 2 } });
+    expect(failed.statusCode).toBe(503);
+    expect(await snapshot()).toEqual(before);
+
+    await pool.query(`UPDATE entity_comments SET moderation_state='withheld' WHERE id=$1`, [id]);
+    const hidden = await app.inject({ method: "GET", url });
+    expect(hidden.json().items.some((item: { id: string }) => item.id === id)).toBe(false);
+    const own = await app.inject({ method: "GET", url, headers: { cookie: author.cookie } });
+    expect(own.json().items.find((item: { id: string }) => item.id === id).body).toBe(editedMask);
+    await pool.query(`UPDATE entity_comments SET moderation_state='clear' WHERE id=$1`, [id]);
+    const deleted = await app.inject({ method: "DELETE", url: `/v1/comments/${id}`, headers: headers(author),
+      payload: { expectedVersion: 2 } });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json().body).toBeNull();
+    const tombstones = await app.inject({ method: "GET", url });
+    expect(tombstones.json().items.find((item: { id: string }) => item.id === id).body).toBeNull();
+  });
 
   it("safe create/reply/edit bind publication evidence; criticism allowed", async () => {
     const { gameId } = await createPublishedGame(author);
