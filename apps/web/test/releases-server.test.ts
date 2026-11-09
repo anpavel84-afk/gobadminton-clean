@@ -254,9 +254,9 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
-  it("keeps seventy-four confirmed seed deployments including accepted alpha.1–alpha.65 and dedupes identical live rows", () => {
+  it("keeps seventy-five confirmed seed deployments including accepted alpha.1–alpha.66 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(74);
+    expect(seedCount).toBe(75);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -305,10 +305,26 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     }]);
+    const alpha66 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
+      (row) => row.application_version === "0.1.0-alpha.66",
+    );
+    expect(alpha66).toEqual([{
+      environment: "dev",
+      source_sha: "0bbac73f6fba25bb2211e0f564c7416282e70ea0",
+      application_version: "0.1.0-alpha.66",
+      version_label: "0.1.0-alpha.66",
+      title: "Карточка тренировки и подтверждение дружеского матча",
+      release_id: "r42608499355-a1",
+      accepted_at: "2026-11-09T11:28:13.000Z",
+      status: "ACCEPTED",
+      kind: "pipeline",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+    }]);
     expect(buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).some(
       (row) => row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(false);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(69);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(70);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -390,7 +406,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.62"
       || row.application_version === "0.1.0-alpha.63"
       || row.application_version === "0.1.0-alpha.64"
-      || row.application_version === "0.1.0-alpha.65",
+      || row.application_version === "0.1.0-alpha.65"
+      || row.application_version === "0.1.0-alpha.66",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -467,7 +484,7 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.66");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.67");
     expect(FIRST_ALPHA_FEATURES).toHaveLength(35);
     expect(TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version == null)).toHaveLength(2);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -738,6 +755,7 @@ describe("history seed integrity", () => {
       "2026-11-09T08:06:21Z",
       "2026-11-09T09:37:22Z",
       "2026-11-09T10:21:55Z",
+      "2026-11-09T11:28:13Z",
     ]);
   });
 
