@@ -493,8 +493,10 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     expect(html).toContain('aria-label="Отзывы об организации · 2: Other Organizer"');
     expect(html).not.toContain("Тренер · самостоятельно указано");
     expect(html).toContain(`aria-label="Отзывы и история: ${trainerDistinct.title}"`);
-    expect(html).toMatch(/gb-discovery-card__people-summary[\s\S]*gb-discovery-card__actions/);
-    expect(html).toMatch(/gb-discovery-card__people-summary[\s\S]*gb-discovery-card__disclosure/);
+    // Owner footer order: disclosure precedes details/share inside people-summary.
+    expect(html).toMatch(
+      /gb-discovery-card__people-summary[\s\S]*gb-discovery-card__disclosure[\s\S]*gb-discovery-card__actions/,
+    );
     expect(html).toContain("О тренере в игре");
     expect(html).toContain("Об организаторе в игре");
   });
