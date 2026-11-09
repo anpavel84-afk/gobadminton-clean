@@ -151,7 +151,7 @@ try {
         return {node,events,stop(){node.removeEventListener('cancel',capture);}};
       });
     }
-    async function resumeIfNativeHidden(dialog,testId,probe) {
+    async function resumeIfNativeHidden(dialog,testId,probe,overflowBaseline) {
       // Let the second Escape's native close event finish; do not space out Escapes.
       await page.evaluate(()=>new Promise(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(resolve))));
       const events=await probe.evaluate(probe=>probe.events.map(event=>({cancelable:event.cancelable,prevented:event.defaultPrevented})));
@@ -162,10 +162,11 @@ try {
         const resume=page.getByTestId(testId);
         await resume.waitFor({state:'visible'});
         assert.equal(await resume.evaluate(node=>node.closest('dialog')===null),true);
-        assert.equal(await page.evaluate(()=>document.body.style.overflow),'','native close releases body scroll');
+        assert.equal(await page.evaluate(()=>document.body.style.overflow),overflowBaseline,'native close restores pre-dialog body scroll ownership');
         assert.equal(await page.evaluate(()=>Boolean(document.activeElement?.closest('dialog[open]'))),false);
         for(const viewportWidth of [1024,width]) {
           await page.setViewportSize({width:viewportWidth,height:900});
+          await resume.scrollIntoViewIfNeeded();
           const target=await resume.evaluate(node=>{
             const rect=node.getBoundingClientRect();
             return {width:rect.width,height:rect.height,hit:node.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)),overflow:document.documentElement.scrollWidth>window.innerWidth};
@@ -336,6 +337,7 @@ try {
     for(const subjectKind of ['aggregate','own_vote','venue_comment']) {
       const priorReports=writes.filter(write=>write.path==='/v1/reports').length;
       reportFailure=true;reportGate=new Promise(resolve=>{releaseReport=resolve;});
+      const reportOverflowBaseline=await page.evaluate(()=>document.body.style.overflow);
       if(subjectKind==='aggregate') await report.click();
       else if(subjectKind==='own_vote') await content.getByTestId('venue-community-report-own-vote').click();
       else {
@@ -355,7 +357,7 @@ try {
       await currentReport.getByRole('button',{name:'Проверить отправку',exact:true}).waitFor();
       const reportPacket=writes.filter(write=>write.path==='/v1/reports').at(-1);
       await page.keyboard.press('Escape');
-      await resumeIfNativeHidden(currentReport,'venue-community-report-resume',reportProbe);
+      await resumeIfNativeHidden(currentReport,'venue-community-report-resume',reportProbe,reportOverflowBaseline);
       assert.equal(writes.filter(write=>write.path==='/v1/reports').length,priorReports+1,'Escapes/resume never resend');
       await assertRetainedOwner();
       assert.equal(await currentReport.getByTestId('venue-community-report-detail').inputValue(),detail);
@@ -373,6 +375,7 @@ try {
     // Review preview is separate from the admitted send. 503 retries preserve
     // actor credentials, game/basis versions, consent projection, body and key.
     reviewFailure=true;reviewGate=new Promise(resolve=>{releaseReview=resolve;});
+    const reviewOverflowBaseline=await page.evaluate(()=>document.body.style.overflow);
     await content.getByRole('button',{name:'Поделиться опытом',exact:true}).click();
     const reviewDialog=page.getByRole('dialog',{name:'Как вам площадка?',exact:true});
     await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).fill('Synthetic frozen review');
@@ -392,7 +395,7 @@ try {
     assert.equal(reviewPacket.body.consentProjectionHash,'synthetic-projection');
     assert.equal(await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).isDisabled(),true);
     await page.keyboard.press('Escape');
-    await resumeIfNativeHidden(reviewDialog,'venue-review-resume',reviewProbe);
+    await resumeIfNativeHidden(reviewDialog,'venue-review-resume',reviewProbe,reviewOverflowBaseline);
     await assertRetainedOwner();
     assert.equal(await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).inputValue(),'Synthetic frozen review');
     assert.equal(await reviewDialog.getByRole('checkbox').isChecked(),true);
@@ -409,6 +412,7 @@ try {
     // reopen the modal or send again; the user can explicitly inspect the receipt.
     reviewFailure=true;reviewGateSuccess=true;
     reviewGate=new Promise(resolve=>{releaseReview=resolve;});
+    const lateSuccessOverflowBaseline=await page.evaluate(()=>document.body.style.overflow);
     await content.getByRole('button',{name:'Поделиться опытом',exact:true}).click();
     await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).fill('Synthetic late success');
     await reviewDialog.getByRole('button',{name:'Сохранить',exact:true}).click();
@@ -424,7 +428,7 @@ try {
     assert.equal(await reviewDialog.isVisible(),wasVisible,'late success never reopens a native-hidden modal');
     assert.equal(writes.length,lateSuccessWrites,'late success never resends');
     if(!wasVisible) {
-      assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
+      assert.equal(await page.evaluate(()=>document.body.style.overflow),lateSuccessOverflowBaseline,'late success preserves pre-dialog body scroll ownership');
       await page.getByTestId('venue-review-resume').focus();await page.keyboard.press('Enter');
     }
     await reviewDialog.getByText('Сохранено только вам.',{exact:true}).waitFor();
