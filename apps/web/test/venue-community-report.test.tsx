@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Me } from "../src/lib/consumer-types";
@@ -527,4 +527,93 @@ describe("#507 I1 F3 consumer venue_community report UI", () => {
     expect(document.querySelector(`[data-venue-community="${VENUE_ID}"]`)).toBeTruthy();
   });
 
+});
+
+
+describe("report lifecycle propagation", () => {
+  beforeEach(() => { polyfillDialog(); transport.calls = []; sessionStorage.clear(); });
+  afterEach(cleanup);
+  it.each(["aggregate", "own_vote", "venue_comment"] as const)("holds %s report through pending/503/close and retries exact context", async subjectKind => {
+    const { VenueCommunityReportDialog } = await import("../src/components/consumer/venues/VenueCommunityReportDialog");
+    let settle!: (result: unknown) => void;
+    transport.handler = () => new Promise(resolve => { settle = resolve; });
+    const unresolved = vi.fn(), close = vi.fn();
+    const subject = subjectKind === "aggregate" ? { subjectKind, venueId: VENUE_ID }
+      : subjectKind === "own_vote" ? { subjectKind, venueId: VENUE_ID, expectedVersion: 9 }
+      : { subjectKind, venueId: VENUE_ID, commentId: COMMENT_ID, expectedVersion: 4 };
+    render(createElement(VenueCommunityReportDialog, { subject, actorId: ACTOR_A, csrfToken: CSRF_A,
+      authReturnPath: "/games?view=map", onClose: close, onUnresolvedChange: unresolved }));
+    fireEvent.change(screen.getByTestId("venue-community-report-detail"), { target: { value: "Точное описание" } });
+    fireEvent.click(screen.getByTestId("venue-community-report-submit"));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    const first = structuredClone(transport.calls[0]);
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(close).not.toHaveBeenCalled();
+    await act(async () => settle({ ok: false, status: 503, error: "unknown" }));
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(close).not.toHaveBeenCalled(); expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
+    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls[1]).toEqual(first);
+    expect(first).toMatchObject({ path: "/v1/reports", method: "POST", csrfToken: CSRF_A,
+      body: { subjectKind, venueId: VENUE_ID, detail: "Точное описание" } });
+    await act(async () => settle({ ok: true, status: 201, data: {
+      reportId: "50000000-0000-4000-8000-000000000001", status: "submitted", createdAt: "2026-11-09T12:00:00Z" } }));
+    expect(unresolved).toHaveBeenLastCalledWith(false);
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ORs independent rating, report and review operations; each resolution leaves the others held", async () => {
+    const { VenueCommunityContent } = await import("../src/components/consumer/venues/VenueCommunityContent");
+    const ratingApi = await import("../src/lib/venue-community-api");
+    const summary = { venueId: VENUE_ID, canonicalVenueId: VENUE_ID, state: "available" as const, average: 4.2, count: 5 };
+    const own = { venueId: VENUE_ID, canonicalVenueId: VENUE_ID, value: 4, version: 3, withdrawn: false, moderationState: "clear" as const, allowedActions: { upsert: true, update: true, withdraw: true } };
+    vi.mocked(ratingApi.fetchOwnCommunityRating).mockResolvedValue({ own, summary });
+    let reportSettle!: (result: unknown) => void;
+    let reviewAttempts = 0, voteAttempts = 0;
+    transport.handler = (path, init) => {
+      if (path.includes("experience-reviews")) return { ok: true, status: 200, data: { items: [], publishedCount: 0 } };
+      if (path.includes("eligibility")) return { ok: true, status: 200, data: { bases: [{ gameId: "game-one", gameTitle: "Игра", admission: "may_submit", outcomeVersion: 2, attendanceVersion: 6 }] } };
+      if (path === `/v1/venues/${VENUE_ID}/community-rating`) return ++voteAttempts === 1
+        ? { ok: false, status: 503, error: "unknown rating" }
+        : { ok: true, status: 200, data: { own: { ...own, value: 5, version: 4 }, summary } };
+      if (path === "/v1/me/venue-reviews" && init?.method === "POST") return ++reviewAttempts === 1
+        ? { ok: false, status: 503, error: "unknown review" }
+        : { ok: true, status: 201, data: { status: "self_draft", receiptToken: "receipt" } };
+      if (path === "/v1/reports") return new Promise(resolve => { reportSettle = resolve; });
+      throw new Error(path);
+    };
+    const unresolved = vi.fn();
+    render(createElement(VenueCommunityContent, { venueId: VENUE_ID, me: me(ACTOR_A, CSRF_A), authReturnPath: "/games?view=map", onUnresolvedChange: unresolved }));
+    await waitFor(() => expect((screen.getByRole("radio", { name: "5 из 5" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("radio", { name: "5 из 5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить изменение" }));
+    await screen.findByTestId("venue-community-vote-unknown");
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByTestId("venue-community-report-aggregate"));
+    fireEvent.click(await screen.findByTestId("venue-community-report-submit"));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    await act(async () => reportSettle({ ok: false, status: 503, error: "unknown report" }));
+    const reportDialog = screen.getByRole("dialog", { name: "Пожаловаться на сводку оценок" });
+    fireEvent(reportDialog, new Event("cancel", { cancelable: true }));
+    expect(reportDialog.hasAttribute("open")).toBe(true);
+    fireEvent.click(within(reportDialog).getByRole("button", { name: "Проверить отправку" }));
+    await act(async () => reportSettle({ ok: true, status: 201, data: { reportId: "50000000-0000-4000-8000-000000000001", status: "submitted", createdAt: "2026-11-09T12:00:00Z" } }));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent(reportDialog, new Event("cancel", { cancelable: true }));
+    expect(screen.getByTestId("venue-community-vote-unknown")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Поделиться опытом" }));
+    await screen.findByText("Можно поделиться опытом");
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Отзыв" } });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить", exact: true }));
+    await screen.findByText("Не удалось подтвердить отправку. Текст сохранён");
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
+    await screen.findByText("Сохранено только вам.");
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    fireEvent(screen.getByRole("dialog", { name: "Как вам площадка?" }), new Event("cancel", { cancelable: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Повторить тот же запрос" }));
+    await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(false));
+  });
 });

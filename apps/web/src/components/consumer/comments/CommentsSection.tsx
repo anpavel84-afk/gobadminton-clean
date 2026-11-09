@@ -37,6 +37,7 @@ type Props = {
   /** Optional DOM id for page anchors (e.g. venue #discussion). */
   sectionId?: string;
   onUnresolvedChange?: (unresolved: boolean) => void;
+  onReportUnresolvedChange?: (unresolved: boolean) => void;
 };
 
 /** In-memory actor+csrf identity — never logged or written to storage keys/DOM. */
@@ -97,6 +98,7 @@ export function CommentsSection({
   title = "Комментарии",
   sectionId,
   onUnresolvedChange,
+  onReportUnresolvedChange,
 }: Props) {
   const headingId = useId();
   const [authOpen, setAuthOpen] = useState(false);
@@ -656,6 +658,7 @@ export function CommentsSection({
 
       {reportSubject && kind === "venue" ? (
         <VenueCommunityReportDialog
+          onUnresolvedChange={onReportUnresolvedChange}
           subject={reportSubject}
           actorId={me?.id ?? null}
           csrfToken={me?.csrfToken ?? null}

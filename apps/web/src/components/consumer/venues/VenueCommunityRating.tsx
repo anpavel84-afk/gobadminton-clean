@@ -41,6 +41,7 @@ type Props = {
   linkToRatings?: boolean;
   sectionId?: string;
   onUnresolvedChange?: (unresolved: boolean) => void;
+  onReportUnresolvedChange?: (unresolved: boolean) => void;
   onSummaryChange?: (summary: CommunityRatingSummary) => void;
 };
 
@@ -86,6 +87,7 @@ export function VenueCommunityRating({
   onSummaryChange,
   sectionId = "ratings",
   onUnresolvedChange,
+  onReportUnresolvedChange,
 }: Props) {
   const headingId = useId();
   const ratingReturnPath = `${authReturnPath.split("#")[0]}#ratings`;
@@ -675,6 +677,7 @@ export function VenueCommunityRating({
       ) : null}
       {reportSubject ? (
         <VenueCommunityReportDialog
+          onUnresolvedChange={onReportUnresolvedChange}
           subject={reportSubject}
           actorId={actorId}
           csrfToken={csrfToken}

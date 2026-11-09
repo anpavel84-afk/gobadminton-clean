@@ -27,12 +27,16 @@ export function VenueReviewsPanel({
   canWrite = false,
   onLogin,
   embedded = false,
+  actorId = null,
+  onUnresolvedChange,
 }: {
   venueId: string;
   csrfToken?: string | null;
   canWrite?: boolean;
   onLogin?: () => void;
   embedded?: boolean;
+  actorId?: string | null;
+  onUnresolvedChange?: (value: boolean) => void;
 }) {
   const [state, setState] = useState<LoadState>("idle");
   const [items, setItems] = useState<PublicVenueReviewItem[]>([]);
@@ -122,6 +126,8 @@ export function VenueReviewsPanel({
       {composer && csrfToken ? (
         <VenueReviewComposer
           venueId={venueId}
+          actorId={actorId}
+          onUnresolvedChange={onUnresolvedChange}
           csrfToken={csrfToken}
           onClose={() => setComposer(false)}
           onSubmitted={reload}

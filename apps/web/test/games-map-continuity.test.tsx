@@ -163,9 +163,9 @@ it("guards selected venue close and switch while UNKNOWN, while collapse keeps t
   const second={...first,id:"other"};
   transport.venues.mockResolvedValue({ok:true,data:[first,second]});
   transport.games.mockResolvedValue({ok:true,data:[]});
-  function cycle() {
+  function cycle(cityId = MOSCOW_BUNDLE.cityId) {
     h.cursor=0;
-    const tree=GamesMapView({cityId:MOSCOW_BUNDLE.cityId,day:"2026-11-20",activity:"regular"});
+    const tree=GamesMapView({cityId,day:"2026-11-20",activity:"regular",onReturnToList:back});
     h.effects.splice(0).forEach(fn=>fn());
     return tree;
   }
@@ -195,6 +195,12 @@ it("guards selected venue close and switch while UNKNOWN, while collapse keeps t
   tree=cycle();expectRetainedOwner(tree);
   popup.props.onExpandedChange(false);tree=cycle();expectRetainedOwner(tree);
   popup.props.onExpandedChange(true);tree=cycle();expectRetainedOwner(tree);
+  // The dynamic module-error fallback receives this same protected callback.
+  find<React.ComponentProps<typeof GamesVenueMap>>(tree,GamesVenueMap)!.props.onReturnToList!();
+  expect(back).not.toHaveBeenCalled();
+  tree=cycle("a0000000-0000-4000-8000-000000000002");expectRetainedOwner(tree);
+  expect(find<React.ComponentProps<typeof GamesVenueMap>>(tree,GamesVenueMap)!.props.cityId).toBe(MOSCOW_BUNDLE.cityId);
+  tree=cycle();expectRetainedOwner(tree);
   sheet.props.onUnresolvedChange!(false);
   find<React.ComponentProps<typeof VenuePopup>>(tree,VenuePopup)!.props.onDeselect();
   expect(find(cycle(),VenuePopup)).toBeUndefined();

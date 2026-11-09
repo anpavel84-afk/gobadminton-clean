@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, render, screen, waitFor, act } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { createElement, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
@@ -1625,4 +1625,104 @@ it("retains the exact vote operation while its popup collapses and expands", asy
   expect(retry.body).toBe(operation!.body);
   expect(new Headers(retry.headers).get("idempotency-key")).toBe(new Headers(operation!.headers).get("idempotency-key"));
   expect(fetchMock.calls.filter(call=>call.url.includes("/community-rating/me"))).toHaveLength(1);
+});
+
+
+// Real React mounts and effects for both authorities; presentation children expose
+// their existing callbacks, while mutation packet behavior is tested with real forms.
+describe("mounted map and discovery lifecycle authorities", () => {
+  const cityA = "a0000000-0000-4000-8000-000000000001";
+  const cityB = "a0000000-0000-4000-8000-000000000002";
+  const mapVenue = { id: V1, cityId: cityA, name: "Исходная площадка", address: "Адрес",
+    latitude: 55.7, longitude: 37.6, timezone: "Europe/Moscow", dataStatus: "verified", provenance: "PUBLIC" };
+  const mounted = vi.fn(), unmounted = vi.fn();
+  const mockedModules = ["next/dynamic", "next/navigation", "../src/lib/api-client",
+    "../src/components/consumer/ConsumerShell", "../src/components/consumer/discovery/DiscoveryCityProvider",
+    "../src/components/consumer/venues/SelectedVenueCover", "../src/components/consumer/games/VenuePreviewCard",
+    "../src/components/consumer/games/VenueSheet", "../src/components/consumer/games/VenuePopup"];
+  beforeEach(() => {
+    mounted.mockClear(); unmounted.mockClear();
+    window.history.replaceState(null, "", `/games?view=map&cityId=${cityA}&day=2026-11-20&activity=regular`);
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })));
+    window.matchMedia = globalThis.matchMedia;
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 0));
+    vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    vi.doMock("../src/components/consumer/games/VenuePopup", () => ({ VenuePopup: ({ children }: { children: ReactNode }) => createElement("section", null, children) }));
+    vi.doMock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+    vi.doMock("next/dynamic", () => ({ default: () => (props: { onSelect: (venue: typeof mapVenue) => void; onReturnToList: () => void; cityId: string; venues: typeof mapVenue[] }) =>
+      createElement("div", { "data-testid": "map-city", "data-city": props.cityId },
+        createElement("button", { disabled: !props.venues.length, onClick: () => props.onSelect(mapVenue) }, "Выбрать площадку"),
+        createElement("button", { onClick: props.onReturnToList }, "Возврат из ошибки модуля")) }));
+    vi.doMock("../src/lib/api-client", async original => ({ ...await original<typeof import("../src/lib/api-client")>(),
+      getMe: async () => ({ ok: true, data: { id: ACTOR, csrfToken: CSRF } }),
+      listAllCityVenues: async (city: string) => ({ ok: true, data: city === cityA ? [mapVenue] : [] }),
+      listAllUpcomingCityGames: async () => ({ ok: true, data: [] }),
+      listGames: async () => ({ ok: true, data: { items: [], nextCursor: null } }),
+      listRoleReputationSummaries: async () => ({ ok: true, data: { items: [] } }),
+    }));
+    vi.doMock("../src/components/consumer/ConsumerShell", () => ({ ConsumerShell: ({ children }: { children: ReactNode }) => createElement("main", null, children) }));
+    vi.doMock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({ useDiscoveryCity: () => ({ location: { cityId: cityA, nameRu: "Москва", timezone: "Europe/Moscow" } }), DiscoveryCityNotice: () => null }));
+    vi.doMock("../src/components/consumer/venues/SelectedVenueCover", () => ({ SelectedVenueCover: () => null,
+      useSelectedVenueCover: () => ({ compact: { current: null }, info: { current: null }, ready: false, fallback: null, retry() {} }) }));
+    vi.doMock("../src/components/consumer/games/VenuePreviewCard", () => ({ VenuePreviewCard: () => null }));
+    vi.doMock("../src/components/consumer/games/VenueSheet", async () => {
+      const { useEffect } = await import("react");
+      return { VenueSheet: (props: { venue: typeof mapVenue; onUnresolvedChange: (value: boolean) => void }) => {
+        useEffect(() => { mounted(); return () => { unmounted(); }; }, []);
+        return createElement("div", { "data-testid": "selected-owner" }, props.venue.name,
+          createElement("button", { onClick: () => props.onUnresolvedChange(true) }, "Операция UNKNOWN"),
+          createElement("button", { onClick: () => props.onUnresolvedChange(false) }, "Операция разрешена"));
+      } };
+    });
+    fetchMock.handler = async () => jsonResponse({ items: [] });
+  });
+  afterEach(() => { mockedModules.forEach(module => vi.doUnmock(module)); });
+
+  it("routes visible and module-error returns through the mounted map guard and freezes a changed city", async () => {
+    const { GamesMapView } = await import("../src/components/consumer/games/GamesMapView");
+    const back = vi.fn();
+    const view = render(createElement(GamesMapView, { cityId: cityA, day: "2026-11-20", onReturnToList: back }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать площадку" }));
+    await screen.findByTestId("selected-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Операция UNKNOWN" }));
+    fireEvent.click(screen.getByRole("button", { name: /К списку/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Возврат из ошибки модуля" }));
+    expect(back).not.toHaveBeenCalled();
+    view.rerender(createElement(GamesMapView, { cityId: cityB, day: "2026-11-20", onReturnToList: back }));
+    expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
+    expect(screen.getByTestId("selected-owner").textContent).toContain("Исходная площадка");
+    expect(unmounted).not.toHaveBeenCalled(); expect(mounted).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Смена города отложена/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Операция разрешена" }));
+    await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    fireEvent.click(screen.getByRole("button", { name: /К списку/ }));
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it("parent Escape and popstate city/list transitions cannot unmount the pending owner", async () => {
+    const { GamesDiscoveryPage } = await import("../src/components/consumer/pages/GamesDiscoveryPage");
+    render(createElement(GamesDiscoveryPage));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать площадку" }));
+    await screen.findByTestId("selected-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Операция UNKNOWN" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("selected-owner")).toBeTruthy();
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
+    act(() => {
+      window.history.pushState(null, "", `/games?view=list&cityId=${cityB}&day=2026-11-20&activity=regular`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
+    expect(screen.getByTestId("selected-owner")).toBeTruthy();
+    expect(unmounted).not.toHaveBeenCalled();
+    expect(screen.getByText(/Смена города отложена/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Операция разрешена" }));
+    await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("map-city")).toBeNull());
+  });
 });
