@@ -1,7 +1,10 @@
 """Caller-side B2 binding and bounded retention. No native patching or launches.
 
-Native provider streams currently have NO supported capacity-control schema.
-They therefore HOLD; only a separately trusted control adapter can supply a stop.
+Native provider streams have NO authenticated capacity-control producer boundary.
+AGY_ERROR/RESOURCE_EXHAUSTED on outer stderr and a static emitter callgraph
+do not close tool/model spoofing in this caller seam. They therefore HOLD;
+only a separately trusted control adapter can supply a stop. No legacy Root
+NO_SOURCE_EFFECT adjudication is implemented here; cgroup-absent stays HOLD.
 """
 from __future__ import annotations
 
@@ -10,6 +13,7 @@ import json
 import os
 import stat
 from dataclasses import asdict
+from contextlib import ExitStack
 from pathlib import Path
 
 import author_routing as policy
@@ -102,6 +106,136 @@ def need(ok):
         raise RetentionError('unsafe_source_retention')
 
 
+class PrivateRetentionSecrets:
+    """Fixed native copy only. Capture anchors before Popen/model effect.
+
+    Original AUTH still uses native.trusted; this does not relax that guard.
+    Refresh may replace the token inode, but every read is stable and bounded.
+    """
+    def __init__(self, native, work, home, *, uid):
+        self.native, self.uid = native, uid
+        self.work, self.home = Path(work), Path(home)
+        base = self.work.parent
+        need(self.work == base / 'ws' and self.home == base / 'home'
+             and base.name.startswith('gb-agy-author-'))
+        self.guard = native._AuthorGuard(base)
+        fd = native._guard_root(self.guard, record=True)
+        os.close(fd)
+        self.directories = {}
+        self.tokens = list(self._read(record=True))
+
+    def _read(self, *, record=False):
+        native = self.native
+        with ExitStack() as stack:
+            root = stack.enter_context(native._private_root(self.guard))
+            def check(fd, key, *, capture=record):
+                info = os.fstat(fd)
+                need(stat.S_ISDIR(info.st_mode) and info.st_uid == self.uid
+                     and stat.S_IMODE(info.st_mode) == 0o700)
+                identity = (info.st_dev, info.st_ino)
+                if capture: self.directories[key] = identity
+                else: need(self.directories.get(key) == identity)
+            check(root, 'root')
+            work = stack.enter_context(native._private_directory(root, 'ws'))
+            check(work, 'ws')
+            parent = root
+            for part in ('home', '.gemini', 'antigravity-cli'):
+                parent = stack.enter_context(native._private_directory(parent, part))
+                check(parent, part)
+            name = 'antigravity-oauth-token'
+            before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            try:
+                info = os.fstat(fd)
+                need((before.st_dev, before.st_ino) == (info.st_dev, info.st_ino)
+                     and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                     and info.st_uid == self.uid and stat.S_IMODE(info.st_mode) == 0o600
+                     and info.st_size <= 65536)
+                raw = bytearray()
+                while len(raw) <= 65536:
+                    chunk = os.read(fd, min(8192, 65537 - len(raw)))
+                    if not chunk: break
+                    raw.extend(chunk)
+                end = os.fstat(fd)
+                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                signature = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid,
+                    s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                need(len(raw) <= 65536 and signature(info) == signature(end) == signature(current))
+                tokens = native._credentials(bytes(raw))
+            finally:
+                os.close(fd)
+        # Reopen all anchors to detect renamed ancestors during the read.
+        fd = native._guard_root(self.guard)
+        os.close(fd)
+        with ExitStack() as stack:
+            root = stack.enter_context(native._private_root(self.guard))
+            check(root, 'root', capture=False)
+            work = stack.enter_context(native._private_directory(root, 'ws'))
+            check(work, 'ws', capture=False)
+            parent = root
+            for part in ('home', '.gemini', 'antigravity-cli'):
+                parent = stack.enter_context(native._private_directory(parent, part))
+                check(parent, part, capture=False)
+        return tokens
+
+    def __call__(self):
+        for token in self._read():
+            if token not in self.tokens:
+                self.tokens.append(token)
+        need(len(self.tokens) <= 1000 and sum(map(len, self.tokens)) <= 1 << 20)
+        return tuple(self.tokens)
+
+
+def retention_failure(stage, error=None):
+    """Finite metadata; never exception text, paths, source or credentials."""
+    category = ('unsafe' if isinstance(error, RetentionError) else
+                'os_error' if isinstance(error, OSError) else 'error')
+    return dict(stage=stage, error_class=category, reason='retention_' + stage + '_failed')
+
+
+def valid_retention_status(value):
+    """No child-provided strings, paths or source in the diagnostic channel."""
+    if (type(value) is not dict or set(value) != {'schema', 'checkpoint', 'failure'}
+            or value['schema'] != 'GB_SOURCE_RETENTION_STATUS_V1'):
+        return False
+    if value['checkpoint'] == 'UNVALIDATED':
+        return value['failure'] is None
+    f = value['failure']
+    return (value['checkpoint'] == 'INVALID' and type(f) is dict
+            and set(f) == {'stage', 'error_class', 'reason'}
+            and f['stage'] in ('setup', 'prepare', 'private_guard', 'capture_or_reap',
+                              'persist', 'status_persist', 'no_capture')
+            and f['error_class'] in ('unsafe', 'os_error', 'error')
+            and f['reason'] == 'retention_' + f['stage'] + '_failed')
+
+
+def finish_retention(retention, directory, binding, setup_failure=None):
+    """Persist a checkpoint or an explicit INVALID receipt after native finalizers."""
+    from providers import atomic_write
+    failure = setup_failure
+    checkpoint = 'INVALID'
+    if retention is not None:
+        failure = retention.failure_metadata
+        if retention.failure is None and retention.result is not None:
+            try:
+                retention.persist(directory, binding)
+                checkpoint = 'UNVALIDATED'
+            except BaseException as err:
+                failure = retention_failure('persist', err)
+        elif failure is None:
+            failure = retention_failure('no_capture')
+    if failure is None and checkpoint == 'INVALID':
+        failure = retention_failure('setup')
+    status = dict(schema='GB_SOURCE_RETENTION_STATUS_V1', checkpoint=checkpoint, failure=failure)
+    try:
+        atomic_write(Path(directory) / 'source-retention.json', status, 0o600)
+    except BaseException as err:
+        # Caller also carries this finite status over its existing bounded IPC.
+        status = dict(schema='GB_SOURCE_RETENTION_STATUS_V1', checkpoint='INVALID',
+                      failure=retention_failure('status_persist', err))
+    return status
+
+
 class SourceRetention:
     """One source-only snapshot, in memory, after ORIGINAL native owned reap.
 
@@ -120,6 +254,7 @@ class SourceRetention:
         self.max_files, self.max_bytes, self.max_file = max_files, max_bytes, max_file
         self.result = None
         self.failure = None
+        self.failure_metadata = None
         self.before_modes = None
 
     def scan(self, work, tokens):
@@ -196,14 +331,19 @@ class SourceRetention:
             source, metadata = self.scan(work, tokens)
             need({n: hashlib.sha256(raw).hexdigest() for n, raw in source.items()} == self.baseline)
             self.before_modes = {n: m[2] for n, m in metadata.items() if n in self.baseline}
-        except BaseException:
+        except BaseException as err:
             self.failure = 'retention_prepare_failed'
+            self.failure_metadata = retention_failure('prepare', err)
 
     def capture(self, work):
         tokens = tuple(t.encode() if isinstance(t, str) else t for t in self.secrets())
         first, meta = self.scan(work, tokens)
         second, meta2 = self.scan(work, tokens)
         need(first == second and meta == meta2)
+        # Revalidate private anchors and refresh tokens after both scans too.
+        # A refresh during scanning invalidates this snapshot rather than
+        # exporting bytes scanned against an obsolete credential set.
+        need(tokens == tuple(t.encode() if isinstance(t, str) else t for t in self.secrets()))
         if self.before_modes is not None:
             # Native importers retain existing modes, so a chmod cannot be
             # handed off faithfully through their byte-only payload contract.
@@ -226,9 +366,10 @@ class SourceRetention:
             need(owned_group_gone(process))
             if self.failure is None and self.result is None:
                 self.capture(work)
-        except BaseException:
+        except BaseException as err:
             # Observing must not replace the native result or exception.
             self.failure = 'retention_or_owned_reap_failed'
+            self.failure_metadata = retention_failure('capture_or_reap', err)
             self.result = None
 
     def popen(self, original, reap):

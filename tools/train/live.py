@@ -1642,7 +1642,7 @@ AGY_QA_INPUTS = AGY_QA_WORKTREES / '.product-qa-inputs'
 AGY_SLOT = 'slot2'
 AGY_IPC_MAX = 4096
 AGY_IPC_FIELDS = frozenset({
-    'ok', 'charged', 'error_type', 'error_code', 'error',
+    'ok', 'charged', 'error_type', 'error_code', 'error', 'retention_status',
 })
 
 
@@ -2027,7 +2027,7 @@ def _agy_drop_to_executor():
 def _agy_ipc_pack(payload):
     """Bounded JSON own fixed fields only — no paths/commands from child."""
     out = {}
-    for key in ('ok', 'charged', 'error_type', 'error_code', 'error'):
+    for key in ('ok', 'charged', 'error_type', 'error_code', 'error', 'retention_status'):
         if key in payload:
             out[key] = payload[key]
     raw = json.dumps(out, separators=(',', ':')).encode()
@@ -2045,6 +2045,10 @@ def _agy_ipc_unpack(raw):
         raise LiveError('agy_child_ipc_failed', type(err).__name__) from err
     if not isinstance(obj, dict) or set(obj) - AGY_IPC_FIELDS:
         raise LiveError('agy_child_ipc_failed', 'unexpected_fields')
+    if 'retention_status' in obj:
+        from author_handoff import valid_retention_status
+        if not valid_retention_status(obj['retention_status']):
+            raise LiveError('agy_child_ipc_failed', 'invalid_retention_status')
     return obj
 
 
@@ -2077,7 +2081,7 @@ def _agy_collect_native_evidence(child_ev, root_ev):
             return
     root_ev.mkdir(parents=True, exist_ok=True)
     for name in ('stream.raw', 'native-receipt.json',
-                 'shared-charge-receipt.json', 'child-ipc-status.json'):
+                 'shared-charge-receipt.json', 'child-ipc-status.json', 'source-retention.json'):
         src = child_ev / name
         if src.is_file() and not src.is_symlink():
             (root_ev / name).write_bytes(src.read_bytes())
@@ -2339,6 +2343,8 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         f'TASK: {json.dumps({k: task.get(k) for k in ("issue","goal","acceptance","allowed_paths")}, ensure_ascii=False)}\n'
         'PASS => findings must be []. Findings list only actionable defects.\n'
     )
+    from providers import public_release_context
+    prompt += public_release_context(task)
     (evidence / 'prompt.md').write_text(prompt)
     # Prompt/events/stderr stay Root-opened FDs (inherited). CLI -o final must NOT
     # target Root 0700 evidence ancestors — use private 1002 TMPDIR tree instead.
@@ -2907,6 +2913,8 @@ def _agy_author_prompt(task, *, rules_text, materials=None):
     prompt = rules_text + '\n'
     prompt += 'EXACT OWNER ASSIGNMENT (Lean Mode B AGY author live binding)\n'
     prompt += json.dumps(body, ensure_ascii=False, indent=2) + '\n'
+    from providers import public_release_context
+    prompt += public_release_context(task)
     prompt += (
         'Work ONLY in the current private export cwd (model workspace). '
         'Do not use staging paths, external task checkout paths, or model Git metadata.\n'
@@ -3273,11 +3281,14 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 os.close(r_fd)
                 status = 0
                 charged_flag = False
+                retention_status = None
                 try:
                     if os.geteuid() == 0:
                         _agy_drop_to_executor()
-                    from author_handoff import SourceRetention, operation
+                    from author_handoff import (SourceRetention, operation,
+                        PrivateRetentionSecrets, retention_failure, finish_retention)
                     retention = None
+                    retention_setup_failure = None
                     launch = subprocess.Popen
                     try:
                         baseline = {n: hashlib.sha256(native._source(staging / n, staging)).hexdigest()
@@ -3288,10 +3299,10 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         def retention_secrets():
                             tokens = list(old_tokens)
                             tokens += native._credentials(native.trusted(native.AUTH, owner=AGY_UID))
-                            if observed_work.get('home'):
-                                tokens += native._credentials(native.trusted(
-                                    Path(observed_work['home']) / '.gemini/antigravity-cli/antigravity-oauth-token',
-                                    owner=AGY_UID))
+                            # Fixed copied AUTH is anchored before Popen, rather
+                            # than trusted() through sticky /tmp. Refresh tokens
+                            # are reread before every source scan.
+                            tokens += observed_work['secrets']()
                             return tokens
                         def original_ignored(name):
                             result = subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
@@ -3305,9 +3316,16 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                             control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()))
                         observed_popen = retention.popen(subprocess.Popen, native.reap)
                         def launch(*a, **k):
-                            observed_work['home'] = k['env']['HOME']
+                            try:
+                                observed_work['secrets'] = PrivateRetentionSecrets(
+                                    native, k['cwd'], k['env']['HOME'], uid=AGY_UID)
+                            except BaseException as err:
+                                retention.failure = 'retention_private_guard_failed'
+                                retention.failure_metadata = retention_failure('private_guard', err)
+                                raise
                             return observed_popen(*a, **k)
-                    except Exception:
+                    except Exception as err:
+                        retention_setup_failure = retention_failure('setup', err)
                         retention = None
                         launch = subprocess.Popen
                     try:
@@ -3323,11 +3341,10 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         )
                     finally:
                         # Native final receipt/cleanup is separate from UNVALIDATED bytes.
-                        if retention is not None and retention.result is not None and retention.failure is None:
-                            try:
-                                retention.persist(native_ev, operation(dict(task, _author_operation=task.get('_author_operation') or fingerprint, runtime_base_sha=base_sha), 'agy_author', head_before))
-                            except Exception:
-                                pass  # No checkpoint => HOLD; never change native outcome.
+                        retention_status = finish_retention(retention, native_ev,
+                            operation(dict(task, _author_operation=task.get('_author_operation') or fingerprint,
+                                runtime_base_sha=base_sha), 'agy_author', head_before),
+                            retention_setup_failure)
                     charged_flag = _agy_read_charge_receipt(charge_receipt)[0]
                     payload = {'ok': True, 'charged': charged_flag}
                 except BaseException as err:
@@ -3340,6 +3357,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         'error': str(err)[:500],
                         'error_code': getattr(err, 'code', None),
                     }
+                if retention_status is not None:
+                    payload['retention_status'] = retention_status
                 try:
                     ipc_status.write_text(
                         json.dumps(
@@ -3399,6 +3418,12 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 except LiveError:
                     msg = {}
             _agy_collect_native_evidence(native_ev, evidence)
+            # Preserve finite retention status even when its child-side disk
+            # write failed. This is diagnostics only, never a routing grant.
+            retention_status = msg.get('retention_status')
+            if retention_status is not None:
+                from providers import atomic_write
+                atomic_write(evidence / 'source-retention-ipc.json', retention_status, 0o600)
             # Fixed receipt path only — never child-supplied paths.
             native_receipt = _agy_author_read_native_receipt(native_ev)
             if not native_receipt and receipt_path.is_file():
