@@ -487,7 +487,7 @@ class RootSourceCustody:
         self.record.update(opaque_workspace='ROOT_ONLY_UNVALIDATED', checkpoint_ready=False)
         self._record()
 
-    def produce_capacity_operation(self, native):
+    def produce_capacity_operation(self, native, *, lease=None, claim_path=None):
         """Root fixed-results producer, after SDK exit, with real outer FD1/FD2.
 
         Captures facts only. It neither grants recovery policy nor adjudicates
@@ -531,6 +531,11 @@ class RootSourceCustody:
             raw_ref=str(self.outer/'outer-stdout'), stderr_ref=str(self.outer/'outer-stderr'),
             raw_sha256=hashlib.sha256(streams[0]).hexdigest(),
             stderr_sha256=hashlib.sha256(streams[1]).hexdigest(), native_ref=str(self.outer/'native-receipt.json'))
+        if lease is not None or claim_path is not None:
+            claim = capacity_claim(lease, claim_path, self.binding)
+            need(op['task_sha256'] == capacity_task_hash(claim, self.binding))
+            op['prospective'] = dict(policy=claim['capacity_policy'], claim_ref=str(claim_path),
+                revision=claim['revision'], task_fingerprint=fingerprint(claim['task']))
         need(typed_agy_capacity(streams[1], streams[0], producer=op, binding=self.binding) is not None)
         atomic_write(op['native_ref'], native, 0o600)
         op['native_sha256'] = hashlib.sha256(Path(op['native_ref']).read_bytes()).hexdigest()
@@ -1034,6 +1039,164 @@ def reconciled_stop(current, failure, *, checkpoint, checkpoint_ref, native_rece
         checkpoint_ref, tuple(receipt_refs), checkpoint['partial_state'])
 
 
+def prospective_capacity_policy(pipeline):
+    """Protected Root global activation; default OFF, exact pipeline generation."""
+    try:
+        from live import _qa_root_config
+        value = _qa_root_config().get('author_capacity_recovery_policy')
+        need(type(value) is dict and value.get('schema') == 'GB_ROOT_CAPACITY_POLICY_V1'
+             and value.get('enabled') is True and value.get('pipeline_revision') == pipeline
+             and policy._sha(pipeline) and type(value.get('generation')) is str
+             and len(value['generation']) == 64
+             and all(c in '0123456789abcdef' for c in value['generation']))
+        return json.loads(json.dumps(value))
+    except Exception:
+        return None
+
+
+def capacity_task_hash(claim, current):
+    # Same frozen payload delivered to the native canonical task contract.
+    task = dict(claim['task'], issue=claim['issue'], revision=claim['revision'])
+    for key in ('worktree', 'runtime_base_sha', 'author_attempt', 'attempt',
+                'findings', 'repair_findings', 'ci_failure', '_bound_author',
+                '_author_operation', '_capacity_successor'):
+        task.pop(key, None)
+    task['_bound_author'] = claim['bound_author']
+    task['_author_operation'] = current.operation
+    if claim.get('capacity_successor'):
+        task['_capacity_successor'] = claim['capacity_successor']
+    return fingerprint(task)
+
+
+def validate_capacity_identity(claim, current):
+    from providers import digest
+    need(str(claim['issue']) == current.task and claim['bound_author']['mode'] == 'on'
+         and claim['bound_author']['revision'] == claim['revision']
+         and claim['bound_author']['decision']['provider'] == current.provider
+         and fingerprint(sorted(claim['task']['allowed_paths'])) == current.scope_id
+         and claim['base_sha'] == current.original_base
+         and digest(dict(revision=claim['revision'], attempt=claim['author_attempt'])) == current.operation)
+
+
+def capacity_claim(lease, claim_path, current):
+    from run import WriterLease
+    from live import _qa_protected_bytes
+    from providers import loads
+    need(isinstance(lease, WriterLease) and claim_path is not None)
+    claim = loads(_qa_protected_bytes(claim_path, results=True))
+    lease.verify_capacity(claim)
+    validate_capacity_identity(claim, current)
+    need(claim.get('phase') in ('RUNNING', 'BLOCKED')
+         and claim.get('owner_authorization') and type(claim.get('capacity_policy')) is dict
+         and claim.get('capacity_policy')
+         == prospective_capacity_policy(claim['bound_author']['pipeline']))
+    return claim
+
+
+def import_capacity_checkpoint(claim, lease):
+    """Root readback and source-only import; existing owner-safe helper + git CAS."""
+    from live import _qa_protected_bytes, git, owner_safe_atomic_import
+    from providers import loads, atomic_write
+    lease.verify_capacity(claim)
+    need(os.geteuid() == 0)
+    proposal = claim['capacity_proposal']
+    stop = proposal['chain'][-1]
+    current = policy.Operation(**stop['failure']['binding'])
+    key, authority, op, native, failure = _recovery_inputs(current)
+    need(authority.get('prospective') is True)
+    control = protected_capacity_decoder(task={}, evidence_dir='', current=current)
+    need(control is not None and control.failure == failure)
+    ref = control.proof.checkpoint_ref
+    checkpoint = loads(_qa_protected_bytes(ref, results=True))
+    names = checkpoint['changed_paths']; deleted = checkpoint['deleted']
+    need(type(names) is list and len(names) == len(set(names))
+         and set(names) <= set(claim['task']['allowed_paths'])
+         and set(deleted) <= set(names)
+         and set(checkpoint['payload_files']) == set(names) - set(deleted)
+         and set(checkpoint['payload_hashes']) == set(checkpoint['payload_files']))
+    payloads = {}
+    for i, name in enumerate(sorted(checkpoint['payload_files'])):
+        need(checkpoint['payload_files'][name] == f'payload-{i}')
+        raw = _qa_protected_bytes(Path(ref).parent / f'payload-{i}', results=True)
+        need(len(raw) <= 8 << 20 and hashlib.sha256(raw).hexdigest() == checkpoint['payload_hashes'][name])
+        payloads[name] = raw
+    need(sum(map(len, payloads.values())) <= 64 << 20)
+    work = claim['worktree']; source = current.source_sha
+    need(Path(work).stat().st_uid == 1002
+         and git(work, 'rev-parse', 'HEAD') == source and not git(work, 'status', '--porcelain'))
+    for name in names:
+        need(type(name) is str and not name.startswith('/')
+             and all(p and p not in ('.', '..') and not p.startswith('.') for p in name.split('/')))
+        target = Path(work) / name
+        need(not any(p.is_symlink() for p in (target, *target.parents)))
+    lease.verify_capacity(claim)
+    def commit_receipt(head):
+        from live import _QA_RESULTS
+        ref_path = _QA_RESULTS / ('capacity-import-' + key + '.json')
+        receipt = dict(schema='GB_ROOT_CAPACITY_IMPORT_V1', binding=asdict(current),
+            checkpoint_fingerprint=checkpoint['fingerprint'], source_sha=source,
+            checkpoint_sha=head, changed_paths=names, worktree=work,
+            kind='commit_cas' if names else 'confirmed_clean_sha')
+        if names:
+            need(git(work, 'rev-list', '--parents', '-n', '1', head).split() == [head, source])
+        lease.verify_capacity(claim)
+        need(not ref_path.exists())
+        atomic_write(ref_path, receipt, 0o600)
+        need(loads(_qa_protected_bytes(ref_path, results=True)) == receipt)
+        fd = os.open(_QA_RESULTS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    if not names:
+        need(checkpoint['partial_state'] == 'confirmed_empty_diff')
+        commit_receipt(source)
+        return source, checkpoint
+    # The producer's bounded secret-checked snapshot is authoritative only after
+    # protected custody/hash revalidation. Never read opaque quarantined bytes.
+    need(checkpoint.get('validation') == 'bounded_secret_checked')
+    imported = True  # Partial importer failures also require bounded rollback.
+    try:
+        owner_safe_atomic_import(worktree=work, payloads=payloads, deleted=deleted)
+        imported = True
+        need(git(work, 'rev-parse', 'HEAD') == source)
+        actual = sorted(filter(None, git(work, 'diff', '--name-only', '-z', 'HEAD').split('\0')))
+        untracked = sorted(filter(None, git(work, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')))
+        need(sorted(set(actual + untracked)) == sorted(names))
+        for name, raw in payloads.items():
+            need((Path(work) / name).read_bytes() == raw)
+        need(all(not (Path(work) / name).exists() for name in deleted))
+        lease.verify_capacity(claim)
+        git(work, 'add', '--', *names)
+        for name, raw in payloads.items():
+            need((Path(work) / name).read_bytes() == raw
+                 and git(work, 'rev-parse', ':' + name) == git(work, 'hash-object', '--', name))
+        # Write a commit without moving HEAD, then compare-and-swap the ref.
+        tree = git(work, 'write-tree')
+        commit = git(work, '-c', 'user.name=agentagency-dev', '-c',
+            'user.email=agentagency-dev@localhost', '-c', 'commit.gpgsign=false',
+            'commit-tree', tree, '-p', source, '-m', f'lean: issue-{claim["issue"]} retained capacity checkpoint')
+        need(policy._sha(commit))
+        lease.verify_capacity(claim)
+        git(work, 'update-ref', 'HEAD', commit, source)
+        need(git(work, 'rev-parse', 'HEAD') == commit and not git(work, 'status', '--porcelain'))
+        need(sorted(filter(None, git(work, 'diff', '--name-only', '-z', source, commit).split('\0'))) == sorted(names))
+        commit_receipt(commit)
+        return commit, checkpoint
+    except Exception:
+        # Only roll back our own import while the source reference is unchanged.
+        # A raced reference is held for reconciliation, never reset over it.
+        lease.verify_capacity(claim)
+        if imported and git(work, 'rev-parse', 'HEAD') == source:
+            changed_now = set(filter(None, git(work, 'diff', '--name-only', '-z', 'HEAD').split('\0')))
+            unknown_now = set(filter(None, git(work, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')))
+            need((changed_now | unknown_now) <= set(names))
+            git(work, 'reset', '--hard', source)
+            for name in payloads:
+                if name not in checkpoint.get('before', {}):
+                    target = Path(work) / name
+                    if target.is_file() and not target.is_symlink(): target.unlink()
+        raise
+
+
 def _protected_stop_inputs(current, failure, checkpoint, checkpoint_ref, native_receipt, receipt_refs):
     """No caller dictionary/ref/boolean can substitute protected operation proof."""
     try:
@@ -1041,8 +1204,7 @@ def _protected_stop_inputs(current, failure, checkpoint, checkpoint_ref, native_
         from providers import loads
         key, _, op, observed_native, observed_failure = _recovery_inputs(current)
         need(observed_native == native_receipt and observed_failure == failure)
-        authority = _qa_root_config().get('author_capacity_recovery', {}).get(key)
-        need(type(authority) is dict and authority.get('enabled') is True)
+        authority = _recovery_inputs(current)[1]
         raw = _qa_protected_bytes(_QA_RESULTS / ('capacity-recovery-' + key + '.json'), results=True)
         r = loads(raw)
         need(r.get('schema') == 'GB_ROOT_CAPACITY_RECOVERY_V1' and r.get('binding') == asdict(current)
@@ -1070,12 +1232,27 @@ def _recovery_inputs(current):
     from providers import loads, typed_agy_capacity
     key = fingerprint(asdict(current))
     authority = _qa_root_config().get('author_capacity_recovery', {}).get(key)
-    need(type(authority) is dict and authority.get('enabled') is True
-         and type(authority.get('nonce')) is str and len(authority['nonce']) == 64)
     fixed = _QA_RESULTS / ('capacity-operation-' + key + '.json')
     raw_op = _qa_protected_bytes(fixed, results=True)
-    need(hashlib.sha256(raw_op).hexdigest() == authority.get('operation_sha256'))
     op = loads(raw_op)
+    prospective = op.get('prospective')
+    if prospective is not None:
+        claim = loads(_qa_protected_bytes(prospective['claim_ref'], results=True))
+        need(type(claim.get('capacity_policy')) is dict
+             and claim.get('capacity_policy') == prospective.get('policy')
+             == prospective_capacity_policy(claim['bound_author']['pipeline'])
+             and claim.get('owner_authorization')
+             and claim['revision'] == prospective['revision']
+             and fingerprint(claim['task']) == prospective['task_fingerprint'])
+        validate_capacity_identity(claim, current)
+        need(op['task_sha256'] == capacity_task_hash(claim, current))
+        need(op.get('owned_stop', {}).get('kind') == 'exclusive-uid-proc-stop-v1'
+             and op.get('checkpoint_ref'))
+        authority = dict(enabled=True, nonce=op.get('nonce'),
+                         operation_sha256=hashlib.sha256(raw_op).hexdigest(), prospective=True)
+    need(type(authority) is dict and authority.get('enabled') is True
+         and type(authority.get('nonce')) is str and len(authority['nonce']) == 64
+         and hashlib.sha256(raw_op).hexdigest() == authority.get('operation_sha256'))
     need(op.get('schema') == 'GB_ROOT_CAPACITY_OPERATION_V1' and op.get('binding') == asdict(current)
          and op.get('nonce') == authority['nonce'] and op.get('boot') ==
          Path('/proc/sys/kernel/random/boot_id').read_text().strip()
@@ -1128,7 +1305,7 @@ def _recovery_inputs(current):
     return key, authority, op, native, failure
 
 
-def adjudicate_capacity_recovery(current, *, nonce):
+def adjudicate_capacity_recovery(current, *, nonce=None, lease=None, claim_path=None):
     """Explicit Root operator API, to be called only after QA/CI/install.
 
     Requires an exact enabled protected policy and protected completed-operation
@@ -1136,7 +1313,7 @@ def adjudicate_capacity_recovery(current, *, nonce):
     charge ledgers, raw/native records, or performs a model call/automatic replay.
     Unsupported evidence returns HOLD. This source operation never invokes it.
     """
-    lease = None
+    owned_here = False
     try:
         need(os.geteuid() == 0 and current.provider == policy.AGY)
         from run import WriterLease
@@ -1144,11 +1321,18 @@ def adjudicate_capacity_recovery(current, *, nonce):
         from providers import loads, atomic_write
         # Scope is read from protected op, never a task-supplied lock bypass.
         key, authority, op, native, failure = _recovery_inputs(current)
-        need(nonce == authority['nonce'])
-        lease = WriterLease(current.task, op['allowed_paths']); lease.acquire()
+        if authority.get('prospective'):
+            capacity_claim(lease, claim_path, current)
+            nonce = authority['nonce']
+        else:
+            need(lease is None and nonce == authority['nonce'])
+            lease = WriterLease(current.task, op['allowed_paths']); lease.acquire()
+            owned_here = True
         need(fingerprint(sorted(op['allowed_paths'])) == current.scope_id)
         final = _QA_RESULTS / ('capacity-recovery-' + key + '.json')
-        need(not final.exists())  # immutable, no nonce reuse or rewrite
+        if final.exists():
+            need(protected_capacity_decoder(task={}, evidence_dir='', current=current) is not None)
+            return dict(action='RECORDED', receipt=str(final))
         checkpoint_ref = op.get('checkpoint_ref')
         if checkpoint_ref:
             raw = _qa_protected_bytes(checkpoint_ref, results=True)
@@ -1194,7 +1378,7 @@ def adjudicate_capacity_recovery(current, *, nonce):
     except Exception:
         return dict(action='HOLD', reason='protected_capacity_adjudication_unproven')
     finally:
-        if lease is not None: lease.release()
+        if owned_here: lease.release()
 
 
 def protected_capacity_decoder(*, task, evidence_dir, error=None, current=None):

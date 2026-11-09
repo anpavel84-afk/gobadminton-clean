@@ -4547,3 +4547,30 @@ class RootEnvBindingDefectTests(unittest.TestCase):
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()
+
+class CapacityOwnedLeaseRegression(unittest.TestCase):
+    def test_real_controller_lease_rejects_foreign_released_replaced_and_boolean(self):
+        import importlib.util
+        path=_TRAIN_DIR.parents[1]/'scripts/chatops/actions_train/live/slots.py'
+        spec=importlib.util.spec_from_file_location('capacity_lease_slots',path)
+        slots=importlib.util.module_from_spec(spec); spec.loader.exec_module(slots)
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); (root/'registry.lock').touch()
+            claim=dict(issue=527,revision='a'*64,task=dict(allowed_paths=['x.py']))
+            lease=lean_run.WriterLease(527,['x.py'],registry=slots.LockRegistry,lock_dir=root,
+                                       frozen_admission=claim)
+            lease.acquire()
+            try:
+                self.assertTrue(lease.verify_capacity(claim))
+                for foreign in (dict(claim,issue=526),dict(claim,revision='b'*64),
+                                dict(claim,task=dict(allowed_paths=['y.py']))):
+                    with self.assertRaises(lean_run.LeanError): lease.verify_capacity(foreign)
+                boolean=lean_run.WriterLease(527,['x.py'],parent_owns=True,lock_dir=root)
+                boolean.acquire()
+                with self.assertRaises(lean_run.LeanError): boolean.verify_capacity(claim)
+                held=root/'slot1.lease'; held.rename(root/'original.lease'); held.write_text('{}')
+                with self.assertRaises(lean_run.LeanError): lease.verify_capacity(claim)
+                held.unlink(); (root/'original.lease').rename(held)
+            finally:
+                lease.release()
+            with self.assertRaises(lean_run.LeanError): lease.verify_capacity(claim)

@@ -1968,3 +1968,138 @@ class AddressedF97Custody(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+class AutomaticProtectedSuccessor(unittest.TestCase):
+    def test_producer_controller_successor_and_next_wake(self):
+        import importlib.util
+        from dataclasses import asdict
+        spec=importlib.util.spec_from_file_location('capacity_test_slots',
+            ROOT/'scripts/chatops/actions_train/live/slots.py')
+        slots=importlib.util.module_from_spec(spec); spec.loader.exec_module(slots)
+        for empty in (False, True):
+            with self.subTest(empty=empty), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                root=Path(td); work=root/'source'; work.mkdir()
+                def git(*args):
+                    return subprocess.check_output(['git','-c','core.hooksPath=/dev/null',*args],cwd=work,text=True).strip()
+                git('init','-q'); git('config','user.name','fixture'); git('config','user.email','fixture@localhost')
+                (work/'x.py').write_bytes(b'old'); git('add','x.py'); git('commit','-qm','base')
+                base=git('rev-parse','HEAD'); pipeline='c'*40
+                policy=dict(schema='GB_ROOT_CAPACITY_POLICY_V1',enabled=True,
+                            pipeline_revision=pipeline,generation='f'*64)
+                cfg=dict(author_routing=dict(mode='on',pipeline_revision=pipeline))
+                def authority(**kw):
+                    return dict(kw,executor_uid=1002,admitted=True,qualified=True,secured=True,
+                                independent_executor=True,evidence={'recipe':'fixture'})
+                stack.enter_context(patch.object(live,'_QA_RESULTS',root))
+                stack.enter_context(patch.object(live,'_qa_root_config',return_value={'author_capacity_recovery_policy':policy}))
+                def protected(ref,**kw):
+                    ref=Path(ref); self.assertTrue(ref.is_relative_to(root)); return ref.read_bytes()
+                stack.enter_context(patch.object(live,'_qa_protected_bytes',side_effect=protected))
+                # Only OS/qualification boundaries are synthetic. Controller,
+                # actual flock registry, fixed producer and recovery are real.
+                stack.enter_context(patch.object(live,'git',side_effect=lambda cwd,*args,**kw:git(*args)))
+                stack.enter_context(patch.object(providers,'routing_qualifications',return_value=routes()))
+                stack.enter_context(patch.object(run,'role_ready',side_effect=lambda role,**kw:(True,
+                    dict(executor='qa:separate',model='gpt-6-sol',effort='medium'))))
+                stack.enter_context(patch.object(providers,'accepted_qa_effort',return_value='medium'))
+                stack.enter_context(patch.object(run,'accepted_qa_effort',return_value='medium'))
+                stack.enter_context(patch.object(run,'select_qa_provider',return_value=('codex_sol_medium','fixture',{})))
+                stack.enter_context(patch.object(run,'_author_provenance',return_value={'fixture':'independent later QA'}))
+                t=task(); t.pop('_author_operation'); t.pop('runtime_base_sha'); t.pop('revision')
+                t.update(base=base,qaroute=['codex_sol_medium'])
+                adm=dict(issue=527,revision='a'*64,comment_id=527,task=t,
+                         owner_id=run.OWNER_ID,snapshot={'accepted':'original-owner-task'})
+                # Existing least-assignments policy selects AGY after one Cursor assignment.
+                run.write_receipt(root/'issue-999/old/claim.json',dict(issue=999,revision='d'*64,
+                    phase='DONE',task=t,bound_author=h.freeze(t,revision='d'*64,pipeline=pipeline,
+                    routes=routes(),history_counts={'cursor_auto':0,'antigravity_sonnet':0},mode='on')))
+                calls=[]
+                def author(**kw):
+                    runtime=kw['task']; calls.append(h.bound_provider(runtime)[0])
+                    if len(calls)>1:
+                        (work/'x.py').write_bytes(b'finished'); git('add','x.py'); git('commit','-qm','backup')
+                        return dict(candidate_sha=git('rev-parse','HEAD'),changed_paths=['x.py'],provider='cursor_auto')
+                    r=object.__new__(h.RootSourceCustody)
+                    r.binding=h.operation(runtime,'agy_author',base); r.allowed=['x.py']; r.uid=978
+                    r.outer=root/'custody'; r.outer.mkdir(mode=0o700)
+                    incoming=root/'incoming'; incoming.mkdir(mode=0o700)
+                    sandbox=root/'ws'; sandbox.mkdir(mode=0o700); (sandbox/'x.py').write_bytes(b'old' if empty else b'partial')
+                    observer=ClosedCustodyFollowup().observer(sandbox); observer.capture(sandbox); observer.persist(incoming,r.binding)
+                    r.cap=os.open(incoming,os.O_RDONLY|os.O_DIRECTORY); self.addCleanup(os.close,r.cap)
+                    r.outerfd=os.open(r.outer,os.O_RDONLY|os.O_DIRECTORY); self.addCleanup(os.close,r.outerfd)
+                    r.record={}; r.checkpoint=None; r.prove_stop=lambda:None; r._record=lambda:None
+                    r.uid=os.getuid()
+                    with patch.object(h.os,'fchown'): r.collect()
+                    r.uid=978
+                    r.nonce='e'*64; r.boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip(); r.pid=999999999
+                    r.sdk_identity=dict(pid=r.pid,start=1,uid=[978]*4,namespace='fixture')
+                    r.native_identity=dict(pid=999999998,start=2,pgrp=999999998)
+                    r.record_path=root/'custody.json'
+                    r.record.update(schema='GB_ROOT_SOURCE_CUSTODY_V1',binding=asdict(r.binding),
+                        nonce=r.nonce,boot=r.boot,native_identity=r.native_identity,sdk_identity=r.sdk_identity,
+                        task_sha256=h.capacity_task_hash(run.read_receipt(kw['capacity_claim_path']),r.binding),
+                        cli_sha256=providers.AGY_CLI_SHA256)
+                    r.record_path.write_text(json.dumps(r.record))
+                    raw=(json.dumps(dict(event='init',init=dict(model=providers.AGY_MODEL)))+'\n'+
+                         json.dumps(dict(event='result',result=dict(status='ERROR')))+'\n').encode()
+                    err=b'AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"actual-fd2"}\n'
+                    fds=[]
+                    for name,data in (('outer-stdout',raw),('outer-stderr',err)):
+                        fd=os.open(r.outer/name,os.O_RDWR|os.O_CREAT|os.O_EXCL,0o600); os.write(fd,data)
+                        fds.append(fd); self.addCleanup(os.close,fd)
+                    r.capture_fds=tuple(fds)
+                    native=dict(schema='GB_AGY_AUTHOR_RECEIPT_V1',phase='failed_no_automatic_replay',
+                        source_head=base,task_sha256=r.record['task_sha256'],exit_code=3,charge_state='charged',
+                        stdout_sha256=hashlib.sha256(raw).hexdigest(),stderr_sha256=hashlib.sha256(err).hexdigest())
+                    proof=dict(kind='exclusive-uid-proc-stop-v1',boot=r.boot,sdk=r.sdk_identity,native=r.native_identity)
+                    stack.enter_context(patch.object(h,'_exclusive_stop',return_value=proof))
+                    stack.enter_context(patch.object(h,'_uid_processes',return_value=[]))
+                    stack.enter_context(patch.object(h.os,'geteuid',return_value=0))
+                    produced=r.produce_capacity_operation(native,lease=kw['capacity_lease'],claim_path=kw['capacity_claim_path'])
+                    # Missing/stale protected facts and revoked policy never decode.
+                    self.assertIsNotNone(h._recovery_inputs(r.binding))
+                    saved=Path(produced).read_bytes()
+                    broken=json.loads(saved); broken['source_sha']='0'*40
+                    Path(produced).write_text(json.dumps(broken))
+                    with self.assertRaises(h.RetentionError): h._recovery_inputs(r.binding)
+                    Path(produced).write_bytes(saved)
+                    checkpoint=Path(json.loads(saved)['checkpoint_ref']); retained=checkpoint.read_bytes()
+                    checkpoint.unlink()
+                    with self.assertRaises(FileNotFoundError): h._recovery_inputs(r.binding)
+                    checkpoint.write_bytes(retained)
+                    policy['enabled']=False
+                    with self.assertRaises(h.RetentionError): h._recovery_inputs(r.binding)
+                    policy['enabled']=True
+                    self.assertIsNone(h.protected_capacity_decoder(task=runtime,evidence_dir=root,current=r.binding))
+                    raise providers.ProviderError('provider_control_failure',charge='charged')
+                locks=root/'locks'; locks.mkdir(); (locks/'registry.lock').touch()
+                adapters=run.Adapters(author=author,author_capacity=h.protected_capacity_decoder,
+                    reviewer_authority=authority,lock_registry=slots.LockRegistry,lock_dir=locks,
+                    integration_lock=root/'integration.lock',
+                    resolve_worktree=lambda t:dict(worktree=str(work),base_sha=base),
+                    validate_worktree=lambda *a,**kw:None,
+                    preqa_diff=lambda *a:dict(ok=True,head=git('rev-parse','HEAD')),
+                    qa=lambda c:dict(verdict='PASS',findings=[],reviewed_sha=c['candidate_sha']),
+                    wait_ci=lambda c:dict(ok=True,head_sha=c['candidate_sha']),
+                    publish=lambda **kw:dict(pr=527,head_sha=kw['payload']['sha']),
+                    merge=lambda **kw:dict(merged_sha=kw['payload']['sha']),
+                    deploy=lambda c:dict(accepted=True,live_sha=c['merged_sha']),fetch_admissions=lambda:[])
+                # Avoid transport preparation only; invoke the same installed adapter fake.
+                stack.enter_context(patch.object(run,'invoke_cursor_author',side_effect=lambda **kw:kw['launcher'](
+                    task=kw['task'],worktree=kw['worktree'],evidence_dir=kw['evidence_dir'])))
+                result=run.execute_claim(adm,adapters,results_root=root,config=cfg)
+                self.assertEqual(result['reason'],'capacity_successor',result)
+                predecessor=run.read_receipt(run.claim_path_for(adm,root))
+                self.assertEqual(predecessor['task'],t); self.assertEqual(predecessor['attempts']['author'],1)
+                self.assertEqual(calls,['agy_author']); self.assertNotEqual(result['claim']['revision'],adm['revision'])
+                self.assertEqual(result['claim']['bound_author']['decision']['provider'],p.CURSOR)
+                self.assertEqual(git('rev-parse','HEAD')==base,empty)
+                imports=list(root.glob('capacity-import-*.json')); self.assertEqual(len(imports),1)
+                receipt=json.loads(imports[0].read_bytes())
+                self.assertEqual(receipt['checkpoint_sha'],git('rev-parse','HEAD'))
+                self.assertEqual(receipt['kind'],'confirmed_clean_sha' if empty else 'commit_cas')
+                next_wake=run.run_once({'event_name':'schedule'},adapters=adapters,results_root=root,config=cfg)
+                self.assertEqual(next_wake['results'][0]['status'],'dev_accepted_uat_pending',next_wake)
+                self.assertEqual(calls,['agy_author','cursor_auto'])
+                run.run_once({'event_name':'schedule'},adapters=adapters,results_root=root,config=cfg)
+                self.assertEqual(calls,['agy_author','cursor_auto'])
+                self.assertEqual(run.read_receipt(run.claim_path_for(adm,root))['capacity_error']['charge'],'charged')

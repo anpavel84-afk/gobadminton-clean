@@ -3033,7 +3033,7 @@ def _agy_author_trusted_payloads(native, staging, receipt, allowed):
 
 
 def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True,
-                    _invoke=None):
+                    _invoke=None, capacity_lease=None, capacity_claim_path=None):
     """Native AGY AUTHOR live binding beside cursor_author_live / agy_qa_live.
 
     UID978 edits a separate staging snapshot (never 1002 Git metadata / Slot2 journal).
@@ -3501,7 +3501,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
             raw_bytes = _agy_author_collect_raw(native_ev, native_receipt, evidence)
             try:
                 if child_status:
-                    root_custody.produce_capacity_operation(native_receipt)
+                    root_custody.produce_capacity_operation(native_receipt,
+                        lease=capacity_lease, claim_path=capacity_claim_path)
             except (OSError, RetentionError, ValueError):
                 pass  # Missing/unsafe evidence stays HOLD, never authorizes fallback.
             finally:
@@ -3526,9 +3527,11 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                         operation_fingerprint=fingerprint,
                         calls_charged=1, no_blind_replay=True,
                         no_fallback_after_paid=True)
-                    from author_handoff import protected_capacity_decoder
-                    control = protected_capacity_decoder(task=task, evidence_dir=evidence,
-                        current=custody_binding)
+                    from author_handoff import _recovery_inputs
+                    try:
+                        control = _recovery_inputs(custody_binding)
+                    except Exception:
+                        control = None
                     if control is not None:
                         raise ProviderError('provider_control_failure', charge='charged')
                     raise ProviderError(
@@ -4394,11 +4397,14 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         from providers import select_author_provider
         task = kwargs.get('task') or {}
         protected_reviewer = kwargs.pop('protected_reviewer', None)
+        capacity_lease = kwargs.pop('capacity_lease', None)
+        capacity_claim_path = kwargs.pop('capacity_claim_path', None)
         provider, _reason, _meta = select_author_provider(
             task, issue=task.get('issue'), reviewer_authority=reviewer_authority,
             protected_reviewer=protected_reviewer)
         if provider == 'agy_author':
-            return agy_author_live(**kwargs)
+            return agy_author_live(**kwargs, capacity_lease=capacity_lease,
+                                   capacity_claim_path=capacity_claim_path)
         if provider == 'codex_author':
             return codex_author_live(**kwargs, reviewer_authority=reviewer_authority,
                                      protected_reviewer=protected_reviewer)
