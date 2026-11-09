@@ -117,7 +117,7 @@ describe("releases current descriptor literals", () => {
     expect(row.owner_uat).toBe("NOT_TESTED");
   });
 
-  it("preserves the exact ten-field trusted alpha.68 receipt before the unaccepted alpha.69 descriptor", () => {
+  it("preserves the exact ten-field trusted alpha.68 receipt before the accepted alpha.69 receipt", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.68");
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -143,12 +143,57 @@ describe("releases current descriptor literals", () => {
     expect(row.known_limitations).toHaveLength(10);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(72);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(77);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(73);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(78);
   });
 
-  it("bumps current descriptor to alpha.69 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.69");
+  it("preserves the exact ten-field trusted alpha.69 receipt before the unaccepted alpha.70 descriptor", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.69");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(4067);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "ae17a1bd172bf9d94a38e99472ea9ea94510016faad35e1e4d06cd61a806db7d",
+    );
+    expect(row.source_sha).toBe("5568044d725d306e3bb3ce032e767cf7d3586c60");
+    expect(row.version_label).toBe("0.1.0-alpha.69");
+    expect(row.api_contract_version).toBe("0.40.0");
+    expect(row.deployments).toHaveLength(1);
+    expect(row.deployments[0]).toEqual({
+      environment: "dev",
+      status: "ACCEPTED",
+      release_id: "r42697926974-a1",
+      accepted_at: "2026-11-09T21:03:51Z",
+      api_digest: "sha256:a40c533540a039b9bc8bce6609626e8a3329456e1c759aae5ebc206892c06d27",
+      web_digest: "sha256:e8393097a4d20cdba625372211ba6dfdb6c2c9411b8d1ff820c4076e227db527",
+      kind: "pipeline",
+    });
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(TRUSTED_HISTORICAL_SEED.slice(-2).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.68", "0.1.0-alpha.69",
+    ]);
+    expect(row.title).toBe("Компактные фильтры на экране «Игры»");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toHaveLength(1);
+    const fixes = row.fixes.join(" ");
+    expect(fixes).toMatch(/существующая кнопка с иконкой ползунков без видимой подписи.*доступным именем «Фильтры»/i);
+    expect(fixes).toMatch(/компактное окно.*«По времени» убрана/i);
+    expect(fixes).toMatch(/Большая панель уровня, пояснения и «Выходите на корт» по умолчанию скрыты/i);
+    expect(fixes).toMatch(/Прежний фильтр уровня применяется сразу.*нижней панели на телефоне/i);
+    expect(fixes).toMatch(/выбранный уровень сохраняется после закрытия.*сброс затрагивает только уровень/i);
+    expect(fixes).toMatch(/Выбор города, дня и типа игры, уровень в профиле и работа сервера остаются прежними/i);
+    expect(row.known_limitations).toHaveLength(10);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
+    expect(row.owner_uat).toBe("NOT_TESTED");
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(73);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(78);
+  });
+
+  it("bumps current descriptor to alpha.70 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.70");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -162,26 +207,25 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/Компактные фильтры на экране «Игры»/i);
-    expect(prose).toMatch(/доступным именем «Фильтры»/i);
+    expect(prose).toMatch(/Оценки, обсуждение и отзывы в карточке площадки на карте/i);
+    expect(prose).toMatch(/без перехода на другую страницу/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/существующая кнопка с иконкой ползунков без видимой подписи.*доступным именем «Фильтры»/i);
-    expect(fixes).toMatch(/компактное окно.*«По времени» убрана/i);
-    expect(fixes).toMatch(/Большая панель уровня, пояснения и «Выходите на корт» по умолчанию скрыты/i);
-    expect(fixes).toMatch(/Прежний фильтр уровня применяется сразу.*нижней панели на телефоне/i);
-    expect(fixes).toMatch(/выбранный уровень сохраняется после закрытия.*сброс затрагивает только уровень/i);
-    expect(fixes).toMatch(/Выбор города, дня и типа игры, уровень в профиле и работа сервера остаются прежними/i);
+    expect(fixes).toMatch(/Оценки, обсуждение и опубликованные отзывы площадки доступны в карточке на карте/i);
+    expect(fixes).toMatch(/без перехода на другую страницу/i);
+    expect(fixes).toMatch(/Незавершённые отправки и их точный повтор сохраняются при переключениях и закрытии карточки средствами браузера/i);
+    expect(fixes).toMatch(/продолжить можно через явное восстановление/i);
+    expect(fixes).not.toMatch(/Фильтры|По времени|фильтр уровня|после конкретной игры|фотограф|галере|нативн.*прилож|#507.*(?:заверш|выполн)/i);
     expect(fixes).not.toMatch(/#507A|#530|Порядок ролей|В нижней строке карточки тренировки|Отзывы и история|Подробнее|Поделиться/i);
     expect(fixes).not.toMatch(/исходного HTML|подтверждённом взаимном желании|роли тренера и организатора показаны согласованно|квадратные фотографии|маскирование|публичного автора/i);
     expect(fixes).not.toMatch(/быстрее|ускорен|\d+\s*(мс|ms|сек|%)/i);
     expect(fixes).not.toMatch(/нецензурные выражения.*замаскированными|Маскирование/i);
-    expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
+    expect(fixes).not.toMatch(/Единая кнопка «На карте»|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
     expect(fixes).not.toMatch(/не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Компактные фильтры на экране «Игры»");
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(10);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/проверка загрузки фотографии площадки в установленной версии ещё не выполнена/i);
     const limitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
