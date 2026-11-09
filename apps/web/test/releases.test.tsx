@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createElement, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,8 +75,31 @@ describe("releases catalogue integrity", () => {
     expect(row!.known_limitations).toHaveLength(6);
   });
 
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.64 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.64");
+  it("preserves the exact ten-field trusted alpha.64 receipt and historical header fix", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.64");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(2805);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "5657197cd227b028993775f205f9675639bcb41b64f2683ca0ec8a76cafab752",
+    );
+    expect(row.title).toBe("Профиль без мерцания при открытии страниц");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toHaveLength(1);
+    const fixes = row.fixes.join(" ");
+    expect(fixes).toMatch(/первом открытии и перезагрузке.*публичное имя и аватар в шапке.*без мерцания/i);
+    expect(fixes).toMatch(/после выхода из аккаунта или смены пользователя.*актуальное состояние входа/i);
+    expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
+    expect(row.known_limitations).toHaveLength(7);
+    expect(row.known_limitations.join(" ")).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
+    expect(row.known_limitations.join(" ")).toMatch(/#506.*пока не доступно пользователям/i);
+    expect(row.owner_uat).toBe("NOT_TESTED");
+  });
+
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.65 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.65");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -91,8 +115,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/шапке|мерцания/i);
-    expect(currentProse).toMatch(/первом открытии и перезагрузке/i);
+    expect(currentProse).toMatch(/Маскирование.*открытых обсуждениях/i);
+    expect(currentProse).toMatch(/обсуждениях игр и площадок/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -112,23 +136,28 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Профиль без мерцания при открытии страниц");
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Маскирование нецензурных выражений в открытых обсуждениях");
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/первом открытии и перезагрузке.*публичное имя и аватар в шапке.*без мерцания/i);
-    expect(fixes).toMatch(/после выхода из аккаунта или смены пользователя.*актуальное состояние входа/i);
+    expect(fixes).toMatch(/обсуждениях игр и площадок.*нецензурные выражения.*замаскированными/i);
+    expect(fixes).toMatch(/в ответах.*после редактирования.*повторной отправке того же комментария/i);
     expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
     expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("accepted_at");
     expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("deployments");
+    expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("api_digest");
+    expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("web_digest");
+    expect(fixes).not.toMatch(/публичное имя и аватар в шапке|без мерцания|после выхода из аккаунта/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/маскирование.*пока не доступно пользователям/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/личных сообщений и закрытых чатов не заявляется завершённой/i);
     expect(currentProse).not.toMatch(/проверки (входа|авторизации).*отменены|постоянно.*(кэш|сохранён)|приёмка.*пройдена/i);
     expect(currentProse).not.toMatch(/\bOPS\b|cache.?scope|admission|ownership|\bwriter\b|кэш/i);
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(
       /не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i,
     );
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(7);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(8);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#506.*пока не доступно пользователям/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#506.*проверка маскирования.*редактирования с действующими правами.*разбора жалоб.*ещё не выполнена/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/карте площадок.*отзыв после конкретной игры.*публичного автора без замены/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
@@ -288,10 +317,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(67);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(68);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(72);
+    ).toBe(73);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -891,15 +920,17 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders the single current header fix and limits without stale map or first-alpha claims", async () => {
+  it("renders the single current public comment mask fix and limits without stale map or first-alpha claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("Профиль без мерцания при открытии страниц");
+    expect(html).toContain("Маскирование нецензурных выражений в открытых обсуждениях");
     expect(html).toContain(CURRENT_NAMED_RELEASE.fixes[0]!);
     expect(html.split(CURRENT_NAMED_RELEASE.fixes[0]!).length - 1).toBe(1);
-    expect(html).toContain("публичное имя и аватар в шапке");
-    expect(html).toContain("после выхода из аккаунта или смены пользователя");
+    expect(html).toContain("нецензурные выражения показываются замаскированными");
+    expect(html).toContain("в ответах, после редактирования и при повторной отправке того же комментария");
+    expect(html).not.toContain("Профиль без мерцания при открытии страниц");
+    expect(html).not.toContain("публичное имя и аватар в шапке");
     expect(html).toContain("реальным аккаунтом");
     expect(html).toContain("390 и 1280");
     expect(html).toContain("ещё не выполнена");
