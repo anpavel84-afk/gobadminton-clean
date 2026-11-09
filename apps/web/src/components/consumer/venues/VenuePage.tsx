@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActivityKind, Venue } from "../../../lib/consumer-types";
 import { ConsumerShell } from "../ConsumerShell";
 import { Button } from "../Button";
@@ -23,13 +23,19 @@ function knownVenueCommunityTargetId(hash: string): "ratings" | "discussion" | "
   return null;
 }
 
-export function VenuePage({venueId}:{venueId:string}) {
+export function VenuePage({venueId,initialVenue=null,initialUnavailable=false}:{venueId:string;initialVenue?:Venue|null;initialUnavailable?:boolean}) {
   const [context,setContext]=useState({day:"",returnTo:"/games?view=map"});
   useEffect(()=>{ const query=new URLSearchParams(window.location.search); setContext({day:query.get("day") ?? "",returnTo:gamesMapReturnPath(query.get("returnTo"))}); },[]);
   const activityValue = new URLSearchParams(context.returnTo.split("?")[1] ?? "").get("activity");
   const activity: "all" | ActivityKind = activityValue === "regular" || activityValue === "trainer_led" ? activityValue : "all";
   const [reload,setReload]=useState(0);
-  const [result,setResult]=useState<{venueId:string;reload:number;venue:Venue|null;error:boolean}|null>(null);
+  const [result,setResult]=useState<{venueId:string;reload:number;venue:Venue|null;error:boolean}|null>(()=>
+    initialVenue?.id===venueId
+      ? {venueId,reload:0,venue:initialVenue,error:false}
+      : initialUnavailable ? {venueId,reload:0,venue:null,error:true} : null);
+  // Skip only the server-handled first request, including StrictMode effect replay.
+  // Navigation/retry consumes this exemption permanently for this mounted instance.
+  const initialRequest=useRef(result?{venueId,reload:0}:null);
   const [me,setMe]=useState<Me|null>(null);
   // A prop change hides the old profile before the next effect runs.
   const current=result?.venueId===venueId&&result.reload===reload?result:null;
@@ -37,11 +43,14 @@ export function VenuePage({venueId}:{venueId:string}) {
   const error=current?.error ?? false;
   const authReturnPath=`/venues/${venueId}`;
   useEffect(()=>{
+    if(initialRequest.current?.venueId===venueId&&initialRequest.current.reload===reload)return;
+    initialRequest.current=null;
     const controller=new AbortController();let active=true;
     setResult({venueId,reload,venue:null,error:false});
     const timer=setTimeout(()=>controller.abort(),15000);
     void fetch(`/v1/venues/${encodeURIComponent(venueId)}`,{cache:"no-store",signal:controller.signal}).then(async r=>{
       if(!r.ok)throw new Error("unavailable");const value=await r.json() as Venue;
+      if(value?.id!==venueId)throw new Error("unavailable");
       if(active&&!controller.signal.aborted)setResult({venueId,reload,venue:value,error:false});
     }).catch(()=>{if(active)setResult({venueId,reload,venue:null,error:true});}).finally(()=>clearTimeout(timer));
     return ()=>{active=false;controller.abort();clearTimeout(timer);};

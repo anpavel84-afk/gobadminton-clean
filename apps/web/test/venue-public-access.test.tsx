@@ -49,6 +49,7 @@ vi.mock("../src/components/consumer/ConsumerShell", () => ({ ConsumerShell: ({ c
 vi.mock("next/link", () => ({ default: ({ children, ...props }: { children: React.ReactNode }) => <a {...props}>{children}</a> }));
 vi.mock("next/dynamic", () => ({ default: () => function MapStub() { return <div data-map="stub" />; } }));
 import { VenuePage } from "../src/components/consumer/venues/VenuePage";
+import VenueRoute from "../src/app/venues/[venueId]/page";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { getMe } from "../src/lib/api-client";
 import {
@@ -166,7 +167,119 @@ beforeEach(() => {
     throw new Error(`Unexpected request ${path}`);
   }));
 });
-afterEach(() => { instances.forEach(cleanup); runtime.pending = []; vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { instances.forEach(cleanup); runtime.pending = []; vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+it("server fetches exactly the requested public venue without request identity or catalog data", async () => {
+  vi.stubEnv("API_BASE_URL", "https://api.example");
+  const upstream = vi.fn(async () => new Response(JSON.stringify(a)));
+  vi.stubGlobal("fetch", upstream);
+  const page = await VenueRoute({ params: Promise.resolve({ venueId: "a" }) });
+  expect(page.type).toBe(VenuePage);
+  expect(page.props).toEqual({ venueId: "a", initialVenue: a, initialUnavailable: false });
+  expect(upstream).toHaveBeenCalledExactlyOnceWith("https://api.example/v1/venues/a", {
+    cache: "no-store", redirect: "error", credentials: "omit",
+    headers: { Accept: "application/json" }, signal: expect.any(AbortSignal),
+  });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("encodes the requested ID as one segment against configured API origin", async () => {
+  vi.stubEnv("API_BASE_URL", "https://api.example");
+  const id = "other/venue?host=evil.example#fragment";
+  const upstream = vi.fn(async (_input: unknown) => new Response("{}", { status: 404 }));
+  vi.stubGlobal("fetch", upstream);
+  const page = await VenueRoute({ params: Promise.resolve({ venueId: id }) });
+  expect(upstream.mock.calls[0]?.[0]).toBe(`https://api.example/v1/venues/${encodeURIComponent(id)}`);
+  expect(page.props.initialVenue).toBeNull();
+});
+
+for (const failure of ["hidden", "mismatch", "network", "invalid-json"] as const) {
+  it(`does not seed a ${failure} server response and retains a real client retry`, async () => {
+    vi.stubEnv("API_BASE_URL", "https://api.example");
+    const fallback = fetch;
+    const upstream = vi.fn(async () => {
+      if (failure === "network") throw new Error("offline");
+      if (failure === "invalid-json") return new Response("not JSON");
+      return new Response(JSON.stringify(b), { status: failure === "hidden" ? 404 : 200 });
+    });
+    vi.stubGlobal("fetch", upstream);
+    const root = await VenueRoute({ params: Promise.resolve({ venueId: "a" }) });
+    expect(root.props.initialVenue).toBeNull();
+    vi.stubGlobal("fetch", fallback);
+    await settle(root);
+    expect(text).toContain("Площадка недоступна");
+    expect(text).not.toContain("Зал Б");
+    expect(calls.filter(path => path === "/v1/venues/a")).toEqual([]);
+    action(node => node.type === "button" && node.props.children === "Повторить", "onClick")();
+    await settle(root);
+    expect(text).toContain("Зал А");
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect(calls.filter(path => path === "/v1/venues/a")).toEqual(["/v1/venues/a"]);
+    assertPublic();
+  });
+}
+
+it("bounds the server request and does not share a DTO between route requests", async () => {
+  vi.stubEnv("API_BASE_URL", "https://api.example");
+  const upstream = vi.fn((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new Error("timeout")), { once: true });
+  }));
+  vi.stubGlobal("fetch", upstream);
+  const pending = VenueRoute({ params: Promise.resolve({ venueId: "a" }) });
+  await vi.advanceTimersByTimeAsync(5000);
+  const failed = await pending;
+  expect(failed.props.initialVenue).toBeNull();
+  expect(failed.props.initialUnavailable).toBe(true);
+  expect(upstream.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  upstream.mockImplementationOnce(async () => new Response(JSON.stringify(b)));
+  const next = await VenueRoute({ params: Promise.resolve({ venueId: "b" }) });
+  expect(next.props.initialVenue).toEqual(b);
+  expect(upstream).toHaveBeenCalledTimes(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("renders a matching seed on first mount and retains it without a duplicate initial public detail GET", async () => {
+  const root = <VenuePage venueId="a" initialVenue={a} />;
+  render(root);
+  expect(text).toContain("Зал А");
+  expect(nodes.some(node => node.type === "img" && node.props.src === cover)).toBe(true);
+  await settle(root);
+  expect(text).toContain("Количество кортов4");
+  expect(calls.filter(path => path === "/v1/venues/a")).toEqual([]);
+  // The existing map schedule still loads the city catalog; only the detail GET is avoided.
+  expect(calls.some(path => path.startsWith("/v1/venues?"))).toBe(true);
+  assertPublic();
+});
+
+it("rejects a seed for another ID and a mismatched client retry response", async () => {
+  const requests = deferredVenues();
+  const root = <VenuePage venueId="a" initialVenue={b} />;
+  render(root);
+  expect(text).not.toContain("Зал Б");
+  requests[0]!.resolve(b); await settle(root);
+  expect(text).toContain("Площадка недоступна");
+  expect(text).not.toContain("Зал Б");
+  action(node => node.type === "button" && node.props.children === "Повторить", "onClick")();
+  await settle(root);
+  requests[1]!.resolve(a); await settle(root);
+  expect(text).toContain("Зал А"); assertPublic();
+});
+
+it("fences a seed on navigation, ignores a stale failure and does not resurrect the old seed on return", async () => {
+  await settle(<VenuePage venueId="a" initialVenue={a} />);
+  const requests = deferredVenues();
+  render(<VenuePage venueId="b" initialVenue={a} />);
+  expect(text).not.toContain("Зал А");
+  const root = <VenuePage venueId="a" initialVenue={a} />;
+  render(root);
+  expect(text).toContain("Загружаем площадку");
+  expect(text).not.toContain("Зал А");
+  expect(requests.map(request => request.path)).toEqual(["/v1/venues/b", "/v1/venues/a"]);
+  expect(requests[0]!.signal.aborted).toBe(true);
+  requests[1]!.resolve(a); await settle(root);
+  requests[0]!.reject(new Error("stale failure")); await settle(root);
+  expect(text).toContain("Зал А"); expect(text).not.toContain("Площадка недоступна"); assertPublic();
+});
 for (const member of [false, true]) {
   it(`keeps public venue effects read-only for ${member ? "member" : "guest"}`, async () => {
     signedIn = member; expect((await getMe()).ok).toBe(member);
