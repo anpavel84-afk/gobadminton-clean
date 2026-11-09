@@ -1966,8 +1966,6 @@ class AddressedF97Custody(unittest.TestCase):
                 if bad != 'stderr': Path(path).write_text('{}')
 
 
-if __name__ == '__main__':
-    unittest.main()
 class AutomaticProtectedSuccessor(unittest.TestCase):
     def test_producer_controller_successor_and_next_wake(self):
         import importlib.util
@@ -1978,6 +1976,13 @@ class AutomaticProtectedSuccessor(unittest.TestCase):
         for empty in (False, True):
             with self.subTest(empty=empty), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
                 root=Path(td); work=root/'source'; work.mkdir()
+                real_acquire=run.WriterLease.acquire
+                def acquire_as_file_owner(lease):
+                    # The synthetic Root mock shares os with the real lease.
+                    # Record the temporary inode's actual owner at acquisition.
+                    with patch.object(h.os,'geteuid',return_value=os.getuid()):
+                        return real_acquire(lease)
+                stack.enter_context(patch.object(run.WriterLease,'acquire',acquire_as_file_owner))
                 def git(*args):
                     return subprocess.check_output(['git','-c','core.hooksPath=/dev/null',*args],cwd=work,text=True).strip()
                 git('init','-q'); git('config','user.name','fixture'); git('config','user.email','fixture@localhost')
@@ -2103,3 +2108,7 @@ class AutomaticProtectedSuccessor(unittest.TestCase):
                 run.run_once({'event_name':'schedule'},adapters=adapters,results_root=root,config=cfg)
                 self.assertEqual(calls,['agy_author','cursor_auto'])
                 self.assertEqual(run.read_receipt(run.claim_path_for(adm,root))['capacity_error']['charge'],'charged')
+
+
+if __name__ == '__main__':
+    unittest.main()
