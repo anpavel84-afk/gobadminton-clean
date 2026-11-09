@@ -1983,6 +1983,33 @@ class AutomaticProtectedSuccessor(unittest.TestCase):
                     with patch.object(h.os,'geteuid',return_value=os.getuid()):
                         return real_acquire(lease)
                 stack.enter_context(patch.object(run.WriterLease,'acquire',acquire_as_file_owner))
+                real_checkpoint_import=h.import_capacity_checkpoint
+                real_atomic_import=live.owner_safe_atomic_import
+                real_stat=Path.stat
+                class SyntheticWorktreeStat:
+                    st_uid=1002
+                    def __init__(self, actual): self.actual=actual
+                    def __getattr__(self, name): return getattr(self.actual,name)
+                def stat_with_synthetic_owner(path, *args, **kwargs):
+                    actual=real_stat(path,*args,**kwargs)
+                    return SyntheticWorktreeStat(actual) if path == work else actual
+                def import_as_fixture_owner(**kwargs):
+                    return real_atomic_import(**kwargs,uid=os.getuid(),gid=os.getgid())
+                def import_synthetic_checkpoint(*args, **kwargs):
+                    # Map only this fixture directory's production owner metadata;
+                    # the original importer, lease checks and file writes stay real.
+                    actual=real_stat(work)
+                    other=work/'x.py'; other_stat=real_stat(other)
+                    with patch.object(Path,'stat',stat_with_synthetic_owner), \
+                            patch.object(live,'owner_safe_atomic_import',import_as_fixture_owner):
+                        mapped=work.stat()
+                        self.assertEqual(mapped.st_uid,1002)
+                        for attr in ('st_gid','st_mode','st_ino','st_dev','st_mtime_ns'):
+                            self.assertEqual(getattr(mapped,attr),getattr(actual,attr))
+                        self.assertEqual(other.stat(),other_stat)
+                        self.assertEqual(other.stat().st_uid,os.getuid())
+                        return real_checkpoint_import(*args,**kwargs)
+                stack.enter_context(patch.object(h,'import_capacity_checkpoint',import_synthetic_checkpoint))
                 def git(*args):
                     return subprocess.check_output(['git','-c','core.hooksPath=/dev/null',*args],cwd=work,text=True).strip()
                 git('init','-q'); git('config','user.name','fixture'); git('config','user.email','fixture@localhost')
