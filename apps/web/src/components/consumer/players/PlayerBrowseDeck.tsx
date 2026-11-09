@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { BrowseMatchConfirmation, MatchPlayer } from "./PlayerBrowseMatch";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { PlayInterestReceipt, PlayInterestView } from "@gobadminton/contracts/friendship-types";
 import { getMe, getMySocialProfile } from "../../../lib/api-client";
@@ -66,6 +67,7 @@ import {
 import "../../../styles/player-browse.css";
 
 type Props = {
+  onMatchConfirmed?: (confirmation: BrowseMatchConfirmation) => void;
   players: PublicPlayer[];
   cities: City[];
   ordinaryScope: string;
@@ -133,6 +135,7 @@ function useLocalDesktop(explicit?: boolean): boolean {
 }
 
 export function PlayerBrowseDeck({
+  onMatchConfirmed,
   players,
   cities,
   ordinaryScope,
@@ -168,6 +171,7 @@ export function PlayerBrowseDeck({
       return changed ? next : prev;
     });
   }, [mobileOffers, mobileOffers?.known]);
+  const [matchSelf, setMatchSelf] = useState<MatchPlayer | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "guest" | "error">("loading");
   const [ownPublicPlayerId, setOwnPublicPlayerId] = useState<string | null>(null);
@@ -386,6 +390,7 @@ export function PlayerBrowseDeck({
     setAuthState("loading");
     setMe(null);
     setOwnPublicPlayerId(null);
+    setMatchSelf(null);
     void (async () => {
       const meResult = await getMe();
       if (!live) return;
@@ -398,7 +403,10 @@ export function PlayerBrowseDeck({
       setAuthState("ready");
       const social = await getMySocialProfile();
       if (!live) return;
-      if (social.ok && social.data.publicPlayerId) setOwnPublicPlayerId(social.data.publicPlayerId);
+      if (social.ok && social.data.publicPlayerId) {
+        setOwnPublicPlayerId(social.data.publicPlayerId);
+        setMatchSelf({ publicPlayerId: social.data.publicPlayerId, displayName: social.data.displayName });
+      }
     })();
     const expire = () => {
       live = false;
@@ -412,6 +420,7 @@ export function PlayerBrowseDeck({
       replaceCommittedMedia(null);
       setMe(null);
       setOwnPublicPlayerId(null);
+      setMatchSelf(null);
       setAuthState("guest");
     };
     const session = () => { expire(); setAuthReload(n => n + 1); };
@@ -1812,6 +1821,9 @@ export function PlayerBrowseDeck({
       me={me}
       authState={authState}
       peerId={current.publicPlayerId}
+      peerName={current.displayName}
+      selfPresentation={matchSelf}
+      onMatchConfirmed={onMatchConfirmed}
       returnPath={`/players?view=cards`}
       navigationLocked={commitPending}
       rateBlockedUntil={rateBlockedUntil}

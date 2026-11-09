@@ -2,7 +2,7 @@
 
 import "../../../styles/radar-geographic.css";
 import "../../../styles/player-browse.css";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
@@ -23,6 +23,7 @@ import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvi
 import { PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
 import { PlayerBrowseOfferOpHost, PlayerBrowseOfferStatus } from "../players/PlayerBrowseOffers";
+import { PlayerBrowseMatch, PlayerBrowseMatchDialog, matchTab, usePlayerBrowseMatch, type BrowseMatchConfirmation } from "../players/PlayerBrowseMatch";
 import { usePlayerBrowseOffers } from "../players/usePlayerBrowseOffers";
 import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
 import { GamesViewAction } from "../games/GamesViewAction";
@@ -215,6 +216,7 @@ export function PlayersDirectoryPage({
     if (browseView !== "cards") return;
     if (closingFsRef.current) return;
     closingFsRef.current = true;
+    matchResult.suspend();
     // Close native dialog without relying on unmount cancel → history push.
     const dialog = mobileFsDialogRef.current;
     if (dialog?.open) {
@@ -246,6 +248,7 @@ export function PlayersDirectoryPage({
       setBrowseView("cards");
       return;
     }
+    matchResult.suspend();
     if (!desktop) {
       closeMobileCards();
       return;
@@ -277,7 +280,9 @@ export function PlayersDirectoryPage({
   // Finder eligibility reads the full public ordinary page — never mergeRadarCatalog.ordinary,
   // which presentation-dedupes peers already shown as Radar rows (would drop them while Radar ON).
   // List display below still uses catalog.radar + catalog.ordinary (deduped full set).
+  const matchReceiver = useRef<((value: BrowseMatchConfirmation) => void) | null>(null);
   const offers = usePlayerBrowseOffers({
+    onMatchConfirmed: value => matchReceiver.current?.(value),
     finderActive: showCards,
     ordinaryScope,
     catalogPlayers: players,
@@ -286,6 +291,17 @@ export function PlayersDirectoryPage({
     moreBusy,
     onLoadMore: loadMore,
   });
+  const matchResult = usePlayerBrowseMatch(offers.me, showCards && mqReady);
+  matchReceiver.current = matchResult.receive;
+  const dismissMatch = useCallback(() => {
+    matchResult.dismiss();
+    requestAnimationFrame(() => {
+      const root = mobileCards ? mobileFsDialogRef.current : document.querySelector(".players-browse-deck");
+      root?.querySelector<HTMLElement>("button:not(:disabled),a[href]")?.focus({ preventScroll: true });
+    });
+  }, [matchResult.dismiss, mobileCards]);
+  const matchContent = matchResult.match && offers.me ? <PlayerBrowseMatch
+    key={matchResult.match.token} match={matchResult.match} me={offers.me} onDismiss={dismissMatch} /> : null;
   const authCardsReady = showCards && offers.authState === "ready";
   // Guest desktop keeps public preview; loading/error cards avoid flashing already-sent peers.
   const deckPlayers = authCardsReady
@@ -435,6 +451,7 @@ export function PlayersDirectoryPage({
   );
   const deck = (
     <PlayerBrowseDeck
+      onMatchConfirmed={matchResult.receive}
       players={deckPlayers}
       cities={cities}
       ordinaryScope={ordinaryScope}
@@ -452,7 +469,7 @@ export function PlayersDirectoryPage({
       onRetryFinder={desktopFinderEligibility ? () => offers.retryEligibility() : undefined}
     />
   );
-  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"} inert={mobileCards ? true : undefined}>
+  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"} inert={mobileCards || matchResult.match ? true : undefined}>
     <section className={`players-hero${showCards ? " pb-hero--compact" : ""}`}>
       <div>
         <h1>Игроки</h1>
@@ -520,16 +537,25 @@ export function PlayersDirectoryPage({
     ) : mobileCards && portalReady ? createPortal(
       <dialog
         ref={mobileFsDialogRef}
-        className="gb-player-browse pb-mobile-fs"
-        aria-label="Свайп"
+        className={`gb-player-browse pb-mobile-fs${matchResult.match ? " pb-mobile-fs--match" : ""}`}
+        aria-label={matchResult.match ? "Дружеский матч" : "Свайп"}
+        aria-labelledby={matchResult.match ? "pb-match-title" : undefined}
+        aria-describedby={matchResult.match ? "pb-match-lead" : undefined}
+        onKeyDown={matchResult.match ? event => {
+          if (event.key === "Escape") {
+            event.preventDefault(); event.stopPropagation(); dismissMatch();
+          } else matchTab(event);
+        } : undefined}
         data-surface="player-browse-mobile-fs"
         onCancel={(event) => {
           // Escape: same close path as X (replace/back). Nested auth <dialog> is a separate top layer.
           event.preventDefault();
-          if (!closingFsRef.current) closeMobileCards();
+          if (matchResult.match) dismissMatch();
+          else if (!closingFsRef.current) closeMobileCards();
         }}
       >
-        {deck}
+        <div className="pb-match-deck" hidden={Boolean(matchResult.match)} inert={matchResult.match ? true : undefined}>{deck}</div>
+        {matchContent}
       </dialog>,
       document.body,
     ) : showCards ? null : (
@@ -548,6 +574,9 @@ export function PlayersDirectoryPage({
         {state === "empty" && !catalog.radar.length && <ProfileState title={filtered ? "Никого не нашли" : "Игроков пока нет"} state="empty">{filtered ? "Попробуйте изменить или сбросить фильтры." : "Вернитесь немного позже."}</ProfileState>}
         {availableNextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor({ scope: ordinaryScope, value: availableNextCursor })}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}
       </section>
+    )}
+    {desktop && portalReady && matchContent && createPortal(
+      <PlayerBrowseMatchDialog onClose={dismissMatch}>{matchContent}</PlayerBrowseMatchDialog>, document.body,
     )}
     {liveRadar && directory.view.selected && <UnifiedPlayerPreview dialog onClose={() => directory.controller?.close()} />}
   </div></ConsumerShell>;
