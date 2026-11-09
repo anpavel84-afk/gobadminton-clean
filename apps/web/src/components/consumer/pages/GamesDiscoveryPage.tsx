@@ -8,7 +8,6 @@ import type { ActivityKind, GamePage, GameRoleReputationCard } from "../../../li
 import { useDiscoveryCity, DiscoveryCityNotice } from "../discovery/DiscoveryCityProvider";
 import { cityDate, discoveryCityHeading, discoveryDateLabel, futureDiscoveryBounds, futureDiscoveryItems, nextCalendarDay } from "../../../lib/discovery-presentation";
 import {
-  LEVEL_GUIDE_DISCOVERY_SCOPE_NOTE,
   LEVEL_GUIDE_MAP_HONESTY,
   filterGamesBySelectedNtrpLevel,
   levelGuideSkillFor,
@@ -16,7 +15,7 @@ import {
 import { AuthChooser } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
-import { LevelGuide } from "../LevelGuide";
+import { DiscoveryLevelFilters } from "../LevelGuide";
 import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, DiscoverySkeleton } from "../discovery/DiscoveryComposition";
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
@@ -335,19 +334,20 @@ export function GamesDiscoveryPage() {
             <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
               {([["all", "Все"], ["regular", "Обычные"], ["trainer_led", "С тренером"]] as const).map(([value, label]) => <button key={value} type="button" className="gb-discovery-chip" aria-pressed={activityFilter === value} onClick={() => setActivityFilter(value)}>{label}</button>)}
             </div>
-            <span className="gb-discovery-sort"><DiscoveryIcon name="filter" />По времени</span>
+            <DiscoveryLevelFilters
+              cityName={location.nameRu}
+              dayLabel={selectedDay ? discoveryDateLabel(selectedDay) : "Все ближайшие"}
+              activityLabel={activityFilter === "all" ? "Все" : activityFilter === "regular" ? "Обычные" : "С тренером"}
+              levelFilter={levelFilter}
+              onLevelFilterChange={setLevelFilter}
+            />
           </div>
-          <LevelGuide
-            surface="discovery"
-            value={levelFilter ? { kind: "ntrp", levelId: levelFilter } : { kind: "none" }}
-            onChange={(choice) => setLevelFilter(choice.kind === "ntrp" ? choice.levelId : "")}
-          />
           <header className="gb-discovery-feed-heading">
-            <div><small>Выходите на корт</small><h2>Игры {discoveryCityHeading(location.nameRu)}</h2></div>
+            <div><h2>Игры {discoveryCityHeading(location.nameRu)}</h2></div>
             <div className="gb-discovery-feed-actions">{showCards && <span>Найдено: {listMatchCount}{feed.nextCursor ? "+" : ""}{levelFilterActive ? ` · из ${items.length} загруженных` : ""}</span>}<button type="button" onClick={() => setRefresh(n => n + 1)} disabled={state === "loading"} aria-label="Обновить игры">↻</button></div>
           </header>
           {state === "filtered" && <p className="gb-discovery-helper" data-state="filtered">{trainerRoleHandle ? "Тренировки выбранного тренера" : activityFilter === "regular" ? "Обычные игры" : "Игры с тренером"} · {selectedDay ? discoveryDateLabel(selectedDay) : "Все ближайшие"}</p>}
-          {levelFilterActive ? <p className="gb-discovery-helper" data-level-filter="active" role="status">Уровень {levelFilterLabel} · {LEVEL_GUIDE_DISCOVERY_SCOPE_NOTE}</p> : null}
+          {levelFilterActive ? <p className="gb-discovery-helper" data-level-filter="active" role="status">Уровень {levelFilterLabel} · только загруженные игры (ntrp v1)</p> : null}
           {trainerRoleHandle ? <p className="gb-discovery-helper"><Button variant="ghost" type="button" onClick={() => setTrainerRoleHandle("")}>Все тренировки</Button></p> : null}
           {state === "loading" && <div data-state="loading" aria-busy="true"><p className="gb-discovery-helper" role="status">Ищем игры рядом…</p><DiscoverySkeleton /><DiscoverySkeleton /></div>}
           {state === "error" && <div className="gb-discovery-state" data-state="error" role="alert"><h3>Не удалось загрузить игры</h3><p>Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => setRefresh(n => n + 1)}>Попробовать снова</Button></div>}
