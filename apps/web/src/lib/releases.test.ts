@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   API_CONTRACT_VERSION_NOTE,
@@ -10,8 +11,24 @@ import {
 
 /** Co-located release integrity — literals must track CURRENT_* only. */
 describe("releases current descriptor literals", () => {
-  it("bumps current descriptor to alpha.63 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.63");
+  it("preserves the exact ten-field trusted alpha.63 receipt and historical map fixes", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.63");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(2950);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "1454dd194e24bf9cb6ff60bbd22eb0bc32f7aabe91c0934b1c2d4f9cdcab1d63",
+    );
+    expect(row.fixes).toHaveLength(2);
+    expect(row.fixes.join(" ")).toMatch(/На карте/);
+    expect(row.fixes.join(" ")).toMatch(/сложенной карты/);
+    expect(row.fixes.join(" ")).toMatch(/унифицированы кнопки действий.*не компоновка целиком/);
+  });
+
+  it("bumps current descriptor to alpha.64 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.64");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -25,20 +42,29 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/мобильн|На карте|действи|Radar/i);
-    expect(prose).toMatch(/обычн|тренировк|кнопки действий|унифицир/i);
+    expect(prose).toMatch(/шапке|мерцания/i);
+    expect(prose).toMatch(/первом открытии и перезагрузке/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/На карте/);
-    expect(fixes).toMatch(/сложенной карты|Radar/i);
-    expect(fixes).toMatch(/унифицированы кнопки действий|не компоновка целиком/i);
-    expect(fixes).toMatch(/alpha\.62|обычной игры и тренировки/i);
+    expect(fixes).toMatch(/публичное имя и аватар в шапке/i);
+    expect(fixes).toMatch(/без мерцания/i);
+    expect(fixes).toMatch(/после выхода из аккаунта или смены пользователя/i);
+    expect(fixes).toMatch(/актуальное состояние входа/i);
+    expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
     expect(fixes).not.toMatch(/не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/На карте|мобильн|игроков/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Профиль без мерцания при открытии страниц");
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(7);
+    const limitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
+    expect(limitations).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
+    expect(limitations).toMatch(/#506.*пока не доступно пользователям/i);
+    expect(limitations).toMatch(/#522|карте площадок|отзыв после конкретной игры|публичного автора без замены/i);
+    expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("accepted_at");
+    expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("deployments");
+    expect(prose).not.toMatch(/проверки (входа|авторизации).*отменены|постоянно.*(кэш|сохранён)|приёмка.*пройдена/i);
+    expect(prose).not.toMatch(/\bOPS\b|cache.?scope|admission|ownership|\bwriter\b|кэш/i);
     expect(
       TRUSTED_HISTORICAL_SEED.some(
         (row) =>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { createContext, createElement, useCallback, useContext, useSyncExternalStore, type ReactNode } from "react";
 import { getMe, getMySocialProfile } from "./api-client";
 import type { PlayerAvatar } from "./consumer-types";
 import { privateActor } from "./foreground-updates";
@@ -11,9 +11,21 @@ type HeaderIdentity = { name: string; avatar?: PlayerAvatar };
 export type HeaderIdentitySnapshot = {
   identity: HeaderIdentity | null;
   imageGeneration: number;
+  loading: boolean;
+  /** Request binding only; never a session token or authentication capability. */
+  ownerId?: string;
 };
 
-const EMPTY_SNAPSHOT: HeaderIdentitySnapshot = { identity: null, imageGeneration: 0 };
+const EMPTY_SNAPSHOT: HeaderIdentitySnapshot = { identity: null, imageGeneration: 0, loading: true };
+const HeaderBootstrap = createContext<HeaderIdentitySnapshot>(EMPTY_SNAPSHOT);
+
+/** Request-owned, presentation-only data. No session secret or auth capability. */
+export function HeaderIdentityProvider({ snapshot, children }: {
+  snapshot: HeaderIdentitySnapshot;
+  children: ReactNode;
+}) {
+  return createElement(HeaderBootstrap.Provider, { value: snapshot }, children);
+}
 
 /** Mirror the existing owned-media and VK/Yandex bounds at the image sink. */
 export function headerAvatarUrls(avatar?: PlayerAvatar): string[] {
@@ -38,6 +50,7 @@ function presentationKey(identity: HeaderIdentity | null): string {
 type HeaderIdentityStore = {
   snapshot: HeaderIdentitySnapshot;
   confirmed?: { actor: string; identity: HeaderIdentity };
+  ownerId?: string;
   generation: number;
   running?: object;
   dirty: boolean;
@@ -51,9 +64,10 @@ let boundWindow: Window | null = null;
 let browserStore: HeaderIdentityStore | null = null;
 let sessionListenersInstalled = false;
 
-function createStore(): HeaderIdentityStore {
+function createStore(bootstrap: HeaderIdentitySnapshot): HeaderIdentityStore {
   return {
-    snapshot: EMPTY_SNAPSHOT,
+    snapshot: bootstrap,
+    ownerId: bootstrap.ownerId,
     generation: 0,
     dirty: false,
     timer: undefined,
@@ -66,24 +80,25 @@ function emit(store: HeaderIdentityStore) {
   for (const listener of store.listeners) listener();
 }
 
-function paint(store: HeaderIdentityStore, value: HeaderIdentity | null) {
+function paint(store: HeaderIdentityStore, value: HeaderIdentity | null, loading = false) {
   const previousKey = presentationKey(store.snapshot.identity);
   const nextKey = presentationKey(value);
   const imageGeneration = previousKey === nextKey
     ? store.snapshot.imageGeneration
     : store.snapshot.imageGeneration + 1;
-  store.snapshot = { identity: value, imageGeneration };
+  store.snapshot = { identity: value, imageGeneration, loading };
   emit(store);
 }
 
-function clearStore(store: HeaderIdentityStore) {
+function clearStore(store: HeaderIdentityStore, loading = false) {
   ++store.generation;
   store.running = undefined;
   store.dirty = false;
   store.confirmed = undefined;
+  store.ownerId = undefined;
   clearTimeout(store.timer);
   store.timer = undefined;
-  paint(store, null);
+  paint(store, null, loading);
 }
 
 async function refresh(store: HeaderIdentityStore) {
@@ -102,32 +117,43 @@ async function refresh(store: HeaderIdentityStore) {
       // Network / timeout / 5xx: keep last confirmed display in the same session.
       // Definitive 401 (and other non-transient) still clears immediately.
       if (
-        store.confirmed &&
+        store.snapshot.identity &&
         (me.status === 0 || me.status === 408 || me.status >= 500)
       ) {
         return;
       }
       store.confirmed = undefined;
-      paint(store, null);
+      paint(store, null, me.status === 0 || me.status === 408 || me.status >= 500);
       return;
     }
     const actor = privateActor(me.data);
     // A different authenticated session never inherits a previous picture.
-    if (store.confirmed?.actor !== actor) {
+    if ((store.ownerId && store.ownerId !== me.data.id) || (store.confirmed && store.confirmed.actor !== actor)) {
       store.confirmed = undefined;
-      paint(store, null);
+      paint(store, null, true);
     }
+    store.ownerId = me.data.id;
     const social = await getMySocialProfile();
     if (!current() || store.dirty) return;
     if (!social.ok && social.status === 401) {
       clearStore(store);
       return;
     }
-    const next: HeaderIdentity = social.ok
-      ? { name: social.data.displayName.trim() || me.data.displayName.trim(), avatar: social.data.avatar }
-      : (social.status === 0 || social.status === 408 || social.status >= 500) && store.confirmed?.actor === actor
-        ? store.confirmed.identity
-        : { name: me.data.displayName.trim() };
+    if (!social.ok) {
+      const transient = social.status === 0 || social.status === 408 || social.status >= 500;
+      if (transient && store.snapshot.identity) return;
+      store.confirmed = undefined;
+      paint(store, null, transient);
+      return;
+    }
+    // Public name comes only from the accepted social profile, never /me provider data.
+    const name = social.data.displayName.trim();
+    if (!name) {
+      store.confirmed = undefined;
+      paint(store, null);
+      return;
+    }
+    const next: HeaderIdentity = { name, avatar: social.data.avatar };
     store.confirmed = { actor, identity: next };
     paint(store, next);
   } finally {
@@ -166,10 +192,10 @@ function ensureSessionBindings() {
     if (store.running) store.dirty = true;
     schedule(store);
   };
-  const sessionChanged = () => {
+  const sessionChanged = (event: Event) => {
     const store = activeStore();
     if (!store) return;
-    clearStore(store);
+    clearStore(store, (event as CustomEvent<{ sessionPresence?: string }>).detail?.sessionPresence !== "absent");
     schedule(store);
   };
   const expired = () => {
@@ -189,20 +215,20 @@ function ensureSessionBindings() {
   document.addEventListener("visibilitychange", visible);
 }
 
-function getBrowserStore(): HeaderIdentityStore | null {
+function getBrowserStore(bootstrap = EMPTY_SNAPSHOT): HeaderIdentityStore | null {
   if (typeof window === "undefined") return null;
   if (boundWindow !== window) {
     browserStore = null;
     sessionListenersInstalled = false;
     boundWindow = window;
   }
-  if (!browserStore) browserStore = createStore();
+  if (!browserStore) browserStore = createStore(bootstrap);
   ensureSessionBindings();
   return browserStore;
 }
 
-function subscribe(onStoreChange: () => void): () => void {
-  const store = getBrowserStore();
+function subscribe(bootstrap: HeaderIdentitySnapshot, onStoreChange: () => void): () => void {
+  const store = getBrowserStore(bootstrap);
   if (!store) return () => {};
   store.listeners.add(onStoreChange);
   if (!store.started) {
@@ -212,14 +238,6 @@ function subscribe(onStoreChange: () => void): () => void {
   return () => {
     store.listeners.delete(onStoreChange);
   };
-}
-
-function getSnapshot(): HeaderIdentitySnapshot {
-  return getBrowserStore()?.snapshot ?? EMPTY_SNAPSHOT;
-}
-
-function getServerSnapshot(): HeaderIdentitySnapshot {
-  return EMPTY_SNAPSHOT;
 }
 
 /** Drop browser-document presentation state between Vitest harness windows. */
@@ -234,8 +252,12 @@ export function resetHeaderIdentityStoreForTests() {
 
 /**
  * Current-browser-document presentation snapshot shared across header remounts.
- * Display only — never auth proof. Empty on the server; no cross-request SSR cache.
+ * Display only — never auth proof. SSR reads only its request-owned context.
  */
 export function useHeaderIdentity(_pathname?: string): HeaderIdentitySnapshot {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const bootstrap = useContext(HeaderBootstrap);
+  const listen = useCallback((listener: () => void) => subscribe(bootstrap, listener), [bootstrap]);
+  const snapshot = useCallback(() => getBrowserStore(bootstrap)?.snapshot ?? bootstrap, [bootstrap]);
+  const serverSnapshot = useCallback(() => bootstrap, [bootstrap]);
+  return useSyncExternalStore(listen, snapshot, serverSnapshot);
 }
