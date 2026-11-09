@@ -62,6 +62,39 @@ type ParticipationLockRow = {
   confirmed_at: Date | null;
 };
 
+/**
+ * Exact-current self authorship: actor is the subject.
+ * Provenance stays self_attested — never upgrade to manager_explicit.
+ */
+export function isExactCurrentSelfAuthored(row: {
+  source: AttendanceSource | null | undefined;
+  actor_user_id: string;
+  user_id: string;
+}): boolean {
+  return row.source === "self_attested" && row.actor_user_id === row.user_id;
+}
+
+/**
+ * Suppress response-required notice projection for self / superseded prompts.
+ * Item/cursor/history stay; real acknowledgedAt is never fabricated or deleted.
+ */
+export function shouldSuppressResponseRequiredNotice(args: {
+  noticeSource: AttendanceSource;
+  noticeAttendanceVersion: number;
+  acknowledgedAt: Date | string | null;
+  currentAttendanceVersion: number;
+}): boolean {
+  if (args.acknowledgedAt) return false;
+  if (args.noticeSource === "self_attested") return true;
+  if (
+    args.currentAttendanceVersion > 0 &&
+    args.noticeAttendanceVersion !== args.currentAttendanceVersion
+  ) {
+    return true;
+  }
+  return false;
+}
+
 @Injectable()
 export class GameAttendanceService {
   constructor(
@@ -303,8 +336,16 @@ export class GameAttendanceService {
         : null;
     const isOwn = context.userId === viewerId;
     const actorDisplay = row ? await this.displayName(client, row.actor_user_id) : null;
+    const selfAuthored =
+      !!row &&
+      isExactCurrentSelfAuthored({
+        source: row.source,
+        actor_user_id: row.actor_user_id,
+        user_id: context.userId,
+      });
     // Missing mark (no row) and unknown row: clarification via dispute, not fake present.
     // Known present/absent: classic challenge. No ACK for unknown/missing.
+    // Exact-current self-authored mark must not require ACK (keeps self_attested provenance).
     const canRequestClarification = writesEnabled && isOwn && !dispute;
     const actions: AttendanceAllowedActions = {
       canSetAttendance: canManagerWrite,
@@ -313,7 +354,8 @@ export class GameAttendanceService {
         isOwn &&
         knownFact &&
         !!row &&
-        acknowledgedVersion !== row.version,
+        acknowledgedVersion !== row.version &&
+        !selfAuthored,
       canDispute: canRequestClarification && (knownFact || !row || row.value === "unknown"),
       canWithdrawDispute: writesEnabled && isOwn && !!dispute,
       canRespondDispute: writesEnabled && pg2 && role === "manager" && !!dispute,
@@ -841,6 +883,19 @@ export class GameAttendanceService {
         if (attendance.value === "unknown") {
           throw conflict("ATTENDANCE_UNKNOWN_NO_ACK", "Неизвестную отметку нельзя подтвердить");
         }
+        // Server-side guard: exact-current self mark must not write acknowledged_at.
+        if (
+          isExactCurrentSelfAuthored({
+            source: attendance.source,
+            actor_user_id: attendance.actor_user_id,
+            user_id: participation.user_id,
+          })
+        ) {
+          throw conflict(
+            "ATTENDANCE_SELF_ACK_REDUNDANT",
+            "Собственную отметку подтверждать не нужно",
+          );
+        }
         const notice = (
           await client.query<{ id: string; acknowledged_at: Date | null; value: AttendanceValue }>(
             `SELECT id, acknowledged_at, value FROM game_attendance_notices
@@ -1334,22 +1389,31 @@ export class GameAttendanceService {
           postGameWritesEnabled(this.env),
           false,
         );
+        const suppressNotice = shouldSuppressResponseRequiredNotice({
+          noticeSource: row.source,
+          noticeAttendanceVersion: row.attendance_version,
+          acknowledgedAt: row.acknowledged_at,
+          currentAttendanceVersion: record.version,
+        });
         items.push({
           gameId: row.game_id,
           contextId: row.participation_id,
           gameTitle: row.game_title,
           endsAt: row.ends_at?.toISOString() ?? null,
           attendance: record,
-          notice: {
-            id: row.notice_id,
-            attendanceVersion: row.attendance_version,
-            value: row.value,
-            late: row.late,
-            source: row.source,
-            actorDisplay: row.actor_display,
-            createdAt: row.created_at.toISOString(),
-            acknowledgedAt: row.acknowledged_at?.toISOString() ?? null,
-          },
+          // Keep history item; null only the response-required notice projection.
+          notice: suppressNotice
+            ? null
+            : {
+                id: row.notice_id,
+                attendanceVersion: row.attendance_version,
+                value: row.value,
+                late: row.late,
+                source: row.source,
+                actorDisplay: row.actor_display,
+                createdAt: row.created_at.toISOString(),
+                acknowledgedAt: row.acknowledged_at?.toISOString() ?? null,
+              },
         });
       }
       const last = page[page.length - 1];
@@ -1674,7 +1738,12 @@ export class GameAttendanceService {
           isOwn &&
           row.status === "open" &&
           !!current &&
-          current.value !== "unknown",
+          current.value !== "unknown" &&
+          !isExactCurrentSelfAuthored({
+            source: current.source,
+            actor_user_id: current.actor_user_id,
+            user_id: row.user_id,
+          }),
       },
     };
   }

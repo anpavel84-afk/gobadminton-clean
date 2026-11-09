@@ -212,19 +212,42 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
   }
 
   async function confirmWithTransition(gameId: string, userId: string) {
+    // Game create already seats the organizer (participations_game_user_uidx). Reuse that
+    // row and backdate confirmed_at / confirmed transition so eligibility matches domain
+    // (transition_as_of_start or current_confirmed within the ended window).
     const part = await pool.query<{ id: string }>(
       `INSERT INTO participations (game_id, user_id, status, confirmed_at)
        VALUES ($1, $2, 'confirmed', clock_timestamp() - interval '4 hours')
+       ON CONFLICT (game_id, user_id) DO UPDATE
+         SET status = 'confirmed',
+             confirmed_at = EXCLUDED.confirmed_at,
+             updated_at = now()
        RETURNING id`,
       [gameId, userId],
     );
     const id = part.rows[0]!.id;
-    await pool.query(
-      `INSERT INTO participation_transitions
-         (participation_id, from_status, to_status, actor_id, reason_code, aggregate_version, game_version, at)
-       VALUES ($1, NULL, 'confirmed', $2, 'test_confirm', 1, 1, clock_timestamp() - interval '4 hours')`,
-      [id, userId],
+    const existingConfirm = await pool.query<{ id: string }>(
+      `SELECT id FROM participation_transitions
+       WHERE participation_id = $1 AND to_status = 'confirmed'
+       ORDER BY at ASC, id ASC
+       LIMIT 1`,
+      [id],
     );
+    if (existingConfirm.rows[0]) {
+      await pool.query(
+        `UPDATE participation_transitions
+         SET at = clock_timestamp() - interval '4 hours'
+         WHERE id = $1`,
+        [existingConfirm.rows[0].id],
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO participation_transitions
+           (participation_id, from_status, to_status, actor_id, reason_code, aggregate_version, game_version, at)
+         VALUES ($1, NULL, 'confirmed', $2, 'test_confirm', 1, 1, clock_timestamp() - interval '4 hours')`,
+        [id, userId],
+      );
+    }
     return id;
   }
 
@@ -415,6 +438,48 @@ run("PG-2 GameAttendance disputes — disposable synthetic PostGIS", () => {
     expect(unknownDispute.statusCode).toBe(201);
     expect(unknownDispute.json().challengedVersion).toBe(2);
     expect(unknownDispute.json().challengedAssertion).toMatchObject({ value: "unknown", version: 2 });
+  });
+
+  it("self_attested current keeps canAcknowledgeCurrent false; external mark still acks", async () => {
+    const g = await createEndedGame(manager);
+    const ownContext = await confirmWithTransition(g.id, manager.userId);
+    const marked = await put(manager, `/v1/games/${g.id}/attendance/${ownContext}`, {
+      expectedVersion: 0,
+      value: "present",
+    });
+    expect(marked.statusCode).toBe(200);
+    expect(marked.json()).toMatchObject({
+      assertion: { source: "self_attested" },
+      allowedActions: expect.objectContaining({ canAcknowledge: false }),
+    });
+
+    const dispute = await post(manager, `/v1/games/${g.id}/attendance/${ownContext}/disputes`, {
+      attendanceVersion: 1,
+      explanation: "Нужно уточнить собственную массовую отметку",
+    });
+    expect(dispute.statusCode).toBe(201);
+    expect(dispute.json()).toMatchObject({
+      status: "open",
+      currentAssertion: { version: 1, assertion: { source: "self_attested" } },
+      allowedActions: expect.objectContaining({ canAcknowledgeCurrent: false }),
+    });
+
+    expect(
+      (
+        await post(manager, `/v1/games/${g.id}/attendance/${ownContext}/acknowledgements`, {
+          attendanceVersion: 1,
+          resolvingDisputeId: dispute.json().id,
+          expectedDisputeVersion: 1,
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    // Dispute stays open; party_acknowledged history is not fabricated for self.
+    const open = await get(manager, `/v1/attendance-disputes/${dispute.json().id}`);
+    expect(open.json()).toMatchObject({
+      status: "open",
+      allowedActions: expect.objectContaining({ canAcknowledgeCurrent: false }),
+    });
   });
 
   it("revision snapshot/reason guard rejects version>1 with null before snapshot and null reason (23514)", async () => {

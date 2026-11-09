@@ -47,8 +47,8 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.61 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.61");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.62 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.62");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,8 +64,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/ролей|сетк|тренер/i);
-    expect(currentProse).toMatch(/истори|строк|ширин|имена|вертикальн/i);
+    expect(currentProse).toMatch(/мобильн|стрелк|Подробнее|действи/i);
+    expect(currentProse).toMatch(/обычн|тренер|тренировк/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,9 +85,9 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/ролей|тренер|сетк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/ролей|истори|ширин|имена|тренер/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/мобильн|действи|обычн|тренировк/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/стрелк|Подробнее|обычн|тренер|мобильн/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
@@ -247,10 +247,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(64);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(65);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(69);
+    ).toBe(70);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -358,6 +358,26 @@ describe("releases catalogue integrity", () => {
       && row.fixes.length === 4
       && row.known_limitations.length === 7
       && row.known_limitations.some((item) => /визуальный дефект|узкие колонки/i.test(item))
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.61"
+      && row.version_label === "0.1.0-alpha.61"
+      && row.source_sha === "23a3d2dba33d79da55151e5d1eff8ff54d9d74ce"
+      && row.deployments[0]?.release_id === "r42532364094-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-08T22:56:54Z"
+      && row.deployments[0]?.api_digest === "sha256:701c336b8ba179e8c77fea86e5a78d24ce44986cfedfa5750f1eff600e7f4aea"
+      && row.deployments[0]?.web_digest === "sha256:cd6b4327e306b02968488d3687069ed485af08f1296a9d989cb78536db0c9837"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.40.0"
+      && row.title === "Ремонт сетки ролей в карточке тренера"
+      && row.additions.length === 0
+      && row.fixes.length === 1
+      && row.known_limitations.length === 7
+      && row.known_limitations.some((item) => /мобильная кнопка|унификация действий/i.test(item))
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -808,10 +828,13 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders current named limits, not first-alpha false email/postgame/push claims", async () => {
+  it("renders the three current fixes and limits without first-alpha false email/postgame/push claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
+    expect(html).toContain("карточки обычной игры и тренировки");
+    expect(html).toContain("не требует подтверждать её самому себе");
+    expect(html).toContain("не разрывается внутри слова");
     for (const item of CURRENT_NAMED_RELEASE.known_limitations) {
       expect(html).toContain(item);
     }

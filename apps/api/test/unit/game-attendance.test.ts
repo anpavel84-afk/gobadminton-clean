@@ -9,8 +9,14 @@ import {
   summarizeRoster,
   unknownAttendanceRecord,
 } from "../../src/games/game-attendance.policy";
+import {
+  isExactCurrentSelfAuthored,
+  shouldSuppressResponseRequiredNotice,
+} from "../../src/games/game-attendance.service";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { loadEnv } from "../../src/config/env";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const env = loadEnv({
   NODE_ENV: "test",
@@ -189,6 +195,74 @@ describe("PG-1b attendance policy", () => {
 
   it("writes remain fail-closed by default", () => {
     expect(postGameWritesEnabled(env)).toBe(false);
+  });
+
+  it("exact-current self authorship suppresses ACK/notice without upgrading provenance", () => {
+    const subject = "10000000-0000-4000-8000-000000000031";
+    const other = "10000000-0000-4000-8000-000000000032";
+    expect(
+      isExactCurrentSelfAuthored({
+        source: "self_attested",
+        actor_user_id: subject,
+        user_id: subject,
+      }),
+    ).toBe(true);
+    expect(
+      isExactCurrentSelfAuthored({
+        source: "manager_explicit",
+        actor_user_id: other,
+        user_id: subject,
+      }),
+    ).toBe(false);
+    expect(
+      isExactCurrentSelfAuthored({
+        source: "self_attested",
+        actor_user_id: other,
+        user_id: subject,
+      }),
+    ).toBe(false);
+    // Self current unacked → suppress; keep acknowledged history; external current stays.
+    expect(
+      shouldSuppressResponseRequiredNotice({
+        noticeSource: "self_attested",
+        noticeAttendanceVersion: 1,
+        acknowledgedAt: null,
+        currentAttendanceVersion: 1,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressResponseRequiredNotice({
+        noticeSource: "manager_explicit",
+        noticeAttendanceVersion: 1,
+        acknowledgedAt: null,
+        currentAttendanceVersion: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressResponseRequiredNotice({
+        noticeSource: "manager_explicit",
+        noticeAttendanceVersion: 2,
+        acknowledgedAt: null,
+        currentAttendanceVersion: 2,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressResponseRequiredNotice({
+        noticeSource: "self_attested",
+        noticeAttendanceVersion: 1,
+        acknowledgedAt: "2026-11-01T00:00:00.000Z",
+        currentAttendanceVersion: 1,
+      }),
+    ).toBe(false);
+    const serviceSrc = readFileSync(
+      path.resolve(__dirname, "../../src/games/game-attendance.service.ts"),
+      "utf8",
+    );
+    expect(serviceSrc).toContain("ATTENDANCE_SELF_ACK_REDUNDANT");
+    expect(serviceSrc).toContain("!selfAuthored");
+    expect(serviceSrc).toContain("shouldSuppressResponseRequiredNotice");
+    // Provenance write path must keep resolveSource → self_attested (no silent upgrade).
+    expect(serviceSrc).toMatch(/actorId === participantUserId \? "self_attested"/);
   });
 
   it("controller preserves actor/session/idempotency on PUT attendance", async () => {
