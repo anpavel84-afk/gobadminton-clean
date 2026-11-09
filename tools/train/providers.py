@@ -836,6 +836,7 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     actual AGY call as Cursor. parent_lease=True means the controller already holds
     the one writer lease — do not nest a second acquisition. Tests inject fakes.
     """
+    public_release_context(task)  # Reject before route/ledger/paid effects.
     provider, route_reason, _meta = select_author_provider(
         task, issue=task.get('issue'), reviewer_authority=reviewer_authority, protected_reviewer=protected_reviewer)
     forward_protected = launcher is not None or provider == 'codex_author'
@@ -898,6 +899,7 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
 
 def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None, reviewer_authority=None, protected_reviewer=None):
     """Independent Codex Sol Medium QA. Live default = live.codex_qa_live."""
+    public_release_context(task)  # Reject before route/ledger/paid effects.
     if task.get('_bound_author', {}).get('mode') == 'on' or protected_reviewer is not None:
         qa_effort = accepted_qa_effort(reviewer_authority, protected_reviewer)
     else:
@@ -936,6 +938,7 @@ def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None, reviewe
 
 def invoke_agy_qa(*, task, candidate_sha, evidence_dir, launcher=None):
     """AGY live QA transport — actual code path, not quota/parser-only."""
+    public_release_context(task)  # Reject before route/ledger/paid effects.
     intent, intent_path = prepare_qa_intent(task, candidate_sha, 'agy_qa', evidence_dir)
     if launcher is None:
         try:

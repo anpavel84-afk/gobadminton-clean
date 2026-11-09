@@ -204,7 +204,8 @@ class PrivateHomeRetention(unittest.TestCase):
             root = Path(td)
             retention = h.SourceRetention(baseline={}, allowed=[], ignored=lambda n:False,
                 source_name=lambda n:True, secrets=lambda:(_ for _ in ()).throw(ValueError('SECRET CONTENT')))
-            retention.prepare(root)
+            with self.assertRaises(h.RetentionError):
+                retention.prepare(root)
             binding = h.operation(task(), 'agy_author', 'a'*40)
             status = h.finish_retention(retention, root, binding)
             self.assertEqual(status['failure']['stage'], 'prepare')
@@ -502,7 +503,7 @@ class CodexCheckpoint(unittest.TestCase):
                 private = root / 'private'; private.mkdir()
                 observer = SimpleNamespace(result=dict(changed_paths=['x.py'],
                     payloads={'x.py': b'new'}, deleted=[]), failure=None,
-                    observe=lambda *a: None, persist=unittest.mock.Mock())
+                    observe=lambda *a: None, prepare=unittest.mock.Mock(), persist=unittest.mock.Mock())
                 proc = SimpleNamespace(returncode=0, pid=12345,
                     communicate=lambda **k: None, poll=lambda: 0)
                 def launch(*a, **kw):
@@ -656,7 +657,7 @@ class Retention(unittest.TestCase):
 
     def test_native_reap_failure_and_observer_failure_preserve_result(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td); (root / 'x.py').write_text('new')
+            root = Path(td); (root / 'x.py').write_text('old')
             observer = self.make(root)
             actual = SimpleNamespace(communicate=lambda **k: ('native result', None), pid=123)
             def fail(p): raise RuntimeError('stop failed')
@@ -1492,3 +1493,143 @@ class QAOutputBoundary(unittest.TestCase):
                     else:
                         self.assertEqual(call()['verdict'], 'PASS')
                         parser.assert_called_once()
+
+
+class AddressedPrelaunchRetention(unittest.TestCase):
+    def test_invalid_public_context_stops_all_adapter_and_direct_routes(self):
+        for bad in ('{}', dict(PublicReleaseDelivery().seed(), fixes=['x'*8192]*5)):
+            t = task(release_input=bad)
+            with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                paid = stack.enter_context(patch.object(live.subprocess, 'Popen'))
+                budget = stack.enter_context(patch.object(live, 'shared_agy_budget'))
+                select = stack.enter_context(patch.object(providers, 'select_author_provider'))
+                ready = stack.enter_context(patch.object(live, '_load_native'))
+                calls = [
+                    lambda: providers.invoke_cursor_author(task=t, worktree=td, evidence_dir=td),
+                    lambda: providers.invoke_codex_qa(task=t, candidate_sha='a'*40, evidence_dir=td),
+                    lambda: providers.invoke_agy_qa(task=t, candidate_sha='a'*40, evidence_dir=td),
+                    lambda: live.cursor_author_live(task=t, worktree=td, evidence_dir=td),
+                    lambda: live.agy_author_live(task=t, worktree=td, evidence_dir=td),
+                    lambda: live.codex_author_live(task=t, worktree=td, evidence_dir=td),
+                    lambda: live.codex_qa_live(task=t, candidate_sha='a'*40, evidence_dir=td),
+                    lambda: live.agy_qa_live(task=t, candidate_sha='a'*40, evidence_dir=td),
+                ]
+                for call in calls:
+                    with self.assertRaises(providers.ProviderError) as error:
+                        call()
+                    self.assertEqual(error.exception.code, 'invalid_public_release_input')
+                    self.assertEqual(error.exception.charge, 'none')
+                for effect in (paid, budget, select, ready): effect.assert_not_called()
+
+    def test_unsupported_custody_is_no_call_even_with_task_claims(self):
+        # No task JSON / callable / copied evidence can open this boundary.
+        with patch.object(live.subprocess, 'Popen') as launch, \
+             patch.object(live, 'shared_agy_budget') as budget:
+            with self.assertRaises(providers.ProviderError) as error:
+                h.require_agy_source_custody()
+            self.assertEqual(error.exception.code, 'agy_source_custody_unsupported')
+            self.assertEqual(error.exception.charge, 'none')
+            launch.assert_not_called(); budget.assert_not_called()
+
+    def test_prepare_fault_blocks_popen_and_has_finite_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            observer = h.SourceRetention(baseline={}, allowed=[], ignored=lambda n:False,
+                source_name=lambda n:True,
+                secrets=lambda:(_ for _ in ()).throw(OSError('PRIVATE TOKEN')))
+            with patch.object(live.subprocess, 'Popen') as launch:
+                with self.assertRaises(h.RetentionError):
+                    observer.popen(launch, lambda p:None)(['never'], cwd=td)
+                launch.assert_not_called()
+            self.assertEqual(observer.failure_metadata['stage'], 'prepare')
+            self.assertNotIn('PRIVATE', json.dumps(observer.failure_metadata))
+
+    def test_durable_observer_checkpoint_precedes_parser_and_cleanup(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); work = root/'native'/'ws'; work.mkdir(parents=True)
+            evidence = root/'evidence'; evidence.mkdir()
+            (work/'x.py').write_bytes(b'old')
+            binding = h.operation(task(), 'agy_author', 'a'*40)
+            observer = Retention().make(work, checkpoint=(evidence, binding))
+            process = observer.popen(subprocess.Popen, lambda p:p.wait(timeout=5))(
+                [sys.executable, '-c', "from pathlib import Path; Path('x.py').write_bytes(b'partial'); raise SystemExit(3)"],
+                cwd=work, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=True)
+            try:
+                process.communicate(timeout=5)
+                # The durable bytes already exist before native parser/finally.
+                self.assertEqual((evidence/'source-checkpoint/payload-0').read_bytes(), b'partial')
+                raise ValueError('synthetic native parser refused')
+            except ValueError:
+                pass
+            finally:
+                shutil.rmtree(root/'native')
+            self.assertEqual(process.returncode, 3)
+            self.assertEqual((evidence/'source-checkpoint/payload-0').read_bytes(), b'partial')
+            status = h.finish_retention(observer, evidence, binding)
+            self.assertEqual(status['checkpoint'], 'UNVALIDATED')
+            manifest = json.loads((evidence/'source-checkpoint/manifest.json').read_text())
+            self.assertEqual(manifest['schema'], 'GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1')
+
+    def test_capture_or_persist_fault_requires_precharge_hold(self):
+        # This is why observer persistence alone does not enable native AGY.
+        # Even successful preparation cannot promise a postlaunch disk/scan.
+        for fault in ('capture', 'persist'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as td:
+                root = Path(td); work=root/'ws'; work.mkdir()
+                evidence=root/'evidence'; evidence.mkdir()
+                (work/'x.py').write_bytes(b'old')
+                observer = Retention().make(work, checkpoint=(evidence,
+                    h.operation(task(), 'agy_author', 'a'*40)))
+                observer.prepare(work)
+                with patch.object(observer, fault, side_effect=OSError('PRIVATE')), \
+                     patch.object(h, 'owned_group_gone', return_value=True):
+                    observer.observe(work, SimpleNamespace(poll=lambda:3), lambda p:None)
+                self.assertIsNotNone(observer.failure)
+                self.assertIsNone(observer.result)
+                with self.assertRaises(providers.ProviderError) as error:
+                    h.require_agy_source_custody()
+                self.assertEqual(error.exception.charge, 'none')
+                self.assertFalse((evidence/'source-checkpoint').exists())
+
+
+class AGYPrechargeBoundary(unittest.TestCase):
+    def test_ready_native_route_holds_before_charge_invoke_or_staging(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            root=Path(td); t=task()
+            (root/'intent.json').write_text('{}')
+            budget=SimpleNamespace(remaining=lambda *a:float('inf'), charge=Mock())
+            stack.enter_context(patch.object(live, 'require_executor_uid'))
+            stack.enter_context(patch.object(providers, 'role_ready', return_value=(True, {})))
+            stack.enter_context(patch.object(providers, 'agy_quota_available', return_value=(True, None, {})))
+            stack.enter_context(patch.object(live, '_load_native', return_value=SimpleNamespace()))
+            stack.enter_context(patch.object(live, 'git', side_effect=['a'*40, '']))
+            stack.enter_context(patch.object(live, 'shared_agy_budget', return_value=budget))
+            staging=stack.enter_context(patch.object(live, '_agy_materialize_qa_snapshot'))
+            launch=stack.enter_context(patch.object(live.subprocess, 'Popen'))
+            invoke=Mock()
+            with self.assertRaises(providers.ProviderError) as error:
+                live.agy_author_live(task=t, worktree=root, evidence_dir=root,
+                    intent_path=root/'intent.json', _invoke=invoke)
+            self.assertEqual(error.exception.code, 'agy_source_custody_unsupported')
+            self.assertEqual(error.exception.charge, 'none')
+            for effect in (budget.charge, staging, launch, invoke): effect.assert_not_called()
+
+    def test_ordinary_notready_legacy_fallback_and_bound_hold_remain(self):
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            root=Path(td)
+            (root/'intent.json').write_text('{}')
+            stack.enter_context(patch.object(live, 'require_executor_uid'))
+            stack.enter_context(patch.object(providers, 'role_ready', return_value=(False, 'not_ready')))
+            stack.enter_context(patch.object(providers, 'agy_author_canary_admitted', return_value=(False, None)))
+            stack.enter_context(patch.object(providers, 'cursor_fallback_authorized', return_value=True))
+            fallback=stack.enter_context(patch.object(live, 'cursor_author_live', return_value={'legacy':True}))
+            self.assertEqual(live.agy_author_live(task=task(), worktree=root,
+                evidence_dir=root, intent_path=root/'intent.json'), {'legacy':True})
+            fallback.reset_mock()
+            with self.assertRaises(providers.ProviderError) as error:
+                live.agy_author_live(task=bound(task()), worktree=root,
+                    evidence_dir=root, intent_path=root/'intent.json')
+            self.assertEqual(error.exception.code, 'bound_agy_local_governance_hold')
+            fallback.assert_not_called()

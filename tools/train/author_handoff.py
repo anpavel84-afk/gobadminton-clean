@@ -1,8 +1,9 @@
 """Caller-side B2 binding and bounded retention. No native patching or launches.
 
 Native provider streams have NO authenticated capacity-control producer boundary.
-AGY_ERROR/RESOURCE_EXHAUSTED on outer stderr and a static emitter callgraph
-do not close tool/model spoofing in this caller seam. They therefore HOLD;
+The pinned CLI emitter callgraph establishes typed outer-error production,
+but this caller does not yet authenticate the fixed outer stream with the
+operation/task/source/attempt and a protected owned-stop receipt. Therefore HOLD;
 only a separately trusted control adapter can supply a stop. No legacy Root
 NO_SOURCE_EFFECT adjudication is implemented here; cgroup-absent stays HOLD.
 """
@@ -104,6 +105,21 @@ class RetentionError(RuntimeError):
 def need(ok):
     if not ok:
         raise RetentionError('unsafe_source_retention')
+
+
+def require_agy_source_custody():
+    """Fail BEFORE shared charge: this native seam has no Root custody ack.
+
+    The existing child-to-parent terminal IPC runs only AFTER native cleanup.
+    UID978 evidence is not Root custody. A disk/scan fault during observe would
+    therefore destroy the only partial source. Neither a task flag, successful
+    setup, nor INVALID metadata can authorize a call across this boundary.
+    No model invocation is safe until a bounded, operation-bound Root custody
+    acknowledgement can precede native destructive cleanup, including faults.
+    """
+    from providers import ProviderError
+    raise ProviderError('agy_source_custody_unsupported',
+        'precharge_hold: no protected precleanup custody acknowledgement', charge='none')
 
 
 class PrivateRetentionSecrets:
@@ -210,7 +226,10 @@ def valid_retention_status(value):
 
 
 def finish_retention(retention, directory, binding, setup_failure=None):
-    """Persist a checkpoint or an explicit INVALID receipt after native finalizers."""
+    """Report durable observer checkpoint; legacy callers may persist here.
+
+    INVALID is diagnostic only, never a claim that source bytes survived.
+    """
     from providers import atomic_write
     failure = setup_failure
     checkpoint = 'INVALID'
@@ -237,14 +256,19 @@ def finish_retention(retention, directory, binding, setup_failure=None):
 
 
 class SourceRetention:
-    """One source-only snapshot, in memory, after ORIGINAL native owned reap.
+    """One source-only snapshot after ORIGINAL native owned reap.
+
+    With checkpoint configured, persistence completes before native parsing or
+    destructive cleanup resumes. This alone cannot guarantee fault custody;
+    the native AGY caller must remain precharge HOLD until that seam exists.
 
     Full scans include ignored outputs for secret/link safety. Only untracked
     paths ignored by the original checkout are excluded from the diff. Bytes,
     manifests and saved payload hashes come from the same bounded reads.
     """
     def __init__(self, *, baseline, allowed, ignored, source_name, secrets,
-                 control=None, max_files=10000, max_bytes=64 << 20, max_file=8 << 20):
+                 control=None, max_files=10000, max_bytes=64 << 20, max_file=8 << 20,
+                 checkpoint=None):
         self.baseline = dict(baseline)
         self.allowed = frozenset(allowed)
         self.ignored = ignored
@@ -256,6 +280,8 @@ class SourceRetention:
         self.failure = None
         self.failure_metadata = None
         self.before_modes = None
+        self.checkpoint = checkpoint
+        self.persisted = None
 
     def scan(self, work, tokens):
         root = Path(work)
@@ -334,6 +360,7 @@ class SourceRetention:
         except BaseException as err:
             self.failure = 'retention_prepare_failed'
             self.failure_metadata = retention_failure('prepare', err)
+            raise RetentionError('retention_prepare_failed') from err
 
     def capture(self, work):
         tokens = tuple(t.encode() if isinstance(t, str) else t for t in self.secrets())
@@ -366,6 +393,8 @@ class SourceRetention:
             need(owned_group_gone(process))
             if self.failure is None and self.result is None:
                 self.capture(work)
+                if self.checkpoint is not None:
+                    self.persist(*self.checkpoint)
         except BaseException as err:
             # Observing must not replace the native result or exception.
             self.failure = 'retention_or_owned_reap_failed'
@@ -394,6 +423,10 @@ class SourceRetention:
         need(self.failure is None and self.result is not None)
         from providers import atomic_write
         destination = Path(directory) / 'source-checkpoint'
+        identity = (str(destination.absolute()), fingerprint(asdict(binding)))
+        if self.persisted is not None:
+            need(self.persisted[0] == identity)
+            return self.persisted[1]
         destination.mkdir(mode=0o700, exist_ok=False)
         r = self.result
         for index, name in enumerate(sorted(r['payloads'])):
@@ -403,6 +436,15 @@ class SourceRetention:
                         payload_files={n: f'payload-{i}' for i, n in enumerate(sorted(r['payloads']))})
         manifest['fingerprint'] = fingerprint(manifest)
         atomic_write(destination / 'manifest.json', manifest, 0o600)
+        # atomic_write fsyncs file bytes; seal directory entries before allowing
+        # native parsing/finally to delete the source workspace.
+        for path in (destination, Path(directory)):
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        self.persisted = (identity, manifest)
         return manifest
 
 

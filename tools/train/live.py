@@ -1260,6 +1260,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     and writer lease. Never exec user-writable external Python as Root; never
     reuse Root HOME/API secrets beyond the memory token in the child env.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import prepare_cursor_author_intent, mark_intent_phase, ProviderError
     require_executor_uid()
     evidence = Path(evidence_dir)
@@ -1322,6 +1324,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             + '\nWork only in ' + str(base / 'work') + '.\n'
             + 'ACTUAL INPUT MATERIALS:\n' + json.dumps(materials)
         )
+        prompt += public_context
         if task.get('repair_findings'):
             prompt += '\nADDRESS THESE FINDINGS EXACTLY:\n' + json.dumps(task['repair_findings'])
         (evidence / 'prompt.txt').write_text(prompt)
@@ -1787,6 +1790,8 @@ def _agy_build_prompt(task, candidate_sha, *, rules_text, source, base_sha,
             diff_names = ''
             diff_stat = ''
     prompt = rules_text + '\n'
+    from providers import public_release_context
+    prompt += public_release_context(task)
     prompt += (
         f'OWNER AUTHORIZED INDEPENDENT SOURCE QA. issue={issue} '
         f'attempt={attempt} candidate={candidate_sha} base={base_sha or ""}. '
@@ -2288,6 +2293,8 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     Verify exit0 AND turn.completed AND canonical exact SHA final. No author
     worktree checkout on HEAD mismatch — precise HOLD. Timeout kills owned pg.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
     from author_handoff import fingerprint
     require_executor_uid()
@@ -2563,6 +2570,8 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     to Codex. Ineligible/shared-budget-unavailable ⇒ no-call technical HOLD.
     Ordinary AGY-before-any-Codex may still fall back to Medium before charge.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import (
         prepare_qa_intent, mark_intent_phase, parse_agy_stream, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
@@ -3037,6 +3046,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
     charges role=author once at launch. Fallback to Cursor ONLY pre-launch when AGY
     is unavailable (no charge). After paid/unknown transport failure: HOLD with raw.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import (
         prepare_cursor_author_intent, mark_intent_phase, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
@@ -3136,6 +3147,14 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                           fallback_provider='cursor_auto')
         return cursor_fallback()
 
+    from author_handoff import require_agy_source_custody
+    try:
+        require_agy_source_custody()
+    except ProviderError as err:
+        mark_intent_phase(intent_path, 'preflight_no_call', error=err.code,
+                          no_model_launched=True)
+        raise
+
     # Fresh 978 staging from current HEAD; frozen base retained for full review diff.
     try:
         staging_snap = _agy_materialize_qa_snapshot(
@@ -3198,6 +3217,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
     charge_receipt = native_ev / 'shared-charge-receipt.json'
 
     def charge():
+        from author_handoff import require_agy_source_custody
+        require_agy_source_custody()
         if charge_receipt.is_file():
             raise ProviderError('agy_double_charge_refused')
         budget.charge(AGY_SLOT, 'agy', 'author')
@@ -3313,7 +3334,10 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                             return result.returncode == 0
                         retention = SourceRetention(baseline=baseline, allowed=task['allowed_paths'],
                             ignored=original_ignored, source_name=native._source_name, secrets=retention_secrets,
-                            control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()))
+                            control=('.agents/agents/' + native.AGENT + '.md', native.AGENT_DEF.encode()),
+                            checkpoint=(native_ev, operation(dict(task,
+                                _author_operation=task.get('_author_operation') or fingerprint,
+                                runtime_base_sha=base_sha), 'agy_author', head_before)))
                         observed_popen = retention.popen(subprocess.Popen, native.reap)
                         def launch(*a, **k):
                             try:
@@ -3326,8 +3350,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                             return observed_popen(*a, **k)
                     except Exception as err:
                         retention_setup_failure = retention_failure('setup', err)
-                        retention = None
-                        launch = subprocess.Popen
+                        raise ProviderError('agy_retention_setup_no_call', charge='none') from err
                     try:
                         native.invoke(
                             bridge, rt, prompt, choice,
@@ -4421,6 +4444,8 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
     Only a separately admitted capacity successor may reach this transport.
     No chat-author qualification assumptions, external hook, or QA self-PASS.
     """
+    from providers import public_release_context
+    public_context = public_release_context(task)
     from providers import ProviderError, role_ready, mark_intent_phase
     from author_handoff import bound_provider, SourceRetention, operation, owned_group_gone
     if (bound_provider(task) or (None,))[0] != 'codex_author' or not task.get('_capacity_successor'):
@@ -4456,7 +4481,9 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
                 '--json', '-o', str(job / 'final.txt'), '-']
         rules, rules_sha, _ = load_short_rules()
         prompt = rules + '\nAuthor only. No commit/push/deploy. TASK DATA:\n' + json.dumps({
-            k: v for k, v in task.items() if not k.startswith('_')})
+            k: task[k] for k in ('issue', 'goal', 'acceptance', 'allowed_paths',
+                'assignment', 'revision', 'findings', 'repair_findings', 'ci_failure')
+            if k in task}) + public_context
         def ignored(name):
             r = run_argv(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
                 '-c', 'core.fsmonitor=false', 'check-ignore', '--no-index', '--quiet', '--', name],
@@ -4470,6 +4497,7 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
             raise ProviderError('codex_local_governance_hold', charge='none')
         with (evidence / 'events.jsonl').open('xb') as out, (evidence / 'stderr').open('xb') as err:
             accepted_qa_effort(reviewer_authority, protected_reviewer)
+            retention.prepare(source)
             budget.charge('slot1', 'codex', 'author')
             mark_intent_phase(intent_path, 'launching', provider='codex_author',
                 model='gpt-6.1-sol', effort='medium', calls_charged=1, usage=None,
