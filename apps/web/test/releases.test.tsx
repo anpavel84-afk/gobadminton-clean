@@ -322,7 +322,7 @@ describe("releases catalogue integrity", () => {
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
     const [radarFix, gamesFix] = CURRENT_NAMED_RELEASE.fixes;
     expect(radarFix).toMatch(/После включения Radar и подтверждения активации.*короткая строка поиска/i);
-    expect(radarFix).toMatch(/Первый ответ завершает поиск.*ближайшие участники.*едином списке.*когда расстояние известно.*иначе.*порядок по городу/i);
+    expect(radarFix).toMatch(/Поиск завершается после ответа на текущий запрос ближайших игроков.*ближайшие участники.*едином списке.*когда расстояние известно.*иначе.*порядок по городу/i);
     expect(radarFix).toMatch(/При задержке или ошибке.*краткий статус/i);
     expect(gamesFix).toMatch(/заголовка и счётчика на телефоне.*отступы горизонтальных переключателей типа игры.*даты на компьютере.*размеры элементов компактного фильтра/i);
     // D1 cause remains UNKNOWN; reset 2.0/session-only checks do not prove a repaired cause or persistence.
@@ -1124,7 +1124,7 @@ describe("releases page current known limitations SSR (#473)", () => {
       expect(html.split(fix).length - 1).toBe(1);
     }
     expect(html).toContain("После включения Radar и подтверждения активации появляется короткая строка поиска");
-    expect(html).toContain("Первый ответ завершает поиск");
+    expect(html).toContain("Поиск завершается после ответа на текущий запрос ближайших игроков");
     expect(html).toContain("иначе сохраняется порядок по городу");
     expect(html).toContain("При задержке или ошибке показан краткий статус");
     expect(html).toContain("отступы горизонтальных переключателей типа игры");
