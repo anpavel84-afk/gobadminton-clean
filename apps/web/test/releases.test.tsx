@@ -47,8 +47,35 @@ vi.mock("../src/lib/releases-server", async (importOriginal) => {
 });
 
 describe("releases catalogue integrity", () => {
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.63 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.63");
+  it("keeps alpha.63 map changes in its accepted historical row", () => {
+    const row = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.63");
+    expect(row).toMatchObject({
+      application_version: "0.1.0-alpha.63",
+      version_label: "0.1.0-alpha.63",
+      source_sha: "6ca9ce29a116984c8114f36223895611ab34821a",
+      title: "Единая кнопка «На карте» в мобильном каталоге игроков",
+      api_contract_version: "0.40.0",
+      owner_uat: "NOT_TESTED",
+      additions: [],
+      deployments: [{
+        environment: "dev",
+        status: "ACCEPTED",
+        release_id: "r42582796773-a1",
+        accepted_at: "2026-11-09T08:06:21Z",
+        api_digest: "sha256:809b872e969e7930d297513b76696a90c7fcc506ef88b39278f4dc35deb2bd4a",
+        web_digest: "sha256:4cc56bf69a905d6750cdb3ae7ecf9a4e95b18c5de6b0b78fb10714d768318576",
+        kind: "pipeline",
+      }],
+    });
+    expect(Object.keys(row!)).toHaveLength(10);
+    expect(row!.fixes).toHaveLength(2);
+    expect(row!.fixes.join(" ")).toMatch(/На карте.*сложенной карты|сложенной карты.*На карте/);
+    expect(row!.fixes.join(" ")).toMatch(/унифицированы кнопки действий.*не компоновка целиком/);
+    expect(row!.known_limitations).toHaveLength(6);
+  });
+
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.64 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.64");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -64,8 +91,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/мобильн|На карте|действи|Radar/i);
-    expect(currentProse).toMatch(/обычн|тренировк|кнопки действий|унифицир/i);
+    expect(currentProse).toMatch(/шапке|мерцания/i);
+    expect(currentProse).toMatch(/первом открытии и перезагрузке/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,13 +112,24 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/На карте|мобильн|игроков/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Профиль без мерцания при открытии страниц");
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
+    const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
+    expect(fixes).toMatch(/первом открытии и перезагрузке.*публичное имя и аватар в шапке.*без мерцания/i);
+    expect(fixes).toMatch(/после выхода из аккаунта или смены пользователя.*актуальное состояние входа/i);
+    expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
+    expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
+    expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("accepted_at");
+    expect(CURRENT_NAMED_RELEASE).not.toHaveProperty("deployments");
+    expect(currentProse).not.toMatch(/проверки (входа|авторизации).*отменены|постоянно.*(кэш|сохранён)|приёмка.*пройдена/i);
+    expect(currentProse).not.toMatch(/\bOPS\b|cache.?scope|admission|ownership|\bwriter\b|кэш/i);
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(
       /не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i,
     );
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(7);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#506.*пока не доступно пользователям/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/карте площадок.*отзыв после конкретной игры.*публичного автора без замены/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
     );
@@ -250,10 +288,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(66);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(67);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(71);
+    ).toBe(72);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -853,14 +891,22 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders the current map CTA fixes and limits without first-alpha false email/postgame/push claims", async () => {
+  it("renders the single current header fix and limits without stale map or first-alpha claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("На карте");
-    expect(html).toContain("сложенной карты");
-    expect(html).toContain("унифицированы кнопки действий");
-    expect(html).toContain("не компоновка целиком");
+    expect(html).toContain("Профиль без мерцания при открытии страниц");
+    expect(html).toContain(CURRENT_NAMED_RELEASE.fixes[0]!);
+    expect(html.split(CURRENT_NAMED_RELEASE.fixes[0]!).length - 1).toBe(1);
+    expect(html).toContain("публичное имя и аватар в шапке");
+    expect(html).toContain("после выхода из аккаунта или смены пользователя");
+    expect(html).toContain("реальным аккаунтом");
+    expect(html).toContain("390 и 1280");
+    expect(html).toContain("ещё не выполнена");
+    expect(html).not.toContain("На карте");
+    expect(html).not.toContain("сложенной карты");
+    expect(html).not.toContain("унифицированы кнопки действий");
+    expect(html).not.toContain("не компоновка целиком");
     expect(html).not.toContain("не требует подтверждать её самому себе");
     expect(html).not.toContain("не разрывается внутри слова");
     for (const item of CURRENT_NAMED_RELEASE.known_limitations) {
