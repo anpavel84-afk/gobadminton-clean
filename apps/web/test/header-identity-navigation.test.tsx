@@ -495,12 +495,17 @@ describe("new document bootstrap / hydration", () => {
     const observer = new MutationObserver(() => labels.push(container.textContent));
     observer.observe(container, { subtree: true, childList: true, characterData: true });
     const errors: unknown[] = [];
-    const root = hydrateRoot(container, documentTree(), { onRecoverableError: error => errors.push(error) });
+    let root!: ReturnType<typeof hydrateRoot>;
+    // Commit hydration and its subscription before waiting for revalidation.
+    await act(async () => {
+      root = hydrateRoot(container, documentTree(), { onRecoverableError: error => errors.push(error) });
+    });
     try {
-      await flushCoalesce();
+      await waitFor(() => expect(transport.meCalls).toBe(1));
       expect(container.textContent).toBe("Профиль: Анна Альфа");
       expect(container.querySelector("img")?.getAttribute("src")).toBe(uploadedA);
       await act(async () => { pendingMe.resolve({ ok: true, status: 200, data: me("u1", "private@example.test") }); });
+      await waitFor(() => expect(transport.socialCalls).toBe(1));
       expect(container.textContent).toBe("Профиль: Анна Альфа");
       await act(async () => { pendingSocial.resolve({ ok: true, status: 200, data: social("Анна Альфа", boot.identity.avatar) }); });
       expect(new Set(labels)).toEqual(new Set(["Профиль: Анна Альфа"]));
