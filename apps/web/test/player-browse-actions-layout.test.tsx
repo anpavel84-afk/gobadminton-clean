@@ -1,14 +1,21 @@
-import { createElement } from "react";
+import { createElement, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DesktopBrowseActionsFixture,
   DesktopBrowseActionsShell,
   StableActionFooter,
 } from "../src/components/consumer/players/PlayerBrowsePlayInterest";
+import { Button } from "../src/components/consumer/Button";
+import { GamesViewAction } from "../src/components/consumer/games/GamesViewAction";
+
+vi.mock("next/link", () => ({
+  default: (props: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) =>
+    createElement("a", props, props.children),
+}));
 
 const root = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(join(root, "../src/styles/player-browse.css"), "utf8");
@@ -38,6 +45,103 @@ const STATES: Array<{
   { id: "guest", status: "Войдите, чтобы предложить игру", primaryLabel: "Войти", primaryClassName: "pb-btn-request" },
   { id: "long-primary", status: "Вы оба хотите сыграть", statusTone: "success", primaryLabel: "Отменить предложение", primaryClassName: "pb-btn-withdraw" },
 ];
+
+const BOTTOM_NAV = createElement(
+  "nav",
+  { className: "gb-bottom-nav", "aria-label": "Основная" },
+  createElement("a", { href: "/games" }, "Игры"),
+  createElement("a", { href: "/players", "aria-current": "page" }, "Игроки"),
+  createElement("a", { href: "/venues" }, "Клубы"),
+  createElement("a", { href: "/profile" }, "Профиль"),
+);
+
+/** Exact #526 Players map props from PlayersDirectoryPage (Radar ON). */
+function playersMapAction(className: string) {
+  return createElement(GamesViewAction, {
+    view: "list",
+    href: "/players/radar",
+    labelFull: "Игроки на карте",
+    labelShort: "На карте",
+    className,
+    "aria-label": "Игроки на карте",
+  });
+}
+
+/** Mobile list finder zone: «Свайп» + in-flow GamesViewAction (Radar ON). */
+function renderPlayers526MobileFixture() {
+  return renderToStaticMarkup(
+    createElement(
+      "div",
+      { className: "gb-app-shell", "data-surface": "players-526-mobile" },
+      createElement(
+        "div",
+        { className: "gb-consumer" },
+        createElement(
+          "div",
+          {
+            className: "fr3 players-page gb-player-browse",
+            "data-surface": "players-directory",
+            "data-browse-view": "list",
+            "data-directory-desktop": "false",
+          },
+          createElement(
+            "div",
+            {
+              className: "pb-mobile-finder-zone",
+              "data-radar": "on",
+              "data-fixture": "players-526-finder",
+            },
+            createElement(
+              Button,
+              {
+                type: "button",
+                variant: "dark",
+                className: "pb-finder-cta",
+                "aria-label": "Свайп",
+              },
+              createElement("span", { className: "pb-finder-cta__label" }, "Свайп"),
+            ),
+            createElement(
+              "div",
+              {
+                className: "pb-finder-map-group",
+                role: "group",
+                "aria-label": "Игроки на карте",
+              },
+              playersMapAction("pb-finder-map-secondary"),
+            ),
+          ),
+        ),
+      ),
+      BOTTOM_NAV,
+    ),
+  );
+}
+
+/** Desktop ≥1024 list: floating gb-players-map-cta (Radar ON); bottom nav stays in DOM but CSS-hidden. */
+function renderPlayers526DesktopFixture() {
+  return renderToStaticMarkup(
+    createElement(
+      "div",
+      { className: "gb-app-shell", "data-surface": "players-526-desktop" },
+      createElement(
+        "div",
+        { className: "gb-consumer" },
+        createElement(
+          "div",
+          {
+            className: "fr3 players-page gb-player-browse",
+            "data-surface": "players-directory",
+            "data-browse-view": "list",
+            "data-directory-desktop": "true",
+          },
+          playersMapAction("gb-players-map-cta"),
+        ),
+      ),
+      BOTTOM_NAV,
+    ),
+  );
+}
 
 describe("player browse desktop actions layout (#523)", () => {
   it("scopes desktop button row to CSS grid so status cannot stretch Next alone", () => {
@@ -160,9 +264,24 @@ describe("player browse desktop actions layout (#523)", () => {
         primary: createElement("button", { type: "button", className: "pb-btn-request" }, "Давай сыграем"),
       })),
     );
-    writeFileSync(out, JSON.stringify({ desktopStates, mobileHtml: mobile }, null, 2));
+    const players526 = {
+      mobileRadarOnHtml: renderPlayers526MobileFixture(),
+      desktopHtml: renderPlayers526DesktopFixture(),
+    };
+    writeFileSync(out, JSON.stringify({ desktopStates, mobileHtml: mobile, players526 }, null, 2));
     expect(desktopStates.ready).toContain("Давай сыграем");
     expect(mobile).toContain("Пропустить");
+    expect(players526.mobileRadarOnHtml).toContain("pb-mobile-finder-zone");
+    expect(players526.mobileRadarOnHtml).toContain("pb-finder-map-secondary");
+    expect(players526.mobileRadarOnHtml).toContain("На карте");
+    // Mobile accessible name is on the finder map group (GamesViewAction href path).
+    expect(players526.mobileRadarOnHtml).toContain('role="group"');
+    expect(players526.mobileRadarOnHtml).toContain('aria-label="Игроки на карте"');
+    expect(players526.mobileRadarOnHtml).toContain('href="/players/radar"');
+    expect(players526.mobileRadarOnHtml).toContain("gb-map-entry-tile");
+    expect(players526.desktopHtml).toContain("gb-players-map-cta");
+    expect(players526.desktopHtml).toContain("Игроки на карте");
+    expect(players526.desktopHtml).toContain('href="/players/radar"');
   });
 });
 
@@ -185,5 +304,26 @@ describe("mobile Players map CTA reuses GamesViewAction (#526)", () => {
     const rule = css.slice(css.indexOf(".pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action {"));
     expect(rule.slice(0, 200)).toContain("position: static");
     expect(css).toContain(".pb-mobile-finder-zone .gb-map-cta-label--short");
+  });
+  it("SSR-renders the actual #526 finder/map fixture (GamesViewAction + Свайп + nav)", () => {
+    const mobile = renderPlayers526MobileFixture();
+    expect(mobile).toContain('data-fixture="players-526-finder"');
+    expect(mobile).toContain('data-radar="on"');
+    expect(mobile).toContain("pb-finder-cta");
+    expect(mobile).toContain("Свайп");
+    expect(mobile).toContain("pb-finder-map-secondary");
+    expect(mobile).toContain("gb-games-view-action");
+    expect(mobile).toContain("gb-map-entry-tile");
+    expect(mobile).toContain("На карте");
+    expect(mobile).toContain("Игроки на карте");
+    expect(mobile).toContain('href="/players/radar"');
+    expect(mobile).toContain("gb-bottom-nav");
+    const desktop = renderPlayers526DesktopFixture();
+    expect(desktop).toContain("gb-players-map-cta");
+    // Desktop accessible name comes from the full label text on the real GamesViewAction link.
+    expect(desktop).toContain('class="gb-map-cta-label gb-map-cta-label--full">Игроки на карте');
+    expect(desktop).toContain('href="/players/radar"');
+    expect(desktop).toContain("gb-map-entry-tile");
+    expect(desktop).not.toContain("pb-mobile-finder-zone");
   });
 });
