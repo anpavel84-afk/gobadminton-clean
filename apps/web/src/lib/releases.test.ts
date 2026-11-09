@@ -25,21 +25,42 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/мобильн|стрелк|Подробнее|действи/i);
-    expect(prose).toMatch(/обычн|тренер|тренировк/i);
+    expect(prose).toMatch(/мобильн|На карте|действи|Radar/i);
+    expect(prose).toMatch(/обычн|тренировк|кнопки действий|унифицир/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/собственн.*посещени/i);
-    expect(fixes).toMatch(/не требует подтверждать.*самому себе/i);
-    expect(fixes).toMatch(/не показывает уведомление.*свою отметку/i);
-    expect(fixes).toMatch(/авторство.*реальные подтверждения.*история.*оспорить/i);
-    expect(fixes).toMatch(/блокировки.*не разрывается внутри слова/i);
-    expect(fixes).not.toMatch(/#526|карта игроков|карту игроков/i);
+    expect(fixes).toMatch(/На карте/);
+    expect(fixes).toMatch(/сложенной карты|Radar/i);
+    expect(fixes).toMatch(/унифицированы кнопки действий|не компоновка целиком/i);
+    expect(fixes).toMatch(/alpha\.62|обычной игры и тренировки/i);
+    expect(fixes).not.toMatch(/не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/мобильн|действи|обычн|тренировк/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/На карте|мобильн|игроков/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
+    expect(
+      TRUSTED_HISTORICAL_SEED.some(
+        (row) =>
+          row.application_version === "0.1.0-alpha.62" &&
+          row.version_label === "0.1.0-alpha.62" &&
+          row.source_sha === "65b987116184dada309b87054b5cbe42c0f21578" &&
+          row.deployments[0]?.release_id === "r42540492310-a1" &&
+          row.deployments[0]?.accepted_at === "2026-11-09T00:42:02Z" &&
+          row.deployments[0]?.api_digest ===
+            "sha256:0508f4747bd38eebdd465b5d14c1fd29962c9bb2fe1b3c3a2a20a90da9ac333b" &&
+          row.deployments[0]?.web_digest ===
+            "sha256:cac3c8981b7444f8c91752db7a3fd4001e1514521b2aad8ec1cc42343b3a6e15" &&
+          row.title ===
+            "Мобильные карточки игр и тренировок, собственная отметка посещения и кнопка блокировки" &&
+          row.api_contract_version === "0.40.0" &&
+          row.fixes.length === 3 &&
+          row.fixes.some((item) => /не требует подтверждать.*самому себе/i.test(item)) &&
+          row.fixes.some((item) => /не разрывается внутри слова/i.test(item)) &&
+          row.fixes.some((item) => /одинаковую компоновку и действия/i.test(item)) &&
+          row.owner_uat === "NOT_TESTED",
+      ),
+    ).toBe(true);
     expect(prose).not.toMatch(/\b15\/20\b|PROD|READY|ACTIVE|DEV|operator|alias/i);
     expect(prose).not.toMatch(/опрос каталога в простое|селектор города|idle polling/i);
     expect(prose).not.toMatch(/уже изменены|уже применены|Цех №1|Старая деревня/i);

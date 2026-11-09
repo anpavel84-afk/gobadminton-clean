@@ -64,8 +64,8 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/мобильн|стрелк|Подробнее|действи/i);
-    expect(currentProse).toMatch(/обычн|тренер|тренировк/i);
+    expect(currentProse).toMatch(/мобильн|На карте|действи|Radar/i);
+    expect(currentProse).toMatch(/обычн|тренировк|кнопки действий|унифицир/i);
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -85,9 +85,12 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toMatch(/мобильн|действи|обычн|тренировк/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/стрелк|Подробнее|обычн|тренер|мобильн/i);
+    expect(CURRENT_NAMED_RELEASE.title).toMatch(/На карте|мобильн|игроков/i);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(
+      /не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i,
+    );
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(6);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(
       /проверк|приёмк|юридическ|2027|iPhone|GoBad|фотограф|#506|#522|карт/i,
@@ -247,10 +250,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(65);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(66);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(70);
+    ).toBe(71);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -378,6 +381,28 @@ describe("releases catalogue integrity", () => {
       && row.fixes.length === 1
       && row.known_limitations.length === 7
       && row.known_limitations.some((item) => /мобильная кнопка|унификация действий/i.test(item))
+      && row.owner_uat === "NOT_TESTED",
+    )).toBe(true);
+    expect(TRUSTED_HISTORICAL_SEED.some((row) =>
+      row.application_version === "0.1.0-alpha.62"
+      && row.version_label === "0.1.0-alpha.62"
+      && row.source_sha === "65b987116184dada309b87054b5cbe42c0f21578"
+      && row.deployments[0]?.release_id === "r42540492310-a1"
+      && row.deployments[0]?.accepted_at === "2026-11-09T00:42:02Z"
+      && row.deployments[0]?.api_digest === "sha256:0508f4747bd38eebdd465b5d14c1fd29962c9bb2fe1b3c3a2a20a90da9ac333b"
+      && row.deployments[0]?.web_digest === "sha256:cac3c8981b7444f8c91752db7a3fd4001e1514521b2aad8ec1cc42343b3a6e15"
+      && row.deployments[0]?.environment === "dev"
+      && row.deployments[0]?.status === "ACCEPTED"
+      && row.deployments[0]?.kind === "pipeline"
+      && row.deployments.length === 1
+      && row.api_contract_version === "0.40.0"
+      && row.title === "Мобильные карточки игр и тренировок, собственная отметка посещения и кнопка блокировки"
+      && row.additions.length === 0
+      && row.fixes.length === 3
+      && row.fixes.some((item) => /одинаковую компоновку и действия|стрелка 44px|Подробнее/i.test(item))
+      && row.fixes.some((item) => /не требует подтверждать.*самому себе/i.test(item))
+      && row.fixes.some((item) => /не разрывается внутри слова/i.test(item))
+      && row.known_limitations.length === 6
       && row.owner_uat === "NOT_TESTED",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
@@ -828,13 +853,16 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders the three current fixes and limits without first-alpha false email/postgame/push claims", async () => {
+  it("renders the current map CTA fixes and limits without first-alpha false email/postgame/push claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("карточки обычной игры и тренировки");
-    expect(html).toContain("не требует подтверждать её самому себе");
-    expect(html).toContain("не разрывается внутри слова");
+    expect(html).toContain("На карте");
+    expect(html).toContain("сложенной карты");
+    expect(html).toContain("унифицированы кнопки действий");
+    expect(html).toContain("не компоновка целиком");
+    expect(html).not.toContain("не требует подтверждать её самому себе");
+    expect(html).not.toContain("не разрывается внутри слова");
     for (const item of CURRENT_NAMED_RELEASE.known_limitations) {
       expect(html).toContain(item);
     }
