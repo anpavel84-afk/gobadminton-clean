@@ -51,5 +51,21 @@ it("public venue page and map cannot reach cover writes or admin endpoints", () 
   for (const [file, source] of graph) {
     expect(file).not.toMatch(/(?:VenueCoverEditor|venue-cover-api)\.[jt]sx?$/);
     expect(source, file).not.toContain("/v1/admin/");
+    expect(file).not.toMatch(/(?:\/app\/|\/lib\/api\.[jt]s$)/);
+    expect(source, file).not.toMatch(/resolveApiBaseUrl|next\/headers|["']server-only["']|API_BASE_URL/);
+  }
+});
+
+it("keeps the configured public server fetch at the route boundary without private or write imports", () => {
+  const route = resolve("src/app/venues/[venueId]/page.tsx");
+  const graph = reachable([route]);
+  expect(graph.has(resolve("src/lib/api.ts"))).toBe(true);
+  const source = graph.get(route)!;
+  expect(source).not.toContain('"use client"');
+  expect(source).not.toMatch(/next\/headers|cookies\(|headers\(|\/v1\/me|\/v1\/admin\/|\/v1\/venues\?/);
+  expect(source).not.toMatch(/Cookie:|Authorization:|method:\s*["'](?:POST|PUT|PATCH|DELETE)/i);
+  for (const [file, body] of graph) {
+    expect(file).not.toMatch(/(?:VenueCoverEditor|venue-cover-api)\.[jt]sx?$/);
+    expect(body, file).not.toContain("/v1/admin/");
   }
 });
