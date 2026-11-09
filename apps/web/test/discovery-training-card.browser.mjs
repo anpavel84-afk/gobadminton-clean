@@ -414,7 +414,26 @@ await withChrome(async ({ call, evaluate }) => {
         } else {
           assert.ok(
             tracks.length === 3 || tracks.length === 4,
-            `${width}/${state}: desktop people-summary roles+actions+disclosure, got ${trainerCard.peopleBandGridColumns}`,
+            `${width}/${state}: desktop people-summary roles+disclosure+actions, got ${trainerCard.peopleBandGridColumns}`,
+          );
+        }
+      }
+      // Owner #521 footer order: disclosure precedes details/share in visual reading order;
+      // details/share sit at the people-summary right edge (ordinary card action alignment).
+      if (trainerCard.disclosure && trainerCard.peopleActions && trainerCard.peopleSummary) {
+        if (width <= 390) {
+          assert.ok(
+            trainerCard.disclosure.y + trainerCard.disclosure.height <= trainerCard.peopleActions.y + 2,
+            `${width}/${state}: mobile disclosure must stack above details/share (disclosure.bottom=${trainerCard.disclosure.y + trainerCard.disclosure.height}, actions.y=${trainerCard.peopleActions.y})`,
+          );
+        } else {
+          assert.ok(
+            trainerCard.disclosure.x + trainerCard.disclosure.width <= trainerCard.peopleActions.x + 2,
+            `${width}/${state}: disclosure must precede details/share horizontally (disclosure.right=${trainerCard.disclosure.x + trainerCard.disclosure.width}, actions.x=${trainerCard.peopleActions.x})`,
+          );
+          assert.ok(
+            Math.abs(trainerCard.peopleActions.right - trainerCard.peopleSummary.right) <= 2,
+            `${width}/${state}: details/share must sit at people-summary right edge (actions.right=${trainerCard.peopleActions.right}, summary.right=${trainerCard.peopleSummary.right})`,
           );
         }
       }
@@ -473,7 +492,7 @@ await withChrome(async ({ call, evaluate }) => {
           assert.equal(
             trainerCard.peopleSummaryChildCount,
             4,
-            `${width}/${state}: collapsed mobile summary must stack 4 rows (roles+actions+disclosure)`,
+            `${width}/${state}: collapsed mobile summary must stack 4 rows (roles+disclosure+actions)`,
           );
           for (const h of trainerCard.peopleSummaryChildHeights || []) {
             assert.ok(
@@ -577,6 +596,12 @@ await withChrome(async ({ call, evaluate }) => {
           `${width}/${state}: typical unused gap under photo before people=${typical.unusedUnderPhoto}`,
         );
       }
+      // Ordinary host actions and trainer people-band actions share the same card right-edge family.
+      assert.ok(ordinary.peopleActions, `${width}/${state}: ordinary details/share actions present`);
+      assert.ok(
+        Math.abs(ordinary.peopleActions.right - typical.peopleActions.right) <= 2,
+        `${width}/${state}: trainer details/share right edge must match ordinary actions (ordinary=${ordinary.peopleActions.right}, trainer=${typical.peopleActions.right})`,
+      );
     }
 
     if (width >= 1280 && !expanded) {

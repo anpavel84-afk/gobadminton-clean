@@ -212,7 +212,7 @@ function TrainerPeopleBand({
             <strong>{host}</strong>
           </span>
         </div>
-        <CardActions gameId={game.id} title={game.title} />
+        {/* #521 Owner footer order: TRAINER → ORGANIZER → disclosure → details/share (right edge). */}
         <button
           ref={toggleRef}
           type="button"
@@ -225,6 +225,7 @@ function TrainerPeopleBand({
           <span>{expanded ? "Свернуть" : "Отзывы и история"}</span>
           <ChevronIcon />
         </button>
+        <CardActions gameId={game.id} title={game.title} />
       </div>
       <div
         ref={detailsRef}
