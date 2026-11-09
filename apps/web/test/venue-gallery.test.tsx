@@ -35,6 +35,12 @@ import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewC
 import { VenuePickerDialog } from "../src/components/consumer/games/VenuePickerDialog";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { venueMediaSkeletonStyle } from "../src/lib/venue-illustration";
+import VenueRoute from "../src/app/venues/[venueId]/page";
+
+vi.mock("../src/components/consumer/ConsumerShell", () => ({
+  ConsumerShell: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("../src/components/consumer/games/GamesMapView", () => ({ GamesMapView: () => null }));
 
 function skeletonMarkup(): string {
   const style = venueMediaSkeletonStyle();
@@ -73,7 +79,47 @@ function ssr(node: ReactNode) {
 }
 
 beforeEach(() => { resetHooks(); });
-afterEach(() => { resetHooks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { resetHooks(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+it("renders the requested route's actual cover src, name and catalog credit in initial SSR without browser effects", async () => {
+  const initialVenue: Venue = {
+    id: "venue-ssr", name: "Публичный зал SSR", cityId: "city", address: "Адрес", timezone: "Europe/Moscow",
+    latitude: 55, longitude: 37, dataStatus: "verified", provenance: "public-source",
+    cover: { uploadedUrl: url("b"), credit: { kind: "photo", text: "Фото: Главная", url: "https://club.example/main" } },
+    publicContacts: null,
+    profile: {
+      courtCount: 4, amenities: { parking: null, showers: null }, updatedAt: null,
+      gallery: { coverage: "ordered", items: [
+        { id: "first", url: url("a"), credit: { kind: "photo", text: "Фото: Один", url: "https://club.example/1" } },
+        { id: "main", url: url("b"), credit: { kind: "photo", text: "Фото: Главная", url: "https://club.example/main" } },
+      ] },
+      catalogSource: { provider: "badminton4u.ru", venueId: "B4U-V-33540253", clubs: [
+        { id: "B4U-C-208", name: "Публичный клуб", url: "https://badminton4u.ru/clubs/208" },
+      ] },
+    },
+  };
+  vi.stubEnv("API_BASE_URL", "https://api.example");
+  const upstream = vi.fn(async () => new Response(JSON.stringify(initialVenue)));
+  vi.stubGlobal("fetch", upstream);
+  const page = await VenueRoute({ params: Promise.resolve({ venueId: initialVenue.id }) });
+  // Real route + VenuePage + gallery render; no hook effects or image load callbacks run.
+  const html = ssr(page);
+  // Scope the primary gallery to its real wrapper; the profile also renders secondary photos.
+  const hero = html.match(/<div class="gb-venue-media">([\s\S]*?)<\/div><div class="gb-venue-public-profile">/)?.[1] ?? "";
+  const images = hero.match(/<img\b[^>]*>/g) ?? [];
+  expect(images.some(image => image.includes(`src="${url("b")}"`))).toBe(true);
+  expect(images.some(image => image.includes(`src="${url("a")}"`))).toBe(false);
+  expect(html).toContain("Публичный зал SSR");
+  expect(hero).toContain("Источник: badminton4u.ru");
+  expect(hero).toContain('href="https://badminton4u.ru/clubs/208"');
+  expect(hero).toContain("Публичный клуб");
+  // Provenance and credits survive in the public RSC seed; the hero waits for decode to display photo credit.
+  expect(page.props.initialVenue).toEqual(initialVenue);
+  expect(hero).toContain("Загружаем фотографию…");
+  expect(hero).not.toContain("Фото: Главная");
+  expect(html).not.toContain("csrfToken");
+  expect(upstream).toHaveBeenCalledTimes(1);
+});
 
 describe("VenueGallery", () => {
   it("hides navigation for a single image and shows default illustration when empty", () => {

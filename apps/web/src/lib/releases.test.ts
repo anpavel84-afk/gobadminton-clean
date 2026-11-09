@@ -72,8 +72,33 @@ describe("releases current descriptor literals", () => {
     expect(row.owner_uat).toBe("NOT_TESTED");
   });
 
-  it("bumps current descriptor to alpha.66 with API 0.40.0", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.66");
+  it("preserves the exact ten-field trusted alpha.66 receipt and historical trainer and match fixes", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.66");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(4013);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "ce994d29970fd5dfe15db23f08f326c189b989595719f2ce0b977ce6deb59b54",
+    );
+    expect(row.title).toBe("Карточка тренировки и подтверждение дружеского матча");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toHaveLength(2);
+    const fixes = row.fixes.join(" ");
+    expect(fixes).toMatch(/роли тренера и организатора показаны согласованно/i);
+    expect(fixes).toMatch(/«Отзывы и история» изначально свёрнут.*раскрывает отзывы и историю отдельно по ролям/i);
+    expect(fixes).toMatch(/метка «С тренером» читается целиком/i);
+    expect(fixes).toMatch(/квадратные фотографии на широком экране и мобильные кнопки действий/i);
+    expect(fixes).toMatch(/подтверждённом взаимном желании сыграть.*«Дружеский матч».*именами обоих игроков и продолжением поиска/i);
+    expect(fixes).toMatch(/переход к общению зависит от текущих прав/i);
+    expect(fixes).toMatch(/высоту экрана и безопасные отступы/i);
+    expect(row.known_limitations).toHaveLength(9);
+    expect(row.owner_uat).toBe("NOT_TESTED");
+  });
+
+  it("bumps current descriptor to alpha.67 with API 0.40.0", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.67");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -87,25 +112,23 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.fixes,
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
-    expect(prose).toMatch(/Карточка тренировки и подтверждение дружеского матча/i);
-    expect(prose).toMatch(/Отзывы и история|Дружеский матч/i);
+    expect(prose).toMatch(/Начало загрузки фотографии площадки при открытии страницы/i);
+    expect(prose).toMatch(/Фотография площадки.*исходного HTML/i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(1);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/роли тренера и организатора показаны согласованно/i);
-    expect(fixes).toMatch(/«Отзывы и история» изначально свёрнут.*раскрывает отзывы и историю отдельно по ролям/i);
-    expect(fixes).toMatch(/метка «С тренером» читается целиком/i);
-    expect(fixes).toMatch(/квадратные фотографии на широком экране и мобильные кнопки действий/i);
-    expect(fixes).toMatch(/подтверждённом взаимном желании сыграть.*«Дружеский матч».*именами обоих игроков и продолжением поиска/i);
-    expect(fixes).toMatch(/переход к общению зависит от текущих прав/i);
-    expect(fixes).toMatch(/высоту экрана и безопасные отступы/i);
+    expect(fixes).toMatch(/Фотография площадки может начать загружаться из исходного HTML страницы/i);
+    expect(fixes).toMatch(/не дожидаясь клиентского запроса данных/i);
+    expect(fixes).not.toMatch(/Отзывы и история|подтверждённом взаимном желании|роли тренера|квадратные фотографии/i);
+    expect(fixes).not.toMatch(/быстрее|ускорен|\d+\s*(мс|ms|сек|%)/i);
     expect(fixes).not.toMatch(/нецензурные выражения.*замаскированными|Маскирование/i);
     expect(fixes).not.toMatch(/На карте|сложенной карты|Radar|унифицированы кнопки действий|alpha\.62/i);
     expect(fixes).not.toMatch(/не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i);
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Карточка тренировки и подтверждение дружеского матча");
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(9);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Начало загрузки фотографии площадки при открытии страницы");
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(10);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/проверка загрузки фотографии площадки в установленной версии ещё не выполнена/i);
     const limitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
     expect(limitations).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
     expect(limitations).toMatch(/#506.*проверка маскирования.*редактирования с действующими правами.*разбора жалоб.*ещё не выполнена/i);
