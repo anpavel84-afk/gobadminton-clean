@@ -1130,16 +1130,36 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                        author_attempt=author_n,
                        author_evidence_dir=str(author_evidence),
                        evidence_root=str(evidence))
+            def capacity_author_launch(**kwargs):
+                # A saved successor is not perpetual launch authority. Reuse the
+                # protected claim/operation + owned lease check at the adapter
+                # boundary, before the backup can charge any budget/model call.
+                if claim.get('capacity_successor'):
+                    try:
+                        from author_handoff import capacity_claim, operation, ACTUAL
+                        capacity_claim(lease, path, operation(
+                            task, ACTUAL[claim['bound_author']['decision']['provider']],
+                            _read_worktree_head(adapters, worktree)))
+                    except Exception as err:
+                        raise ProviderError('capacity_policy_prelaunch_hold', charge='none') from err
+                return adapters.author(**kwargs, capacity_lease=lease, capacity_claim_path=path)
+
             try:
                 if adapters.author:
                     author_result = invoke_cursor_author(
                         task=task, worktree=worktree, evidence_dir=author_evidence,
-                        launcher=(lambda **kw: adapters.author(**kw, capacity_lease=lease, capacity_claim_path=path))
-                        if claim.get('capacity_policy') else adapters.author, parent_lease=True, reviewer_authority=adapters.reviewer_authority,
+                        launcher=capacity_author_launch
+                        if claim.get('capacity_policy') or claim.get('capacity_successor') else adapters.author,
+                        parent_lease=True, reviewer_authority=adapters.reviewer_authority,
                         protected_reviewer=claim.get('reviewer_authority'))
                 else:
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
+                if err.code == 'capacity_policy_prelaunch_hold':
+                    claim = mark_phase(path, 'BLOCKED', stage='author', error=err.code,
+                                       capacity_hold=err.code, no_model_launched=True)
+                    return {'status': 'blocked', 'reason': err.code,
+                            'claim': claim, 'claim_path': str(path)}
                 if (task.get('_bound_author', {}).get('mode') == 'on'
                         and adapters.author_capacity is not None):
                     proposal = record_capacity_proposal(

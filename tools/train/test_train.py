@@ -4543,11 +4543,6 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                     lean_run.execute_claim(adm_u, adapters2, results_root=td_u)
                 self.assertEqual(ctx2.exception.code, 'no_automatic_paid_replay')
 
-
-if __name__ == '__main__':
-    os.chdir(Path(__file__).resolve().parent)
-    unittest.main()
-
 class CapacityOwnedLeaseRegression(unittest.TestCase):
     def test_real_controller_lease_rejects_foreign_released_replaced_and_boolean(self):
         import importlib.util
@@ -4574,3 +4569,146 @@ class CapacityOwnedLeaseRegression(unittest.TestCase):
             finally:
                 lease.release()
             with self.assertRaises(lean_run.LeanError): lease.verify_capacity(claim)
+
+
+class CapacityPrelaunchPolicyRegression(unittest.TestCase):
+    """Real saved successor/next wake; synthetic Root IO, no provider or Root execution."""
+
+    def test_saved_successor_rechecks_current_policy_before_backup(self):
+        import importlib.util
+        from contextlib import ExitStack
+        from dataclasses import asdict
+        import author_handoff as h
+        import author_routing as policy
+
+        spec = importlib.util.spec_from_file_location('prelaunch_fixture_slots',
+            _TRAIN_DIR.parents[1] / 'scripts/chatops/actions_train/live/slots.py')
+        slots = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(slots)
+        for change in ('unchanged', 'revoked', 'missing', 'generation', 'pipeline', 'unproven'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                root = Path(td)
+                adapters, state = make_flow_adapters(td)
+                adapters.lock_registry = slots.LockRegistry
+                (Path(adapters.lock_dir) / 'registry.lock').touch()
+                adapters.fetch_admissions = lambda: []
+                pipeline = 'c' * 40
+                captured = dict(schema='GB_ROOT_CAPACITY_POLICY_V1', enabled=True,
+                                pipeline_revision=pipeline, generation='f' * 64)
+                current = {'author_capacity_recovery_policy': dict(captured)}
+                config = dict(author_routing=dict(mode='on', pipeline_revision=pipeline))
+                reviewer = dict(executor='qa:separate', model='gpt-6-sol', effort='medium')
+                ready = lambda *a, **kw: (True, dict(reviewer))
+                stack.enter_context(patch.object(lean_run, 'role_ready', side_effect=ready))
+                stack.enter_context(patch.object(providers, 'role_ready', side_effect=ready))
+                stack.enter_context(patch.object(lean_live, '_qa_root_config', return_value=current))
+
+                def protected(ref, **kw):
+                    ref = Path(ref)
+                    self.assertTrue(ref.is_relative_to(root))
+                    return ref.read_bytes()
+
+                stack.enter_context(patch.object(lean_live, '_qa_protected_bytes', side_effect=protected))
+                routes = {policy.AGY: policy.Route(policy.AGY, True, True, True,
+                                                   'agy:fixture', policy.AGY_MODEL)}
+                stack.enter_context(patch.object(providers, 'routing_qualifications', return_value=routes))
+                comment, _ = owner_task_comment(issue=527, complexity='standard', work_kind='ops',
+                                                authorroute=['agy_author', 'cursor_auto'])
+                adm = lean_run.admit_comment(comment, {'number': 527, 'state': 'open'}, {'id': REPO_ID})
+                old = lean_run.claim_admission(adm, results_root=root, config=config)
+                self.assertEqual(old['bound_author']['decision']['provider'], policy.AGY)
+                work = adapters.worktree(old['task'])
+                source = Path(work) / 'apps/web/src/x.ts'
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b'partial')
+                runtime = dict(old['task'], issue=527, revision=old['revision'],
+                               runtime_base_sha=state['frozen_base'], _author_operation='original-operation')
+                operation = h.operation(runtime, 'agy_author', state['frozen_base'])
+                retention = h.SourceRetention(
+                    baseline={'apps/web/src/x.ts': hashlib.sha256(b'old').hexdigest()},
+                    allowed=['apps/web/src/x.ts'], ignored=lambda n: False,
+                    source_name=lambda n: True, secrets=lambda: ())
+                retention.capture(work)
+                checkpoint = retention.persist(root, operation)
+                routes[policy.CURSOR] = policy.Route(policy.CURSOR, True, True, True, 'cursor:fixture', 'auto')
+                failure = policy.CapacityFailure(operation, 'typed429-evidence', 'RATE_LIMIT', 'native_top_level_error')
+                stop = policy.StopProof(operation, failure.fingerprint, True, True, True, False,
+                    str(root / 'source-checkpoint/manifest.json'), ('original-paid-receipt',), 'preserved_diff')
+                proposal = h.propose_handoff(current=operation, failure=failure, proof=stop,
+                    routes=routes, reviewer=policy.Reviewer('qa:separate', 'gpt-6-sol:medium', True, True, True),
+                    initial_provider=policy.AGY, cumulative_attempts=1,
+                    history_refs=('original-paid-receipt', 'usage-UNKNOWN'))
+                proposal = json.loads(json.dumps(proposal, default=asdict))
+                self.assertEqual(proposal['action'], 'REQUIRE_NEW_ADMISSION')
+                old.update(phase='BLOCKED', worktree=work, base_sha=state['frozen_base'],
+                           attempts={'author': 1, 'qa': 0}, capacity_proposal=proposal,
+                           capacity_error={'code': 'provider_control_failure', 'charge': 'charged'})
+                old_path = lean_run.claim_path_for(adm, root)
+                lean_run.write_receipt(old_path, old)
+                checkpoint_sha = _sha(200)
+
+                def imported(claim, lease):
+                    lease.verify_capacity(claim)
+                    state['heads'][work] = checkpoint_sha
+                    return checkpoint_sha, checkpoint
+
+                def git(cwd, *args):
+                    self.assertEqual(str(cwd), work)
+                    if args[:2] == ('rev-parse', 'HEAD'): return checkpoint_sha
+                    if args[0] == 'status': return ''
+                    if args[0] == 'diff': return 'apps/web/src/x.ts\0'
+                    raise AssertionError(args)
+
+                stack.enter_context(patch.object(h, 'import_capacity_checkpoint', side_effect=imported))
+                stack.enter_context(patch.object(lean_live, 'git', side_effect=git))
+                lease = lean_run.WriterLease(527, old['task']['allowed_paths'],
+                    registry=slots.LockRegistry, lock_dir=adapters.lock_dir, frozen_admission=old)
+                lease.acquire()
+                try:
+                    derived = lean_run.derive_capacity_successor(old_path, runtime, lease, adapters, root, config)
+                finally:
+                    lease.release()
+                self.assertEqual(derived['reason'], 'capacity_successor', derived)
+                successor = derived['claim']
+                self.assertEqual(successor['phase'], 'CLAIMED')
+                self.assertEqual(successor['capacity_policy'], captured)
+                predecessor = old_path.read_bytes()
+                if change == 'revoked': current['author_capacity_recovery_policy']['enabled'] = False
+                elif change == 'missing': current.clear()
+                elif change == 'generation': current['author_capacity_recovery_policy']['generation'] = 'e' * 64
+                elif change == 'pipeline': current['author_capacity_recovery_policy']['pipeline_revision'] = 'd' * 40
+                elif change == 'unproven':
+                    stack.enter_context(patch.object(lean_live, '_qa_root_config', side_effect=OSError('unproven')))
+                # Keep the paid adapter synthetic; transport routing/intent and
+                # execute_claim precharge guard run normally, including real flock.
+                stack.enter_context(patch.object(lean_run, '_author_provenance', return_value={'fixture': True}))
+                out = lean_run.run_once({'event_name': 'schedule'}, adapters=adapters,
+                                        results_root=root, config=config)
+                result = out['results'][0]
+                self.assertEqual(old_path.read_bytes(), predecessor)
+                self.assertEqual(result['claim']['capacity_chain'], successor['capacity_chain'])
+                self.assertEqual(result['claim']['author_history_refs'], proposal['history_refs'])
+                self.assertEqual(result['claim']['owner_authorization'], successor['owner_authorization'])
+                self.assertEqual(result['claim']['capacity_policy'], captured)
+                self.assertEqual(result['claim']['attempts']['author'], 2)
+                if change == 'unchanged':
+                    self.assertEqual(result['status'], 'dev_accepted_uat_pending', result)
+                    self.assertEqual(state['author_calls'], 1)
+                    self.assertEqual(result['claim']['author_provider'], 'cursor_auto')
+                else:
+                    self.assertEqual(result['status'], 'blocked', result)
+                    self.assertEqual(result['claim']['phase'], 'BLOCKED')
+                    self.assertEqual(result['reason'], 'capacity_policy_prelaunch_hold')
+                    self.assertTrue(result['claim']['no_model_launched'])
+                    self.assertEqual(state['author_calls'], 0)
+                    self.assertEqual(state['qa_calls'], 0)
+                    self.assertEqual(state['publish_calls'], 0)
+                    # A further wake cannot replay this held successor.
+                    lean_run.run_once({'event_name': 'schedule'}, adapters=adapters,
+                                      results_root=root, config=config)
+                    self.assertEqual(state['author_calls'], 0)
+
+
+if __name__ == '__main__':
+    os.chdir(Path(__file__).resolve().parent)
+    unittest.main()
