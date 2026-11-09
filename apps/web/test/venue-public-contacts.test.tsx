@@ -5,17 +5,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { listAllCityVenues } from "../src/lib/api-client";
 import type { VenueSummary } from "../src/lib/consumer-types";
-vi.mock("react", async original => ({...await original<typeof React>(),useState:<T,>(v:T)=>[v,()=>{}],useEffect:()=>{},useRef:(v:unknown)=>({current:v}),useId:()=>"contacts"}));
+const hooks = vi.hoisted(() => ({ active: false }));
+function manual<T>(render: () => T): T {
+ const previous = hooks.active; hooks.active = true;
+ try { return render(); } finally { hooks.active = previous; }
+}
+vi.mock("react", async original => {
+ const actual = await original<typeof React>();
+ return {
+  ...actual,
+  useState<T>(initial: T | (() => T)) {
+   if (!hooks.active) return actual.useState(initial);
+   return [typeof initial === "function" ? (initial as () => T)() : initial, () => {}];
+  },
+  useEffect: (...args: Parameters<typeof actual.useEffect>) => hooks.active ? undefined : actual.useEffect(...args),
+  useRef: (value: unknown) => hooks.active ? { current: value } : actual.useRef(value),
+  useId: () => hooks.active ? "contacts" : actual.useId(),
+  useContext<T>(context: React.Context<T>) {
+   return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+  },
+ };
+});
 vi.mock("next/link",()=>({default:({href,children}:{href:string;children:React.ReactNode})=><a href={href}>{children}</a>}));
 const venue:VenueSummary={id:"venue",cityId:"city",name:"Зал",address:"Адрес",timezone:"Europe/Moscow"};
 function walk(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]{
  if(!isValidElement<Record<string,unknown>>(node))return [];
- if(typeof node.type==='function')return walk((node.type as (p:Record<string,unknown>)=>React.ReactNode)(node.props));
+ if(typeof node.type==='function')return walk(manual(() => (node.type as (p:Record<string,unknown>)=>React.ReactNode)(node.props)));
  return [node,...Children.toArray(node.props.children as React.ReactNode).flatMap(walk)];
 }
 function render(value:unknown,gamesReady=true){
  const v={...venue,publicContacts:value} as VenueSummary;
- const tree=VenueSheet({venue:v,games:[],gamesReady,now:0,onCollapse:()=>{},onDeselect:()=>{}});
+ const tree=manual(() => VenueSheet({venue:v,games:[],gamesReady,now:0,onCollapse:()=>{},onDeselect:()=>{}}));
  return {nodes:walk(tree),html:renderToStaticMarkup(tree)};
 }
 afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();});

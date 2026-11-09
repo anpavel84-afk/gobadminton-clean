@@ -6,34 +6,55 @@ import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
 // Explicit effect/state harness: real component, transport, pagination, timers and cards.
 // No browser dependency is installed in this source checkout.
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
+const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, active: false,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
-vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof React>(),
-  useState<T>(initial: T) {
-    const index = hooks.cursor++; const slots = hooks.slots;
-    if (!(index in slots)) slots[index] = initial;
-    return [slots[index], (next: T | ((old: T) => T)) => {
-      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
-    }];
-  },
-  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
-  useMemo(fn: () => unknown, deps: unknown[]) {
-    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
-    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
-    return (hooks.slots[i] as { value: unknown }).value;
-  },
-  useEffect(effect: () => void | (() => void), deps: unknown[]) {
-    const index = hooks.cursor++;
-    const previous = hooks.slots[index] as unknown[] | undefined;
-    if (!previous || deps.some((value, i) => value !== previous[i])) {
-      hooks.slots[index] = deps;
-      hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
-    }
-  },
-  // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
-  useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) { hooks.cursor++; return getSnapshot(); },
-}));
+
+function manual<T>(render: () => T): T {
+  const previous = hooks.active; hooks.active = true;
+  try { return render(); } finally { hooks.active = previous; }
+}
+vi.mock("react", async importOriginal => {
+  const actual = await importOriginal<typeof React>();
+  return {
+    ...actual,
+    useContext<T>(context: React.Context<T>) {
+      return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
+    },
+    useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList) {
+      if (!hooks.active) return actual.useCallback(fn, deps);
+      const i = hooks.cursor++;
+      const previous = hooks.slots[i] as { deps: React.DependencyList; fn: T } | undefined;
+      if (!previous || deps.some((value, n) => !Object.is(value, previous.deps[n]))) hooks.slots[i] = { deps, fn };
+      return (hooks.slots[i] as { fn: T }).fn;
+    },
+    useState<T>(initial: T | (() => T)) {
+      if (!hooks.active) return actual.useState(initial);
+      const index = hooks.cursor++; const slots = hooks.slots;
+      if (!(index in slots)) slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      return [slots[index], (next: T | ((old: T) => T)) => {
+        slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
+      }];
+    },
+    useRef(initial: unknown) { if (!hooks.active) return actual.useRef(initial); const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+    useMemo(fn: () => unknown, deps: unknown[]) {
+      if (!hooks.active) return actual.useMemo(fn, deps);
+      const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+      if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+      return (hooks.slots[i] as { value: unknown }).value;
+    },
+    useEffect(effect: () => void | (() => void), deps: unknown[]) {
+      if (!hooks.active) return actual.useEffect(effect, deps);
+      const index = hooks.cursor++;
+      const previous = hooks.slots[index] as unknown[] | undefined;
+      if (!previous || deps.some((value, i) => value !== previous[i])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push(() => { hooks.cleanups[index]?.(); hooks.cleanups[index] = effect() || (() => {}); });
+      }
+    },
+    // This harness models synchronous render snapshots; detailed resource subscribe/unsubscribe covered by selected-venue-cover test.
+    useSyncExternalStore<T>(subscribe: (onChange: () => void) => () => void, getSnapshot: () => T, getServerSnapshot?: () => T) { if (!hooks.active) return actual.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot); hooks.cursor++; return getSnapshot(); },
+  };
+});
 vi.mock("next/dynamic", () => ({ default: () => function CapturedMap() { return <div data-map="harness" />; } }));
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
@@ -51,7 +72,7 @@ let venues: VenueSummary[]; let gamesReady: boolean; let dialog: boolean;
 const assign = vi.fn(); const writes = vi.fn(); const returned = vi.fn();
 function render(overrides: Partial<React.ComponentProps<typeof GamesMapView>> = {}) {
   hooks.cursor = 0;
-  const tree = GamesMapView({ cityId: a.cityId, day: "2026-11-10", activity: "trainer_led", ...overrides });
+  const tree = manual(() => GamesMapView({ cityId: a.cityId, day: "2026-11-10", activity: "trainer_led", ...overrides }));
   hooks.effects.splice(0).forEach(effect => effect()); return tree;
 }
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
@@ -62,7 +83,7 @@ function elements(node: React.ReactNode): React.ReactElement<Record<string, unkn
 function mapProps(tree: React.ReactNode) {
   const map = elements(tree).find(node => typeof node.props.onSelect === "function");
   if (!map) throw new Error("Map props missing");
-  return map.props as { onSelect: (venue: VenueSummary) => void; selectedVenueId: string | null; onAvailability: (ready: boolean) => void };
+  return map.props as { onSelect: (venue: VenueSummary) => void; selectedVenueId: string | null; onAvailability: (ready: boolean) => void; onReturnToList: () => void };
 }
 function preview(tree: React.ReactNode) {
   const card = elements(tree).find(node => node.type === VenuePreviewCard);
@@ -79,9 +100,9 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
   venues = [a, b]; gamesReady = true; dialog = false; assign.mockClear(); writes.mockClear(); returned.mockClear();
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { pathname: "/games", search: "?view=map&day=2026-11-10", assign } }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://example.test", hash: "", href: "https://example.test/games?view=map&day=2026-11-10", pathname: "/games", search: "?view=map&day=2026-11-10", assign } }));
   window.addEventListener("gb-map-return", returned);
-  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", querySelector: () => dialog ? {} : null }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", documentElement: { getAttribute: (name: string) => name === "data-gb-session-presence" ? "absent" : null }, querySelector: () => dialog ? {} : null }));
   vi.stubGlobal("sessionStorage", { setItem: writes });
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     const isVenues = url.startsWith("/v1/venues");
@@ -143,4 +164,33 @@ it("keeps the popup identity and selected venue when presentation changes", asyn
   expect(expanded?.props.expanded).toBe(true);
   expect(mapProps(tree).selectedVenueId).toBe(a.id);
   expect(assign).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled(); expect(returned).not.toHaveBeenCalled();
+});
+
+it.each([true, false])("guards list navigation with caller callback=%s until unresolved operations and dialogs finish", async withCallback => {
+  const onReturnToList = vi.fn();
+  const overrides = { onReturnToList: withCallback ? onReturnToList : undefined };
+  let tree = await load();
+  mapProps(tree).onSelect(a);
+  tree = render(overrides);
+  preview(tree).props.onOpen();
+  tree = render(overrides);
+  const sheet = elements(tree).find(node => node.type === VenueSheet) as React.ReactElement<React.ComponentProps<typeof VenueSheet>> | undefined;
+  if (!sheet?.props.onUnresolvedChange) throw new Error("Missing unresolved operation callback");
+  sheet.props.onUnresolvedChange(true);
+  mapProps(tree).onReturnToList();
+  expect(onReturnToList).not.toHaveBeenCalled(); expect(assign).not.toHaveBeenCalled();
+  tree = render(overrides);
+  expect(mapProps(tree).selectedVenueId).toBe(a.id);
+  expect(renderToStaticMarkup(tree)).toContain("Завершите текущую операцию");
+  sheet.props.onUnresolvedChange(false);
+  dialog = true;
+  mapProps(tree).onReturnToList();
+  expect(onReturnToList).not.toHaveBeenCalled(); expect(assign).not.toHaveBeenCalled();
+  dialog = false;
+  mapProps(tree).onReturnToList();
+  if (withCallback) {
+    expect(onReturnToList).toHaveBeenCalledOnce(); expect(assign).not.toHaveBeenCalled();
+  } else {
+    expect(assign).toHaveBeenCalledExactlyOnceWith("/games"); expect(onReturnToList).not.toHaveBeenCalled();
+  }
 });

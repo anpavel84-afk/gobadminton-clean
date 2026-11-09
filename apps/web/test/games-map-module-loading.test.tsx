@@ -13,6 +13,7 @@ type DynamicCapture = {
   loader: MapLoader;
   options: DynamicOptions<MapProps>;
   resolved?: ComponentType<MapProps>;
+  props?: MapProps;
 };
 
 /** This models pending/resolved dynamic rendering, not Next or browser chunk timing. */
@@ -30,6 +31,7 @@ async function importView(outcome: "success" | "failure" = "success") {
       const current: DynamicCapture = { loader, options };
       registration.current = current;
       return function MockDynamicMap(props: MapProps) {
+        current.props = props;
         const Resolved = current.resolved;
         if (Resolved) return <Resolved {...props} />;
         return options.loading?.({ isLoading: true, pastDelay: true, timedOut: false, error: null }) ?? null;
@@ -55,6 +57,7 @@ afterEach(() => {
   vi.doUnmock("next/dynamic");
   vi.doUnmock("../src/components/consumer/games/GamesVenueMap");
   vi.resetModules();
+  vi.unstubAllGlobals();
 });
 
 it("renders one polite atomic module status and a decorative progress bar inside the map area", () => {
@@ -91,8 +94,11 @@ it("registers the real loading component with ssr:false and resolves to the exac
     cityId: MOSCOW_BUNDLE.cityId,
     venues: [], counts: null, selectedVenueId: null,
     onSelect: expect.any(Function), onDeselect: expect.any(Function),
-    onAvailability: expect.any(Function), onErrorCardChange: expect.any(Function), onReturnToList,
+    onAvailability: expect.any(Function), onErrorCardChange: expect.any(Function), onReturnToList: expect.any(Function),
   });
+  vi.stubGlobal("document", { querySelector: () => null });
+  captured.props?.onReturnToList?.();
+  expect(onReturnToList).toHaveBeenCalledOnce();
 });
 
 it("resolves a rejected import to a stable alert and keeps the existing return action", async () => {
@@ -119,14 +125,32 @@ it("resolves a rejected import to a stable alert and keeps the existing return a
   expect(html).toContain("Загружаем все площадки и расписание…");
   expect(html).not.toContain("Загружаем карту…");
   expect(mapExport).not.toHaveBeenCalled();
+  vi.stubGlobal("document", { querySelector: () => null });
+  expect(captured.props?.onReturnToList).toEqual(expect.any(Function));
+  captured.props?.onReturnToList?.();
+  expect(onReturnToList).toHaveBeenCalledOnce();
   // SSR does not execute onAvailability's effect or prove a populated fallback list.
 });
 
 it("offers list navigation when the failed module has no return callback", async () => {
   const { GamesMapView, captured } = await importView("failure");
-  await resolveMap(captured);
+  const ErrorComponent = await resolveMap(captured);
+  // The standalone error keeps its existing link fallback.
+  const standalone = renderToStaticMarkup(<ErrorComponent cityId={MOSCOW_BUNDLE.cityId} venues={[]} counts={null} onSelect={() => {}} />);
+  expect(standalone).toContain('href="/games"');
   const html = renderToStaticMarkup(<GamesMapView cityId={MOSCOW_BUNDLE.cityId} day="" />);
-  expect(html).toContain('href="/games"');
+  // Inside GamesMapView the button uses the guarded callback, including fallback navigation.
+  expect(html).toContain('<button type="button"');
+  const assign = vi.fn();
+  let dialogOpen = true;
+  vi.stubGlobal("document", { querySelector: () => dialogOpen ? {} : null });
+  vi.stubGlobal("window", { location: { assign } });
+  expect(captured.props?.onReturnToList).toEqual(expect.any(Function));
+  captured.props?.onReturnToList?.();
+  expect(assign).not.toHaveBeenCalled();
+  dialogOpen = false;
+  captured.props?.onReturnToList?.();
+  expect(assign).toHaveBeenCalledExactlyOnceWith("/games");
   expect(html).toContain('role="alert"');
   expect(html).not.toContain("Загружаем карту…");
 });

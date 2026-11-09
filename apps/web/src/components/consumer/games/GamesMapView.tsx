@@ -178,7 +178,11 @@ export function GamesMapView({ cityId: requestedCityId, day, venueId, activity =
     setGalleryIndex(0);
     setSelectedVenueId(venue.id);
   };
-  const returnToList = () => { if (canLeaveSelection()) onReturnToList?.(); };
+  const returnToList = () => {
+    if (!canLeaveSelection()) return;
+    if (onReturnToList) onReturnToList();
+    else window.location.assign("/games");
+  };
   const retainedSelection = useRef<VenueSummary | undefined>(undefined);
   const catalogSelection = venues.find(item => item.id === selectedVenueId);
   if (catalogSelection && !unresolved.current) retainedSelection.current = catalogSelection;
