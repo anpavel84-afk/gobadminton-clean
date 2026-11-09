@@ -39,7 +39,7 @@ export function VenueCommunityContent({ venueId, me, authReturnPath, embedded = 
     });
     return () => cancelAnimationFrame(frame);
   }, [section]);
-  const returnBase = authReturnPath.split("#")[0];
+  const [returnBase = ""] = authReturnPath.split("#");
   return <div ref={root} className={`gb-venue-community${embedded ? " gb-venue-community--embedded" : ""}`} data-venue-community={venueId}>
     <div data-community-section="ratings" tabIndex={-1}>
       <VenueCommunityRating venueId={venueId} sectionId={id("ratings")} signedIn={Boolean(me?.id && me.csrfToken)}

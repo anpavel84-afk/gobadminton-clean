@@ -180,12 +180,21 @@ it("guards selected venue close and switch while UNKNOWN, while collapse keeps t
   tree=cycle();
   const popup=find<React.ComponentProps<typeof VenuePopup>>(tree,VenuePopup)!;
   const sheet=find<React.ComponentProps<typeof VenueSheet>>(tree,VenueSheet)!;
+  const initialKey=popup.key;
+  expect(initialKey).not.toBeNull();
+  function expectRetainedOwner(current: React.ReactNode) {
+    expect(find(current,VenuePopup)?.key).toBe(initialKey);
+    expect(find<React.ComponentProps<typeof VenuePopup>>(current,VenuePopup)?.props.retainContent).toBe(true);
+    expect(find<React.ComponentProps<typeof VenueSheet>>(current,VenueSheet)?.props.venue.id).toBe(first.id);
+  }
+  expectRetainedOwner(tree);
   sheet.props.onUnresolvedChange!(true);
   popup.props.onDeselect(); tree=cycle();
-  expect(find(tree,VenuePopup)?.key).toBe(first.id);
+  expectRetainedOwner(tree);
   find<React.ComponentProps<typeof GamesVenueMap>>(tree,GamesVenueMap)!.props.onSelect(second);
-  tree=cycle();expect(find(tree,VenuePopup)?.key).toBe(first.id);
-  popup.props.onExpandedChange(false);tree=cycle();expect(find(tree,VenuePopup)?.key).toBe(first.id);
+  tree=cycle();expectRetainedOwner(tree);
+  popup.props.onExpandedChange(false);tree=cycle();expectRetainedOwner(tree);
+  popup.props.onExpandedChange(true);tree=cycle();expectRetainedOwner(tree);
   sheet.props.onUnresolvedChange!(false);
   find<React.ComponentProps<typeof VenuePopup>>(tree,VenuePopup)!.props.onDeselect();
   expect(find(cycle(),VenuePopup)).toBeUndefined();

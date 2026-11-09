@@ -115,7 +115,7 @@ export function stableVenueCounts(previous: Map<string, number> | null, next: Ma
 
 /** Public selection intent only; schedule-only GamesMapView.venueId is unrelated. */
 export function mapCommunityReturnPath(path: string, search: string, venueId: string, cityId: string, day: string, activity: string) {
-  const base = gamesMapReturnPath(`${path}${search}`).split("#")[0];
+  const [base = "/games?view=map"] = gamesMapReturnPath(`${path}${search}`).split("#");
   const [route, query] = base.split("?");
   const source = new URLSearchParams(query);
   const params = new URLSearchParams();

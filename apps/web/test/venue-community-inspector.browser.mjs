@@ -3,10 +3,73 @@
 // with the parent's built web server and existing .tools Playwright installation.
 // One Next SSR root per page; no standalone renderToString roots or fixture product code.
 import assert from 'node:assert/strict';
-import { pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { setTimeout, clearTimeout } from 'node:timers';
+import { URL, pathToFileURL } from 'node:url';
 const origin = process.env.P1_ORIGIN || 'http://127.0.0.1:18984';
 assert.equal(new URL(origin).hostname, '127.0.0.1');
-const { chromium } = await import(pathToFileURL(`${process.cwd()}/.tools/node_modules/playwright/index.mjs`));
+const playwrightModule = process.env.P1_PLAYWRIGHT_MODULE || `${process.cwd()}/.tools/node_modules/playwright/index.mjs`;
+const { chromium } = await import(pathToFileURL(playwrightModule));
+
+// Parent-host execution only: connect to this owned child's endpoint, with the
+// existing sandbox intact. Earlier dependency/sandbox failures remain failures.
+async function connectOwnedChrome() {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-507-synthetic-'));
+  const chrome = spawn('/opt/gobadminton-qa/chromium-headless-1243/chrome-headless-shell', [
+    '--headless', '--no-first-run', '--enable-unsafe-swiftshader',
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`,
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let exited = false;
+  const exit = new Promise(resolve => {
+    const done = () => { exited = true; resolve(); };
+    chrome.once('exit', done);
+    chrome.once('error', done);
+  });
+  async function waitForExit() {
+    let timer;
+    try {
+      await Promise.race([exit, new Promise(resolve => { timer = setTimeout(resolve, 3000); })]);
+    } finally { clearTimeout(timer); }
+  }
+  async function stop() {
+    if (!exited) { chrome.kill('SIGTERM'); await waitForExit(); }
+    if (!exited) { chrome.kill('SIGKILL'); await waitForExit(); }
+    assert.ok(exited, 'Owned Chrome did not exit; its profile is retained');
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+  try {
+    const endpoint = await new Promise((resolve, reject) => {
+      let stderr = '';
+      const timer = setTimeout(() => finish(new Error(`Owned Chrome DevTools timeout: ${stderr}`)), 15000);
+      const onData = chunk => {
+        stderr = (stderr + chunk.toString()).slice(-8192);
+        const match = /DevTools listening on (ws:\/\/\S+)\r?\n/.exec(stderr);
+        if (match) finish(null, match[1]);
+      };
+      const onExit = (code, signal) => finish(new Error(`Owned Chrome exited (${code}/${signal}): ${stderr}`));
+      const onError = error => finish(error);
+      function finish(error, value) {
+        clearTimeout(timer);
+        chrome.stderr.off('data', onData);
+        chrome.stderr.resume();
+        chrome.off('exit', onExit);
+        chrome.off('error', onError);
+        if (error) reject(error); else resolve(value);
+      }
+      chrome.stderr.on('data', onData);
+      chrome.once('exit', onExit);
+      chrome.once('error', onError);
+    });
+    const browser = await chromium.connectOverCDP(endpoint, { timeout: 15000 });
+    return { browser, stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
 const city = 'a0000000-0000-4000-8000-000000000001';
 const id = '10000000-0000-4000-8000-000000000001';
 const actor = '30000000-0000-4000-8000-000000000001';
@@ -15,7 +78,7 @@ const venue = {id,cityId:city,name:'Synthetic venue',address:'Synthetic address'
 const aggregate = {venueId:id,canonicalVenueId:id,state:'available',average:4.3,count:3};
 const comment = {id:commentId,entityKind:'venue',entityId:id,parentCommentId:null,body:'Synthetic server ***** '+ 'x'.repeat(950),deleted:false,version:1,createdAt:'2026-11-01T12:00:00Z',updatedAt:'2026-11-01T12:00:00Z',edited:false,mine:false,replyCount:0,author:{publicPlayerId:null,displayName:'Synthetic player',avatar:{uploadedUrl:null,providerUrl:null},profilePublic:false}};
 const review = {reviewHandle:'synthetic-published',authorLabel:'Участник игры',text:'Synthetic published '+ 'x'.repeat(470),topics:['surface'],publishedRevision:1,publishedAt:'2026-11-01T12:00:00Z'};
-const browser = await chromium.launch({headless:true,chromiumSandbox:true});
+const { browser, stop } = await connectOwnedChrome();
 try {
   for (const width of [390,1280]) {
     const context = await browser.newContext({viewport:{width,height:900}});
@@ -59,7 +122,7 @@ try {
     await content.getByRole('heading',{name:'Оценки сообщества',exact:true}).waitFor();
     await page.evaluate(()=>{
       document.documentElement.style.setProperty('--gb-safe-bottom','34px');
-      window.dispatchEvent(new CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}}));
+      window.dispatchEvent(new window.CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}}));
     });
     await content.getByRole('radio',{name:'4 из 5',exact:true}).waitFor();
     await content.getByRole('radio',{name:'4 из 5',exact:true}).click();
@@ -108,7 +171,7 @@ try {
     // D1 uses the production picker and its independent sibling actions.
     await page.goto(`${origin}/games/create?cityId=${city}`);
     await page.locator('.gb-game-create').waitFor();
-    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}})));
+    await page.evaluate(()=>window.dispatchEvent(new window.CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}})));
     const pickerTrigger=page.locator('.gb-venue-picker-trigger');
     await pickerTrigger.click();
     const picker=page.locator('.gb-venue-picker');
@@ -132,4 +195,7 @@ try {
     await context.close();
   }
   console.log('Synthetic shared map fixture complete at 390/1280, 1024 transition and 34px safe inset. No hosted UAT claimed.');
-} finally {await browser.close();}
+} finally {
+  try { await browser.close(); }
+  finally { await stop(); }
+}
