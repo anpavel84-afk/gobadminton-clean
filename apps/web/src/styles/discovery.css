@@ -309,6 +309,12 @@
     --gb-discovery-hero-scene-scale: calc(280 / 470);
     height: calc(300px * 280 / 470);
   }
+  /* #521 R3 repair3: tablet trainer content was ~12px taller than the shared square
+     (820 intrinsic 289.6 vs image 277.5). Tighten vertical pad only — keep fonts,
+     long natural flow, ordinary/mobile/desktop≥1200 unchanged. */
+  .gb-discovery-card[data-activity="trainer_led"] > .gb-discovery-card__content {
+    padding: 12px 20px 10px;
+  }
 }
 @media (max-width: 1050px) {
   .gb-discovery-hero { grid-template-columns: minmax(0, 1fr) minmax(240px, 280px); }
