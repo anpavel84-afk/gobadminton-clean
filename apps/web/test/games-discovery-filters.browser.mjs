@@ -34,11 +34,12 @@ const outDir = resolveEvidenceDir(outDirArg);
 mkdirSync(outDir, { recursive: true });
 
 const receipt = {
-  scope: "#458 DiscoveryLevelFilters SSR+CSS geometry via owned Chromium CDP; not DEV/Owner UAT",
+  scope: "#458/#547 DiscoveryLevelFilters SSR+CSS geometry + labelled D1 browser fixture via owned Chromium CDP; not DEV/Owner/GoBad UAT",
   chrome: CHROME,
   viewports: VIEWPORTS,
   shots: [],
   metrics: [],
+  d1: null,
   pass: false,
   status: "PENDING",
 };
@@ -66,9 +67,14 @@ async function ssrFixtures() {
   const payload = JSON.parse(await readFile(out, "utf8"));
   assert.match(payload.closedHtml, /gb-discovery-filters-trigger/);
   assert.doesNotMatch(payload.closedHtml, /Выходите на корт|По времени|data-level-guide/);
+  assert.match(payload.closedHtml, /Все ближайшие/);
+  assert.match(payload.closedHtml, /С тренером/);
+  assert.match(payload.closedHtml, /Найдено: 12 · из 40 загруженных/);
   assert.match(payload.openHtml, /gb-discovery-filters-dialog/);
   assert.match(payload.openHtml, /data-presentation="compact"/);
+  assert.match(payload.openHtml, /value="2\.0"/);
   assert.equal(payload.halfSteps?.length, 13);
+  assert.match(String(payload.d1InteractiveHtml || ""), /games547-d1-exact-2\.0-controlled-reset/);
   await rm(dir, { recursive: true, force: true });
   return payload;
 }
@@ -225,6 +231,24 @@ await withChrome(async ({ call, evaluate }) => {
       const eyebrow = (document.body.textContent || '').includes('Выходите на корт');
       const sortText = (document.body.textContent || '').includes('По времени');
       const overflowX = document.documentElement.scrollWidth > ${width} + 1;
+      const heading = document.querySelector('.gb-discovery-feed-heading');
+      const title = heading?.querySelector('h2');
+      const count = heading?.querySelector('.gb-discovery-feed-actions > span');
+      const titleBox = title?.getBoundingClientRect();
+      const countBox = count?.getBoundingClientRect();
+      const chips = document.querySelector('.gb-discovery-chips');
+      const chipsStyle = chips ? getComputedStyle(chips) : null;
+      const filtersStyle = getComputedStyle(document.querySelector('.gb-discovery-filters'));
+      const dateSelect = document.querySelector('.gb-discovery-date select');
+      const dateOpt = dateSelect && Array.from(dateSelect.options).find((o) => o.value === '');
+      const dateTextOk = dateOpt ? dateOpt.label === 'Все ближайшие' || dateOpt.textContent === 'Все ближайшие' : false;
+      const dateBox = dateSelect?.getBoundingClientRect();
+      const overlap =
+        titleBox && countBox
+          ? !(titleBox.right <= countBox.left + 1 || countBox.right <= titleBox.left + 1 || titleBox.bottom <= countBox.top + 1 || countBox.bottom <= titleBox.top + 1)
+            && Math.min(titleBox.right, countBox.right) - Math.max(titleBox.left, countBox.left) > 4
+            && Math.min(titleBox.bottom, countBox.bottom) - Math.max(titleBox.top, countBox.top) > 4
+          : false;
       return {
         trigger: tr ? { width: tr.width, height: tr.height, x: tr.x, y: tr.y } : null,
         guidePresent: Boolean(guide),
@@ -232,6 +256,12 @@ await withChrome(async ({ call, evaluate }) => {
         sortText,
         overflowX,
         triggerCount: document.querySelectorAll('.gb-discovery-filters-trigger').length,
+        titleCountOverlap: overlap,
+        chipsScrollbarWidth: chipsStyle?.scrollbarWidth || null,
+        filtersScrollbarWidth: filtersStyle.scrollbarWidth || null,
+        chipsPaddingEnd: chipsStyle?.paddingInlineEnd || null,
+        dateTextOk,
+        dateWidth: dateBox ? Math.round(dateBox.width) : 0,
       };
     })()`);
     assert.ok(closed.trigger, `${width}: trigger present`);
@@ -242,6 +272,16 @@ await withChrome(async ({ call, evaluate }) => {
     assert.equal(closed.eyebrow, false, `${width}: no feed eyebrow`);
     assert.equal(closed.sortText, false, `${width}: no По времени`);
     assert.equal(closed.overflowX, false, `${width}: no horizontal overflow closed`);
+    assert.equal(closed.titleCountOverlap, false, `${width}: title/count no collision`);
+    assert.equal(closed.dateTextOk, true, `${width}: date option Все ближайшие present`);
+    if (width >= 1280) {
+      assert.ok(closed.dateWidth >= 120, `${width}: date control wide enough for Все ближайшие`);
+    }
+    if (width <= 390) {
+      assert.equal(closed.chipsScrollbarWidth, "none", `${width}: chips scrollbar hidden`);
+      assert.equal(closed.filtersScrollbarWidth, "none", `${width}: filters scrollbar hidden`);
+      assert.ok(Number.parseFloat(closed.chipsPaddingEnd) >= 12, `${width}: chips end padding`);
+    }
     receipt.metrics.push({ width, state: "closed", ...closed });
 
     await call("Page.setDocumentContent", {
@@ -254,6 +294,7 @@ await withChrome(async ({ call, evaluate }) => {
       const body = dialog?.querySelector('.gb-discovery-filters-dialog__body');
       const footer = dialog?.querySelector('.gb-discovery-filters-dialog__footer');
       const reset = dialog?.querySelector('.gb-discovery-filters-dialog__reset');
+      const listBtn = footer?.querySelector('.gb-c23-btn');
       const closeBtn = dialog?.querySelector('.gb-close-button');
       const select = dialog?.querySelector('select');
       const dr = dialog?.getBoundingClientRect();
@@ -268,6 +309,9 @@ await withChrome(async ({ call, evaluate }) => {
         footer: fr ? { bottom: fr.bottom, height: fr.height } : null,
         close: cr ? { width: cr.width, height: cr.height, top: cr.y, right: ${width} - cr.right } : null,
         resetMinHeight: reset ? Math.round(reset.getBoundingClientRect().height) : 0,
+        listBtnMinHeight: listBtn ? Math.round(listBtn.getBoundingClientRect().height) : 0,
+        selectMinHeight: select ? Math.round(select.getBoundingClientRect().height) : 0,
+        selectValue: select ? select.value : null,
         selectFontSize: select ? getComputedStyle(select).fontSize : null,
         bodyOverflow,
         footerPad,
@@ -281,7 +325,10 @@ await withChrome(async ({ call, evaluate }) => {
     assert.equal(open.definitions, 13, `${width}: 13 level definitions`);
     assert.ok(open.close && Math.abs(open.close.width - 44) <= 1, `${width}: close 44`);
     assert.ok(open.close && Math.abs(open.close.height - 44) <= 1, `${width}: close height 44`);
-    assert.ok(open.resetMinHeight >= 44, `${width}: reset ≥44`);
+    assert.ok(open.resetMinHeight >= 48, `${width}: reset ≥48 (44 floor retained)`);
+    assert.ok(open.listBtnMinHeight >= 48, `${width}: list btn ≥48`);
+    assert.ok(open.selectMinHeight >= 48, `${width}: compact select ≥48`);
+    assert.equal(open.selectValue, "2.0", `${width}: open fixture exact 2.0`);
     if (width <= 390) {
       assert.ok(open.dialog.width >= width - 2, `${width}: bottomsheet full width`);
       assert.ok(open.dialog.top > 0, `${width}: sheet leaves top breathing room`);
@@ -293,6 +340,38 @@ await withChrome(async ({ call, evaluate }) => {
     assert.ok(["auto", "scroll", "overlay"].includes(open.bodyOverflow), `${width}: single body scroll`);
     receipt.metrics.push({ width, state: "open", safeArea, ...open });
   }
+
+  /* Labelled browser fixture: controlled reset mirror for exact 2.0 — not live Next GET / GoBad UAT. */
+  await call("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  const { frameTree: d1Tree } = await call("Page.getFrameTree");
+  await call("Page.setDocumentContent", {
+    frameId: d1Tree.frame.id,
+    html: fixtures.d1InteractiveHtml,
+  });
+  await sleep(80);
+  const before = await evaluate(`window.__gb547D1()`);
+  assert.equal(before.selectValue, "2.0", "D1 fixture starts at 2.0");
+  assert.equal(before.dotActive, true, "D1 fixture active dot before reset");
+  assert.equal(before.resetDisabled, false, "D1 fixture reset enabled before");
+  await evaluate(`document.getElementById('gb547-reset').click()`);
+  const after = await evaluate(`window.__gb547D1()`);
+  assert.equal(after.selectValue, "", "D1 fixture select cleared");
+  assert.equal(after.dotActive, false, "D1 fixture dot absent");
+  assert.equal(after.resetDisabled, true, "D1 fixture reset disabled");
+  assert.equal(after.helperHidden, true, "D1 fixture helper hidden");
+  assert.match(String(after.summary || ""), /Все ближайшие/, "D1 fixture other filters preserved");
+  receipt.d1 = {
+    fixture: "BROWSER_FIXTURE games547-d1-exact-2.0-controlled-reset",
+    before,
+    after,
+    note: "Source controlled reset clears exact 2.0; GoBad #547 no-op report remains NOT_REPRODUCED here; parent installed-556 evidence retained separately.",
+  };
+
   receipt.pass = true;
   receipt.status = "PASS";
 });
