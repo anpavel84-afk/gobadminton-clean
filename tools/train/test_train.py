@@ -3109,7 +3109,7 @@ class Od018TransportSeamTests(unittest.TestCase):
                                       return_value={'unexpected': 'second Codex call'}) as codex:
                 with self.assertRaises(providers.ProviderError) as ctx:
                     lean_live._qa_resume_agy_capacity(claim, task, ev)
-                self.assertEqual(ctx.exception.code, 'agy_capacity_alternative_ineligible')
+                self.assertEqual(ctx.exception.code, 'qa_capacity_control_unsupported')
                 self.assertEqual(ctx.exception.charge, 'none')
                 self.assertEqual(codex.call_count, 0)
 
@@ -3860,6 +3860,29 @@ class CursorNamespaceUid1002Tests(unittest.TestCase):
             self.assertTrue(intent.get('no_model_launched'))
 
 
+@contextmanager
+def _synthetic_source_custody():
+    # These legacy post-model controller fixtures already model process ownership
+    # and source validation. No Root path/config access belongs in this seam.
+    import author_handoff
+    class Direct:
+        def __new__(cls, root):
+            if root is not None: raise AssertionError('synthetic Root seam only')
+            return None
+    original_mkdtemp = tempfile.mkdtemp
+    def private_temp(suffix=None, prefix=None, dir=None):
+        # Redirect only these three synthetic fixtures' explicit /tmp requests.
+        return original_mkdtemp(suffix=suffix, prefix=prefix,
+                                dir=tempfile.gettempdir() if dir == '/tmp' else dir)
+    with mock.patch.object(author_handoff, 'RootSourceCustody', return_value=None), \
+         mock.patch.object(author_handoff, 'DirectSourceCustody', Direct), \
+         mock.patch.object(tempfile, 'mkdtemp', side_effect=private_temp), \
+         mock.patch.object(author_handoff, 'owned_group_gone', return_value=True), \
+         mock.patch.object(lean_live, '_kill_owned_process_group'), \
+         mock.patch.object(lean_live.os, 'killpg', side_effect=ProcessLookupError):
+        yield
+
+
 class RootEnvBindingDefectTests(unittest.TestCase):
     """OD-018 author20: UID1002 snapshot, fresh origin/dev refspec, unpublished preserve."""
 
@@ -4087,6 +4110,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             body = inspect.getsource(lean_live.create_task_worktree)
             self.assertIn('+refs/heads/dev:refs/remotes/origin/dev', body)
 
+    @_synthetic_source_custody()
     def test_post_model_snapshot_fail_preserves_unpublished_charged_blocked(self):
         """Model completed + snapshot fail → UNVALIDATED sources, charged source_import, BLOCKED."""
         with tempfile.TemporaryDirectory() as td:
@@ -4204,6 +4228,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             self.assertNotEqual(claim['phase'], 'RUNNING')
             self.assertFalse(claim.get('no_model_launched'))
 
+    @_synthetic_source_custody()
     def test_root_atomic_import_fchown_0600_and_newdir_ownership(self):
         """Root importer fchown before replace; fresh source dirs user-owned; mode kept."""
         with tempfile.TemporaryDirectory(dir='/tmp') as td:
@@ -4335,6 +4360,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 p == str(existing.parent) for p, _u, _g in dir_chowns))
             self.assertTrue(any(c and c[0] == 'add' for c in git_calls))
 
+    @_synthetic_source_custody()
     def test_post_model_git_fail_charged_source_import_blocked(self):
         """Model completed + local git failure → ProviderError source_import charged BLOCKED."""
         with tempfile.TemporaryDirectory(dir='/tmp') as td:
@@ -4383,6 +4409,7 @@ class RootEnvBindingDefectTests(unittest.TestCase):
                 }
 
             def boom_git(cwd, *args, **kwargs):
+                if args == ('rev-parse', 'HEAD'): return 'b' * 40
                 raise lean_live.LiveError(
                     'subprocess_failed', 'git:add: Permission denied')
 

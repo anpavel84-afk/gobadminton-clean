@@ -1089,7 +1089,8 @@ def typed_agy_capacity(stderr, raw, *, producer, binding):
     from dataclasses import asdict
     from author_handoff import fingerprint
     import author_routing as policy
-    if (type(producer) is not dict or producer.get('binding') != asdict(binding)
+    if (type(stderr) is not bytes or type(raw) is not bytes
+            or type(producer) is not dict or producer.get('binding') != asdict(binding)
             or producer.get('cli_sha256') != AGY_CLI_SHA256
             or producer.get('control_origin') != 'pinned-agy-outer-stderr-v1'
             or producer.get('exit_code') != 3 or producer.get('model') != AGY_MODEL
@@ -1099,7 +1100,10 @@ def typed_agy_capacity(stderr, raw, *, producer, binding):
         return None
     try:
         events = [loads(line) for line in raw.splitlines() if line.strip()]
-        if (not events or events[0].get('event') != 'init' or events[-1].get('event') != 'result'
+        if (not events or any(type(e) is not dict for e in events)
+                or type(events[0].get('init')) is not dict
+                or type(events[-1].get('result')) is not dict
+                or events[0].get('event') != 'init' or events[-1].get('event') != 'result'
                 or events[0].get('init', {}).get('model') != AGY_MODEL
                 or events[-1].get('result', {}).get('status') != 'ERROR'
                 or sum(e.get('event') == 'init' for e in events) != 1
@@ -1109,7 +1113,7 @@ def typed_agy_capacity(stderr, raw, *, producer, binding):
                     if line.startswith(b'AGY_ERROR: ')]
         if len(controls) != 1: return None
         c = controls[0]
-        if (c.get('status') != 'RESOURCE_EXHAUSTED' or type(c.get('error_code')) is not int
+        if (type(c) is not dict or c.get('status') != 'RESOURCE_EXHAUSTED' or type(c.get('error_code')) is not int
                 or c['error_code'] != 429 or c.get('code_kind') != 'http'
                 or c.get('retryable') is not True or not isinstance(c.get('error_id'), str)
                 or not 1 <= len(c['error_id']) <= 128):

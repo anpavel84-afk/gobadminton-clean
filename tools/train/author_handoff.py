@@ -2,7 +2,7 @@
 
 Root custody is separate from provider success, stop authority and acceptance.
 Capacity recovery requires protected operation/control evidence and explicit
-Root policy. Unsupported controls and absent cgroups remain HOLD by default.
+Root policy. An absent cgroup requires independent exclusive-UID proc proof.
 """
 from __future__ import annotations
 
@@ -139,10 +139,10 @@ def _bounded_file(fd, name, limit):
 
 
 class SourceQuarantine:
-    """Opaque allowed-file rescue; no recursive export or reads after quarantine.
+    """Bounded per-file fault inventory; no unsafe source-byte retention.
 
-    Fault custody is always HOLD. Home/auth/out, links, large/unbounded trees
-    cannot enter this sink. A quarantined inode is never an accepted checkpoint.
+    Incomplete outcomes never release cleanup. Opaque EXACT workspace custody
+    belongs to the Root parent and is never called sanitized or source-only.
     """
     def __init__(self, cap, allowed, uid):
         need(type(allowed) in (list, tuple) and 0 < len(allowed) <= 256)
@@ -155,6 +155,7 @@ class SourceQuarantine:
         self.cap, self.uid = cap, uid
         self.workfd = None
         self.ready = self.quarantined = False
+        self.outcomes = {}
         os.mkdir('fallback', 0o700, dir_fd=cap)
         self.fallback = _directory(cap, 'fallback')
         for index in range(len(self.allowed)):
@@ -173,33 +174,92 @@ class SourceQuarantine:
         return [info.st_dev, info.st_ino]
 
     def quarantine(self):
-        if self.quarantined: return
-        self.quarantined = True
+        """Truthful fault inventory only. Unsafe bytes stay in EXACT ws.
+
+        No secret-blind per-file rename, no sanitized/source-only claim. Root
+        may subsequently move the opaque workspace without traversing it.
+        Native must veto destructive cleanup until a durable checkpoint ACK.
+        """
         self.ready = False
-        if self.workfd is None: return
-        total = 0
+        self.outcomes = {}
         for index, name in enumerate(self.allowed):
-            parent = os.dup(self.workfd)
+            parent = os.dup(self.workfd) if self.workfd is not None else None
             try:
+                need(parent is not None)
                 for part in name.split('/')[:-1]:
-                    nextfd = _directory(parent, part); os.close(parent); parent = nextfd
-                    need(os.fstat(parent).st_uid == self.uid)
-                leaf = name.split('/')[-1]
-                before = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
-                need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
-                     and before.st_uid == self.uid and before.st_size <= 8 << 20)
-                total += before.st_size; need(total <= 64 << 20)
-                os.rename(leaf, str(index), src_dir_fd=parent, dst_dir_fd=self.fallback)
-                after = os.stat(str(index), dir_fd=self.fallback, follow_symlinks=False)
-                need((before.st_dev, before.st_ino) == (after.st_dev, after.st_ino))
-            except (OSError, RetentionError): pass
-            finally: os.close(parent)
-        os.fsync(self.fallback); os.fsync(self.cap)
+                    child = _directory(parent, part); os.close(parent); parent = child
+                info = os.stat(name.split('/')[-1], dir_fd=parent, follow_symlinks=False)
+                self.outcomes[str(index)] = ('unvalidated_in_ws' if stat.S_ISREG(info.st_mode)
+                                             else 'unsafe_in_ws')
+            except FileNotFoundError:
+                self.outcomes[str(index)] = 'absent'
+            except (OSError, RetentionError):
+                self.outcomes[str(index)] = 'unproven_in_ws'
+            finally:
+                if parent is not None: os.close(parent)
+        self.quarantined = False  # Inventory is not a completed custody transfer.
+        return self.outcomes
 
     def close(self):
         for fd in (self.workfd, self.fallback, self.cap):
             if fd is not None: os.close(fd)
         self.workfd = self.fallback = self.cap = None
+
+
+def _proc_identity(pid):
+    """Root reads actual procfs; permission/namespace/parse faults fail closed."""
+    root = Path('/proc') / str(pid)
+    before_stat = (root / 'stat').read_text()
+    status = (root / 'status').read_text()
+    namespace = os.readlink(root / 'ns/pid')
+    uids = tuple(map(int, next(x for x in status.splitlines() if x.startswith('Uid:')).split()[1:]))
+    raw = (root / 'stat').read_text()
+    need(raw[raw.rindex(')')+2:].split()[19] == before_stat[before_stat.rindex(')')+2:].split()[19]
+         and next(x for x in status.splitlines() if x.startswith('Uid:')) ==
+             next(x for x in (root / 'status').read_text().splitlines() if x.startswith('Uid:'))
+         and namespace == os.readlink(root / 'ns/pid'))
+    fields = raw[raw.rindex(')') + 2:].split()
+    return dict(pid=pid, uid=list(uids), ppid=int(fields[1]), pgrp=int(fields[2]),
+                start=int(fields[19]), namespace=namespace)
+
+
+def _uid_processes(uid, *, native=None, sdk=None):
+    all_processes = []
+    for path in Path('/proc').iterdir():
+        if not path.name.isdecimal(): continue
+        need(len(all_processes) < 65536)
+        try: identity = _proc_identity(int(path.name))
+        except FileNotFoundError: continue
+        all_processes.append(identity)
+    selected = {i['pid']: i for i in all_processes if uid in i['uid']}
+    # Independently reject native/SDK descendants even if their UID or group
+    # changed. NNP is retained, but absence proof does not merely assume it.
+    ancestors = {i['pid'] for i in (native, sdk) if i is not None} | set(selected)
+    while True:
+        added = [i for i in all_processes if i['pid'] not in selected and
+                 (i['ppid'] in ancestors or
+                  (native is not None and i['pgrp'] == native['pgrp']))]
+        if not added: break
+        selected.update({i['pid']: i for i in added}); ancestors.update(i['pid'] for i in added)
+    return sorted(selected.values(), key=lambda i: i['pid'])
+
+
+def _exclusive_stop(*, uid, sdk, native, boot, sdk_exited=False):
+    need(uid == 978 and boot == Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+    need(sdk['namespace'] == os.readlink('/proc/self/ns/pid') and sdk['uid'] == [uid]*4)
+    # Two actual enumerations, excluding ONLY the authenticated waiting SDK.
+    for _ in range(2):
+        observed = _uid_processes(uid, native=native, sdk=sdk)
+        need(observed == ([] if sdk_exited else [sdk]))
+        if sdk_exited:
+            try: _proc_identity(sdk['pid'])
+            except FileNotFoundError: pass
+            else: need(False)
+        if native is not None:
+            try: _proc_identity(native['pid'])
+            except FileNotFoundError: pass
+            else: need(False)  # PID reuse is HOLD too.
+    return dict(kind='exclusive-uid-proc-stop-v1', boot=boot, sdk=sdk, native=native)
 
 
 class RootSourceCustody:
@@ -228,7 +288,7 @@ class RootSourceCustody:
         self.binding, self.allowed, self.uid = binding, sorted(set(allowed)), uid
         self.nonce = secrets.token_hex(32)
         self.boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
-        self.outer = Path(tempfile.mkdtemp(prefix='gb-source-custody-', dir='/tmp'))
+        self.outer = Path(tempfile.mkdtemp(prefix='gb-source-custody-', dir=_QA_RESULTS))
         os.chmod(self.outer, 0o700)
         self.outerfd = os.open(self.outer, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         (self.outer/'incoming').mkdir(mode=0o700)
@@ -245,6 +305,11 @@ class RootSourceCustody:
         self.prepared = False
         self.checkpoint = None
         self.anchors = ()
+        self.native_identity = None
+        self.stop_proof = None
+        self.capture_fds = tuple(os.open(self.outer / name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+            for name in ('outer-stdout', 'outer-stderr'))
 
     def _record(self):
         from providers import atomic_write
@@ -256,13 +321,51 @@ class RootSourceCustody:
 
     def client(self):
         self.server.close(); os.close(self.outerfd)
-        return CustodyClient(self.peer, self.cap, self.binding, self.allowed, self.uid, self.nonce, self.boot)
+        return CustodyClient(self.peer, self.cap, self.binding, self.allowed, self.uid, self.nonce, self.boot, self.capture_fds)
 
     def parent(self, pid):
         self.pid = pid; self.peer.close()
+        self.sdk_identity = _proc_identity(pid)
+
+    def stop_owned(self):
+        """Timeout only: signal exact anchored owned identities through pidfds.
+
+        Unknown descendants/exclusivity are HOLD, never a broad UID/group kill.
+        """
+        import signal
+        need(self.native_identity is not None)
+        processes = _uid_processes(self.uid, native=self.native_identity, sdk=self.sdk_identity)
+        for identity in processes:
+            if identity == self.sdk_identity: continue
+            need(identity['uid'] == [self.uid]*4
+                 and identity['namespace'] == self.sdk_identity['namespace']
+                 and identity['pgrp'] == self.native_identity['pgrp']
+                 and identity['start'] >= self.native_identity['start'])
+        for identity in processes:
+            if identity == self.sdk_identity: continue
+            fd = os.pidfd_open(identity['pid'])
+            try:
+                need(_proc_identity(identity['pid']) == identity)
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+            finally: os.close(fd)
+
+    def prove_stop(self, *, sdk_exited=False):
+        proof = _exclusive_stop(uid=self.uid, sdk=self.sdk_identity,
+                                native=self.native_identity, boot=self.boot, sdk_exited=sdk_exited)
+        need(self.anchors)
+        anchored = os.fstat(self.anchors[1])
+        need([anchored.st_dev, anchored.st_ino] == self.record['source_anchor'])
+        # Also bind the pathname to the anchored ws inode, not a replacement.
+        current = os.stat('ws', dir_fd=self.anchors[0], follow_symlinks=False)
+        need([current.st_dev, current.st_ino] == self.record['source_anchor'])
+        self.stop_proof = proof
+        self.record.update(owned_stop=proof); self._record()
+        return proof
 
     def collect(self):
         from providers import loads
+        if self.binding.provider == policy.AGY:
+            self.prove_stop()  # Never trust a child-supplied reap boolean.
         fd = _directory(self.cap, 'source-checkpoint')
         try:
             info = os.fstat(fd)
@@ -274,6 +377,7 @@ class RootSourceCustody:
             raw = _bounded_file(fd, 'manifest.json', 2 << 20)
             m = loads(raw)
             need(m.get('schema') == 'GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1'
+                 and m.get('validation') == 'bounded_secret_checked'
                  and m.get('binding') == asdict(self.binding)
                  and m.get('fingerprint') == fingerprint({k:v for k,v in m.items() if k != 'fingerprint'}))
             names, changed = m.get('payload_files'), m.get('changed_paths')
@@ -292,10 +396,11 @@ class RootSourceCustody:
                 child = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
                 try: os.fchown(child, 0, 0); os.fchmod(child, 0o600); os.fsync(child)
                 finally: os.close(child)
-            os.fchown(fd, 0, 0); os.fchmod(fd, 0o700); os.fsync(fd); os.fsync(self.outerfd)
-            self.checkpoint = m
+            os.fchown(fd, 0, 0); os.fchmod(fd, 0o700); os.fsync(fd); os.fsync(self.cap); os.fsync(self.outerfd)
             self.record.update(checkpoint_ready=True, checkpoint_sha256=hashlib.sha256(raw).hexdigest())
             self._record()  # durable Root custody BEFORE ACK; still HOLD
+            if self.binding.provider == policy.AGY: self.prove_stop()
+            self.checkpoint = m
         finally: os.close(fd)
 
     def service(self):
@@ -329,38 +434,129 @@ class RootSourceCustody:
             except BaseException:
                 if not self.anchors: os.close(root)
                 raise
-            self.record.update(child_pid=self.pid, source_anchor=msg['anchor'])
+            observed_sdk = _proc_identity(self.pid)
+            need(observed_sdk['start'] == self.sdk_identity['start'])
+            self.sdk_identity = observed_sdk
+            self.record.update(child_pid=self.pid, sdk_identity=observed_sdk, source_anchor=msg['anchor'])
+            if self.binding.provider == policy.AGY:
+                # Exclusive UID scope must already hold BEFORE paid launch.
+                _exclusive_stop(uid=self.uid, sdk=self.sdk_identity, native=None, boot=self.boot)
             self._record(); self.prepared = True
+        elif op == 'LAUNCHED':
+            need(self.prepared and self.native_identity is None and
+                 set(msg) == {'op','nonce','boot','binding','pid'})
+            identity = _proc_identity(msg['pid'])
+            need(identity['uid'] == [self.uid]*4 and identity['ppid'] == self.pid
+                 and identity['pgrp'] == identity['pid']
+                 and identity['namespace'] == self.sdk_identity['namespace'])
+            from providers import AGY_CLI, AGY_CLI_SHA256
+            native_exe = Path('/proc') / str(identity['pid']) / 'exe'
+            need(os.path.samefile(native_exe, AGY_CLI)
+                 and hashlib.sha256(native_exe.read_bytes()).hexdigest() == AGY_CLI_SHA256)
+            self.native_identity = identity
+            self.record.update(native_identity=identity, cli_sha256=AGY_CLI_SHA256)
+            self._record()
+        elif op == 'STOP':
+            need(self.prepared and set(msg) == {'op','nonce','boot','binding'})
+            self.prove_stop()
         elif op == 'CHECKPOINT':
             need(self.prepared and set(msg) == {'op','nonce','boot','binding'})
             if self.checkpoint is None: self.collect()
+            else: self.prove_stop()
         elif op == 'HOLD':
-            self.record.update(fault=True); self._record()
+            need(set(msg) <= {'op','nonce','boot','binding','outcomes'})
+            outcomes = msg.get('outcomes', {})
+            need(type(outcomes) is dict and set(outcomes) <= {str(i) for i in range(len(getattr(self, 'allowed', ())))}
+                 and all(v in ('unvalidated_in_ws','unsafe_in_ws','unproven_in_ws','absent')
+                         for v in outcomes.values()))
+            self.record.update(fault=True, source_outcomes=outcomes); self._record()
         else: need(False)
         self.server.send(json.dumps(dict(op=op, nonce=self.nonce, ok=True)).encode())
 
-    def rescue(self):
-        # Parent can still rescue anchored source if SDK dies unexpectedly.
-        self.record.update(fault=True); self._record()
+    def rescue(self, *, sdk_exited=False):
+        # Stop is independently proved BEFORE even an opaque rename. No reads
+        # of the opaque tree, which may contain links, secrets and .agents.
+        self.record.update(fault=True, opaque_workspace='HOLD'); self._record()
         if not self.anchors: return
-        rescue = SourceQuarantine.__new__(SourceQuarantine)
-        rescue.allowed, rescue.uid = tuple(sorted(self.allowed)), self.uid
-        rescue.cap, rescue.workfd = os.dup(self.cap), os.dup(self.anchors[1])
-        rescue.fallback = _directory(self.cap, 'fallback')
-        rescue.ready, rescue.quarantined = False, False
-        try: rescue.quarantine()
-        finally: rescue.close()
+        self.prove_stop(sdk_exited=sdk_exited)
+        os.rename('ws', 'opaque-ws', src_dir_fd=self.anchors[0], dst_dir_fd=self.outerfd)
+        info = os.stat('opaque-ws', dir_fd=self.outerfd, follow_symlinks=False)
+        need([info.st_dev, info.st_ino] == self.record['source_anchor'])
+        os.fchown(self.anchors[1], 0, 0); os.fchmod(self.anchors[1], 0o700)
+        os.fsync(self.anchors[1]); os.fsync(self.anchors[0]); os.fsync(self.outerfd)
+        self.record.update(opaque_workspace='ROOT_ONLY_UNVALIDATED', checkpoint_ready=False)
+        self._record()
+
+    def produce_capacity_operation(self, native):
+        """Root fixed-results producer, after SDK exit, with real outer FD1/FD2.
+
+        Captures facts only. It neither grants recovery policy nor adjudicates
+        legacy lost-after-tree history. Invalid/missing facts remain HOLD.
+        """
+        from live import _QA_RESULTS
+        from providers import atomic_write, typed_agy_capacity, AGY_MODEL, AGY_CLI_SHA256
+        need(os.geteuid() == 0 and self.binding.provider == policy.AGY)
+        need(self.checkpoint is not None and self.record.get('checkpoint_ready') is True
+             and not self.record.get('fault') and self.native_identity is not None
+             and self.record.get('cli_sha256') == AGY_CLI_SHA256)
+        proof = _exclusive_stop(uid=self.uid, sdk=self.sdk_identity,
+            native=self.native_identity, boot=self.boot, sdk_exited=True)
+        need(not Path('/proc', str(self.pid)).exists())
+        need(native.get('schema') == 'GB_AGY_AUTHOR_RECEIPT_V1'
+             and native.get('phase') == 'failed_no_automatic_replay'
+             and native.get('source_head') == self.binding.source_sha
+             and native.get('task_sha256') == self.record['task_sha256']
+             and native.get('exit_code') == 3 and native.get('charge_state') == 'charged'
+             and not any(k.startswith('cleanup') and v == 'failed' for k,v in native.items())
+             and native.get('oauth_refresh') != 'failed' and native.get('receipt_persist') != 'failed')
+        streams = []
+        for fd, field in zip(self.capture_fds, ('stdout_sha256','stderr_sha256')):
+            before = os.fstat(fd); need(0 < before.st_size <= 2 << 20)
+            raw = os.pread(fd, (2 << 20)+1, 0)
+            need(_signature(before) == _signature(os.fstat(fd)) and len(raw) == before.st_size
+                 and hashlib.sha256(raw).hexdigest() == native.get(field))
+            os.fsync(fd); streams.append(raw)
+        key = fingerprint(asdict(self.binding))
+        final = _QA_RESULTS / ('capacity-operation-' + key + '.json')
+        need(not final.exists())  # Immutable operation, never replay/overwrite.
+        checkpoint_ref = self.outer/'source-checkpoint/manifest.json'
+        op = dict(schema='GB_ROOT_CAPACITY_OPERATION_V1', binding=asdict(self.binding),
+            nonce=self.nonce, boot=self.boot, executor_uid=self.uid, sdk_pid=self.pid,
+            sdk_identity=self.sdk_identity, native_identity=self.native_identity,
+            native_completed=True, source_sha=self.binding.source_sha, scope_id=self.binding.scope_id,
+            allowed_paths=self.allowed, task_sha256=self.record['task_sha256'],
+            cli_sha256=AGY_CLI_SHA256, control_origin='pinned-agy-outer-stderr-v1',
+            exit_code=3, model=AGY_MODEL, owned_stop=proof, custody_ref=str(self.record_path),
+            checkpoint_ref=str(checkpoint_ref), checkpoint_sha256=self.record['checkpoint_sha256'],
+            raw_ref=str(self.outer/'outer-stdout'), stderr_ref=str(self.outer/'outer-stderr'),
+            raw_sha256=hashlib.sha256(streams[0]).hexdigest(),
+            stderr_sha256=hashlib.sha256(streams[1]).hexdigest(), native_ref=str(self.outer/'native-receipt.json'))
+        need(typed_agy_capacity(streams[1], streams[0], producer=op, binding=self.binding) is not None)
+        atomic_write(op['native_ref'], native, 0o600)
+        op['native_sha256'] = hashlib.sha256(Path(op['native_ref']).read_bytes()).hexdigest()
+        os.fsync(self.outerfd)
+        atomic_write(final, op, 0o600)
+        fd = os.open(_QA_RESULTS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+        return str(final)
 
     def close(self):
+        if getattr(self, 'closed', False): return
+        self.closed = True
         self.server.close()
-        for fd in (*self.anchors, self.cap, self.outerfd): os.close(fd)
+        for fd in (*self.anchors, *self.capture_fds, self.cap, self.outerfd):
+            try: os.close(fd)
+            except OSError: self.record['capability_close'] = 'failed'
 
 
 class CustodyClient(SourceQuarantine):
-    def __init__(self, channel, cap, binding, allowed, uid, nonce, boot):
+    def __init__(self, channel, cap, binding, allowed, uid, nonce, boot, capture_fds=()):
         super().__init__(cap, allowed, uid)
         self.channel, self.binding, self.nonce, self.boot = channel, binding, nonce, boot
         self.terminal = False
+        self.capture_fds = capture_fds
+        self.failed = False
         channel.settimeout(10)
 
     @staticmethod
@@ -381,16 +577,29 @@ class CustodyClient(SourceQuarantine):
         self.request('PREPARED', base=work.parent.name, anchor=anchor)
         self.ready = True
 
+    def stop(self):
+        self.request('STOP')
+
+    def launched(self, process):
+        self.request('LAUNCHED', pid=process.pid)
+
+    def cleanup_authorized(self, work):
+        # Only a synchronous authenticated Root CHECKPOINT ACK can release ws.
+        return self.terminal and not self.failed
+
     def terminal_checkpoint(self, retention, work):
         if self.terminal: return
         try:
+            need(not self.failed)
+            self.stop()
             need(self.ready and retention.failure is None)
             if retention.result is None: retention.capture(work)
             retention.persist(Path('/proc/self/fd') / str(self.cap), self.binding)
             self.request('CHECKPOINT'); self.terminal = True
         except BaseException:
+            self.failed = True
             self.quarantine()
-            try: self.request('HOLD')
+            try: self.request('HOLD', outcomes=self.outcomes)
             except BaseException: pass
             raise RetentionError('root_custody_hold') from None
 
@@ -401,6 +610,8 @@ class DirectSourceCustody(SourceQuarantine):
         super().__init__(os.dup(root.cap), root.allowed, root.uid)
 
     def prepare(self, work):
+        self.work_path = Path(work)
+        self.process = None
         anchor = self.anchor(work)
         self.root.record.update(source_anchor=anchor); self.root._record(); self.ready = True
 
@@ -409,8 +620,21 @@ class DirectSourceCustody(SourceQuarantine):
         self.root.collect()
 
     def quarantine(self):
+        if self.quarantined: return
         super().quarantine()
-        self.root.record.update(fault=True); self.root._record()
+        self.root.record.update(fault=True, opaque_workspace='HOLD'); self.root._record()
+        # Direct providers have an actual Root-owned Popen, unlike forked AGY.
+        need(os.geteuid() == 0 and self.process is not None and owned_group_gone(self.process))
+        need([self.work_path.lstat().st_dev, self.work_path.lstat().st_ino] ==
+             self.root.record['source_anchor'])
+        os.rename(self.work_path, self.root.outer/'opaque-ws')
+        os.fchown(self.workfd, 0, 0); os.fchmod(self.workfd, 0o700); os.fsync(self.workfd)
+        parent = os.open(self.work_path.parent, os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try: os.fsync(parent)
+        finally: os.close(parent)
+        os.fsync(self.root.outerfd)
+        self.root.record.update(opaque_workspace='ROOT_ONLY_UNVALIDATED'); self.root._record()
+        self.quarantined = True
 
 
 class PrivateRetentionSecrets:
@@ -683,8 +907,10 @@ class SourceRetention:
 
     def observe(self, work, process, reap):
         try:
+            if isinstance(self.custody, DirectSourceCustody): self.custody.process = process
             reap(process)  # ORIGINAL native function, original Popen object
             need(owned_group_gone(process))
+            if isinstance(self.custody, CustodyClient): self.custody.stop()
             if self.failure is None and self.result is None:
                 self.capture(work)
                 if isinstance(self.custody, DirectSourceCustody):
@@ -704,7 +930,17 @@ class SourceRetention:
         observer = self
         def launch(*args, **kwargs):
             observer.prepare(kwargs['cwd'])
+            originals = None
+            if isinstance(observer.custody, CustodyClient):
+                need(len(observer.custody.capture_fds) == 2)
+                originals = (kwargs['stdout'], kwargs['stderr'])
+                kwargs['stdout'], kwargs['stderr'] = observer.custody.capture_fds
             process = original(*args, **kwargs)
+            if isinstance(observer.custody, CustodyClient):
+                try: observer.custody.launched(process)
+                except BaseException:
+                    reap(process)
+                    raise
             work = kwargs['cwd']
             class Observed:
                 def __getattr__(self, name):
@@ -714,6 +950,12 @@ class SourceRetention:
                         return process.communicate(*a, **k)
                     finally:
                         observer.observe(work, process, reap)
+                        if originals is not None:
+                            for fd, target in zip(observer.custody.capture_fds, originals):
+                                need(os.fstat(fd).st_size <= 2 << 20)
+                                raw = os.pread(fd, (2 << 20) + 1, 0)
+                                need(len(raw) <= 2 << 20)
+                                target.write(raw); target.flush()
             return Observed()
         return launch
 
@@ -731,7 +973,7 @@ class SourceRetention:
         for index, name in enumerate(sorted(r['payloads'])):
             atomic_write(destination / f'payload-{index}', r['payloads'][name], 0o600)
         manifest = {k: v for k, v in r.items() if k != 'payloads'}
-        manifest.update(schema='GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1', binding=asdict(binding),
+        manifest.update(schema='GB_UNVALIDATED_AUTHOR_CHECKPOINT_V1', validation='bounded_secret_checked', binding=asdict(binding),
                         payload_files={n: f'payload-{i}' for i, n in enumerate(sorted(r['payloads']))})
         manifest['fingerprint'] = fingerprint(manifest)
         atomic_write(destination / 'manifest.json', manifest, 0o600)
@@ -754,8 +996,10 @@ def reconciled_stop(current, failure, *, checkpoint, checkpoint_ref, native_rece
     Usage unknown is deliberately not actual-effects unknown. Raw native error
     and charge receipts are retained separately; this function never clears them.
     """
-    if not _protected_stop_inputs(current, failure, checkpoint, checkpoint_ref, native_receipt, receipt_refs):
+    protected = _protected_stop_inputs(current, failure, checkpoint, checkpoint_ref, native_receipt, receipt_refs)
+    if not protected:
         return None
+    proc_stop = type(protected) is dict and protected.get('kind') == 'exclusive-uid-proc-stop-v1'
     if (not isinstance(failure, policy.CapacityFailure) or failure.binding != current
             or actual_effects != 'RECONCILED' or owned_reaped is not True
             or checkpoint.get('binding') != asdict(current)
@@ -764,13 +1008,14 @@ def reconciled_stop(current, failure, *, checkpoint, checkpoint_ref, native_rece
                                                            if k != 'fingerprint'})
             or not checkpoint_ref or not receipt_refs):
         return None
-    # Native AGY final cleanup/guard/cgroup closure is mandatory. Snapshot alone
-    # never proves it, and an absent cgroup is insufficient for native AGY.
+    # Native cleanup remains mandatory. Absent cgroups require actual protected
+    # Root proc proof; a checkpoint validation label cannot substitute for stop.
     if current.provider == policy.AGY:
         if (native_receipt.get('schema') != 'GB_AGY_AUTHOR_RECEIPT_V1'
                 or native_receipt.get('phase') != 'failed_no_automatic_replay'
                 or (native_receipt.get('executor_reap') != 'cgroup-quiet'
-                    and checkpoint.get('reconciliation') != 'ROOT_READONLY_INVENTORY_NO_SOURCE_EFFECT')
+                    and checkpoint.get('reconciliation') != 'ROOT_READONLY_INVENTORY_NO_SOURCE_EFFECT'
+                    and not proc_stop)
                 or native_receipt.get('source_head') != current.source_sha
                 or native_receipt.get('cleanup') == 'failed'
                 or native_receipt.get('oauth_refresh') == 'failed'
@@ -815,7 +1060,7 @@ def _protected_stop_inputs(current, failure, checkpoint, checkpoint_ref, native_
             leaf = checkpoint['payload_files'][name]; need(leaf == f'payload-{i}')
             need(hashlib.sha256(_qa_protected_bytes(parent / leaf, results=True)).hexdigest()
                  == checkpoint['payload_hashes'][name])
-        return True
+        return op.get('owned_stop') or True
     except Exception: return False
 
 
@@ -839,19 +1084,36 @@ def _recovery_inputs(current):
          and type(op.get('task_sha256')) is str and len(op['task_sha256']) == 64
          and type(op.get('sdk_pid')) is int and op['sdk_pid'] > 1
          and not Path('/proc', str(op['sdk_pid'])).exists())
+    if op.get('owned_stop', {}).get('kind') == 'exclusive-uid-proc-stop-v1':
+        proof = _exclusive_stop(uid=978, sdk=op['sdk_identity'], native=op['native_identity'],
+                                boot=op['boot'], sdk_exited=True)
+        need(op['owned_stop'] == proof and proof['native'] is not None)
+        custody = loads(_qa_protected_bytes(op['custody_ref'], results=True))
+        need(custody.get('schema') == 'GB_ROOT_SOURCE_CUSTODY_V1'
+             and custody.get('binding') == asdict(current) and custody.get('nonce') == op['nonce']
+             and custody.get('boot') == op['boot'] and custody.get('task_sha256') == op['task_sha256']
+             and custody.get('native_identity') == op['native_identity']
+             and custody.get('sdk_identity') == op['sdk_identity']
+             and custody.get('checkpoint_ready') is True and not custody.get('fault')
+             and custody.get('checkpoint_sha256') == op.get('checkpoint_sha256')
+             and custody.get('cli_sha256') == op.get('cli_sha256'))
+        checkpoint_raw = _qa_protected_bytes(op['checkpoint_ref'], results=True)
+        checkpoint = loads(checkpoint_raw)
+        need(hashlib.sha256(checkpoint_raw).hexdigest() == op['checkpoint_sha256']
+             and checkpoint.get('binding') == asdict(current)
+             and checkpoint.get('validation') == 'bounded_secret_checked'
+             and checkpoint.get('fingerprint') == fingerprint({k:v for k,v in checkpoint.items() if k != 'fingerprint'}))
     # Actual observation; cgroup-absent is not cgroup-quiet. Permission failures
     # are HOLD, and no absence observation is accepted from a caller boolean.
-    for process in Path('/proc').iterdir():
-        if not process.name.isdecimal(): continue
-        try: status = (process/'status').read_text()
-        except FileNotFoundError: continue
-        uid = next(line for line in status.splitlines() if line.startswith('Uid:')).split()[1:]
-        need('978' not in uid)
+    need(_uid_processes(978) == [])
     def read(ref, expected):
         raw = _qa_protected_bytes(ref, results=True)
         need(hashlib.sha256(raw).hexdigest() == expected)
         return raw
     native = loads(read(op['native_ref'], op['native_sha256']))
+    need(native.get('executor_reap') == 'cgroup-quiet' or
+         op.get('owned_stop', {}).get('kind') == 'exclusive-uid-proc-stop-v1' or
+         authority.get('adjudication') == 'LEGACY_526_ATTEMPT5_NO_SOURCE_EFFECT')
     need(native.get('schema') == 'GB_AGY_AUTHOR_RECEIPT_V1'
          and native.get('phase') == 'failed_no_automatic_replay'
          and native.get('source_head') == current.source_sha
@@ -891,7 +1153,8 @@ def adjudicate_capacity_recovery(current, *, nonce):
         if checkpoint_ref:
             raw = _qa_protected_bytes(checkpoint_ref, results=True)
             checkpoint = loads(raw)
-            need(native.get('executor_reap') == 'cgroup-quiet')
+            need(native.get('executor_reap') == 'cgroup-quiet' or
+                 op.get('owned_stop', {}).get('kind') == 'exclusive-uid-proc-stop-v1')
             need(hashlib.sha256(raw).hexdigest() == op['checkpoint_sha256'])
         else:
             # Bounded historical exception is an explicit inference over a

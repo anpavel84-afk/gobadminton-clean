@@ -344,6 +344,30 @@ class Qualification(unittest.TestCase):
             with self.assertRaises((OSError, QA.ReviewError)): QA.trusted(path)
 
 
+def _bounded_custody_fs(test):
+    """Only new custody tests: anchor at their private fixture, not denied /tmp.
+
+    Real inner no-follow guard, private removal and evidence fsync still run.
+    Existing ancestor/guard regressions keep their original implementations.
+    """
+    def run(self):
+        import native_antigravity
+        def anchor(saved, *, record=False):
+            self.assertTrue(saved.root.is_relative_to(self.root))
+            fd = os.open(saved.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try: N._guard_check(fd, saved.root, saved, record=record)
+            except BaseException: os.close(fd); raise
+            return fd
+        def evidence(path, create=False):
+            path = Path(path); self.assertTrue(path.is_relative_to(self.root))
+            if create: path.mkdir(mode=0o700, exist_ok=True)
+            return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        with patch.object(N, '_guard_root', side_effect=anchor), \
+             patch.object(native_antigravity, 'private_directory', side_effect=evidence):
+            return test(self)
+    return run
+
+
 class Invocation(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='agy-author-test-'); self.addCleanup(self.temp.cleanup)
@@ -390,7 +414,7 @@ class Invocation(unittest.TestCase):
             p = Path(mkdtemp(prefix=kwargs['prefix'],dir=self.root)); self.jobs.append(p); return str(p)
         self.stack.enter_context(patch.object(N.tempfile,'mkdtemp',side_effect=private_temp))
 
-    def invoke(self, mode='success', events=None):
+    def invoke(self, mode='success', events=None, custody=None, atomic_fault=None):
         def popen(argv, **kwargs):
             self.called += 1
             self.rt.budget.charge.assert_called_once_with('slot2','agy','author')
@@ -438,9 +462,11 @@ class Invocation(unittest.TestCase):
             p.poll.side_effect = lambda:p.returncode
             return p
         def atomic(path,value):
-            self.phases.append(value['phase']); path.write_text(json.dumps(value))
+            self.phases.append(value['phase'])
+            if value['phase'] == atomic_fault: raise OSError('synthetic custody fault')
+            path.write_text(json.dumps(value))
         return N.invoke(self.bridge,self.rt,'trusted full rules and task',self.choice,
-            popen=popen,atomic=atomic,permitted=lambda n,allowed:n in allowed)
+            popen=popen,atomic=atomic,permitted=lambda n,allowed:n in allowed,custody=custody)
 
     def assert_failed(self):
         receipt = json.loads((self.outbox/'agy-author-receipt.json').read_text())
@@ -475,6 +501,49 @@ class Invocation(unittest.TestCase):
         self.assertEqual(r['executor_reap'],'cgroup-absent')
         self.assertIsNotNone(r['source_export_sha256']); self.assertIsNotNone(r['output_manifest_sha256'])
         self.assertNotIn(TOKEN,json.dumps(r)); self.assertNotIn(REFRESH,json.dumps(r))
+
+    @_bounded_custody_fs
+    def test_authenticated_custody_success_keeps_normal_cleanup(self):
+        capability = SimpleNamespace(cleanup_authorized=lambda work: True)
+        self.invoke(custody=capability)
+        self.assertTrue(all(not p.exists() for p in self.jobs))
+        self.assertEqual((self.source/'allowed.txt').read_text(), 'after\n')
+
+    def _assert_custody_veto(self, fault):
+        capability = SimpleNamespace(cleanup_authorized=lambda work: False)
+        with self.assertRaises(N.ReviewError):
+            self.invoke(mode='exit' if fault == 'failed_no_automatic_replay' else 'success',
+                        custody=capability, atomic_fault=fault)
+        base = self.jobs[-1]
+        self.assertEqual((base/'ws/allowed.txt').read_text(), 'after\n')
+        self.assertFalse((base/'home').exists()); self.assertFalse((base/'out').exists())
+        self.assertEqual((self.source/'allowed.txt').read_text(), 'before\n')
+        self.assertEqual(self.choice['native_receipt']['custody'], 'HOLD_UNACKNOWLEDGED_EXACT_WS')
+
+    @_bounded_custody_fs
+    def test_custody_veto_preserves_exact_ws_and_erases_home_out(self):
+        self._assert_custody_veto('validated')
+
+    @_bounded_custody_fs
+    def test_custody_failed_receipt_fault_cannot_erase_ws(self):
+        self._assert_custody_veto('failed_no_automatic_replay')
+
+    @_bounded_custody_fs
+    def test_custody_capability_exception_is_veto(self):
+        capability = SimpleNamespace(cleanup_authorized=Mock(side_effect=OSError('lost Root')))
+        with self.assertRaises(N.ReviewError): self.invoke(custody=capability)
+        self.assertTrue((self.jobs[-1]/'ws/allowed.txt').exists())
+        self.assertFalse((self.jobs[-1]/'home').exists())
+        self.assertEqual((self.source/'allowed.txt').read_text(), 'before\n')
+
+    @_bounded_custody_fs
+    def test_custody_setup_fault_precedes_charge_and_popen(self):
+        capability = SimpleNamespace(cleanup_authorized=lambda work: False)
+        with self.assertRaises(N.ReviewError):
+            self.invoke(custody=capability, atomic_fault='prepared')
+        self.rt.budget.charge.assert_not_called(); self.assertEqual(self.called, 0)
+        self.assertTrue((self.jobs[-1]/'ws/allowed.txt').exists())
+        self.assertFalse((self.jobs[-1]/'home').exists())
 
     def test_permitted_deletion(self):
         self.invoke('delete'); self.assertFalse((self.source/'allowed.txt').exists())

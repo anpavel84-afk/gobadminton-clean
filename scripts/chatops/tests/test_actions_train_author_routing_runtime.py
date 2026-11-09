@@ -553,6 +553,13 @@ class CodexCheckpoint(unittest.TestCase):
                     observer.persist.assert_not_called()
 
 
+class _NoRootDirectFixture:
+    """Legacy controller fixture seam: no Root paths or protected config."""
+    def __new__(cls, root):
+        if root is not None: raise AssertionError('synthetic Root seam only')
+        return None
+
+
 class Retention(unittest.TestCase):
     def test_cursor_unsafe_output_holds_and_cleans_only_own_sandbox(self):
         for kind in ('secret', 'oos'):
@@ -579,6 +586,8 @@ class Retention(unittest.TestCase):
                     source_name=lambda name: True, CURSOR_PIN=root, AUTHOR_TOOLS='tools',
                     _stop=lambda process: None, parse_stream=lambda raw: {'completed': True})
                 patches = [
+                    patch.object(h, 'RootSourceCustody', return_value=None),
+                    patch.object(h, 'DirectSourceCustody', _NoRootDirectFixture),
                     patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'TEST_SECRET'}),
                     patch.object(live, 'require_executor_uid'),
                     patch.object(live, '_load_native', return_value=native),
@@ -600,7 +609,7 @@ class Retention(unittest.TestCase):
                 for entry in patches: stack.enter_context(entry)
                 with self.assertRaises(providers.ProviderError) as raised:
                     live.cursor_author_live(task=task(), worktree=root, evidence_dir=evidence, intent_path=intent)
-                self.assertEqual(raised.exception.code, 'unsafe_source')
+                self.assertEqual(raised.exception.code, 'cursor_source_custody_hold')
                 receipt = json.loads(intent.read_text())
                 self.assertEqual(receipt['phase'], 'HOLD_no_automatic_replay')
                 self.assertEqual(receipt['checkpoint'], 'INVALID')
@@ -691,8 +700,6 @@ class Retention(unittest.TestCase):
             with self.assertRaises(h.RetentionError): self.make(root).capture(root)
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class RootReviewerDelivery(unittest.TestCase):
@@ -1661,16 +1668,21 @@ class ClosedCustodyFollowup(unittest.TestCase):
                 client.anchor(work); client.ready=True
                 (work/'x.py').write_bytes(b'partial')
                 with ExitStack() as stack:
+                    stack.enter_context(patch.object(client, 'stop'))
                     if fault in ('capture','persist'):
                         stack.enter_context(patch.object(observer, fault, side_effect=OSError('private text')))
                     else:
                         stack.enter_context(patch.object(client, 'request', side_effect=OSError('ACK lost')))
                     with self.assertRaises(h.RetentionError): client.terminal_checkpoint(observer, work)
-                self.assertTrue(client.quarantined)
+                self.assertFalse(client.quarantined)
+                self.assertFalse(client.cleanup_authorized(work))
+                self.assertEqual(client.outcomes, {'0':'unvalidated_in_ws'})
                 with patch.object(observer, 'capture', side_effect=AssertionError('read after quarantine')):
                     with self.assertRaises(h.RetentionError): client.terminal_checkpoint(observer, work)
-                shutil.rmtree(base)  # native finally is destructive
-                self.assertEqual((capdir/'fallback/0').read_bytes(), b'partial')
+                # Explicit native veto leaves ws; only private siblings are erased.
+                shutil.rmtree(home)
+                self.assertEqual((work/'x.py').read_bytes(), b'partial')
+                self.assertEqual((capdir/'fallback/0').read_bytes(), b'')
                 self.assertFalse((capdir/'home').exists())
                 self.assertNotIn(b'PRIVATE_AUTH', b''.join(p.read_bytes() for p in capdir.rglob('*') if p.is_file()))
                 self.assertFalse(os.get_inheritable(cap))
@@ -1774,3 +1786,185 @@ class ClosedKernelIPC(unittest.TestCase):
                         with self.assertRaises(h.RetentionError): r.service()
                         r._record.assert_not_called()
                 finally: server.close(); os.waitpid(pid,0)
+
+
+class AddressedF97Custody(unittest.TestCase):
+    def test_proc_stop_without_cgroup_exact_uid_and_identity(self):
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        sdk = dict(pid=123, uid=[978]*4, ppid=1, pgrp=123, start=40,
+                   namespace=os.readlink('/proc/self/ns/pid'))
+        native = dict(sdk, pid=124, ppid=123, pgrp=124, start=41)
+        with patch.object(h, '_uid_processes', return_value=[sdk]), \
+             patch.object(h, '_proc_identity', side_effect=FileNotFoundError):
+            proof = h._exclusive_stop(uid=978, sdk=sdk, native=native, boot=boot)
+            self.assertEqual(proof['kind'], 'exclusive-uid-proc-stop-v1')
+            for changes in ({'boot':'stale'}, {'uid':1002}, {'sdk':dict(sdk, start=39)},
+                            {'sdk':dict(sdk, namespace='foreign')}, {'sdk':dict(sdk, uid=[1002]*4)}):
+                with self.assertRaises(h.RetentionError):
+                    h._exclusive_stop(**(dict(uid=978, sdk=sdk, native=native, boot=boot) | changes))
+        for processes in ([sdk,native], [dict(sdk,start=99)], [sdk,dict(native,ppid=1)]):
+            with patch.object(h, '_uid_processes', return_value=processes):
+                with self.assertRaises(h.RetentionError):
+                    h._exclusive_stop(uid=978,sdk=sdk,native=native,boot=boot)
+        with patch.object(h, '_uid_processes', side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                h._exclusive_stop(uid=978,sdk=sdk,native=native,boot=boot)
+
+    def test_proc_reader_includes_native_descendants_with_other_uid(self):
+        sdk=dict(pid=123,uid=[978]*4,ppid=1,pgrp=123,start=40,namespace='fixture')
+        native=dict(pid=124,uid=[1002]*4,ppid=123,pgrp=124,start=41,namespace='fixture')
+        child=dict(pid=125,uid=[1002]*4,ppid=124,pgrp=125,start=42,namespace='fixture')
+        unrelated=dict(pid=126,uid=[1002]*4,ppid=1,pgrp=126,start=43,namespace='fixture')
+        identities={i['pid']:i for i in (sdk,native,child,unrelated)}
+        with patch.object(Path,'iterdir',return_value=iter(Path('/proc')/str(i) for i in identities)), \
+             patch.object(h,'_proc_identity',side_effect=lambda pid:identities[pid]):
+            self.assertEqual(h._uid_processes(978,native=native,sdk=sdk),[sdk,native,child])
+
+    def test_stop_precedes_capture_and_late_writer_blocks_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            work=Path(td); (work/'x.py').write_bytes(b'partial')
+            observer=ClosedCustodyFollowup().observer(work)
+            client=object.__new__(h.CustodyClient)
+            order=[]
+            client.stop=lambda:order.append('root-stop')
+            observer.custody=client
+            original=observer.capture
+            def capture(path): order.append('capture'); return original(path)
+            proc=SimpleNamespace(pid=99999,poll=lambda:0)
+            with patch.object(h,'owned_group_gone',return_value=True), \
+                 patch.object(observer,'capture',side_effect=capture):
+                observer.observe(work,proc,lambda p:order.append('reap'))
+            self.assertEqual(order,['reap','root-stop','capture'])
+            observer.result=None
+            client.stop=unittest.mock.Mock(side_effect=h.RetentionError('late writer'))
+            client.quarantine=unittest.mock.Mock()
+            with patch.object(h,'owned_group_gone',return_value=True), \
+                 patch.object(observer,'capture') as collect:
+                with self.assertRaises(h.RetentionError): observer.observe(work,proc,lambda p:None)
+                collect.assert_not_called()
+
+    def checkpoint_root(self, root):
+        work=root/'ws'; work.mkdir(mode=0o700); (work/'x.py').write_bytes(b'partial')
+        incoming=root/'incoming'; incoming.mkdir(mode=0o700)
+        outer=root/'outer'; outer.mkdir(mode=0o700)
+        b=h.operation(task(),'agy_author','a'*40)
+        observer=ClosedCustodyFollowup().observer(work)
+        observer.capture(work); observer.persist(incoming,b)
+        r=object.__new__(h.RootSourceCustody)
+        r.cap=os.open(incoming,os.O_RDONLY|os.O_DIRECTORY)
+        r.outerfd=os.open(outer,os.O_RDONLY|os.O_DIRECTORY)
+        self.addCleanup(os.close,r.cap); self.addCleanup(os.close,r.outerfd)
+        r.binding=b; r.uid=os.getuid(); r.allowed=['x.py']; r.checkpoint=None; r.record={}
+        r.prove_stop=unittest.mock.Mock(); r._record=unittest.mock.Mock()
+        return r,outer,incoming
+
+    def test_root_checkpoint_fsync_rename_record_faults_never_complete(self):
+        for fault in ('stop','fsync','rename','record'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+                r,outer,incoming=self.checkpoint_root(Path(td))
+                stack.enter_context(patch.object(h.os,'fchown'))
+                if fault == 'stop': r.prove_stop.side_effect=h.RetentionError('live')
+                elif fault == 'record': r._record.side_effect=OSError('disk')
+                else: stack.enter_context(patch.object(h.os,fault,side_effect=OSError('disk')))
+                with self.assertRaises((h.RetentionError,OSError)): r.collect()
+                self.assertIsNone(r.checkpoint)
+                self.assertTrue((incoming/'source-checkpoint/payload-0').exists() or
+                                (outer/'source-checkpoint/payload-0').exists())
+                if fault == 'stop': self.assertTrue((incoming/'source-checkpoint').exists())
+
+    def test_secret_bounds_and_per_file_fault_inventory_never_retain_unsafe_bytes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); work=root/'ws'; work.mkdir(mode=0o700)
+            sink=root/'sink'; sink.mkdir(mode=0o700)
+            (work/'x.py').write_bytes(b'OLD_SECRET')
+            observer=Retention().make(work)
+            with self.assertRaises(h.RetentionError): observer.capture(work)
+            guard=h.SourceQuarantine(os.open(sink,os.O_RDONLY|os.O_DIRECTORY), ['x.py','absent.py'],os.getuid())
+            self.addCleanup(guard.close); guard.anchor(work)
+            result=guard.quarantine()
+            self.assertEqual(result,{'0':'absent','1':'unvalidated_in_ws'})
+            self.assertFalse(guard.quarantined)
+            self.assertEqual((work/'x.py').read_bytes(),b'OLD_SECRET')
+            self.assertEqual((sink/'fallback/1').read_bytes(),b'')
+            with patch.object(h.os,'stat',side_effect=PermissionError):
+                self.assertEqual(set(guard.quarantine().values()),{'unproven_in_ws'})
+
+    def test_real_fixed_capacity_producer_with_synthetic_root_seam(self):
+        from dataclasses import asdict
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            root=Path(td); r,outer,incoming=self.checkpoint_root(root)
+            stack.enter_context(patch.object(h.os,'fchown'))
+            r.collect()
+            r.outer=outer; r.nonce='f'*64
+            r.boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip(); r.pid=999999999
+            r.sdk_identity=dict(pid=r.pid,start=1,uid=[978]*4,namespace='fixture')
+            r.native_identity=dict(pid=999999998,start=2,pgrp=999999998)
+            r.uid=978; r.record_path=root/'custody.json'
+            r.record.update(task_sha256='a'*64,cli_sha256=providers.AGY_CLI_SHA256)
+            raw=(json.dumps(dict(event='init',init=dict(model=providers.AGY_MODEL)))+'\n'+
+                 json.dumps(dict(event='result',result=dict(status='ERROR')))+'\n').encode()
+            err=b'AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"real-fd2"}\n'
+            fds=[]
+            for name,data in (('outer-stdout',raw),('outer-stderr',err)):
+                fd=os.open(outer/name,os.O_RDWR|os.O_CREAT|os.O_EXCL,0o600); os.write(fd,data)
+                fds.append(fd); self.addCleanup(os.close,fd)
+            r.capture_fds=tuple(fds)
+            native=dict(schema='GB_AGY_AUTHOR_RECEIPT_V1',phase='failed_no_automatic_replay',
+                source_head=r.binding.source_sha,task_sha256='a'*64,exit_code=3,charge_state='charged',
+                stdout_sha256=hashlib.sha256(raw).hexdigest(),stderr_sha256=hashlib.sha256(err).hexdigest())
+            stack.enter_context(patch.object(h.os,'geteuid',return_value=0))
+            stack.enter_context(patch.object(live,'_QA_RESULTS',root))
+            proof=dict(kind='exclusive-uid-proc-stop-v1',boot=r.boot,sdk=r.sdk_identity,native=r.native_identity)
+            stop=stack.enter_context(patch.object(h,'_exclusive_stop',return_value=proof))
+            path=r.produce_capacity_operation(native)
+            op=json.loads(Path(path).read_bytes())
+            self.assertEqual(op['binding'],asdict(r.binding)); self.assertEqual(op['raw_sha256'],native['stdout_sha256'])
+            self.assertEqual(op['control_origin'],'pinned-agy-outer-stderr-v1')
+            self.assertIsNotNone(providers.typed_agy_capacity(err,raw,producer=op,binding=r.binding))
+            self.assertIsNone(providers.typed_agy_capacity(b'',raw+err,producer=op,binding=r.binding))
+            # Exercise the real fixed producer -> protected decoder path with
+            # bounded synthetic Root authority. No host config or adjudication.
+            r.record.update(schema='GB_ROOT_SOURCE_CUSTODY_V1',binding=asdict(r.binding),
+                nonce=r.nonce,boot=r.boot,native_identity=r.native_identity,sdk_identity=r.sdk_identity)
+            r.record_path.write_text(json.dumps(r.record))
+            key=h.fingerprint(asdict(r.binding))
+            authority=dict(enabled=True,nonce=r.nonce,operation_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest())
+            def protected(ref, **kw):
+                ref=Path(ref); self.assertTrue(ref.is_relative_to(root))
+                return ref.read_bytes()
+            stack.enter_context(patch.object(live,'_qa_protected_bytes',side_effect=protected))
+            stack.enter_context(patch.object(live,'_qa_root_config',return_value={
+                'author_capacity_recovery':{key:authority}}))
+            stack.enter_context(patch.object(h,'_uid_processes',return_value=[]))
+            _,_,observed,_,failure=h._recovery_inputs(r.binding)
+            self.assertEqual(observed,op)
+            refs=[op['native_ref'],path]
+            recovery=dict(schema='GB_ROOT_CAPACITY_RECOVERY_V1',state='RECONCILED',
+                binding=asdict(r.binding),boot=r.boot,nonce=r.nonce,
+                failure_fingerprint=failure.fingerprint,checkpoint_ref=op['checkpoint_ref'],
+                checkpoint_sha256=op['checkpoint_sha256'],native_receipt=native,receipt_refs=refs)
+            (root/('capacity-recovery-'+key+'.json')).write_text(json.dumps(recovery))
+            decoded=h.protected_capacity_decoder(task=task(),evidence_dir=root,current=r.binding)
+            self.assertIsInstance(decoded,p.CapacityStop)
+            self.assertEqual(decoded.failure,failure)
+            checkpoint_path=Path(op['checkpoint_ref']); saved=checkpoint_path.read_bytes()
+            checkpoint_path.write_bytes(b'{}')
+            self.assertIsNone(h.protected_capacity_decoder(task=task(),evidence_dir=root,current=r.binding))
+            checkpoint_path.write_bytes(saved)
+
+            with self.assertRaises(h.RetentionError): r.produce_capacity_operation(native)  # immutable
+            for bad in ('checkpoint','stop','stderr'):
+                Path(path).unlink()
+                if bad == 'checkpoint': r.checkpoint=None
+                elif bad == 'stop':
+                    r.checkpoint={}; stop.side_effect=h.RetentionError('unknown stop')
+                else:
+                    stop.side_effect=None; os.ftruncate(fds[1],0)
+                with self.assertRaises(h.RetentionError): r.produce_capacity_operation(native)
+                self.assertFalse(Path(path).exists())
+                # No producer, policy grant, legacy adjudication or decoder success is invented.
+                if bad != 'stderr': Path(path).write_text('{}')
+
+
+if __name__ == '__main__':
+    unittest.main()

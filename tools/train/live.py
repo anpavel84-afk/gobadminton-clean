@@ -1605,7 +1605,16 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                         retention.custody.quarantine()
                 finally:
                     retention.custody.close(); source_custody.close()
-            shutil.rmtree(base, ignore_errors=True)
+            if source_custody is None or source_custody.checkpoint or retention.custody.quarantined:
+                shutil.rmtree(base, ignore_errors=True)
+            else:
+                # Custody fault: keep EXACT work, erase private siblings independently.
+                for child in base.iterdir():
+                    if child.name == 'work': continue
+                    if child.is_dir() and not child.is_symlink(): shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        try: child.unlink()
+                        except OSError: pass
 
 
 def _kill_owned_process_group(p):
@@ -3234,6 +3243,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
         }
 
     native_receipt = {}
+    root_custody = None
     changed = []
     payloads = {}
     deleted = []
@@ -3363,6 +3373,7 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                             bridge, rt, prompt, choice,
                             popen=launch,
                             atomic=custody_atomic,
+                            custody=custody_client,
                             permitted=lambda n, allowed: n in set(allowed or []),
                             evidence_dir=native_ev,
                         )
@@ -3425,20 +3436,31 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 root_custody._record()
                 ready, _, _ = _select.select([r_fd], [], [], 15)
             if not ready:
-                root_custody.rescue()
-                root_custody.close()
+                # Stop only identities bound by Root before rescue. Any failure
+                # leaves opaque ws in place under HOLD; never collect live bytes.
+                try: root_custody.stop_owned()
+                except (OSError, RetentionError): pass
                 try:
                     os.close(r_fd)
                 except OSError:
                     pass
                 try:
-                    os.kill(pid, 9)
+                    from author_handoff import _proc_identity
+                    import signal
+                    sdk_fd = os.pidfd_open(pid)
+                    try:
+                        if _proc_identity(pid) == root_custody.sdk_identity:
+                            signal.pidfd_send_signal(sdk_fd, signal.SIGKILL)
+                    finally: os.close(sdk_fd)
                 except OSError:
                     pass
                 try:
                     os.waitpid(pid, 0)
                 except OSError:
                     pass
+                try: root_custody.rescue(sdk_exited=True)
+                except (OSError, RetentionError): pass  # Explicit unresolved HOLD, no deletion.
+                finally: root_custody.close()
                 record_agy_charge(
                     int(task['issue']),
                     {'phase': 'timeout', 'operation_fingerprint': fingerprint},
@@ -3452,8 +3474,9 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
                 os.close(r_fd)
             _, child_status = os.waitpid(pid, 0)
             if child_status and not root_custody.checkpoint:
-                root_custody.rescue()
-            root_custody.close()
+                try: root_custody.rescue(sdk_exited=True)
+                except (OSError, RetentionError): pass  # Source remains in ws, HOLD.
+            # Keep Root descriptors/record until the fixed capacity producer runs.
 
             try:
                 msg = _agy_ipc_unpack(raw_ipc) if raw_ipc else {}
@@ -3476,6 +3499,13 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
             if not native_receipt and receipt_path.is_file():
                 native_receipt = _agy_author_read_native_receipt(native_ev)
             raw_bytes = _agy_author_collect_raw(native_ev, native_receipt, evidence)
+            try:
+                if child_status:
+                    root_custody.produce_capacity_operation(native_receipt)
+            except (OSError, RetentionError, ValueError):
+                pass  # Missing/unsafe evidence stays HOLD, never authorizes fallback.
+            finally:
+                root_custody.close()
             if native_receipt:
                 (evidence / 'native-receipt.json').write_text(
                     json.dumps(native_receipt, sort_keys=True, indent=2) + '\n')
@@ -3560,6 +3590,8 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
             operation_fingerprint=fingerprint, no_blind_replay=True)
         raise ProviderError('agy_author_launch_unknown', type(err).__name__,
                             charge='unknown') from err
+    finally:
+        if root_custody is not None: root_custody.close()
 
     allowed = set(task.get('allowed_paths') or [])
     if not changed or not set(changed) <= allowed:
@@ -4545,7 +4577,15 @@ def codex_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_
                     retention.custody.quarantine()
             finally:
                 retention.custody.close(); source_custody.close()
-        shutil.rmtree(private, ignore_errors=True)
+        if source_custody is None or source_custody.checkpoint or getattr(retention.custody, 'quarantined', False) is True:
+            shutil.rmtree(private, ignore_errors=True)
+        else:
+            for child in private.iterdir():
+                if child.name == 'source': continue
+                if child.is_dir() and not child.is_symlink(): shutil.rmtree(child, ignore_errors=True)
+                else:
+                    try: child.unlink()
+                    except OSError: pass
 
 # Root-only authority delivery. None of these inputs comes from an event/task.
 _QA_RESULTS = Path('/var/lib/gobadminton-lean/results')
