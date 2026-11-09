@@ -531,8 +531,8 @@ describe("#507 I1 F3 consumer venue_community report UI", () => {
 
 
 describe("report lifecycle propagation", () => {
-  beforeEach(() => { polyfillDialog(); transport.calls = []; sessionStorage.clear(); });
-  afterEach(cleanup);
+  beforeEach(() => { polyfillDialog(); transport.calls = []; transport.handler = null; sessionStorage.clear(); });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
   it.each(["aggregate", "own_vote", "venue_comment"] as const)("holds %s report through pending/503/close and retries exact context", async subjectKind => {
     const { VenueCommunityReportDialog } = await import("../src/components/consumer/venues/VenueCommunityReportDialog");
     let settle!: (result: unknown) => void;
@@ -572,12 +572,22 @@ describe("report lifecycle propagation", () => {
     vi.mocked(ratingApi.fetchOwnCommunityRating).mockResolvedValue({ own, summary });
     let reportSettle!: (result: unknown) => void;
     let reviewAttempts = 0, voteAttempts = 0;
+    const ratingWrites: Array<{ path: string; method: string | undefined; body: string | null; csrf: string | null; key: string | null }> = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path !== `/v1/venues/${VENUE_ID}/community-rating` || init?.method !== "PUT") {
+        throw new Error(`Unexpected rating fetch ${init?.method} ${path}`);
+      }
+      const headers = new Headers(init.headers);
+      ratingWrites.push({ path, method: init.method, body: typeof init.body === "string" ? init.body : null,
+        csrf: headers.get("x-csrf-token"), key: headers.get("idempotency-key") });
+      voteAttempts += 1;
+      return new Response(JSON.stringify(voteAttempts === 1 ? { error: "unknown rating" }
+        : { own: { ...own, value: 5, version: 4 }, summary }), { status: voteAttempts === 1 ? 503 : 200 });
+    }));
     transport.handler = (path, init) => {
       if (path.includes("experience-reviews")) return { ok: true, status: 200, data: { items: [], publishedCount: 0 } };
       if (path.includes("eligibility")) return { ok: true, status: 200, data: { bases: [{ gameId: "game-one", gameTitle: "Игра", admission: "may_submit", outcomeVersion: 2, attendanceVersion: 6 }] } };
-      if (path === `/v1/venues/${VENUE_ID}/community-rating`) return ++voteAttempts === 1
-        ? { ok: false, status: 503, error: "unknown rating" }
-        : { ok: true, status: 200, data: { own: { ...own, value: 5, version: 4 }, summary } };
       if (path === "/v1/me/venue-reviews" && init?.method === "POST") return ++reviewAttempts === 1
         ? { ok: false, status: 503, error: "unknown review" }
         : { ok: true, status: 201, data: { status: "self_draft", receiptToken: "receipt" } };
@@ -590,6 +600,12 @@ describe("report lifecycle propagation", () => {
     fireEvent.click(screen.getByRole("radio", { name: "5 из 5" }));
     fireEvent.click(screen.getByRole("button", { name: "Сохранить изменение" }));
     await screen.findByTestId("venue-community-vote-unknown");
+    expect(ratingWrites).toHaveLength(1);
+    const firstRating = ratingWrites[0];
+    if (!firstRating) throw new Error("Missing admitted rating PUT");
+    expect(firstRating).toEqual({ path: `/v1/venues/${VENUE_ID}/community-rating`, method: "PUT",
+      body: JSON.stringify({ value: 5, expectedVersion: 3 }), csrf: CSRF_A, key: expect.any(String) });
+    expect(firstRating.key).toBeTruthy();
     expect(unresolved).toHaveBeenLastCalledWith(true);
     fireEvent.click(screen.getByTestId("venue-community-report-aggregate"));
     fireEvent.click(await screen.findByTestId("venue-community-report-submit"));
@@ -606,7 +622,7 @@ describe("report lifecycle propagation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Поделиться опытом" }));
     await screen.findByText("Можно поделиться опытом");
     fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Отзыв" } });
-    fireEvent.click(screen.getByRole("button", { name: "Сохранить", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
     await screen.findByText("Не удалось подтвердить отправку. Текст сохранён");
     expect(unresolved).toHaveBeenLastCalledWith(true);
     fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
@@ -615,5 +631,7 @@ describe("report lifecycle propagation", () => {
     fireEvent(screen.getByRole("dialog", { name: "Как вам площадка?" }), new Event("cancel", { cancelable: true }));
     fireEvent.click(screen.getByRole("button", { name: "Повторить тот же запрос" }));
     await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(false));
+    expect(ratingWrites).toHaveLength(2);
+    expect(ratingWrites[1]).toEqual(firstRating);
   });
 });

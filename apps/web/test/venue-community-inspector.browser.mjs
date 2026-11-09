@@ -166,7 +166,10 @@ try {
     assert.equal(writes.filter(write=>write.method==='PUT').length,1,'no automatic retry on resize or close');
     // Real keyboard activation reaches the actual return handler even when the
     // expanded sheet header covers its pointer position on narrow screens.
-    const back=page.getByRole('button',{name:'К списку игр',exact:true});
+    const back=page.getByRole('region',{name:'Игры на карте',exact:true})
+      .getByRole('button',{name:/^(?:К списку игр|← К списку)$/}).filter({visible:true});
+    await back.waitFor({state:'visible'});
+    assert.equal(await back.count(),1,'one visible accessible map return control');
     await back.focus();
     assert.equal(await back.evaluate(node=>node===document.activeElement),true);
     await page.keyboard.press('Enter');
@@ -185,7 +188,7 @@ try {
     // A city navigation event must retain the old mounted catalog and packet.
     await page.evaluate(cityB=>{
       const url=new URL(window.location.href);url.searchParams.set('cityId',cityB);
-      window.history.pushState(null,'',url);window.dispatchEvent(new PopStateEvent('popstate'));
+      window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
     },'a0000000-0000-4000-8000-000000000002');
     await page.getByText(/Смена города отложена/).waitFor();
     assert.equal(await content.count(),1);
@@ -194,7 +197,7 @@ try {
     // the original same-venue fixture can proceed after this operation settles.
     await page.evaluate(cityA=>{
       const url=new URL(window.location.href);url.searchParams.set('cityId',cityA);
-      window.history.pushState(null,'',url);window.dispatchEvent(new PopStateEvent('popstate'));
+      window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
     },city);
     await content.getByRole('button',{name:'Повторить тот же запрос',exact:true}).click();
     await content.getByRole('button',{name:'Сохранить изменение',exact:true}).waitFor();
@@ -286,7 +289,7 @@ try {
     await page.waitForFunction(()=>document.querySelector('#venue-review-text').disabled);
     const beforeFence=writes.filter(write=>write.path==='/v1/me/venue-reviews').length;
     activeActor='30000000-0000-4000-8000-000000000002';activeCsrf='synthetic-new-session';
-    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}})));
+    await page.evaluate(()=>window.dispatchEvent(new window.CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}})));
     const fencedResponse=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/me/venue-reviews' && response.status()===503);
     releaseReview();
     await fencedResponse;
@@ -295,7 +298,7 @@ try {
     assert.equal(await page.getByRole('button',{name:'Проверить отправку',exact:true}).count(),0,'late old-session 503 cannot restore retry');
     assert.equal(writes.filter(write=>write.path==='/v1/me/venue-reviews').length,beforeFence,'session transition never replays');
     activeActor=actor;activeCsrf='synthetic-only';
-    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}})));
+    await page.evaluate(()=>window.dispatchEvent(new window.CustomEvent('gb-session-changed',{detail:{sessionPresence:'present'}})));
 
     const metrics=await page.evaluate(()=>{
       const ids=[...document.querySelectorAll('[id]')].map(node=>node.id);

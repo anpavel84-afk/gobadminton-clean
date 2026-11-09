@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor, act, fireEvent } from "@testing-libra
 import { createElement, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
+import type * as ApiClientModule from "../src/lib/api-client";
 
 const V1 = "10000000-0000-4000-8000-000000000001";
 const V2 = "10000000-0000-4000-8000-000000000002";
@@ -57,6 +58,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.resetModules();
 });
@@ -1633,6 +1635,9 @@ it("retains the exact vote operation while its popup collapses and expands", asy
 describe("mounted map and discovery lifecycle authorities", () => {
   const cityA = "a0000000-0000-4000-8000-000000000001";
   const cityB = "a0000000-0000-4000-8000-000000000002";
+  const discoveryCity = Object.freeze({
+    location: Object.freeze({ cityId: cityA, nameRu: "Москва", timezone: "Europe/Moscow" }),
+  });
   const mapVenue = { id: V1, cityId: cityA, name: "Исходная площадка", address: "Адрес",
     latitude: 55.7, longitude: 37.6, timezone: "Europe/Moscow", dataStatus: "verified", provenance: "PUBLIC" };
   const mounted = vi.fn(), unmounted = vi.fn();
@@ -1655,7 +1660,7 @@ describe("mounted map and discovery lifecycle authorities", () => {
       createElement("div", { "data-testid": "map-city", "data-city": props.cityId },
         createElement("button", { disabled: !props.venues.length, onClick: () => props.onSelect(mapVenue) }, "Выбрать площадку"),
         createElement("button", { onClick: props.onReturnToList }, "Возврат из ошибки модуля")) }));
-    vi.doMock("../src/lib/api-client", async original => ({ ...await original<typeof import("../src/lib/api-client")>(),
+    vi.doMock("../src/lib/api-client", async original => ({ ...await original<typeof ApiClientModule>(),
       getMe: async () => ({ ok: true, data: { id: ACTOR, csrfToken: CSRF } }),
       listAllCityVenues: async (city: string) => ({ ok: true, data: city === cityA ? [mapVenue] : [] }),
       listAllUpcomingCityGames: async () => ({ ok: true, data: [] }),
@@ -1663,7 +1668,7 @@ describe("mounted map and discovery lifecycle authorities", () => {
       listRoleReputationSummaries: async () => ({ ok: true, data: { items: [] } }),
     }));
     vi.doMock("../src/components/consumer/ConsumerShell", () => ({ ConsumerShell: ({ children }: { children: ReactNode }) => createElement("main", null, children) }));
-    vi.doMock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({ useDiscoveryCity: () => ({ location: { cityId: cityA, nameRu: "Москва", timezone: "Europe/Moscow" } }), DiscoveryCityNotice: () => null }));
+    vi.doMock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({ useDiscoveryCity: () => discoveryCity, DiscoveryCityNotice: () => null }));
     vi.doMock("../src/components/consumer/venues/SelectedVenueCover", () => ({ SelectedVenueCover: () => null,
       useSelectedVenueCover: () => ({ compact: { current: null }, info: { current: null }, ready: false, fallback: null, retry() {} }) }));
     vi.doMock("../src/components/consumer/games/VenuePreviewCard", () => ({ VenuePreviewCard: () => null }));
@@ -1678,7 +1683,12 @@ describe("mounted map and discovery lifecycle authorities", () => {
     });
     fetchMock.handler = async () => jsonResponse({ items: [] });
   });
-  afterEach(() => { mockedModules.forEach(module => vi.doUnmock(module)); });
+  afterEach(() => {
+    cleanup();
+    mockedModules.forEach(module => vi.doUnmock(module));
+    vi.resetModules();
+    window.history.replaceState(null, "", "/");
+  });
 
   it("routes visible and module-error returns through the mounted map guard and freezes a changed city", async () => {
     const { GamesMapView } = await import("../src/components/consumer/games/GamesMapView");
