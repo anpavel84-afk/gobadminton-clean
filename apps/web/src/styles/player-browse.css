@@ -1506,11 +1506,32 @@
 .gb-player-browse .pb-finder-cta__label {
   white-space: nowrap;
 }
-.gb-player-browse .pb-finder-map-secondary {
+/* Shared GamesViewAction rendered in-flow inside the zone: not a second fixed overlay. */
+.gb-player-browse .pb-mobile-finder-zone .pb-finder-map-group {
+  display: contents;
+}
+.gb-player-browse .pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action {
+  position: static;
+  display: flex;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  justify-content: center;
+  pointer-events: none;
+}
+.gb-player-browse .pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action > a,
+.gb-player-browse .pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action > button {
+  pointer-events: auto;
   min-height: 44px;
-  min-width: 120px;
-  border-radius: 999px;
-  font-weight: 600;
+  min-width: 0;
+  max-width: calc(100vw - 32px);
+}
+.gb-player-browse .pb-mobile-finder-zone .gb-map-cta-label--full {
+  display: none;
+}
+.gb-player-browse .pb-mobile-finder-zone .gb-map-cta-label--short {
+  display: inline;
 }
 @media (min-width: 721px) and (max-width: 1023px) {
   .gb-player-browse .pb-mobile-finder-zone {

@@ -4,7 +4,6 @@ import "../../../styles/radar-geographic.css";
 import "../../../styles/player-browse.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
 import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
@@ -388,13 +387,16 @@ export function PlayersDirectoryPage({
         <span className="pb-finder-cta__label">Свайп</span>
       </Button>
       {activationId ? (
-        <Link
-          href="/players/radar"
-          className="gb-c23-btn gb-c23-btn--outline pb-finder-map-secondary"
-          aria-label="Игроки на карте"
-        >
-          На карте
-        </Link>
+        <div className="pb-finder-map-group" role="group" aria-label="Игроки на карте">
+          <GamesViewAction
+            view="list"
+            href="/players/radar"
+            labelFull="Игроки на карте"
+            labelShort="На карте"
+            className="pb-finder-map-secondary"
+            aria-label="Игроки на карте"
+          />
+        </div>
       ) : null}
     </div>
   ) : null;
