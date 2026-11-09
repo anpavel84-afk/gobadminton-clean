@@ -1,4 +1,4 @@
-import { createElement, type AnchorHTMLAttributes } from "react";
+import { createElement, type AnchorHTMLAttributes, type ReactElement } from "react";
 import { readFileSync, writeFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -13,6 +13,17 @@ const LONG_ORGANIZER =
   "Other Organizer With Extremely Long Display Name For Wrap Verification Across Widths";
 const DEMO_TRAINER = "Alexey Morozov (demo trainer)";
 const DEMO_ORGANIZER = "Alexey Morozov";
+
+/**
+ * Each browser fixture card is SSR'd as its own root. Without a distinct
+ * `identifierPrefix`, React `useId()` repeats the same disclosure region id
+ * across roots; joining HTML into one document makes getElementById always
+ * hit the first region. Production uses a single application root — do not
+ * rewrite product IDs; uniquify the harness roots instead.
+ */
+function ssrFixtureRoot(identifierPrefix: string, element: ReactElement) {
+  return renderToStaticMarkup(element, { identifierPrefix });
+}
 
 /** Exact DiscoveryGameCard SSR payloads for the sibling browser geometry helper. */
 export function renderTrainingCardBrowserFixtures() {
@@ -179,18 +190,36 @@ export function renderTrainingCardBrowserFixtures() {
     },
   };
   return {
-    regularHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: regular })),
-    trainerTypicalHtml: renderToStaticMarkup(
+    regularHtml: ssrFixtureRoot(
+      "gb521-regular-",
+      createElement(DiscoveryGameCard, { game: regular }),
+    ),
+    trainerTypicalHtml: ssrFixtureRoot(
+      "gb521-typical-",
       createElement(DiscoveryGameCard, { game: trainerTypical, reputation: reputationTypical }),
     ),
-    trainerHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct, reputation })),
-    trainerSameStringIdsHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerSameStringIds })),
-    trainerMissingHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerMissing })),
-    trainerWithoutRoleDataHtml: renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct })),
-    trainerNullHeldHtml: renderToStaticMarkup(
+    trainerHtml: ssrFixtureRoot(
+      "gb521-long-",
+      createElement(DiscoveryGameCard, { game: trainerDistinct, reputation }),
+    ),
+    trainerSameStringIdsHtml: ssrFixtureRoot(
+      "gb521-same-",
+      createElement(DiscoveryGameCard, { game: trainerSameStringIds }),
+    ),
+    trainerMissingHtml: ssrFixtureRoot(
+      "gb521-missing-",
+      createElement(DiscoveryGameCard, { game: trainerMissing }),
+    ),
+    trainerWithoutRoleDataHtml: ssrFixtureRoot(
+      "gb521-norole-",
+      createElement(DiscoveryGameCard, { game: trainerDistinct }),
+    ),
+    trainerNullHeldHtml: ssrFixtureRoot(
+      "gb521-nullheld-",
       createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: reputationNullHeld }),
     ),
-    trainerZeroHeldHtml: renderToStaticMarkup(
+    trainerZeroHeldHtml: ssrFixtureRoot(
+      "gb521-zeroheld-",
       createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: reputationZeroHeld }),
     ),
     longTrainerName: LONG_TRAINER,

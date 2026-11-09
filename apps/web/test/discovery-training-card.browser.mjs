@@ -602,16 +602,64 @@ await withChrome(async ({ call, evaluate }) => {
     const collapsedMetrics = await evaluate(measureExpression);
     const collapsedSummary = assertViewportMetrics(collapsedMetrics, { expanded: false });
 
-    await evaluate(`(() => {
-      for (const btn of document.querySelectorAll('.gb-discovery-card__disclosure')) {
+    // Harness must expose unique disclosure region ids (SSR identifierPrefix per root).
+    // Do not scope around duplicate ids — each toggle must open its OWN card region.
+    const expandResult = await evaluate(`(() => {
+      const btns = [...document.querySelectorAll('.gb-discovery-card__disclosure')];
+      const controlled = btns.map((btn) => {
+        const id = btn.getAttribute('aria-controls');
+        const card = btn.closest('.gb-discovery-card');
+        const region = id ? document.getElementById(id) : null;
+        return {
+          id,
+          hasRegion: !!region,
+          regionInSameCard: !!(card && region && card.contains(region)),
+          wasHidden: region ? !!region.hidden : null,
+        };
+      });
+      const ids = controlled.map((c) => c.id).filter(Boolean);
+      const unique = new Set(ids);
+      if (unique.size !== ids.length) {
+        throw new Error('duplicate disclosure region ids in joined SSR feed: ' + ids.join(','));
+      }
+      for (const row of controlled) {
+        if (!row.id) throw new Error('disclosure missing aria-controls');
+        if (!row.hasRegion) throw new Error('aria-controls id not found: ' + row.id);
+        if (!row.regionInSameCard) {
+          throw new Error('aria-controls resolves outside owning card: ' + row.id);
+        }
+      }
+      for (const btn of btns) {
         btn.setAttribute('aria-expanded', 'true');
         const label = btn.querySelector('span');
         if (label) label.textContent = 'Свернуть';
         const region = document.getElementById(btn.getAttribute('aria-controls'));
-        if (region) region.hidden = false;
+        if (!region) throw new Error('missing region for expand');
+        // Own region only — never fall back to querySelectorAll first match.
+        if (!btn.closest('.gb-discovery-card')?.contains(region)) {
+          throw new Error('refusing to expand foreign region');
+        }
+        region.hidden = false;
       }
-      return true;
+      const after = btns.map((btn) => {
+        const region = document.getElementById(btn.getAttribute('aria-controls'));
+        return {
+          id: btn.getAttribute('aria-controls'),
+          hidden: region ? !!region.hidden : null,
+          inCard: !!(btn.closest('.gb-discovery-card')?.contains(region)),
+        };
+      });
+      if (after.some((r) => r.hidden !== false || !r.inCard)) {
+        throw new Error('per-card expand failed: ' + JSON.stringify(after));
+      }
+      return { ids, uniqueCount: unique.size, expanded: after.length };
     })()`);
+    assert.ok(expandResult?.uniqueCount >= 1, `${width}: expected unique disclosure region ids`);
+    assert.equal(
+      expandResult.uniqueCount,
+      expandResult.ids.length,
+      `${width}: disclosure region ids must be unique (got ${JSON.stringify(expandResult.ids)})`,
+    );
     await sleep(80);
 
     const expandedMetrics = await evaluate(measureExpression);
