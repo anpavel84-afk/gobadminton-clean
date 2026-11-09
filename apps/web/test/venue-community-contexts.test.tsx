@@ -1723,16 +1723,109 @@ describe("mounted map and discovery lifecycle authorities", () => {
     expect(screen.getByTestId("selected-owner")).toBeTruthy();
     expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
     act(() => {
-      window.history.pushState(null, "", `/games?view=list&cityId=${cityB}&day=2026-11-20&activity=regular`);
+      window.history.pushState(null, "", `/games?view=list&cityId=${cityB}&day=2026-11-20&activity=regular&selectedVenue=${V1}&communityCity=${cityA}#ratings`);
       window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+      expect(new URL(window.location.href).searchParams.get("view")).toBe("map");
     });
+    // The same requested city must be corrected even without a state change.
+    act(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("cityId", cityB);
+      window.history.pushState(window.history.state, "", url);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+    });
+    const held = new URL(window.location.href);
+    expect(held.searchParams.get("day")).toBe("2026-11-20");
+    expect(held.searchParams.get("activity")).toBe("regular");
+    expect(held.searchParams.get("selectedVenue")).toBe(V1);
+    expect(held.searchParams.get("communityCity")).toBe(cityA);
+    expect(held.hash).toBe("#ratings");
     expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
     expect(screen.getByTestId("selected-owner")).toBeTruthy();
     expect(unmounted).not.toHaveBeenCalled();
     expect(screen.getByText(/Смена города отложена/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Операция разрешена" }));
     await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityB);
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("map-city")).toBeNull());
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("list");
+  });
+
+  it("cancels held city intent without losing the actor-bound UNKNOWN retry, then allows normal city navigation", async () => {
+    vi.doMock("../src/components/consumer/games/VenueSheet", async () => {
+      const { useEffect } = await import("react");
+      const { VenueCommunityRating } = await import("../src/components/consumer/venues/VenueCommunityRating");
+      return { VenueSheet: (props: { venue: typeof mapVenue; me: { id: string; csrfToken: string } | null; onUnresolvedChange: (value: boolean) => void }) => {
+        useEffect(() => { mounted(); return () => { unmounted(); }; }, []);
+        return createElement("div", { "data-testid": "selected-owner" }, props.venue.name,
+          createElement(VenueCommunityRating, { venueId: props.venue.id, signedIn: !!props.me,
+            actorId: props.me?.id, csrfToken: props.me?.csrfToken ?? null,
+            authReturnPath: "/games?view=map", onUnresolvedChange: props.onUnresolvedChange }));
+      } };
+    });
+    let attempts = 0;
+    fetchMock.handler = async (url, init) => {
+      if (url.includes("venue-community-summaries")) return jsonResponse({ items: [summary(V1, V1, "available", 4.2, 5)] });
+      if (url.includes("/community-rating/me")) return jsonResponse({ own: ownRow({ value: null, version: 0 }), summary: summary(V1, V1, "available", 4.2, 5) });
+      if (url.includes("/community-rating") && init?.method === "PUT") {
+        attempts += 1;
+        return attempts === 1 ? jsonResponse({}, 503) : jsonResponse({ own: ownRow({ value: 4, version: 1 }), summary: summary(V1, V1, "available", 4.2, 6) });
+      }
+      throw new Error(`Unexpected request ${url}`);
+    };
+    const { GamesDiscoveryPage } = await import("../src/components/consumer/pages/GamesDiscoveryPage");
+    render(createElement(GamesDiscoveryPage));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Выбрать площадку" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать площадку" }));
+    await waitFor(() => expect((screen.getByRole("radio", { name: "4 из 5" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("radio", { name: "4 из 5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Отправить оценку" }));
+    await screen.findByTestId("venue-community-vote-unknown");
+    const owner = screen.getByTestId("selected-owner");
+    const frozen = fetchMock.calls.find(call => call.method === "PUT")!;
+    expect(new Headers(frozen.headers).get("x-csrf-token")).toBe(CSRF);
+    expect(JSON.parse(frozen.body!)).toEqual({ value: 4, expectedVersion: 0 });
+    expect(idempotencyKeyOf(frozen)).toBeTruthy();
+
+    const navigate = (city: string) => act(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("cityId", city);
+      window.history.pushState(window.history.state, "", url);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    navigate(cityB);
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+    expect(screen.getByText(/Смена города отложена.*Москва/)).toBeTruthy();
+    navigate(cityB);
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityA);
+    navigate(cityA);
+    expect(screen.queryByText(/Смена города отложена/)).toBeNull();
+    expect(screen.getByTestId("selected-owner")).toBe(owner);
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(unmounted).not.toHaveBeenCalled();
+    expect(attempts).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить тот же запрос" }));
+    await screen.findByRole("button", { name: "Сохранить изменение" });
+    const retry = fetchMock.calls.filter(call => call.method === "PUT");
+    expect(retry).toHaveLength(2);
+    expect(retry[1]?.url).toBe(frozen.url);
+    expect(retry[1]?.body).toBe(frozen.body);
+    expect(idempotencyKeyOf(retry[1])).toBe(idempotencyKeyOf(frozen));
+    expect(new Headers(retry[1]?.headers).get("x-csrf-token")).toBe(CSRF);
+    expect(fetchMock.calls.filter(call => call.url.includes("/community-rating/me"))).toHaveLength(1);
+    expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityA);
+    expect(screen.getByTestId("selected-owner")).toBe(owner);
+
+    navigate(cityB);
+    await waitFor(() => expect(screen.getByTestId("map-city").getAttribute("data-city")).toBe(cityB));
+    expect(new URL(window.location.href).searchParams.get("cityId")).toBe(cityB);
+    expect(screen.queryByTestId("selected-owner")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /К списку/ }));
+    await screen.findByRole("button", { name: "Где играем: Санкт-Петербург. Сменить город" });
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("list");
+    expect(attempts).toBe(2);
   });
 });

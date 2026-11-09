@@ -59,12 +59,17 @@ export function GamesDiscoveryPage() {
   useEffect(() => {
     const readContext = () => {
     const query = new URLSearchParams(window.location.search);
-    if (mapUnresolved.current && query.get("view") !== "map") {
-      setMapHoldNotice("Проверьте результат текущей операции перед возвратом к списку.");
+    if (mapUnresolved.current) {
+      if (query.get("view") !== "map") setMapHoldNotice("Проверьте результат текущей операции перед возвратом к списку.");
       const heldUrl = new URL(window.location.href);
       heldUrl.searchParams.set("view", "map");
-      window.history.replaceState(window.history.state, "", heldUrl);
+      if (retainedLocation.current) heldUrl.searchParams.set("cityId", retainedLocation.current.cityId);
+      // Correct every history navigation in the handler: repeated intent may not
+      // change React state, so the passive URL effect need not run again.
+      if (heldUrl.href !== window.location.href) window.history.replaceState(window.history.state, "", heldUrl);
     } else setView(query.get("view") === "map" ? "map" : "list");
+    // Read the original query, not the held URL: keep the requested city until
+    // all operations settle, or a later navigation explicitly cancels it.
     setUrlCity(query.get("cityId"));
     const day = query.get("day");
     setSelectedDay(day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "");

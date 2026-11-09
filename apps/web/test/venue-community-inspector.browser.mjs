@@ -185,20 +185,32 @@ try {
     assert.equal(new URL(page.url()).searchParams.get('view'),'map');
     assert.equal(await content.count(),1,'real pointer return retains UNKNOWN');
     await page.getByRole('button',{name:'Развернуть площадку',exact:true}).click();
-    // A city navigation event must retain the old mounted catalog and packet.
-    await page.evaluate(cityB=>{
-      const url=new URL(window.location.href);url.searchParams.set('cityId',cityB);
-      window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
-    },'a0000000-0000-4000-8000-000000000002');
-    await page.getByText(/Смена города отложена/).waitFor();
-    assert.equal(await content.count(),1);
-    assert.equal(new URL(page.url()).searchParams.get('cityId'),city,'held city is not silently relabeled');
+    // Repeated city navigation must retain the old mounted catalog and packet,
+    // including when the requested city already matches React state.
+    for (let attempt=0;attempt<2;attempt++) {
+      await page.evaluate(cityB=>{
+        const url=new URL(window.location.href);url.searchParams.set('cityId',cityB);
+        window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
+      },'a0000000-0000-4000-8000-000000000002');
+      await page.getByText(/Смена города отложена/).waitFor();
+      await page.waitForFunction(expected=>new URL(window.location.href).searchParams.get('cityId')===expected,city,{timeout:2000});
+      assert.equal(await content.count(),1);
+      assert.equal(new URL(page.url()).searchParams.get('cityId'),city,'held city is not silently relabeled');
+      const held=new URL(page.url());
+      assert.equal(held.searchParams.get('day'),'2026-11-20');
+      assert.equal(held.searchParams.get('activity'),'regular');
+      assert.equal(held.searchParams.get('selectedVenue'),id);
+      assert.equal(held.searchParams.get('communityCity'),city);
+      assert.equal(held.hash,'#ratings');
+      assert.equal(writes.filter(write=>write.method==='PUT').length,1,'held navigation never retries');
+    }
     // Cancel the requested city transition while still unresolved, so the rest of
     // the original same-venue fixture can proceed after this operation settles.
     await page.evaluate(cityA=>{
       const url=new URL(window.location.href);url.searchParams.set('cityId',cityA);
       window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
     },city);
+    await page.getByText(/Смена города отложена/).waitFor({state:'hidden'});
     await content.getByRole('button',{name:'Повторить тот же запрос',exact:true}).click();
     await content.getByRole('button',{name:'Сохранить изменение',exact:true}).waitFor();
     const retried=writes.filter(write=>write.method==='PUT');
@@ -306,6 +318,26 @@ try {
       return {unique:ids.length===new Set(ids).size,overflow:document.documentElement.scrollWidth>window.innerWidth,small:targets.map(node=>({text:node.textContent,rect:node.getBoundingClientRect().toJSON()})).filter(({rect})=>rect.width<43.5||rect.height<43.5)};
     });
     assert.equal(metrics.unique,true);assert.equal(metrics.overflow,false);assert.deepEqual(metrics.small,[]);
+    assert.deepEqual(errors,[]);
+    // All operations have settled: the next city navigation must work normally,
+    // remove the old owner/catalog, and still allow the ordinary list return.
+    const settledWrites=writes.length;
+    const nextCity='a0000000-0000-4000-8000-000000000002';
+    await page.evaluate(cityB=>{
+      const url=new URL(window.location.href);url.searchParams.set('cityId',cityB);
+      window.history.pushState(null,'',url);window.dispatchEvent(new window.PopStateEvent('popstate'));
+    },nextCity);
+    await page.waitForFunction(expected=>new URL(window.location.href).searchParams.get('cityId')===expected,nextCity,{timeout:2000});
+    await content.waitFor({state:'detached'});
+    await page.getByText('В каталоге города пока нет площадок.',{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('cityId'),nextCity);
+    assert.equal(await content.count(),0,'settled city transition releases the old owner');
+    await back.click();
+    await page.getByRole('button',{name:'Где играем: Санкт-Петербург. Сменить город',exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('view'),'list');
+    assert.equal(new URL(page.url()).searchParams.get('day'),'2026-11-20');
+    assert.equal(new URL(page.url()).searchParams.get('activity'),'regular');
+    assert.equal(writes.length,settledWrites,'normal city navigation never autosends');
     assert.deepEqual(errors,[]);
     // D1 uses the production picker and its independent sibling actions.
     await page.goto(`${origin}/games/create?cityId=${city}`);
