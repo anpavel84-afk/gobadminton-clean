@@ -176,7 +176,7 @@ describe("production venue popup presentation with real React", () => {
       onCollapse={noop} onDeselect={noop} onCommunitySectionChange={onSection} />);
     const actions = within(within(container).getByRole("navigation", { name: "Сообщество площадки" }));
     for (const [label, section] of [["Оценить", "ratings"], ["Обсуждение", "discussion"], ["Отзывы после игры", "reviews"]] as const) {
-      fireEvent.click(actions.getByRole("button", { name: label, exact: true }));
+      fireEvent.click(actions.getByRole("button", { name: label }));
       expect(onSection).toHaveBeenLastCalledWith(section);
     }
     expect(onSection).toHaveBeenCalledTimes(3);

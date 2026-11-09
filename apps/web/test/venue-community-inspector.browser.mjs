@@ -83,6 +83,10 @@ try {
   for (const width of [390,1280]) {
     const context = await browser.newContext({viewport:{width,height:900}});
     let ownValue=null, ownVersion=0, failVote=true;
+    // The real composer reloads GET after POST; keep its synthetic server state
+    // local to this isolated browser context.
+    const comments=[comment];
+    let commentPending=null, commentReadbacks=0;
     const writes=[];
     const own=()=>({venueId:id,canonicalVenueId:id,value:ownValue,version:ownVersion,withdrawn:false,moderationState:'clear',allowedActions:{upsert:true,update:true,withdraw:true}});
     await context.route('**/*', async route=>{
@@ -98,7 +102,12 @@ try {
           return reply({own:own(),summary:aggregate});
         }
         if(path==='/v1/reports') return reply({reportId:'50000000-0000-4000-8000-000000000001',status:'submitted',createdAt:'2026-11-09T12:00:00Z'},201);
-        if(path===`/v1/venues/${id}/comments`) return reply({...comment,id:'20000000-0000-4000-8000-000000000002',body:request.postDataJSON().text,mine:true},201);
+        if(path===`/v1/venues/${id}/comments`) {
+          commentPending=await page.evaluate(key=>JSON.parse(window.sessionStorage.getItem(key)),`gb-fr04-pending:comments:venue:${id}:${actor}`);
+          const created={...comment,id:'20000000-0000-4000-8000-000000000002',body:request.postDataJSON().text,mine:true};
+          comments.push(created);
+          return reply(created,201);
+        }
         throw new Error(`Unexpected synthetic mutation ${path}`);
       }
       if(path==='/v1/me') return reply({id:actor,displayName:'Synthetic actor',csrfToken:'synthetic-only',linkedProviders:[],locale:'ru'});
@@ -111,7 +120,10 @@ try {
       if(path==='/v1/venue-community-summaries') return reply({items:[aggregate]});
       if(path===`/v1/venues/${id}/community-rating/me`) return reply({own:own(),summary:aggregate});
       if(path===`/v1/venues/${id}/experience-reviews`) return reply({venueId:id,publishedCount:1,items:[review],nextCursor:null,canWriteHint:false});
-      if(path===`/v1/venues/${id}/comments`) return reply({entityKind:'venue',entityId:id,parentCommentId:null,items:[comment],nextCursor:null,visibleCount:1,canCreate:true});
+      if(path===`/v1/venues/${id}/comments`) {
+        if(comments.length>1) commentReadbacks++;
+        return reply({entityKind:'venue',entityId:id,parentCommentId:null,items:comments,nextCursor:null,visibleCount:comments.length,canCreate:true});
+      }
       return reply({items:[],nextCursor:null});
     });
     const page=await context.newPage();
@@ -146,7 +158,8 @@ try {
     await page.setViewportSize({width,height:900});
     const report=content.getByTestId('venue-community-report-aggregate');
     await report.focus(); await page.keyboard.press('Enter');
-    await page.getByLabel('Причина',{exact:true}).waitFor();
+    const reportDialog=page.getByRole('dialog',{name:'Пожаловаться на сводку оценок',exact:true});
+    await reportDialog.getByRole('combobox',{name:/^Причина(?:\s|$)/}).waitFor();
     await page.keyboard.press('Escape');
     assert.equal(await report.evaluate(node=>node===document.activeElement),true,'native dialog restores exact trigger');
     assert.equal(await content.count(),1,'nested Escape leaves map selection');
@@ -157,6 +170,16 @@ try {
     await content.getByLabel('Ваш комментарий',{exact:true}).fill('Synthetic in-map comment');
     await content.getByRole('button',{name:'Отправить',exact:true}).click();
     await content.getByText('Synthetic in-map comment',{exact:true}).waitFor();
+    const commentWrites=writes.filter(write=>write.path.endsWith('/comments'));
+    assert.equal(commentWrites.length,1,'one comment POST without automatic replay');
+    const postedComment=commentWrites[0];
+    assert.deepEqual({path:postedComment.path,method:postedComment.method,body:postedComment.body},{
+      path:`/v1/venues/${id}/comments`,method:'POST',body:{text:'Synthetic in-map comment',parentCommentId:null},
+    });
+    assert.ok(postedComment.key,'comment POST has an idempotency key');
+    assert.deepEqual(commentPending,postedComment,'comment body/key/path match the exact actor-bound pending operation');
+    assert.ok(commentReadbacks>0,'created comment was returned by a subsequent same-venue GET');
+    assert.equal(await content.locator('.gb-comments__count').innerText(),'2');
     await content.getByText(review.text,{exact:true}).waitFor();
     assert.equal(new URL(page.url()).pathname,'/games');
     assert.equal(new URL(page.url()).searchParams.get('cityId'),city);
