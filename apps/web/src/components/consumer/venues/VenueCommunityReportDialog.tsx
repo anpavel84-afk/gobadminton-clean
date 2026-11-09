@@ -77,6 +77,8 @@ export function VenueCommunityReportDialog({
   const [detail, setDetail] = useState("");
   const [done, setDone] = useState(false);
   const [authOpen, setAuthOpen] = useState(!signedIn);
+  const [nativeHidden, setNativeHidden] = useState(false);
+  const [reopenSignal, setReopenSignal] = useState(0);
   /**
    * Bumps when CSRF rotates for the same actor/subject so UNKNOWN stays on the prior
    * storage scope (no clear/replay) while the new context can start cleanly.
@@ -112,6 +114,7 @@ export function VenueCommunityReportDialog({
       subjectKey,
     };
     admittedAuthRef.current = null;
+    if (nativeHidden) setNativeHidden(false);
     sessionLive.current = true;
     if (revoked) setRevoked(false);
     if (csrfRotated) csrfEpochRef.current += 1;
@@ -126,6 +129,7 @@ export function VenueCommunityReportDialog({
       sessionLive.current = false;
       admittedAuthRef.current = null;
       setRevoked(true); setAuthOpen(true); setDetail(""); setDone(false);
+      setNativeHidden(false);
       setSessionGeneration(value => value + 1);
     };
     window.addEventListener("gb-session-changed", revoke);
@@ -150,6 +154,7 @@ export function VenueCommunityReportDialog({
     (failure) => {
       if (failure?.status === 401) {
         admittedAuthRef.current = null;
+        setNativeHidden(false);
         setAuthOpen(true);
         setDetail("");
         setDone(false);
@@ -232,11 +237,23 @@ export function VenueCommunityReportDialog({
   const formVisible = authMatches && !done;
 
   return (
+    <>
+    {nativeHidden ? <Button
+      data-testid="venue-community-report-resume"
+      autoFocus
+      style={{ minHeight: 44, minWidth: 44 }}
+      onClick={() => { setNativeHidden(false); setReopenSignal(value => value + 1); }}
+    >Проверить отправку</Button> : null}
     <ProfileDialog
       title={subjectTitle(subject)}
       onClose={requestClose}
       className="profile-dialog--community"
       lockBodyScroll
+      onNativeClose={() => {
+        if (mutation.busy || mutation.pending) setNativeHidden(true);
+        else onClose();
+      }}
+      reopenSignal={reopenSignal}
     >
       {done ? (
         <p role="status" data-testid="venue-community-report-success">
@@ -298,5 +315,6 @@ export function VenueCommunityReportDialog({
         }}
       />
     </ProfileDialog>
+    </>
   );
 }

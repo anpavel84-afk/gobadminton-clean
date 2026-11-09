@@ -66,7 +66,7 @@ export function Toggle({ label, helper, on, disabled, onClick, describedBy, id }
   return <button type="button" id={id} className={`toggle-row ${on ? "is-on" : ""}`} aria-label={label} aria-describedby={describedBy} role="switch" aria-checked={on} disabled={disabled} onClick={onClick}><span><strong>{label}</strong>{helper && <small>{helper}</small>}</span><i aria-hidden="true"><b /></i></button>;
 }
 /** Native modal provides focus containment, Escape and focus restoration. */
-export function ProfileDialog({ title, onClose, children, size = "normal", className, describedBy, lockBodyScroll = false }: {
+export function ProfileDialog({ title, onClose, children, size = "normal", className, describedBy, lockBodyScroll = false, onNativeClose, reopenSignal }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
@@ -78,20 +78,42 @@ export function ProfileDialog({ title, onClose, children, size = "normal", class
   describedBy?: string;
   /** Opt-in body scroll lock (supported overlay families); default leaves overflow untouched. */
   lockBodyScroll?: boolean;
+  /** Opt-in notification when the browser closes a still-mounted dialog. */
+  onNativeClose?: () => void;
+  /** Change only on explicit user resume; never driven by pending/response state. */
+  reopenSignal?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const nativeClose = useRef(onNativeClose);
+  nativeClose.current = onNativeClose;
+  const observesNativeClose = Boolean(onNativeClose);
   useEffect(() => {
     const dialog = ref.current;
     const trigger = document.activeElement as HTMLElement | null;
     const overflow = lockBodyScroll ? document.body.style.overflow : null;
     if (lockBodyScroll) document.body.style.overflow = "hidden";
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
       if (lockBodyScroll && overflow !== null) document.body.style.overflow = overflow;
       if (trigger?.isConnected) trigger.focus();
     };
-  }, [lockBodyScroll]);
+    const closed = () => {
+      // A queued close from StrictMode cleanup may arrive after showModal().
+      if (dialog?.open) return;
+      release();
+      nativeClose.current?.();
+    };
+    if (observesNativeClose) dialog?.addEventListener("close", closed);
+    dialog?.showModal();
+    return () => {
+      // Managed dismissal/unmount is not a browser-forced close notification.
+      dialog?.removeEventListener("close", closed);
+      dialog?.close();
+      release();
+    };
+  }, [lockBodyScroll, observesNativeClose, reopenSignal]);
   const classes = ["profile-dialog", size === "small" ? "profile-dialog--small" : "", className].filter(Boolean).join(" ");
   return <dialog ref={ref} className={classes} aria-label={title} aria-describedby={describedBy} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header><div className="profile-dialog__body">{children}</div></dialog>;
 }

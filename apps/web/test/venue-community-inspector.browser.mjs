@@ -85,6 +85,7 @@ try {
     const context = await browser.newContext({viewport:{width,height:900}});
     let ownValue=null, ownVersion=0, failVote=true;
     let reportFailure=false, reviewFailure=false;
+    let reviewGateSuccess=false;
     let releaseReport, releaseReview;
     let reportGate, reviewGate;
     let activeActor=actor, activeCsrf='synthetic-only';
@@ -112,7 +113,7 @@ try {
         }
         if(path==='/v1/me/venue-reviews/consent-preview') return reply({consentProjectionHash:'synthetic-projection',authorLabel:'Участник игры'});
         if(path==='/v1/me/venue-reviews') {
-          if(reviewFailure) {reviewFailure=false;await reviewGate;return reply({},503);}
+          if(reviewFailure) {reviewFailure=false;await reviewGate;if(!reviewGateSuccess) return reply({},503);}
           return reply({id:'60000000-0000-4000-8000-000000000001',version:1,status:request.postDataJSON().audience==='self_draft'?'self_draft':'submitted',reviewHandle:'synthetic-new',receiptToken:'synthetic-receipt',publicVisible:false,notBefore:null},201);
         }
         if(path===`/v1/venues/${id}/comments`) {
@@ -142,6 +143,48 @@ try {
     });
     const page=await context.newPage();
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    async function watchCancels(dialog) {
+      return dialog.evaluateHandle(node=>{
+        const events=[];
+        const capture=event=>events.push(event);
+        node.addEventListener('cancel',capture);
+        return {node,events,stop(){node.removeEventListener('cancel',capture);}};
+      });
+    }
+    async function resumeIfNativeHidden(dialog,testId,probe) {
+      // Let the second Escape's native close event finish; do not space out Escapes.
+      await page.evaluate(()=>new Promise(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(resolve))));
+      const events=await probe.evaluate(probe=>probe.events.map(event=>({cancelable:event.cancelable,prevented:event.defaultPrevented})));
+      assert.equal(events.length,2,'real busy and UNKNOWN Escapes reached the same mounted dialog');
+      assert.deepEqual(events[0],{cancelable:true,prevented:true});
+      const count=writes.length;
+      if(!await dialog.isVisible()) {
+        const resume=page.getByTestId(testId);
+        await resume.waitFor({state:'visible'});
+        assert.equal(await resume.evaluate(node=>node.closest('dialog')===null),true);
+        assert.equal(await page.evaluate(()=>document.body.style.overflow),'','native close releases body scroll');
+        assert.equal(await page.evaluate(()=>Boolean(document.activeElement?.closest('dialog[open]'))),false);
+        for(const viewportWidth of [1024,width]) {
+          await page.setViewportSize({width:viewportWidth,height:900});
+          const target=await resume.evaluate(node=>{
+            const rect=node.getBoundingClientRect();
+            return {width:rect.width,height:rect.height,hit:node.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)),overflow:document.documentElement.scrollWidth>window.innerWidth};
+          });
+          assert.ok(target.width>=44 && target.height>=44);assert.equal(target.hit,true);assert.equal(target.overflow,false);
+        }
+        await resume.focus();
+        assert.equal(await resume.evaluate(node=>document.activeElement===node),true);
+        await page.keyboard.press('Enter');
+        await dialog.waitFor({state:'visible'});
+        assert.equal(await dialog.evaluate((node,probe)=>node===probe.node,probe),true,'same dialog is resumed');
+        assert.equal(await page.evaluate(()=>document.body.style.overflow),'hidden');
+        assert.equal(await dialog.evaluate(node=>node.contains(document.activeElement)),true,'native focus containment reacquired');
+      } else {
+        assert.equal(await dialog.getByRole('button',{name:'Проверить отправку',exact:true}).isVisible(),true);
+      }
+      assert.equal(writes.length,count,'resume never sends or retries');
+      await probe.evaluate(probe=>probe.stop());await probe.dispose();
+    }
     // Restoration intent is validated by the actual current-city catalog, never schedule-only venueId.
     await page.goto(`${origin}/games?view=map&cityId=${city}&day=2026-11-20&activity=regular&selectedVenue=${id}&communityCity=${city}#ratings`);
     const content=page.locator(`[data-venue-community="${id}"]`);
@@ -289,25 +332,43 @@ try {
     assert.equal(new URL(page.url()).pathname,'/games');
     assert.equal(new URL(page.url()).searchParams.get('cityId'),city);
     assert.equal(new URL(page.url()).searchParams.get('activity'),'regular');
-    // Report pending and 503 retain the native dialog and exact packet.
-    reportFailure=true;reportGate=new Promise(resolve=>{releaseReport=resolve;});
-    await report.click();
-    await page.getByTestId('venue-community-report-detail').fill('Synthetic exact report');
-    await page.getByTestId('venue-community-report-submit').click();
-    await page.waitForFunction(()=>document.querySelector('[data-testid="venue-community-report-submit"]').disabled);
-    await page.keyboard.press('Escape');
-    assert.equal(await reportDialog.isVisible(),true,'busy report cannot close');
-    releaseReport();
-    await reportDialog.getByRole('button',{name:'Проверить отправку',exact:true}).waitFor();
-    await page.keyboard.press('Escape');
-    assert.equal(await reportDialog.isVisible(),true,'UNKNOWN report cannot close');
-    const reportPacket=writes.filter(write=>write.path==='/v1/reports').at(-1);
-    await page.setViewportSize({width:1024,height:900});
-    await page.setViewportSize({width,height:900});
-    await reportDialog.getByRole('button',{name:'Проверить отправку',exact:true}).click();
-    await page.getByTestId('venue-community-report-success').waitFor();
-    assert.deepEqual(writes.filter(write=>write.path==='/v1/reports').at(-1),reportPacket);
-    await page.keyboard.press('Escape');
+    // Every actual report entry point retains its exact subject/version/detail/key.
+    for(const subjectKind of ['aggregate','own_vote','venue_comment']) {
+      const priorReports=writes.filter(write=>write.path==='/v1/reports').length;
+      reportFailure=true;reportGate=new Promise(resolve=>{releaseReport=resolve;});
+      if(subjectKind==='aggregate') await report.click();
+      else if(subjectKind==='own_vote') await content.getByTestId('venue-community-report-own-vote').click();
+      else {
+        await content.locator('article.gb-comment').filter({has:page.getByText(comment.body,{exact:true})})
+          .getByRole('button',{name:'Действия с комментарием',exact:true}).click();
+        await content.getByTestId('venue-community-report-comment').click();
+      }
+      const currentReport=page.getByRole('dialog',{name:subjectKind==='aggregate'?'Пожаловаться на сводку оценок':subjectKind==='own_vote'?'Пожаловаться на свою оценку':'Пожаловаться на публикацию',exact:true});
+      const reportProbe=await watchCancels(currentReport);
+      const detail=`Synthetic exact ${subjectKind} report`;
+      await currentReport.getByTestId('venue-community-report-detail').fill(detail);
+      await currentReport.getByTestId('venue-community-report-submit').click();
+      await page.waitForFunction(()=>document.querySelector('[data-testid="venue-community-report-submit"]').disabled);
+      await page.keyboard.press('Escape');
+      assert.equal(await currentReport.isVisible(),true,'first busy Escape is prevented');
+      releaseReport();
+      await currentReport.getByRole('button',{name:'Проверить отправку',exact:true}).waitFor();
+      const reportPacket=writes.filter(write=>write.path==='/v1/reports').at(-1);
+      await page.keyboard.press('Escape');
+      await resumeIfNativeHidden(currentReport,'venue-community-report-resume',reportProbe);
+      assert.equal(writes.filter(write=>write.path==='/v1/reports').length,priorReports+1,'Escapes/resume never resend');
+      await assertRetainedOwner();
+      assert.equal(await currentReport.getByTestId('venue-community-report-detail').inputValue(),detail);
+      assert.equal(reportPacket.body.subjectKind,subjectKind);
+      if(subjectKind==='own_vote') assert.equal(reportPacket.body.expectedVersion,1);
+      if(subjectKind==='venue_comment') {assert.equal(reportPacket.body.commentId,commentId);assert.equal(reportPacket.body.expectedVersion,1);}
+      await currentReport.getByRole('button',{name:'Проверить отправку',exact:true}).click();
+      await currentReport.getByTestId('venue-community-report-success').waitFor();
+      assert.deepEqual(writes.filter(write=>write.path==='/v1/reports').at(-1),reportPacket);
+      assert.equal(writes.filter(write=>write.path==='/v1/reports').length,priorReports+2,'one separate explicit report retry');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.getByTestId('venue-community-report-resume').count(),0,'success/managed dismissal creates no resume');
+    }
 
     // Review preview is separate from the admitted send. 503 retries preserve
     // actor credentials, game/basis versions, consent projection, body and key.
@@ -315,6 +376,7 @@ try {
     await content.getByRole('button',{name:'Поделиться опытом',exact:true}).click();
     const reviewDialog=page.getByRole('dialog',{name:'Как вам площадка?',exact:true});
     await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).fill('Synthetic frozen review');
+    const reviewProbe=await watchCancels(reviewDialog);
     await reviewDialog.getByLabel('Всем на странице площадки',{exact:true}).check();
     await reviewDialog.getByRole('checkbox').click();
     await page.waitForFunction(()=>document.querySelector('.gb-venue-reviews__preview input[type="checkbox"]')?.checked === true);
@@ -330,7 +392,10 @@ try {
     assert.equal(reviewPacket.body.consentProjectionHash,'synthetic-projection');
     assert.equal(await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).isDisabled(),true);
     await page.keyboard.press('Escape');
-    assert.equal(await reviewDialog.isVisible(),true,'UNKNOWN review cannot close');
+    await resumeIfNativeHidden(reviewDialog,'venue-review-resume',reviewProbe);
+    await assertRetainedOwner();
+    assert.equal(await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).inputValue(),'Synthetic frozen review');
+    assert.equal(await reviewDialog.getByRole('checkbox').isChecked(),true);
     await page.setViewportSize({width:1024,height:900});
     await page.setViewportSize({width,height:900});
     assert.equal(writes.filter(write=>write.path==='/v1/me/venue-reviews').length,1,'no hidden retry');
@@ -338,6 +403,35 @@ try {
     await reviewDialog.getByText(/Публикация — после независимой проверки и паузы 48 часов/).waitFor();
     assert.deepEqual(writes.filter(write=>write.path==='/v1/me/venue-reviews').at(-1),reviewPacket);
     await page.keyboard.press('Escape');
+    assert.equal(await page.getByTestId('venue-review-resume').count(),0,'success/managed dismissal creates no resume');
+
+    // A response may succeed after native close while still busy. It must never
+    // reopen the modal or send again; the user can explicitly inspect the receipt.
+    reviewFailure=true;reviewGateSuccess=true;
+    reviewGate=new Promise(resolve=>{releaseReview=resolve;});
+    await content.getByRole('button',{name:'Поделиться опытом',exact:true}).click();
+    await reviewDialog.getByLabel('Ваш опыт на площадке',{exact:true}).fill('Synthetic late success');
+    await reviewDialog.getByRole('button',{name:'Сохранить',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#venue-review-text').disabled);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.evaluate(()=>new Promise(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(resolve))));
+    const wasVisible=await reviewDialog.isVisible();
+    if(!wasVisible) await page.getByTestId('venue-review-resume').waitFor({state:'visible'});
+    const lateSuccessWrites=writes.length;
+    releaseReview();
+    await page.waitForFunction(()=>document.querySelector('#venue-review-text')?.disabled===false);
+    assert.equal(await reviewDialog.isVisible(),wasVisible,'late success never reopens a native-hidden modal');
+    assert.equal(writes.length,lateSuccessWrites,'late success never resends');
+    if(!wasVisible) {
+      assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
+      await page.getByTestId('venue-review-resume').focus();await page.keyboard.press('Enter');
+    }
+    await reviewDialog.getByText('Сохранено только вам.',{exact:true}).waitFor();
+    assert.equal(writes.length,lateSuccessWrites,'inspecting the late receipt never resends');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.getByTestId('venue-review-resume').count(),0);
+    reviewGateSuccess=false;
 
     reviewFailure=true;reviewGate=new Promise(resolve=>{releaseReview=resolve;});
     await content.getByRole('button',{name:'Поделиться опытом',exact:true}).click();

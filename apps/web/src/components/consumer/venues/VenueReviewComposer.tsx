@@ -72,6 +72,8 @@ export function VenueReviewComposer({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
+  const [nativeHidden, setNativeHidden] = useState(false);
+  const [reopenSignal, setReopenSignal] = useState(0);
   type Packet = {
     body: Parameters<typeof createVenueReview>[0]; key: string;
     actorId: string; csrf: string; generation: number;
@@ -93,6 +95,7 @@ export function VenueReviewComposer({
     packetRef.current = null;
     sendLock.current = false;
     setPacket(null); setBusy(false); setPreviewBusy(false);
+    setNativeHidden(false);
     setConsent(false); setPreviewHash(null); setReceipt(null); setNotice(null);
     setText(""); setAudience("self_draft"); setBases([]); setState("loading");
   }
@@ -136,6 +139,7 @@ export function VenueReviewComposer({
       epoch.current += 1; previewSequence.current += 1;
       packetRef.current = null; sendLock.current = false;
       setPacket(null); setBusy(false); setPreviewBusy(false);
+      setNativeHidden(false);
       setConsent(false); setPreviewHash(null); setReceipt(null); setText("");
       setAudience("self_draft"); setState("auth");
       setNotice("Сессия изменилась. Повтор прежней отправки недоступен; её результат не подтверждён.");
@@ -219,6 +223,7 @@ export function VenueReviewComposer({
         if (result.status === 409) setState("error");
         if (result.status === 401 || result.status === 403) {
           context.current.revoked = true;
+          setNativeHidden(false); setText(""); setReceipt(null);
           setConsent(false); setPreviewHash(null); setState("auth");
         }
         return;
@@ -243,11 +248,23 @@ export function VenueReviewComposer({
   }
 
   return (
+    <>
+    {nativeHidden && !context.current.revoked ? <Button
+      data-testid="venue-review-resume"
+      autoFocus
+      style={{ minHeight: 44, minWidth: 44 }}
+      onClick={() => { setNativeHidden(false); setReopenSignal(value => value + 1); }}
+    >Проверить отправку</Button> : null}
     <ProfileDialog
       title="Как вам площадка?"
       onClose={requestClose}
       className="profile-dialog--postgame"
       lockBodyScroll
+      onNativeClose={() => {
+        if (sendLock.current || packetRef.current) setNativeHidden(true);
+        else onClose();
+      }}
+      reopenSignal={reopenSignal}
       describedBy="gb-venue-review-composer-hint"
     >
       <div className="gb-venue-reviews gb-venue-reviews__composer-body">
@@ -409,5 +426,6 @@ export function VenueReviewComposer({
         ) : null}
       </div>
     </ProfileDialog>
+    </>
   );
 }
