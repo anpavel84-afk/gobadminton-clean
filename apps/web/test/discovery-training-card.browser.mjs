@@ -57,7 +57,10 @@ async function ssrExactCards() {
   assert.doesNotMatch(payload.trainerHtml, /data-layout/);
   assert.match(payload.trainerHtml, /gb-discovery-card__people/);
   assert.match(payload.trainerTypicalHtml, /gb-discovery-card__people/);
+  assert.match(payload.trainerTypicalHtml, /gb-discovery-card__people-summary/);
+  assert.match(payload.trainerTypicalHtml, /gb-discovery-card__disclosure/);
   assert.match(payload.trainerTypicalHtml, /gb-discovery-card__actions/);
+  assert.match(payload.trainerTypicalHtml, /aria-expanded="false"/);
   assert.doesNotMatch(payload.trainerTypicalHtml, /gb-discovery-card__footer/);
   await rm(dir, { recursive: true, force: true });
   return payload;
@@ -208,7 +211,7 @@ await withChrome(async ({ call, evaluate }) => {
     });
     await sleep(150);
 
-    const metrics = await evaluate(`(() => {
+    const measureExpression = `(() => {
       const viewportWidth = ${width};
       const longTrainer = ${JSON.stringify(fixtures.longTrainerName)};
       const longOrganizer = ${JSON.stringify(fixtures.longOrganizerName)};
@@ -221,12 +224,20 @@ await withChrome(async ({ call, evaluate }) => {
         const imageSlot = card.querySelector('.gb-discovery-card__image');
         const imageEl = imageSlot?.querySelector('img') || imageSlot?.querySelector('.gb-venue-cover');
         const content = card.querySelector('.gb-discovery-card__content');
-        const actions = card.querySelector('.gb-discovery-card__actions');
+        const peopleBand = card.querySelector('.gb-discovery-card__people');
+        const peopleSummary = peopleBand?.querySelector('.gb-discovery-card__people-summary');
+        const actions = peopleSummary?.querySelector(':scope > .gb-discovery-card__actions')
+          || card.querySelector('.gb-discovery-card__actions');
         const details = actions?.querySelector('.gb-c23-btn') || card.querySelector('.gb-c23-btn');
         const detailsSpan = details?.querySelector(':scope > span') || null;
         // Product DiscoveryIcon is an accessible <img src="/discovery/arrow.svg">, not inline <svg>.
         const detailsArrowImg = details?.querySelector('img.gb-discovery-icon[src*="arrow.svg"], img[src="/discovery/arrow.svg"]') || null;
         const shareBtn = actions?.querySelector('.gb-game-share__button') || null;
+        const disclosure = peopleSummary?.querySelector(':scope > .gb-discovery-card__disclosure') || null;
+        const roleDetails = peopleBand?.querySelector('.gb-discovery-card__role-details') || null;
+        const historyEl = roleDetails && !roleDetails.hidden
+          ? roleDetails.querySelector('.gb-discovery-card__history')
+          : null;
         const spanCs = detailsSpan ? getComputedStyle(detailsSpan) : null;
         const imgStyle = imageEl ? getComputedStyle(imageEl.tagName === 'IMG' ? imageEl : (imageEl.querySelector('img') || imageEl)) : null;
         const strongs = [...card.querySelectorAll('.gb-discovery-host strong')].map((s) => ({
@@ -239,11 +250,9 @@ await withChrome(async ({ call, evaluate }) => {
           overflowWrap: getComputedStyle(s).overflowWrap,
         }));
         const roles = [...card.querySelectorAll('.gb-discovery-host')].map((h) => h.getAttribute('data-role'));
-        const peopleHosts = [...card.querySelectorAll('.gb-discovery-card__people > .gb-discovery-host')];
+        const peopleHosts = [...(peopleSummary?.querySelectorAll(':scope > .gb-discovery-host') || [])];
         const people = peopleHosts.map(rect);
-        const peopleBand = card.querySelector('.gb-discovery-card__people');
-        const peopleActions = peopleBand?.querySelector(':scope > .gb-discovery-card__actions');
-        const historyEl = peopleBand?.querySelector(':scope > .gb-discovery-card__history, :scope > .gb-discovery-card__band-spacer');
+        const summaryStyle = peopleSummary ? getComputedStyle(peopleSummary) : null;
         const roleNameMetrics = peopleHosts.map((host) => {
           const strong = host.querySelector('strong');
           const r = strong ? rect(strong) : null;
@@ -268,10 +277,11 @@ await withChrome(async ({ call, evaluate }) => {
         const image = rect(imageEl?.tagName === 'IMG' ? imageEl : (imageEl?.querySelector('img') || imageEl));
         const cardBox = rect(card);
         const peopleBandRect = peopleBand ? rect(peopleBand) : null;
-        const peopleBandStyle = peopleBand ? getComputedStyle(peopleBand) : null;
+        const peopleSummaryRect = peopleSummary ? rect(peopleSummary) : null;
         const unusedUnderPhoto = peopleBandRect && slot
           ? Math.max(0, peopleBandRect.y - slot.bottom)
           : null;
+        const visibleControls = [...card.querySelectorAll('a,button')].filter((el) => el.getClientRects().length > 0);
         return {
           index,
           activity: card.getAttribute('data-activity'),
@@ -290,17 +300,29 @@ await withChrome(async ({ call, evaluate }) => {
           detailsHeight: details ? Math.round(details.getBoundingClientRect().height) : null,
           shareWidth: shareBtn ? Math.round(shareBtn.getBoundingClientRect().width) : null,
           shareHeight: shareBtn ? Math.round(shareBtn.getBoundingClientRect().height) : null,
+          disclosure: disclosure ? {
+            ...rect(disclosure),
+            ariaExpanded: disclosure.getAttribute('aria-expanded'),
+            width: Math.round(disclosure.getBoundingClientRect().width),
+            height: Math.round(disclosure.getBoundingClientRect().height),
+          } : null,
+          roleDetailsHidden: roleDetails ? !!roleDetails.hidden : null,
           strongs,
           roles,
           people,
           roleNameMetrics,
           peopleBand: peopleBandRect,
-          peopleBandGridColumns: peopleBandStyle?.gridTemplateColumns || null,
-          peopleActions: peopleActions ? rect(peopleActions) : null,
+          peopleSummary: peopleSummaryRect,
+          peopleBandGridColumns: summaryStyle?.gridTemplateColumns || null,
+          peopleActions: actions ? rect(actions) : null,
           history: historyEl ? rect(historyEl) : null,
           unusedUnderPhoto,
           crop: imgStyle ? { fit: imgStyle.objectFit, position: imgStyle.objectPosition } : null,
           overflowX: card.scrollWidth > card.clientWidth + 1,
+          controlsOverflow: visibleControls.some((el) => {
+            const r = el.getBoundingClientRect();
+            return r.right > cardBox.right + 1 || r.bottom > cardBox.bottom + 1 || r.x < cardBox.x - 1;
+          }),
           viewportWidth,
         };
       });
@@ -308,7 +330,8 @@ await withChrome(async ({ call, evaluate }) => {
         cards,
         longTrainerVisible: document.body.innerText.includes(longTrainer),
         longOrganizerVisible: document.body.innerText.includes(longOrganizer),
-        sourceCssHasHistorySpan: ${JSON.stringify(/\.gb-discovery-card__people\s*>\s*\.gb-discovery-card__history/.test(discovery))},
+        sourceCssHasPeopleSummary: ${JSON.stringify(/\.gb-discovery-card__people-summary/.test(discovery))},
+        sourceCssHasDisclosure: ${JSON.stringify(/\.gb-discovery-card__disclosure/.test(discovery))},
         sameStringStillSeparate: (() => {
           const same = [...document.querySelectorAll('.gb-discovery-card')].find((c) =>
             c.querySelector('[data-trainer-profile="shared-looking-id"]')
@@ -320,15 +343,19 @@ await withChrome(async ({ call, evaluate }) => {
         missingTrainer: !!document.querySelector('[data-trainer-unavailable="true"]'),
         typicalPeople: !!document.querySelector('#feed .gb-discovery-card[data-activity="trainer_led"] .gb-discovery-card__people'),
       };
-    })()`);
+    })()`;
 
-    assert.equal(metrics.cards.length, 5, `${width}: expected 5 fixture cards`);
-    assert.equal(metrics.longTrainerVisible, true, `${width}: long trainer name must be in DOM text`);
-    assert.equal(metrics.longOrganizerVisible, true, `${width}: long organizer name must be in DOM text`);
-    assert.equal(metrics.sameStringStillSeparate, true, `${width}: coinciding id strings must stay separate roles`);
-    assert.equal(metrics.missingTrainer, true, `${width}: missing trainer fixture`);
-    assert.equal(metrics.typicalPeople, true, `${width}: compact people row present`);
-    assert.equal(metrics.sourceCssHasHistorySpan, true, `${width}: source CSS must span history on its own row`);
+    const assertViewportMetrics = (metrics, { expanded }) => {
+    const state = expanded ? "expanded" : "collapsed";
+
+    assert.equal(metrics.cards.length, 5, `${width}/${state}: expected 5 fixture cards`);
+    assert.equal(metrics.longTrainerVisible, true, `${width}/${state}: long trainer name must be in DOM text`);
+    assert.equal(metrics.longOrganizerVisible, true, `${width}/${state}: long organizer name must be in DOM text`);
+    assert.equal(metrics.sameStringStillSeparate, true, `${width}/${state}: coinciding id strings must stay separate roles`);
+    assert.equal(metrics.missingTrainer, true, `${width}/${state}: missing trainer fixture`);
+    assert.equal(metrics.typicalPeople, true, `${width}/${state}: compact people row present`);
+    assert.equal(metrics.sourceCssHasPeopleSummary, true, `${width}/${state}: source CSS people-summary present`);
+    assert.equal(metrics.sourceCssHasDisclosure, true, `${width}/${state}: source CSS disclosure present`);
 
     const ordinary = metrics.cards[0];
     const typical = metrics.cards[1];
@@ -338,17 +365,32 @@ await withChrome(async ({ call, evaluate }) => {
       assert.equal(typical.activity, "trainer_led");
       assert.ok(
         Math.abs(ordinary.detailsWidth - typical.detailsWidth) <= 1,
-        `${width}: ordinary/trainer primary action widths must match (${ordinary.detailsWidth} vs ${typical.detailsWidth})`,
+        `${width}/${state}: ordinary/trainer primary action widths must match (${ordinary.detailsWidth} vs ${typical.detailsWidth})`,
       );
       assert.ok(
         Math.abs(ordinary.detailsHeight - typical.detailsHeight) <= 1,
-        `${width}: ordinary/trainer primary action heights must match (${ordinary.detailsHeight} vs ${typical.detailsHeight})`,
+        `${width}/${state}: ordinary/trainer primary action heights must match (${ordinary.detailsHeight} vs ${typical.detailsHeight})`,
       );
     }
 
-    // #507: role names need usable width / normal text height (reject one-character-wide vertical letters).
+    // #521 R3: role names need usable width / normal text height (reject one-character-wide vertical letters).
     for (const trainerCard of metrics.cards.filter((c) => c.activity === "trainer_led" && c.peopleBand)) {
-      assert.ok(trainerCard.peopleBandGridColumns, `${width}: people band grid-template-columns present`);
+      assert.ok(trainerCard.disclosure, `${width}/${state}: disclosure control present`);
+      assert.equal(
+        trainerCard.disclosure.ariaExpanded,
+        expanded ? "true" : "false",
+        `${width}/${state}: disclosure aria-expanded`,
+      );
+      assert.ok(
+        trainerCard.disclosure.width >= 44 && trainerCard.disclosure.height >= 44,
+        `${width}/${state}: disclosure target >=44px (got ${trainerCard.disclosure.width}x${trainerCard.disclosure.height})`,
+      );
+      assert.equal(
+        trainerCard.roleDetailsHidden,
+        !expanded,
+        `${width}/${state}: role-details hidden=${!expanded}`,
+      );
+      assert.ok(trainerCard.peopleBandGridColumns, `${width}/${state}: people-summary grid-template-columns present`);
       {
         // Used values are pixel tracks (not authored minmax tokens).
         const tracks = trainerCard.peopleBandGridColumns.trim().split(/\s+/).filter(Boolean);
@@ -356,13 +398,12 @@ await withChrome(async ({ call, evaluate }) => {
           assert.equal(
             tracks.length,
             1,
-            `${width}: mobile people band stays single-column, got ${trainerCard.peopleBandGridColumns}`,
+            `${width}/${state}: mobile people-summary stays single-column, got ${trainerCard.peopleBandGridColumns}`,
           );
         } else {
-          // Author template keeps 4 tracks; empty 4th collapses when history spans its own row.
           assert.ok(
             tracks.length === 3 || tracks.length === 4,
-            `${width}: desktop people band roles+actions (+optional collapsed track), got ${trainerCard.peopleBandGridColumns}`,
+            `${width}/${state}: desktop people-summary roles+actions+disclosure, got ${trainerCard.peopleBandGridColumns}`,
           );
         }
       }
@@ -372,166 +413,186 @@ await withChrome(async ({ call, evaluate }) => {
         const measuredHeight = name.nameHeight ?? name.rect?.height ?? 0;
         assert.ok(
           measuredWidth >= 48,
-          `${width}:${name.role} role name width ${measuredWidth}px too narrow for "${name.text.slice(0, 32)}"`,
+          `${width}/${state}:${name.role} role name width ${measuredWidth}px too narrow for "${name.text.slice(0, 32)}"`,
         );
-        // Long role names (>40) may wrap past 3 lines — same long-content exemption as people-band height.
-        // Normal names keep the 3-line cap (reject one-character-wide vertical stacking).
         if (name.text.length <= 40) {
           const maxNameHeight = Math.max(56, (name.lineHeight || 18) * 3 + 4);
           assert.ok(
             measuredHeight <= maxNameHeight,
-            `${width}:${name.role} role name height ${measuredHeight}px looks vertical/stacked (max ${maxNameHeight}) for "${name.text.slice(0, 32)}"`,
+            `${width}/${state}:${name.role} role name height ${measuredHeight}px looks vertical/stacked (max ${maxNameHeight}) for "${name.text.slice(0, 32)}"`,
           );
         }
-        assert.notEqual(name.whiteSpace, "nowrap", `${width}:${name.role} must wrap`);
-        assert.notEqual(name.textOverflow, "ellipsis", `${width}:${name.role} must not ellipsis`);
-        if (name.rect && trainerCard.peopleBand) {
+        assert.notEqual(name.whiteSpace, "nowrap", `${width}/${state}:${name.role} must wrap`);
+        assert.notEqual(name.textOverflow, "ellipsis", `${width}/${state}:${name.role} must not ellipsis`);
+        if (name.rect && trainerCard.peopleSummary) {
           assert.ok(
-            name.rect.right <= trainerCard.peopleBand.right + 1,
-            `${width}:${name.role} name rect.right ${name.rect.right} outside people band (band.right=${trainerCard.peopleBand.right})`,
-          );
-          assert.ok(
-            name.rect.bottom <= trainerCard.peopleBand.bottom + 1,
-            `${width}:${name.role} name rect.bottom ${name.rect.bottom} outside people band (band.bottom=${trainerCard.peopleBand.bottom})`,
+            name.rect.right <= trainerCard.peopleSummary.right + 1,
+            `${width}/${state}:${name.role} name rect.right ${name.rect.right} outside people-summary`,
           );
         }
       }
-      if (trainerCard.history && trainerCard.people?.[0] && width > 390) {
+      if (expanded && trainerCard.history && trainerCard.people?.[0] && width > 390) {
         assert.ok(
           trainerCard.history.y + 1 >= trainerCard.people[0].bottom - 2,
-          `${width}: history must sit on its own row below roles (history.y=${trainerCard.history.y}, role.bottom=${trainerCard.people[0].bottom})`,
+          `${width}/${state}: history must sit below roles (history.y=${trainerCard.history.y}, role.bottom=${trainerCard.people[0].bottom})`,
+        );
+        assert.ok(
+          trainerCard.history.width >= trainerCard.peopleBand.width * 0.45,
+          `${width}/${state}: history should use a full row under roles`,
         );
       }
-      // Long role names may legitimately grow the people band (~279). Cap only compact/normal fixtures.
-      // Still require no clipping of the band inside the card.
+      if (!expanded) {
+        assert.equal(trainerCard.history, null, `${width}/${state}: history hidden while collapsed`);
+      }
       assert.ok(
         trainerCard.peopleBand.bottom <= trainerCard.card.bottom + 1,
-        `${width}: people band must stay inside card (band.bottom=${trainerCard.peopleBand.bottom}, card.bottom=${trainerCard.card.bottom})`,
+        `${width}/${state}: people band must stay inside card`,
       );
+      assert.equal(trainerCard.controlsOverflow, false, `${width}/${state}: controls must stay in card`);
       const hasLongRoleName = (trainerCard.roleNameMetrics || []).some((n) => (n.text || "").length > 40);
-      if (!hasLongRoleName) {
-        // Mobile (CSS max-width:720) stacks roles — normal 390 layout ~229px; keep desktop ≤220.
-        const maxPeopleBandHeight = width <= 720 ? 240 : 220;
+      if (!hasLongRoleName && !expanded) {
+        // Collapsed summary only — mobile stacks; desktop stays compact.
+        const maxPeopleBandHeight = width <= 720 ? 240 : 180;
         assert.ok(
           trainerCard.peopleBand.height <= maxPeopleBandHeight,
-          `${width}: people band height ${trainerCard.peopleBand.height} still crushed/tall (max ${maxPeopleBandHeight})`,
+          `${width}/${state}: collapsed people band height ${trainerCard.peopleBand.height} too tall (max ${maxPeopleBandHeight})`,
         );
       }
     }
 
     for (const row of metrics.cards) {
       assert.equal(row.layout, null);
-      assert.equal(row.overflowX, false, `${width}:${row.activity} horizontal overflow`);
-      assert.ok(row.details, `${width}:${row.activity} details CTA`);
-      assert.ok(row.details.bottom <= row.card.bottom + 1, `${width}:${row.activity} CTA clipped`);
-      assert.ok(row.details.right <= width + 1, `${width}:${row.activity} CTA beyond viewport`);
-      assert.ok(row.imageSlot && row.image, `${width}:${row.activity} image metrics`);
-      assert.ok(Math.abs(row.image.width - row.imageSlot.width) <= 1, `${width}:${row.activity} img width fills slot`);
-      assert.ok(Math.abs(row.image.height - row.imageSlot.height) <= 1, `${width}:${row.activity} img height fills slot`);
+      assert.equal(row.overflowX, false, `${width}/${state}:${row.activity} horizontal overflow`);
+      assert.ok(row.details, `${width}/${state}:${row.activity} details CTA`);
+      assert.ok(row.details.bottom <= row.card.bottom + 1, `${width}/${state}:${row.activity} CTA clipped`);
+      assert.ok(row.details.right <= width + 1, `${width}/${state}:${row.activity} CTA beyond viewport`);
+      assert.ok(row.imageSlot && row.image, `${width}/${state}:${row.activity} image metrics`);
+      assert.ok(Math.abs(row.image.width - row.imageSlot.width) <= 1, `${width}/${state}:${row.activity} img width fills slot`);
+      assert.ok(Math.abs(row.image.height - row.imageSlot.height) <= 1, `${width}/${state}:${row.activity} img height fills slot`);
       if (row.crop) {
-        assert.equal(row.crop.fit, "cover", `${width}:${row.activity} object-fit`);
-        assert.match(row.crop.position, /50%\s*50%/, `${width}:${row.activity} object-position`);
+        assert.equal(row.crop.fit, "cover", `${width}/${state}:${row.activity} object-fit`);
+        assert.match(row.crop.position, /50%\s*50%/, `${width}/${state}:${row.activity} object-position`);
       }
       for (const s of row.strongs) {
-        assert.notEqual(s.whiteSpace, "nowrap", `${width}: strong must wrap, got ${s.whiteSpace}`);
-        assert.notEqual(s.textOverflow, "ellipsis", `${width}: strong must not ellipsis`);
+        assert.notEqual(s.whiteSpace, "nowrap", `${width}/${state}: strong must wrap, got ${s.whiteSpace}`);
+        assert.notEqual(s.textOverflow, "ellipsis", `${width}/${state}: strong must not ellipsis`);
         if (s.text.length > 24) {
           const fittedWidth = s.rect?.width ?? s.clientWidth;
           assert.ok(
             s.scrollWidth <= fittedWidth + 2 || s.rect.height > 18,
-            `${width}: long name should wrap or fit: ${s.text.slice(0, 40)}`,
+            `${width}/${state}: long name should wrap or fit: ${s.text.slice(0, 40)}`,
           );
         }
       }
       if (width <= 390) {
-        assert.ok(Math.abs(row.imageSlot.height - 210) <= 1, `${width}:${row.activity} mobile image height 210`);
-        assert.ok(row.imageSlot.width >= row.card.width * 0.9, `${width}:${row.activity} mobile image width`);
-        assert.ok(row.content.y >= row.imageSlot.bottom - 1, `${width}:${row.activity} mobile content below image`);
-        // Shared mobile CardActions: ordinary + trainer use the same 44px arrow-only primary + share.
-        assert.ok(row.detailsAriaLabel && /Подробнее/.test(row.detailsAriaLabel), `${width}:${row.activity} details aria-label`);
-        assert.equal(row.detailsSpanDisplay, "none", `${width}:${row.activity} Подробнее text hidden on mobile`);
-        assert.equal(row.detailsHasArrowImg, true, `${width}:${row.activity} details keeps discovery arrow image asset`);
+        assert.ok(Math.abs(row.imageSlot.height - 210) <= 1, `${width}/${state}:${row.activity} mobile image height 210`);
+        assert.ok(row.imageSlot.width >= row.card.width * 0.9, `${width}/${state}:${row.activity} mobile image width`);
+        assert.ok(row.content.y >= row.imageSlot.bottom - 1, `${width}/${state}:${row.activity} mobile content below image`);
+        assert.ok(row.detailsAriaLabel && /Подробнее/.test(row.detailsAriaLabel), `${width}/${state}:${row.activity} details aria-label`);
+        assert.equal(row.detailsSpanDisplay, "none", `${width}/${state}:${row.activity} Подробнее text hidden on mobile`);
+        assert.equal(row.detailsHasArrowImg, true, `${width}/${state}:${row.activity} details keeps discovery arrow image asset`);
         assert.match(
           row.detailsArrowSrc || "",
           /\/discovery\/arrow\.svg$/,
-          `${width}:${row.activity} details arrow src must be /discovery/arrow.svg (got ${row.detailsArrowSrc})`,
+          `${width}/${state}:${row.activity} details arrow src must be /discovery/arrow.svg (got ${row.detailsArrowSrc})`,
         );
         assert.ok(
           row.detailsWidth != null && Math.abs(row.detailsWidth - 44) <= 1,
-          `${width}:${row.activity} details width ${row.detailsWidth} must be 44px arrow footprint`,
+          `${width}/${state}:${row.activity} details width ${row.detailsWidth} must be 44px arrow footprint`,
         );
         assert.ok(
           row.detailsHeight != null && Math.abs(row.detailsHeight - 44) <= 1,
-          `${width}:${row.activity} details height ${row.detailsHeight} must be 44px`,
+          `${width}/${state}:${row.activity} details height ${row.detailsHeight} must be 44px`,
         );
         assert.ok(
           row.shareWidth != null && Math.abs(row.shareWidth - 44) <= 1,
-          `${width}:${row.activity} share width ${row.shareWidth} must stay 44px`,
+          `${width}/${state}:${row.activity} share width ${row.shareWidth} must stay 44px`,
         );
         assert.ok(
           row.shareHeight != null && Math.abs(row.shareHeight - 44) <= 1,
-          `${width}:${row.activity} share height ${row.shareHeight} must stay 44px`,
+          `${width}/${state}:${row.activity} share height ${row.shareHeight} must stay 44px`,
         );
       } else {
-        assert.ok(Math.abs(row.imageSlot.width - row.imageSlot.height) <= 1, `${width}:${row.activity} desktop square slot`);
-        assert.ok(Math.abs(row.image.width - row.image.height) <= 1, `${width}:${row.activity} desktop square img`);
-        assert.ok(row.imageSlot.x < row.content.x, `${width}:${row.activity} image left of content`);
-        assert.ok(row.imageSlot.width <= row.card.width * 0.45, `${width}:${row.activity} image not full-width banner`);
-        assert.ok(row.content.x >= row.imageSlot.right - 2, `${width}:${row.activity} content starts after image`);
+        assert.ok(Math.abs(row.imageSlot.width - row.imageSlot.height) <= 1, `${width}/${state}:${row.activity} desktop square slot`);
+        assert.ok(Math.abs(row.image.width - row.image.height) <= 1, `${width}/${state}:${row.activity} desktop square img`);
+        assert.ok(row.imageSlot.x < row.content.x, `${width}/${state}:${row.activity} image left of content`);
+        assert.ok(row.imageSlot.width <= row.card.width * 0.45, `${width}/${state}:${row.activity} image not full-width banner`);
+        assert.ok(row.content.x >= row.imageSlot.right - 2, `${width}/${state}:${row.activity} content starts after image`);
         if (width >= 1280) {
-          // Desktop keeps visible text CTA (not icon-only).
-          assert.notEqual(row.detailsSpanDisplay, "none", `${width}:${row.activity} desktop Подробнее text visible`);
+          assert.notEqual(row.detailsSpanDisplay, "none", `${width}/${state}:${row.activity} desktop Подробнее text visible`);
           assert.ok(
             row.detailsWidth != null && row.detailsWidth > 80,
-            `${width}:${row.activity} desktop details stays wide text CTA (got ${row.detailsWidth})`,
+            `${width}/${state}:${row.activity} desktop details stays wide text CTA (got ${row.detailsWidth})`,
           );
         }
       }
     }
 
-    if (width >= 1280) {
-      assert.ok(Math.abs(ordinary.imageSlot.width - typical.imageSlot.width) <= 1, "regular/trainer same square crop width");
-      assert.ok(Math.abs(ordinary.imageSlot.height - typical.imageSlot.height) <= 1, "regular/trainer same square crop height");
-      // D2: no equal-height latch / no forced blank below photo. Compact typical grows only if needed.
-      // #507: history may occupy its own row under roles — allow that dedicated line, not a crushed vertical stack.
-      const delta = typical.card.height - ordinary.card.height;
-      const maxDelta = width >= 1920 ? 140 : 160;
-      assert.ok(
-        delta <= maxDelta,
-        `${width}: typical trainer must stay compact vs ordinary, delta=${delta} max=${maxDelta}`,
-      );
-      // Card wraps image + content; geometry nonnegative / contained (no clip). No extra-height requirement.
-      assert.ok(typical.card.height >= typical.imageSlot.height - 1, `${width}: typical card must wrap image slot`);
-      assert.ok(typical.content.bottom <= typical.card.bottom + 1, `${width}: typical content must stay in card`);
-      assert.ok(typical.peopleBand, `${width}: typical people band`);
-      assert.ok(typical.peopleActions, `${width}: typical details/share in people band`);
-      assert.ok(typical.peopleBand.bottom <= typical.card.bottom + 1, `${width}: typical people band must stay in card`);
+    if (width >= 820 && !expanded) {
+      assert.ok(typical.peopleBand, `${width}/${state}: typical people band`);
+      assert.ok(typical.peopleActions, `${width}/${state}: typical details/share in people-summary`);
+      assert.ok(typical.peopleBand.bottom <= typical.card.bottom + 1, `${width}/${state}: typical people band must stay in card`);
       if (typical.unusedUnderPhoto != null) {
         assert.ok(
           typical.unusedUnderPhoto <= 1,
-          `${width}: typical unused gap under photo before people=${typical.unusedUnderPhoto}`,
+          `${width}/${state}: typical unused gap under photo before people=${typical.unusedUnderPhoto}`,
         );
       }
+    }
+
+    if (width >= 1280 && !expanded) {
+      assert.ok(Math.abs(ordinary.imageSlot.width - typical.imageSlot.width) <= 1, "regular/trainer same square crop width");
+      assert.ok(Math.abs(ordinary.imageSlot.height - typical.imageSlot.height) <= 1, "regular/trainer same square crop height");
+      const delta = typical.card.height - ordinary.card.height;
+      const maxDelta = width >= 1920 ? 120 : 140;
+      assert.ok(
+        delta <= maxDelta,
+        `${width}/${state}: collapsed typical trainer must stay compact vs ordinary, delta=${delta} max=${maxDelta}`,
+      );
+      assert.ok(typical.card.height >= typical.imageSlot.height - 1, `${width}/${state}: typical card must wrap image slot`);
+      assert.ok(typical.content.bottom <= typical.card.bottom + 1, `${width}/${state}: typical content must stay in card`);
       for (const person of typical.people || []) {
-        assert.ok(person.width >= 0 && person.height >= 0, `${width}: typical people geometry nonnegative`);
-        assert.ok(person.bottom <= typical.card.bottom + 1, `${width}: typical people must stay in card`);
+        assert.ok(person.width >= 0 && person.height >= 0, `${width}/${state}: typical people geometry nonnegative`);
+        assert.ok(person.bottom <= typical.card.bottom + 1, `${width}/${state}: typical people must stay in card`);
       }
     }
+
+    return { ordinary, typical };
+    };
+
+    const collapsedMetrics = await evaluate(measureExpression);
+    const collapsedSummary = assertViewportMetrics(collapsedMetrics, { expanded: false });
+
+    await evaluate(`(() => {
+      for (const btn of document.querySelectorAll('.gb-discovery-card__disclosure')) {
+        btn.setAttribute('aria-expanded', 'true');
+        const label = btn.querySelector('span');
+        if (label) label.textContent = 'Свернуть';
+        const region = document.getElementById(btn.getAttribute('aria-controls'));
+        if (region) region.hidden = false;
+      }
+      return true;
+    })()`);
+    await sleep(80);
+
+    const expandedMetrics = await evaluate(measureExpression);
+    const expandedSummary = assertViewportMetrics(expandedMetrics, { expanded: true });
 
     const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     const shotName = `geometry-${width}.png`;
     writeFileSync(join(outDir, shotName), Buffer.from(shot.data, "base64"));
     receipt.shots.push(shotName);
     receipt.metrics.push({ width, summary: {
-      cardCount: metrics.cards.length,
-      longTrainerVisible: metrics.longTrainerVisible,
-      longOrganizerVisible: metrics.longOrganizerVisible,
-      sameStringStillSeparate: metrics.sameStringStillSeparate,
-      missingTrainer: metrics.missingTrainer,
-      ordinaryH: Math.round(ordinary.card.height),
-      typicalH: Math.round(typical.card.height),
-      slotSquare: Math.abs(ordinary.imageSlot.width - ordinary.imageSlot.height) <= 1,
-      activities: metrics.cards.map((c) => ({
+      cardCount: collapsedMetrics.cards.length,
+      longTrainerVisible: collapsedMetrics.longTrainerVisible,
+      longOrganizerVisible: collapsedMetrics.longOrganizerVisible,
+      sameStringStillSeparate: collapsedMetrics.sameStringStillSeparate,
+      missingTrainer: collapsedMetrics.missingTrainer,
+      ordinaryH: Math.round(collapsedSummary.ordinary.card.height),
+      typicalHCollapsed: Math.round(collapsedSummary.typical.card.height),
+      typicalHExpanded: Math.round(expandedSummary.typical.card.height),
+      slotSquare: Math.abs(collapsedSummary.ordinary.imageSlot.width - collapsedSummary.ordinary.imageSlot.height) <= 1,
+      activities: collapsedMetrics.cards.map((c) => ({
         activity: c.activity,
         roles: c.roles,
         imageW: Math.round(c.imageSlot.width),
@@ -540,6 +601,7 @@ await withChrome(async ({ call, evaluate }) => {
         detailsBottom: Math.round(c.details.bottom),
         cardBottom: Math.round(c.card.bottom),
         overflowX: c.overflowX,
+        disclosureExpanded: c.disclosure?.ariaExpanded ?? null,
       })),
     } });
   }

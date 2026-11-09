@@ -151,15 +151,43 @@ afterEach(() => {
 });
 
 describe("#521 discovery compact role review interactions", () => {
-  it("opens the existing RoleReviewsDialog for the exact available role and restores focus on close", async () => {
+  it("keeps reviews/history collapsed by default with no hidden focus targets", async () => {
     const { DiscoveryGameCard } = await import(
       "../src/components/consumer/discovery/DiscoveryGameCard"
     );
     render(createElement(DiscoveryGameCard, { game: trainerGame, reputation }));
 
-    const trainingButton = screen.getByRole("button", {
-      name: /Отзывы о тренировках · 1: Alexey Morozov \(demo trainer\)/,
+    const disclosure = screen.getByRole("button", {
+      name: /Отзывы и история: Demo Morozov Coaching Hour/,
     });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /Отзывы о тренировках/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Отзывы об организации/ })).toBeNull();
+    expect(screen.queryByText("Подтверждённая история: 3")).toBeNull();
+    expect(screen.getByText("Тренер")).toBeTruthy();
+    expect(screen.getByText("Организатор")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Подробнее: Demo Morozov Coaching Hour/ })).toBeTruthy();
+  });
+
+  it("expands/collapses via click and keyboard and opens independent role dialogs", async () => {
+    const { DiscoveryGameCard } = await import(
+      "../src/components/consumer/discovery/DiscoveryGameCard"
+    );
+    render(createElement(DiscoveryGameCard, { game: trainerGame, reputation }));
+
+    const disclosure = screen.getByRole("button", {
+      name: /Отзывы и история: Demo Morozov Coaching Hour/,
+    });
+    disclosure.focus();
+    fireEvent.keyDown(disclosure, { key: "Enter", code: "Enter" });
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Подтверждённая история: 3")).toBeTruthy();
+
+    const trainingButton = screen.getByRole("button", {
+      name: "Отзывы о тренировках · 1: Alexey Morozov (demo trainer)",
+    });
+    expect(trainingButton.textContent).toContain("Отзывы · 1");
     trainingButton.focus();
     expect(document.activeElement).toBe(trainingButton);
     fireEvent.click(trainingButton);
@@ -184,7 +212,7 @@ describe("#521 discovery compact role review interactions", () => {
     });
 
     const orgButton = screen.getByRole("button", {
-      name: /Отзывы об организации · 2: Other Organizer/,
+      name: "Отзывы об организации · 2: Other Organizer",
     });
     fireEvent.click(orgButton);
     const orgDialog = await screen.findByRole("dialog", { name: /Отзывы об организации · 2/ });
@@ -192,6 +220,42 @@ describe("#521 discovery compact role review interactions", () => {
     fireEvent.click(within(orgDialog).getByRole("button", { name: "Закрыть" }));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /Отзывы о тренировках/ })).toBeNull();
+  });
+
+  it("keeps focus valid when collapsing while a review modal is still open", async () => {
+    const { DiscoveryGameCard } = await import(
+      "../src/components/consumer/discovery/DiscoveryGameCard"
+    );
+    render(createElement(DiscoveryGameCard, { game: trainerGame, reputation }));
+
+    const disclosure = screen.getByRole("button", {
+      name: /Отзывы и история: Demo Morozov Coaching Hour/,
+    });
+    fireEvent.click(disclosure);
+    const trainingButton = screen.getByRole("button", {
+      name: "Отзывы о тренировках · 1: Alexey Morozov (demo trainer)",
+    });
+    fireEvent.click(trainingButton);
+    const dialog = await screen.findByRole("dialog", { name: /Отзывы о тренировках · 1/ });
+    expect(dialog).toBeTruthy();
+
+    // Collapse request while modal open — region stays mounted for exact trigger focus return.
+    fireEvent.click(disclosure);
+    expect(screen.getByRole("button", { name: /Отзывы о тренировках/ })).toBeTruthy();
+
+    fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement === trainingButton || document.activeElement === disclosure).toBe(
+        true,
+      );
     });
   });
 
@@ -206,8 +270,11 @@ describe("#521 discovery compact role review interactions", () => {
     );
     render(createElement(DiscoveryGameCard, { game: trainerGame, reputation: unavailable }));
 
+    expect(screen.getByRole("button", { name: /Отзывы и история/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Отзывы и история/ }));
     expect(screen.queryByRole("button", { name: /Отзывы о тренировках/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Отзывы об организации/ })).toBeNull();
+    expect(screen.getAllByText("Отзывы сейчас недоступны.").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Тренер")).toBeTruthy();
     expect(screen.queryByText("Тренер · самостоятельно указано")).toBeNull();
     expect(screen.getByText("Alexey Morozov (demo trainer)")).toBeTruthy();

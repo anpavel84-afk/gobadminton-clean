@@ -342,11 +342,15 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     );
     expect(discoveryCss).not.toMatch(/\.gb-discovery-(?:card|host|card__people)[^{]*\{[^}]*(?:line-clamp|text-overflow:\s*ellipsis)/);
     expect(discoveryCss).toMatch(/\.gb-discovery-card__people/);
-    expect(discoveryCss).toMatch(/\.gb-discovery-card__role-review/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__people-summary/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__disclosure/);
+    expect(discoveryCss).toMatch(/\.gb-discovery-card__role-details/);
     expect(discoveryCss).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(0,\s*1fr\)\s*auto\s*auto/);
     expect(discoveryCss).toMatch(/\.gb-discovery-card\[data-activity="trainer_led"\]\s*\.gb-discovery-terms\s*\{[^}]*margin-bottom:\s*0/);
     expect(panelSource).toMatch(/renderCompact/);
+    expect(panelSource).toMatch(/dialogOpen/);
     expect(panelSource).toMatch(/compactHistoryLabel|Подтверждённая история/);
+    expect(panelSource).not.toMatch(/Тренер · самостоятельно указано/);
   });
 
   it("allows complete trainer/organizer name wrap without ellipsis clipping", () => {
@@ -384,7 +388,12 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     expect(training).toContain("С тренером");
     expect(training).toContain('data-activity="trainer_led"');
     expect(training).toContain("gb-discovery-card__people");
+    expect(training).toContain("gb-discovery-card__people-summary");
     expect(training).toContain("gb-discovery-card__actions");
+    expect(training).toContain("gb-discovery-card__disclosure");
+    expect(training).toContain('aria-expanded="false"');
+    expect(training).toContain("aria-controls=");
+    expect(training).toContain("Отзывы и история");
     expect(training).not.toContain("gb-discovery-card__footer");
     expect(training).toContain('data-role="trainer"');
     expect(training).toContain('data-trainer-profile="trainer-profile-am"');
@@ -392,12 +401,18 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     expect(training).toContain('data-role="organizer"');
     expect(training).toContain('data-organizer-id="org-user-other"');
     expect(training).toContain("Other Organizer");
-    expect(training).toContain("gb-discovery-card__role-review");
+    expect(training).toContain("gb-discovery-card__role-details");
+    expect(training).toContain("gb-discovery-card__review-btn");
     expect(training).toContain("Отзывы");
     expect(training).toContain("Подтверждённая история: 3");
     expect(training).toContain(">Тренер<");
     expect(training).not.toMatch(/<small>Тренер · самостоятельно указано<\/small>/);
+    expect(training).not.toContain("Тренер · самостоятельно указано");
     expect(training).not.toContain("gb-role-rep-footer");
+    // Collapsed default: secondary reviews/history live in a hidden region (not tab targets).
+    expect(training).toMatch(
+      /<div\b(?=[^>]*\bgb-discovery-card__role-details\b)(?=[^>]*\bhidden\b)[^>]*>/,
+    );
   });
 
   it("always shows trainer and organizer separately even when id strings coincide", () => {
@@ -435,7 +450,7 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     expect(html).toContain("Подробнее");
   });
 
-  it("preserves long terms, seats, share and compact review cues on trainer cards", () => {
+  it("preserves long terms, seats, share and disclosure-gated review labels on trainer cards", () => {
     const html = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: trainerDistinct, reputation }));
     expect(html).toContain(trainerDistinct.settlement.terms);
     expect(html).toContain("Свободно 3 из 4");
@@ -443,11 +458,16 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     expect(html).toContain("Уровень: 2.5");
     expect(html).toContain("Парная игра");
     expect(html).toContain(`href="/games/${trainerDistinct.id}"`);
-    expect(html).toContain(" · Отзывы · 1");
-    expect(html).toContain(" · Отзывы · 2");
-    expect(html).toContain('aria-label="Отзывы о тренировках · 1: Alexey Morozov (demo trainer). Тренер · самостоятельно указано"');
+    expect(html).toContain("Отзывы · 1");
+    expect(html).toContain("Отзывы · 2");
+    expect(html).toContain('aria-label="Отзывы о тренировках · 1: Alexey Morozov (demo trainer)"');
     expect(html).toContain('aria-label="Отзывы об организации · 2: Other Organizer"');
-    expect(html).toMatch(/gb-discovery-card__people[\s\S]*gb-discovery-card__actions/);
+    expect(html).not.toContain("Тренер · самостоятельно указано");
+    expect(html).toContain(`aria-label="Отзывы и история: ${trainerDistinct.title}"`);
+    expect(html).toMatch(/gb-discovery-card__people-summary[\s\S]*gb-discovery-card__actions/);
+    expect(html).toMatch(/gb-discovery-card__people-summary[\s\S]*gb-discovery-card__disclosure/);
+    expect(html).toContain("О тренере в игре");
+    expect(html).toContain("Об организаторе в игре");
   });
 
   it("keeps available reviews when held count is null and distinguishes zero from null history", () => {
@@ -473,16 +493,19 @@ describe("#521 discovery training card D2 square + compact roles", () => {
       createElement(DiscoveryGameCard, { game: trainerDistinct, reputation: zeroHeld }),
     );
     expect(without).toContain("gb-discovery-card__people");
+    expect(without).toContain("gb-discovery-card__disclosure");
     expect(without).toContain("Подробнее");
-    expect(without).not.toContain("gb-discovery-card__role-review");
+    expect(without).not.toContain("gb-discovery-card__review-btn");
+    expect(without).toContain("Отзывы сейчас недоступны.");
     expect(without).not.toContain("gb-discovery-card__history\"");
-    expect(nullHtml).toContain("gb-discovery-card__role-review");
-    expect(nullHtml).toContain(" · Отзывы · 2");
+    expect(nullHtml).toContain("gb-discovery-card__review-btn");
+    expect(nullHtml).toContain("Отзывы · 2");
     expect(nullHtml).not.toContain("gb-discovery-card__history\"");
     expect(nullHtml).not.toContain("Подтверждённая история");
     expect(zeroHtml).toContain("По подтверждённой истории проведённых игр пока нет");
     expect(zeroHtml).not.toContain("Подтверждённая история: 0");
-    expect(zeroHtml).not.toContain(" · Отзывы · 0");
+    expect(zeroHtml).not.toContain("Отзывы · 0");
+    expect(zeroHtml).toContain(">Отзывы<");
   });
 
   it("leaves unavailable review gates as plain roles without fake zero counts", () => {
@@ -496,9 +519,12 @@ describe("#521 discovery training card D2 square + compact roles", () => {
     );
     expect(html).toContain(">Тренер<");
     expect(html).not.toMatch(/<small>Тренер · самостоятельно указано<\/small>/);
+    expect(html).not.toContain("Тренер · самостоятельно указано");
     expect(html).toContain("Организатор");
-    expect(html).not.toContain("gb-discovery-card__role-review");
-    expect(html).not.toContain(" · Отзывы · 0");
+    expect(html).toContain("gb-discovery-card__disclosure");
+    expect(html).not.toContain("gb-discovery-card__review-btn");
+    expect(html).toContain("Отзывы сейчас недоступны.");
+    expect(html).not.toContain("Отзывы · 0");
     expect(html).not.toContain("gb-discovery-card__history\"");
     expect(html).toContain("Подробнее");
   });
