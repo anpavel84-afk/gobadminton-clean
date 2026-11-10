@@ -17,6 +17,7 @@ import {
   unicodeLength,
   updateCommentRequest,
   deleteCommentRequest,
+  createVenueCommentRequest, updateVenueCommentRequest, normalizeVenueCommentText, assertCommentContent,
 } from "../../src/comments/comments.policy";
 
 const gameId = "10000000-0000-4000-8000-000000000001";
@@ -154,7 +155,7 @@ describe("#506 public comment response boundary", () => {
     const moderation = { approveTexts: vi.fn(), bindTexts: vi.fn() };
     const service = new CommentsService(
       {} as never, env, mutations as never,
-      new IdempotencyService({} as never, env), {} as never, moderation as never,
+      new IdempotencyService({} as never, env), {} as never, moderation as never, {} as never, {} as never,
     );
     return { service, mutations, moderation, result };
   }
@@ -198,5 +199,25 @@ describe("#506 public comment response boundary", () => {
       text: raw, parentCommentId: null,
     })).rejects.toThrow("replay fence");
     expect(moderation.approveTexts).not.toHaveBeenCalled();
+  });
+});
+
+describe("#507 I2b distinct venue content shape",()=>{
+  it("preserves game strict text and attachment denial while allowing venue photo-only",()=>{
+    const id="10000000-0000-4000-8000-000000000001";
+    expect(()=>parse(createCommentRequest,{text:"ok",photoIds:[id]})).toThrow();
+    expect(()=>parse(updateCommentRequest,{expectedVersion:1,photoIds:[id]})).toThrow();
+    expect(()=>normalizeCommentText("  ")).toThrow();
+    const body=parse(createVenueCommentRequest,{photoIds:[id]});
+    expect(normalizeVenueCommentText(body.text)).toBeNull();
+    expect(()=>assertCommentContent(null,body.photoIds!)).not.toThrow();
+    expect(()=>assertCommentContent(null,[])).toThrow();
+    expect(()=>parse(createVenueCommentRequest,{photoIds:[id,id.toUpperCase()]})).toThrow();
+    expect(()=>normalizeVenueCommentText("🙂".repeat(1001))).toThrow();
+    expect(normalizeVenueCommentText(" text ")).toBe("text");
+  });
+  it("keeps omitted photos distinct from explicit removal",()=>{
+    expect(parse(updateVenueCommentRequest,{text:"keep",expectedVersion:1}).photoIds).toBeUndefined();
+    expect(parse(updateVenueCommentRequest,{text:"remove",photoIds:[],expectedVersion:1}).photoIds).toEqual([]);
   });
 });

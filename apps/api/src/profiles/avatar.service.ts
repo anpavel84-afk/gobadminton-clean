@@ -253,7 +253,15 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
             const privateRef = privateTable.rows[0]?.relation ? await client.query(
               "SELECT 1 FROM venue_photo_submissions WHERE storage_key=$1 AND status='ready' AND expires_at>clock_timestamp()", [row.storage_key],
             ) : undefined;
-            if (!ref.rowCount && !privateRef?.rowCount) {
+            const publications=await client.query<{relation:string|null}>("SELECT to_regclass('public.entity_comment_photos') AS relation");
+            const publishedRef=publications.rows[0]?.relation ? await client.query(`SELECT 1
+              FROM venue_photo_submissions s JOIN entity_comment_photos p ON p.photo_id=s.id
+              JOIN entity_comments c ON c.id=p.comment_id
+              WHERE s.storage_key=$1 AND (
+                (c.version=p.resource_version AND c.deleted_at IS NULL)
+                OR EXISTS(SELECT 1 FROM venue_community_report_bindings b
+                  WHERE b.comment_id=p.comment_id AND b.reported_resource_version=p.resource_version))`,[row.storage_key]) : undefined;
+            if (!ref.rowCount && !privateRef?.rowCount && !publishedRef?.rowCount) {
               try { await unlink(this.filename(row.storage_key)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
               await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [row.storage_key]);
             }

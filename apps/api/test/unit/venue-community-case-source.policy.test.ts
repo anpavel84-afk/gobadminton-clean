@@ -233,3 +233,11 @@ describe("#507 I1 F3 community Cases source policy helpers", () => {
     ).toBe(false);
   });
 });
+
+it("#507 I2b photo-only exact evidence is available without invented text",()=>{
+  const base={revisionFound:true,reportedBody:null,reportedPhotoCount:1,expectedFingerprint:"exact",
+    reportedFingerprint:"exact",currentDeleted:false,currentWithheld:false,currentVersion:1,reportedVersion:1};
+  expect(evaluateCommunityCommentSourceAvailability(base)).toMatchObject({available:true,text:null,currentPublication:"live"});
+  expect(evaluateCommunityCommentSourceAvailability({...base,reportedFingerprint:"wrong"})).toMatchObject({available:false,reason:"fingerprint_mismatch"});
+  expect(evaluateCommunityCommentSourceAvailability({...base,reportedPhotoCount:0})).toMatchObject({available:false,reason:"empty_body"});
+});

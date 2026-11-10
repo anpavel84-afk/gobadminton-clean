@@ -215,14 +215,19 @@ export function venueCommunityCommentReportFingerprint(
     commentId: string;
     entityId: string;
     resourceVersion: number;
-    bodyText: string;
+    bodyText: string | null;
+    photos?: readonly { id: string; approvalId: string; fingerprint: string; sha256: string }[];
   },
 ): string {
+  if (input.photos?.length) return createHmac("sha256",secret)
+    .update("venue-community-comment-photo-report-fingerprint:v2:")
+    .update(JSON.stringify([input.commentId,input.entityId,input.resourceVersion,input.bodyText,
+      input.photos.map(p=>[p.id,p.approvalId,p.fingerprint,p.sha256])])).digest("hex");
   return createHmac("sha256", secret)
     .update(
       `${VENUE_COMMUNITY_COMMENT_FINGERPRINT_NS}:${input.commentId}:${input.entityId}:${input.resourceVersion}:`,
     )
-    .update(input.bodyText, "utf8")
+    .update(input.bodyText ?? "", "utf8")
     .digest("hex");
 }
 

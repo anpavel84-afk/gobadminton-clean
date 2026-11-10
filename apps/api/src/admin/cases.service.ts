@@ -1,3 +1,5 @@
+import { AvatarService } from "../profiles/avatar.service";
+import { bindPublicationPhotos, currentPhotoIds, photoApprovalSql, sameReportedCommentLineage, revisionPhotoEvidence, validatePublicationPhotos } from "../comments/comment-photo-publication";
 import { Inject, Injectable } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
@@ -62,7 +64,8 @@ export class AdminCasesService {
     @Inject(CASE_EVIDENCE_POLICY) private readonly policy:CaseEvidencePolicy,
     private readonly roleReputation: AdminRoleReputationService,
     private readonly venueReviews: AdminVenueReviewsService,
-    private readonly moderation: ContentModerationService) {}
+    private readonly moderation: ContentModerationService,
+    private readonly media: AvatarService) {}
   enabled() { this.admin.enabled(); if(!this.env.CASES_INTERNAL_ENABLED) throw notFound("CASES_DISABLED","Обращения недоступны"); }
   private manage(actor:AuditActor) { if(!manages(actor)) throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения"); }
   private async scoped(c:PoolClient,actor:AuditActor,id:string) {
@@ -437,6 +440,7 @@ export class AdminCasesService {
     caseId:string,
     reportId:string,
     page:CommunityReportPage,
+    photoId?:string,
   ) {
     this.enabled();
     return this.admin.privilegedRead(request,"user.lookup",async(c,a)=>{
@@ -459,6 +463,7 @@ export class AdminCasesService {
       )).rows[0];
       const detail=detailRow?.detail??null;
 
+      if(photoId && binding.subject_kind!=="venue_comment") throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
       if(binding.subject_kind==="aggregate") {
         return this.readCommunityAggregateSource(c,a,{
           caseId,
@@ -485,6 +490,7 @@ export class AdminCasesService {
         reportId,
         caseRow:r,
         binding:{...binding,subject_kind:"venue_comment"},
+        photoId,
         reportMeta,
         detail,
       });
@@ -809,6 +815,7 @@ export class AdminCasesService {
     c:PoolClient,
     a:AuditActor,
     input:{
+      photoId?:string;
       caseId:string;
       reportId:string;
       caseRow:CaseRow;
@@ -872,18 +879,21 @@ export class AdminCasesService {
         WHERE comment_id=$1 AND resource_version=$2`,
       [input.binding.comment_id,input.binding.reported_resource_version])).rows[0];
     const secret=this.fingerprintSecret();
+    const reportedPhotos=await revisionPhotoEvidence(c,input.binding.comment_id,input.binding.reported_resource_version);
     const reportedFingerprint=
-      revision && revision.after_body!=null && revision.after_body.length>0
+      revision && (revision.after_body!=null && revision.after_body.length>0 || reportedPhotos.length>0)
         ? venueCommunityCommentReportFingerprint(secret,{
             commentId:input.binding.comment_id,
             entityId:revision.entity_id,
             resourceVersion:revision.resource_version,
             bodyText:revision.after_body,
+            photos:reportedPhotos,
           })
         : null;
     const availability=evaluateCommunityCommentSourceAvailability({
       revisionFound:Boolean(revision),
       reportedBody:revision?.after_body??null,
+      reportedPhotoCount:reportedPhotos.length,
       expectedFingerprint:input.binding.content_fingerprint,
       reportedFingerprint,
       currentDeleted:comment.deleted_at!=null || revision?.tombstone===true,
@@ -910,10 +920,28 @@ export class AdminCasesService {
         ...(availability.available?{}:{unavailableReason:availability.reason}),
       },
     });
+    if (input.photoId) {
+      if (!availability.available || !reportedPhotos.some(p=>p.id===input.photoId)) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const photo=(await c.query<{storage_key:string;image_sha256:string;content_fingerprint:string}>(`SELECT s.storage_key,s.image_sha256,a.content_fingerprint
+        FROM entity_comment_photos p JOIN venue_photo_submissions s ON s.id=p.photo_id
+        JOIN content_moderation_approvals a ON a.id=s.image_approval_id
+        WHERE p.comment_id=$1 AND p.resource_version=$2 AND p.photo_id=$3
+          AND ${photoApprovalSql(this.env)} AND a.provider_key=$4 FOR SHARE OF s,a`,
+        [input.binding.comment_id,input.binding.reported_resource_version,input.photoId,this.env.CONTENT_MODERATION_PROVIDER])).rows[0];
+      if (!photo) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      const bytes=await this.media.readPrivateStage(c,photo.storage_key,photo.image_sha256);
+      if (this.moderation.fingerprint(bytes,"community_photo")!==photo.content_fingerprint) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+      await appendAudit(c,{actor:a,action:"admin.case.community_photo_read",targetType:"case",targetId:input.caseId,
+        permission:"evidence.assigned.read",reason:"operations_read",after:{reportId:input.reportId,photoId:input.photoId,
+          reportedVersion:input.binding.reported_resource_version}});
+      return {bytes};
+    }
+    const sameLineage=await sameReportedCommentLineage(c,{caseId:input.caseId,reportId:input.reportId,
+      commentId:comment.id,reportedVersion:input.binding.reported_resource_version,currentVersion:comment.version});
     const commentCapability =
       input.caseRow.status === "closed" ||
       !availability.available ||
-      comment.deleted_at != null
+      comment.deleted_at != null || !sameLineage
         ? null
         : {
             action: "venue_community_decide" as const,
@@ -943,6 +971,8 @@ export class AdminCasesService {
       reportedVersion:input.binding.reported_resource_version,
       currentVersion:availability.currentVersion,
       text:availability.available?availability.text:null,
+      photos:availability.available?reportedPhotos.map(p=>({id:p.id,
+        url:`/v1/admin/cases/${input.caseId}/community-reports/${input.reportId}/photos/${p.id}`})):[],
       currentPublication:availability.currentPublication,
       decisionCapability:commentCapability,
     };
@@ -1086,7 +1116,7 @@ export class AdminCasesService {
     let assessActorUserId: string | null = null;
 
     return this.admin.privilegedRunWithExternalPrepare<
-      TextBatchApproval,
+      TextBatchApproval | null,
       {
         caseId: string;
         caseVersion: number;
@@ -1122,22 +1152,23 @@ export class AdminCasesService {
         if (locked.comment.moderation_state !== "withheld") {
           throw conflict("RESTORE_DENIED", "Восстановление недоступно");
         }
-        if (!locked.comment.body || locked.comment.body.length < 1) {
-          throw conflict("RESTORE_DENIED", "Восстановление недоступно");
-        }
+        const ids=await currentPhotoIds(client,locked.comment.id,locked.comment.version);
+        if (!locked.comment.body && !ids.length) throw conflict("RESTORE_DENIED", "Восстановление недоступно");
+        await validatePublicationPhotos(client,this.env,this.media,this.moderation,{actorId:locked.comment.author_user_id,
+          canonical:locked.resolved.canonicalId,commentId:locked.comment.id,version:locked.comment.version,ids});
         preparedText = locked.comment.body;
         preparedResourceVersion = locked.comment.version;
         preparedCommentId = locked.comment.id;
         assessActorUserId = actor.principal.user_id;
       },
       async () =>
-        this.moderation.approveTexts(assessActorUserId!, [
+        preparedText===null ? Promise.resolve(null) : this.moderation.approveTexts(assessActorUserId!, [
           { surface: "comment_body", text: preparedText!, fieldId: "text" },
         ]),
       async (client, actor, keyHash, prepared) =>
         this.executeCommunityDecide(client, actor, keyHash, caseId, input, {
           approval: prepared,
-          text: preparedText!,
+          text: preparedText,
           resourceVersion: preparedResourceVersion!,
           commentId: preparedCommentId!,
         }),
@@ -1432,18 +1463,21 @@ export class AdminCasesService {
       )
     ).rows[0];
     const secret = this.fingerprintSecret();
+    const reportedPhotos=await revisionPhotoEvidence(client,commentId,args.binding.reported_resource_version);
     const reportedFingerprint =
-      revision && revision.after_body != null && revision.after_body.length > 0
+      revision && (revision.after_body != null && revision.after_body.length > 0 || reportedPhotos.length>0)
         ? venueCommunityCommentReportFingerprint(secret, {
             commentId,
             entityId: revision.entity_id,
             resourceVersion: revision.resource_version,
             bodyText: revision.after_body,
+            photos: reportedPhotos,
           })
         : null;
     const availability = evaluateCommunityCommentSourceAvailability({
       revisionFound: Boolean(revision),
       reportedBody: revision?.after_body ?? null,
+      reportedPhotoCount: reportedPhotos.length,
       expectedFingerprint: args.binding.content_fingerprint,
       reportedFingerprint,
       currentDeleted: comment.deleted_at != null || revision?.tombstone === true,
@@ -1451,7 +1485,9 @@ export class AdminCasesService {
       currentVersion: comment.version,
       reportedVersion: args.binding.reported_resource_version,
     });
-    if (!availability.available) {
+    const sameLineage=await sameReportedCommentLineage(client,{caseId:args.caze.id,reportId:args.input.reportId,
+      commentId,reportedVersion:args.binding.reported_resource_version,currentVersion:comment.version});
+    if (!availability.available || !sameLineage) {
       throw notFound("REPORT_UNAVAILABLE", "Жалоба недоступна");
     }
 
@@ -1472,8 +1508,8 @@ export class AdminCasesService {
     input: VenueCommunityDecide,
     prepared:
       | {
-          approval: TextBatchApproval;
-          text: string;
+          approval: TextBatchApproval | null;
+          text: string | null;
           resourceVersion: number;
           commentId: string;
         }
@@ -1624,7 +1660,8 @@ export class AdminCasesService {
       });
     }
 
-    if (comment.deleted_at != null || !comment.body || comment.body.length < 1) {
+    const photoIds=await currentPhotoIds(client,comment.id,comment.version);
+    if (comment.deleted_at != null || (!comment.body && !photoIds.length)) {
       throw conflict("DECISION_DENIED", "Решение недоступно для текущего состояния");
     }
 
@@ -1640,6 +1677,8 @@ export class AdminCasesService {
       }
     }
 
+    if(input.decision==="restore") await validatePublicationPhotos(client,this.env,this.media,this.moderation,{actorId:comment.author_user_id,
+      canonical:locked.resolved.canonicalId,commentId:comment.id,version:comment.version,ids:photoIds});
     const nextVersion = comment.version + 1;
     const nextState: "clear" | "withheld" =
       input.decision === "withhold" ? "withheld" : "clear";
@@ -1673,7 +1712,8 @@ export class AdminCasesService {
         comment.body,
       ],
     );
-    if (input.decision === "restore" && prepared) {
+    await bindPublicationPhotos(client,comment.id,nextVersion,photoIds);
+    if (input.decision === "restore" && prepared?.approval && prepared.text !== null) {
       await this.moderation.bindTexts(
         client,
         prepared.approval,

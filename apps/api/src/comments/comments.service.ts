@@ -1,3 +1,7 @@
+import { ActorFenceService } from "../common/actor-fence.service";
+import { AvatarService } from "../profiles/avatar.service";
+import { bindPublicationPhotos, currentPhotoIds, projectCurrentPhotos, validatePublicationPhotos } from "./comment-photo-publication";
+import { createVenueCommentRequest, updateVenueCommentRequest, normalizeVenueCommentText, assertCommentContent } from "./comments.policy";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { conflict, forbidden } from "../auth/problem";
@@ -45,6 +49,7 @@ import {
 } from "./comments.policy";
 import {
   canonicalVenueFamilyIds,
+  lockCatalogShared,
   resolveCanonicalVenue,
 } from "../venues/venue-community.query";
 
@@ -81,6 +86,8 @@ export class CommentsService {
     private readonly idempotency: IdempotencyService,
     private readonly pairs: PairFenceService,
     private readonly moderation: ContentModerationService,
+    private readonly media: AvatarService,
+    private readonly actorFence: ActorFenceService,
   ) {}
 
   async list(
@@ -257,15 +264,17 @@ export class CommentsService {
         }
 
         const canCreate = await this.resolveCanCreate(client, kind, listEntityId, viewerId);
-        await client.query("COMMIT");
         const page = rows.slice(0, limit);
+        const items = await Promise.all(page.map(async row => ({...this.projectRow(row, viewerId),
+          ...(kind === "venue" ? {photos: await projectCurrentPhotos(client,this.env,row.id,viewerId)} : {})})));
+        await client.query("COMMIT");
         const hasMore = rows.length > limit;
         const last = page[page.length - 1];
         return {
           entityKind: kind,
           entityId: listEntityId,
           parentCommentId,
-          items: page.map((row) => this.projectRow(row, viewerId)),
+          items,
           nextCursor: hasMore && last
             ? encodeCursor({
               createdAt: last.created_at.toISOString(),
@@ -288,6 +297,26 @@ export class CommentsService {
     }
   }
 
+  async detail(commentIdRaw: string, viewerId: string | null): Promise<CommentView> {
+    const commentId=parseCommentId(commentIdRaw), client=await this.pool.connect();
+    try { await client.query("BEGIN");
+      const scope=(await client.query<CommentRow>("SELECT * FROM entity_comments WHERE id=$1",[commentId])).rows[0];
+      if (!scope) unavailable();
+      await client.query("SELECT id FROM users WHERE id=$1 FOR SHARE",[scope.author_user_id]);
+      await this.lockAndAssertPublicParent(client,scope.entity_kind,scope.entity_id);
+      await client.query("SELECT id FROM entity_comments WHERE id=$1 FOR SHARE",[commentId]);
+      const row=(await client.query<CommentRow>("SELECT * FROM entity_comments WHERE id=$1",[commentId])).rows[0];
+      if (!row || row.deleted_at || row.moderation_state!=="clear") unavailable();
+      const permitted=await client.query(`SELECT 1 FROM users u WHERE u.id=$1 AND u.status='active'
+        AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,"u.id",["account.access","profile.public"])}`,[row.author_user_id]);
+      if (!permitted.rowCount || (viewerId && viewerId!==row.author_user_id && await this.pairBlocked(client,viewerId,row.author_user_id))) unavailable();
+      const result=await this.loadProjected(client,commentId,viewerId);
+      await client.query("COMMIT");
+      return {...result,body:maskPublicCommentBody(result.body)};
+    } catch(error) {await client.query("ROLLBACK").catch(()=>undefined);throw error;}
+    finally {client.release();}
+  }
+
   async create(
     kind: EntityCommentKind,
     entityIdRaw: string,
@@ -297,8 +326,11 @@ export class CommentsService {
     input: unknown,
   ): Promise<{ statusCode: number; body: CommentView }> {
     const entityId = parseEntityId(entityIdRaw);
-    const body = parse(createCommentRequest, input);
-    const text = normalizeCommentText(body.text);
+    if (kind === "game") parse(createCommentRequest,input);
+    const body = parse(createVenueCommentRequest,input);
+    const text = kind === "venue" ? normalizeVenueCommentText(body.text) : normalizeCommentText(body.text);
+    const photos = body.photoIds ?? [];
+    assertCommentContent(text,photos);
     const parentCommentId = body.parentCommentId ?? null;
     if (parentCommentId) parseCommentId(parentCommentId);
     const requestHash = this.idempotency.requestHash({
@@ -306,6 +338,7 @@ export class CommentsService {
       entityId,
       parentCommentId,
       text,
+      ...(photos.length ? {photoIds:photos} : {}),
     });
     const receipt = {
       actorId,
@@ -321,18 +354,20 @@ export class CommentsService {
     };
 
     // Durable same-key claim before provider I/O; concurrent losers never approveTexts.
-    const result = await this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
+    const result = await this.mutations.runWithExternalPrepare<TextBatchApproval | null, CommentView>({
       ...receipt,
       prepare: async () => {
         // Parent/actor/block fences before any provider I/O; no locks held across network.
-        await this.authorizeWritePreflight(kind, entityId, actorId, parentCommentId);
-        return this.moderation.approveTexts(actorId, [
+        await this.authorizeWritePreflight(kind, entityId, actorId, sessionId, parentCommentId,photos);
+        return text === null ? null : this.moderation.approveTexts(actorId, [
           { surface: "comment_body", text, fieldId: "text" },
         ]);
       },
       execute: async (client, textApproval) => {
         const scopeId = await this.lockAndAssertPublicParent(client, kind, entityId);
         await this.assertCanWrite(client, kind, scopeId, actorId, parentCommentId);
+        if (kind === "venue") await validatePublicationPhotos(client,this.env,this.media,this.moderation,
+          {actorId,canonical:scopeId,ids:photos});
         // New roots store canonical venue id; reply trigger may rewrite to root origin.
         const writeEntityId = scopeId;
         const inserted = (
@@ -350,7 +385,8 @@ export class CommentsService {
            VALUES ($1, $2, $3, 1, $4, $5, false)`,
           [inserted.id, kind, inserted.entity_id, actorId, text],
         );
-        await this.bindCommentPublication(client, textApproval, text, {
+        await bindPublicationPhotos(client,inserted.id,1,photos);
+        if (text !== null && textApproval) await this.bindCommentPublication(client, textApproval, text, {
           commentId: inserted.id,
           resourceVersion: 1,
           actorUserId: actorId,
@@ -370,12 +406,13 @@ export class CommentsService {
     input: unknown,
   ): Promise<{ statusCode: number; body: CommentView }> {
     const commentId = parseCommentId(commentIdRaw);
-    const body = parse(updateCommentRequest, input);
-    const text = normalizeCommentText(body.text);
+    const body = parse(updateVenueCommentRequest, input);
+    const text = normalizeVenueCommentText(body.text);
     const requestHash = this.idempotency.requestHash({
       commentId,
       expectedVersion: body.expectedVersion,
       text,
+      ...(body.photoIds !== undefined ? {photoIds:body.photoIds} : {}),
     });
     const receipt = {
       actorId,
@@ -390,11 +427,11 @@ export class CommentsService {
       },
     };
 
-    const result = await this.mutations.runWithExternalPrepare<TextBatchApproval, CommentView>({
+    const result = await this.mutations.runWithExternalPrepare<TextBatchApproval | null, CommentView>({
       ...receipt,
       prepare: async () => {
-        await this.authorizeUpdatePreflight(commentId, actorId, body.expectedVersion);
-        return this.moderation.approveTexts(actorId, [
+        await this.authorizeUpdatePreflight(commentId, actorId, sessionId, body.expectedVersion, input);
+        return text === null ? null : this.moderation.approveTexts(actorId, [
           { surface: "comment_body", text, fieldId: "text" },
         ]);
       },
@@ -403,6 +440,15 @@ export class CommentsService {
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
         if (row.version !== body.expectedVersion) {
           throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
+        }
+        if (row.entity_kind === "game") { parse(updateCommentRequest,input); normalizeCommentText(body.text); }
+        const photos = body.photoIds ?? await currentPhotoIds(client,commentId,row.version);
+        assertCommentContent(text,photos);
+        if (row.entity_kind === "venue") {
+          const venue=await resolveCanonicalVenue(client,row.entity_id);
+          if (!venue) unavailable();
+          await validatePublicationPhotos(client,this.env,this.media,this.moderation,
+            {actorId,canonical:venue.canonicalId,commentId,version:row.version,ids:photos});
         }
         // Author edits never clear moderation withholding (column omitted from SET).
         const next = (
@@ -422,7 +468,8 @@ export class CommentsService {
            VALUES ($1, $2, $3, $4, $5, $6, $7, false)`,
           [commentId, next.entity_kind, next.entity_id, next.version, actorId, row.body, text],
         );
-        await this.bindCommentPublication(client, textApproval, text, {
+        await bindPublicationPhotos(client,commentId,next.version,photos);
+        if (text !== null && textApproval) await this.bindCommentPublication(client, textApproval, text, {
           commentId,
           resourceVersion: next.version,
           actorUserId: actorId,
@@ -484,6 +531,7 @@ export class CommentsService {
            VALUES ($1, $2, $3, $4, $5, $6, NULL, true)`,
           [commentId, next.entity_kind, next.entity_id, next.version, actorId, row.body],
         );
+        await bindPublicationPhotos(client,commentId,next.version,[]);
         return { statusCode: 200, body: await this.loadProjected(client, commentId, actorId) };
       },
     });
@@ -545,10 +593,13 @@ export class CommentsService {
       return entityId;
     }
 
+    await lockCatalogShared(client);
     const resolved = await resolveCanonicalVenue(client, entityId);
     if (!resolved) unavailable();
     await client.query(`SELECT id FROM venues WHERE id = $1 FOR SHARE`, [resolved.canonicalId]);
-    return resolved.canonicalId;
+    const fresh=await resolveCanonicalVenue(client,entityId);
+    if (!fresh || fresh.canonicalId!==resolved.canonicalId) unavailable();
+    return fresh.canonicalId;
   }
 
   private async assertRootParent(
@@ -591,14 +642,19 @@ export class CommentsService {
     kind: EntityCommentKind,
     entityId: string,
     actorId: string,
+    sessionId: string,
     parentCommentId: string | null,
+    photos: string[],
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       try {
+        await this.actorFence.assertActiveConsumerInTransaction(client,{actorId,sessionId});
         const scopeId = await this.lockAndAssertPublicParent(client, kind, entityId);
         await this.assertCanWrite(client, kind, scopeId, actorId, parentCommentId);
+        if (kind === "venue") await validatePublicationPhotos(client,this.env,this.media,this.moderation,
+          {actorId,canonical:scopeId,ids:photos});
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -612,16 +668,30 @@ export class CommentsService {
   private async authorizeUpdatePreflight(
     commentId: string,
     actorId: string,
+    sessionId: string,
     expectedVersion: number,
+    input: unknown,
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       try {
+        await this.actorFence.assertActiveConsumerInTransaction(client,{actorId,sessionId});
         const row = await this.lockOwnedLiveComment(client, commentId, actorId);
         await this.lockAndAssertPublicParent(client, row.entity_kind, row.entity_id);
         if (row.version !== expectedVersion) {
           throw conflict("VERSION_CONFLICT", "Версия комментария устарела");
+        }
+        if(row.entity_kind === "game") parse(updateCommentRequest,input);
+        const body = parse(updateVenueCommentRequest,input);
+        const text = row.entity_kind === "game" ? normalizeCommentText(body.text) : normalizeVenueCommentText(body.text);
+        const photos = body.photoIds ?? await currentPhotoIds(client,commentId,row.version);
+        assertCommentContent(text,photos);
+        if (row.entity_kind === "venue") {
+          const venue=await resolveCanonicalVenue(client,row.entity_id);
+          if (!venue) unavailable();
+          await validatePublicationPhotos(client,this.env,this.media,this.moderation,
+            {actorId,canonical:venue.canonicalId,commentId,version:row.version,ids:photos});
         }
         await client.query("COMMIT");
       } catch (error) {
@@ -709,6 +779,7 @@ export class CommentsService {
       ).rows[0];
       if (!organizer) unavailable();
       if (organizer.created_by_user_id !== actorId) {
+        await this.pairs.lockOrCreate(client,actorId,organizer.created_by_user_id);
         const blocked = await this.pairBlocked(client, actorId, organizer.created_by_user_id);
         if (blocked) {
           throw forbidden("COMMENT_PARENT_BLOCKED", "Комментарий недоступен из‑за блокировки");
@@ -724,6 +795,7 @@ export class CommentsService {
         kind === "venue",
       );
       if (parent.author_user_id !== actorId) {
+        await this.pairs.lockOrCreate(client,actorId,parent.author_user_id);
         const blocked = await this.pairBlocked(client, actorId, parent.author_user_id);
         if (blocked) {
           throw forbidden("COMMENT_AUTHOR_BLOCKED", "Ответ недоступен из‑за блокировки");
@@ -754,6 +826,9 @@ export class CommentsService {
     commentId: string,
     actorId: string,
   ): Promise<CommentRow> {
+    const scope=(await client.query<CommentRow>("SELECT * FROM entity_comments WHERE id=$1",[commentId])).rows[0];
+    if (!scope || scope.author_user_id!==actorId) unavailable();
+    await this.lockAndAssertPublicParent(client,scope.entity_kind,scope.entity_id);
     const row = (
       await client.query<CommentRow>(
         `SELECT * FROM entity_comments WHERE id = $1 FOR UPDATE`,
@@ -770,6 +845,9 @@ export class CommentsService {
     commentId: string,
     actorId: string,
   ): Promise<CommentRow> {
+    const scope=(await client.query<CommentRow>("SELECT * FROM entity_comments WHERE id=$1",[commentId])).rows[0];
+    if (!scope || scope.author_user_id!==actorId) unavailable();
+    await this.lockAndAssertPublicParent(client,scope.entity_kind,scope.entity_id);
     const row = (
       await client.query<CommentRow>(
         `SELECT * FROM entity_comments WHERE id = $1 FOR UPDATE`,
@@ -821,7 +899,8 @@ export class CommentsService {
     ).rows[0];
     if (!row) unavailable();
     // Keep receipt bytes unchanged; presentMutation masks the final authorized response once.
-    return this.projectRow(row, viewerId, false);
+    return {...this.projectRow(row, viewerId, false), ...(row.entity_kind === "venue"
+      ? {photos: await projectCurrentPhotos(client,this.env,commentId,viewerId)} : {})};
   }
 
   /** Also quarantine legacy raw receipts after MutationRunner's authorized replay.

@@ -24,6 +24,13 @@ export class CommentsController {
     private readonly comments: CommentsService,
   ) {}
 
+  @Get("comments/:commentId")
+  @Header("Cache-Control", "no-store")
+  async detail(@Req() request: FastifyRequest,@Param("commentId") id: string) {
+    const viewer=await this.auth.optionalSession(request);
+    return projectCommentAvatar(await this.comments.detail(id,viewer?.userId??null));
+  }
+
   @Get("games/:gameId/comments")
   @Header("Cache-Control", "no-store")
   async listGame(

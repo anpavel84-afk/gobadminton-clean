@@ -2,8 +2,8 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.41.0",
-    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed."
+    "version": "0.42.0",
+    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed. #507 I2b API 0.42: atomic venue text-or-1–4 approved photos; exact current media and assigned historical case evidence; paginated community photos. Source candidate only; no UI/I3/release claim."
   },
   "x-document-status": "DESIGN_DRAFT",
   "servers": [
@@ -20793,7 +20793,7 @@
           "Comments"
         ],
         "summary": "Create a comment or one-level reply on a venue",
-        "description": "#507 I1. Authorized registered users may create/reply on a canonical public physical venue without attendance. Same comment_body gate: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Guest read. Experience reviews stay on /experience-reviews. Photo attachments remain #507 I2.",
+        "description": "#507 I1. Authorized registered users may create/reply on a canonical public physical venue without attendance. Same comment_body gate: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Guest read. Experience reviews stay on /experience-reviews. Photo attachments remain #507 I2. I2b: venue-only optional text/photoIds; one transaction publishes exact new revision and full ordered approved set. Legacy text-only hashes/replays preserved. Image moderation is not repeated.",
         "security": [
           {
             "cookieSession": []
@@ -20835,7 +20835,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateEntityCommentRequest"
+                "$ref": "#/components/schemas/CreateVenueCommentRequest"
               }
             }
           }
@@ -20976,7 +20976,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateEntityCommentRequest"
+                "description": "Server resolves immutable entity kind. Venue branch extends legacy update shape; game still accepts only UpdateEntityCommentRequest.",
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/UpdateEntityCommentRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateVenueCommentRequest"
+                  }
+                ]
               }
             }
           }
@@ -21223,6 +21231,43 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getCurrentEntityComment",
+        "tags": [
+          "Comments"
+        ],
+        "summary": "Current permitted source comment for deep linking",
+        "security": [],
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized response; Cache-Control: no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityComment"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable without exposing private stage/foreign resource details"
+          },
+          "409": {
+            "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
           }
         }
       }
@@ -24985,6 +25030,236 @@
             }
           }
         }
+      }
+    },
+    "/comments/{commentId}/revisions/{version}/photos/{photoId}": {
+      "get": {
+        "operationId": "readCurrentVenueCommentPhoto",
+        "tags": [
+          "Comments"
+        ],
+        "summary": "Reauthorize exact current comment revision/photo before every GET/HEAD/conditional response",
+        "security": [],
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "name": "photoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized response; Cache-Control: no-store",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable without exposing private stage/foreign resource details"
+          },
+          "409": {
+            "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
+          }
+        },
+        "description": "No-store full-frame PNG. Current source deletion, attachment removal, withholding, actor restriction, bilateral viewer block or unavailable canonical venue revokes immediately. Conditional headers never bypass authorization; authorized requests return 200, not cached 304. No avatar alias/private-stage URL."
+      },
+      "head": {
+        "operationId": "headCurrentVenueCommentPhoto",
+        "tags": [
+          "Comments"
+        ],
+        "summary": "Reauthorize exact current comment revision/photo before every GET/HEAD/conditional response",
+        "security": [],
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "name": "photoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized response; Cache-Control: no-store",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable without exposing private stage/foreign resource details"
+          },
+          "409": {
+            "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
+          }
+        },
+        "description": "No-store full-frame PNG. Current source deletion, attachment removal, withholding, actor restriction, bilateral viewer block or unavailable canonical venue revokes immediately. Conditional headers never bypass authorization; authorized requests return 200, not cached 304. No avatar alias/private-stage URL."
+      }
+    },
+    "/venues/{venueId}/community-photos": {
+      "get": {
+        "operationId": "listCurrentVenueCommunityPhotos",
+        "tags": [
+          "Comments"
+        ],
+        "summary": "Current-authority photo gallery with source-comment attribution",
+        "security": [],
+        "parameters": [
+          {
+            "name": "venueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized response; Cache-Control: no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCommunityPhotoPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable without exposing private stage/foreign resource details"
+          },
+          "409": {
+            "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
+          }
+        },
+        "description": "24 plus next cursor. Order: immutable first publication timestamp and photo ID descending; retained edits do not reorder. Cursor binds canonical ID and full canonical family/catalog versions; mismatch -> 409 VENUE_CANONICAL_CHANGED, restart paging. Rechecks current media authority on each page. No UI/viewer implemented."
+      }
+    },
+    "/admin/cases/{id}/community-reports/{reportId}/photos/{photoId}": {
+      "get": {
+        "operationId": "readAssignedCaseCommunityPhoto",
+        "tags": [
+          "Comments"
+        ],
+        "summary": "Exact historical photo from assigned independent case evidence",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "reportId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "photoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized response; Cache-Control: no-store",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable without exposing private stage/foreign resource details"
+          },
+          "409": {
+            "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
+          }
+        },
+        "description": "Existing Admin internal gate, evidence.assigned.read, current case assignment, linked exact report, independent reviewer and fresh step-up required on every request (including HEAD/conditional). Fingerprint binds exact reported body and ordered photo IDs/approvals/content fingerprints/SHA. Historical evidence never retargets a newer authored revision. Metadata audit contains IDs only. Missing collected bytes return unavailable; no public stage/raw key disclosure."
       }
     }
   },
@@ -38510,7 +38785,7 @@
               "null"
             ],
             "maxLength": 1000,
-            "description": "null when deleted; HTML treated as plain text"
+            "description": "Null for deleted or photo-only venue comments. Game live body remains mandatory; server masks public text."
           },
           "deleted": {
             "type": "boolean"
@@ -38547,6 +38822,14 @@
           "replyCount": {
             "type": "integer",
             "minimum": 0
+          },
+          "photos": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "$ref": "#/components/schemas/CommunityCommentPhoto"
+            },
+            "description": "Venue current authorized photos only. Empty on deletion/withholding; omitted for legacy receipts/game."
           }
         }
       },
@@ -41335,6 +41618,181 @@
           }
         },
         "description": "Required ready-submission CAS version; must equal X-Photo-Version: 1, including on replay."
+      },
+      "CreateVenueCommentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          },
+          "photoIds": {
+            "type": "array",
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "parentCommentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "description": "Venue only: trim text; at least nonempty text or 1–4 unique ordered approved owned photoIds. Photo-only makes no text moderation request. New stages require current canonical venue, version 1 and unexpired approval."
+      },
+      "UpdateVenueCommentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          },
+          "photoIds": {
+            "type": "array",
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "description": "Venue: omitted photoIds retain current set, [] removes all. Omitted/null/blank text clears text. Empty resulting content denied. Retained IDs may cross staging TTL only on their same current source comment. Game: strict legacy text-required shape; photoIds rejected."
+      },
+      "CommunityCommentPhoto": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "width",
+          "height",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1600
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1600
+          },
+          "url": {
+            "type": "string",
+            "description": "Exact comment/current resourceVersion/photo URL; no raw storage key or stage authority. Full-frame approved PNG, max 2 MiB."
+          }
+        }
+      },
+      "VenueCommunityPhotoPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "venueId",
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "venueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 24,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "width",
+                "height",
+                "url",
+                "source"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1600
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1600
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Exact comment/current resourceVersion/photo URL; no raw storage key or stage authority. Full-frame approved PNG, max 2 MiB."
+                },
+                "source": {
+                  "type": "object",
+                  "required": [
+                    "commentId",
+                    "parentCommentId",
+                    "resourceVersion",
+                    "path"
+                  ],
+                  "properties": {
+                    "commentId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "parentCommentId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid"
+                    },
+                    "resourceVersion": {
+                      "type": "integer"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     }
   }

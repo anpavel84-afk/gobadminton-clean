@@ -1,11 +1,22 @@
-import { Body,Controller,Get,Header,Headers,HttpCode,Param,Post,Query,Req } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
+import { notFound } from "../auth/problem";
+import { Body,Controller,Get,Header,Headers,HttpCode,Param,Post,Query,Req,Res } from "@nestjs/common";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { parse,uuid } from "./dto";
 import { caseCreateSchema,caseCommandSchema,casePageSchema,caseHistorySchema,reportPageSchema,communityReportPageSchema } from "./cases.dto";
 import { AdminCasesService } from "./cases.service";
 @Controller("admin")
 export class AdminCasesController {
  constructor(private readonly cases:AdminCasesService) {}
+ @Get("cases/:id/community-reports/:reportId/photos/:photoId")
+ @Header("Cache-Control","no-store")
+ async communityPhoto(@Param("id") id:string,@Param("reportId") reportId:string,@Param("photoId") photoId:string,
+   @Req() request:FastifyRequest,@Res() reply:FastifyReply) {
+   this.cases.enabled();
+   const result=await this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),parse(communityReportPageSchema,{}),parse(uuid,photoId));
+   if (!("bytes" in result)) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+   return reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff").header("Content-Security-Policy","default-src 'none'; sandbox")
+     .type("image/png").send(result.bytes);
+ }
  @Get("reports") @Header("Cache-Control","no-store")
  reports(@Query() query:unknown,@Req() request:FastifyRequest){this.cases.enabled();return this.cases.reports(request,parse(reportPageSchema,query));}
  @Get("cases") @Header("Cache-Control","no-store")
