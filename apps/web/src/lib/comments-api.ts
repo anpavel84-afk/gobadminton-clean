@@ -149,3 +149,28 @@ export function isCommentDeleteBody(body: object): body is DeleteCommentBody {
   const value = body as DeleteCommentBody;
   return Number.isInteger(value.expectedVersion) && value.expectedVersion >= 1;
 }
+
+
+/** One current authorized source read; never scans list pages or follows source paths. */
+export function getCommentDetail(commentId: string, signal: AbortSignal) {
+  return apiFetch<unknown>(`/v1/comments/${encodeURIComponent(commentId)}`, { signal, cache: "no-store" });
+}
+export function isCurrentPhotoSource(value: unknown, photo: import("./comments-types").VenueCommunityPhoto): value is EntityComment {
+  if (!isCommentView(value)) return false;
+  const row = value;
+  const author = row.author;
+  return row.id === photo.source.commentId && row.entityKind === "venue" && isPhotoId(row.entityId)
+    && row.version === photo.source.resourceVersion && !row.deleted
+    && row.parentCommentId === photo.source.parentCommentId
+    && typeof row.mine === "boolean" && typeof row.edited === "boolean"
+    && Number.isInteger(row.replyCount) && row.replyCount >= 0
+    && typeof row.createdAt === "string" && Number.isFinite(Date.parse(row.createdAt))
+    && typeof row.updatedAt === "string" && Number.isFinite(Date.parse(row.updatedAt))
+    && (author === null || (typeof author === "object" && typeof author.displayName === "string"
+      && (author.publicPlayerId === null || typeof author.publicPlayerId === "string")
+      && typeof author.profilePublic === "boolean" && !!author.avatar
+      && (author.avatar.uploadedUrl === null || typeof author.avatar.uploadedUrl === "string")
+      && (author.avatar.providerUrl === null || typeof author.avatar.providerUrl === "string")))
+    && Boolean(row.photos?.some((item) => item.id === photo.id && item.url === photo.url
+      && item.width === photo.width && item.height === photo.height));
+}

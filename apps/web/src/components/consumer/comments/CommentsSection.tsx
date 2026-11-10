@@ -16,7 +16,7 @@ import {
   publicCommentModerationNotice,
   updateEntityCommentPath,
 } from "../../../lib/comments-api";
-import type { CommentEntityKind, EntityComment, EntityCommentPage } from "../../../lib/comments-types";
+import type { CommentEntityKind, EntityComment, EntityCommentPage, VenueCommunityPhoto } from "../../../lib/comments-types";
 import type { Me } from "../../../lib/consumer-types";
 import { Button } from "../Button";
 import { MutationNotice } from "../messages/MessageComposition";
@@ -48,6 +48,9 @@ type Props = {
   sectionId?: string;
   onUnresolvedChange?: (unresolved: boolean) => void;
   onReportUnresolvedChange?: (unresolved: boolean) => void;
+  sourceComment?: EntityComment | null;
+  onOpenPhoto?: (photo: VenueCommunityPhoto, inlineItems: VenueCommunityPhoto[]) => void;
+  onPublished?: () => void;
 };
 
 /** In-memory actor+csrf identity — never logged or written to storage keys/DOM. */
@@ -109,7 +112,10 @@ export function CommentsSection({
   sectionId,
   onUnresolvedChange,
   onReportUnresolvedChange,
+  sourceComment, onOpenPhoto, onPublished,
 }: Props) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const sourceRef = useRef<HTMLElement>(null);
   const headingId = useId();
   const [authOpen, setAuthOpen] = useState(false);
   const [order, setOrder] = useState<"asc" | "desc">("asc");
@@ -347,6 +353,9 @@ export function CommentsSection({
         : pending.method === "PUT" ? `edit:${data.id}:${body.expectedVersion}` : undefined;
       photos.published(body.photoIds ?? [], photoTarget);
       setStatus("Комментарий сохранён.");
+      if (kind === "venue" && (data.photos?.length
+        || [...(currentPage?.items ?? []), ...Object.values(expandedReplies).flat()]
+          .some((item) => item.id === data.id && item.photos?.length))) onPublished?.();
       if (pending.method === "POST" && !(pending.body as { parentCommentId?: string }).parentCommentId) {
         setDraft("");
       }
@@ -472,6 +481,17 @@ export function CommentsSection({
     void reload();
   }
 
+  const existingSource = sourceComment && currentPage && [
+    ...currentPage.items, ...Object.values(expandedReplies).flat(),
+  ].some((item) => item.id === sourceComment.id && item.version === sourceComment.version && !item.deleted);
+  useEffect(() => {
+    if (!sourceComment || !sessionLive.current) return;
+    const target = existingSource
+      ? sectionRef.current?.querySelector<HTMLElement>(`[data-comment-id="${sourceComment.id}"]`)
+      : sourceRef.current;
+    target?.scrollIntoView?.({ block: "center" }); target?.focus({ preventScroll: true });
+  }, [sourceComment, existingSource]);
+
   if (!parentPublic) return null;
 
   const locked = mutation.busy || mutation.pending;
@@ -495,6 +515,7 @@ export function CommentsSection({
 
   return (
     <section
+      ref={sectionRef}
       className="gb-comments"
       id={sectionId}
       aria-labelledby={headingId}
@@ -574,9 +595,17 @@ export function CommentsSection({
         <p className="gb-comments__empty" role="status">Пока нет комментариев. Начните разговор.</p>
       ) : null}
 
+      {sourceComment && !existingSource ? <article ref={sourceRef} tabIndex={-1} className="gb-community-source" aria-label="Исходная публикация">
+        <p>{sourceComment.parentCommentId ? "Ответ в обсуждении площадки" : "Публикация в обсуждении площадки"}</p>
+        {sourceComment.author ? <strong>{sourceComment.author.displayName}</strong> : null}
+        <time dateTime={sourceComment.createdAt}>{commentTime(sourceComment.createdAt)}</time>
+        <p>{sourceComment.body}</p>
+        <CommentPhotos comment={sourceComment} onOpenPhoto={onOpenPhoto} onRefresh={() => { onPublished?.(); void reload(); }} />
+      </article> : null}
+
       {currentPage && currentPage.items.length > 0 ? (
         <ul className="gb-comments__list">
-          {currentPage.items.map((item) => (
+          {currentPage.items.filter((item) => !sourceComment || existingSource || item.id !== sourceComment.id).map((item) => (
             <li key={item.id} className="gb-comments__item">
               <CommentArticle
                 item={item}
@@ -595,7 +624,8 @@ export function CommentsSection({
                 replyReady={contentReady(`reply:${item.id}`, replyDraft)}
                 editPhotos={kind === "venue" ? <VenueCommentPhotoComposer key={`edit:${item.id}:${item.version}`} model={photos} target={`edit:${item.id}:${item.version}`} disabled={Boolean(locked)} /> : null}
                 replyPhotos={kind === "venue" ? <VenueCommentPhotoComposer key={`reply:${item.id}`} model={photos} target={`reply:${item.id}`} disabled={Boolean(locked)} /> : null}
-                onRefreshPhotos={() => void reload()}
+                onOpenPhoto={onOpenPhoto}
+                onRefreshPhotos={() => { onPublished?.(); void reload(); }}
                 onEditDraft={setEditDraft}
                 onStartEdit={() => {
                   if (kind === "venue") photos.retain(`edit:${item.id}:${item.version}`, item.photos ?? []);
@@ -636,7 +666,7 @@ export function CommentsSection({
                     ...photoBody(`reply:${item.id}`),
                   });
                 }}
-                replies={expandedReplies[item.id]}
+                replies={expandedReplies[item.id]?.filter((reply) => !sourceComment || existingSource || reply.id !== sourceComment.id)}
                 replyCursor={replyCursors[item.id]}
                 onShowReplies={() => void loadReplies(item.id, !expandedReplies[item.id])}
                 onMoreReplies={() => void loadReplies(item.id, false)}
@@ -725,7 +755,7 @@ function CommentArticle({
   locked,
   editing,
   editDraft,
-  editReady, replyReady, editPhotos, replyPhotos, onRefreshPhotos,
+  editReady, replyReady, editPhotos, replyPhotos, onRefreshPhotos, onOpenPhoto,
   onEditDraft,
   onStartEdit,
   onCancelEdit,
@@ -758,6 +788,7 @@ function CommentArticle({
   editing: boolean;
   editDraft: string;
   editReady: boolean; replyReady: boolean; editPhotos: ReactNode; replyPhotos: ReactNode; onRefreshPhotos: () => void;
+  onOpenPhoto?: (photo: VenueCommunityPhoto, inlineItems: VenueCommunityPhoto[]) => void;
   onEditDraft: (value: string) => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
@@ -810,7 +841,7 @@ function CommentArticle({
   }, [menuOpen, onCloseMenu]);
 
   return (
-    <article className={`gb-comment${item.deleted ? " is-deleted" : ""}`}>
+    <article tabIndex={-1} data-comment-id={item.id} className={`gb-comment${item.deleted ? " is-deleted" : ""}`}>
       {item.deleted ? (
         <p className="gb-comment__tombstone">Комментарий удалён</p>
       ) : (
@@ -898,7 +929,7 @@ function CommentArticle({
               {entityKind === "venue" ? <div className="gb-comment-photo-composer__accepted">
                 <p>Текущая публикация сохраняется до успешного изменения.</p>
                 <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
-                <CommentPhotos comment={item} onRefresh={onRefreshPhotos} />
+                <CommentPhotos comment={item} onRefresh={onRefreshPhotos} onOpenPhoto={onOpenPhoto} />
               </div> : null}
               <div className="gb-comments__dialog-actions">
                 <Button type="button" variant="outline" disabled={locked} onClick={onCancelEdit}>Отмена</Button>
@@ -908,7 +939,7 @@ function CommentArticle({
           ) : (
             <>
               <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
-              <CommentPhotos comment={item} onRefresh={onRefreshPhotos} />
+              <CommentPhotos comment={item} onRefresh={onRefreshPhotos} onOpenPhoto={onOpenPhoto} />
             </>
           )}
 
@@ -937,7 +968,7 @@ function CommentArticle({
         <ul className="gb-comment__replies">
           {replies.map((reply) => (
             <li key={reply.id}>
-              <article className={`gb-comment gb-comment--reply${reply.deleted ? " is-deleted" : ""}`}>
+              <article tabIndex={-1} data-comment-id={reply.id} className={`gb-comment gb-comment--reply${reply.deleted ? " is-deleted" : ""}`}>
                 {reply.deleted ? (
                   <p className="gb-comment__tombstone">Комментарий удалён</p>
                 ) : (
@@ -978,7 +1009,7 @@ function CommentArticle({
                       expanded={Boolean(expandedTextMap[reply.id])}
                       onExpand={() => onExpandText(reply.id)}
                     />
-                    <CommentPhotos comment={reply} onRefresh={onRefreshPhotos} />
+                    <CommentPhotos comment={reply} onRefresh={onRefreshPhotos} onOpenPhoto={onOpenPhoto} />
                   </>
                 )}
               </article>

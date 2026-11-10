@@ -32,3 +32,29 @@ export function withdrawVenueCommentPhoto(id: string, key: string, csrfToken: st
     headers: { "Idempotency-Key": key, "X-Photo-Version": "1" },
   });
 }
+
+
+/** Actual API 0.42: opaque cursor, fixed 24-item page, no total. */
+export function getVenueCommunityPhotos(venueId: string, cursor: string | null, signal: AbortSignal) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  return apiFetch<unknown>(`/v1/venues/${encodeURIComponent(venueId)}/community-photos${query}`, { signal, cache: "no-store" });
+}
+export function isCommunityPhotoPage(value: unknown): value is import("./comments-types").VenueCommunityPhotoPage {
+  if (!value || typeof value !== "object") return false;
+  const page = value as import("./comments-types").VenueCommunityPhotoPage;
+  if (!isPhotoId(page.venueId) || !Array.isArray(page.items) || page.items.length > 24
+    || !(page.nextCursor === null || (typeof page.nextCursor === "string" && page.nextCursor.length > 0 && page.nextCursor.length <= 1024))
+    || (page.nextCursor !== null && page.items.length !== 24)) return false;
+  const ids = new Set<string>();
+  return page.items.every((photo) => {
+    if (!photo || !isPhotoId(photo.id) || ids.has(photo.id)) return false;
+    ids.add(photo.id);
+    const s = photo.source;
+    return s && isPhotoId(s.commentId) && (s.parentCommentId === null || isPhotoId(s.parentCommentId))
+      && s.parentCommentId !== s.commentId && Number.isInteger(s.resourceVersion) && s.resourceVersion > 0
+      && s.path === `/v1/comments/${s.commentId}`
+      && photo.url === `/v1/comments/${s.commentId}/revisions/${s.resourceVersion}/photos/${photo.id}`
+      && Number.isInteger(photo.width) && photo.width > 0 && photo.width <= 1600
+      && Number.isInteger(photo.height) && photo.height > 0 && photo.height <= 1600;
+  });
+}
