@@ -1,3 +1,7 @@
+import { createHmac } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
+import { COMMUNITY_PHOTO_POLICY, ContentModerationService, IMAGE_POLICY } from "../../src/moderation/moderation.service";
+import { safeImageDecision, type ContentModerationProvider } from "../../src/moderation/provider";
 import { describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { loadEnv } from "../../src/config/env";
@@ -68,5 +72,48 @@ describe("moderation adapter safety", () => {
     expect(malformed).toHaveBeenCalledTimes(1);
     const transport=vi.fn<typeof fetch>(async()=>Response.json({private:"PRIVATE_PAYLOAD"}));
     await expect(new OpenAIModerationProvider(loadEnv(rawEnv),transport).moderateImage({mime:"image/png",bytes,signal:new AbortController().signal,beforeAttempt:async()=>undefined})).rejects.toMatchObject({kind:"schema",message:"Moderation schema"});
+  });
+});
+
+describe("community_photo M1 identity", () => {
+  const env = loadEnv({...rawEnv,CONTENT_MODERATION_PROVIDER:"fake"});
+  function harness() {
+    const query = vi.fn().mockResolvedValue({rows:[],rowCount:0});
+    const moderateImage = vi.fn().mockResolvedValue(safeImageDecision());
+    const provider = {key:"fake",model:MODERATION_MODEL,moderateImage} as unknown as ContentModerationProvider;
+    const service = new ContentModerationService({query} as unknown as Pool,env,provider);
+    return {query,moderateImage,service};
+  }
+  it("keeps old fingerprints byte-for-byte and separates new surface/policy and actual bytes", async () => {
+    const {query,moderateImage,service} = harness();
+    const source = await sharp({create:{width:512,height:512,channels:3,background:"red"}}).png().toBuffer();
+    for (const slot of ["avatar","cover"] as const) expect(service.fingerprint(source,slot)).toBe(
+      createHmac("sha256",rawEnv.CONTENT_MODERATION_FINGERPRINT_SECRET).update(`moderation-fingerprint:v1:${slot}_image:`).update(source).digest("hex"));
+    const avatar = await service.approveImage("actor",source);
+    const community = await service.approveImage("actor",source,"community_photo");
+    expect(avatar.policy).toBe(IMAGE_POLICY);expect(community.policy).toBe(COMMUNITY_PHOTO_POLICY);
+    expect(community.fingerprint).not.toBe(avatar.fingerprint);
+    expect(query.mock.calls[1]![1]).toEqual([community.fingerprint,COMMUNITY_PHOTO_POLICY,"fake",MODERATION_MODEL,"community_photo_image"]);
+    expect(moderateImage.mock.calls[1]![0].bytes.equals(source)).toBe(true);
+    const client = {query:vi.fn().mockResolvedValue({rows:[{id:"approval"}]})};
+    await expect(service.bindImage(client as unknown as PoolClient,community,source,"community_photo")).resolves.toBe("approval");
+    await expect(service.bindImage(client as unknown as PoolClient,community,source,"avatar")).rejects.toMatchObject({status:503});
+    const other = await sharp({create:{width:512,height:512,channels:3,background:"blue"}}).png().toBuffer();
+    await expect(service.bindImage(client as unknown as PoolClient,community,other,"community_photo")).rejects.toMatchObject({status:503});
+  });
+  it("reuses only the dedicated allow cache and fails closed on provider error/invalid canonical input", async () => {
+    const {query,moderateImage,service} = harness();
+    const bytes = await sharp({create:{width:800,height:400,channels:3,background:"red"}}).png().toBuffer();
+    query.mockResolvedValueOnce({rows:[{category_flags:safeImageDecision().categories,provider_response_id:null,checked_at:new Date()}]});
+    await service.approveImage("actor",bytes,"community_photo");
+    expect(moderateImage).not.toHaveBeenCalled();
+    moderateImage.mockRejectedValueOnce(new ModerationProviderError("unavailable"));
+    await expect(service.approveImage("actor",bytes,"community_photo")).rejects.toMatchObject({status:503});
+    await expect(service.approveImage("actor",bytes,"cover")).rejects.toMatchObject({status:503});
+    const metadata = await sharp(bytes).withMetadata().png().toBuffer();
+    await expect(service.approveImage("actor",metadata,"community_photo")).rejects.toMatchObject({status:503});
+    const wide = await sharp({create:{width:1601,height:1,channels:3,background:"red"}}).png().toBuffer();
+    await expect(service.approveImage("actor",wide,"community_photo")).rejects.toMatchObject({status:503});
+    expect(moderateImage).toHaveBeenCalledTimes(1);
   });
 });

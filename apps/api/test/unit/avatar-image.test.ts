@@ -94,3 +94,61 @@ describe("avatar command boundary", () => {
     expect(authorizeReplay).not.toHaveBeenCalled();
   });
 });
+
+describe("community_photo full-frame sanitizer", () => {
+  it("preserves landscape/portrait frame and strips orientation/metadata without upscaling", async () => {
+    for (const [width, height, expected] of [[2400,1200,[1600,800]], [400,800,[400,800]]] as const) {
+      const input = await sharp({create:{width,height,channels:3,background:"red"}})
+        .withMetadata().jpeg().toBuffer();
+      const bytes = await sanitizeAvatar(input, "image/jpeg", "community_photo");
+      const meta = await sharp(bytes).metadata();
+      expect([meta.width,meta.height]).toEqual(expected);
+      expect(meta.exif).toBeUndefined(); expect(meta.icc).toBeUndefined(); expect(meta.xmp).toBeUndefined();
+    }
+    const rotated = await sharp({create:{width:200,height:400,channels:3,background:"blue"}})
+      .withMetadata({orientation:6}).jpeg().toBuffer();
+    expect(await sharp(await sanitizeAvatar(rotated,"image/jpeg","community_photo")).metadata()).toMatchObject({width:400,height:200});
+  });
+  it("keeps both edge colors (no crop) and bounds high-entropy output by reduction", async () => {
+    const raw = Buffer.alloc(2400*1200*3);
+    for (let y=0;y<1200;y++) for (let x=0;x<2400;x++) raw[(y*2400+x)*3+(x<1200?0:2)] = 255;
+    const image = await sharp(raw,{raw:{width:2400,height:1200,channels:3}}).png().toBuffer();
+    const bytes = await sanitizeAvatar(image,"image/png","community_photo");
+    const decoded = await sharp(bytes).raw().toBuffer({resolveWithObject:true});
+    expect(decoded.data[0]).toBe(255);
+    expect(decoded.data[(decoded.info.width-1)*3+2]).toBe(255);
+    // Fixed deterministic noise exercises the bounded ladder rather than a flat-color shortcut.
+    const noise = Buffer.alloc(1600*1600*3); let seed=507;
+    for (let i=0;i<noise.length;i++) { seed=(Math.imul(seed,1664525)+1013904223)>>>0; noise[i]=seed>>>24; }
+    const compressed = await sharp(noise,{raw:{width:1600,height:1600,channels:3}}).jpeg({quality:90}).toBuffer();
+    const reduced = await sanitizeAvatar(compressed,"image/jpeg","community_photo");
+    expect(reduced.length).toBeLessThanOrEqual(2*1024*1024);
+    expect((await sharp(reduced).metadata()).width).toBeLessThan(1600);
+  });
+  it("rejects trailing/truncated containers, APNG, animation, type and dimension violations", async () => {
+    for (const format of ["png","jpeg","webp"] as const) {
+      const input = await sharp({create:{width:40,height:20,channels:3,background:"red"}}).toFormat(format).toBuffer();
+      await expect(sanitizeAvatar(Buffer.concat([input,Buffer.from("trailing")]),`image/${format}`,"community_photo")).rejects.toMatchObject({status:422});
+      await expect(sanitizeAvatar(input.subarray(0,input.length-3),`image/${format}`,"community_photo")).rejects.toMatchObject({status:422});
+      await expect(sanitizeAvatar(input,"image/gif","community_photo")).rejects.toMatchObject({status:415});
+    }
+    const png = await sharp({create:{width:10,height:10,channels:3,background:"red"}}).png().toBuffer();
+    const actl = Buffer.alloc(20);actl.writeUInt32BE(8);actl.write("acTL",4);actl.writeUInt32BE(2,8);
+    await expect(sanitizeAvatar(Buffer.concat([png.subarray(0,33),actl,png.subarray(33)]),"image/png","community_photo")).rejects.toMatchObject({status:422});
+    const animated = await sharp(Buffer.from([...Array(12).fill(0),...Array(12).fill(255)]),{raw:{width:2,height:4,channels:3,pageHeight:2}}).webp({loop:0,delay:[100,100]}).toBuffer();
+    await expect(sanitizeAvatar(animated,"image/webp","community_photo")).rejects.toMatchObject({status:422});
+    const huge = await sharp({create:{width:8193,height:1,channels:3,background:"red"}}).png().toBuffer();
+    await expect(sanitizeAvatar(huge,"image/png","community_photo")).rejects.toMatchObject({status:422});
+    const pixels = await sharp({create:{width:4001,height:4000,channels:3,background:"red"}}).png().toBuffer();
+    await expect(sanitizeAvatar(pixels,"image/png","community_photo")).rejects.toMatchObject({status:422});
+    await expect(sanitizeAvatar(Buffer.alloc(AVATAR_MAX_BYTES+1),"image/png","community_photo")).rejects.toMatchObject({status:413});
+  });
+  it("retains the exact historical avatar/cover transforms", async () => {
+    const input = await sharp({create:{width:900,height:600,channels:3,background:"green"}}).withMetadata({orientation:6}).jpeg().toBuffer();
+    for (const [slot,width,height] of [["avatar",512,512],["cover",1200,400]] as const) {
+      const historical = await sharp(input,{failOn:"warning",limitInputPixels:16_000_000,limitInputChannels:4})
+        .rotate().resize(width,height,{fit:"cover"}).png().timeout({seconds:10}).toBuffer();
+      expect((await sanitizeAvatar(input,"image/jpeg",slot)).equals(historical)).toBe(true);
+    }
+  });
+});

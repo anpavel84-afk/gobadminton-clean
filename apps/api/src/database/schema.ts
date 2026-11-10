@@ -832,3 +832,23 @@ export const playInterests = pgTable("play_interests", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** #507 I2a private stages; SQL migration owns immutable/approval constraints. */
+export const venuePhotoSubmissions = pgTable("venue_photo_submissions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  ownerUserId: uuid("owner_user_id").notNull().references(() => users.id),
+  venueId: uuid("venue_id").notNull().references(() => venues.id),
+  purpose: text("purpose").notNull().default("comment_attachment"),
+  storageKey: text("storage_key").notNull().unique(),
+  imageApprovalId: uuid("image_approval_id").notNull().references(() => contentModerationApprovals.id),
+  imageSha256: text("image_sha256").notNull(),
+  preset: text("preset").notNull(),
+  width: integer("width").notNull(), height: integer("height").notNull(),
+  rightsVersion: text("rights_version").notNull(),
+  rightsDeclaredAt: timestamp("rights_declared_at", { withTimezone: true }).notNull().defaultNow(),
+  status: text("status").notNull().default("ready"),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull().default(sql`now() + interval '1 hour'`),
+  withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+}, table => [index("venue_photo_submissions_owner_ready").on(table.ownerUserId, table.expiresAt).where(sql`${table.status}='ready'`)]);

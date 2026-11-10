@@ -2,15 +2,17 @@ import sharp from "sharp";
 import { problem } from "../auth/problem";
 
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+export type ImagePreset = "avatar" | "cover" | "community_photo";
+export const COMMUNITY_PHOTO_SIDES = [1600, 1200, 960, 768] as const;
 export const AVATAR_KEY = /^[a-f0-9]{64}\.png$/;
-export async function sanitizeAvatar(input: unknown, mime: string, slot: "avatar" | "cover" = "avatar"): Promise<Buffer> {
+export async function sanitizeAvatar(input: unknown, mime: string, slot: ImagePreset = "avatar"): Promise<Buffer> {
   if (!Buffer.isBuffer(input) || input.length === 0) throw problem(422, "AVATAR_INVALID", "Выберите фотографию");
   if (input.length > AVATAR_MAX_BYTES) throw problem(413, "AVATAR_TOO_LARGE", "Фото должно быть не больше 5 МБ");
   const format = input.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "png"
     : input[0] === 255 && input[1] === 216 && input[2] === 255 ? "jpeg"
     : input.toString("ascii", 0, 4) === "RIFF" && input.toString("ascii", 8, 12) === "WEBP" ? "webp" : null;
   if (!format || mime !== `image/${format}`) throw problem(415, "AVATAR_TYPE", "Выберите JPEG, PNG или WebP");
-  if (slot === "cover") {
+  if (slot !== "avatar") {
     // Reject trailing containers and malformed chunk envelopes before decoding.
     if (format === "webp" && (input.length < 12 || input.readUInt32LE(4) + 8 !== input.length)) throw problem(422, "COVER_INVALID", "Фото повреждено");
     if (format === "jpeg") {
@@ -57,6 +59,14 @@ export async function sanitizeAvatar(input: unknown, mime: string, slot: "avatar
     const meta = await image.metadata();
     if (meta.format !== format || !meta.width || !meta.height || meta.width > 8192 || meta.height > 8192 || (meta.pages ?? 1) !== 1) throw new Error("dimensions/frames");
     // Decode and re-encode: default sharp output strips EXIF/XMP/ICC and ancillary metadata.
+    if (slot === "community_photo") {
+      for (const side of COMMUNITY_PHOTO_SIDES) {
+        const reduced = await image.clone().rotate().resize(side, side, { fit: "inside", withoutEnlargement: true })
+          .png().timeout({ seconds: 10 }).toBuffer();
+        if (reduced.length <= 2 * 1024 * 1024) return reduced;
+      }
+      throw new Error("derivative size");
+    }
     const sanitized = await image.rotate().resize(slot === "cover" ? 1200 : 512, slot === "cover" ? 400 : 512, { fit: "cover" }).png().timeout({ seconds: 10 }).toBuffer();
     if (sanitized.length > 2 * 1024 * 1024) throw new Error("derivative size");
     return sanitized;
