@@ -1335,7 +1335,7 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders private own reviews and the discussion-report copy clarification without stale release claims", async () => {
+  it("renders own review editing and public revision consent without stale release claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
@@ -1344,9 +1344,16 @@ describe("releases page current known limitations SSR (#473)", () => {
       expect(html).toContain(fix);
       expect(html.split(fix).length - 1).toBe(1);
     }
-    expect(html).toContain("На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.");
-    expect(html).toContain("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.");
-    expect(html.split("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.").length - 1).toBe(1);
+    for (const addition of [
+      "В своём профиле можно отредактировать свой отзыв о площадке и сохранить новую редакцию. Форма открывает сохранённые текст, темы и видимость выбранного отзыва; раздел доступен только владельцу аккаунта.",
+      "Перед отправкой публичной редакции нужно просмотреть, что будет опубликовано, и заново подтвердить согласие.",
+    ]) {
+      expect(html).toContain(addition);
+      expect(html.split(addition).length - 1).toBe(1);
+    }
+    expect(html).not.toContain("Свои отзывы о площадках в профиле");
+    expect(html).not.toContain("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.");
+    expect(html).not.toContain("На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.");
     expect(html).not.toContain("Прокрутка типов игр без обрезанных кнопок");
     expect(html).not.toContain("На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым.");
     expect(html).not.toContain("Компактная карточка площадки и действия на карте");
