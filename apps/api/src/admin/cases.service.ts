@@ -280,6 +280,7 @@ export class AdminCasesService {
       if(!hasPermission(a.roles as AdminRole[],"evidence.assigned.read")) {
         throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
       }
+      await lockCatalogShared(c);
       const r=await this.scoped(c,a,caseId);
       if(r.assigned_to!==a.principalId) throw notFound("CASE_UNAVAILABLE","Обращение недоступно");
       const link=(await c.query("SELECT id FROM support_case_links WHERE case_id=$1 AND report_id=$2",[caseId,reportId])).rows[0];
@@ -341,6 +342,7 @@ export class AdminCasesService {
       if(!hasPermission(a.roles as AdminRole[],"evidence.assigned.read")) {
         throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
       }
+      await lockCatalogShared(c);
       const r=await this.scoped(c,a,caseId);
       if(r.assigned_to!==a.principalId) throw notFound("CASE_UNAVAILABLE","Обращение недоступно");
       const link=(await c.query("SELECT id FROM support_case_links WHERE case_id=$1 AND report_id=$2",[caseId,reportId])).rows[0];
@@ -447,6 +449,7 @@ export class AdminCasesService {
       if(!canReadAssignedEvidence(a)) {
         throw forbidden("ADMIN_PERMISSION_DENIED","Нет разрешения");
       }
+      await lockCatalogShared(c);
       const r=await this.scoped(c,a,caseId);
       if(r.assigned_to!==a.principalId) throw notFound("CASE_UNAVAILABLE","Обращение недоступно");
       const link=(await c.query("SELECT id FROM support_case_links WHERE case_id=$1 AND report_id=$2",[caseId,reportId])).rows[0];
@@ -490,7 +493,7 @@ export class AdminCasesService {
         reportId,
         caseRow:r,
         binding:{...binding,subject_kind:"venue_comment"},
-        photoId,
+        ...(photoId ? {photoId} : {}),
         reportMeta,
         detail,
       });
@@ -972,7 +975,7 @@ export class AdminCasesService {
       currentVersion:availability.currentVersion,
       text:availability.available?availability.text:null,
       photos:availability.available?reportedPhotos.map(p=>({id:p.id,
-        url:`/v1/admin/cases/${input.caseId}/community-reports/${input.reportId}/photos/${p.id}`})):[],
+        url:`/v1/admin/cases/${input.caseId}/community-reports/${input.reportId}?photoId=${p.id}`})):[],
       currentPublication:availability.currentPublication,
       decisionCapability:commentCapability,
     };

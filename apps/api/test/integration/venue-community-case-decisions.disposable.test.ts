@@ -408,6 +408,11 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
     const evidence=await app.inject({method:"GET",url:sourcePath,headers:adminHeaders(support)});
     expect(evidence.statusCode,evidence.body).toBe(200);expect(evidence.json()).toMatchObject({sourceAvailable:true,text:null,reportedVersion:1});
     const evidenceUrl=evidence.json().photos[0].url;
+    const unassigned=await adminActor("support");
+    expect((await app.inject({method:"GET",url:evidenceUrl,headers:adminHeaders(unassigned)})).statusCode).not.toBe(200);
+    await pool.query("UPDATE admin_sessions SET step_up_at=now()-interval '11 minutes' WHERE id=$1",[support.sessionId]);
+    expect((await app.inject({method:"HEAD",url:evidenceUrl,headers:{...adminHeaders(support),"if-none-match":"*"}})).statusCode).not.toBe(200);
+    await pool.query("UPDATE admin_sessions SET step_up_at=now() WHERE id=$1",[support.sessionId]);
     expect((await app.inject({method:"GET",url:evidenceUrl,headers:{cookie:actorA.cookie}})).statusCode).not.toBe(200);
     expect((await app.inject({method:"GET",url:evidenceUrl,headers:adminHeaders(support)})).statusCode).toBe(200);
     const withheld=await decide(support,assigned.caseId,{action:"venue_community_decide",expectedCaseVersion:assigned.version,

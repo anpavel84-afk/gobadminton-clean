@@ -70,6 +70,8 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'current comment revision missing' USING ERRCODE='23514'; END IF;
   SELECT count(*),max(position) INTO n,top FROM entity_comment_photos WHERE comment_id=cid AND resource_version=c.version;
   IF n>4 OR (n>0 AND top<>n-1) OR (c.entity_kind='game' AND (n<>0 OR (c.deleted_at IS NULL AND c.body IS NULL)))
+    OR (c.body IS NOT NULL AND btrim(c.body, E' \t\n\r\013\f' ||
+      U&'\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')='')
     OR (c.deleted_at IS NULL AND c.body IS NULL AND n=0)
     OR (c.deleted_at IS NOT NULL AND (c.body IS NOT NULL OR n<>0))
     OR r.after_body IS DISTINCT FROM c.body OR r.tombstone IS DISTINCT FROM (c.deleted_at IS NOT NULL)

@@ -239,7 +239,9 @@ export class CommentPhotosService {
           if(rawCursor.length>1024) throw new Error();
           const parsed=JSON.parse(Buffer.from(rawCursor,"base64url").toString("utf8"));
           if(parsed.scope!==scope) throw conflict("VENUE_CANONICAL_CHANGED", "Площадка изменилась; начните список заново",JSON.stringify({canonicalVenueId:canonical,reset:true}));
-          if(typeof parsed.at!=="string" || !Number.isFinite(Date.parse(parsed.at))) throw new Error();
+          if(typeof parsed.at!=="string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(parsed.at)
+            || parsed.at.startsWith("0000") || !Number.isFinite(Date.parse(parsed.at))
+            || new Date(parsed.at).toISOString()!==`${parsed.at.slice(0,23)}Z`) throw new Error();
           before={at:parsed.at,id:uuid(parsed.id)};
         } catch(error) {
           if(error instanceof ProblemHttpException && (error.getResponse() as ProblemBody).code==="VENUE_CANONICAL_CHANGED") throw error;

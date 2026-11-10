@@ -266,7 +266,7 @@ export class CommentsService {
         const canCreate = await this.resolveCanCreate(client, kind, listEntityId, viewerId);
         const page = rows.slice(0, limit);
         const items = await Promise.all(page.map(async row => ({...this.projectRow(row, viewerId),
-          ...(kind === "venue" ? {photos: await projectCurrentPhotos(client,this.env,row.id,viewerId)} : {})})));
+          ...(kind === "venue" ? {photos: await projectCurrentPhotos(client,this.env,row.id,viewerId,row.version)} : {})})));
         await client.query("COMMIT");
         const hasMore = rows.length > limit;
         const last = page[page.length - 1];
@@ -900,7 +900,7 @@ export class CommentsService {
     if (!row) unavailable();
     // Keep receipt bytes unchanged; presentMutation masks the final authorized response once.
     return {...this.projectRow(row, viewerId, false), ...(row.entity_kind === "venue"
-      ? {photos: await projectCurrentPhotos(client,this.env,commentId,viewerId)} : {})};
+      ? {photos: await projectCurrentPhotos(client,this.env,commentId,viewerId,row.version)} : {})};
   }
 
   /** Also quarantine legacy raw receipts after MutationRunner's authorized replay.

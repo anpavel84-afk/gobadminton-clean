@@ -80,12 +80,12 @@ export function publicPhotoView(row: {id: string; width: number; height: number}
   return { id: row.id,width: row.width,height: row.height,
     url: `/v1/comments/${commentId}/revisions/${version}/photos/${row.id}` };
 }
-export async function projectCurrentPhotos(client: PoolClient, env: AppEnv, commentId: string, viewerId: string | null): Promise<CommentPhotoView[]> {
+export async function projectCurrentPhotos(client: PoolClient, env: AppEnv, commentId: string, viewerId: string | null, version: number): Promise<CommentPhotoView[]> {
   const rows = (await client.query<{id: string; width: number; height: number; version: number; entity_id: string}>(`SELECT s.id,s.width,s.height,c.version,c.entity_id
     FROM entity_comments c JOIN entity_comment_photos p ON p.comment_id=c.id AND p.resource_version=c.version
     JOIN venue_photo_submissions s ON s.id=p.photo_id JOIN content_moderation_approvals a ON a.id=s.image_approval_id
-    WHERE c.id=$1 AND ${publicPhotoAuthoritySql(env,"$2")} AND a.provider_key=$3 ORDER BY p.position`,
-    [commentId,viewerId,env.CONTENT_MODERATION_PROVIDER])).rows;
+    WHERE c.id=$1 AND c.version=$4 AND ${publicPhotoAuthoritySql(env,"$2")} AND a.provider_key=$3 ORDER BY p.position`,
+    [commentId,viewerId,env.CONTENT_MODERATION_PROVIDER,version])).rows;
   if (rows.length && !await resolveCanonicalVenue(client,rows[0]!.entity_id)) return [];
   return rows.map(r=>publicPhotoView(r,commentId,r.version));
 }

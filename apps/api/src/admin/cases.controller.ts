@@ -7,16 +7,6 @@ import { AdminCasesService } from "./cases.service";
 @Controller("admin")
 export class AdminCasesController {
  constructor(private readonly cases:AdminCasesService) {}
- @Get("cases/:id/community-reports/:reportId/photos/:photoId")
- @Header("Cache-Control","no-store")
- async communityPhoto(@Param("id") id:string,@Param("reportId") reportId:string,@Param("photoId") photoId:string,
-   @Req() request:FastifyRequest,@Res() reply:FastifyReply) {
-   this.cases.enabled();
-   const result=await this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),parse(communityReportPageSchema,{}),parse(uuid,photoId));
-   if (!("bytes" in result)) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
-   return reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff").header("Content-Security-Policy","default-src 'none'; sandbox")
-     .type("image/png").send(result.bytes);
- }
  @Get("reports") @Header("Cache-Control","no-store")
  reports(@Query() query:unknown,@Req() request:FastifyRequest){this.cases.enabled();return this.cases.reports(request,parse(reportPageSchema,query));}
  @Get("cases") @Header("Cache-Control","no-store")
@@ -42,8 +32,14 @@ export class AdminCasesController {
   return this.cases.readMessageReport(request,parse(uuid,id),parse(uuid,reportId));
  }
  @Get("cases/:id/community-reports/:reportId") @Header("Cache-Control","no-store")
- communityReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Query() query:unknown,@Req() request:FastifyRequest){
+ async communityReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Query() query:unknown,
+   @Req() request:FastifyRequest,@Res({passthrough:true}) reply:FastifyReply){
   this.cases.enabled();
-  return this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),parse(communityReportPageSchema,query));
+  const page=parse(communityReportPageSchema,query);
+  const result=await this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),page,page.photoId);
+  if (!page.photoId) return result;
+  if (!("bytes" in result)) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+  return reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff")
+    .header("Content-Security-Policy","default-src 'none'; sandbox").type("image/png").send(result.bytes);
  }
 }

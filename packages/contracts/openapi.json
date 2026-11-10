@@ -20934,7 +20934,7 @@
           "Comments"
         ],
         "summary": "Edit own comment (CAS)",
-        "description": "#394 + #506 B1a. Author-only edit with expectedVersion. Cookie mutation + CSRF/Origin/Idempotency-Key. Ownership/parent/version fences run before text moderation; final CAS revalidates and binds publication evidence to the comment UUID/new version. Reject/unavailable keeps prior accepted body. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Stale version → conflict, not false success. Same-key replay skips provider I/O.",
+        "description": "#394 + #506 B1a. Author-only edit with expectedVersion. Cookie mutation + CSRF/Origin/Idempotency-Key. Ownership/parent/version fences run before text moderation; final CAS revalidates and binds publication evidence to the comment UUID/new version. Reject/unavailable keeps prior accepted body. Text moderation: 422 PUBLIC_TEXT_CONTENT_REJECTED (fields.text); 503 MODERATION_TEMPORARILY_UNAVAILABLE; 429 MODERATION_RATE_LIMITED. Stale version → conflict, not false success. Same-key replay skips provider I/O. I2b venue only: text-or-photos, optional photoIds retain current set; [] removes it. Omitted/null/blank text clears text. Approved stages attach atomically, rejection/timeout preserves previous body and photos; no repeated image classification. Game remains strict text-required with no photoIds.",
         "security": [
           {
             "cookieSession": []
@@ -24056,7 +24056,7 @@
           "Admin"
         ],
         "summary": "Assigned reviewer reads exact venue-community report source",
-        "description": "#507 I1 F3. Only currently assigned independent reviewer with evidence.assigned.read and fresh step-up. case.manage alone or unassigned staff is insufficient. Human COI is established before private detail on unavailable paths; creator/admin-action affiliation spans the bounded physical venue family. Aggregate pages via opaque HMAC cursor bound to this case/report/venue (raw UUID rejected). own_vote/venue_comment return exact reported revision only after fingerprint validation; mismatch keeps values null. decisionCapability exposes venue_community_decide retain/withhold/restore when backend exists. Audited metadata only (no body/detail/fingerprint in audit). Safe 403/404 on reassignment/COI/cross-case/global roles without scoped rights.",
+        "description": "#507 I1 F3. Only currently assigned independent reviewer with evidence.assigned.read and fresh step-up. case.manage alone or unassigned staff is insufficient. Human COI is established before private detail on unavailable paths; creator/admin-action affiliation spans the bounded physical venue family. Aggregate pages via opaque HMAC cursor bound to this case/report/venue (raw UUID rejected). own_vote/venue_comment return exact reported revision only after fingerprint validation; mismatch keeps values null. decisionCapability exposes venue_community_decide retain/withhold/restore when backend exists. Audited metadata only (no body/detail/fingerprint in audit). Safe 403/404 on reassignment/COI/cross-case/global roles without scoped rights. I2b: optional photoId selects exact historical sanitized PNG instead of JSON; all existing authority and fingerprint checks apply to every GET/HEAD/conditional request. No raw storage key/private-stage authority. Historical evidence never retargets newer authored revisions.",
         "security": [
           {
             "AdminSessionCookie": []
@@ -24110,6 +24110,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "photoId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Exact attachment of the reported venue-comment revision; returns PNG through the same assigned, independent, step-up and audited read. Not accepted for other report subjects."
           }
         ],
         "responses": {
@@ -24129,6 +24139,12 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AdminCaseCommunityReportSource"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
@@ -25194,72 +25210,12 @@
           },
           "409": {
             "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "description": "24 plus next cursor. Order: immutable first publication timestamp and photo ID descending; retained edits do not reorder. Cursor binds canonical ID and full canonical family/catalog versions; mismatch -> 409 VENUE_CANONICAL_CHANGED, restart paging. Rechecks current media authority on each page. No UI/viewer implemented."
-      }
-    },
-    "/admin/cases/{id}/community-reports/{reportId}/photos/{photoId}": {
-      "get": {
-        "operationId": "readAssignedCaseCommunityPhoto",
-        "tags": [
-          "Comments"
-        ],
-        "summary": "Exact historical photo from assigned independent case evidence",
-        "security": [
-          {
-            "AdminSessionCookie": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "reportId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "photoId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Current authorized response; Cache-Control: no-store",
-            "content": {
-              "image/png": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Unavailable without exposing private stage/foreign resource details"
-          },
-          "409": {
-            "description": "VENUE_CANONICAL_CHANGED; reset cursor after canonical family change"
-          }
-        },
-        "description": "Existing Admin internal gate, evidence.assigned.read, current case assignment, linked exact report, independent reviewer and fresh step-up required on every request (including HEAD/conditional). Fingerprint binds exact reported body and ordered photo IDs/approvals/content fingerprints/SHA. Historical evidence never retargets a newer authored revision. Metadata audit contains IDs only. Missing collected bytes return unavailable; no public stage/raw key disclosure."
       }
     }
   },
@@ -41160,7 +41116,8 @@
           "currentVersion",
           "text",
           "currentPublication",
-          "decisionCapability"
+          "decisionCapability",
+          "photos"
         ],
         "properties": {
           "caseId": {
@@ -41254,6 +41211,29 @@
               }
             ],
             "description": "Present when venue_community_decide backend exists and the case/resource is actionable; null when closed/unavailable/HMAC-invalid. Not a fake UI affordance."
+          },
+          "photos": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "url"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Assigned case/report route with photoId query; exact historical revision only, no public or private-stage authority."
+                }
+              }
+            },
+            "description": "Ordered exact reported attachments after fingerprint validation; empty on unavailable evidence. Text may be null for a photo-only source."
           }
         }
       },
@@ -41269,7 +41249,7 @@
             "$ref": "#/components/schemas/AdminCaseCommunityCommentSource"
           }
         ],
-        "description": "#507 I1 F3 assigned Cases community source. No decision capability."
+        "description": "Assigned Cases community source; exact revision evidence and current decision capability subject to assignment, independence and fresh step-up."
       },
       "AdminCaseCommunityDecisionCapability": {
         "type": "object",

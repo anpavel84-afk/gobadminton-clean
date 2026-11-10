@@ -143,8 +143,10 @@ run("#507 I2a owned disposable private photo foundation", () => {
     const status=await get(photo.id);expect(status.json()).not.toHaveProperty("storage_key");
     expect((await app.inject({method:"GET",url:`/v1/media/avatars/${await storage(photo.id)}`})).statusCode).toBe(404);
     expect((await app.inject({method:"GET",url:`/v1/venues/${venue}/comments`})).json().items).toEqual([]);
-    const forbidden=await app.inject({method:"POST",url:`/v1/venues/${venue}/comments`,headers:headers(owner),payload:{text:"",photoIds:[photo.id]}});
-    expect([400,422]).toContain(forbidden.statusCode);
+    const forbidden=await app.inject({method:"POST",url:`/v1/venues/${venue}/comments`,headers:headers(other),payload:{text:"",photoIds:[photo.id]}});
+    expect(forbidden.statusCode).toBe(404);
+    expect(forbidden.json().code).toBe("PHOTO_SUBMISSION_UNAVAILABLE");
+    expect((await get(photo.id)).statusCode).toBe(200);
     expect((await pool.query("SELECT 1 FROM venue_gallery_items WHERE storage_key=$1",[await storage(photo.id)])).rowCount).toBe(0);
   });
   it("deduplicates concurrent/retried commands, separates venue hashes and seals provider UNKNOWN", async () => {

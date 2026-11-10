@@ -211,14 +211,21 @@ run("#507 I2b exact revision photo publication", () => {
     expect(deletion.statusCode).toBe(200);await media.cleanup();
     expect((await pool.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1",[await storage(a.id)])).rowCount).toBe(0);
   });
+  it("refuses destructive rollback while retaining published evidence",async()=>{
+    const a=await ready(),made=await create({photoIds:[a.id]});expect(made.statusCode).toBe(201);
+    await expect(pool.query(await readFile(path.join(migrationDir,"rollback/0070_venue_comment_photo_publications.sql"),"utf8"))).rejects.toMatchObject({code:"P0001"});
+    expect((await publicGet(made.json().photos[0].url)).statusCode).toBe(200);
+  });
   it("rejects empty live content at commit time SQL",async()=>{
-    const client=await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const row=(await client.query<{id:string}>("INSERT INTO entity_comments(entity_kind,entity_id,author_user_id,body,version) VALUES('venue',$1,$2,NULL,1) RETURNING id",[venue,owner.id])).rows[0]!;
-      await client.query("INSERT INTO entity_comment_revisions(comment_id,entity_kind,entity_id,resource_version,actor_user_id,after_body) VALUES($1,'venue',$2,1,$3,NULL)",[row.id,venue,owner.id]);
-      await expect(client.query("SET CONSTRAINTS ALL IMMEDIATE")).rejects.toMatchObject({code:"23514"});
-    } finally {await client.query("ROLLBACK");client.release();}
+    for (const body of [null," \n\u00a0"]) {
+      const client=await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const row=(await client.query<{id:string}>("INSERT INTO entity_comments(entity_kind,entity_id,author_user_id,body,version) VALUES('venue',$1,$2,$3,1) RETURNING id",[venue,owner.id,body])).rows[0]!;
+        await client.query("INSERT INTO entity_comment_revisions(comment_id,entity_kind,entity_id,resource_version,actor_user_id,after_body) VALUES($1,'venue',$2,1,$3,$4)",[row.id,venue,owner.id,body]);
+        await expect(client.query("SET CONSTRAINTS ALL IMMEDIATE")).rejects.toMatchObject({code:"23514"});
+      } finally {await client.query("ROLLBACK");client.release();}
+    }
     expect((await create({text:"  ",photoIds:[]})).statusCode).toBe(422);
     expect((await create({photoIds:Array(5).fill(randomUUID())})).statusCode).toBe(422);
   });
@@ -228,6 +235,10 @@ run("#507 I2b exact revision photo publication", () => {
     }
     const first=await app.inject({method:"GET",url:`/v1/venues/${venue}/community-photos`});expect(first.statusCode,first.body).toBe(200);
     expect(first.json().items).toHaveLength(24);expect(first.json().nextCursor).toBeTruthy();
+    const invalid=JSON.parse(Buffer.from(first.json().nextCursor,"base64url").toString("utf8"));
+    invalid.at="2026-02-30T00:00:00.000000Z";
+    const badCursor=Buffer.from(JSON.stringify(invalid)).toString("base64url");
+    expect((await app.inject({method:"GET",url:`/v1/venues/${venue}/community-photos?cursor=${badCursor}`})).statusCode).toBe(400);
     const second=await app.inject({method:"GET",url:`/v1/venues/${venue}/community-photos?cursor=${first.json().nextCursor}`});
     expect(second.statusCode,second.body).toBe(200);expect(second.json().items).toHaveLength(1);expect(second.json().nextCursor).toBeNull();
     const all=[...first.json().items,...second.json().items];expect(new Set(all.map(p=>p.id)).size).toBe(25);
