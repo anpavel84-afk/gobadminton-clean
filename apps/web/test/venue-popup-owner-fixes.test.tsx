@@ -1,10 +1,11 @@
 /** @vitest-environment jsdom */
 import { createRef, type ComponentProps, type ReactNode } from "react";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PathnameContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VenuePublicContacts, VenueSheet, VenueSheetGameRow } from "../src/components/consumer/games/VenueSheet";
+import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { CreateGamePage, CreateGamePresentation, emptyDraft } from "../src/components/consumer/pages/CreateGamePage";
 import { initialCreateVenue, selectCreateVenue } from "../src/lib/venue-popup-create";
 import { venueCreatePath } from "../src/lib/games-venue-map";
@@ -154,32 +155,44 @@ describe("production venue popup presentation with real React", () => {
     const html = render(true, []);
     expect(html).toContain("Existing cover slot"); expect(html).not.toContain("PRIVATE_");
     expect(html).toMatch(/<button[^>]*>Создать игру на этой площадке/);
-    expect(links(html)).toEqual([]);
-    expect(html).toMatch(/<nav[^>]*aria-label="Сообщество площадки"/);
-    for (const label of ["Оценить", "Обсуждение", "Отзывы после игры"]) {
-      expect(html).toMatch(new RegExp(`<button[^>]*>${label}</button>`));
-    }
+    expect(links(html).some(link => link.href?.startsWith("/venues/"))).toBe(false);
+    expect(html).not.toMatch(/<nav[^>]*aria-label="Сообщество площадки"/);
+    expect(html).not.toContain("data-community-actions");
+    expect(html).not.toMatch(/<button[^>]*>Оценить<\/button>/);
+    expect(textContent(html)).toContain("Оценки сообщества");
+    expect(textContent(html)).toContain("Обсуждение площадки");
+    expect(textContent(html)).toContain("Отзывы после игры");
+    expect(textContent(html)).toContain("Чтение доступно без входа.");
+    expect(textContent(html)).not.toContain("Оценить");
     expect(html).not.toContain('gb-venue-community__compact-link');
     expect(textContent(html).indexOf(venue.address)).toBeLessThan(textContent(html).indexOf("Контакты площадки"));
     expect(textContent(html).indexOf("Контакты площадки")).toBeLessThan(textContent(html).indexOf("Создать игру"));
     expect(render(false, [])).not.toContain("Создать игру на этой площадке");
-    expect(render(true, [game])).not.toContain("Создать игру на этой площадке");
-    for (const [markup, label] of [[html, "Создать игру на этой площадке"], [render(true, [game]), "Показать игры на этой площадке"]]) {
+    const withGames = render(true, [game]);
+    expect(withGames).toMatch(/<button[^>]*>Создать игру на этой площадке/);
+    expect(textContent(withGames).indexOf("Показать игры на этой площадке")).toBeLessThan(textContent(withGames).indexOf("Создать игру на этой площадке"));
+    for (const games of [[], [game]]) {
+      const compact = ssr(<VenuePreviewCard venue={supplied} games={games} gamesReady now={0} onOpen={noop} />);
+      expect(compact).not.toContain("Создать игру на этой площадке");
+    }
+    for (const [markup, label] of [[html, "Создать игру на этой площадке"], [withGames, "Создать игру на этой площадке"], [withGames, "Показать игры на этой площадке"]]) {
       expect(markup).toContain(`aria-label="${label}"`);
       expect(markup).toContain(`${label}<span aria-hidden="true">→</span></button>`);
     }
   });
-  it("routes community buttons to the selected venue section inside the map", () => {
+  it("keeps inline community read surfaces without old jump nav or guest rate CTA", () => {
     const onSection = vi.fn();
     const { container } = render(<VenueSheet venue={venue} games={[]} gamesReady={false} now={0} active={false}
       communitySummaryState="ready"
       onCollapse={noop} onDeselect={noop} onCommunitySectionChange={onSection} />);
-    const actions = within(within(container).getByRole("navigation", { name: "Сообщество площадки" }));
-    for (const [label, section] of [["Оценить", "ratings"], ["Обсуждение", "discussion"], ["Отзывы после игры", "reviews"]] as const) {
-      fireEvent.click(actions.getByRole("button", { name: label }));
-      expect(onSection).toHaveBeenLastCalledWith(section);
-    }
-    expect(onSection).toHaveBeenCalledTimes(3);
+    expect(container.querySelector('[aria-label="Сообщество площадки"]')).toBeNull();
+    expect(within(container).queryByRole("button", { name: "Оценить" })).toBeNull();
+    expect(within(container).getByRole("heading", { name: "Оценки сообщества" })).toBeTruthy();
+    expect(within(container).getByRole("heading", { name: "Обсуждение площадки" })).toBeTruthy();
+    expect(within(container).getByRole("heading", { name: "Отзывы после игры" })).toBeTruthy();
+    expect(container.textContent).toContain("Чтение доступно без входа.");
+    expect(container.textContent).not.toContain("Оценить");
+    expect(onSection).not.toHaveBeenCalled();
     expect(container.querySelector('a[href^="/venues/"]')).toBeNull();
   });
   it.each(["form", "preview"] as const)("shares actual fields and actions in embedded/full %s", step => {
@@ -270,8 +283,12 @@ describe("production pure create selection", () => {
 
 it("offers direct community sections independently of an unavailable schedule", () => {
   const html = ssr(<VenueSheet venue={venue} games={[]} gamesReady={false} now={0} onCollapse={noop} onDeselect={noop} onCommunitySectionChange={noop} />);
-  expect(textContent(html)).toContain("Оценить");
-  expect(textContent(html)).toContain("Обсуждение");
+  expect(textContent(html)).toContain("Оценки сообщества");
+  expect(textContent(html)).toContain("Обсуждение площадки");
   expect(textContent(html)).toContain("Отзывы после игры");
+  expect(textContent(html)).toContain("Чтение доступно без входа.");
+  expect(textContent(html)).not.toContain("Оценить");
+  expect(html).not.toMatch(/<nav[^>]*aria-label="Сообщество площадки"/);
   expect(links(html).some(link => link.href?.endsWith("#ratings"))).toBe(false);
+  expect(links(html).some(link => link.href?.startsWith("/venues/"))).toBe(false);
 });

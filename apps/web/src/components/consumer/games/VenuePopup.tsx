@@ -70,7 +70,8 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   labels?: { dialog?: string; expandHandle?: string; collapseHandle?: string };
 }) {
   const desktop = useDesktopMapInspector();
-  const compactHeight = retainContent ? 224 : 172;
+  // Owner R3.1: retainContent keeps the expanded fiber; compact geometry stays accepted69 172px.
+  const compactHeight = 172;
   const dialogLabel = labels?.dialog ?? "Выбранная площадка";
   const expandHandle = labels?.expandHandle ?? "Развернуть площадку";
   const collapseHandle = labels?.collapseHandle ?? "Свернуть площадку";

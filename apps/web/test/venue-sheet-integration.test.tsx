@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Children, isValidElement } from "react";
 import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -237,7 +238,7 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
         popupRendered = true;
         for (const item of elements(popupTree)) {
           const ref = item.props.ref as { current: unknown } | undefined;
-          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : (item.props.style as React.CSSProperties | undefined)?.height ?? 224 }) };
+          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : (item.props.style as React.CSSProperties | undefined)?.height ?? 172 }) };
         }
         h.effects.splice(0).forEach(fn => fn()); popupState.slots = h.slots; popupState.cleanups = h.cleanups;
         h.slots = parent.slots; h.cleanups = parent.cleanups;
@@ -356,4 +357,13 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   expect(countsSeen.at(-1)).toBeNull(); expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
   popupState.cleanups.forEach(fn => fn?.()); sheet.cleanups.forEach(fn => fn?.()); h.cleanups.forEach(fn => fn?.());
   child.cleanups.forEach(fn => fn?.()); expect(map.remove).toHaveBeenCalledOnce();
+});
+
+it("VenueSheet keeps a single overview info host — no desktop/mobile infoBody remount fork", () => {
+  const source = readFileSync(new URL("../src/components/consumer/games/VenueSheet.tsx", import.meta.url), "utf8");
+  expect(source).toContain("Stable info/community owner");
+  expect(source).toContain('className={desktop ? "gb-desktop-overlay-body" : "gb-venue-sheet-scroll"}');
+  // Former remount risk: infoBody rendered under alternate ternary parent chains.
+  expect(source).not.toMatch(/desktop \? <>[\s\S]*\{infoBody\}[\s\S]*: <>[\s\S]*\{infoBody\}/);
+  expect(source.split("{infoBody}").length - 1).toBe(1);
 });

@@ -56,6 +56,7 @@ import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { CloseButton } from "../src/components/consumer/CloseButton";
 import { GameTerms } from "../src/components/consumer/games/GameDetailComposition";
 import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
+import { VenueCommunityContent } from "../src/components/consumer/venues/VenueCommunityContent";
 import { formatSeats } from "../src/lib/game-presentation";
 import { venueDays, venueDayLabel } from "../src/lib/venue-popup";
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
@@ -756,4 +757,44 @@ it("forwards morph coverFallback, coverReady and onCoverRetry into VenueGallery"
   expect(gallery!.props.coverReady).toBe(true);
   expect(gallery!.props.onCoverRetry).toBe(onCoverRetry);
   expect(gallery!.props.coverSlot).toBeTruthy();
+});
+
+it("places Create in the expanded footer and drops jump-action strips", () => {
+  props = { ...props, games: [], onCommunitySectionChange: vi.fn(), onUnresolvedChange: vi.fn() };
+  const tree = render();
+  const html = renderToStaticMarkup(tree);
+  expect(html).not.toContain("data-community-actions");
+  expect(html).not.toContain('aria-label="Сообщество площадки"');
+  expect(elements(tree).some(node =>
+    node.type === "nav" && node.props["aria-label"] === "Сообщество площадки")).toBe(false);
+  const footer = elements(tree).find(node => node.type === "footer" && node.props.className === "gb-venue-sheet-create-footer");
+  expect(footer).toBeTruthy();
+  expect(renderToStaticMarkup(footer!)).toContain("Создать игру на этой площадке");
+  expect(elements(tree).some(node => node.type === VenueCommunityContent)).toBe(true);
+});
+
+it("keeps the inline community owner mounted when switching into create", () => {
+  props = { ...props, games: [], onCommunitySectionChange: vi.fn(), onUnresolvedChange: vi.fn() };
+  click(render(), "Создать игру на этой площадке");
+  const tree = render();
+  expect(elements(tree).some(node => node.type === CreateGamePage)).toBe(true);
+  expect(elements(tree).some(node => node.type === VenueCommunityContent)).toBe(true);
+  const hiddenOwner = elements(tree).find(node =>
+    node.props.hidden === true && elements(node).some(child => child.type === VenueCommunityContent));
+  expect(hiddenOwner).toBeTruthy();
+  expect(hiddenOwner?.props.inert).toBe(true);
+});
+
+it("keeps schedule access in the info body when games exist", () => {
+  const tree = render();
+  const html = renderToStaticMarkup(tree);
+  expect(html).toContain("Показать игры на этой площадке");
+  expect(html).not.toContain("data-community-actions");
+  const footer = elements(tree).find(node => node.type === "footer" && node.props.className === "gb-venue-sheet-create-footer");
+  expect(footer).toBeTruthy();
+  expect(renderToStaticMarkup(footer!)).toContain("Создать игру на этой площадке");
+  const schedule = elements(tree).find(node =>
+    node.type === "button" && node.props["aria-label"] === "Показать игры на этой площадке");
+  expect(schedule).toBeTruthy();
+  expect(elements(footer!).some(node => node === schedule)).toBe(false);
 });

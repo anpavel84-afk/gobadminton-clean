@@ -1,17 +1,17 @@
 "use client";
-import { Button } from "../Button";
 import type { VenueCommunitySection } from "../venues/VenueCommunityContent";
 import type { ReactNode } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { nearestGameLabel, venueGameCount } from "../../../lib/venue-popup";
-import { VenueCover, venueCoverUrl } from "../venues/VenueCover";
+import { VenueCover } from "../venues/VenueCover";
 import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import { VenueCommunityRating } from "../venues/VenueCommunityRating";
 import type { CommunityRatingSummary } from "../../../lib/venue-community-api";
 import "../../../styles/venue-popup.css";
 
-export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true, onCommunityOpen }: {
+export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true, onCommunityOpen: _onCommunityOpen }: {
+  /** Retained for map caller compatibility; compact community jump strip is removed (Owner R3.1). */
   onCommunityOpen?: (section: VenueCommunitySection) => void;
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number; onOpen: () => void; embedded?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
@@ -31,11 +31,9 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
   // Morph slot still goes through VenueGallery so ordered gallery + main-at-nonzero stay coherent.
   // Source credit is a sibling footer outside the 64px/minmax(0,1fr)/44px row button (not a 4th grid child).
   const multi = (venue.profile?.gallery?.items?.length ?? 0) > 1;
-  const galleryCount = venue.profile?.gallery?.items?.length ?? 0;
   const catalogSource = venue.profile?.catalogSource;
   const hasSource = Boolean(safeCatalogSource(catalogSource));
-  // Default illustration label sits in the copy column — not a 4th grid child / nested control.
-  const showDefaultIllustrationLabel = !venueCoverUrl(venue.cover?.uploadedUrl) && galleryCount === 0;
+  // Owner R3.1: illustration badge stays on the 64px cover (StyleGuide), not a 6th copy row.
   const media = coverSlot || multi
     ? <VenueGallery
         venue={venue}
@@ -62,9 +60,6 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
       {media}
       <span className="gb-venue-preview-copy">
         <strong>{venue.name}</strong><span className="gb-venue-preview-address">{venue.address}</span>
-        {showDefaultIllustrationLabel
-          ? <span className="gb-venue-illustration-label">Иллюстрация</span>
-          : null}
         {showCommunityRating ? (
           <VenueCommunityRating
             venueId={venue.id}
@@ -82,11 +77,6 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
       </span>
       <span className="gb-venue-preview-arrow" aria-hidden="true">↑</span>
     </button>
-    {onCommunityOpen && <nav className="gb-venue-community-actions gb-venue-community-actions--preview" data-community-actions aria-label="Сообщество площадки">
-      <Button variant="outline" onClick={() => onCommunityOpen("ratings")}>Оценить</Button>
-      <Button variant="outline" onClick={() => onCommunityOpen("discussion")}>Обсуждение</Button>
-      <Button variant="ghost" onClick={() => onCommunityOpen("reviews")}>После игры</Button>
-    </nav>}
     {hasSource ? (
       <div className="gb-venue-preview-source">
         <VenueSourceCredit catalogSource={catalogSource} variant="compactPrimary" />

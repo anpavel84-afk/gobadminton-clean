@@ -17,7 +17,6 @@ import { VenueGameActions } from "./VenueGameActions";
 import { useVenuePopupModalLifecycle, useVenuePopupContentVisible } from "./VenuePopup";
 import { useDesktopMapInspector } from "./DesktopMapInspector";
 import { VenueCommunityContent, type VenueCommunitySection } from "../venues/VenueCommunityContent";
-import { Button } from "../Button";
 import { VenueCommunityRating } from "../venues/VenueCommunityRating";
 import type { CommunityRatingSummary } from "../../../lib/venue-community-api";
 import "../../../styles/venue-popup.css";
@@ -69,8 +68,10 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
 }) {
   const desktop = useDesktopMapInspector();
   const contentVisible = useVenuePopupContentVisible();
+  const communityEnabled = Boolean(onCommunitySectionChange || onUnresolvedChange);
   const communityOpened = useRef(false);
-  if (communitySection) communityOpened.current = true;
+  // First expanded admission keeps VenueCommunityContent mounted across collapse/width/schedule/create.
+  if (communityEnabled && (desktop || contentVisible)) communityOpened.current = true;
   const [view, setView] = useState<"info" | "schedule" | "game" | "create">("info");
   const [selectedDate, setSelectedDate] = useState("");
   const [gameId, setGameId] = useState<string | null>(null);
@@ -95,6 +96,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   useVenuePopupModalLifecycle({
     active, embedded, panelRef: panel, initialFocusRef: close,
     onEscape: () => {
+      // communitySection is scroll/focus intent inside inline content — clear without dismissing.
       if (communitySection) { onCommunitySectionChange?.(null); return; }
       if (desktop && currentView === "create") { setView("info"); return; }
       if (desktop && (currentView === "game" || currentView === "schedule")) {
@@ -108,16 +110,18 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     lockBody: !desktop,
   });
   const openCreate = () => setView("create");
-  const desktopBack = communitySection ? { label: "К площадке", ariaLabel: "К площадке", onClick: () => onCommunitySectionChange?.(null) } : currentView !== "info" ? {
-    label: currentView === "game" ? "К площадке" : "К площадке",
+  const desktopBack = currentView !== "info" ? {
+    label: "К площадке",
     ariaLabel: currentView === "game" ? "К площадке" : "К информации о площадке",
     onClick: () => currentView === "game" ? backFromGame() : setView("info"),
   } : undefined;
-  const infoPrimary = gamesReady && games.length === 0
+  // Owner R3.1: Create stays in the expanded information footer only (never compact).
+  const createCta = gamesReady
     ? <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
-    : gamesReady && days.length > 0
-      ? <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>
-      : null;
+    : null;
+  const scheduleCta = gamesReady && days.length > 0
+    ? <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>
+    : null;
   const infoBody = <div className="gb-venue-sheet-info">
     {contentVisible && <VenueGallery
       venue={venue}
@@ -132,7 +136,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     />}
     {venue.profile?.description ? <p className="gb-venue-sheet-description">{venue.profile.description}</p> : null}
     <h3>{venue.name}</h3><p>{venue.address}</p>
-    {showCommunityRating ? (
+    {showCommunityRating && !communityOpened.current ? (
       <VenueCommunityRating
         venueId={venue.id}
         variant="compact"
@@ -145,11 +149,6 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         linkToRatings={false}
       />
     ) : null}
-    {onCommunitySectionChange && <nav className="gb-venue-community-actions" data-community-actions aria-label="Сообщество площадки">
-      <Button variant="outline" onClick={() => onCommunitySectionChange("ratings")}>Оценить</Button>
-      <Button variant="outline" onClick={() => onCommunitySectionChange("discussion")}>Обсуждение</Button>
-      <Button variant="ghost" onClick={() => onCommunitySectionChange("reviews")}>Отзывы после игры</Button>
-    </nav>}
     <VenuePublicContacts value={venue.publicContacts} />
     {!gamesReady && <p role="status">Расписание временно недоступно</p>}
     {gamesReady && games.length === 0 && (desktop
@@ -160,9 +159,19 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
             <p>Будьте первым, кто создаст игру и соберет компанию!</p>
           </div>
         </section>
-      : infoPrimary
+      : null
     )}
-    {!desktop && gamesReady && days.length > 0 && infoPrimary}
+    {scheduleCta}
+    {communityOpened.current ? (
+      <VenueCommunityContent
+        venueId={venue.id}
+        me={me}
+        embedded
+        section={communitySection}
+        authReturnPath={authReturnPath ?? `/venues/${venue.id}`}
+        onUnresolvedChange={onUnresolvedChange}
+      />
+    ) : null}
   </div>;
   const scheduleBody = <div><h3>Игры на этой площадке</h3>
     <div className="gb-venue-sheet-dates" aria-label="Даты игр">{days.map(item => {
@@ -174,13 +183,14 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     })}</div>
     {day?.games.map(item => VenueSheetGameRow({ game: item, timezone: venue.timezone, onOpen: () => { setGameId(item.id); setView("game"); } }))}
   </div>;
+  const infoOwnerActive = currentView === "info" || communityOpened.current;
   return <>
     {!embedded && !desktop && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={panel} className="gb-venue-sheet" data-view={communitySection ? "community" : currentView} data-desktop={desktop ? "true" : undefined} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded && !desktop ? "true" : undefined} aria-labelledby={label}>
+    <div ref={panel} className="gb-venue-sheet" data-view={currentView} data-desktop={desktop ? "true" : undefined} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded && !desktop ? "true" : undefined} aria-labelledby={label}>
       {!embedded && !desktop && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
       {desktop ? (
         <DesktopOverlayHeader
-          title={communitySection ? "Сообщество" : venue.name}
+          title={venue.name}
           titleId={label}
           kicker={currentView === "info" ? "Площадка" : undefined}
           back={desktopBack}
@@ -189,38 +199,56 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         />
       ) : (
         <header className="gb-venue-sheet-header">
-          {(communitySection || currentView !== "info") && <button type="button" className="gb-venue-sheet-back" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => communitySection ? onCommunitySectionChange?.(null) : currentView === "game" ? backFromGame() : setView("info")}>
+          {currentView !== "info" && <button type="button" className="gb-venue-sheet-back" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => currentView === "game" ? backFromGame() : setView("info")}>
             <span aria-hidden="true">←</span>
           </button>}
           <div className="gb-venue-sheet-heading">
-            <h2 id={label}>{communitySection ? "К площадке" : venue.name}</h2>
-            {!communitySection && currentView !== "info" && <p className="gb-venue-sheet-header-address">{venue.address}</p>}
+            <h2 id={label}>{venue.name}</h2>
+            {currentView !== "info" && <p className="gb-venue-sheet-header-address">{venue.address}</p>}
           </div>
           <CloseButton ref={close} className="gb-venue-sheet-close" onClick={onCloseClick} />
         </header>
       )}
-      <div className="gb-venue-sheet-community-body" hidden={!communitySection} inert={!communitySection}>
-        {communityOpened.current && <>
-          <div className="gb-venue-community-identity"><h3>{venue.name}</h3><p>{venue.address}</p></div>
-          <nav className="gb-venue-community-actions" aria-label="Разделы сообщества">
-            {(["ratings", "discussion", "reviews"] as const).map((value, index) => <Button key={value} variant="ghost" onClick={() => onCommunitySectionChange?.(value)}>{["Оценки", "Обсуждение", "После игры"][index]}</Button>)}
-          </nav>
-          <VenueCommunityContent venueId={venue.id} me={me} embedded section={communitySection} authReturnPath={authReturnPath ?? `/venues/${venue.id}`} onUnresolvedChange={onUnresolvedChange} />
-        </>}
-      </div>
-      <div className="gb-venue-sheet-overview" hidden={Boolean(communitySection)} inert={Boolean(communitySection)}>
-      {desktop && currentView === "info" ? <>
-        <div className="gb-desktop-overlay-body">{infoBody}</div>
-        {infoPrimary ? <footer className="gb-desktop-overlay-footer">{infoPrimary}</footer> : null}
-      </> : desktop && currentView === "create" ? (
+      <div className="gb-venue-sheet-overview">
+      {/* Stable info/community owner: same React parent across 390↔1280; only presentation class changes. */}
+      {infoOwnerActive ? (
+        <div
+          className={desktop ? "gb-desktop-overlay-body" : "gb-venue-sheet-scroll"}
+          hidden={desktop ? currentView !== "info" : undefined}
+          inert={desktop && currentView !== "info" ? true : undefined}
+        >
+          <div hidden={currentView !== "info"} inert={currentView !== "info" || undefined}>
+            {infoBody}
+          </div>
+          {!desktop && currentView === "create" ? (
+            <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} />
+          ) : null}
+          {!desktop && currentView === "game" && game ? (
+            <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
+          ) : null}
+          {!desktop && currentView === "schedule" ? scheduleBody : null}
+        </div>
+      ) : !desktop ? (
+        <div className="gb-venue-sheet-scroll">
+          {currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : null}
+          {currentView === "game" && game ? (
+            <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
+          ) : null}
+          {currentView === "schedule" ? scheduleBody : null}
+        </div>
+      ) : null}
+      {currentView === "info" && createCta ? (
+        <footer className={desktop ? "gb-desktop-overlay-footer" : "gb-venue-sheet-create-footer"}>{createCta}</footer>
+      ) : null}
+      {desktop && currentView === "create" ? (
         <div className="gb-desktop-overlay-body"><CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /></div>
-      ) : desktop && currentView === "game" && game ? (
+      ) : null}
+      {desktop && currentView === "game" && game ? (
         <DesktopInspectorGame game={game} onVenueClick={() => setView("info")} />
-      ) : desktop && currentView === "schedule" ? (
+      ) : null}
+      {desktop && currentView === "schedule" ? (
         <div className="gb-desktop-overlay-body">{scheduleBody}</div>
-      ) : currentView === "info" ? infoBody : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? (
-        <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
-      ) : scheduleBody}
+      ) : null}
       </div>
     </div>
   </>;
