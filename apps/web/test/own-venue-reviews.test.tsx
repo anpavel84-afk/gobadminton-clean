@@ -309,7 +309,7 @@ describe("selected owner edit entry", () => {
     await waitFor(() => expect(screen.getByLabelText("Ваш опыт на площадке").getAttribute("disabled")).toBeNull());
     expect(editor.textContent).toContain("Сохранённая игра");
     expect(screen.getByLabelText("Ваш опыт на площадке")).toHaveProperty("value", row.text);
-    expect(screen.getByRole("checkbox")).toHaveProperty("checked", false);
+    expect(screen.getByRole("checkbox", { name: "Подтверждаю публикацию этого текста без моего профиля, игры и состава." })).toHaveProperty("checked", false);
     expect(transport.request.mock.calls.some(([path]) => String(path).includes("eligibility"))).toBe(false);
     expect(commands()).toHaveLength(0);
   });
