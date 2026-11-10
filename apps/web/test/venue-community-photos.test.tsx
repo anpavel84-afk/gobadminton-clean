@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiFetch } from "../src/lib/api-client";
 import { isCommunityPhotoPage } from "../src/lib/venue-comment-photos-api";
 import { isCurrentPhotoSource } from "../src/lib/comments-api";
 import { useVenueCommunityPhotos } from "../src/components/consumer/venues/useVenueCommunityPhotos";
+import { VenueCommunityContent } from "../src/components/consumer/venues/VenueCommunityContent";
 import type { VenueCommunityPhoto } from "../src/lib/comments-types";
 vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn() }));
+vi.mock("../src/components/consumer/venues/VenueCommunityPhotoViewer", () => ({ VenueCommunityPhotoViewer: () => null }));
+vi.mock("../src/components/consumer/venues/VenueCommunityRating", () => ({ VenueCommunityRating: () => <section>Оценки</section> }));
+vi.mock("../src/components/consumer/venues/VenueReviewsPanel", () => ({ VenueReviewsPanel: () => <section>Отзывы</section> }));
+vi.mock("../src/components/consumer/comments/CommentsSection", () => ({
+  CommentsSection: ({ onUnresolvedChange }: { onUnresolvedChange: (value: boolean) => void }) => <section>Обсуждение<button onClick={() => onUnresolvedChange(true)}>Незавершённая публикация</button></section>,
+}));
 const venue = "10000000-0000-4000-8000-000000000001";
 const comment = "10000000-0000-4000-8000-000000000002";
 const parent = "10000000-0000-4000-8000-000000000003";
@@ -22,6 +29,44 @@ const source = (p = photo(24, true)) => ({ id: comment, entityId: venue, entityK
   body: "Текущий источник", deleted: false, version: 2, photos: [{ id: p.id, width: p.width, height: p.height, url: p.url }],
   mine: false, edited: true, author: null, replyCount: 0, createdAt: "2026-11-10T10:00:00Z", updatedAt: "2026-11-10T11:00:00Z" });
 afterEach(() => { cleanup(); vi.mocked(apiFetch).mockReset(); });
+
+describe("I2c2 one community owner in page and expanded map host", () => {
+  it("keeps one gallery/read across density changes, bottom order and the existing unresolved guard", async () => {
+    vi.mocked(apiFetch).mockResolvedValue(ok(page([], null)));
+    const unresolved = vi.fn();
+    const props = { venueId: venue, me: null, authReturnPath: `/venues/${venue}`, onUnresolvedChange: unresolved };
+    const { container, rerender } = render(<VenueCommunityContent {...props} />);
+    await screen.findByText("Пока нет фотографий сообщества.");
+    expect(Array.from(container.querySelectorAll("[data-community-section]")).map((node) => node.getAttribute("data-community-section"))).toEqual(["ratings", "discussion", "reviews", "photos"]);
+    const owner = container.querySelector("[data-venue-community]");
+    expect(container.querySelectorAll("[data-venue-community]")).toHaveLength(1);
+    rerender(<VenueCommunityContent {...props} embedded />);
+    await waitFor(() => expect(vi.mocked(apiFetch).mock.calls).toHaveLength(1));
+    expect(vi.mocked(apiFetch).mock.calls[0]?.[0]).toBe(`/v1/venues/${venue}/community-photos`);
+    expect(container.querySelector("[data-venue-community]")).toBe(owner);
+    expect(screen.getAllByRole("region", { name: "Фотографии сообщества" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Незавершённая публикация" }));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+  });
+  it("keeps the existing community usable when its new gallery read fails and retries only on request", async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce({ ok: false, status: 0, error: "Unavailable gallery transport" })
+      .mockResolvedValue(ok(page([], null)));
+    const unresolved = vi.fn();
+    render(<VenueCommunityContent venueId={venue} me={null} authReturnPath={`/venues/${venue}`} onUnresolvedChange={unresolved} />);
+    await screen.findByText("Не удалось загрузить фотографии.");
+    expect(screen.queryByText("Пока нет фотографий сообщества.")).toBeNull();
+    expect(screen.getByText("Оценки")).toBeTruthy();
+    expect(screen.getByText("Отзывы")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Незавершённая публикация" }));
+    expect(unresolved).toHaveBeenLastCalledWith(true);
+    expect(vi.mocked(apiFetch).mock.calls).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Обновить фотографии" }));
+    await screen.findByText("Пока нет фотографий сообщества.");
+    expect(vi.mocked(apiFetch).mock.calls.map(([path]) => path)).toEqual([
+      `/v1/venues/${venue}/community-photos`, `/v1/venues/${venue}/community-photos`,
+    ]);
+  });
+});
 
 describe("I2c2 current-photo API contracts", () => {
   it("accepts a real 24-item opaque page and rejects invented routes, stale versions, duplicates and malformed source", () => {

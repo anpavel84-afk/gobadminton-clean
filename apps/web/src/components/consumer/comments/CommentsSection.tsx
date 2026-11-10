@@ -114,8 +114,6 @@ export function CommentsSection({
   onReportUnresolvedChange,
   sourceComment, onOpenPhoto, onPublished,
 }: Props) {
-  const sectionRef = useRef<HTMLElement>(null);
-  const sourceRef = useRef<HTMLElement>(null);
   const headingId = useId();
   const [authOpen, setAuthOpen] = useState(false);
   const [order, setOrder] = useState<"asc" | "desc">("asc");
@@ -481,6 +479,8 @@ export function CommentsSection({
     void reload();
   }
 
+  const sectionRef = useRef<HTMLElement>(null);
+  const sourceRef = useRef<HTMLElement>(null);
   const existingSource = sourceComment && currentPage && [
     ...currentPage.items, ...Object.values(expandedReplies).flat(),
   ].some((item) => item.id === sourceComment.id && item.version === sourceComment.version && !item.deleted);

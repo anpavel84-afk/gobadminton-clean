@@ -7,6 +7,7 @@ import type {
   EntityComment,
   EntityCommentPage,
   UpdateCommentBody,
+  VenueCommunityPhoto,
 } from "./comments-types";
 
 /**
@@ -155,7 +156,7 @@ export function isCommentDeleteBody(body: object): body is DeleteCommentBody {
 export function getCommentDetail(commentId: string, signal: AbortSignal) {
   return apiFetch<unknown>(`/v1/comments/${encodeURIComponent(commentId)}`, { signal, cache: "no-store" });
 }
-export function isCurrentPhotoSource(value: unknown, photo: import("./comments-types").VenueCommunityPhoto): value is EntityComment {
+export function isCurrentPhotoSource(value: unknown, photo: VenueCommunityPhoto): value is EntityComment {
   if (!isCommentView(value)) return false;
   const row = value;
   const author = row.author;

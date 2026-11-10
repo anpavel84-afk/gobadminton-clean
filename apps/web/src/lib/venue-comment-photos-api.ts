@@ -1,5 +1,6 @@
 import { apiFetch } from "./api-client";
 import { isPhotoId } from "./comments-api";
+import type { VenueCommunityPhotoPage } from "./comments-types";
 
 export const PHOTO_RIGHTS = "community-photo-rights-v1";
 export type VenueCommentPhotoReceipt = {
@@ -39,9 +40,9 @@ export function getVenueCommunityPhotos(venueId: string, cursor: string | null, 
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
   return apiFetch<unknown>(`/v1/venues/${encodeURIComponent(venueId)}/community-photos${query}`, { signal, cache: "no-store" });
 }
-export function isCommunityPhotoPage(value: unknown): value is import("./comments-types").VenueCommunityPhotoPage {
+export function isCommunityPhotoPage(value: unknown): value is VenueCommunityPhotoPage {
   if (!value || typeof value !== "object") return false;
-  const page = value as import("./comments-types").VenueCommunityPhotoPage;
+  const page = value as VenueCommunityPhotoPage;
   if (!isPhotoId(page.venueId) || !Array.isArray(page.items) || page.items.length > 24
     || !(page.nextCursor === null || (typeof page.nextCursor === "string" && page.nextCursor.length > 0 && page.nextCursor.length <= 1024))
     || (page.nextCursor !== null && page.items.length !== 24)) return false;

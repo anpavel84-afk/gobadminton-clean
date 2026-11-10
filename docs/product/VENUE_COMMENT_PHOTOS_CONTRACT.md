@@ -456,3 +456,44 @@ No dependencies were installed. Pinned TSC, lint, Vitest, actual Next synthetic 
 independent QA, CI7, trusted DEV release/acceptance and smoke remain for Root's qualified
 route. A new I2c2 release must await DEV80 acceptance. Owner/device/provider UAT is
 NOT_TESTED. This candidate does not complete #507 or I3 and makes no DEV/PROD READY claim.
+
+### I2c2 continuation — address known parent failures, attempt 2
+
+Continues supplied checkpoint `757efa259ba82ce5396b22db74634f9e7d63af81`, preserving
+the gallery/viewer/source-jump implementation and retained R3.1 host behavior. Root's
+parent evidence was TSC PASS, three forbidden inline type-import lint errors and four
+private-boundary test failures. Those parent results are not passes for this revision.
+
+Restored `test/venue-community-contexts.test.tsx` by copying the verified local
+`I2c2-ACCEPTED80-CONTEXTS-BASELINE.txt` source input, byte for byte: 1976 lines,
+84317 bytes, SHA-256 `0f076493ccb44b0352866f2f4bf14654f4060545862387243b5020b78b527e2b`.
+All accepted describe/it bodies and assertions are retained; no fixture additions or
+global mocks were added to that baseline. The replacement I2c2 smoke check was moved
+to the existing new `test/venue-community-photos.test.tsx`, sharing its API mock, and
+now also checks owner DOM identity and the exact gallery endpoint. A separate case in
+that new file covers initial gallery transport failure, preserved community/unresolved
+callbacks, no false empty state, and explicit same-endpoint retry. The existing
+`apiFetch` catches rejected fetch handlers and returns a failed result; the gallery
+already renders an error with explicit refresh. Old context fixtures need no changes.
+
+The private-boundary harness deliberately sets state slots 1 (order), 8 (expanded
+replies) and 14 (menu). The two new source refs had shifted every original slot by two.
+They now run unconditionally after all preexisting hooks, immediately before the new
+source-focus effect. The private-boundary tests were not edited. Rights, mutation body,
+actor/session/version fences and recovery logic were not changed. Replaced the three
+inline `import()` type annotations with top-level type imports; no lint configuration,
+disable directive, plugin or dependency changes.
+
+Actual local verification: byteexact baseline comparison/hash PASS; native Node 24
+TypeScript stripping and module parsing of four `.ts` modules PASS; four direct linked
+API predicate assertions PASS with transport forbidden; source inspection checks for
+the established state-slot order, unconditional source refs and removal of inline type
+imports PASS. These are not mounted React or TypeScript semantic checks. Pinned TSC,
+changed-file ESLint and the seven affected Vitest suites were attempted, each exit 127
+because this export has no `node_modules/.bin` binaries. Their current status is
+NOT_RUN, pending Root's qualified environment; no dependency installation was attempted.
+
+The latest admission supplies DEV80 acceptance. This repair remains SOURCE_ONLY, with
+no Git/network, paid QA, server/API/OPS/runtime/PROD work or deployment. Root must rerun
+all seven affected suites with restored coverage, TSC/lint and applicable browser/CI/QA
+gates before any I2c2 release. Owner UAT remains NOT_TESTED; #507 and I3 are not DONE.
