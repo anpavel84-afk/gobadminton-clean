@@ -12,6 +12,7 @@ vi.mock("next/link", () => ({
 }));
 
 import { DiscoveryLevelFilters, LevelGuide } from "../src/components/consumer/LevelGuide";
+import { ensureActivityChipVisible } from "../src/components/consumer/pages/GamesDiscoveryPage";
 import {
   filterGamesBySelectedNtrpLevel,
   levelGuideSkillFor,
@@ -89,6 +90,49 @@ function listed(id: string, allowedLevelIds: string[], scaleId = "ntrp", scaleVe
 }
 
 describe("GamesDiscovery compact filters #458", () => {
+  it("#547 D3: focus reveals the full chip with end clearance, without selecting it", () => {
+    const onSelect = vi.fn();
+    render(createElement("div", {
+      role: "group", "aria-label": "Фильтр активности", onFocus: ensureActivityChipVisible,
+      style: { paddingRight: "16px" },
+    }, ...["Все", "Обычные", "С тренером"].map((label, index) => createElement("button", {
+      key: label, type: "button", "aria-pressed": index === 0, onClick: onSelect,
+    }, label))));
+    const row = screen.getByRole("group", { name: "Фильтр активности" });
+    const chips = within(row).getAllByRole("button");
+    // Actual admitted 390px geometry; jsdom itself does not lay out or perform Tab.
+    Object.defineProperties(row, {
+      clientWidth: { configurable: true, value: 279 },
+      scrollWidth: { configurable: true, value: 320 },
+    });
+    const rect = (left: number, width: number) => ({ left, right: left + width, width } as DOMRect);
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => rect(19, row.clientWidth));
+    const positions = [[19, 50], [77, 113], [198, 125]] as const;
+    chips.forEach((chip, index) => {
+      const [left, width] = positions[index]!;
+      vi.spyOn(chip, "getBoundingClientRect").mockImplementation(() => rect(left - row.scrollLeft, width));
+    });
+    const trainer = chips[2]!;
+    trainer.focus({ preventScroll: true });
+    expect(document.activeElement).toBe(trainer);
+    expect(row.scrollLeft).toBe(41);
+    expect(trainer.getBoundingClientRect().left).toBeGreaterThanOrEqual(19);
+    expect(trainer.getBoundingClientRect().right).toBeLessThanOrEqual(298 - 16);
+    expect(chips.map(chip => chip.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    chips[0]!.focus({ preventScroll: true });
+    expect(row.scrollLeft).toBe(0);
+    chips[1]!.focus({ preventScroll: true });
+    expect(row.scrollLeft).toBe(0); // Already visible: no unnecessary scroll.
+    Object.defineProperties(row, {
+      clientWidth: { value: 600 }, scrollWidth: { value: 600 },
+    });
+    trainer.focus({ preventScroll: true });
+    expect(document.activeElement).toBe(trainer);
+    expect(row.scrollLeft).toBe(0); // Non-overflowing desktop row stays in place.
+  });
+
   it("default closed: one filters icon, no LevelGuide panel, no feed eyebrow", () => {
     const { container } = render(createElement(Harness));
     const triggers = screen.getAllByRole("button", { name: "Фильтры" });
@@ -449,6 +493,7 @@ if (fixturePath) {
     fixturePath,
     JSON.stringify({
       closedHtml: closed,
+      activityChipFocusSource: ensureActivityChipVisible.toString(),
       openHtml: openMarkup,
       halfSteps: ntrpHalfstepIds(),
       d1InteractiveHtml,

@@ -1,7 +1,7 @@
 /* global process, console, URL, WebSocket, Buffer, setTimeout, fetch */
 /** #458 compact discovery filters: actual source composition geometry via owned Chromium CDP.
  * Playwright unavailable here; uses /opt/gobadminton-qa/chromium-headless-1243/chrome-headless-shell.
- * D3 uses real Chromium Tab input and DOM scroll/text geometry; React dialog
+ * D3 uses real Chromium Tab input, the source focus handler and DOM scroll/text geometry; React dialog
  * interaction coverage remains in games-discovery-filters.test.tsx.
  * Not DEV / Owner UAT / GoBad. Parent executes when Chromium missing. */
 import assert from "node:assert/strict";
@@ -35,7 +35,7 @@ const outDir = resolveEvidenceDir(outDirArg);
 mkdirSync(outDir, { recursive: true });
 
 const receipt = {
-  scope: "#458/#547 SSR+CSS geometry, D3 real Tab/scroll + labelled D1 browser fixture via owned Chromium CDP; not DEV/Owner/GoBad UAT",
+  scope: "#458/#547 SSR+CSS+source focus handler fixture, D3 real Tab/scroll + labelled D1 browser fixture via owned Chromium CDP; not actualNext/DEV/Owner/GoBad UAT",
   chrome: CHROME,
   viewports: VIEWPORTS,
   shots: [],
@@ -70,6 +70,7 @@ async function ssrFixtures() {
   assert.doesNotMatch(payload.closedHtml, /Выходите на корт|По времени|data-level-guide/);
   assert.match(payload.closedHtml, /Все ближайшие/);
   assert.match(payload.closedHtml, /С тренером/);
+  assert.equal(typeof payload.activityChipFocusSource, "string", "D3 fixture includes the production focus handler");
   assert.match(payload.closedHtml, /Найдено: 12 · из 40 загруженных/);
   assert.match(payload.openHtml, /gb-discovery-filters-dialog/);
   assert.match(payload.openHtml, /data-presentation="compact"/);
@@ -223,6 +224,7 @@ async function chipGeometry(evaluate) {
       lastHit: hit(last), triggerHit: hit(trigger),
       lastFocused: document.activeElement === last,
       lastFocusVisible: last.matches(':focus-visible'),
+      activitySelection: [...chips.children].map(chip => chip.getAttribute('aria-pressed')),
       focusLabel: document.activeElement?.textContent?.trim() || document.activeElement?.getAttribute('aria-label'),
       pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
     };
@@ -343,6 +345,13 @@ await withChrome(async ({ call, evaluate }) => {
     receipt.metrics.push({ width, state: "closed", ...closed });
 
     if (width === 390) {
+      // Static markup has no React listeners. Bind the exact source callback,
+      // not a mirrored scroll fix; actualNext still needs its own real-Tab proof.
+      await evaluate(`(() => {
+        const row = document.querySelector('.gb-discovery-filters > .gb-discovery-chips');
+        const onFocus = (${fixtures.activityChipFocusSource});
+        row.addEventListener('focusin', event => onFocus({ currentTarget: row, target: event.target }));
+      })()`);
       // Measure the real scrollport/control/text, rather than matching CSS declarations.
       const initial = await chipGeometry(evaluate);
       receipt.metrics.push({ width, state: "d3-initial", ...initial });
@@ -359,7 +368,7 @@ await withChrome(async ({ call, evaluate }) => {
       assertLastChipVisible(end, "D3 scroll endpoint");
 
       // Start again at the cut edge; no HTMLElement.focus()/Locator.focus() or
-      // scrollIntoView(): visibility must result from native sequential Tab focus.
+      // scrollIntoView(): sequential Tab invokes the production focus callback.
       await evaluate(`document.querySelector('.gb-discovery-filters > .gb-discovery-chips').scrollLeft = 0`);
       const sequence = [];
       let keyboard;
@@ -375,13 +384,15 @@ await withChrome(async ({ call, evaluate }) => {
       assert.deepEqual(sequence.slice(-3), ["Все", "Обычные", "С тренером"], `D3 native chip Tab order: ${JSON.stringify(sequence)}`);
       assert.equal(keyboard.lastFocused, true, "D3 actual Tab reaches last chip");
       assert.equal(keyboard.lastFocusVisible, true, "D3 last chip has keyboard focus indicator");
-      assert.ok(keyboard.scrollLeft > 0, "D3 native Tab scrolls the chip row from its initial position");
+      assert.deepEqual(keyboard.activitySelection, initial.activitySelection, "D3 Tab preserves activity selection");
+      assert.ok(keyboard.scrollLeft > 0, "D3 actual Tab and source focus handler scroll the chip row from its initial position");
       assertLastChipVisible(keyboard, "D3 actual Tab");
       await tab(call);
       assert.equal(await evaluate(`document.activeElement === document.querySelector('.gb-discovery-filters-trigger')`), true, "D3 next Tab reaches filter");
       await tab(call, true);
       const backwards = await chipGeometry(evaluate);
       assert.equal(backwards.lastFocused, true, "D3 Shift+Tab returns to last chip");
+      assert.deepEqual(backwards.activitySelection, initial.activitySelection, "D3 Shift+Tab preserves activity selection");
       assertLastChipVisible(backwards, "D3 Shift+Tab");
     }
 

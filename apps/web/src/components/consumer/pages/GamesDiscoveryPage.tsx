@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from "react";
 import { useRouter } from "next/navigation";
 import { supportedLocation } from "../../../lib/discovery-city";
 import { getMe, listGames, listRoleReputationSummaries } from "../../../lib/api-client";
@@ -27,6 +27,24 @@ import { preloadGamesMapAssets, readMapPreloadBrowserEnv, scheduleMapPreloadIdle
 
 type LoadState = "loading" | "ready" | "filtered" | "empty" | "error" | "stale";
 type Feed = GamePage & { key: string; state: LoadState };
+
+/** Keep keyboard focus clear of the compact row's edge cue without moving the page. */
+export function ensureActivityChipVisible(event: FocusEvent<HTMLDivElement>) {
+  const row = event.currentTarget;
+  const chip = event.target;
+  if (!(chip instanceof HTMLButtonElement) || chip.parentElement !== row) return;
+  const maxScroll = row.scrollWidth - row.clientWidth;
+  if (maxScroll <= 0) return;
+
+  const viewportLeft = row.getBoundingClientRect().left + row.clientLeft;
+  const style = getComputedStyle(row);
+  const visibleLeft = viewportLeft + (parseFloat(style.paddingLeft) || 0);
+  const visibleRight = viewportLeft + row.clientWidth - (parseFloat(style.paddingRight) || 0);
+  const bounds = chip.getBoundingClientRect();
+  const delta = bounds.left < visibleLeft ? bounds.left - visibleLeft
+    : bounds.right > visibleRight ? bounds.right - visibleRight : 0;
+  if (delta !== 0) row.scrollLeft = Math.max(0, Math.min(maxScroll, row.scrollLeft + delta));
+}
 
 export function GamesDiscoveryPage() {
   const router = useRouter();
@@ -358,7 +376,7 @@ export function GamesDiscoveryPage() {
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
-            <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
+            <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности" onFocus={ensureActivityChipVisible}>
               {([["all", "Все"], ["regular", "Обычные"], ["trainer_led", "С тренером"]] as const).map(([value, label]) => <button key={value} type="button" className="gb-discovery-chip" aria-pressed={activityFilter === value} onClick={() => setActivityFilter(value)}>{label}</button>)}
             </div>
             <DiscoveryLevelFilters
