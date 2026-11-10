@@ -268,3 +268,81 @@ Process deviation: the initial full Foundation unit command invoked the checker'
 attempt, contrary to the no-Git constraint; it was not repeated. Subsequent Foundation
 checks called its rule functions with filesystem enumeration and did not invoke Git.
 No Git mutation, network call, install or database connection was performed.
+
+## I2c1 client source candidate on frozen merged79
+
+This bounded source candidate targets base `701dd73c914d075fbca5695ba67455fba84642a2`
+and actual API 0.42. It adds venue composer/reply/edit attachments and current public inline
+photos in the existing CommentsSection. Games keep mandatory text and no attachment input.
+R3.1 host composition, compact preview, sticky creation action, official media and avatars
+are unchanged. No backend/schema/service change is part of this slice.
+
+The unchecked rights checkbox precedes initial upload. The client sends raw JPEG/PNG/WebP,
+up to 5 MiB, without crop, through existing `apiFetch` with explicit Content-Type, the frozen
+Idempotency-Key and exact `community-photo-rights-v1` declaration. At most two preparations
+run concurrently. Ready means preflight only; the complete ordered set (0–4 IDs) and text
+are submitted through the existing social mutation. Selected checking/rejected/UNKNOWN
+items prevent submission; explicit removal never silently publishes a partial selection.
+Text-only venue edits use an explicit current ordered set; `[]` removes attachments.
+Only retained current comment IDs bypass private staging TTL. Photo-only writes send
+empty text, which must settle against returned `body: null`.
+
+Session storage, using the existing browser pending-command pattern, holds actor/venue,
+composer target, file SHA-256/MIME/size, frozen key, declaration version and ready/withdrawal
+recovery metadata. It contains no photo bytes, base64, CSRF, cookies or file names. Raw Blob
+bytes exist only in the hook's owned memory. Reload never starts an upload: UNKNOWN without
+a receipt requires an exact hash/MIME/size file reselection and explicit same-key retry.
+A mismatched file cannot replace a selected UNKNOWN attempt. Removing UNKNOWN from selection
+keeps its attempt record. Ready-stage withdrawal has its own frozen key and sends both
+`X-Photo-Version: 1` and JSON `{"expectedVersion":1}`. Published and retained IDs never use
+private-stage DELETE; only the validated atomic publication settles their private records.
+Session/actor/entity changes abort owned requests, clear owned bytes/timers, hide private
+previews and ignore late results. Old actor records remain scoped to that actor. Host unresolved
+state includes unfinished preparation, unpublished stages, withdrawal and comment writes.
+
+Client response predicates check receipt venue/status/version/expiry/dimensions/private path,
+duplicate IDs and exact ordered publication IDs. Inline image URLs must be the exact relative
+`/v1/comments/:id/revisions/:version/photos/:photoId` for their current DTO. External URLs,
+queries, stale revisions and duplicate IDs fail closed. Public media failure shows unavailable
+with a comments refresh action; there is no raw/provider fallback. Server no-store and current
+rights checks remain authoritative. New photo styles target named photo classes only.
+
+### Masked presentation settlement
+
+The existing server presents MutationRunner receipts through `maskPublicCommentBody`.
+The client now accepts either the exact trimmed submitted text (empty becomes null), or an
+equal **Unicode codepoint-length** presentation in which each position is unchanged or
+replaced by exactly one ASCII `*`. Replacement is confined to letters, combining marks,
+numbers and `@`/`$` leet characters. Whitespace, separators, punctuation and emoji/symbols
+must remain byte-for-byte at their positions. Insertions, deletions, normalization, reordered
+text, unrelated non-star text and changed lengths are rejected. This deliberately constrained
+presentation predicate does not determine which words deserve masking and does not duplicate
+the server dictionary, classifier, moderation approval or policy. Server presentation outside
+this permitted shape remains UNKNOWN. Entity/path/comment/parent, actor/session, expected
+version and ordered photo identity checks still apply before pending settlement; a successful
+masked write is not replayed simply because its displayed text differs from its submitted text.
+
+### Candidate verification and remaining delivery
+
+Actual restricted-export checks: native Node TypeScript stripping/module syntax parsing of
+the four changed `.ts` source files passed; 27 direct native helper/API-wrapper assertions
+passed with `apiFetch` stubbed (no network). Those assertions cover permitted/rejected masking,
+photo identity/URL/receipt guards, raw Blob identity, rights/key headers and both withdrawal
+CAS representations. An initial `node --check` invocation did not strip TypeScript in this
+CommonJS package and rejected TS syntax; the corrected native `stripTypeScriptTypes` plus
+module-parser check passed. Neither invocation was TypeScript typechecking.
+
+Mounted jsdom tests were added for photo-only/text+photos, same-key malformed/UNKNOWN retry,
+rejected selection removal, exact file reselection after reload, two-upload concurrency,
+failed edit preserving accepted content, explicit removal and retained ordering, photo-only
+reply, actor/session/entity late completion fences, masked settlement versus unrelated response,
+public image failure and unchanged text-required games. Existing assertions are retained.
+These mounted tests were **not executed** in the dependency-free private export. Pinned TSC,
+ESLint, targeted Vitest (comments API/comments/private boundary/new photos), and actual Next
+synthetic flows at 390/1280 remain for Root's qualified environment. No dependency download,
+Git, credentials, database, runtime/deploy or sub-agent operation was performed.
+
+Independent QA, mandatory CI, DEV79 acceptance before a new release, trusted DEV release and
+applicable smoke remain outstanding. Owner UAT is NOT_TESTED. This is a source candidate,
+not DONE or DEV acceptance. I2c2 (bottom community gallery, paginated fullscreen viewer and
+source jump) and I3 (new-venue official-photo candidate) remain future slices.
