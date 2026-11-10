@@ -90,19 +90,19 @@ export class CommentPhotosService {
   }
   private async capacity(client: PoolClient, owner: string): Promise<void> {
     const count = await client.query<{ count: string }>(
-      "SELECT count(*) FROM venue_photo_submissions WHERE owner_user_id=$1 AND status='ready' AND expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM entity_comment_photo_origins o WHERE o.photo_id=venue_photo_submissions.id)", [owner]);
+      "SELECT count(*) FROM venue_photo_submissions WHERE owner_user_id=$1 AND purpose='comment_attachment' AND status='ready' AND expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM entity_comment_photo_origins o WHERE o.photo_id=venue_photo_submissions.id)", [owner]);
     if (Number(count.rows[0]!.count) >= 8) throw conflict("COMMENT_PHOTO_LIMIT", "Сначала используйте или удалите загруженные фото");
   }
   private async current(client: PoolClient, actor: AuthenticatedConsumer, id: string): Promise<PhotoRow> {
     await assertCapabilities(client, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, actor.userId, ["profile.public"]);
     // Snapshot identifies venue only; no bytes/receipt are exposed before all current fences.
     const snapshot = await client.query<{ venue_id: string }>(
-      "SELECT venue_id FROM venue_photo_submissions WHERE id=$1 AND owner_user_id=$2", [id, actor.userId]);
+      "SELECT venue_id FROM venue_photo_submissions WHERE purpose='comment_attachment' AND id=$1 AND owner_user_id=$2", [id, actor.userId]);
     if (!snapshot.rows[0]) throw unavailable();
     await this.venue(client, snapshot.rows[0].venue_id, snapshot.rows[0].venue_id);
     const found = await client.query<PhotoRow>(`SELECT s.*, a.content_fingerprint FROM venue_photo_submissions s
       JOIN content_moderation_approvals a ON a.id=s.image_approval_id
-      WHERE s.id=$1 AND s.owner_user_id=$2 AND s.status='ready' AND s.expires_at>clock_timestamp()
+      WHERE s.id=$1 AND s.purpose='comment_attachment' AND s.owner_user_id=$2 AND s.status='ready' AND s.expires_at>clock_timestamp()
         AND s.version=1 AND s.rights_version=$3 AND s.preset='community_photo'
         AND a.content_type='image' AND a.surface_key='community_photo_image' AND a.decision='allow'
         AND a.policy_version=$4 AND a.local_policy_version='none' AND a.fingerprint_version=1
@@ -272,12 +272,12 @@ export class CommentPhotosService {
       actorId: actor.userId, sessionId: actor.sessionId, operation: "comments.photos.withdraw", key,
       requestHash: this.idempotency.requestHash({ id, expected }),
       authorizeReplay: async (client, saved: Receipt) => {
-        const own = await client.query("SELECT 1 FROM venue_photo_submissions WHERE id=$1 AND owner_user_id=$2 AND status='withdrawn' AND version=$3", [saved.id, actor.userId, saved.version]);
+        const own = await client.query("SELECT 1 FROM venue_photo_submissions WHERE purpose='comment_attachment' AND id=$1 AND owner_user_id=$2 AND status='withdrawn' AND version=$3", [saved.id, actor.userId, saved.version]);
         if (!own.rowCount) throw unavailable();
       },
       execute: async client => {
         // Withdrawal remains available after expiry/merge/restriction, without provider I/O.
-        const found = await client.query<PhotoRow>("SELECT * FROM venue_photo_submissions WHERE id=$1 AND owner_user_id=$2 FOR UPDATE", [id, actor.userId]);
+        const found = await client.query<PhotoRow>("SELECT * FROM venue_photo_submissions WHERE purpose='comment_attachment' AND id=$1 AND owner_user_id=$2 FOR UPDATE", [id, actor.userId]);
         const row = found.rows[0];
         if (!row) throw unavailable();
         const published=await client.query("SELECT 1 FROM entity_comment_photo_origins WHERE photo_id=$1",[id]);

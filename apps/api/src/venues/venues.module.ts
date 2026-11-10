@@ -1,3 +1,5 @@
+import { ProfilesModule } from "../profiles/profiles.module";
+import { VenuePhotoCandidatesController, VenuePhotoCandidatesService } from "./venue-photo-candidates";
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ModerationModule } from "../moderation/moderation.module";
@@ -7,9 +9,9 @@ import { VenueReviewsController } from "./venue-reviews.controller";
 import { VenueReviewsService } from "./venue-reviews.service";
 
 @Module({
-  imports: [AuthModule, ModerationModule],
-  controllers: [VenuesController, VenueReviewsController],
-  providers: [VenuesService, VenueReviewsService],
-  exports: [VenuesService, VenueReviewsService],
+  imports: [AuthModule, ModerationModule, ProfilesModule],
+  controllers: [VenuesController, VenueReviewsController, VenuePhotoCandidatesController],
+  providers: [VenuesService, VenueReviewsService, VenuePhotoCandidatesService],
+  exports: [VenuesService, VenueReviewsService, VenuePhotoCandidatesService],
 })
 export class VenuesModule {}

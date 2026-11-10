@@ -26,3 +26,9 @@ export const venueCommand = z.discriminatedUnion("action", [
 export const venuePage = z.object({cityId:uuid.optional(),status:z.enum(["unverified","verified","retired","merged"]).optional(),beforeId:uuid.optional(),limit:z.coerce.number().int().min(1).max(50).default(20)}).strict();
 export type VenueFields = z.infer<typeof venueFields>;
 export type VenueCommand = z.infer<typeof venueCommand>;
+
+export const venueCandidateDecision = z.object({
+  action: z.enum(["accept", "reject"]),
+  expectedVersion: z.number().int().positive().max(2147483647),
+  expectedCandidateVersion: z.literal(1),
+}).strict();

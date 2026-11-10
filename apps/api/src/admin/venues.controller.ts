@@ -1,12 +1,12 @@
 import { VenueCoverService } from "../venues/venue-cover.service";
 import { VenueGalleryService } from "../venues/venue-gallery.service";
 import { AdminService } from "./admin.service";
-import { Body, Controller, Delete, Put, Get, Header, Headers, HttpCode, Param, Post, Query, Req } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
+import { Body, Controller, Delete, Put, Get, Header, Headers, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { AdminVenuesService } from "../venues/admin-venues.service";
 import { parse, reason, uuid } from "./dto";
-import { venueCommand, venueCreate, venuePage } from "./venues.dto";
+import { venueCommand, venueCreate, venuePage, venueCandidateDecision } from "./venues.dto";
 import { galleryItemCommandSchema, galleryReorderSchema, parseGalleryEvidenceHeaders } from "../venues/venue-gallery";
 const cursor=z.object({beforeId:uuid.optional()}).strict();
 const venueVersion=z.string().regex(/^[1-9][0-9]{0,9}$/).transform(Number).pipe(z.number().int().max(2147483647));
@@ -36,6 +36,22 @@ export class AdminVenuesController {
   removeCover(@Req() r:FastifyRequest,@Param("id") id:string,@Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
     this.admin.enabled();const input=parse(z.object({expectedVersion:z.number().int().positive().max(2147483647)}).strict(),b);
     return this.covers.mutate(r,k,parse(uuid,id),input.expectedVersion);
+  }
+  @Get(":id/photo-candidates") @Header("Cache-Control","no-store")
+  candidateQueue(@Req() r:FastifyRequest,@Param("id") id:string) {
+    this.admin.enabled();return this.gallery.candidateQueue(r,parse(uuid,id));
+  }
+  @Get(":id/photo-candidates/:candidateId/content")
+  async candidateContent(@Req() r:FastifyRequest,@Param("id") id:string,@Param("candidateId") candidateId:string,@Res() reply:FastifyReply) {
+    this.admin.enabled();
+    reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff")
+      .header("Content-Security-Policy","default-src 'none'; sandbox");
+    return reply.type("image/png").send(await this.gallery.candidateContent(r,parse(uuid,id),parse(uuid,candidateId)));
+  }
+  @Post(":id/photo-candidates/:candidateId/decision") @HttpCode(200) @Header("Cache-Control","no-store")
+  decideCandidate(@Req() r:FastifyRequest,@Param("id") id:string,@Param("candidateId") candidateId:string,
+    @Headers("idempotency-key") k:string|undefined,@Body() b:unknown) {
+    this.admin.enabled();return this.gallery.decideCandidate(r,k,parse(uuid,id),parse(uuid,candidateId),parse(venueCandidateDecision,b));
   }
   @Get(":id/gallery") @Header("Cache-Control","no-store")
   listGallery(@Req() r:FastifyRequest,@Param("id") id:string) {

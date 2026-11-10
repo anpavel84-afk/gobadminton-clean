@@ -32,6 +32,26 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
     });
   }, 60_000);
 
+  it("installs 0071 candidate purpose/transition/provenance constraints without replacing comment publication", async () => {
+    const { pool } = createDatabase(databaseUrl);
+    try {
+      const checks = await pool.query<{conname:string;definition:string}>(`SELECT conname,pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint WHERE conrelid='venue_photo_submissions'::regclass
+        AND conname IN ('venue_photo_submissions_purpose_state','venue_photo_submissions_gallery_item_id_fkey','venue_photo_submissions_decision_audit_id_fkey')`);
+      expect(checks.rows).toHaveLength(3);
+      expect(checks.rows.find(c=>c.conname==='venue_photo_submissions_purpose_state')?.definition).toContain("official_candidate");
+      const pending = await pool.query(`SELECT indexdef FROM pg_indexes WHERE tablename='venue_photo_submissions'
+        AND indexname='venue_photo_candidates_one_pending'`);
+      expect(pending.rows[0]?.indexdef).toContain("UNIQUE");
+      expect(pending.rows[0]?.indexdef).toContain("awaiting_review");
+      const guard=await pool.query(`SELECT pg_get_functiondef('venue_photo_submission_guard()'::regprocedure) AS definition`);
+      expect(guard.rows[0].definition).toContain("candidate decision audit required");
+      expect(guard.rows[0].definition).toContain("community_photo_image");
+      expect((await pool.query(`SELECT 1 FROM pg_trigger WHERE tgrelid='venue_photo_submissions'::regclass
+        AND tgname='published_photo_withdraw_guard' AND NOT tgisinternal`)).rowCount).toBe(1);
+    } finally { await pool.end(); }
+  });
+
   it("applies PostGIS + identity + organizer/venue/game + participation + game_managers + trainer migrations", async () => {
     const { pool } = createDatabase(databaseUrl);
     try {
@@ -209,6 +229,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0068_venue_community_votes_comments",
         "0069_venue_comment_photo_submissions",
         "0070_venue_comment_photo_publications",
+        "0071_venue_photo_candidates",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_community_votes')::text AS name")).rows[0]
