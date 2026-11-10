@@ -221,7 +221,7 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-8).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
@@ -267,7 +267,7 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
@@ -306,7 +306,7 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
@@ -1339,7 +1339,7 @@ describe("releases page current known limitations SSR (#473)", () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("Свои отзывы о площадках в профиле");
+    expect(html).toContain("Редактирование своих отзывов о площадках");
     for (const fix of CURRENT_NAMED_RELEASE.fixes) {
       expect(html).toContain(fix);
       expect(html.split(fix).length - 1).toBe(1);
