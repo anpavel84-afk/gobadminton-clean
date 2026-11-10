@@ -5,10 +5,13 @@ import type { Me } from "../../../lib/consumer-types";
 import { VenueCommunityRating } from "./VenueCommunityRating";
 import { CommentsSection } from "../comments/CommentsSection";
 import { VenueReviewsPanel } from "./VenueReviewsPanel";
+import { VenueCommunityPhotos } from "./VenueCommunityPhotos";
+import { VenueCommunityPhotoViewer } from "./VenueCommunityPhotoViewer";
+import { useVenueCommunityPhotos } from "./useVenueCommunityPhotos";
 import { SurfacePanel } from "../Surfaces";
 import "../../../styles/venue-community.css";
 
-export type VenueCommunitySection = "ratings" | "discussion" | "reviews";
+export type VenueCommunitySection = "ratings" | "discussion" | "reviews" | "photos";
 
 /** One mounted owner for the selected physical venue, independent of host density. */
 export function VenueCommunityContent({ venueId, me, authReturnPath, embedded = false, section = null,
@@ -18,6 +21,7 @@ export function VenueCommunityContent({ venueId, me, authReturnPath, embedded = 
   section?: VenueCommunitySection | null;
   onUnresolvedChange?: (value: boolean) => void;
 }) {
+  const gallery = useVenueCommunityPhotos(venueId, me?.id ?? null, me?.csrfToken ?? null);
   const prefix = useId();
   const root = useRef<HTMLDivElement>(null);
   const pending = useRef({ ratings: false, discussion: false, ratingReport: false, commentReport: false, reviews: false });
@@ -49,11 +53,14 @@ export function VenueCommunityContent({ venueId, me, authReturnPath, embedded = 
     <div data-community-section="discussion" tabIndex={-1}>
       <CommentsSection kind="venue" entityId={venueId} me={me} title="Обсуждение площадки"
         description="Вопросы и впечатления о площадке · не проверенные отзывы после игры"
+        sourceComment={gallery.source} onOpenPhoto={gallery.open} onPublished={gallery.restart}
         authReturnPath={`${returnBase}#discussion`} parentPublic sectionId={id("discussion")} onUnresolvedChange={discussionPending} onReportUnresolvedChange={commentReportPending} />
     </div>
     <SurfacePanel tone="bordered" aria-label="Отзывы после игры" id={id("reviews")} data-community-section="reviews" tabIndex={-1}>
       <VenueReviewsPanel venueId={venueId} embedded={embedded} actorId={me?.id ?? null} onUnresolvedChange={reviewPending} csrfToken={me?.csrfToken ?? null}
         canWrite={Boolean(me?.id && me.csrfToken)} onLogin={() => { window.location.href = `/auth?returnTo=${encodeURIComponent(`${returnBase}#reviews`)}`; }} />
     </SurfacePanel>
+    <VenueCommunityPhotos model={gallery} sectionId={id("photos")} />
+    {gallery.selected ? <VenueCommunityPhotoViewer model={gallery} /> : null}
   </div>;
 }

@@ -344,3 +344,26 @@ describe("I2c1 mounted venue contribution", () => {
     expect(screen.queryByRole("checkbox")).toBeNull(); expect(screen.getByRole("button", { name: "Отправить" }).hasAttribute("disabled")).toBe(true);
   });
 });
+
+describe("I2c2 same-host source target", () => {
+  it("focuses an authorized later-page reply without scanning root/reply pages or duplicating it", async () => {
+    items = [];
+    const target = { ...source("Ответ с другой страницы", [photo()]), parentCommentId: otherPhoto };
+    render(<CommentsSection {...props} sourceComment={target} onOpenPhoto={vi.fn()} />);
+    await screen.findByText("Пока нет комментариев. Начните разговор.");
+    const article = screen.getByRole("article", { name: "Исходная публикация" });
+    expect(article.textContent).toContain("Ответ в обсуждении площадки");
+    expect(screen.getAllByText("Ответ с другой страницы")).toHaveLength(1);
+    expect(document.activeElement).toBe(article);
+    expect(vi.mocked(apiFetch).mock.calls.filter(([path]) => path.includes("/comments"))).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Открыть фото 1 к комментарию" })).toBeTruthy();
+  });
+  it("focuses the existing exact-version article when its source is already mounted", async () => {
+    const target = source("Уже загруженная публикация", [photo()]); items = [target];
+    render(<CommentsSection {...props} sourceComment={target} />);
+    await waitFor(() => expect(screen.queryByRole("article", { name: "Исходная публикация" })).toBeNull());
+    const article = document.querySelector(`[data-comment-id="${commentId}"]`);
+    expect(article).toBeTruthy(); expect(document.activeElement).toBe(article);
+    expect(screen.getAllByText("Уже загруженная публикация")).toHaveLength(1);
+  });
+});

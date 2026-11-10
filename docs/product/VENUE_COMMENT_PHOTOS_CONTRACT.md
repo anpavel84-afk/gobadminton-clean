@@ -379,3 +379,121 @@ syntax parsing passed for the four `.ts` source modules plus `comments-api.test.
 identity, photo-only body guards, removed directives and user-visible uncertainty copy).
 The transport was stubbed to throw; no request was made. This does not parse TSX, mount
 React, typecheck, lint, or execute the Vitest suites.
+
+## I2c2 source-only candidate on supplied merged alpha80
+
+Assignment `VENUE507_I2C2_APPROVED_GALLERY_VIEWER_SOURCE_JUMP`, supplied base
+`d4c6e04374fa98412174994536f95f529b153f4c`. This private export was edited without
+Git or network access; the supplied base/admission is not an independently read Git receipt.
+I2c1 contribution, mutation settlement/UNKNOWN handling and host unresolved guards remain
+in their existing components. No backend, official gallery, game attachment support, new
+store, service, scheduler, provider check or compact map creation action is added.
+
+The single VenueCommunityContent owns a separate bottom community gallery after verified
+reviews in both full page and expanded map density. It fetches actual API 0.42 pages of
+24 through an opaque cursor. Strict DTO predicates require UUID identities, dimensions,
+exact same-comment/version/photo relative URLs and exact source detail paths; no total is
+invented. Canonical-family 409, changed canonical identity or overlapping cursor pages
+clear cursor/media/source/viewer and require restart. Next-page failure retains the current
+photo and exact cursor for explicit retry. Publication refresh is an existing bounded
+callback, used when the accepted changed comment has/had photos, not for text-only writes.
+
+The fullscreen viewer reuses ProfileDialog native showModal/close, focus restoration,
+Escape, background inertness and opt-in body scroll lock, plus its shared SVG CloseButton.
+Native focus containment/inertness require actual browser verification; jsdom stubs cannot
+prove them. Navigation uses arrows (including while the close button has focus), buttons
+and 10px axis locking with a 48px horizontally dominant swipe. Vertical gestures do not
+advance photos. Failed/revoked media has an unavailable state and no private/provider
+fallback. Unknown total is «Фото N»; only a known cursor end permits «Фото N из M».
+Inline photos share the viewer. When their target has not been fetched in gallery order,
+the bounded comment attachment set is labelled «Фото N к публикации» rather than a global
+ordinal; no background page scan is started to discover its ordinal.
+
+Actual author credit needs the existing current-comment detail endpoint because the
+community-photo page has no author field. One abortable read per selected photo supplies
+strictly validated credit or marks that source unavailable. The explicit «К публикации»
+action independently rechecks the current authorized exact comment/version/photo before
+closing the viewer and focusing its same-host target. This is a bounded fresh read, not
+polling or a page scan. Detail can legitimately return a pre-merge origin entityId; family
+membership is taken from the authorized gallery source, while exact photo/version/source
+identity is revalidated. Missing, revised, deleted, revoked or malformed source data fails
+honestly and offers gallery refresh. Existing exact-version targets are focused in place;
+otherwise one read-only source article appears in the same CommentsSection, including a
+later-page root/reply. No write capability is inferred from that detail DTO and duplicate
+older target representations are hidden.
+
+Actor/venue/session render binds and request aborts fence late page/detail/credit responses,
+including an away-and-return context. Host close/unmount aborts reads. Session events hide
+all gallery/source/credit state immediately; signed-in expiry waits for fresh host session
+props, while guests can explicitly restart. No credentials or pending photo bytes are
+stored by this gallery.
+
+### STYLE_GUIDE_PARITY (reference record)
+
+Reused existing community panel/headings, Button/token families, I2c1 inline photos,
+ProfileDialog and CloseButton; retained paid Astra Nov7 viewer guidance and later R3.1
+single-host ownership. STYLE_GUIDE_GAP: bounded fullscreen media sizing and thumbnail grid
+are scoped extensions because the actual official VenueGallery is inline and provides no
+modal. The alternative of changing that official gallery would mix its separate source
+and was not used. Scoped `.gb-community-*` media rules avoid avatar/cover sizing changes.
+No new Owner visual override is asserted; references remain approximate under t420u.
+
+### Actual checks and remaining delivery
+
+PASS in this dependency-free export: native Node 24 TypeScript stripping/module syntax
+checking for the four changed `.ts` source modules; 29 direct strict DTO/API wrapper
+assertions with transport stubbed; 16 direct actual hook-state assertions in a small
+in-memory hooks harness (cursor failure/retry, 409 restart, close, late venue/actor result,
+session expiry), plus six final assertions for late credit responses after close/session
+change. Those harnesses are not mounted React, Vitest or browser evidence.
+
+Added targeted mounted tests for 24-item cursor flow, retry/restart, late context reads,
+revoked/revised sources, later-page reply resolution, existing-target focus and no duplicate,
+viewer keyboard/swipe/focus-return/body-lock behavior and single-owner density changes.
+These TSX/Vitest tests are NOT_RUN here. Dependencies, root/web AGENTS.md and the installed
+Next guide are absent in the export; the supplied readonly rules/Next excerpt were used.
+No dependencies were installed. Pinned TSC, lint, Vitest, actual Next synthetic 390/1280,
+independent QA, CI7, trusted DEV release/acceptance and smoke remain for Root's qualified
+route. A new I2c2 release must await DEV80 acceptance. Owner/device/provider UAT is
+NOT_TESTED. This candidate does not complete #507 or I3 and makes no DEV/PROD READY claim.
+
+### I2c2 continuation — address known parent failures, attempt 2
+
+Continues supplied checkpoint `757efa259ba82ce5396b22db74634f9e7d63af81`, preserving
+the gallery/viewer/source-jump implementation and retained R3.1 host behavior. Root's
+parent evidence was TSC PASS, three forbidden inline type-import lint errors and four
+private-boundary test failures. Those parent results are not passes for this revision.
+
+Restored `test/venue-community-contexts.test.tsx` by copying the verified local
+`I2c2-ACCEPTED80-CONTEXTS-BASELINE.txt` source input, byte for byte: 1976 lines,
+84317 bytes, SHA-256 `0f076493ccb44b0352866f2f4bf14654f4060545862387243b5020b78b527e2b`.
+All accepted describe/it bodies and assertions are retained; no fixture additions or
+global mocks were added to that baseline. The replacement I2c2 smoke check was moved
+to the existing new `test/venue-community-photos.test.tsx`, sharing its API mock, and
+now also checks owner DOM identity and the exact gallery endpoint. A separate case in
+that new file covers initial gallery transport failure, preserved community/unresolved
+callbacks, no false empty state, and explicit same-endpoint retry. The existing
+`apiFetch` catches rejected fetch handlers and returns a failed result; the gallery
+already renders an error with explicit refresh. Old context fixtures need no changes.
+
+The private-boundary harness deliberately sets state slots 1 (order), 8 (expanded
+replies) and 14 (menu). The two new source refs had shifted every original slot by two.
+They now run unconditionally after all preexisting hooks, immediately before the new
+source-focus effect. The private-boundary tests were not edited. Rights, mutation body,
+actor/session/version fences and recovery logic were not changed. Replaced the three
+inline `import()` type annotations with top-level type imports; no lint configuration,
+disable directive, plugin or dependency changes.
+
+Actual local verification: byteexact baseline comparison/hash PASS; native Node 24
+TypeScript stripping and module parsing of four `.ts` modules PASS; four direct linked
+API predicate assertions PASS with transport forbidden; source inspection checks for
+the established state-slot order, unconditional source refs and removal of inline type
+imports PASS. These are not mounted React or TypeScript semantic checks. Pinned TSC,
+changed-file ESLint and the seven affected Vitest suites were attempted, each exit 127
+because this export has no `node_modules/.bin` binaries. Their current status is
+NOT_RUN, pending Root's qualified environment; no dependency installation was attempted.
+
+The latest admission supplies DEV80 acceptance. This repair remains SOURCE_ONLY, with
+no Git/network, paid QA, server/API/OPS/runtime/PROD work or deployment. Root must rerun
+all seven affected suites with restored coverage, TSC/lint and applicable browser/CI/QA
+gates before any I2c2 release. Owner UAT remains NOT_TESTED; #507 and I3 are not DONE.

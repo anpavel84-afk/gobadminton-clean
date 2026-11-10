@@ -57,3 +57,8 @@ export type UpdateCommentBody = {
 export type DeleteCommentBody = {
   expectedVersion: number;
 };
+
+export type VenueCommunityPhoto = CommentPhoto & {
+  source: { commentId: string; parentCommentId: string | null; resourceVersion: number; path: string };
+};
+export type VenueCommunityPhotoPage = { venueId: string; items: VenueCommunityPhoto[]; nextCursor: string | null };
