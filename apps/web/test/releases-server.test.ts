@@ -874,7 +874,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
   });
 
-  it("keeps eighty-eight confirmed seed deployments including accepted alpha.1–alpha.79 and dedupes identical live rows", () => {
+  it("keeps eighty-nine confirmed seed deployments including accepted alpha.1–alpha.80 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
     expect(seedCount).toBe(89);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
@@ -1191,7 +1191,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.76"
       || row.application_version === "0.1.0-alpha.77"
       || row.application_version === "0.1.0-alpha.78"
-      || row.application_version === "0.1.0-alpha.79",
+      || row.application_version === "0.1.0-alpha.79"
+      || row.application_version === "0.1.0-alpha.80",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"

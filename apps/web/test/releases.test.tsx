@@ -729,7 +729,8 @@ describe("releases catalogue integrity", () => {
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
     expect(currentProse).toContain("Галерея фотографий сообщества площадки");
-    expect(currentProse).toContain("Текущие одобренные фотографии показаны прямо в комментариях площадки");
+    expect(currentProse).toContain("Внизу полной страницы площадки и раскрытой карточки на карте появился отдельный раздел «Фотографии сообщества» в том же содержимом площадки.");
+    expect(currentProse).toContain("Показан текущий автор фотографии; кнопка «К публикации» открывает её актуальный комментарий или ответ в той же карточке площадки, в том числе со следующих страниц обсуждения.");
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
