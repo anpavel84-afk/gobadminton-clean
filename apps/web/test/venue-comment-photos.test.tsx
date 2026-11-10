@@ -130,6 +130,93 @@ describe("I2c1 mounted venue contribution", () => {
     expect(JSON.parse(commands()[0]![1]!.body as string).photoIds).toEqual([otherPhoto, photoId]);
   });
 
+  it.each(["ready", "unknown"])("restores published photos on cancel/reopen with a %s stage and saves the explicit order", async (state) => {
+    items = [source("Старый текст", [photo()])];
+    upload = async () => state === "ready" ? ok(receipt(otherPhoto), 201) : { ok: false, status: 0, error: "packet lost" };
+    const unresolved = vi.fn();
+    render(<CommentsSection {...props} onUnresolvedChange={unresolved} />);
+    await screen.findByText("Старый текст"); await edit();
+    fireEvent.change(screen.getByLabelText("Редактирование"), { target: { value: "Отменённый текст" } });
+    await selectPhoto();
+    if (state === "ready") await screen.findByAltText("Выбранное фото 2");
+    else await screen.findByText("Результат пока неизвестен. Повтор использует ту же попытку.");
+    const stagedRecord = sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`);
+    const originalUpload = commands()[0]![1]!;
+    fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+    expect(items[0]!.photos?.map((p) => p.id)).toEqual([photoId]);
+    expect(sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`)).toBe(stagedRecord);
+    expect(commands()).toHaveLength(1);
+    await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(true));
+    expect((await edit() as HTMLTextAreaElement).value).toBe("Старый текст");
+    await screen.findByAltText("Выбранное фото 1");
+    expect(sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`)).toBe(stagedRecord);
+    if (state === "unknown") {
+      expect(screen.getByRole("button", { name: "Сохранить" }).hasAttribute("disabled")).toBe(true);
+      upload = async () => ok(receipt(otherPhoto), 201);
+      fireEvent.click(screen.getAllByRole("checkbox").at(-1)!);
+      fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+      await screen.findByAltText("Выбранное фото 2");
+      expect(commands()[1]![1]!.headers).toEqual(originalUpload.headers);
+      expect(commands()[1]![1]!.body).toBe(originalUpload.body);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Фото 2 раньше" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await screen.findByText("Комментарий сохранён.");
+    const put = commands().find(([, init]) => init?.method === "PUT")!;
+    expect(JSON.parse(put[1]!.body as string)).toEqual({ text: "Старый текст", expectedVersion: 1, photoIds: [otherPhoto, photoId] });
+    expect(items[0]!.version).toBe(2);
+    expect(items[0]!.photos?.map((p) => p.id)).toEqual([otherPhoto, photoId]);
+    expect(commands().some(([, init]) => init?.method === "DELETE")).toBe(false);
+    await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(false));
+  });
+
+  it("requires explicit removal when restoring published photos plus a cancelled replacement exceeds four", async () => {
+    const third = "10000000-0000-4000-8000-000000000005";
+    const fourth = "10000000-0000-4000-8000-000000000006";
+    const staged = "10000000-0000-4000-8000-000000000007";
+    items = [source("Текст", [photo(), photo(otherPhoto), photo(third), photo(fourth)])];
+    upload = async () => ok(receipt(staged), 201);
+    render(<CommentsSection {...props} />); await screen.findByText("Текст"); await edit();
+    fireEvent.click(screen.getByRole("button", { name: "Убрать фото 1" }));
+    await selectPhoto(); await screen.findByAltText("Выбранное фото 4");
+    fireEvent.click(screen.getByRole("button", { name: "Отмена" })); await edit();
+    expect(screen.getAllByAltText(/Выбранное фото/)).toHaveLength(5);
+    await screen.findByText("Не больше четырёх фото в публикации. Уберите лишние фото перед сохранением.");
+    expect(screen.getByRole("button", { name: "Сохранить" }).hasAttribute("disabled")).toBe(true);
+    expect(commands()).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Убрать фото 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await screen.findByText("Комментарий сохранён.");
+    expect(JSON.parse(commands()[1]![1]!.body as string)).toEqual({ text: "Текст", expectedVersion: 1, photoIds: [photoId, third, fourth, staged] });
+    expect(commands().some(([, init]) => init?.method === "DELETE")).toBe(false);
+  });
+
+  it("preserves a staged withdrawal and its frozen key across cancel/reopen", async () => {
+    items = [source("Текст", [photo()])]; upload = async () => ok(receipt(otherPhoto), 201);
+    const implementation = vi.mocked(apiFetch).getMockImplementation()!;
+    vi.mocked(apiFetch).mockImplementation(async (path, init) => init?.method === "DELETE"
+      ? { ok: false, status: 0, error: "packet lost" } as never : implementation(path, init));
+    const unresolved = vi.fn();
+    render(<CommentsSection {...props} onUnresolvedChange={unresolved} />);
+    await screen.findByText("Текст"); await edit(); await selectPhoto(); await screen.findByAltText("Выбранное фото 2");
+    fireEvent.click(screen.getByRole("button", { name: "Убрать фото 2" }));
+    await screen.findByText("Результат пока неизвестен. Повтор использует ту же попытку.");
+    const record = sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`);
+    fireEvent.click(screen.getByRole("button", { name: "Отмена" })); await edit();
+    await screen.findByAltText("Выбранное фото 1");
+    expect(sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`)).toBe(record);
+    expect(commands()).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    await waitFor(() => expect(commands()).toHaveLength(3));
+    await screen.findByText("Результат пока неизвестен. Повтор использует ту же попытку.");
+    expect(commands()[2]![1]).toEqual(expect.objectContaining({ headers: commands()[1]![1]!.headers, body: commands()[1]![1]!.body }));
+    expect(commands()[1]![0]).toContain(otherPhoto);
+    expect(commands()[2]![0]).toBe(commands()[1]![0]);
+    expect(sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`)).toBe(record);
+    expect(publications()).toHaveLength(0);
+    await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(true));
+  });
+
   it.each(["actor", "session", "entity"])("hides private/late results across %s boundary", async (boundary) => {
     let finish!: (value: unknown) => void; upload = () => new Promise((resolve) => { finish = resolve; });
     const view = render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий"); await selectPhoto();

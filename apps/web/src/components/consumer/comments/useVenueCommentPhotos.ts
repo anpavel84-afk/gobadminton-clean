@@ -37,6 +37,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const selecting = useRef(0);
   const dirtyTargets = useRef(new Set<string>());
+  const retainedTargets = useRef(new Set<string>());
   const [snapshot, setSnapshot] = useState<{ scope: string; items: PhotoDraft[] }>({ scope, items: [] });
   const [notice, setNotice] = useState("");
   const storageKey = storagePrefix + scope;
@@ -69,7 +70,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     generation.current += 1;
     owner.current = context;
     active.current = true;
-    entries.current = []; selecting.current = 0; dirtyTargets.current.clear();
+    entries.current = []; selecting.current = 0; dirtyTargets.current.clear(); retainedTargets.current.clear();
     files.current.clear(); running.current.clear();
     setNotice("");
     if (enabled) {
@@ -206,15 +207,21 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     unresolved: Boolean(isVisible && (visible.some((p) => !p.retained) || selecting.current > 0 || dirtyTargets.current.size > 0)),
     ready(target: string, text: string) {
       const selected = visible.filter((p) => p.target === target && p.selected);
-      return selecting.current === 0 && selected.every((p) => p.state === "ready" && !p.withdrawKey
+      return selecting.current === 0 && selected.length <= 4 && selected.every((p) => p.state === "ready" && !p.withdrawKey
         && (p.retained || (p.receipt && Date.parse(p.receipt.expiresAt) > Date.now())))
         && Boolean(text.trim() || selected.length);
     },
     ids: (target: string) => visible.filter((p) => p.target === target && p.selected).map((p) => p.retained?.id ?? p.receipt!.id),
     add,
     retain(target: string, photos: CommentPhoto[]) {
-      if (!current() || entries.current.some((p) => p.key === "hold" || p.target === target)) return;
-      entries.current.push(...photos.map((photo): PhotoDraft => ({ key: photo.id, target, hash: "", mime: "", size: 0, retained: photo, state: "ready", selected: true })));
+      if (!current() || retainedTargets.current.has(target) || entries.current.some((p) => p.key === "hold")) return;
+      retainedTargets.current.add(target);
+      // Cancellation drops the accepted snapshot, not staged command identities. Restore
+      // published IDs before those stages on reopening; never silently trim either set.
+      entries.current.unshift(...photos.map((photo): PhotoDraft => ({ key: photo.id, target, hash: "", mime: "", size: 0, retained: photo, state: "ready", selected: true })));
+      if (entries.current.filter((p) => p.target === target && p.selected).length > 4) {
+        setNotice("Не больше четырёх фото в публикации. Уберите лишние фото перед сохранением.");
+      }
       save();
     },
     retry(p: PhotoDraft) { if (p.state !== "rejected") void perform(p, Boolean(p.receipt && !p.withdrawKey)); },
@@ -242,6 +249,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     discardRetained(target: string) {
       if (!current()) return;
       dirtyTargets.current.delete(target);
+      retainedTargets.current.delete(target);
       entries.current = entries.current.filter((p) => p.target !== target || !p.retained); save();
     },
     published(ids: string[], target?: string) {
