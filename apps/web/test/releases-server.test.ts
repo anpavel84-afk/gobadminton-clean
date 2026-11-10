@@ -885,7 +885,7 @@ describe("history seed integrity", () => {
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
     expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
-      "В описании возможностей площадки уточнено: на комментарий или ответ в обсуждении можно пожаловаться через меню публикации. Для отправки жалобы нужен вход в аккаунт.",
+      "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.",
     ]);
     expect(CURRENT_NAMED_RELEASE.title).toBe("Свои отзывы о площадках в профиле");
     expect(CURRENT_NAMED_RELEASE.additions).toEqual([

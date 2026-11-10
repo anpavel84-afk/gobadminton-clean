@@ -484,11 +484,11 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
     expect(CURRENT_NAMED_RELEASE.title).toBe("Свои отзывы о площадках в профиле");
     expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
-      "В описании возможностей площадки уточнено: на комментарий или ответ в обсуждении можно пожаловаться через меню публикации. Для отправки жалобы нужен вход в аккаунт.",
+      "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.",
     ]);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/В описании возможностей площадки уточнено/i);
-    expect(fixes).toMatch(/на комментарий или ответ в обсуждении можно пожаловаться через меню публикации/i);
+    expect(fixes).not.toMatch(/меню/i);
+    expect(fixes).toMatch(/На комментарий или ответ в обсуждении можно пожаловаться\./i);
     expect(fixes).toMatch(/Для отправки жалобы нужен вход в аккаунт/i);
     expect(fixes).not.toMatch(/автоматическ|автоотправ|сам.*публику|14.*дн|I2|I3|UGC|#549|нативн.*прилож|#507.*(?:DONE|заверш|выполн)/i);
     // D1 cause remains UNKNOWN; reset 2.0/session-only checks do not prove a repaired cause or persistence.
@@ -1295,7 +1295,7 @@ describe("releases page current known limitations SSR (#473)", () => {
       expect(html).toContain(fix);
       expect(html.split(fix).length - 1).toBe(1);
     }
-    expect(html).toContain("В описании возможностей площадки уточнено: на комментарий или ответ в обсуждении можно пожаловаться через меню публикации. Для отправки жалобы нужен вход в аккаунт.");
+    expect(html).toContain("На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.");
     expect(html).toContain("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.");
     expect(html.split("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.").length - 1).toBe(1);
     expect(html).not.toContain("Прокрутка типов игр без обрезанных кнопок");

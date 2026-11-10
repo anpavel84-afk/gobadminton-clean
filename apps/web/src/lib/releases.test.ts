@@ -407,15 +407,15 @@ describe("releases current descriptor literals", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
     ].join(" ");
     expect(prose).toMatch(/Свои отзывы о площадках в профиле/i);
-    expect(prose).toMatch(/на комментарий или ответ в обсуждении можно пожаловаться через меню публикации/i);
+    expect(prose).toMatch(/На комментарий или ответ в обсуждении можно пожаловаться\./i);
     expect(prose).toMatch(/1 января 2027|2027 UTC/i);
     expect(prose).toMatch(/приёмк|NOT_TESTED|iPhone|GoBad|#506|#522|карт/i);
     expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
-      "В описании возможностей площадки уточнено: на комментарий или ответ в обсуждении можно пожаловаться через меню публикации. Для отправки жалобы нужен вход в аккаунт.",
+      "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.",
     ]);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
-    expect(fixes).toMatch(/В описании возможностей площадки уточнено/i);
-    expect(fixes).toMatch(/на комментарий или ответ в обсуждении можно пожаловаться через меню публикации/i);
+    expect(fixes).not.toMatch(/меню/i);
+    expect(fixes).toMatch(/На комментарий или ответ в обсуждении можно пожаловаться\./i);
     expect(fixes).toMatch(/Для отправки жалобы нужен вход в аккаунт/i);
     expect(fixes).not.toMatch(/автоматическ|автоотправ|сам.*публику|14.*дн|I2|I3|UGC|#549|нативн.*прилож|#507.*(?:DONE|заверш|выполн)/i);
     // D1 cause remains UNKNOWN; reset 2.0/session-only checks do not prove a repaired cause or persistence.
