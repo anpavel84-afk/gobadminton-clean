@@ -17,7 +17,6 @@ function PublicPhoto({ photo, index, onRefresh }: { photo: CommentPhoto; index: 
     <Button type="button" variant="outline" onClick={onRefresh}>Обновить комментарии</Button>
   </div> : (
     // Current server route rechecks rights for every no-store read. No storage fallback.
-    // eslint-disable-next-line @next/next/no-img-element
     <img className="gb-comment-photos__image" src={photo.url} width={photo.width} height={photo.height} alt={`Фото ${index + 1} к комментарию`} onError={() => setFailed(true)} />
   );
 }

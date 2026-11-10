@@ -342,7 +342,10 @@ export function CommentsSection({
     (data, pending) => {
       if (!settlementLive()) return;
       if (!pending || data.entityKind !== kind || data.entityId !== entityId) return;
-      photos.published((pending.body as { photoIds?: string[] }).photoIds ?? []);
+      const body = pending.body as { photoIds?: string[]; parentCommentId?: string; expectedVersion?: number };
+      const photoTarget = pending.method === "POST" ? (body.parentCommentId ? `reply:${body.parentCommentId}` : "root")
+        : pending.method === "PUT" ? `edit:${data.id}:${body.expectedVersion}` : undefined;
+      photos.published(body.photoIds ?? [], photoTarget);
       setStatus("Комментарий сохранён.");
       if (pending.method === "POST" && !(pending.body as { parentCommentId?: string }).parentCommentId) {
         setDraft("");

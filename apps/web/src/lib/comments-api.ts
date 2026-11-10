@@ -107,19 +107,27 @@ export function validPhotoIds(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= 4 && value.every(isPhotoId) && new Set(value).size === value.length;
 }
 
-/** Presentation compatibility only: equal Unicode codepoint count; each position is
- * unchanged or replaced by one ASCII '*'. Whitespace, punctuation and symbols cannot
- * be rewritten (only letters, marks, numbers and the server's @/$ leet characters).
- * No dictionary, normalization, classification or approval is performed here.
+/** Presentation only: each original grapheme is unchanged or fully replaced by
+ * one ASCII '*' per original codepoint. NFKC is used solely to check whether that
+ * grapheme represents letters/marks/numbers or @/$; it never rewrites the output.
+ * Whitespace, punctuation, unrelated text and changed lengths fail closed.
+ * No dictionary, classification or content approval is performed here.
  */
 export function commentPresentationMatches(actual: string | null, submitted: string | null | undefined): boolean {
   const text = submitted?.trim() || null;
   if (actual === text) return true;
   if (actual === null || text === null) return false;
-  const input = [...text];
   const output = [...actual];
-  return input.length === output.length && output.every((ch, i) =>
-    ch === input[i] || (ch === "*" && /^[\p{L}\p{M}\p{N}@$]$/u.test(input[i]!)));
+  if ([...text].length !== output.length) return false;
+  let offset = 0;
+  for (const { segment } of new Intl.Segmenter("ru", { granularity: "grapheme" }).segment(text)) {
+    const width = [...segment].length;
+    const presented = output.slice(offset, offset + width).join("");
+    if (presented !== segment && (presented !== "*".repeat(width)
+      || !/^[\p{L}\p{M}\p{N}@$]+$/u.test(segment.normalize("NFKC")))) return false;
+    offset += width;
+  }
+  return offset === output.length;
 }
 
 export function isCommentCreateBody(body: object): body is CreateCommentBody {

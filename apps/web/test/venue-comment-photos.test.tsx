@@ -142,25 +142,44 @@ describe("I2c1 mounted venue contribution", () => {
     expect(publications()).toHaveLength(0);
   });
 
-  it("settles masked server presentation but holds unrelated text without replay", async () => {
-    presentation = () => "*****";
+  it("ignores a late file hash even after returning to the original actor/session", async () => {
+    let finish!: (bytes: ArrayBuffer) => void;
+    const hashing = vi.spyOn(webcrypto.subtle, "digest").mockImplementationOnce(() => new Promise<ArrayBuffer>((resolve) => { finish = resolve; }));
+    try {
+      const view = render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий");
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.change(screen.getByLabelText("Добавить фото / выбрать прежний файл для повтора"), { target: { files: [file()] } });
+      await waitFor(() => expect(hashing).toHaveBeenCalledTimes(1));
+      view.rerender(<CommentsSection {...props} me={{ ...me, id: "actor-b" }} />);
+      view.rerender(<CommentsSection {...props} />);
+      await screen.findByLabelText("Ваш комментарий");
+      await act(async () => { finish(new Uint8Array(32).buffer); });
+      expect(commands()).toHaveLength(0);
+      expect(sessionStorage.getItem(`gb-venue-comment-photos:${me.id}:${venue}`)).toBeNull();
+      expect(screen.queryByAltText("Выбранное фото 1")).toBeNull();
+    } finally { hashing.mockRestore(); }
+  });
+
+  it.each([["хуйня", "*****"], ["ⓗⓤⓨ", "***"]])("settles server presentation of %s but holds unrelated text without replay", async (input, masked) => {
+    presentation = () => masked;
     const first = render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий");
-    fireEvent.change(screen.getByLabelText("Ваш комментарий"), { target: { value: "хуйня" } });
+    fireEvent.change(screen.getByLabelText("Ваш комментарий"), { target: { value: input } });
     fireEvent.click(screen.getByRole("button", { name: "Отправить" })); await screen.findByText("Комментарий сохранён.");
     expect(sessionStorage.getItem(`gb-fr04-pending:comments:venue:${venue}:${me.id}`)).toBeNull();
-    first.unmount(); items = []; presentation = () => "друго";
+    first.unmount(); items = []; presentation = () => input === "хуйня" ? "друго" : "xyz";
     render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий");
-    fireEvent.change(screen.getByLabelText("Ваш комментарий"), { target: { value: "хуйня" } });
+    fireEvent.change(screen.getByLabelText("Ваш комментарий"), { target: { value: input } });
     fireEvent.click(screen.getByRole("button", { name: "Отправить" }));
     await screen.findByText("Результат не подтверждён. Не повторяйте отправку.");
     expect(sessionStorage.getItem(`gb-fr04-pending:comments:venue:${venue}:${me.id}`)).not.toBeNull();
     expect(publications()).toHaveLength(2);
   });
 
-  it("starts at most two uploads and drains only the initial user-selected queue", async () => {
+  it("starts at most two uploads and settles a reordered initial user-selected queue", async () => {
     const finishes: Array<(result: unknown) => void> = [];
     upload = () => new Promise((resolve) => { finishes.push(resolve); });
-    render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий");
+    const unresolved = vi.fn();
+    render(<CommentsSection {...props} onUnresolvedChange={unresolved} />); await screen.findByLabelText("Ваш комментарий");
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.change(screen.getByLabelText("Добавить фото / выбрать прежний файл для повтора"), {
       target: { files: [file("one"), file("two"), file("three"), file("four")] },
@@ -176,6 +195,11 @@ describe("I2c1 mounted venue contribution", () => {
     await act(async () => { finishes[2]!(ok(receipt(thirdId), 201)); finishes[3]!(ok(receipt(fourthId), 201)); });
     await waitFor(() => expect(screen.getAllByAltText(/Выбранное фото/)).toHaveLength(4));
     expect(commands()).toHaveLength(4);
+    fireEvent.click(screen.getByRole("button", { name: "Фото 2 раньше" }));
+    fireEvent.click(screen.getByRole("button", { name: "Отправить" }));
+    await screen.findByText("Комментарий сохранён.");
+    expect(JSON.parse(publications()[0]![1]!.body as string).photoIds).toEqual([otherPhoto, photoId, thirdId, fourthId]);
+    await waitFor(() => expect(unresolved).toHaveBeenLastCalledWith(false));
   });
 
   it("requires explicit removal of a rejected selection before publishing text", async () => {
@@ -193,7 +217,7 @@ describe("I2c1 mounted venue contribution", () => {
   it("recovers UNKNOWN after reload only with an exact reselected file and the frozen key", async () => {
     upload = async () => ({ ok: false, status: 0, error: "packet lost" });
     const first = render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий");
-    const image = file(); await selectPhoto(image); await screen.findByText(/UNKNOWN: результат неизвестен/);
+    const image = file(); await selectPhoto(image); await screen.findByText("Результат пока неизвестен. Повтор использует ту же попытку.");
     const original = commands()[0]![1]!; first.unmount();
     render(<CommentsSection {...props} />); await screen.findByLabelText("Ваш комментарий");
     expect(commands()).toHaveLength(1); // No automatic request after restoration.

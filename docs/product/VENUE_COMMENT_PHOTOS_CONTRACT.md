@@ -311,14 +311,17 @@ rights checks remain authoritative. New photo styles target named photo classes 
 
 The existing server presents MutationRunner receipts through `maskPublicCommentBody`.
 The client now accepts either the exact trimmed submitted text (empty becomes null), or an
-equal **Unicode codepoint-length** presentation in which each position is unchanged or
-replaced by exactly one ASCII `*`. Replacement is confined to letters, combining marks,
-numbers and `@`/`$` leet characters. Whitespace, separators, punctuation and emoji/symbols
-must remain byte-for-byte at their positions. Insertions, deletions, normalization, reordered
-text, unrelated non-star text and changed lengths are rejected. This deliberately constrained
+equal **Unicode codepoint-length** presentation in which every original grapheme is
+unchanged or fully replaced by one ASCII `*` per original codepoint. Replacement eligibility
+is limited to graphemes whose NFKC form consists entirely of letters, combining marks,
+numbers or `@`/`$`. This includes the actual server result `ⓗⓤⓨ` → `***` and whole
+letter/combining-mark graphemes. NFKC only checks eligibility; unmasked text must remain
+exactly as submitted, never normalized. Whitespace, separators, punctuation and other
+symbols must remain at their positions. Partial grapheme masks, insertions, deletions,
+reordered text, unrelated non-star text and changed lengths are rejected. This constrained
 presentation predicate does not determine which words deserve masking and does not duplicate
 the server dictionary, classifier, moderation approval or policy. Server presentation outside
-this permitted shape remains UNKNOWN. Entity/path/comment/parent, actor/session, expected
+this permitted shape remains unresolved. Entity/path/comment/parent, actor/session, expected
 version and ordered photo identity checks still apply before pending settlement; a successful
 masked write is not replayed simply because its displayed text differs from its submitted text.
 
@@ -342,7 +345,37 @@ ESLint, targeted Vitest (comments API/comments/private boundary/new photos), and
 synthetic flows at 390/1280 remain for Root's qualified environment. No dependency download,
 Git, credentials, database, runtime/deploy or sub-agent operation was performed.
 
-Independent QA, mandatory CI, DEV79 acceptance before a new release, trusted DEV release and
-applicable smoke remain outstanding. Owner UAT is NOT_TESTED. This is a source candidate,
+At the saved WIP checkpoint, DEV79 acceptance was still required before a new release;
+the continuation admission below supplies that acceptance. Independent QA, mandatory CI,
+trusted I2c1 DEV release and applicable smoke remain outstanding. Owner UAT is NOT_TESTED. This is a source candidate,
 not DONE or DEV acceptance. I2c2 (bottom community gallery, paginated fullscreen viewer and
 source jump) and I3 (new-venue official-photo candidate) remain future slices.
+
+### I2c1 saved-WIP continuation — attempt 2
+
+Continues checkpoint `e229ff4c7a6b88cf0489ec66a99da4f1819fbbca` without rewriting the
+prior timeout/UNKNOWN/cost history. Root supplied pre-continuation diagnostic evidence:
+web TSC and five affected Vitest suites passed; lint failed on three disable directives
+for unavailable rules. Those directives are removed, with no configuration/plugin changes.
+User-facing upload uncertainty now says «Результат пока неизвестен»; internal states and
+frozen attempt identities are unchanged. The NFKC server case above has helper and mounted
+regressions; the existing unrelated-response assertions remain.
+
+The final source audit also adds a lifecycle generation fence to hashing/upload completion,
+so returning to identical actor/session/venue values cannot revive an old asynchronous task.
+Confirmed publication clears the matching composer's reorder flag, including root/reply
+photo-only publication, so the host unresolved signal can settle. Focused mounted coverage
+holds a hash across actor-away/actor-return and extends the existing upload-concurrency
+case through ordered publication and host settlement. No automatic restore/upload is added.
+
+Post-continuation pinned TSC, lint, Vitest and synthetic Next flows are NOT_RUN in this
+export because dependencies are absent; Root runs the pinned checks. The earlier supplied
+passes are evidence about the saved WIP, not results for these edits. Independent QA, CI,
+trusted DEV release/smoke and Owner UAT remain separate; UAT is NOT_TESTED. DEV79 acceptance
+is supplied admission evidence, not performed or rechecked by this source-only operation.
+I2c2 and I3 remain out of scope. Actual bounded post-continuation checks: native Node TypeScript stripping and module
+syntax parsing passed for the four `.ts` source modules plus `comments-api.test.ts`;
+30 direct helper/source assertions passed (presentation acceptance/refusal, current-photo
+identity, photo-only body guards, removed directives and user-visible uncertainty copy).
+The transport was stubbed to throw; no request was made. This does not parse TSX, mount
+React, typecheck, lint, or execute the Vitest suites.

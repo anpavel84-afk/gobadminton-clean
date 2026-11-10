@@ -26,10 +26,9 @@ export function VenueCommentPhotoComposer({ model, target, disabled }: {
         {items.map((p, index) => (
           <li key={p.key}>
             {p.state === "ready" && p.selected && (p.retained?.url || p.receipt?.previewPath) ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img className="gb-comment-photo-composer__preview" src={p.retained?.url ?? p.receipt!.previewPath!} alt={`Выбранное фото ${index + 1}`} />
             ) : null}
-            <p role="status">Фото {index + 1} · {p.state === "checking" ? "Проверяется…" : p.state === "ready" ? "Готово" : p.state === "rejected" ? "Отклонено" : p.state === "retryable" ? "Можно повторить позже" : "UNKNOWN — результат неизвестен"}{!p.selected ? " · исключено из публикации" : ""}</p>
+            <p role="status">Фото {index + 1} · {p.state === "checking" ? "Проверяется…" : p.state === "ready" ? "Готово" : p.state === "rejected" ? "Отклонено" : p.state === "retryable" ? "Можно повторить позже" : "Результат пока неизвестен"}{!p.selected ? " · исключено из публикации" : ""}</p>
             {p.message ? <p>{p.message}</p> : null}
             <div className="gb-comment-photo-composer__actions">
               {p.state !== "checking" && p.state !== "ready" && p.state !== "rejected" && p.key !== "hold" ? (

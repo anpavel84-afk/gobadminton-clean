@@ -68,6 +68,13 @@ describe("#394 comments-api helpers", () => {
 describe("I2c1 presentation and current-photo guards", () => {
   it("permits only equal-length positional star redaction without content approval", () => {
     expect(commentPresentationMatches("*****", "хуйня")).toBe(true);
+    // Actual unchanged server presentation: NFKC-backed grapheme spans, not a client classifier.
+    expect(commentPresentationMatches("***", "ⓗⓤⓨ")).toBe(true);
+    expect(commentPresentationMatches("huy", "ⓗⓤⓨ")).toBe(false);
+    expect(commentPresentationMatches("****", "ⓗⓤⓨ")).toBe(false);
+    expect(commentPresentationMatches("***", "ⓗ ⓨ")).toBe(false);
+    expect(commentPresentationMatches("**", "х\u0301")).toBe(true);
+    expect(commentPresentationMatches("*\u0301", "х\u0301")).toBe(false);
     expect(commentPresentationMatches("Он сказал: *****!", "Он сказал: хуйня!")).toBe(true);
     expect(commentPresentationMatches("* * *", "х у й")).toBe(true);
     expect(commentPresentationMatches(null, "  ")).toBe(true);

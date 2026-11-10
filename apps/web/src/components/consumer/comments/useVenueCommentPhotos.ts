@@ -29,6 +29,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
   live.current = context;
   const owner = useRef(context);
   const active = useRef(true);
+  const generation = useRef(0);
   const entries = useRef<PhotoDraft[]>([]);
   const files = useRef(new Map<string, Blob>());
   const controllers = useRef(new Set<AbortController>());
@@ -39,7 +40,9 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
   const [snapshot, setSnapshot] = useState<{ scope: string; items: PhotoDraft[] }>({ scope, items: [] });
   const [notice, setNotice] = useState("");
   const storageKey = storagePrefix + scope;
-  function current(c = context) { return active.current && same(c, live.current) && same(c, owner.current); }
+  function current(c = context, epoch = generation.current) {
+    return active.current && epoch === generation.current && same(c, live.current) && same(c, owner.current);
+  }
   function save() {
     if (!current()) return;
     setSnapshot({ scope, items: [...entries.current] });
@@ -54,6 +57,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     } catch { /* Memory retains the identity if browser storage is unavailable. */ }
   }
   function abort() {
+    generation.current += 1;
     active.current = false;
     for (const controller of controllers.current) controller.abort();
     controllers.current.clear(); running.current.clear(); files.current.clear();
@@ -62,6 +66,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     setSnapshot({ scope: "", items: [] });
   }
   useEffect(() => {
+    generation.current += 1;
     owner.current = context;
     active.current = true;
     entries.current = []; selecting.current = 0; dirtyTargets.current.clear();
@@ -99,6 +104,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     window.addEventListener("gb-private-expired", onSession);
     window.addEventListener("gb-session-changed", onSession);
     return () => {
+      generation.current += 1;
       active.current = false;
       for (const controller of controllers.current) controller.abort();
       controllers.current.clear(); running.current.clear(); files.current.clear();
@@ -108,7 +114,6 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
       window.removeEventListener("gb-session-changed", onSession);
     };
     // Context values define the owner; no automatic upload/retry on restoration/auth.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, csrf, enabled]);
 
   async function perform(p: PhotoDraft, reconcile = false) {
@@ -118,6 +123,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
     }
     if (running.current.size >= 2) return;
     const c = context;
+    const epoch = generation.current;
     const controller = new AbortController();
     controllers.current.add(controller); running.current.add(p.key);
     const timer = setTimeout(() => controller.abort(), 45000);
@@ -129,7 +135,7 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
         : reconcile && p.receipt
           ? await getOwnedVenueCommentPhoto(p.receipt.id, controller.signal)
           : await uploadVenueCommentPhoto(venue, files.current.get(p.key)!, p.key, csrf, controller.signal);
-      if (!current(c)) return;
+      if (!current(c, epoch)) return;
       if (result.ok) {
         if (!isPhotoReceipt(result.data, venue, p.withdrawKey ? "withdrawn" : "ready", p.receipt?.id)
           || entries.current.some((other) => other !== p && (other.receipt?.id ?? other.retained?.id) === (result.data as VenueCommentPhotoReceipt).id)) {
@@ -146,14 +152,14 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
         p.message = p.withdrawKey ? "Снятие не подтверждено. Проверьте доступ и повторите ту же операцию." : "Фото недоступно или не принято. Удалите его из публикации.";
       } else {
         p.state = result.status === 429 ? "retryable" : "unknown";
-        p.message = result.status === 429 ? "Проверка временно недоступна. Повторите позже." : "UNKNOWN: результат неизвестен. Повтор использует ту же попытку.";
+        p.message = result.status === 429 ? "Проверка временно недоступна. Повторите позже." : "Результат пока неизвестен. Повтор использует ту же попытку.";
       }
       save();
     } catch {
-      if (current(c)) { p.state = "unknown"; p.message = "UNKNOWN: результат неизвестен."; save(); }
+      if (current(c, epoch)) { p.state = "unknown"; p.message = "Результат пока неизвестен."; save(); }
     } finally {
       clearTimeout(timer); timers.current.delete(timer); controllers.current.delete(controller);
-      if (current(c)) {
+      if (current(c, epoch)) {
         running.current.delete(p.key);
         // Only first-admission queued uploads start automatically, never UNKNOWN retries.
         const next = entries.current.find((item) => item.state === "checking" && !running.current.has(item.key));
@@ -164,15 +170,16 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
   async function add(target: string, selected: FileList | File[]) {
     if (!current() || !enabled || selecting.current > 0 || entries.current.some((p) => p.key === "hold")) return;
     const c = context;
+    const epoch = generation.current;
     selecting.current += 1; save();
     try {
       for (const file of Array.from(selected)) {
-        if (!current(c)) break;
+        if (!current(c, epoch)) break;
         if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size < 1 || file.size > MAX_BYTES) {
           setNotice("Выберите JPEG, PNG или WebP до 5 МиБ."); continue;
         }
         const hash = await fileHash(file);
-        if (!current(c)) break;
+        if (!current(c, epoch)) break;
         // Reselection is recovery of SAME bytes and key, never a fresh upload.
         const old = entries.current.find((p) => p.target === target && p.hash === hash && p.mime === file.type && p.size === file.size);
         if (old) { files.current.set(old.key, file); old.message = "Файл совпадает. Нажмите «Повторить»."; save(); continue; }
@@ -187,9 +194,9 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
         if (running.current.size < 2) void perform(p);
       }
     } catch {
-      if (current(c)) setNotice("Не удалось прочитать файл. Загрузка не начата; выберите файл снова.");
+      if (current(c, epoch)) setNotice("Не удалось прочитать файл. Загрузка не начата; выберите файл снова.");
     } finally {
-      if (current(c)) { selecting.current -= 1; save(); }
+      if (current(c, epoch)) { selecting.current -= 1; save(); }
     }
   }
   const isVisible = snapshot.scope === scope && same(owner.current, context) && active.current && enabled;
@@ -237,8 +244,9 @@ export function useVenueCommentPhotos(venue: string, actor: string, csrf: string
       dirtyTargets.current.delete(target);
       entries.current = entries.current.filter((p) => p.target !== target || !p.retained); save();
     },
-    published(ids: string[]) {
+    published(ids: string[], target?: string) {
       if (!current() || !enabled) return;
+      if (target) dirtyTargets.current.delete(target);
       // Publication is the sole proof these stages are now public. NEVER private DELETE.
       entries.current = entries.current.filter((p) => {
         if (!ids.includes(p.retained?.id ?? p.receipt?.id ?? "")) return true;
