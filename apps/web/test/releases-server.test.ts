@@ -356,8 +356,8 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
   });
 
   it("preserves the exact ten-field trusted alpha.69 receipt before the accepted alpha.70 receipt", () => {
@@ -385,8 +385,8 @@ describe("history seed integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-13).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-14).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -402,8 +402,8 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
   });
 
   it("preserves the exact ten-field trusted alpha.70 receipt before the accepted alpha.71 receipt", () => {
@@ -431,8 +431,8 @@ describe("history seed integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-12).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-13).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
@@ -442,8 +442,8 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
   });
 
   it("preserves the exact ten-field accepted alpha.71 receipt before the accepted alpha.72 receipt", () => {
@@ -470,8 +470,8 @@ describe("history seed integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-12).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-13).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
     expect(row.additions).toHaveLength(0);
@@ -485,12 +485,56 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
   });
 
 
-  it("preserves the exact ten-field accepted alpha.80 seed before unaccepted alpha.81", () => {
+
+  it("preserves the exact ten-field accepted alpha.81 seed before unaccepted alpha.82", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.81");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toEqual([
+      "application_version", "title", "owner_uat", "additions", "fixes", "known_limitations",
+      "version_label", "source_sha", "api_contract_version", "deployments",
+    ]);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(5991);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "8cb577da21770f974ab19e406e07437e79e2e52ba14f4e6c2b5104c028c285ac",
+    );
+    expect(row.source_sha).toBe("d9c1e57d6350b7b9e3f0d76db6ac5e535112fd95");
+    expect(row.version_label).toBe("0.1.0-alpha.81");
+    expect(row.api_contract_version).toBe("0.42.0");
+    expect(row.title).toBe("Галерея фотографий сообщества площадки");
+    expect(row.additions).toHaveLength(5);
+    expect(row.fixes).toHaveLength(3);
+    expect(row.known_limitations).toHaveLength(9);
+    expect(row.deployments).toEqual([{
+      environment: "dev", status: "ACCEPTED", release_id: "r42850039504-a1",
+      accepted_at: "2026-11-10T16:05:00Z",
+      api_digest: "sha256:eac601f8299d7d6f6f7ea5b3f22c2a32decd09d106599bd4a92909e5a0e946cc",
+      web_digest: "sha256:5e93ef3ac1336d4139d9c0c2bcb959b97b8258e414adec3c80cc6842713f303f",
+      kind: "pipeline",
+    }]);
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.80")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(row.owner_uat).toBe("NOT_TESTED");
+    expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+      row.known_limitations[0],
+      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована только серверная часть предложения фотографии создателем площадки; пользовательский интерфейс предложения фотографии при создании новой площадки ещё не реализован. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.",
+      ...row.known_limitations.slice(2),
+    ]);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
+    expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
+    expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
+  });
+
+  it("preserves the exact ten-field accepted alpha.80 seed before the accepted alpha.81 seed", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.80");
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -519,15 +563,15 @@ describe("history seed integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.79")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
       row.known_limitations[0],
-      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81; предложение фотографии при создании новой площадки ещё не реализовано.",
+      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована только серверная часть предложения фотографии создателем площадки; пользовательский интерфейс предложения фотографии при создании новой площадки ещё не реализован. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.",
       ...row.known_limitations.slice(2),
     ]);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
   });
@@ -566,14 +610,14 @@ describe("history seed integrity", () => {
     expect(row.known_limitations).toEqual(previous.known_limitations);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
       row.known_limitations[0],
-      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81; предложение фотографии при создании новой площадки ещё не реализовано.",
+      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована только серверная часть предложения фотографии создателем площадки; пользовательский интерфейс предложения фотографии при создании новой площадки ещё не реализован. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.",
       ...row.known_limitations.slice(2),
     ]);
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-3)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
   });
@@ -602,14 +646,14 @@ describe("history seed integrity", () => {
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
       row.known_limitations[0],
-      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81; предложение фотографии при создании новой площадки ещё не реализовано.",
+      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована только серверная часть предложения фотографии создателем площадки; пользовательский интерфейс предложения фотографии при создании новой площадки ещё не реализован. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.",
       ...row.known_limitations.slice(2),
     ]);
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-3)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-4)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
   });
@@ -656,13 +700,13 @@ describe("history seed integrity", () => {
     expect(row.known_limitations).toEqual(previous.known_limitations);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
       row.known_limitations[0],
-      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81; предложение фотографии при создании новой площадки ещё не реализовано.",
+      "Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована только серверная часть предложения фотографии создателем площадки; пользовательский интерфейс предложения фотографии при создании новой площадки ещё не реализован. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.",
       ...row.known_limitations.slice(2),
     ]);
-    expect(TRUSTED_HISTORICAL_SEED.at(-4)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-5)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
   });
@@ -707,10 +751,10 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.75")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-5)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-6)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
   });
@@ -755,10 +799,10 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.74")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-6)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-7)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.74 receipt before the accepted alpha.75 receipt", () => {
@@ -789,15 +833,15 @@ describe("history seed integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.73")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-7)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.at(-8)).toBe(row);
     expect(row.title).toBe("Прокрутка типов игр без обрезанных кнопок");
     expect(row.additions).toHaveLength(0);
     expect(row.fixes).toEqual(["На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым."]);
     expect(row.known_limitations[0]).toBe("Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.73 receipt before the accepted alpha.74 receipt", () => {
@@ -828,11 +872,11 @@ describe("history seed integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.72")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-8)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.at(-9)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.72 receipt before the accepted alpha.73 receipt", () => {
@@ -869,14 +913,14 @@ describe("history seed integrity", () => {
       "Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.",
     ]);
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(89);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.81")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(90);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.82")).toBe(false);
   });
 
-  it("keeps eighty-nine confirmed seed deployments including accepted alpha.1–alpha.80 and dedupes identical live rows", () => {
+  it("keeps ninety confirmed seed deployments including accepted alpha.1–alpha.81 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(89);
+    expect(seedCount).toBe(90);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -950,17 +994,24 @@ describe("history seed integrity", () => {
       origin: "seed",
     }]);
     const ordered = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
-    expect(ordered.slice(0, 14).map((row) => row.application_version)).toEqual([
-      "0.1.0-alpha.80", "0.1.0-alpha.79", "0.1.0-alpha.78", "0.1.0-alpha.77", "0.1.0-alpha.76", "0.1.0-alpha.75", "0.1.0-alpha.74", "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
+    expect(ordered.slice(0, 15).map((row) => row.application_version)).toEqual([
+      "0.1.0-alpha.81", "0.1.0-alpha.80", "0.1.0-alpha.79", "0.1.0-alpha.78", "0.1.0-alpha.77", "0.1.0-alpha.76", "0.1.0-alpha.75", "0.1.0-alpha.74", "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
     ]);
     expect(ordered[0]).toMatchObject({
+      application_version: "0.1.0-alpha.81",
+      source_sha: "d9c1e57d6350b7b9e3f0d76db6ac5e535112fd95",
+      release_id: "r42850039504-a1",
+      accepted_at: "2026-11-10T16:05:00.000Z",
+      status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
+    });
+    expect(ordered[1]).toMatchObject({
       application_version: "0.1.0-alpha.80",
       source_sha: "d4c6e04374fa98412174994536f95f529b153f4c",
       release_id: "r42832327907-a1",
       accepted_at: "2026-11-10T14:22:08.000Z",
       status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
     });
-    expect(ordered[1]).toMatchObject({
+    expect(ordered[2]).toMatchObject({
       application_version: "0.1.0-alpha.79",
       source_sha: "701dd73c914d075fbca5695ba67455fba84642a2",
       release_id: "r42819887411-a2",
@@ -969,7 +1020,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[2]).toMatchObject({
+    expect(ordered[3]).toMatchObject({
       application_version: "0.1.0-alpha.78",
       source_sha: "db867399609190852db67650ad5c0973b5dd88e9",
       release_id: "r42813886246-a1",
@@ -978,7 +1029,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[3]).toMatchObject({
+    expect(ordered[4]).toMatchObject({
       application_version: "0.1.0-alpha.77",
       source_sha: "65c7e59212eab0de2a9ecd50c36ed1c1e7854ad9",
       release_id: "r42800435924-a1",
@@ -987,7 +1038,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[4]).toMatchObject({
+    expect(ordered[5]).toMatchObject({
       application_version: "0.1.0-alpha.76",
       source_sha: "dd5b2c1496af57ca168d171decb384d2ecfec5c1",
       release_id: "r42783213882-a1",
@@ -996,7 +1047,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[5]).toMatchObject({
+    expect(ordered[6]).toMatchObject({
       application_version: "0.1.0-alpha.75",
       source_sha: "0d8a23f782bd33f993d3a1b7b4850719307fae1b",
       release_id: "r42754460186-a1",
@@ -1005,7 +1056,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[6]).toMatchObject({
+    expect(ordered[7]).toMatchObject({
       application_version: "0.1.0-alpha.74",
       source_sha: "a2e18dc96f36d80979a667ee47752ff60667a318",
       release_id: "r42747213508-a1",
@@ -1014,7 +1065,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[7]).toMatchObject({
+    expect(ordered[8]).toMatchObject({
       application_version: "0.1.0-alpha.73",
       source_sha: "c157c3b1a5cabc539a8ae1a6c2c468825336df7f",
       release_id: "r42742161818-a1",
@@ -1038,9 +1089,9 @@ describe("history seed integrity", () => {
         web_digest: receipt73.web_digest,
       },
     }]);
-    expect(withLive73).toHaveLength(89);
-    expect(withLive73.filter((row) => row.application_version === "0.1.0-alpha.73")).toEqual([ordered[7]]);
-    expect(ordered[8]).toMatchObject({
+    expect(withLive73).toHaveLength(90);
+    expect(withLive73.filter((row) => row.application_version === "0.1.0-alpha.73")).toEqual([ordered[8]]);
+    expect(ordered[9]).toMatchObject({
       application_version: "0.1.0-alpha.72",
       source_sha: "ff3cb00c62c1206530bcc95aba13d196d5266474",
       release_id: "r42724583100-a1",
@@ -1049,7 +1100,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[9]).toMatchObject({
+    expect(ordered[10]).toMatchObject({
       application_version: "0.1.0-alpha.71",
       source_sha: "aeaee2dc4de8a0972015df039a153fa4ef06027f",
       release_id: "r42719450513-a1",
@@ -1058,7 +1109,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[10]).toMatchObject({
+    expect(ordered[11]).toMatchObject({
       application_version: "0.1.0-alpha.70",
       source_sha: "0968028ad7755a8087afbcb0fd8d3a09d7ddb97d",
       release_id: "r42714053715-a1",
@@ -1067,7 +1118,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[11]).toMatchObject({
+    expect(ordered[12]).toMatchObject({
       application_version: "0.1.0-alpha.69",
       source_sha: "5568044d725d306e3bb3ce032e767cf7d3586c60",
       release_id: "r42697926974-a1",
@@ -1076,7 +1127,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[12]).toMatchObject({
+    expect(ordered[13]).toMatchObject({
       source_sha: "2c33ce49d5b8ad704bf78524b8149c94e4d3e62e",
       release_id: "r42627002935-a1",
       accepted_at: "2026-11-09T13:42:50.000Z",
@@ -1084,7 +1135,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[13]).toMatchObject({
+    expect(ordered[14]).toMatchObject({
       source_sha: "04fdc58b53e79996ccdb21a7396c5d1525cfbd10",
       release_id: "r42613449482-a1",
       accepted_at: "2026-11-09T12:05:53.000Z",
@@ -1095,7 +1146,7 @@ describe("history seed integrity", () => {
     expect(buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).some(
       (row) => row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(false);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(84);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(85);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -1192,7 +1243,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.77"
       || row.application_version === "0.1.0-alpha.78"
       || row.application_version === "0.1.0-alpha.79"
-      || row.application_version === "0.1.0-alpha.80",
+      || row.application_version === "0.1.0-alpha.80"
+      || row.application_version === "0.1.0-alpha.81",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -1269,12 +1321,12 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.81");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.42.0");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.82");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.43.0");
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Галерея фотографий сообщества площадки");
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Серверная подготовка фотографий от создателя площадки");
     expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(5);
     const alpha80 = TRUSTED_HISTORICAL_SEED.find((row) => row.application_version === "0.1.0-alpha.80")!;
     const alpha80Delta = [...alpha80.additions, ...alpha80.fixes].join(" ");
@@ -1286,16 +1338,25 @@ describe("history seed integrity", () => {
     expect(alpha80Delta).toMatch(/замаскированным сервером текстом.*команды, автора, пути, обсуждения, версии и порядка фотографий/);
     expect(alpha80Delta).toMatch(/Проверка текста остаётся на сервере.*не добавляет собственный словарь/);
     expect(alpha80Delta).toMatch(/компьютере.*строка с кнопкой отправки не переносится.*выбор фотографий подписан по-русски/);
+    const alpha81 = TRUSTED_HISTORICAL_SEED.find((row) => row.application_version === "0.1.0-alpha.81")!;
+    const alpha81Delta = [...alpha81.additions, ...alpha81.fixes].join(" ");
+    expect(alpha81Delta).toMatch(/Внизу полной страницы.*раскрытой карточки на карте.*«Фотографии сообщества».*том же содержимом/);
+    expect(alpha81Delta).toMatch(/страницами по запросу.*конец списка неизвестен.*без общего количества.*после последней страницы.*общее количество/);
+    expect(alpha81Delta).toMatch(/сохраняет фотографию целиком.*стрелки клавиатуры.*горизонтальное.*Escape.*возвращает фокус/);
+    expect(alpha81Delta).toMatch(/текущий автор.*«К публикации».*актуальный комментарий или ответ.*той же карточке.*следующих страниц/);
+    expect(alpha81Delta).toMatch(/ошибке следующей страницы текущее фото сохраняется.*ту же страницу.*Недоступная фотография или изменившаяся публикация/);
+    expect(alpha81.fixes).toContain("Начальная загрузка фотографий сообщества продолжается после закрытия фотографии из комментария или перехода к текущей публикации; галерея больше не показывает ложное сообщение об отсутствии фотографий вместо ожидаемого результата загрузки.");
+    expect(alpha81Delta).toMatch(/фокус остаётся внутри окна.*кнопка повторной загрузки исчезает/);
+    expect(alpha81Delta).toMatch(/вертикального жеста мышью.*не мешает.*горизонтальному перелистыванию/);
     const currentDelta = [...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes].join(" ");
-    expect(currentDelta).toMatch(/Внизу полной страницы.*раскрытой карточки на карте.*«Фотографии сообщества».*том же содержимом/);
-    expect(currentDelta).toMatch(/страницами по запросу.*конец списка неизвестен.*без общего количества.*после последней страницы.*общее количество/);
-    expect(currentDelta).toMatch(/сохраняет фотографию целиком.*стрелки клавиатуры.*горизонтальное.*Escape.*возвращает фокус/);
-    expect(currentDelta).toMatch(/текущий автор.*«К публикации».*актуальный комментарий или ответ.*той же карточке.*следующих страниц/);
-    expect(currentDelta).toMatch(/ошибке следующей страницы текущее фото сохраняется.*ту же страницу.*Недоступная фотография или изменившаяся публикация/);
-    expect(CURRENT_NAMED_RELEASE.fixes).toContain("Начальная загрузка фотографий сообщества продолжается после закрытия фотографии из комментария или перехода к текущей публикации; галерея больше не показывает ложное сообщение об отсутствии фотографий вместо ожидаемого результата загрузки.");
-    expect(currentDelta).toMatch(/фокус остаётся внутри окна.*кнопка повторной загрузки исчезает/);
-    expect(currentDelta).toMatch(/вертикального жеста мышью.*не мешает.*горизонтальному перелистыванию/);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toContain("Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81; предложение фотографии при создании новой площадки ещё не реализовано.");
+    expect(currentDelta).toMatch(/серверная часть.*создателем новой площадки.*Право создателя закрепляется сервером.*канонической площадки/);
+    expect(currentDelta).toMatch(/приватный кандидат.*статус и предпросмотр.*отозвать.*до решения.*Публичных ссылок на кандидаты нет/);
+    expect(currentDelta).toMatch(/Уполномоченный сотрудник.*одобрить или отклонить.*свежего повторного подтверждения входа.*конкретного служебного действия/);
+    expect(currentDelta).toMatch(/сохранённое разрешение проверки содержимого именно этой обложки.*актуальные права.*данные об авторстве/);
+    expect(currentDelta).toMatch(/добавляется к существующим.*не более 8.*без неявной замены обложки/);
+    expect(currentDelta).toMatch(/версий и одновременных изменений.*устаревших решений.*вместимости.*существующая очистка файлов/);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/alpha\.82.*только серверная часть.*пользовательский интерфейс.*ещё не реализован.*обычным аккаунтом и служебной ролью ещё не выполнена/);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toContain("Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована только серверная часть предложения фотографии создателем площадки; пользовательский интерфейс предложения фотографии при создании новой площадки ещё не реализован. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.");
     expect(currentDelta).not.toMatch(/#507.*(?:DONE|заверш|выполн)|проверка владельцем пройдена|нативный интерфейс доступен/i);
     expect(currentDelta).not.toMatch(/(?:^|[^а-яё])нов[а-яё]*\s+(?:допуск|срок|окн)[а-яё]*|медиа|нативн|автоматическ.*удал|модераци[яи]\s+(?:полностью\s+)?(?:завершена|выполнена)|приёмк.*пройдена/iu);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
@@ -1592,6 +1653,7 @@ describe("history seed integrity", () => {
       "2026-11-10T12:28:54Z",
       "2026-11-10T13:07:47Z",
       "2026-11-10T14:22:08Z",
+      "2026-11-10T16:05:00Z",
     ]);
   });
 
