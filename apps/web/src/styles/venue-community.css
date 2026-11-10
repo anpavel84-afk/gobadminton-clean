@@ -346,15 +346,38 @@
 
 /* I2c1: photo rules never target generic img/avatar elements. */
 .gb-consumer .gb-comments__composer > .gb-comment-photo-composer { grid-column:1 / -1; }
+/* Photo composers reserve a footer row; never auto-place submit in the avatar track.
+   Existing mobile and embedded width:100% rules still apply. Game composers are unchanged. */
+.gb-consumer .gb-comments__composer > .gb-comment-photo-composer + .gb-c23-btn {
+  grid-column:1 / -1;
+  justify-self:end;
+  max-width:100%;
+  white-space:nowrap;
+}
 .gb-comment-photo-composer { min-width:0; margin:0; border:1px solid var(--gb-line,#dfe4dc); border-radius:12px; padding:12px; }
 .gb-comment-photo-composer p, .gb-comment-photo-composer label { font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
 .gb-comment-photo-composer__rights { display:flex; align-items:flex-start; gap:10px; margin-bottom:12px; }
 .gb-comment-photo-composer__rights input { flex:none; margin-top:4px; }
-.gb-comment-photo-composer__input { display:grid; gap:8px; }
-.gb-comment-photo-composer__input input { max-width:100%; min-height:44px; }
+.gb-comment-photo-composer__input { position:relative; display:grid; justify-items:start; gap:8px; }
+.gb-comment-photo-composer__native-input {
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  clip-path:inset(50%);
+  white-space:nowrap;
+  border:0;
+}
+.gb-comment-photo-composer__hint { margin:0; color:var(--gb-ink-soft,#536159); }
+.gb-consumer .gb-comment-photo-composer__input > .gb-c23-btn { min-height:44px; white-space:nowrap; }
 .gb-comment-photo-composer__list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); padding:0; list-style:none; gap:12px; }
-.gb-comment-photo-composer__actions { display:flex; gap:6px; flex-wrap:wrap; }
-.gb-comment-photo-composer__actions button { min-height:44px; }
+.gb-comment-photo-composer__actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.gb-consumer .gb-comment-photo-composer__actions .gb-c23-btn { min-height:44px; padding:0 12px; white-space:nowrap; }
+.gb-comment-photo-composer__order { display:inline-flex; flex:none; gap:6px; }
+.gb-consumer .gb-comment-photo-composer__order > .gb-c23-btn { min-width:44px; padding:0; }
 .gb-comment-photo-composer__preview { width:100%; height:140px; object-fit:contain; border-radius:8px; background:var(--gb-paper,#f5f6f2); }
 .gb-comment-photos { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:8px; margin-top:12px; }
 .gb-comment-photos__image { width:100%; height:auto; max-height:360px; object-fit:contain; border-radius:10px; background:var(--gb-paper,#f5f6f2); }
