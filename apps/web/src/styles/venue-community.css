@@ -399,7 +399,7 @@ dialog.profile-dialog.gb-community-photo-viewer[open] > header .gb-close-button 
 dialog.profile-dialog.gb-community-photo-viewer[open] > .profile-dialog__body { display:block; flex:1; min-height:0; padding:0; overscroll-behavior:contain; max-height:calc(100dvh - 100px); overflow:auto; }
 .gb-community-photo-viewer__content { display:grid; gap:12px; }
 .gb-community-photo-viewer__content > p { margin:0; }
-.gb-community-photo-viewer__image { display:grid; place-items:center; min-height:160px; height: min(60dvh,720px); touch-action:pan-y; }
+.gb-community-photo-viewer__image { display:grid; place-items:center; min-height:160px; height: min(60dvh,720px); touch-action:pan-y; user-select:none; }
 .gb-community-photo-viewer__image > img { display:block; max-width:100%; width:auto; max-height:100%; height:auto; object-fit:contain; user-select:none; }
 .gb-community-photo-viewer__actions { display:flex; gap:12px; flex-wrap:wrap; }
 .gb-community-photo-viewer__actions > button { min-width:44px; min-height:44px; }
