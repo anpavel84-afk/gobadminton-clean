@@ -48,10 +48,10 @@
 .gb-consumer .gb-venue-sheet-back { display:inline-flex; align-items:center; gap:4px; border:0; background:transparent; padding:0 4px; color:var(--gb-ink); font:inherit; white-space:nowrap; }
 .gb-consumer .gb-venue-sheet-kicker { display:block; margin:0 0 8px; color:var(--gb-purple); font-size:12px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; }
 .gb-consumer .gb-venue-sheet-close { position:sticky; top:0; z-index:1; }
-.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header { height:0; position:relative; z-index:1; }
-.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2,
-.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-heading { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
-.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close { position:absolute; right:8px; top:8px; }
+.gb-consumer .gb-venue-sheet[data-view="info"] .gb-venue-sheet-header { height:0; position:relative; z-index:1; }
+.gb-consumer .gb-venue-sheet[data-view="info"] .gb-venue-sheet-header h2,
+.gb-consumer .gb-venue-sheet[data-view="info"] .gb-venue-sheet-heading { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.gb-consumer .gb-venue-sheet[data-view="info"] .gb-venue-sheet-close { position:absolute; right:8px; top:8px; }
 .gb-consumer .gb-venue-sheet-empty { display:grid; gap:16px; margin:28px 0 8px; }
 .gb-consumer .gb-venue-sheet-empty > h3 { margin:0; font-size:18px; }
 .gb-consumer .gb-venue-sheet-empty-card { display:grid; gap:8px; justify-items:center; text-align:center; padding:28px 16px; border:1px dashed var(--gb-line-dark); border-radius:var(--gb-radius-md); background:var(--gb-paper); color:var(--gb-ink-soft); }
