@@ -662,6 +662,8 @@ describe("report lifecycle propagation", () => {
     const reviewReceipt: VenueReviewMutationReceipt = { id: "review-one", version: 1, status: "self_draft",
       reviewHandle: "handle", receiptToken: "receipt", publicVisible: false, notBefore: null };
     transport.handler = (path, init) => {
+      if (path === `/v1/venues/${VENUE_ID}/community-photos` && (init?.method ?? "GET") === "GET") return { ok: true, status: 200,
+        data: { venueId: VENUE_ID, items: [], nextCursor: null } };
       if (path === `/v1/venues/${VENUE_ID}/experience-reviews?limit=5`) return { ok: true, status: 200,
         data: { venueId: VENUE_ID, items: [], publishedCount: 0, nextCursor: null, canWriteHint: false } satisfies VenueReviewsSummary };
       if (path === `/v1/me/venue-reviews/eligibility?venueId=${VENUE_ID}`) return { ok: true, status: 200, data: { bases: [basis] } };
