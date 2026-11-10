@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as ApiClient from "../src/lib/api-client";
 import type { OwnVenueReview, VenueReviewMutationReceipt } from "../src/lib/venue-reviews-api";
 
 const transport = vi.hoisted(() => ({
@@ -10,7 +11,7 @@ const transport = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: transport.refresh }) }));
 vi.mock("next/link", () => ({ default: ({ children, ...props }: { children: ReactNode }) => createElement("a", props, children) }));
 vi.mock("../src/lib/api-client", async importOriginal => ({
-  ...await importOriginal<typeof import("../src/lib/api-client")>(),
+  ...await importOriginal<typeof ApiClient>(),
   apiFetch: transport.request,
 }));
 import { OwnVenueReviews } from "../src/components/consumer/venues/OwnVenueReviews";
@@ -45,6 +46,11 @@ function confirm() {
   fireEvent.click(screen.getByRole("button", { name: "Да, отозвать" }));
 }
 function commands() { return transport.request.mock.calls.filter(([path]) => String(path).endsWith("/commands")); }
+function requireCall<T>(calls: readonly T[], index: number): T {
+  const call = calls[index];
+  if (call === undefined) throw new Error(`Expected mock call at index ${index}`);
+  return call;
+}
 function button(name: string) { return screen.getByRole("button", { name }) as HTMLButtonElement; }
 
 beforeEach(() => {
@@ -67,7 +73,7 @@ describe("private own collection and public truth", () => {
     view.rerender(<OwnVenueReviews actorId="owner-a" csrfToken="csrf-a" onUnauthorized={vi.fn()} />);
     expect(transport.request).not.toHaveBeenCalled();
     await open();
-    expect(transport.request.mock.calls[0][0]).toBe(ownPath);
+    expect(requireCall(transport.request.mock.calls, 0)[0]).toBe(ownPath);
     expect(screen.getByText(/до 50 последних/)).toBeTruthy();
     expect(screen.getByText(/отсутствие отзыва.*не означает/)).toBeTruthy();
     expect(screen.getByText(/Редактирование пока недоступно/)).toBeTruthy();
@@ -91,7 +97,7 @@ describe("private own collection and public truth", () => {
     expect(await screen.findByText("Прежний публичный текст")).toBeTruthy();
     expect(screen.queryByText("Чужой текст")).toBeNull();
     expect(screen.getAllByText(row.text!).length).toBeGreaterThan(0);
-    expect(transport.request.mock.calls[2][0]).toContain("cursor=page-two");
+    expect(requireCall(transport.request.mock.calls, 2)[0]).toContain("cursor=page-two");
   });
 
   it("bounds public lookup to three pages, never replaces a missing quote with own text", async () => {
@@ -136,7 +142,7 @@ describe("withdraw command and recovery", () => {
     mount(); await open(); confirm();
     expect(screen.getAllByText(row.text!).length).toBeGreaterThan(0);
     expect(screen.queryByText("Отозван")).toBeNull();
-    const [path, init] = commands()[0];
+    const [path, init] = requireCall(commands(), 0);
     expect(path).toBe(`${ownPath}/${row.id}/commands`);
     expect(JSON.parse(init.body)).toEqual({ action: "withdraw", expectedVersion: 7 });
     expect(init.csrfToken).toBe("csrf-a");
@@ -168,12 +174,12 @@ describe("withdraw command and recovery", () => {
     expect(button("Отозвать отзыв").disabled).toBe(true);
     expect(transport.request.mock.calls.filter(([path]) => path === ownPath)).toHaveLength(1);
     fireEvent.click(button("Вернуться к операции"));
-    const frozen = commands()[0];
+    const frozen = requireCall(commands(), 0);
     transport.request.mockResolvedValueOnce(ok(receipt));
     fireEvent.click(button("Повторить исходный запрос"));
     expect(await screen.findByText("Отозван")).toBeTruthy();
     expect(commands()).toHaveLength(2);
-    expect(commands()[1]).toEqual(frozen);
+    expect(requireCall(commands(), 1)).toEqual(frozen);
   });
 
   it.each([
@@ -213,7 +219,7 @@ describe("withdraw command and recovery", () => {
     transport.request.mockResolvedValueOnce(ok({ ...receipt, version: 12 }));
     confirm();
     expect(await screen.findByText("Отозван")).toBeTruthy();
-    expect(JSON.parse(commands()[1][1].body)).toEqual({ action: "withdraw", expectedVersion: 11 });
+    expect(JSON.parse(requireCall(commands(), 1)[1].body)).toEqual({ action: "withdraw", expectedVersion: 11 });
   });
 
   it("successful conflict refresh with absent row proves no deletion and offers no stale action", async () => {
