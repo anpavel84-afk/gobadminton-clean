@@ -1,7 +1,8 @@
 /* global process, console, URL, WebSocket, Buffer, setTimeout, fetch */
 /** #458 compact discovery filters: actual source composition geometry via owned Chromium CDP.
  * Playwright unavailable here; uses /opt/gobadminton-qa/chromium-headless-1243/chrome-headless-shell.
- * Interaction keyboard coverage lives in games-discovery-filters.test.tsx.
+ * D3 uses real Chromium Tab input and DOM scroll/text geometry; React dialog
+ * interaction coverage remains in games-discovery-filters.test.tsx.
  * Not DEV / Owner UAT / GoBad. Parent executes when Chromium missing. */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -34,7 +35,7 @@ const outDir = resolveEvidenceDir(outDirArg);
 mkdirSync(outDir, { recursive: true });
 
 const receipt = {
-  scope: "#458/#547 DiscoveryLevelFilters SSR+CSS geometry + labelled D1 browser fixture via owned Chromium CDP; not DEV/Owner/GoBad UAT",
+  scope: "#458/#547 SSR+CSS geometry, D3 real Tab/scroll + labelled D1 browser fixture via owned Chromium CDP; not DEV/Owner/GoBad UAT",
   chrome: CHROME,
   viewports: VIEWPORTS,
   shots: [],
@@ -191,6 +192,63 @@ main.gb-consumer{padding:16px;width:${width}px;max-width:100%;box-sizing:border-
 </head><body class="gb-consumer-body"><main class="gb-consumer">${bodyHtml}</main></body></html>`;
 }
 
+async function tab(call, backwards = false) {
+  const key = { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9, modifiers: backwards ? 8 : 0 };
+  await call("Input.dispatchKeyEvent", { type: "keyDown", ...key });
+  await call("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+}
+
+async function chipGeometry(evaluate) {
+  return evaluate(`(() => {
+    const chips = document.querySelector('.gb-discovery-filters > .gb-discovery-chips');
+    const last = chips.lastElementChild;
+    const trigger = document.querySelector('.gb-discovery-filters-trigger');
+    const rect = (element) => {
+      const r = element.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+    };
+    const range = document.createRange();
+    range.selectNodeContents(last);
+    const text = range.getBoundingClientRect();
+    const hit = (element) => {
+      const r = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+    };
+    return {
+      row: rect(chips), last: rect(last), trigger: rect(trigger),
+      text: { left: text.left, right: text.right, top: text.top, bottom: text.bottom },
+      scrollLeft: chips.scrollLeft,
+      maxScroll: chips.scrollWidth - chips.clientWidth,
+      endGap: chips.getBoundingClientRect().right - last.getBoundingClientRect().right,
+      lastHit: hit(last), triggerHit: hit(trigger),
+      lastFocused: document.activeElement === last,
+      lastFocusVisible: last.matches(':focus-visible'),
+      focusLabel: document.activeElement?.textContent?.trim() || document.activeElement?.getAttribute('aria-label'),
+      pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+    };
+  })()`);
+}
+
+function assertLastChipVisible(geometry, state) {
+  const detail = `${state}: ${JSON.stringify(geometry)}`;
+  assert.ok(geometry.last.left >= geometry.row.left - 1 && geometry.last.right <= geometry.row.right + 1, `full last control visible; ${detail}`);
+  assert.ok(geometry.text.left >= geometry.row.left && geometry.text.right <= geometry.row.right, `full last text visible; ${detail}`);
+  assert.ok(geometry.text.left >= geometry.last.left && geometry.text.right <= geometry.last.right, `text fits last control; ${detail}`);
+  assert.ok(geometry.endGap >= 16 - 1, `retained end clearance exposes full control/focus before edge cue; ${detail}`);
+  assert.equal(geometry.lastHit, true, `last control receives pointer; ${detail}`);
+  assert.equal(geometry.triggerHit, true, `filter receives pointer; ${detail}`);
+  assert.ok(Math.abs(geometry.trigger.width - 44) <= 1 && Math.abs(geometry.trigger.height - 44) <= 1, `44px filter retained; ${detail}`);
+  assert.ok(geometry.trigger.left >= geometry.row.right && geometry.trigger.right <= 390, `filter remains beside chips inside viewport; ${detail}`);
+  assert.equal(geometry.pageOverflow, false, `no page overflow; ${detail}`);
+}
+
+async function captureD3(call, state) {
+  const name = `d3-390-${state}.png`;
+  const shot = await call("Page.captureScreenshot", { format: "png" });
+  writeFileSync(join(outDir, name), Buffer.from(shot.data, "base64"));
+  receipt.shots.push({ width: 390, state, file: name, scope: "SSR+CSS fixture; not actual DEV" });
+}
+
 if (!chromeAvailable()) {
   receipt.status = "NOT_TESTED";
   receipt.reason = `Qualified Chromium missing at ${CHROME}; parent executes helper. Geometry assertions preserved in source.`;
@@ -261,7 +319,6 @@ await withChrome(async ({ call, evaluate }) => {
         titleCountOverlap: overlap,
         chipsScrollbarWidth: chipsStyle?.scrollbarWidth || null,
         filtersScrollbarWidth: filtersStyle.scrollbarWidth || null,
-        chipsPaddingEnd: chipsStyle?.paddingInlineEnd || null,
         dateTextOk,
         dateWidth: dateBox ? Math.round(dateBox.width) : 0,
       };
@@ -282,9 +339,51 @@ await withChrome(async ({ call, evaluate }) => {
     if (width <= 390) {
       assert.equal(closed.chipsScrollbarWidth, "none", `${width}: chips scrollbar hidden`);
       assert.equal(closed.filtersScrollbarWidth, "none", `${width}: filters scrollbar hidden`);
-      assert.ok(Number.parseFloat(closed.chipsPaddingEnd) >= 12, `${width}: chips end padding`);
     }
     receipt.metrics.push({ width, state: "closed", ...closed });
+
+    if (width === 390) {
+      // Measure the real scrollport/control/text, rather than matching CSS declarations.
+      const initial = await chipGeometry(evaluate);
+      receipt.metrics.push({ width, state: "d3-initial", ...initial });
+      await captureD3(call, "initial");
+      assert.ok(initial.maxScroll > 0, `D3 fixture must reproduce overflow: ${JSON.stringify(initial)}`);
+      assert.ok(initial.scrollLeft <= 1 && initial.last.right > initial.row.right, "D3 starts with last chip extending beyond row");
+
+      await evaluate(`document.querySelector('.gb-discovery-filters > .gb-discovery-chips').scrollLeft = 10000`);
+      await sleep(80);
+      const end = await chipGeometry(evaluate);
+      receipt.metrics.push({ width, state: "d3-end", ...end });
+      await captureD3(call, "end");
+      assert.ok(Math.abs(end.scrollLeft - end.maxScroll) <= 1, "D3 reaches actual scroll endpoint");
+      assertLastChipVisible(end, "D3 scroll endpoint");
+
+      // Start again at the cut edge; no HTMLElement.focus()/Locator.focus() or
+      // scrollIntoView(): visibility must result from native sequential Tab focus.
+      await evaluate(`document.querySelector('.gb-discovery-filters > .gb-discovery-chips').scrollLeft = 0`);
+      const sequence = [];
+      let keyboard;
+      for (let step = 0; step < 8; step++) {
+        await tab(call);
+        await sleep(40);
+        keyboard = await chipGeometry(evaluate);
+        sequence.push(keyboard.focusLabel);
+        if (keyboard.lastFocused) break;
+      }
+      receipt.metrics.push({ width, state: "d3-keyboard-tab", sequence, ...keyboard });
+      await captureD3(call, "keyboard-tab");
+      assert.deepEqual(sequence.slice(-3), ["Все", "Обычные", "С тренером"], `D3 native chip Tab order: ${JSON.stringify(sequence)}`);
+      assert.equal(keyboard.lastFocused, true, "D3 actual Tab reaches last chip");
+      assert.equal(keyboard.lastFocusVisible, true, "D3 last chip has keyboard focus indicator");
+      assert.ok(keyboard.scrollLeft > 0, "D3 native Tab scrolls the chip row from its initial position");
+      assertLastChipVisible(keyboard, "D3 actual Tab");
+      await tab(call);
+      assert.equal(await evaluate(`document.activeElement === document.querySelector('.gb-discovery-filters-trigger')`), true, "D3 next Tab reaches filter");
+      await tab(call, true);
+      const backwards = await chipGeometry(evaluate);
+      assert.equal(backwards.lastFocused, true, "D3 Shift+Tab returns to last chip");
+      assertLastChipVisible(backwards, "D3 Shift+Tab");
+    }
 
     await call("Page.setDocumentContent", {
       frameId: frameTree.frame.id,
@@ -371,7 +470,7 @@ await withChrome(async ({ call, evaluate }) => {
     fixture: "BROWSER_FIXTURE games547-d1-exact-2.0-controlled-reset",
     before,
     after,
-    note: "Source controlled reset clears exact 2.0; GoBad #547 no-op report remains NOT_REPRODUCED here; parent installed-556 evidence retained separately.",
+    note: "Retained controlled 2.0 reset fixture. Latest admitted GoBad D1 recheck PASS; original cause UNKNOWN. This D3 task adds no reset fix; historical installed-556 evidence remains separate.",
   };
 
   receipt.pass = true;
