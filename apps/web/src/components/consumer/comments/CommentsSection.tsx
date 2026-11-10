@@ -1,8 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
+  commentPresentationMatches,
+  isCommentCreateBody,
+  isCommentUpdateBody,
+  isCommentDeleteBody,
+  validPhotoIds,
+  isPhotoId,
   createEntityCommentPath,
   deleteEntityCommentPath,
   isCommentView,
@@ -19,7 +25,11 @@ import { AuthChooser, Avatar, ProfileDialog } from "../players/ProfileCompositio
 import { ConversationSafety } from "../messages/ConversationSafety";
 import { VenueCommunityReportDialog } from "../venues/VenueCommunityReportDialog";
 import type { VenueCommunityReportSubject } from "../../../lib/venue-community-api";
+import { useVenueCommentPhotos } from "./useVenueCommentPhotos";
+import { VenueCommentPhotoComposer } from "./VenueCommentPhotoComposer";
+import { CommentPhotos } from "./CommentPhotos";
 import "../../../styles/comments.css";
+import "../../../styles/venue-community.css";
 
 const TEXT_MAX = 1000;
 const COLLAPSE_LINES = 4;
@@ -165,6 +175,15 @@ export function CommentsSection({
     ? page
     : null;
 
+  const photos = useVenueCommentPhotos(entityId, actorKey, hostCsrf,
+    kind === "venue" && Boolean(me) && parentPublic && sessionLive.current);
+  function contentReady(target: string, text: string) {
+    return kind === "venue" ? photos.ready(target, text) : textReady(text);
+  }
+  function photoBody(target: string) {
+    return kind === "venue" ? { photoIds: [...photos.ids(target)] } : {};
+  }
+
   function clearPrivilegedSurface() {
     setDraft("");
     setReplyDraft("");
@@ -248,7 +267,8 @@ export function CommentsSection({
       }
       return;
     }
-    if (result.data.entityKind !== kindSnap || result.data.entityId !== entitySnap) {
+    if (result.data.entityKind !== kindSnap || result.data.entityId !== entitySnap
+      || !result.data.items.every(isCommentView)) {
       if (!append) {
         setPage(null);
         setPageBind(null);
@@ -322,6 +342,10 @@ export function CommentsSection({
     (data, pending) => {
       if (!settlementLive()) return;
       if (!pending || data.entityKind !== kind || data.entityId !== entityId) return;
+      const body = pending.body as { photoIds?: string[]; parentCommentId?: string; expectedVersion?: number };
+      const photoTarget = pending.method === "POST" ? (body.parentCommentId ? `reply:${body.parentCommentId}` : "root")
+        : pending.method === "PUT" ? `edit:${data.id}:${body.expectedVersion}` : undefined;
+      photos.published(body.photoIds ?? [], photoTarget);
       setStatus("Комментарий сохранён.");
       if (pending.method === "POST" && !(pending.body as { parentCommentId?: string }).parentCommentId) {
         setDraft("");
@@ -331,6 +355,7 @@ export function CommentsSection({
         setReplyFor(null);
       }
       if (pending.method === "PUT") {
+        photos.discardRetained(`edit:${data.id}:${(pending.body as { expectedVersion: number }).expectedVersion}`);
         setEditId(null);
         setEditDraft("");
       }
@@ -349,21 +374,13 @@ export function CommentsSection({
     {
       holdCorruptStorage: true,
       validatePending: (pending) => {
-        const pathOk = pending.path === createEntityCommentPath(kind, entityId)
-          || /^\/v1\/comments\/[0-9a-f-]{36}$/i.test(pending.path);
-        if (!pathOk) return false;
-        if (pending.method === "POST") {
-          const body = pending.body as { text?: unknown; parentCommentId?: unknown };
-          return typeof body.text === "string"
-            && (body.parentCommentId == null || typeof body.parentCommentId === "string");
-        }
-        if (pending.method === "PUT") {
-          const body = pending.body as { text?: unknown; expectedVersion?: unknown };
-          return typeof body.text === "string" && typeof body.expectedVersion === "number";
-        }
-        if (pending.method === "DELETE") {
-          return typeof (pending.body as { expectedVersion?: unknown }).expectedVersion === "number";
-        }
+        if (!settlementLive() || !me || !pending || !pending.body || typeof pending.body !== "object") return false;
+        const body = pending.body as { text?: string; photoIds?: string[] };
+        if (kind === "game" && (body.photoIds !== undefined || (pending.method !== "DELETE" && !textReady(body.text ?? "")))) return false;
+        if (pending.method === "POST") return pending.path === createEntityCommentPath(kind, entityId) && isCommentCreateBody(body);
+        if (!/^\/v1\/comments\/[0-9a-f-]{36}$/i.test(pending.path)) return false;
+        if (pending.method === "PUT") return isCommentUpdateBody(body);
+        if (pending.method === "DELETE") return isCommentDeleteBody(body);
         return false;
       },
       validateSuccess: (data, pending) => {
@@ -371,9 +388,20 @@ export function CommentsSection({
         if (!settlementLive()) return false;
         if (!pending || !isCommentView(data)) return false;
         if (data.entityKind !== kind || data.entityId !== entityId) return false;
+        const frozen = pending.body as { photoIds?: string[] };
+        if (kind === "venue") {
+          const expected = frozen.photoIds;
+          if (expected !== undefined && (!validPhotoIds(expected)
+            || JSON.stringify(data.photos?.map((p) => p.id) ?? []) !== JSON.stringify(expected))) return false;
+          if (pending.method === "PUT" && expected === undefined) {
+            const old = currentPage?.items.find((item) => pending.path === updateEntityCommentPath(item.id));
+            if (old ? JSON.stringify(data.photos?.map((p) => p.id) ?? []) !== JSON.stringify(old.photos?.map((p) => p.id) ?? []) : Boolean(data.photos?.length)) return false;
+          }
+        }
         if (pending.method === "POST") {
           const body = pending.body as { text: string; parentCommentId?: string | null };
-          if (data.deleted || data.body !== body.text) return false;
+          if (pending.path !== createEntityCommentPath(kind, entityId) || !isPhotoId(data.id) || data.version !== 1) return false;
+          if (data.deleted || !commentPresentationMatches(data.body, body.text)) return false;
           if ((body.parentCommentId ?? null) !== (data.parentCommentId ?? null)) return false;
           return data.mine === true;
         }
@@ -381,19 +409,23 @@ export function CommentsSection({
           const body = pending.body as { text: string; expectedVersion: number };
           // Bind to exact pending.path comment id — unrelated same version/body rejected.
           if (pending.path !== updateEntityCommentPath(data.id)) return false;
-          return !data.deleted && data.body === body.text && data.version === body.expectedVersion + 1 && data.mine;
+          const old = currentPage?.items.find((item) => item.id === data.id)
+            ?? Object.values(expandedReplies).flat().find((item) => item.id === data.id);
+          if ((data.parentCommentId ?? null) !== (old?.parentCommentId ?? null)) return false;
+          return !data.deleted && commentPresentationMatches(data.body, body.text) && data.version === body.expectedVersion + 1 && data.mine === true;
         }
         if (pending.method === "DELETE") {
           const body = pending.body as { expectedVersion: number };
           if (pending.path !== deleteEntityCommentPath(data.id)) return false;
-          return data.deleted && data.body === null && data.version === body.expectedVersion + 1 && data.mine;
+          return data.deleted && data.body === null && (data.parentCommentId ?? null) === null
+            && !(data.photos?.length) && data.version === body.expectedVersion + 1 && data.mine === true;
         }
         return false;
       },
     },
   );
 
-  useEffect(() => { onUnresolvedChange?.(Boolean(mutation.busy || mutation.pending)); }, [mutation.busy, mutation.pending, onUnresolvedChange]);
+  useEffect(() => { onUnresolvedChange?.(Boolean(mutation.busy || mutation.pending || photos.unresolved)); }, [mutation.busy, mutation.pending, photos.unresolved, onUnresolvedChange]);
 
   async function loadReplies(parentId: string, reset = false) {
     const current = generation.current;
@@ -409,7 +441,8 @@ export function CommentsSection({
     });
     if (current !== generation.current) return;
     if (!sameContext(kindSnap, entitySnap, authSnap)) return;
-    if (!result.ok || result.data.entityId !== entitySnap) return;
+    if (!result.ok || result.data.entityId !== entitySnap || result.data.entityKind !== kindSnap
+      || !result.data.items.every((item) => isCommentView(item) && item.parentCommentId === parentId)) return;
     setExpandedReplies((prev) => ({
       ...prev,
       [parentId]: reset
@@ -451,7 +484,7 @@ export function CommentsSection({
     notice: moderationNotice ?? mutation.notice,
     pending: mutation.pending,
     busy: mutation.busy,
-    retry: mutation.retry,
+    retry: () => { if (settlementLive()) mutation.retry(); },
   };
   /** Drop stale own edit/delete chrome when bound write capability is revoked. */
   if (currentPage && !canCreate) {
@@ -498,10 +531,10 @@ export function CommentsSection({
           className="gb-comments__composer"
           onSubmit={(e) => {
             e.preventDefault();
-            if (!textReady(draft) || locked) return;
+            if (!contentReady("root", draft) || locked) return;
             const text = draft.replace(/^\s+|\s+$/gu, "");
             if (unicodeLen(text) > TEXT_MAX) return;
-            admitMutation(createEntityCommentPath(kind, entityId), { text, parentCommentId: null });
+            admitMutation(createEntityCommentPath(kind, entityId), { text, parentCommentId: null, ...photoBody("root") });
           }}
         >
           <Avatar name={me.displayName || "Вы"} tone="lime" className="avatar avatar--lime gb-comments__avatar" />
@@ -516,7 +549,8 @@ export function CommentsSection({
               placeholder="Ваш комментарий"
             />
           </label>
-          <Button type="submit" disabled={locked || !textReady(draft)} loading={mutation.busy && !mutation.pending}>
+          {kind === "venue" ? <VenueCommentPhotoComposer model={photos} target="root" disabled={Boolean(locked)} /> : null}
+          <Button type="submit" disabled={locked || !contentReady("root", draft)} loading={mutation.busy && !mutation.pending}>
             Отправить
           </Button>
         </form>
@@ -557,19 +591,26 @@ export function CommentsSection({
                 locked={locked}
                 editing={editId === item.id}
                 editDraft={editDraft}
+                editReady={contentReady(`edit:${item.id}:${item.version}`, editDraft)}
+                replyReady={contentReady(`reply:${item.id}`, replyDraft)}
+                editPhotos={kind === "venue" ? <VenueCommentPhotoComposer key={`edit:${item.id}:${item.version}`} model={photos} target={`edit:${item.id}:${item.version}`} disabled={Boolean(locked)} /> : null}
+                replyPhotos={kind === "venue" ? <VenueCommentPhotoComposer key={`reply:${item.id}`} model={photos} target={`reply:${item.id}`} disabled={Boolean(locked)} /> : null}
+                onRefreshPhotos={() => void reload()}
                 onEditDraft={setEditDraft}
                 onStartEdit={() => {
+                  if (kind === "venue") photos.retain(`edit:${item.id}:${item.version}`, item.photos ?? []);
                   setEditId(item.id);
                   setEditDraft(item.body ?? "");
                   setMenuFor(null);
                 }}
-                onCancelEdit={() => { setEditId(null); setEditDraft(""); }}
+                onCancelEdit={() => { photos.discardRetained(`edit:${item.id}:${item.version}`); setEditId(null); setEditDraft(""); }}
                 onSaveEdit={() => {
-                  if (!canCreate || !item.mine || !textReady(editDraft) || locked) return;
+                  if (!canCreate || !item.mine || !contentReady(`edit:${item.id}:${item.version}`, editDraft) || locked) return;
                   const text = editDraft.replace(/^\s+|\s+$/gu, "");
                   admitMutation(updateEntityCommentPath(item.id), {
                     text,
                     expectedVersion: item.version,
+                    ...photoBody(`edit:${item.id}:${item.version}`),
                   }, "PUT");
                 }}
                 onDelete={() => {
@@ -587,11 +628,12 @@ export function CommentsSection({
                   if (!expandedReplies[item.id] && item.replyCount > 0) void loadReplies(item.id, true);
                 }}
                 onSubmitReply={() => {
-                  if (!canCreate || !textReady(replyDraft) || locked) return;
+                  if (!canCreate || !contentReady(`reply:${item.id}`, replyDraft) || locked) return;
                   const text = replyDraft.replace(/^\s+|\s+$/gu, "");
                   admitMutation(createEntityCommentPath(kind, entityId), {
                     text,
                     parentCommentId: item.id,
+                    ...photoBody(`reply:${item.id}`),
                   });
                 }}
                 replies={expandedReplies[item.id]}
@@ -683,6 +725,7 @@ function CommentArticle({
   locked,
   editing,
   editDraft,
+  editReady, replyReady, editPhotos, replyPhotos, onRefreshPhotos,
   onEditDraft,
   onStartEdit,
   onCancelEdit,
@@ -714,6 +757,7 @@ function CommentArticle({
   locked: boolean;
   editing: boolean;
   editDraft: string;
+  editReady: boolean; replyReady: boolean; editPhotos: ReactNode; replyPhotos: ReactNode; onRefreshPhotos: () => void;
   onEditDraft: (value: string) => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
@@ -850,13 +894,22 @@ function CommentArticle({
                   onChange={(e) => onEditDraft(e.target.value)}
                 />
               </label>
+              {editPhotos}
+              {entityKind === "venue" ? <div className="gb-comment-photo-composer__accepted">
+                <p>Текущая публикация сохраняется до успешного изменения.</p>
+                <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
+                <CommentPhotos comment={item} onRefresh={onRefreshPhotos} />
+              </div> : null}
               <div className="gb-comments__dialog-actions">
                 <Button type="button" variant="outline" disabled={locked} onClick={onCancelEdit}>Отмена</Button>
-                <Button type="submit" disabled={locked || !textReady(editDraft)}>Сохранить</Button>
+                <Button type="submit" disabled={locked || !editReady}>Сохранить</Button>
               </div>
             </form>
           ) : (
-            <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
+            <>
+              <CommentBody text={item.body ?? ""} expanded={expanded} onExpand={onExpand} />
+              <CommentPhotos comment={item} onRefresh={onRefreshPhotos} />
+            </>
           )}
 
           {me && canCreate ? (
@@ -925,6 +978,7 @@ function CommentArticle({
                       expanded={Boolean(expandedTextMap[reply.id])}
                       onExpand={() => onExpandText(reply.id)}
                     />
+                    <CommentPhotos comment={reply} onRefresh={onRefreshPhotos} />
                   </>
                 )}
               </article>
@@ -953,7 +1007,8 @@ function CommentArticle({
               placeholder="Ваш ответ"
             />
           </label>
-          <Button type="submit" disabled={locked || !textReady(replyDraft)}>Ответить</Button>
+          {replyPhotos}
+          <Button type="submit" disabled={locked || !replyReady}>Ответить</Button>
         </form>
       ) : null}
     </article>

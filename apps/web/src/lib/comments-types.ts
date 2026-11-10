@@ -12,6 +12,8 @@ export type CommentAuthor = {
   profilePublic: boolean;
 };
 
+export type CommentPhoto = { id: string; width: number; height: number; url: string };
+
 export type EntityComment = {
   id: string;
   entityKind: CommentEntityKind;
@@ -26,6 +28,8 @@ export type EntityComment = {
   mine: boolean;
   author: CommentAuthor | null;
   replyCount: number;
+  /** Absent on legacy text-only game DTOs. */
+  photos?: CommentPhoto[];
 };
 
 export type EntityCommentPage = {
@@ -39,12 +43,14 @@ export type EntityCommentPage = {
 };
 
 export type CreateCommentBody = {
-  text: string;
+  text?: string | null;
+  photoIds?: string[];
   parentCommentId?: string | null;
 };
 
 export type UpdateCommentBody = {
-  text: string;
+  text?: string | null;
+  photoIds?: string[];
   expectedVersion: number;
 };
 
