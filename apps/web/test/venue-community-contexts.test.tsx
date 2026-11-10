@@ -1,10 +1,10 @@
 /** @vitest-environment jsdom */
-import { readFileSync } from "node:fs";
 import { cleanup, render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import { createElement, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommunityRatingSummary } from "../src/lib/venue-community-api";
 import type * as ApiClientModule from "../src/lib/api-client";
+import { DESKTOP_MAP_INSPECTOR_MQ } from "../src/components/consumer/games/DesktopMapInspector";
 
 const V1 = "10000000-0000-4000-8000-000000000001";
 const V2 = "10000000-0000-4000-8000-000000000002";
@@ -1842,12 +1842,135 @@ describe("mounted map and discovery lifecycle authorities", () => {
   });
 });
 
-it("R3.1 mounted owner contract: VenueSheet keeps one infoBody host across desktop presentation", () => {
-  const sheet = readFileSync(new URL("../src/components/consumer/games/VenueSheet.tsx", import.meta.url), "utf8");
-  expect(sheet).toContain("VenueCommunityContent");
-  expect(sheet).toContain('className={desktop ? "gb-desktop-overlay-body" : "gb-venue-sheet-scroll"}');
-  expect(sheet).toContain("hidden={desktop ? currentView !== \"info\" : undefined}");
-  expect(sheet).toContain("inert={desktop && currentView !== \"info\" ? true : undefined}");
-  expect(sheet.split("{infoBody}").length - 1).toBe(1);
-  expect(sheet).not.toMatch(/desktop \? <>[\s\S]*\{infoBody\}[\s\S]*: <>[\s\S]*\{infoBody\}/);
+it("R3.1 mounted owner contract: VenueSheet keeps one VenueCommunityContent DOM owner across 390→1280→390", async () => {
+  let width = 390;
+  const listeners = new Set<() => void>();
+  const matchMedia = (query: string) => ({
+    get matches() {
+      if (query.includes("prefers-reduced-motion")) return false;
+      if (query === DESKTOP_MAP_INSPECTOR_MQ || query.includes("min-width: 1024px")) return width >= 1024;
+      return false;
+    },
+    media: query,
+    addEventListener(_name: string, fn: () => void) { listeners.add(fn); },
+    removeEventListener(_name: string, fn: () => void) { listeners.delete(fn); },
+    addListener(fn: () => void) { listeners.add(fn); },
+    removeListener(fn: () => void) { listeners.delete(fn); },
+  });
+  vi.stubGlobal("matchMedia", matchMedia);
+  window.matchMedia = matchMedia as typeof window.matchMedia;
+
+  const draftValue = 4;
+  fetchMock.handler = async (url, init) => {
+    if (url.includes("venue-community-summaries")) {
+      return jsonResponse({ items: [summary(V1, V1, "available", 4.2, 5)] });
+    }
+    if (url.includes("/community-rating/me")) {
+      return jsonResponse({
+        own: {
+          venueId: V1,
+          canonicalVenueId: V1,
+          value: null,
+          version: 0,
+          withdrawn: false,
+          moderationState: "clear",
+          allowedActions: { upsert: true, update: false, withdraw: false },
+        },
+        summary: summary(V1, V1, "available", 4.2, 5),
+      });
+    }
+    if (url.includes("/community-rating") && init?.method === "PUT") {
+      return jsonResponse({}, 503);
+    }
+    // Comments/reviews use response.text() via apiFetch — real Response bodies.
+    if (url.includes("/comments")) {
+      return new Response(JSON.stringify({
+        entityKind: "venue",
+        entityId: V1,
+        parentCommentId: null,
+        visibleCount: 0,
+        canCreate: true,
+        nextCursor: null,
+        items: [],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("experience-reviews") || url.includes("/venue-reviews")) {
+      return new Response(JSON.stringify({
+        venueId: V1,
+        publishedCount: 0,
+        items: [],
+        nextCursor: null,
+        canWriteHint: false,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Unexpected request ${url}`);
+  };
+
+  const { VenueSheet } = await import("../src/components/consumer/games/VenueSheet");
+  const venue = {
+    id: V1,
+    cityId: "a0000000-0000-4000-8000-000000000001",
+    name: "Зал удержание",
+    address: "Адрес",
+    timezone: "Europe/Moscow",
+  };
+  const me = { id: ACTOR, displayName: "Тест", locale: "ru", linkedProviders: [] as string[], csrfToken: CSRF };
+  const unresolved = vi.fn();
+
+  render(createElement(VenueSheet, {
+    venue,
+    games: [],
+    gamesReady: true,
+    now: 0,
+    embedded: true,
+    active: true,
+    onCollapse() {},
+    onDeselect() {},
+    onCommunitySectionChange: vi.fn(),
+    onUnresolvedChange: unresolved,
+    me,
+    authReturnPath: "/games?view=map",
+  }));
+
+  await waitFor(() => expect(document.querySelector("[data-venue-community]")).toBeTruthy());
+  await waitFor(() => expect((screen.getByRole("radio", { name: "4 из 5" }) as HTMLButtonElement).disabled).toBe(false));
+  const owner = document.querySelector("[data-venue-community]")!;
+  expect(document.querySelectorAll("[data-venue-community]")).toHaveLength(1);
+
+  fireEvent.click(screen.getByRole("radio", { name: `${draftValue} из 5` }));
+  expect(screen.getByRole("radio", { name: `${draftValue} из 5` }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Отправить оценку" }));
+  await screen.findByTestId("venue-community-vote-unknown");
+  const unknown = screen.getByTestId("venue-community-vote-unknown");
+  const frozenPut = fetchMock.calls.find(call => call.method === "PUT");
+  expect(frozenPut).toBeTruthy();
+  expect(JSON.parse(frozenPut!.body!)).toEqual({ value: draftValue, expectedVersion: 0 });
+  expect(unresolved).toHaveBeenLastCalledWith(true);
+
+  const setWidth = (next: number) => {
+    width = next;
+    act(() => { listeners.forEach(fn => fn()); });
+  };
+
+  setWidth(1280);
+  expect(document.querySelectorAll("[data-venue-community]")).toHaveLength(1);
+  expect(document.querySelector("[data-venue-community]")).toBe(owner);
+  expect(JSON.parse(frozenPut!.body!)).toEqual({ value: draftValue, expectedVersion: 0 });
+  expect(screen.getByTestId("venue-community-vote-unknown")).toBe(unknown);
+  expect(document.querySelector(".gb-desktop-overlay-body")).toBeTruthy();
+  expect(document.querySelector(".gb-venue-sheet")?.getAttribute("data-desktop")).toBe("true");
+
+  setWidth(390);
+  expect(document.querySelectorAll("[data-venue-community]")).toHaveLength(1);
+  expect(document.querySelector("[data-venue-community]")).toBe(owner);
+  expect(screen.getByTestId("venue-community-vote-unknown")).toBe(unknown);
+  expect(document.querySelector(".gb-venue-sheet-scroll")).toBeTruthy();
+  expect(document.querySelector(".gb-venue-sheet")?.getAttribute("data-desktop")).not.toBe("true");
+
+  fireEvent.click(screen.getByRole("button", { name: "Повторить тот же запрос" }));
+  await waitFor(() => expect(fetchMock.calls.filter(call => call.method === "PUT")).toHaveLength(2));
+  const retry = fetchMock.calls.filter(call => call.method === "PUT")[1]!;
+  expect(retry.body).toBe(frozenPut!.body);
+  expect(JSON.parse(retry.body!)).toEqual({ value: draftValue, expectedVersion: 0 });
+  expect(new Headers(retry.headers).get("idempotency-key")).toBe(new Headers(frozenPut!.headers).get("idempotency-key"));
 });

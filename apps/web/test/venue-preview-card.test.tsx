@@ -407,10 +407,13 @@ it("keeps compact copy geometry honest: cover badge, gap 0, no sixth illustratio
 });
 
 it("keeps VenueCommunityContent under one overview host across desktop MQ flips", () => {
+  // Node fakeReact structural positions only. active=false so modal lifecycle no-ops
+  // without inventing a global document stub; DOM retention is proven in jsdom contexts.
   const media = { matches: false, listeners: [] as Array<() => void> };
   Object.assign(window, {
     matchMedia: (query: string) => ({
-      matches: query.includes("prefers-reduced-motion") ? false : media.matches,
+      // Getter: listeners must observe later media.matches flips (same as desktop-map-inspector harness).
+      get matches() { return query.includes("prefers-reduced-motion") ? false : media.matches; },
       addEventListener(_name: string, fn: () => void) { media.listeners.push(fn); },
       removeEventListener(_name: string, fn: () => void) { media.listeners = media.listeners.filter(listener => listener !== fn); },
       addListener(fn: () => void) { media.listeners.push(fn); },
@@ -423,7 +426,7 @@ it("keeps VenueCommunityContent under one overview host across desktop MQ flips"
     gamesReady: true,
     now: 0,
     embedded: true,
-    active: true,
+    active: false,
     onCollapse() {},
     onDeselect() {},
     onCommunitySectionChange: vi.fn(),
@@ -458,8 +461,10 @@ it("keeps VenueCommunityContent under one overview host across desktop MQ flips"
   // Same overview-first-child host position: only the presentation class flips with MQ.
   const overview = popupElements(desktop).find(node => node.props.className === "gb-venue-sheet-overview");
   const overviewKids = Children.toArray((overview?.props.children ?? []) as ReactNode);
-  expect(isValidElement(overviewKids[0])).toBe(true);
-  expect((overviewKids[0] as React.ReactElement).props.className).toBe("gb-desktop-overlay-body");
+  const overviewHost = overviewKids[0];
+  expect(isValidElement<Record<string, unknown>>(overviewHost)).toBe(true);
+  if (!isValidElement<Record<string, unknown>>(overviewHost)) throw new Error("expected overview host element");
+  expect(overviewHost.props.className).toBe("gb-desktop-overlay-body");
   media.matches = false;
   media.listeners.forEach(fn => fn());
   hooks.cursor = 0;
