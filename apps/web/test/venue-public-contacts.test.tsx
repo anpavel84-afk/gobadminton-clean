@@ -19,13 +19,34 @@ vi.mock("react", async original => {
    return [typeof initial === "function" ? (initial as () => T)() : initial, () => {}];
   },
   useEffect: (...args: Parameters<typeof actual.useEffect>) => hooks.active ? undefined : actual.useEffect(...args),
+  useLayoutEffect: (...args: Parameters<typeof actual.useLayoutEffect>) => hooks.active ? undefined : actual.useLayoutEffect(...args),
   useRef: (value: unknown) => hooks.active ? { current: value } : actual.useRef(value),
   useId: () => hooks.active ? "contacts" : actual.useId(),
+  useMemo<T>(factory: () => T, deps?: readonly unknown[]) {
+   if (!hooks.active) return actual.useMemo(factory, deps);
+   return factory();
+  },
+  useCallback<T extends (...args: never[]) => unknown>(fn: T, _deps?: readonly unknown[]) {
+   if (!hooks.active) return actual.useCallback(fn, _deps as never);
+   return fn;
+  },
   useContext<T>(context: React.Context<T>) {
    return hooks.active ? (context as React.Context<T> & { _currentValue: T })._currentValue : actual.useContext(context);
   },
  };
 });
+// Inline community is covered by dedicated suites; keep contacts walk on real VenuePublicContacts.
+vi.mock("../src/components/consumer/venues/VenueCommunityContent", () => ({
+ VenueCommunityContent: (props: { venueId: string }) => (
+  <div data-testid="venue-community-inline" data-venue-id={props.venueId}>
+   <h2>Оценки сообщества</h2>
+   <p>Войдите, чтобы поставить свою оценку.</p>
+   <h2>Обсуждение площадки</h2>
+   <p>Чтение доступно без входа.</p>
+   <h2>Отзывы после игры</h2>
+  </div>
+ ),
+}));
 vi.mock("next/link",()=>({default:({href,children}:{href:string;children:React.ReactNode})=><a href={href}>{children}</a>}));
 const venue:VenueSummary={id:"venue",cityId:"city",name:"Зал",address:"Адрес",timezone:"Europe/Moscow"};
 function walk(node:React.ReactNode):React.ReactElement<Record<string,unknown>>[]{
@@ -68,16 +89,14 @@ describe("VenueSheet public organization contacts",()=>{
    const {html,nodes,onCommunitySectionChange}=render({phone:"+1234567",website,messengers:[]});
    expect(html).toContain('tel:+1234567');
    expect(nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('tel:'))).toHaveLength(0);
-   const compactRatings=nodes.filter(n=>n.type==='span' && n.props['data-testid']==='venue-community-compact');
-   expect(compactRatings).toHaveLength(1);
-   expect(compactRatings[0]?.props.children).toBe("Оценки загружаются…");
-   const rateButton=nodes.find(n=>n.type==='button' && n.props.children==='Оценить');
-   expect(rateButton?.props.type).toBe('button');
-   if(typeof rateButton?.props.onClick!=='function')throw new Error("Missing in-surface ratings button handler");
+   expect(nodes.filter(n=>n.type==='button' && n.props.children==='Оценить')).toHaveLength(0);
+   expect(nodes.some(n=>n.props['data-testid']==='venue-community-inline')).toBe(true);
+   expect(html).toContain("Оценки сообщества");
+   expect(html).toContain("Войдите, чтобы поставить свою оценку.");
+   expect(html).toContain("Чтение доступно без входа.");
+   expect(html).not.toContain('gb-venue-community__compact-link');
+   expect(nodes.some(n=>n.type==='a' && String(n.props.href).startsWith('/venues/'))).toBe(false);
    expect(onCommunitySectionChange).not.toHaveBeenCalled();
-   rateButton.props.onClick();
-   expect(onCommunitySectionChange).toHaveBeenCalledTimes(1);
-   expect(onCommunitySectionChange).toHaveBeenCalledWith("ratings");
   }
   for(const [raw,expected] of [[" HTTP://Example.COM:80/a/../b ","http://example.com/b"],["https://[::1]/","https://[::1]/"],["https://127.0.0.1/","https://127.0.0.1/"],[" ".repeat(310)+"https://example.com/","https://example.com/"]]){
    expect(render({phone:null,website:raw,messengers:[]}).nodes.some(n=>n.props.href===expected)).toBe(true);

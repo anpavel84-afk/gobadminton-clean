@@ -227,7 +227,43 @@ afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount
 
 import type * as ApiClient from "../src/lib/api-client";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
-const transport = vi.hoisted(() => ({ venues: vi.fn(), games: vi.fn(), apiFetch: vi.fn() }));
+const transport = vi.hoisted(() => ({
+  venues: vi.fn(),
+  games: vi.fn(),
+  apiFetch: vi.fn(),
+  getMe: vi.fn(),
+}));
+function communityApiResult(path: string) {
+  if (path === "/v1/me" || path.startsWith("/v1/me?")) {
+    return { ok: false as const, status: 401, error: "Unauthorized" };
+  }
+  if (path.includes("/experience-reviews")) {
+    const venueId = /\/venues\/([^/]+)\/experience-reviews/.exec(path)?.[1] ?? "venue";
+    return {
+      ok: true as const,
+      status: 200,
+      data: { venueId: decodeURIComponent(venueId), publishedCount: 0, items: [], nextCursor: null, canWriteHint: false },
+    };
+  }
+  if (path.includes("/comments")) {
+    const venueMatch = /\/venues\/([^/]+)\/comments/.exec(path);
+    const entityId = decodeURIComponent(venueMatch?.[1] ?? "venue");
+    return {
+      ok: true as const,
+      status: 200,
+      data: {
+        entityKind: "venue" as const,
+        entityId,
+        parentCommentId: null,
+        items: [],
+        nextCursor: null,
+        visibleCount: 0,
+        canCreate: false,
+      },
+    };
+  }
+  return { ok: false as const, status: 404, error: `unmocked ${path}` };
+}
 const dynamicRegistry = vi.hoisted(() => new Map<string, (props: Record<string, unknown>) => ReactNode>());
 vi.mock("next/dynamic", () => ({ default: (loader: () => unknown) => {
   const key = String(loader).includes("GamesVenueMap") ? "venues" : "radar";
@@ -239,8 +275,11 @@ vi.mock("next/link", () => ({ default: (props: Record<string, unknown>) => <a {.
 vi.mock("next/navigation", () => ({ usePathname: () => "/games", useRouter: () => ({ push: navigation, replace: navigation }), useSearchParams: () => new URLSearchParams() }));
 vi.mock("../src/lib/api-client", async original => {
   const actual = await original<typeof ApiClient>();
-  const partial: Pick<typeof ApiClient, "listAllCityVenues" | "listAllUpcomingCityGames" | "apiFetch"> = {
-    listAllCityVenues: transport.venues, listAllUpcomingCityGames: transport.games, apiFetch: transport.apiFetch,
+  const partial: Pick<typeof ApiClient, "listAllCityVenues" | "listAllUpcomingCityGames" | "apiFetch" | "getMe"> = {
+    listAllCityVenues: transport.venues,
+    listAllUpcomingCityGames: transport.games,
+    apiFetch: transport.apiFetch,
+    getMe: transport.getMe,
   };
   return { ...actual, ...partial };
 });
@@ -293,14 +332,28 @@ const returnToList = vi.fn();
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] }); maps.length = 0; markerButtons.length = 0; currentCity = MOSCOW_BUNDLE.cityId; navigation.mockClear(); returnToList.mockClear();
   transport.venues.mockReset().mockResolvedValue({ ok: true, data: [venue, { ...venue, id: "unselected", name: "Другой зал" }] });
-  transport.games.mockReset().mockResolvedValue({ ok: true, data: [game] }); transport.apiFetch.mockReset();
+  transport.games.mockReset().mockResolvedValue({ ok: true, data: [game] });
+  transport.apiFetch.mockReset().mockImplementation(async (path: string) => communityApiResult(path));
+  transport.getMe.mockReset().mockImplementation(async () => communityApiResult("/v1/me"));
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { pathname: "/games", search: "?view=map", hash: "", href: "https://dev.gobadminton.ru/games?view=map", origin: new URL(MOSCOW_BUNDLE.prefix).origin, assign: navigation }, matchMedia: () => ({ matches: false }), innerHeight: 800, getComputedStyle: (node: Node) => ({ visibility: node.visibility }) }));
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem() {}, removeItem() {} });
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16)); vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, arrayBuffer: async () => new TextEncoder().encode('{"version":8,"sources":{},"layers":[]}') })));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/v1/venue-community-summaries")) {
+      const ids = new URL(url, "https://dev.gobadminton.ru").searchParams.get("venueIds")?.split(",").filter(Boolean) ?? [venue.id];
+      return {
+        ok: true,
+        json: async () => ({
+          items: ids.map(id => ({ venueId: id, canonicalVenueId: id, state: "empty" as const, average: null, count: null })),
+        }),
+      };
+    }
+    return { ok: true, arrayBuffer: async () => new TextEncoder().encode('{"version":8,"sources":{},"layers":[]}'), text: async () => '{"version":8,"sources":{},"layers":[]}', json: async () => ({ version: 8, sources: {}, layers: [] }) };
+  }));
   const bytes = MOSCOW_BUNDLE.styleHash.match(/../g); if (!bytes) throw new Error("Invalid hash");
-  vi.stubGlobal("crypto", { subtle: { digest: async () => new Uint8Array(bytes.map(hex => parseInt(hex, 16))).buffer } });
+  vi.stubGlobal("crypto", { subtle: { digest: async () => new Uint8Array(bytes.map(hex => parseInt(hex, 16))).buffer, randomUUID: () => "00000000-0000-4000-8000-000000000099" } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => { vi.useRealTimers(); });
@@ -375,7 +428,7 @@ it.each(["onPointerCancel", "onLostPointerCapture"])("cleans capture on %s and p
   expect(renderer.nodes().some(node => node.className.includes("gb-venue-sheet-cover"))).toBe(false);
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   gesture(renderer, "onPointerDown", 0, 600); gesture(renderer, "onPointerMove", 80, 601, 100);
-  expect(surface(renderer).style.height).toBe("224px"); expect(surface(renderer).props["data-moving"]).toBe(false);
+  expect(surface(renderer).style.height).toBe("172px"); expect(surface(renderer).props["data-moving"]).toBe(false);
   const prevent = vi.fn(); const stop = vi.fn();
   handler(surface(renderer), "onClickCapture", { detail: 1, preventDefault: prevent, stopPropagation: stop });
   expect(prevent).toHaveBeenCalledOnce();
