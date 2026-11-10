@@ -25813,6 +25813,7 @@
           "Admin"
         ],
         "operationId": "listScopedVenuePhotoCandidates",
+        "x-client-surface": "admin-only",
         "summary": "Read the bounded pending candidate queue",
         "security": [
           {
@@ -25885,6 +25886,7 @@
           "Admin"
         ],
         "operationId": "getScopedVenuePhotoCandidateContent",
+        "x-client-surface": "admin-only",
         "summary": "Private scoped pending preview; conditional headers never bypass authority",
         "security": [
           {
@@ -25949,6 +25951,7 @@
           "Admin"
         ],
         "operationId": "decideScopedVenuePhotoCandidate",
+        "x-client-surface": "admin-only",
         "summary": "Genuine privileged accept/reject with fresh step-up",
         "description": "Reuses existing venue.manage scope: active principal, creator-or-superadmin, live venue. Locks current owner, catalog, venue, gallery, candidate and exact stored approval/bytes. Rechecks both versions, rights and capacity 8. Accept reuses paid exact current-policy image ALLOW, prepares freeCreditTextCandidate via approveTexts outside DB locks and binds venue_credit_text atomically with gallery/provenance/audit. Append by default; existing official cover is preserved. Reject/withdraw/provider failure leave official media unchanged. Existing immutable audit binds the exact reviewed version/owner/bytes/rights/evidence. Same-key UNKNOWN is never replayed into external preparation.",
         "security": [

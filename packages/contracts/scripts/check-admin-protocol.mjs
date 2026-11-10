@@ -35,7 +35,8 @@ for(const [path,item] of Object.entries(api.paths)) {
 // + pilot metrics summary GET (#460).
 // + GET /admin/cases/{id}/message-reports/{reportId} (exact additive Admin message-report source).
 // + GET /admin/cases/{id}/community-reports/{reportId} (#507 I1 F3 assigned community source read).
-assert.equal(operations,53,"Update this inventory deliberately when adding an Admin operation");
+// + Candidate queue GET, private content GET, and decision POST (#507 I3a).
+assert.equal(operations,56,"Update this inventory deliberately when adding an Admin operation");
 const moderationGet=api.paths["/admin/audit/moderation"]?.get;
 assert.ok(moderationGet,"Missing GET /admin/audit/moderation");
 assert.equal(moderationGet["x-client-surface"],"admin-only");
