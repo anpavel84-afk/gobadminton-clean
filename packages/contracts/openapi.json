@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.40.0",
+    "version": "0.41.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -24323,6 +24323,145 @@
           }
         }
       }
+    },
+    "/me/venue-reviews/{id}": {
+      "get": {
+        "operationId": "getOwnVenueReview",
+        "tags": [
+          "Venues"
+        ],
+        "summary": "Read exactly one own venue review and its persisted edit basis",
+        "description": "Cookie owner only; other owner, absent and malformed id share RESOURCE_UNAVAILABLE 404. No-store, consistent read-only snapshot; no fence/window writes. Exact selected pending-first revision.game_id, no latest30/latest50 admission scan. Missing history or withdrawn revision is unavailable for editing; hold/window/canonical checks use existing write policy. This read never proves an unresolved command completed and never authorizes a future write. Withdrawal remains independent. Private provenance is never part of public review DTOs.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Selected private snapshot; unavailable edit basis remains truthful.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectedOwnVenueReview"
+                },
+                "examples": {
+                  "selected": {
+                    "value": {
+                      "id": "10000000-0000-4000-8000-000000000001",
+                      "reviewHandle": "abcdef0123456789abcdef0123456789",
+                      "venueId": "20000000-0000-4000-8000-000000000001",
+                      "status": "self_draft",
+                      "version": 7,
+                      "audience": "self_draft",
+                      "text": "Хорошее покрытие",
+                      "topics": [
+                        "surface"
+                      ],
+                      "pendingRevision": 4,
+                      "approvedRevision": null,
+                      "publicVisible": false,
+                      "notBefore": null,
+                      "firstEligibleAt": "2026-11-09T12:00:00Z",
+                      "receiptToken": null,
+                      "editContext": {
+                        "revisionId": "30000000-0000-4000-8000-000000000001",
+                        "resourceVersion": 4,
+                        "gameId": "40000000-0000-4000-8000-000000000001",
+                        "basis": {
+                          "gameId": "40000000-0000-4000-8000-000000000001",
+                          "gameTitle": "Игра",
+                          "admission": "may_submit",
+                          "reason": null,
+                          "outcomeVersion": 2,
+                          "attendanceVersion": 3,
+                          "firstEligibleAt": "2026-11-09T12:00:00Z",
+                          "helpHint": null
+                        }
+                      },
+                      "editUnavailableReason": null
+                    }
+                  },
+                  "missingHistory": {
+                    "value": {
+                      "id": "10000000-0000-4000-8000-000000000001",
+                      "reviewHandle": "abcdef0123456789abcdef0123456789",
+                      "venueId": "20000000-0000-4000-8000-000000000001",
+                      "status": "self_draft",
+                      "version": 7,
+                      "audience": "self_draft",
+                      "text": "Хорошее покрытие",
+                      "topics": [
+                        "surface"
+                      ],
+                      "pendingRevision": 4,
+                      "approvedRevision": null,
+                      "publicVisible": false,
+                      "notBefore": null,
+                      "firstEligibleAt": "2026-11-09T12:00:00Z",
+                      "receiptToken": null,
+                      "editContext": null,
+                      "editUnavailableReason": "missing_history"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Identical absent/other-owner response, before loading game history.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Ресурс недоступен",
+                  "status": 404,
+                  "code": "RESOURCE_UNAVAILABLE",
+                  "requestId": "synthetic-selected-404"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "x-operation-kind": "authenticated-read"
+      }
     }
   },
   "components": {
@@ -40383,6 +40522,224 @@
             "minimum": 1
           }
         }
+      },
+      "SelectedVenueReviewBasis": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "gameTitle",
+          "admission",
+          "reason",
+          "outcomeVersion",
+          "attendanceVersion",
+          "firstEligibleAt",
+          "helpHint"
+        ],
+        "properties": {
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "gameTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "admission": {
+            "type": "string",
+            "enum": [
+              "may_submit",
+              "hold",
+              "deny",
+              "missing_history"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcomeVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attendanceVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "firstEligibleAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "helpHint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "attendance_unmarked",
+              "attendance_clarifying",
+              "missing_history",
+              null
+            ]
+          }
+        }
+      },
+      "SelectedOwnVenueReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "reviewHandle",
+          "venueId",
+          "status",
+          "version",
+          "audience",
+          "text",
+          "topics",
+          "pendingRevision",
+          "approvedRevision",
+          "publicVisible",
+          "notBefore",
+          "firstEligibleAt",
+          "receiptToken",
+          "editContext",
+          "editUnavailableReason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reviewHandle": {
+            "type": "string"
+          },
+          "venueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "audience": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "self_draft",
+              "public_venue",
+              null
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topics": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "string",
+              "enum": [
+                "surface",
+                "lighting",
+                "amenities"
+              ]
+            }
+          },
+          "pendingRevision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "approvedRevision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "publicVisible": {
+            "type": "boolean"
+          },
+          "notBefore": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "firstEligibleAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "receiptToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "editContext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "revisionId",
+              "resourceVersion",
+              "gameId",
+              "basis"
+            ],
+            "properties": {
+              "revisionId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "resourceVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "gameId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "basis": {
+                "$ref": "#/components/schemas/SelectedVenueReviewBasis"
+              }
+            }
+          },
+          "editUnavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "withdrawn",
+              "missing_history",
+              null
+            ]
+          }
+        },
+        "description": "Private owner snapshot. Body and editContext come from exactly pending_revision_id else approved_revision_id, never a replacement game. version is slot CAS; resourceVersion identifies that immutable revision. Admission is current read-only information, revalidated by commands. No public quotation is returned."
       }
     }
   }

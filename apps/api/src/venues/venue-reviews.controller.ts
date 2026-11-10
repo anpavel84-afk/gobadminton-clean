@@ -61,6 +61,13 @@ export class VenueReviewsController {
     return this.reviews.listMine(actor.userId);
   }
 
+  @Get("me/venue-reviews/:id")
+  @Header("Cache-Control", "no-store")
+  async getMine(@Req() request: FastifyRequest, @Param("id") id: string) {
+    const actor = await this.auth.requireSession(request);
+    return this.reviews.getMine(actor.userId, id);
+  }
+
   @Post("me/venue-reviews/:id/commands")
   @Header("Cache-Control", "no-store")
   async ownCommand(
