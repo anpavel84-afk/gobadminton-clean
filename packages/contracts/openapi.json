@@ -42624,13 +42624,13 @@
           "creditUrl": {
             "type": "string",
             "format": "uri",
-            "pattern": "^https://",
+            "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
             "maxLength": 300
           },
           "sourceUrl": {
             "type": "string",
             "format": "uri",
-            "pattern": "^https://",
+            "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
             "maxLength": 300
           },
           "sourceAuthor": {
