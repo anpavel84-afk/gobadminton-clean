@@ -36,6 +36,10 @@ import {
   type TextSurface,
 } from "./text-policy";
 
+import type { ImagePreset } from "../profiles/avatar-image";
+
+export const COMMUNITY_PHOTO_POLICY = "community-photo-image-v1:inside1600-ladder-v1";
+const imagePolicy = (slot: ImagePreset) => slot === "community_photo" ? COMMUNITY_PHOTO_POLICY : IMAGE_POLICY;
 export const IMAGE_POLICY = "avatar-image-v1";
 export type ImageApproval = Readonly<{
   fingerprint: string;
@@ -79,7 +83,7 @@ export class ContentModerationService {
     @Inject(MODERATION_PROVIDER) private readonly provider: ContentModerationProvider) {
     if (provider.key === "fake" && (env.NODE_ENV !== "test" || env.APP_ENV !== "local")) throw new Error("Fake moderation requires local NODE_ENV=test");
   }
-  fingerprint(bytes: Buffer, slot: "avatar" | "cover" = "avatar"): string {
+  fingerprint(bytes: Buffer, slot: ImagePreset = "avatar"): string {
     if (!this.env.CONTENT_MODERATION_FINGERPRINT_SECRET) throw problem(503, "MODERATION_TEMPORARILY_UNAVAILABLE", "Проверка фото временно недоступна");
     return createHmac("sha256", this.env.CONTENT_MODERATION_FINGERPRINT_SECRET)
       .update(`moderation-fingerprint:v1:${slot}_image:`).update(bytes).digest("hex");
@@ -124,17 +128,19 @@ export class ContentModerationService {
       throw this.mismatchText();
     }
   }
-  async approveImage(actorId: string, bytes: Buffer, slot: "avatar" | "cover" = "avatar"): Promise<ImageApproval> {
+  async approveImage(actorId: string, bytes: Buffer, slot: ImagePreset = "avatar"): Promise<ImageApproval> {
     // Defense in depth at the port: original/noncanonical bytes cannot reach any provider.
     const metadata = await sharp(bytes).metadata();
-    if (bytes.length > 2 * 1024 * 1024 || metadata.format !== "png" || metadata.width !== (slot === "cover" ? 1200 : 512) || metadata.height !== (slot === "cover" ? 400 : 512) ||
+    if (bytes.length > 2 * 1024 * 1024 || metadata.format !== "png" || (slot === "community_photo"
+        ? !metadata.width || !metadata.height || metadata.width > 1600 || metadata.height > 1600
+        : metadata.width !== (slot === "cover" ? 1200 : 512) || metadata.height !== (slot === "cover" ? 400 : 512)) ||
       (metadata.pages ?? 1) !== 1 || metadata.exif || metadata.icc || metadata.xmp) throw this.mismatchImage();
     const fingerprint = this.fingerprint(bytes, slot);
     const cached = await this.pool.query<{category_flags: ImageDecision["categories"]; provider_response_id: string | null; checked_at: Date}>(
       `SELECT category_flags,provider_response_id,checked_at FROM content_moderation_approvals
        WHERE surface_key=$5 AND content_type='image' AND fingerprint_version=1 AND content_fingerprint=$1
        AND policy_version=$2 AND local_policy_version='none' AND provider_key=$3 AND provider_model=$4 AND decision='allow'`,
-      [fingerprint, IMAGE_POLICY, this.provider.key, this.provider.model, `${slot}_image`]);
+      [fingerprint, imagePolicy(slot), this.provider.key, this.provider.model, `${slot}_image`]);
     const row = cached.rows[0];
     let decision: ImageDecision;
     if (row) {
@@ -160,7 +166,7 @@ export class ContentModerationService {
     this.validateDecision(decision);
     if (IMAGE_CATEGORIES.some(key => decision.categories[key])) throw problem(422, "PUBLIC_IMAGE_CONTENT_REJECTED", "Выберите другое фото");
     return Object.freeze({fingerprint, providerKey: this.provider.key, providerModel: this.provider.model,
-      policy: IMAGE_POLICY, checkedAt: row?.checked_at ?? new Date(),
+      policy: imagePolicy(slot), checkedAt: row?.checked_at ?? new Date(),
       decision: {...decision, categories: {...decision.categories}}});
   }
 
@@ -492,8 +498,8 @@ export class ContentModerationService {
     }
   }
   /** Called only under owning AvatarService publication transaction after actor/version fence. */
-  async bindImage(client: PoolClient, approval: ImageApproval, currentBytes: Buffer, slot: "avatar" | "cover" = "avatar"): Promise<string> {
-    if (approval.fingerprint !== this.fingerprint(currentBytes, slot) || approval.policy !== IMAGE_POLICY ||
+  async bindImage(client: PoolClient, approval: ImageApproval, currentBytes: Buffer, slot: ImagePreset = "avatar"): Promise<string> {
+    if (approval.fingerprint !== this.fingerprint(currentBytes, slot) || approval.policy !== imagePolicy(slot) ||
       approval.providerKey !== this.provider.key || approval.providerModel !== MODERATION_MODEL) throw this.mismatchImage();
     this.validateDecision(approval.decision);
     if (IMAGE_CATEGORIES.some(key => approval.decision.categories[key])) throw this.mismatchImage();
@@ -505,7 +511,7 @@ export class ContentModerationService {
       ON CONFLICT(surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model)
       DO UPDATE SET decision='allow',category_flags=excluded.category_flags,checked_at=excluded.checked_at,
         provider_response_id=excluded.provider_response_id RETURNING id`,
-    [approval.fingerprint, IMAGE_POLICY, approval.providerKey, approval.providerModel, approval.decision.responseId, JSON.stringify(flags), approval.checkedAt, `${slot}_image`]);
+    [approval.fingerprint, imagePolicy(slot), approval.providerKey, approval.providerModel, approval.decision.responseId, JSON.stringify(flags), approval.checkedAt, `${slot}_image`]);
     return result.rows[0]!.id;
   }
 

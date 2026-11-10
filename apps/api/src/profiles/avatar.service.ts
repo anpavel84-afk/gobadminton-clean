@@ -213,6 +213,20 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
     if (!bytes.equals(expected)) throw serviceUnavailable("AVATAR_STORAGE_UNAVAILABLE", "Фото недоступно");
     return bytes;
   }
+  /** Internal private-stage reader. Caller holds current owner/session/resource fences.
+   * Journal lock serializes disk reads with the existing collector. Never a public URL.
+   */
+  async readPrivateStage(client: import("pg").PoolClient, key: string, sha256: string): Promise<Buffer> {
+    const journal = await client.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1 FOR UPDATE", [key]);
+    if (!journal.rowCount) throw notFound("PHOTO_SUBMISSION_UNAVAILABLE", "Фото недоступно");
+    let bytes: Buffer;
+    try { bytes = await readFile(this.filename(key)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notFound("PHOTO_SUBMISSION_UNAVAILABLE", "Фото недоступно");
+      throw error;
+    }
+    if (createHash("sha256").update(bytes).digest("hex") !== sha256) throw notFound("PHOTO_SUBMISSION_UNAVAILABLE", "Фото недоступно");
+    return bytes;
+  }
   /** Retryable journal includes the account-deletion status transition and explicit profile deletion; never removes a referenced key. */
   async cleanup(): Promise<void> {
     if (this.sweeping || !this.env.AVATAR_MEDIA_ROOT) return;
@@ -233,7 +247,13 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
                UNION ALL SELECT 1 FROM venue_gallery_items WHERE storage_key=$1 AND active`,
               [row.storage_key],
             );
-            if (!ref.rowCount) {
+            // Keep N-1 avatar/cover fixtures and rollback compatible. PostgreSQL
+            // must not parse an absent additive table in the reference query.
+            const privateTable = await client.query<{ relation: string | null }>("SELECT to_regclass('public.venue_photo_submissions') AS relation");
+            const privateRef = privateTable.rows[0]?.relation ? await client.query(
+              "SELECT 1 FROM venue_photo_submissions WHERE storage_key=$1 AND status='ready' AND expires_at>clock_timestamp()", [row.storage_key],
+            ) : undefined;
+            if (!ref.rowCount && !privateRef?.rowCount) {
               try { await unlink(this.filename(row.storage_key)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
               await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [row.storage_key]);
             }
