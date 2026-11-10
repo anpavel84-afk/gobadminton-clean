@@ -17,6 +17,7 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [candidateDecisionPending, setCandidateDecisionPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [activation, setActivation] = useState("");
@@ -31,13 +32,19 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
   const logoutKey = useRef<string | null>(null);
   const logoutCsrf = useRef<string | null>(null);
   const generation = useRef(0);
+  const candidateDecisionPendingRef = useRef(false);
+  const onCandidateDecisionPending = useCallback((pending: boolean) => {
+    candidateDecisionPendingRef.current = pending;
+    setCandidateDecisionPending(pending);
+  }, []);
 
   const clear = useCallback(() => {
     generation.current++;
+    onCandidateDecisionPending(false);
     setSession(null); setTicket(null); setAudit(null); setActivation(""); setSection("overview");
     setPilotEpoch((value) => value + 1);
     authenticator.current?.abort();
-  }, []);
+  }, [onCandidateDecisionPending]);
   const refresh = useCallback(async () => {
     const version = generation.current;
     try {
@@ -54,11 +61,12 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
     } catch (cause) {
       if (mounted.current && version === generation.current) {
         // A failed authority refresh must hide privileged content even on a network outage.
+        onCandidateDecisionPending(false);
         setSession(null); setAudit(null); setSection("overview"); setPilotEpoch((value) => value + 1);
       }
       throw cause;
     }
-  }, []);
+  }, [onCandidateDecisionPending]);
 
   useEffect(() => {
     mounted.current = true;
@@ -105,7 +113,7 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
       if (mounted.current) {
         setError(errorMessage(cause));
         if (cause instanceof AdminError && cause.status === 401) clear();
-        else if (cause instanceof AdminError && cause.code === "ADMIN_STEP_UP_REQUIRED") { setAudit(null); setSection("overview"); setNow(Date.now()); }
+        else if (cause instanceof AdminError && cause.code === "ADMIN_STEP_UP_REQUIRED") { setAudit(null); if (!candidateDecisionPendingRef.current) setSection("overview"); setNow(Date.now()); }
         else if (cause instanceof AdminError && cause.code === "ADMIN_PERMISSION_DENIED") {
           setAudit(null);
           setPilotEpoch((value) => value + 1);
@@ -168,10 +176,13 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
     });
   }
   async function navigate(id: string) {
+    if (candidateDecisionPendingRef.current) return;
     await run(async () => {
       setAudit(null);
       const current = await refresh();
       if (!visibleNavigation(current.roles).some(item => item.id === id)) throw new AdminError("ADMIN_PERMISSION_DENIED", 403);
+      // A candidate may start sending while this navigation awaits authority.
+      if (candidateDecisionPendingRef.current) return;
       setSection(id);
       if (id === "security") setAudit(await adminRequest("audit/security"));
     });
@@ -186,7 +197,7 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
       {notice && <div className="notice" role="status">{notice}</div>}
       {logoutPending && <div className="notice"><p>Проверим, что выход завершён.</p><button className="button outline" disabled={busy} onClick={() => void logout()}>Повторить выход</button></div>}
       {loading ? <section className="panel" aria-busy="true"><p role="status">Проверяем вход…</p><div className="skeleton" /></section> : session ? <div className="shell">
-        <nav className="panel navigation" aria-label="Разделы администрирования">{nav.map(item => <button key={item.id} className={section === item.id ? "selected" : ""} aria-current={section === item.id ? "page" : undefined} disabled={busy} onClick={() => void navigate(item.id)}>{item.label}</button>)}</nav>
+        <nav className="panel navigation" aria-label="Разделы администрирования">{nav.map(item => <button key={item.id} className={section === item.id ? "selected" : ""} aria-current={section === item.id ? "page" : undefined} disabled={busy || candidateDecisionPending} onClick={() => void navigate(item.id)}>{item.label}</button>)}</nav>
         <section className="panel content">
           {section === "overview" ? <><h2>Ваш доступ</h2><div className="roles">{session.roles.length ? session.roles.map(role => <span className="badge" key={role}>{roleLabels[role] ?? "Неизвестная роль"}</span>) : <p>Активных ролей нет. Обратитесь к ответственному за доступ.</p>}</div><dl><dt>Учётная запись</dt><dd>{session.principalId}</dd><dt>Вход действует до</dt><dd>{new Date(session.expiresAt).toLocaleString("ru-RU")}</dd></dl><div className="notice" hidden={session.roles.length === 1 && session.roles[0] === "pilot_viewer"}><strong>{fresh ? "Подтверждение входа актуально" : "Требуется повторное подтверждение"}</strong><p>Для чувствительных действий понадобится ключ доступа.</p><button className="button outline" disabled={busy} onClick={() => void prove("step_up")}>{busy ? "Подтверждение…" : "Подтвердить вход"}</button></div></>
           : section === "pilot" ? <PilotMetricsPanel key={session.principalId + String(pilotEpoch)} session={session} busy={busy} run={run} onAuthorityLoss={clear} />
@@ -194,7 +205,7 @@ export function AdminApp({ qaKeyEnabled = false }: { qaKeyEnabled?: boolean }) {
           : section === "users" ? <UserRestrictions key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "games" ? <GameModeration key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "security" ? <><h2>Журнал безопасности</h2><p>Последние события доступа и изменения учётных записей.</p>{audit ? audit.items.length ? <ul className="events">{audit.items.map(item => <li key={item.id}><strong>{item.action_key}</strong><small>{new Date(item.created_at).toLocaleString("ru-RU")}</small></li>)}</ul> : <div className="notice">Событий пока нет.</div> : <p role="status">Загружаем журнал…</p>}<ModerationJournal session={session} busy={busy} now={now} run={run} stepup={() => prove("step_up")} onAuthorityLoss={clear} /></>
-          : section === "venues" ? <Venues session={session} stepup={() => prove("step_up")} onAuthorityLoss={clear} />
+          : section === "venues" ? <Venues session={session} stepup={() => prove("step_up")} onAuthorityLoss={clear} onDecisionPending={onCandidateDecisionPending} />
           : <><h2>{nav.find(item => item.id === section)?.label}</h2><div className="notice"><strong>Раздел готовится</strong><p>Работа с этими данными пока недоступна.</p></div></>}
         </section>
       </div> : ticket ? <section className="panel">

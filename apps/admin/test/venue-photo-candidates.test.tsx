@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VenuePhotoCandidates } from "../src/components/VenuePhotoCandidates";
 import type { Session } from "../src/lib/admin-client";
+import { act } from "@testing-library/react";
+import { AdminApp } from "../src/components/AdminApp";
 
 const venue = "a0000000-0000-4000-8000-000000000001";
 const other = "a0000000-0000-4000-8000-000000000002";
@@ -143,5 +145,126 @@ describe("selected venue candidate review (synthetic source tests; no real Admin
     await vi.advanceTimersByTimeAsync(20001);vi.useRealTimers();await screen.findByText(/UNKNOWN: результат/);
     old.resolve(json(receipt("accept")));await Promise.resolve();await Promise.resolve();
     expect(changed).not.toHaveBeenCalled();expect(posts()).toHaveLength(1);
+  });
+});
+
+describe("AdminApp navigation with an unresolved candidate decision",()=>{
+  // Real AdminApp -> Venues -> candidate, including the section unmount boundary.
+  // Only transport and browser scrolling are synthetic; no component or hook mocks.
+  function adminHarness() {
+    const selectedVenue = {
+      id:venue,cityId:other,cityName:"Город",name:"Зал для проверки навигации",address:"Проверенный адрес",
+      timezone:"Europe/Moscow",latitude:55.75,longitude:37.62,identityDiscriminator:"",
+      lifecycleState:"unverified",canonicalVenueId:null,version:31,
+    };
+    const state = {
+      session:{...session,stepUpAt:new Date().toISOString()},
+      settled:false,
+      nextAuthority:null as Promise<Response> | null,
+    };
+    const decision = vi.fn<(init:RequestInit)=>Promise<Response>>();
+    decision.mockRejectedValueOnce(new TypeError("original response lost"));
+    fetchMock.mockImplementation(async(input,init)=>{
+      const path=String(input);
+      if(path === "/v1/admin/auth/me") {
+        if(state.nextAuthority) { const response=state.nextAuthority;state.nextAuthority=null;return response; }
+        return json(state.session);
+      }
+      if(path === "/v1/admin/auth/logout") return new Response(null,{status:204});
+      if(path === `${root}/${candidateId}/decision`) return decision(init!);
+      if(path === root) return json({items:state.settled ? [] : [candidate]});
+      if(path === candidate.previewPath) return png();
+      if(path === `/v1/admin/venues/${venue}/gallery`) return json({version:state.settled ? 32 : 31,items:[]});
+      if(path === `/v1/admin/venues/${venue}`) return json({...selectedVenue,version:state.settled ? 32 : 31});
+      if(path.startsWith("/v1/admin/venues?")) return json({items:[selectedVenue],nextBeforeId:null});
+      throw new Error(`Unexpected synthetic Admin request: ${path}`);
+    });
+    vi.stubGlobal("requestAnimationFrame",vi.fn(()=>0));
+    render(<AdminApp/>);
+    async function open() {
+      fireEvent.click(await screen.findByRole("button",{name:"Площадки"}));
+      fireEvent.click(await screen.findByRole("button",{name:/Зал для проверки навигации · Открыть/}));
+      await ready();
+      await waitFor(()=>expect((screen.getByRole("button",{name:"Принять фото"}) as HTMLButtonElement).disabled).toBe(false));
+    }
+    return {state,decision,open};
+  }
+
+  it("retains the mounted UNKNOWN packet across attempted switch/return and reconciles only its exact body/key",async()=>{
+    const h=adminHarness();await h.open();
+    const overview=screen.getByRole("button",{name:"Обзор"}) as HTMLButtonElement;
+    const venues=screen.getByRole("button",{name:"Площадки"}) as HTMLButtonElement;
+    const authorityReads=()=>fetchMock.mock.calls.filter(([path])=>path === "/v1/admin/auth/me").length;
+    const before=authorityReads();
+    // Both handlers run before React commits disabled navigation: the ref must guard it.
+    act(()=>{
+      fireEvent.click(screen.getByRole("button",{name:"Принять фото"}));
+      fireEvent.click(overview);
+    });
+    await screen.findByText(/UNKNOWN: результат/);
+    expect(authorityReads()).toBe(before);
+    const reconciliation=screen.getByRole("button",{name:"Сверить исходное решение"});
+    const original=posts()[0]!;
+    expect(overview.disabled).toBe(true);expect(venues.disabled).toBe(true);
+    fireEvent.click(overview);fireEvent.click(venues);
+    fireEvent.focus(window);
+    await waitFor(()=>expect(authorityReads()).toBe(before+1));
+    expect(screen.getByRole("button",{name:"Сверить исходное решение"})).toBe(reconciliation);
+    expect(venues.getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("button",{name:"Принять фото"})).toBeNull();
+    expect(posts()).toHaveLength(1);
+
+    const response=deferred<Response>();h.decision.mockReturnValueOnce(response.promise);
+    fireEvent.click(reconciliation);
+    expect(posts()).toHaveLength(2);
+    expect(posts()[1]![0]).toBe(original[0]);
+    expect(posts()[1]![1]!.body).toBe(original[1]!.body);
+    expect(posts()[1]![1]!.headers).toEqual(original[1]!.headers);
+    expect(overview.disabled).toBe(true);
+    h.state.settled=true;response.resolve(json(receipt("accept")));
+    await screen.findByText(/Фото принято в галерею/);
+    await waitFor(()=>expect(overview.disabled).toBe(false));
+    fireEvent.click(overview);await screen.findByRole("heading",{name:"Ваш доступ"});
+    fireEvent.click(venues);await screen.findByRole("button",{name:/Зал для проверки навигации · Открыть/});
+    expect(posts()).toHaveLength(2);
+  });
+
+  it("guards a section transition already awaiting authority when the candidate starts sending",async()=>{
+    const h=adminHarness();await h.open();
+    const authority=deferred<Response>();h.state.nextAuthority=authority.promise;
+    const overview=screen.getByRole("button",{name:"Обзор"}) as HTMLButtonElement;
+    fireEvent.click(overview);
+    fireEvent.click(screen.getByRole("button",{name:"Принять фото"}));
+    await screen.findByText(/UNKNOWN: результат/);
+    authority.resolve(json(h.state.session));
+    await waitFor(()=>expect((screen.getByRole("button",{name:"Выйти"}) as HTMLButtonElement).disabled).toBe(false));
+    expect(overview.disabled).toBe(true);
+    expect(screen.getByRole("button",{name:"Площадки"}).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button",{name:"Сверить исходное решение"})).toBeTruthy();
+    expect(screen.queryByRole("heading",{name:"Ваш доступ"})).toBeNull();
+    expect(posts()).toHaveLength(1);
+  });
+
+  for(const loss of ["logout","actor/role loss"] as const) it(`releases the navigation lock on ${loss} without replaying the old actor's packet`,async()=>{
+    const h=adminHarness();await h.open();
+    fireEvent.click(screen.getByRole("button",{name:"Принять фото"}));await screen.findByText(/UNKNOWN: результат/);
+    const original=posts()[0]!;
+    expect((screen.getByRole("button",{name:"Обзор"}) as HTMLButtonElement).disabled).toBe(true);
+    if(loss === "logout") {
+      expect((screen.getByRole("button",{name:"Выйти"}) as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.click(screen.getByRole("button",{name:"Выйти"}));
+      await screen.findByRole("heading",{name:"Выберите способ входа"});
+      expect((screen.getByRole("button",{name:"Войти через VK"}) as HTMLButtonElement).disabled).toBe(false);
+    } else {
+      h.state.session={...h.state.session,principalId:"replacement-admin",userId:"replacement-user",sessionId:"replacement-session",roles:["support"]};
+      fireEvent.focus(window);
+      await screen.findByText("replacement-admin");
+      expect((screen.getByRole("button",{name:"Обзор"}) as HTMLButtonElement).disabled).toBe(false);
+      expect((screen.getByRole("button",{name:"Обращения"}) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByRole("button",{name:"Площадки"})).toBeNull();
+    }
+    expect(screen.queryByRole("button",{name:"Сверить исходное решение"})).toBeNull();
+    expect(fetchMock.mock.calls.filter(([path])=>path === original[0])).toHaveLength(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:private-candidate");
   });
 });

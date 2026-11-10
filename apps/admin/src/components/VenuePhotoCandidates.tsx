@@ -18,6 +18,7 @@ type Mode = "loading" | "empty" | "pending" | "denied" | "stepup" | "sending" | 
 type Props = {
   id: string; version: number; selection: number; session: Session; disabled: boolean; authorityBlocked: boolean;
   canStart: () => boolean; onBusy: (busy: boolean) => void; authorityLoss: () => void;
+  onDecisionPending?: (pending: boolean) => void;
   stepup: () => Promise<void>; changed: () => Promise<void>;
 };
 const uuid = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
@@ -65,7 +66,12 @@ export function VenuePhotoCandidates(props: Props) {
     if (privateUrl.current) URL.revokeObjectURL(privateUrl.current);
     privateUrl.current = ""; setPreview("");
   }
-  function lock(value: boolean) { latch.current = value; setWorking(value); latest.current.props.onBusy(value || !!packet.current); }
+  function lock(value: boolean) {
+    latch.current = value; setWorking(value); latest.current.props.onBusy(value || !!packet.current);
+    // Keep the owning section mounted for this actor's packet, including UNKNOWN.
+    // Reads and step-up alone must not block section navigation.
+    latest.current.props.onDecisionPending?.(!!packet.current && packet.current.scope === latest.current.scope && authorized());
+  }
   async function request<T>(path: string, parse: (response: Response) => Promise<T>, init: RequestInit = {}): Promise<T> {
     const controller = new AbortController(); controllers.current.add(controller);
     const aborted = new Promise<never>((_resolve,reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once:true }));
@@ -136,7 +142,7 @@ export function VenuePhotoCandidates(props: Props) {
       mounted.current = false; ++lifetime.current;
       for (const controller of controllers.current) controller.abort();
       if (privateUrl.current) URL.revokeObjectURL(privateUrl.current);
-      privateUrl.current = ""; latch.current = false; onBusy(false);
+      privateUrl.current = ""; latch.current = false; onBusy(false); props.onDecisionPending?.(false);
     };
     // scope contains only actor/authority/selection identity; restoring step-up never sends a command.
   }, [scope]);
