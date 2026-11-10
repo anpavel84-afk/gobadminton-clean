@@ -45,6 +45,33 @@ describe("I2c2 viewer", () => {
     rerender(<VenueCommunityPhotoViewer model={model({ selection: { items: [photo], index: 0 } })} />);
     expect(screen.getByText("Фото 1 к публикации")).toBeTruthy();
   });
+  it("keeps focus inside the open dialog when the focused retry disappears, so plain arrows still work", () => {
+    const items = Array.from({ length: 25 }, () => photo);
+    const move = vi.fn();
+    const m = model({ items, selectedItems: items, selection: { index: 23 }, phase: "error", move });
+    const { rerender } = render(<VenueCommunityPhotoViewer model={m} />);
+    const dialog = screen.getByRole("dialog", { name: "Фотографии сообщества" });
+    const retry = screen.getByRole("button", { name: "Повторить загрузку" });
+    retry.focus(); expect(document.activeElement).toBe(retry);
+    fireEvent.click(retry); expect(move).toHaveBeenCalledExactlyOnceWith(1);
+
+    rerender(<VenueCommunityPhotoViewer model={{ ...m, selection: { index: 24 }, phase: "ready", cursor: null }} />);
+    expect(screen.getByText("Фото 25 из 25")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Повторить загрузку" })).toBeNull();
+    expect(dialog.hasAttribute("open")).toBe(true);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+    expect(move).toHaveBeenLastCalledWith(-1);
+  });
+  it("preserves focus on a surviving control when the async retry disappears", () => {
+    const m = model({ phase: "error", selection: { index: 1 }, items: [photo, photo], selectedItems: [photo, photo] });
+    const { rerender } = render(<VenueCommunityPhotoViewer model={m} />);
+    const previous = screen.getByRole("button", { name: "Предыдущее фото" });
+    previous.focus(); expect(document.activeElement).toBe(previous);
+    rerender(<VenueCommunityPhotoViewer model={{ ...m, phase: "ready", cursor: null }} />);
+    expect(screen.queryByRole("button", { name: "Повторить загрузку" })).toBeNull();
+    expect(document.activeElement).toBe(previous);
+  });
   it("requires 48px and horizontal axis dominance; a vertical gesture stays on the same photo", () => {
     class TestPointerEvent extends MouseEvent {
       pointerId: number; isPrimary = true;

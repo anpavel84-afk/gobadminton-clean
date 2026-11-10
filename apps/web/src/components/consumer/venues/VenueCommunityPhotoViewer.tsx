@@ -1,11 +1,12 @@
 "use client";
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { ProfileDialog } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import type { VenueCommunityPhotosModel } from "./useVenueCommunityPhotos";
 
 export function VenueCommunityPhotoViewer({ model }: { model: VenueCommunityPhotosModel }) {
   const content = useRef<HTMLDivElement>(null);
+  const focused = useRef<HTMLElement | null>(null);
   const actions = useRef(model); actions.current = model;
   useEffect(() => {
     const dialog = content.current?.closest("dialog");
@@ -15,9 +16,22 @@ export function VenueCommunityPhotoViewer({ model }: { model: VenueCommunityPhot
         event.preventDefault(); event.stopPropagation(); actions.current.move(event.key === "ArrowLeft" ? -1 : 1);
       }
     };
+    const focus = (event: FocusEvent) => { focused.current = event.target as HTMLElement; };
     dialog.addEventListener("keydown", key);
-    return () => dialog.removeEventListener("keydown", key);
+    dialog.addEventListener("focusin", focus);
+    return () => {
+      dialog.removeEventListener("keydown", key);
+      dialog.removeEventListener("focusin", focus);
+    };
   }, []);
+  useLayoutEffect(() => {
+    const dialog = content.current?.closest("dialog");
+    const previous = focused.current;
+    // Removing or disabling an async control can leave native modal focus on body.
+    if (!dialog?.open || !previous || document.activeElement !== document.body) return;
+    if (dialog.contains(previous) && !previous.matches(":disabled")) return;
+    dialog.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+  });
   const drag = useRef<{ id: number; x: number; y: number; axis: "x" | "y" | null } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const photo = model.selected;
