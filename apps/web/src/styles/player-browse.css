@@ -1520,12 +1520,10 @@
   justify-content: center;
   pointer-events: none;
 }
+/* Keep shared GamesViewAction geometry (width/height/padding/lime tile); only disable zone pointer passthrough. */
 .gb-player-browse .pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action > a,
 .gb-player-browse .pb-mobile-finder-zone .pb-finder-map-secondary.gb-games-view-action > button {
   pointer-events: auto;
-  min-height: 44px;
-  min-width: 0;
-  max-width: calc(100vw - 32px);
 }
 .gb-player-browse .pb-mobile-finder-zone .gb-map-cta-label--full {
   display: none;

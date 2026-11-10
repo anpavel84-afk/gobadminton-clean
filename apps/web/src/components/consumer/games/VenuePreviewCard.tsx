@@ -1,5 +1,4 @@
 "use client";
-import { Button } from "../Button";
 import type { VenueCommunitySection } from "../venues/VenueCommunityContent";
 import type { ReactNode } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
@@ -11,7 +10,8 @@ import { VenueCommunityRating } from "../venues/VenueCommunityRating";
 import type { CommunityRatingSummary } from "../../../lib/venue-community-api";
 import "../../../styles/venue-popup.css";
 
-export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true, onCommunityOpen }: {
+export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedded = false, coverSlot, coverFallback = false, coverReady = false, onCoverRetry, galleryIndex, onGalleryIndexChange, communitySummary = null, communitySummaryState, showCommunityRating = true, onCommunityOpen: _onCommunityOpen }: {
+  /** Retained for map caller compatibility; compact community jump strip is removed (Owner R3.1). */
   onCommunityOpen?: (section: VenueCommunitySection) => void;
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number; onOpen: () => void; embedded?: boolean; coverSlot?: ReactNode;
   coverFallback?: boolean;
@@ -82,11 +82,6 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
       </span>
       <span className="gb-venue-preview-arrow" aria-hidden="true">↑</span>
     </button>
-    {onCommunityOpen && <nav className="gb-venue-community-actions gb-venue-community-actions--preview" data-community-actions aria-label="Сообщество площадки">
-      <Button variant="outline" onClick={() => onCommunityOpen("ratings")}>Оценить</Button>
-      <Button variant="outline" onClick={() => onCommunityOpen("discussion")}>Обсуждение</Button>
-      <Button variant="ghost" onClick={() => onCommunityOpen("reviews")}>После игры</Button>
-    </nav>}
     {hasSource ? (
       <div className="gb-venue-preview-source">
         <VenueSourceCredit catalogSource={catalogSource} variant="compactPrimary" />

@@ -356,3 +356,70 @@ it.each(["onPointerCancel", "onLostPointerCapture"])("%s does not swallow the ne
   (h.find("gb-venue-handle").props.onClick as () => void)();
   expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
 });
+
+it("restores accepted69 compact preview without community jump actions", () => {
+  const onCommunityOpen = vi.fn();
+  hooks.active = true;
+  let tree: ReturnType<typeof VenuePreviewCard>;
+  try {
+    tree = VenuePreviewCard({
+      venue,
+      games: [],
+      gamesReady: true,
+      now: 0,
+      onOpen: () => {},
+      onCommunityOpen,
+    });
+  } finally {
+    hooks.active = false;
+  }
+  const html = renderToStaticMarkup(tree);
+  expect(html).toContain('class="gb-venue-preview-button"');
+  expect(html).toContain('class="gb-venue-preview-arrow"');
+  expect(html).toContain('class="gb-venue-preview-copy"');
+  expect(html).not.toContain("data-community-actions");
+  expect(html).not.toContain("Оценить");
+  expect(html).not.toContain("Обсуждение");
+  expect(html).not.toContain("После игры");
+  expect(onCommunityOpen).not.toHaveBeenCalled();
+});
+
+it("keeps retainContent compact host at original 172px", () => {
+  const state = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
+  const change = vi.fn();
+  const run = <T,>(fn: () => T): T => {
+    const saved = { slots: hooks.slots, cursor: hooks.cursor, cleanups: hooks.cleanups, effects: hooks.effects, active: hooks.active };
+    hooks.slots = state.slots; hooks.cursor = 0; hooks.cleanups = state.cleanups; hooks.effects = []; hooks.active = true;
+    try {
+      const result = fn();
+      hooks.effects.splice(0).forEach(effect => effect());
+      state.slots = hooks.slots; state.cleanups = hooks.cleanups;
+      return result;
+    } finally {
+      Object.assign(hooks, saved);
+    }
+  };
+  Object.assign(window, {
+    matchMedia: () => ({
+      matches: false,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    }),
+  });
+  const tree = run(() => VenuePopup({
+    expanded: false,
+    onExpandedChange: change,
+    onDeselect: () => {},
+    retainContent: true,
+    preview: <span>Preview</span>,
+    children: <span>Body</span>,
+  }));
+  const popup = popupElements(tree).find(node => node.props.className === "gb-venue-popup");
+  const measure = popupElements(tree).find(node => node.props.className === "gb-venue-popup-compact-measure");
+  expect(popup?.props.style).toMatchObject({ height: "172px" });
+  expect(measure?.props.style).toMatchObject({ height: 172 });
+  expect(popup?.props["data-community-host"]).toBe(true);
+  state.cleanups.forEach(fn => fn?.());
+});

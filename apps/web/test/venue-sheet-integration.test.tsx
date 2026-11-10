@@ -237,7 +237,7 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
         popupRendered = true;
         for (const item of elements(popupTree)) {
           const ref = item.props.ref as { current: unknown } | undefined;
-          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : (item.props.style as React.CSSProperties | undefined)?.height ?? 224 }) };
+          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : (item.props.style as React.CSSProperties | undefined)?.height ?? 172 }) };
         }
         h.effects.splice(0).forEach(fn => fn()); popupState.slots = h.slots; popupState.cleanups = h.cleanups;
         h.slots = parent.slots; h.cleanups = parent.cleanups;

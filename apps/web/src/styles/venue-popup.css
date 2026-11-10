@@ -108,8 +108,23 @@
   transition:opacity 220ms cubic-bezier(.2,.8,.2,1);
 }
 
-.gb-consumer .gb-venue-popup-content { width:100%; min-width:0; height:calc(100% - 44px); overflow-y:auto; overflow-x:clip; overscroll-behavior:contain; scroll-padding-top:80px; scroll-padding-bottom:96px; box-sizing:border-box; -webkit-overflow-scrolling:touch; }
-.gb-consumer .gb-venue-popup .gb-venue-sheet { position:static; width:100%; max-width:none; max-height:none; overflow:visible; border-radius:0; }
+.gb-consumer .gb-venue-popup-content { width:100%; min-width:0; height:calc(100% - 44px); overflow:hidden; overflow-x:clip; overscroll-behavior:contain; scroll-padding-top:80px; scroll-padding-bottom:96px; box-sizing:border-box; -webkit-overflow-scrolling:touch; display:flex; flex-direction:column; }
+.gb-consumer .gb-venue-popup .gb-venue-sheet { position:static; width:100%; max-width:none; max-height:none; overflow:hidden; border-radius:0; display:flex; flex-direction:column; flex:1 1 auto; min-height:0; height:100%; padding:0 16px 0; }
+.gb-consumer .gb-venue-popup .gb-venue-sheet-overview { display:flex; flex:1 1 auto; flex-direction:column; min-height:0; }
+.gb-consumer .gb-venue-popup .gb-venue-sheet-scroll { flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:clip; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding-bottom:8px; }
+.gb-consumer .gb-venue-popup .gb-venue-sheet-create-footer {
+  flex:0 0 auto;
+  box-sizing:border-box;
+  margin:0 -16px 0;
+  padding:12px 16px calc(12px + var(--gb-safe-bottom));
+  background:var(--gb-white);
+  border-top:1px solid var(--gb-line);
+}
+.gb-consumer .gb-venue-popup .gb-venue-sheet-create-footer .gb-venue-sheet-primary {
+  min-height:52px;
+  font-size:14px;
+  white-space:normal;
+}
 .gb-consumer a.gb-venue-sheet-primary { display:block; box-sizing:border-box; text-align:center; text-decoration:none; color:var(--gb-ink); }
 @media (min-width:768px) { .gb-consumer .gb-venue-popup { left:auto; right:16px; width:420px; max-width:calc(100% - 32px); } }
 @media (prefers-reduced-motion:reduce) { .gb-consumer .gb-venue-popup { transition:none !important; } }
