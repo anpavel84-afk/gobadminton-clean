@@ -257,6 +257,58 @@ describe("live health/meta honesty", () => {
 });
 
 describe("history seed integrity", () => {
+  it("#549 projects stored alpha.75 additions/fixes only onto their historical receipt", () => {
+    const alpha75 = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.75")!;
+    const unknownSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const projection = {
+      environment: "dev" as const,
+      observed_at: "2026-11-10T12:00:00Z",
+      pending: false,
+      accepted: {
+        release_id: "test-projection",
+        source_sha: unknownSha,
+        status: "ACCEPTED",
+        finished_at: "2026-11-10T12:00:00Z",
+        api_digest: null,
+        web_digest: null,
+      },
+    };
+    const rows = buildHistoryRows(TRUSTED_HISTORICAL_SEED, [projection]);
+    const historical = rows.find(row => row.source_sha === alpha75.source_sha)!;
+    expect(historical).toMatchObject({
+      application_version: "0.1.0-alpha.75",
+      release_id: "r42754460186-a1",
+      accepted_at: "2026-11-10T04:23:21.000Z",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+      additions: alpha75.additions,
+      fixes: ["На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт."],
+    });
+    for (const row of rows.filter(row => row.source_sha !== alpha75.source_sha)) {
+      expect([...row.additions, ...row.fixes]).not.toContain(historical.fixes[0]);
+    }
+    expect(rows.find(row => row.source_sha === unknownSha)).toMatchObject({
+      version_label: "Неизвестный номер", origin: "live_projection", additions: [], fixes: [],
+    });
+    // A receipt alone never supplies notes, even when its SHA has a known title.
+    const projectionOnly = buildHistoryRows([], [{
+      ...projection, accepted: { ...projection.accepted, source_sha: alpha75.source_sha },
+    }]);
+    expect(projectionOnly[0]).toMatchObject({ origin: "live_projection", additions: [], fixes: [] });
+    expect([...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes]).not.toContain(historical.fixes[0]);
+    const previousSha = process.env.GIT_SHA;
+    process.env.GIT_SHA = unknownSha;
+    try {
+      const currentProjection = buildHistoryRows([], [projection]);
+      expect(currentProjection[0]).toMatchObject({
+        application_version: CURRENT_APPLICATION_VERSION, origin: "live_projection", additions: [], fixes: [],
+      });
+    } finally {
+      if (previousSha === undefined) delete process.env.GIT_SHA;
+      else process.env.GIT_SHA = previousSha;
+    }
+  });
+
   it("preserves the exact trusted alpha.67 receipt before the accepted alpha.68 receipt", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.67");
     expect(rows).toHaveLength(1);
@@ -705,6 +757,8 @@ describe("history seed integrity", () => {
       (row) => row.application_version === "0.1.0-alpha.63",
     );
     expect(alpha63).toEqual([{
+      additions: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.63")!.additions,
+      fixes: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.63")!.fixes,
       environment: "dev",
       source_sha: "6ca9ce29a116984c8114f36223895611ab34821a",
       application_version: "0.1.0-alpha.63",
@@ -721,6 +775,8 @@ describe("history seed integrity", () => {
       (row) => row.application_version === "0.1.0-alpha.64",
     );
     expect(alpha64).toEqual([{
+      additions: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.64")!.additions,
+      fixes: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.64")!.fixes,
       environment: "dev",
       source_sha: "9660409cea06718ef13ec3fbb792679f11619ece",
       application_version: "0.1.0-alpha.64",
@@ -737,6 +793,8 @@ describe("history seed integrity", () => {
       (row) => row.application_version === "0.1.0-alpha.65",
     );
     expect(alpha65).toEqual([{
+      additions: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.65")!.additions,
+      fixes: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.65")!.fixes,
       environment: "dev",
       source_sha: "9efe1bc4467a1a74379aee9d4fe870b134130754",
       application_version: "0.1.0-alpha.65",
@@ -753,6 +811,8 @@ describe("history seed integrity", () => {
       (row) => row.application_version === "0.1.0-alpha.66",
     );
     expect(alpha66).toEqual([{
+      additions: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.66")!.additions,
+      fixes: TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.66")!.fixes,
       environment: "dev",
       source_sha: "0bbac73f6fba25bb2211e0f564c7416282e70ea0",
       application_version: "0.1.0-alpha.66",

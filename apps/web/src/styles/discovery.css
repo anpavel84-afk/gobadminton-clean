@@ -509,6 +509,7 @@
   .gb-discovery-create__plus { width: 52px; height: 52px; }
   /* #547 D3: retain compact swipe chips and the existing 16px end clearance. */
   .gb-discovery-filters {
+    gap: 8px;
     margin: 2px 0 28px;
     padding: 3px;
     overflow-x: auto;
@@ -534,8 +535,15 @@
      clearance, leaving the full last control/text (and focus ring) opaque.
      Scope to compact discovery filters; map/create chip rows are unchanged. */
   .gb-discovery-filters > .gb-discovery-chips {
+    gap: 6px;
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
+  }
+  /* Fit all three activities beside settings at 390px, including the mobile
+     16px type floor. Narrower/enlarged-text rows retain scroll + focus reveal. */
+  .gb-consumer .gb-discovery-filters > .gb-discovery-chips > .gb-discovery-chip {
+    min-width: 44px;
+    padding-inline: 8px;
   }
   .gb-discovery-chips > * { flex-shrink: 0; }
   .gb-discovery-chip { white-space: nowrap; }

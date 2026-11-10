@@ -158,6 +158,18 @@ function HistoryList({ rows }: { rows: HistoryRow[] }) {
           </div>
           <p>{row.title}</p>
           <p className="gb-releases-meta">{formatReleaseDateRu(row.accepted_at)}</p>
+          {row.additions.length > 0 ? (
+            <div className="gb-releases-list-block">
+              <h3>Что добавлено</h3>
+              {row.additions.map((item) => <p key={item}>{item}</p>)}
+            </div>
+          ) : null}
+          {row.fixes.length > 0 ? (
+            <div className="gb-releases-list-block">
+              <h3>Что исправлено</h3>
+              {row.fixes.map((item) => <p key={item}>{item}</p>)}
+            </div>
+          ) : null}
           <details className="gb-releases-details">
             <summary>Технические сведения</summary>
             <p className="gb-releases-meta">

@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 import { createHash } from "node:crypto";
 import { createElement, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -1436,6 +1437,57 @@ describe("releases page current known limitations SSR (#473)", () => {
       history: [],
       checkedAt: "2026-11-05T00:00:00.000Z",
     });
+  });
+
+  it("#549 renders stored alpha.75 discussion-report notes inside that history row only", async () => {
+    const { buildHistoryRows } = await import("../src/lib/releases-server");
+    const alpha75 = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.75")!;
+    const history = buildHistoryRows(TRUSTED_HISTORICAL_SEED, [{
+      environment: "dev",
+      observed_at: "2026-11-10T12:00:00Z",
+      pending: false,
+      accepted: {
+        source_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        release_id: "test-projection",
+        status: "ACCEPTED",
+        finished_at: "2026-11-10T12:00:00Z",
+        api_digest: null,
+        web_digest: null,
+      },
+    }]);
+    loadReleasesPageModelMock.mockResolvedValue({
+      build: { applicationVersion: CURRENT_APPLICATION_VERSION, gitSha: "unknown" },
+      named: { ...CURRENT_NAMED_RELEASE, source_sha: null },
+      environments: [], history, checkedAt: "2026-11-10T12:00:00Z",
+    });
+    const ReleasesPage = (await import("../src/app/releases/page")).default;
+    const document = window.document.implementation.createHTMLDocument();
+    document.body.innerHTML = renderToStaticMarkup(await ReleasesPage());
+    const rows = [...document.querySelectorAll(".gb-releases-history > li")];
+    const row = rows.find(item => item.querySelector("strong")?.textContent === "0.1.0-alpha.75")!;
+    expect(row).toBeDefined();
+    const report = "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.";
+    expect([...row.querySelectorAll(".gb-releases-list-block p")].map(item => item.textContent)).toEqual([
+      ...alpha75.additions, report,
+    ]);
+    // User notes are visible without opening the retained technical disclosure.
+    expect(row.querySelector("details")?.textContent).not.toContain(report);
+    expect(row.querySelector("summary")?.textContent).toBe("Технические сведения");
+    expect(row.querySelector("details")?.textContent).toContain("r42754460186-a1");
+    expect(row.querySelector("details")?.textContent).toContain("0d8a23f7");
+    expect(row.querySelector("details")?.textContent).toContain("2026-11-10T04:23:21.000Z");
+    expect(row.querySelector("details")?.textContent).toContain("NOT_TESTED");
+    for (const other of rows.filter(item => item !== row)) {
+      expect(other.textContent).not.toContain(report);
+    }
+    const unknown = rows.find(item => item.querySelector("strong")?.textContent === "Неизвестный номер")!;
+    expect(unknown.querySelector(".gb-releases-list-block")).toBeNull();
+    const current = document.querySelector("[aria-labelledby='releases-named']")!;
+    expect(current.textContent).toContain(CURRENT_NAMED_RELEASE.title);
+    expect(current.textContent).not.toContain(report);
+    expect([...current.querySelectorAll(".gb-releases-list-block li")].map(item => item.textContent)).toEqual([
+      ...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes,
+    ]);
   });
 
   it("renders alpha.78 server photo publication API without stale release claims", async () => {

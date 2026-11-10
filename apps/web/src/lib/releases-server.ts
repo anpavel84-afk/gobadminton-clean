@@ -66,6 +66,8 @@ export type HistoryRow = {
   application_version: string | null;
   version_label: string;
   title: string;
+  additions: string[];
+  fixes: string[];
   release_id: string | null;
   accepted_at: string;
   status: string;
@@ -359,6 +361,8 @@ export function buildHistoryRows(
         application_version: release.application_version,
         version_label: release.version_label,
         title: release.title,
+        additions: release.additions,
+        fixes: release.fixes,
         release_id: dep.release_id,
         accepted_at,
         status: dep.status,
@@ -379,6 +383,10 @@ export function buildHistoryRows(
       application_version: meta.application_version,
       version_label: meta.version_label,
       title: meta.title,
+      // Projection receipts contain no release notes; do not borrow another
+      // version's changes or turn the current draft into historical evidence.
+      additions: [],
+      fixes: [],
       release_id: projection.accepted.release_id,
       accepted_at,
       status: projection.accepted.status,
