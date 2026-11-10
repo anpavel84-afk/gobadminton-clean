@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { File } from "node:buffer";
 import { webcrypto } from "node:crypto";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { Me } from "../src/lib/consumer-types";
@@ -181,7 +181,7 @@ describe("I2c1 mounted venue contribution", () => {
     await selectPhoto(); await screen.findByAltText("Выбранное фото 4");
     fireEvent.click(screen.getByRole("button", { name: "Отмена" })); await edit();
     expect(screen.getAllByAltText(/Выбранное фото/)).toHaveLength(5);
-    await screen.findByText("Не больше четырёх фото в публикации. Уберите лишние фото перед сохранением.");
+    await within(screen.getByLabelText("Редактирование").closest("form")!).findByText("Не больше четырёх фото в публикации. Уберите лишние фото перед сохранением.");
     expect(screen.getByRole("button", { name: "Сохранить" }).hasAttribute("disabled")).toBe(true);
     expect(commands()).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Убрать фото 2" }));
