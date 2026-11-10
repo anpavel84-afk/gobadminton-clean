@@ -1,5 +1,4 @@
 /** @vitest-environment jsdom */
-import { Blob, File } from "node:buffer";
 import { webcrypto } from "node:crypto";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +7,14 @@ import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage"
 import { markSessionPresence } from "../src/lib/session-presence";
 import { gameCoverRequest } from "../src/lib/game-cover-api";
 const city = vi.hoisted(() => ({ cityId: "city", nameRu: "Москва", timezone: "Europe/Moscow" }));
+// Model the prepared browser Blob while filling jsdom's missing modern read methods.
+function imageBytes(text: string, type: string) {
+  const bytes = new TextEncoder().encode(text);
+  return Object.assign(new Blob([bytes], { type }), {
+    arrayBuffer: async () => bytes.slice().buffer,
+    text: async () => text,
+  });
+}
 vi.mock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({ useDiscoveryCity: () => ({ location: city }) }));
 vi.mock("next/link", () => ({ default: ({ children, href }: { children: ReactNode; href: string }) => <a href={href}>{children}</a> }));
 vi.mock("../src/components/consumer/ConsumerShell", () => ({ ConsumerShell: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
@@ -20,11 +27,11 @@ vi.mock("../src/components/consumer/venues/VenueCommunityRating", () => ({ Venue
 vi.mock("../src/components/consumer/players/ProfileComposition", () => ({ AuthEntry: () => null }));
 vi.mock("../src/components/consumer/messages/InvitationChooser", () => ({ InvitationChooser: () => null }));
 vi.mock("../src/lib/use-venue-community", () => ({ useVenueCommunitySummaries: () => ({ summaries: {}, state: "ready" }) }));
-vi.mock("../src/lib/avatar-preprocess", () => ({ preprocessAvatar: async () => new Blob(["VENUE-DERIVATIVE"], { type: "image/png" }), AVATAR_DERIVATIVE_MAX_BYTES: 512 * 1024 }));
+vi.mock("../src/lib/avatar-preprocess", () => ({ preprocessAvatar: async () => imageBytes("VENUE-DERIVATIVE", "image/png"), AVATAR_DERIVATIVE_MAX_BYTES: 512 * 1024 }));
 vi.mock("../src/lib/game-cover-api", () => ({ gameCoverRequest: vi.fn(async () => ({ version: 2 })) }));
 vi.mock("../src/components/consumer/games/GamePhotoSelection", () => ({
   GamePhotoSelection: ({ onChange, onReady }: { onChange: (bytes: Blob) => void; onReady: (ready: boolean) => void }) =>
-    <button type="button" onClick={() => { onChange(new Blob(["GAME-DERIVATIVE"], { type: "image/webp" })); onReady(true); }}>Выбрать отдельное фото игры</button>,
+    <button type="button" onClick={() => { onChange(imageBytes("GAME-DERIVATIVE", "image/webp")); onReady(true); }}>Выбрать отдельное фото игры</button>,
 }));
 const venueId = "10000000-0000-4000-8000-000000000001", gameId = "10000000-0000-4000-8000-000000000002";
 const venue = { id: venueId, cityId: "city", name: "Канонический зал", address: "Адрес", timezone: "Europe/Moscow" };
@@ -38,6 +45,11 @@ beforeEach(() => {
   markSessionPresence("present"); photoStatus = 503; gameFailure = false;
   vi.mocked(gameCoverRequest).mockClear();
   vi.stubGlobal("crypto", webcrypto);
+  vi.stubGlobal("ResizeObserver", class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
   vi.stubGlobal("URL", class extends URL { static override createObjectURL = vi.fn(() => "blob:synthetic"); static override revokeObjectURL = vi.fn(); });
   vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL, init?: RequestInit) => {
     const url = String(path);

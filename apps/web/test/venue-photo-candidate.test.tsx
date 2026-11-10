@@ -1,5 +1,4 @@
 /** @vitest-environment jsdom */
-import { Blob, File } from "node:buffer";
 import { webcrypto } from "node:crypto";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +12,11 @@ vi.mock("next/link", () => ({ default: ({ children }: { children: ReactNode }) =
 const venue = "10000000-0000-4000-8000-000000000001", id = "10000000-0000-4000-8000-000000000002";
 const evidence: CandidateEvidence = { creditKind: "photo", creditText: "Фото: Анна", creditUrl: "https://example.org/anna", sourceUrl: "https://example.org/photo", permissionBasis: "Письменное разрешение автора" };
 const receipt = (status: VenuePhotoCandidate["status"] = "awaiting_review"): VenuePhotoCandidate => ({ id, venueId: venue, status, version: status === "awaiting_review" ? 1 : 2, width: 1200, height: 400, evidence, previewPath: status === "awaiting_review" ? `/v1/me/venue-photo-candidates/${id}/content` : null });
-const derivative = new Blob(["confirmed-crop"], { type: "image/png" });
+// jsdom supplies DOM Blob/File; provide the modern Blob read method used by hashing.
+const derivativeBytes = new TextEncoder().encode("confirmed-crop");
+const derivative = Object.assign(new Blob([derivativeBytes], { type: "image/png" }), {
+  arrayBuffer: async () => derivativeBytes.slice().buffer,
+});
 const file = new File(["RAW-EXIF"], "source.png", { type: "image/png" });
 let upload: () => Promise<Response>;
 let withdraw: () => Promise<Response>;

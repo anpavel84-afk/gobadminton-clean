@@ -11,7 +11,10 @@ export type VenuePhotoCandidate = {
   id: string; venueId: string; status: "awaiting_review" | "accepted" | "rejected" | "withdrawn";
   version: number; width: 1200; height: 400; evidence: CandidateEvidence; previewPath: string | null;
 };
-const clean = (text: string) => !/[\u0000-\u001f\u007f-\u009f]/u.test(text);
+const clean = (text: string) => Array.from(text).every(character => {
+  const code = character.charCodeAt(0);
+  return code > 0x1f && (code < 0x7f || code > 0x9f);
+});
 const url = (text: unknown): text is string => typeof text === "string" && text.length <= 300
   && text.startsWith("https://") && httpsCreditUrl(text) !== null;
 export function isCandidateEvidence(value: unknown): value is CandidateEvidence {
