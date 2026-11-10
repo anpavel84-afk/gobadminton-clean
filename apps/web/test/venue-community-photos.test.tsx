@@ -28,6 +28,11 @@ const ok = (data: unknown) => ({ ok: true as const, status: 200, data });
 const source = (p = photo(24, true)) => ({ id: comment, entityId: venue, entityKind: "venue", parentCommentId: p.source.parentCommentId,
   body: "Текущий источник", deleted: false, version: 2, photos: [{ id: p.id, width: p.width, height: p.height, url: p.url }],
   mine: false, edited: true, author: null, replyCount: 0, createdAt: "2026-11-10T10:00:00Z", updatedAt: "2026-11-10T11:00:00Z" });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((finish) => { resolve = finish; });
+  return { promise, resolve };
+}
 afterEach(() => { cleanup(); vi.mocked(apiFetch).mockReset(); });
 
 describe("I2c2 one community owner in page and expanded map host", () => {
@@ -69,6 +74,75 @@ describe("I2c2 one community owner in page and expanded map host", () => {
 });
 
 describe("I2c2 current-photo API contracts", () => {
+  it.each(["close", "jump"] as const)("keeps the initial gallery loading through inline %s and populates its valid response", async (action) => {
+    const initialRead = deferred<ReturnType<typeof ok>>();
+    const inline = photo(24, true);
+    vi.mocked(apiFetch).mockImplementation(async (path) => (path.includes("community-photos")
+      ? await initialRead.promise : ok(source(inline))) as never);
+    const { result } = renderHook(() => useVenueCommunityPhotos(venue, null, null));
+    expect(result.current.phase).toBe("loading");
+    act(() => result.current.open(inline, [inline]));
+    expect(result.current.selected).toEqual(inline);
+    expect(result.current.items).toEqual([]);
+    await act(async () => { await result.current[action](); });
+    expect(result.current.selection).toBeNull();
+    expect(result.current.phase).toBe("loading");
+    expect(result.current.items).toEqual([]);
+    expect(result.current.source).toEqual(action === "jump" ? source(inline) : null);
+    await act(async () => initialRead.resolve(ok(page())));
+    expect(result.current.phase).toBe("ready");
+    expect(result.current.items).toEqual(first);
+    expect(result.current.cursor).toBe("opaque+cursor/one=");
+    expect(result.current.selection).toBeNull();
+    expect(result.current.source).toEqual(action === "jump" ? source(inline) : null);
+  });
+  it.each(["close", "jump"] as const)("fences the preserved initial read after inline %s when the actor changes", async (action) => {
+    const oldRead = deferred<ReturnType<typeof ok>>();
+    const newRead = deferred<ReturnType<typeof ok>>();
+    const inline = photo(24, true);
+    let galleryReads = 0;
+    vi.mocked(apiFetch).mockImplementation(async (path) => (path.includes("community-photos")
+      ? await (++galleryReads === 1 ? oldRead.promise : newRead.promise) : ok(source(inline))) as never);
+    const { result, rerender } = renderHook(({ actor }) => useVenueCommunityPhotos(venue, actor, "session"), { initialProps: { actor: "a" } });
+    const oldSignal = vi.mocked(apiFetch).mock.calls[0]?.[1]?.signal;
+    act(() => result.current.open(inline, [inline]));
+    await act(async () => { await result.current[action](); });
+    expect(result.current.phase).toBe("loading");
+    rerender({ actor: "b" });
+    expect(oldSignal?.aborted).toBe(true);
+    expect(result.current.phase).toBe("loading");
+    expect(result.current.items).toEqual([]);
+    expect(result.current.selection).toBeNull();
+    expect(result.current.source).toBeNull();
+    const newItems = [photo(40)];
+    await act(async () => newRead.resolve(ok(page(newItems, null))));
+    expect(result.current.phase).toBe("ready");
+    expect(result.current.items).toEqual(newItems);
+    // The old transport deliberately completes despite abort after the new actor's response.
+    await act(async () => oldRead.resolve(ok(page())));
+    expect(result.current.phase).toBe("ready");
+    expect(result.current.items).toEqual(newItems);
+    expect(result.current.cursor).toBeNull();
+    expect(result.current.source).toBeNull();
+  });
+  it.each(["close", "jump"] as const)("still cancels a pending next page on viewer %s without losing loaded photos", async (action) => {
+    const nextRead = deferred<ReturnType<typeof ok>>();
+    vi.mocked(apiFetch).mockImplementation(async (path) => (path.includes("?cursor=")
+      ? await nextRead.promise : path.includes("community-photos") ? ok(page()) : ok(source(first[23]!))) as never);
+    const { result } = renderHook(() => useVenueCommunityPhotos(venue, null, null));
+    await waitFor(() => expect(result.current.items).toEqual(first));
+    act(() => result.current.open(first[23]!));
+    act(() => result.current.move(1));
+    expect(result.current.phase).toBe("loading");
+    await act(async () => { await result.current[action](); });
+    expect(result.current.selection).toBeNull();
+    expect(result.current.phase).toBe("ready");
+    expect(result.current.items).toEqual(first);
+    await act(async () => nextRead.resolve(ok(page([photo(24, true)], null))));
+    expect(result.current.items).toEqual(first);
+    expect(result.current.cursor).toBe("opaque+cursor/one=");
+    expect(result.current.selection).toBeNull();
+  });
   it("accepts a real 24-item opaque page and rejects invented routes, stale versions, duplicates and malformed source", () => {
     expect(isCommunityPhotoPage(page())).toBe(true);
     expect(isCommunityPhotoPage(page([photo(1)], "cursor"))).toBe(false);

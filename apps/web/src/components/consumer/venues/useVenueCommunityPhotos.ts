@@ -18,12 +18,12 @@ const initial = (venueId: string): State => ({ items: [], canonical: venueId, cu
 export function useVenueCommunityPhotos(venueId: string, actorId: string | null, csrf: string | null) {
   const [state, setState] = useState<State>(() => initial(venueId));
   const context = useRef({ venueId, actorId, csrf, epoch: 0, live: true });
-  const pageRequest = useRef<AbortController | null>(null);
+  const pageRequest = useRef<{ controller: AbortController; initial: boolean } | null>(null);
   const sourceRequest = useRef<AbortController | null>(null);
   const creditRequest = useRef<AbortController | null>(null);
   const bind = useRef(context.current);
   if (context.current.venueId !== venueId || context.current.actorId !== actorId || context.current.csrf !== csrf) {
-    pageRequest.current?.abort(); sourceRequest.current?.abort(); creditRequest.current?.abort();
+    pageRequest.current?.controller.abort(); sourceRequest.current?.abort(); creditRequest.current?.abort();
     context.current = { venueId, actorId, csrf, epoch: context.current.epoch + 1, live: true };
   }
   const current = bind.current === context.current ? state : initial(venueId);
@@ -34,7 +34,7 @@ export function useVenueCommunityPhotos(venueId: string, actorId: string | null,
     const before = snapshot.current;
     const cursor = reset ? null : before.cursor;
     if (!reset && !cursor) return;
-    const controller = new AbortController(); pageRequest.current = controller;
+    const controller = new AbortController(); pageRequest.current = { controller, initial: reset };
     if (reset) {
       sourceRequest.current?.abort(); sourceRequest.current = null; creditRequest.current?.abort(); creditRequest.current = null;
       bind.current = ctx; setState(initial(ctx.venueId));
@@ -64,22 +64,28 @@ export function useVenueCommunityPhotos(venueId: string, actorId: string | null,
     bind.current = context.current;
     pageRequest.current = null;
     void load(true);
-    return () => { context.current.epoch++; pageRequest.current?.abort(); sourceRequest.current?.abort(); creditRequest.current?.abort(); pageRequest.current = null; };
+    return () => { context.current.epoch++; pageRequest.current?.controller.abort(); sourceRequest.current?.abort(); creditRequest.current?.abort(); pageRequest.current = null; };
   }, [venueId, actorId, csrf, load]);
   useEffect(() => {
     const fence = () => {
       context.current = { ...context.current, epoch: context.current.epoch + 1, live: false };
-      pageRequest.current?.abort(); sourceRequest.current?.abort(); creditRequest.current?.abort(); pageRequest.current = null; sourceRequest.current = null;
+      pageRequest.current?.controller.abort(); sourceRequest.current?.abort(); creditRequest.current?.abort(); pageRequest.current = null; sourceRequest.current = null;
       bind.current = context.current; setState({ ...initial(context.current.venueId), phase: "restart" });
     };
     window.addEventListener("gb-private-expired", fence); window.addEventListener("gb-session-changed", fence);
     return () => { window.removeEventListener("gb-private-expired", fence); window.removeEventListener("gb-session-changed", fence); };
   }, []);
+  const cancelNextPage = () => {
+    // The initial read belongs to the community, including when an inline viewer closes.
+    if (!pageRequest.current || pageRequest.current.initial) return false;
+    pageRequest.current.controller.abort(); pageRequest.current = null;
+    return true;
+  };
   const close = () => {
     // Fence even transports that complete despite abort, without cancelling gallery state.
     sourceRequest.current?.abort(); sourceRequest.current = null; creditRequest.current?.abort(); creditRequest.current = null;
-    pageRequest.current?.abort(); pageRequest.current = null;
-    setState((s) => ({ ...s, selection: null, credit: null, sourceBusy: false, phase: s.phase === "loading" ? "ready" : s.phase }));
+    const cancelledNextPage = cancelNextPage();
+    setState((s) => ({ ...s, selection: null, credit: null, sourceBusy: false, phase: cancelledNextPage && s.phase === "loading" ? "ready" : s.phase }));
   };
   const open = (photo: VenueCommunityPhoto, inlineItems?: VenueCommunityPhoto[]) => {
     if (!context.current.live) return;
@@ -114,10 +120,10 @@ export function useVenueCommunityPhotos(venueId: string, actorId: string | null,
     if (!result.ok || !isCurrentPhotoSource(result.data, selected)) {
       setState((s) => ({ ...s, sourceBusy: false, sourceError: "Публикация недоступна или изменилась. Обновите фотографии." })); return;
     }
-    pageRequest.current?.abort(); pageRequest.current = null;
+    const cancelledNextPage = cancelNextPage();
     creditRequest.current?.abort(); creditRequest.current = null;
     // Membership is supplied by the authorized gallery DTO; detail entityId can be a merged origin.
-    setState((s) => ({ ...s, source: result.data as EntityComment, sourceBusy: false, selection: null, phase: s.phase === "loading" ? "ready" : s.phase }));
+    setState((s) => ({ ...s, source: result.data as EntityComment, sourceBusy: false, selection: null, phase: cancelledNextPage && s.phase === "loading" ? "ready" : s.phase }));
   }
   function move(delta: number) {
     if (!current.selection || current.sourceBusy) return;
@@ -130,7 +136,7 @@ export function useVenueCommunityPhotos(venueId: string, actorId: string | null,
       // Signed-in expiry waits for the host's new session props; guest may explicitly resume.
       if (!context.current.live && actorId) return;
       context.current.live = true;
-      pageRequest.current?.abort(); pageRequest.current = null;
+      pageRequest.current?.controller.abort(); pageRequest.current = null;
       sourceRequest.current?.abort(); sourceRequest.current = null; creditRequest.current?.abort(); creditRequest.current = null;
       void load(true);
     } };
