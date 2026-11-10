@@ -7,6 +7,9 @@ import { InvitationChooser } from "../messages/InvitationChooser";
 import { GamePhotoSelection } from "../games/GamePhotoSelection";
 import { GameLevelRange } from "../games/GameLevelRange";
 import { gameCoverRequest } from "../../../lib/game-cover-api";
+import { VenueCandidatePhotoField } from "../venues/VenueCandidatePhotoField";
+import { useVenuePhotoCandidate } from "../venues/useVenuePhotoCandidate";
+import type { VenuePhotoCandidateModel } from "../venues/useVenuePhotoCandidate";
 import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -133,6 +136,8 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
   const [dateChoice, setDateChoice] = useState<"today" | "tomorrow" | "custom">("today");
   const [customDuration, setCustomDuration] = useState(false);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [candidateHost, setCandidateHost] = useState(0);
+  const venueCandidate = useVenuePhotoCandidate(me?.id ?? "", me?.csrfToken ?? "", `${location?.cityId ?? ""}:${candidateHost}`, Boolean(me) && !["loading", "auth", "setup", "load-error"].includes(step));
   const [knownVenues, setKnownVenues] = useState<VenueSummary[]>([]);
   const [selectedVenueCache, setSelectedVenueCache] = useState<VenueSummary | null>(null);
   const [venueStatus, setVenueStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -196,7 +201,8 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
   useEffect(() => {
     const changed = () => { ++sessionEpoch.current; contactEdited.current = false; setMe(null); setTrainer(null); setPreferences(null); setSaveContact(false); venueManuallySelected.current = false; setSelectedVenueCache(null); setDraft(emptyDraft()); setCreated(null); setPhoto(null); setPhotoReady(true); setCreatorSeat(null); setStep("loading"); setReload(n => n + 1); };
     window.addEventListener("gb-session-changed", changed);
-    return () => { ++sessionEpoch.current; window.removeEventListener("gb-session-changed", changed); };
+    window.addEventListener("gb-private-expired", changed);
+    return () => { ++sessionEpoch.current; window.removeEventListener("gb-session-changed", changed); window.removeEventListener("gb-private-expired", changed); };
   }, []);
 
   useEffect(() => {
@@ -232,11 +238,13 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
   }, [initialVenue, location?.cityId, knownVenues, reload]);
 
   function onVenueModeChange(createNewVenue: boolean) {
+    setCandidateHost(n => n + 1);
     venueManuallySelected.current = true;
     setDraft(value => ({ ...value, createNewVenue, venueId: "" }));
   }
 
   function onVenueSelect(venue: VenueSummary) {
+    setCandidateHost(n => n + 1);
     venueManuallySelected.current = true;
     setSelectedVenueCache(venue);
     setDraft(value => ({ ...value, venueId: venue.id }));
@@ -380,6 +388,9 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
           setStep("unknown"); await rereadResult(null); return;
         }
         venueId = venueResult.data.id;
+        // Keep the canonical result before any optional media operation. Dedup grants no client-side privilege.
+        setSelectedVenueCache(venueResult.data);
+        venueCandidate.submitForVenue(venueId);
         setDraft(value => ({ ...value, venueId, createNewVenue: false }));
       }
       if (!gameStartIsFuture(previewPayload.startsAt)) {
@@ -456,7 +467,7 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
     initialVenue === undefined ? undefined : initialVenue?.id ?? "",
   ));
   return {
-    step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
+    venueCandidate, step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
     activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,
     draft, setDraft, knownVenues, selectedVenue, venueStatus, setVenueReload, venuePickerOpen,
     setVenuePickerOpen, venueTriggerRef, onVenueModeChange, onVenueSelect, created, error, busy,
@@ -467,13 +478,13 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
 
 /** The route and popup render the same fields, validation, photo, preview and actions. */
 export function CreateGamePresentation({ embedded = false, onClose, invitePlayerId = null,
-  step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
+  venueCandidate, step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
   activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,
   draft, setDraft, knownVenues, selectedVenue, venueStatus, setVenueReload, venuePickerOpen,
   setVenuePickerOpen, venueTriggerRef, onVenueModeChange, onVenueSelect, created, error, busy,
   setBusy, photo, setPhoto, photoReady, setPhotoReady, photoUrl, contactEdited, previewPayload,
   previewGame, location, onCheck, onPublish, setStep, recoveryChecked, rereadResult, returnPath,
-}: ReturnType<typeof useCreateGameController> & Pick<CreateGamePageProps, "embedded" | "onClose"> & { invitePlayerId?: string | null }) {
+}: Omit<ReturnType<typeof useCreateGameController>, "venueCandidate"> & { venueCandidate?: VenuePhotoCandidateModel } & Pick<CreateGamePageProps, "embedded" | "onClose"> & { invitePlayerId?: string | null }) {
   const [inviteOpen, setInviteOpen] = useState(true);
   const [sentInvitation, setSentInvitation] = useState<string | null>(null);
   // Public compact summary for the closed-picker selected venue only (≤1 id; no catalog fetch /me).
@@ -551,10 +562,10 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
                 onSelect={onVenueSelect}
               />}
             </div> : <>
-              <label className="gb-game-field gb-game-field--wide">Название площадки<input id="venueName" required value={draft.venueName} onChange={e => setDraft({ ...draft, venueName: e.target.value })} /></label>
-              <label className="gb-game-field gb-game-field--wide">Адрес<input id="venueAddress" required value={draft.venueAddress} onChange={e => setDraft({ ...draft, venueAddress: e.target.value })} /></label>
-              <label className="gb-game-field">Широта<input id="lat" type="number" min={-90} max={90} step="any" required value={draft.latitude} onChange={e => setDraft({ ...draft, latitude: e.target.value })} /></label>
-              <label className="gb-game-field">Долгота<input id="lng" type="number" min={-180} max={180} step="any" required value={draft.longitude} onChange={e => setDraft({ ...draft, longitude: e.target.value })} /></label>
+              <label className="gb-game-field gb-game-field--wide">Название площадки<input id="venueName" required value={draft.venueName} onChange={e => { venueCandidate?.invalidateConfirmation(); setDraft({ ...draft, venueName: e.target.value }); }} /></label>
+              <label className="gb-game-field gb-game-field--wide">Адрес<input id="venueAddress" required value={draft.venueAddress} onChange={e => { venueCandidate?.invalidateConfirmation(); setDraft({ ...draft, venueAddress: e.target.value }); }} /></label>
+              <label className="gb-game-field">Широта<input id="lat" type="number" min={-90} max={90} step="any" required value={draft.latitude} onChange={e => { venueCandidate?.invalidateConfirmation(); setDraft({ ...draft, latitude: e.target.value }); }} /></label>
+              <label className="gb-game-field">Долгота<input id="lng" type="number" min={-180} max={180} step="any" required value={draft.longitude} onChange={e => { venueCandidate?.invalidateConfirmation(); setDraft({ ...draft, longitude: e.target.value }); }} /></label>
             </>}
             <div className="gb-game-field gb-game-field--wide"><span>Дата начала</span><div className="gb-discovery-chips" role="group" aria-label="Дата начала">
               {([["today", "Сегодня"], ["tomorrow", "Завтра"], ["custom", "Выбрать дату"]] as const).map(([choice, label]) => <button key={choice} className="gb-discovery-chip" type="button" aria-pressed={dateChoice === choice} onClick={() => { setDateChoice(choice); if (choice !== "custom" && location) setDraft(d => ({ ...d, startDate: nextCalendarDay(cityDate(new Date(), location.timezone), choice === "today" ? 0 : 1) })); }}>{label}</button>)}
@@ -593,6 +604,7 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
               <label className="gb-game-field gb-game-field--wide">Оплата тренеру (по договорённости)<textarea id="feeTerms" required value={draft.trainerFeeTerms} onChange={e => setDraft({ ...draft, trainerFeeTerms: e.target.value })} /><small>Расчёт напрямую с тренером.</small></label>
             </>}
           </div></section>
+          {venueCandidate && (draft.createNewVenue || venueCandidate.canonicalVenueId === draft.venueId) && <VenueCandidatePhotoField model={venueCandidate} disabled={busy} />}
           <GamePhotoSelection onChange={setPhoto} onReady={setPhotoReady} disabled={busy}/>
           {error && <div className="gb-game-notice" role="alert"><p>{error}</p><Button variant="outline" type="button" onClick={() => setReload(n => n + 1)}>Обновить проверку входа</Button></div>}
           <div className="gb-game-form-actions">{embedded ? <Button variant="outline" onClick={onClose}>Отмена</Button> : <Button variant="outline" href="/games">Отмена</Button>}<Button type="submit" disabled={!photoReady}>Далее — к созданию</Button></div>
@@ -606,6 +618,7 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
       {step === "preview" && previewGame && <div className="gb-game-preview" data-surface="create-preview">
         <header className="gb-game-preview-heading"><h2>Проверка перед созданием</h2><p>Проверьте данные. Игра появится после нажатия «Создать игру».</p></header>
         <GameHero game={previewGame} preview localPreview={photoUrl} />
+        {venueCandidate && (draft.createNewVenue || venueCandidate.canonicalVenueId === draft.venueId) && <VenueCandidatePhotoField model={venueCandidate} compact disabled={busy} />}
         <p>{photo ? "Выбрано своё фото этой игры. Перед публикацией сервер проверит изображение." : "Будет использована текущая одобренная обложка площадки или стандартная."}</p>
         <div className="gb-game-detail-grid"><div><GameTerms game={previewGame} onVenueClick={embedded ? () => { setStep("form"); setVenuePickerOpen(true); } : undefined} /><section className="gb-game-section"><h2>Кто увидит игру</h2><p>{draft.visibility === "public" ? "Игра появится в поиске" : "Только те, у кого есть ссылка"}</p></section></div>
           <aside className="gb-game-booking"><div className="gb-game-booking__terms"><strong>Готово к публикации</strong><p>{activityKind === "regular" ? "При создании обычной игры ваше участие подтверждает сервер." : "Тренер не занимает место игрока."}</p></div>{!embedded && publishActionBar}</aside>
@@ -623,6 +636,7 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
         <p role="status">{recoveryChecked ? created ? (created.status === "draft" ? "Игра сохранена как черновик. Публикация не подтверждена." : "Статус игры обновлён.") : "Список обновлён. Откройте созданные игры и проверьте результат." : "Не удалось проверить результат. Обновите состояние ещё раз."}</p>
         <div className="gb-game-form-actions"><Button variant="outline" disabled={busy} onClick={async () => { setBusy(true); try { await rereadResult(created); } finally { setBusy(false); } }}>Проверить состояние</Button><Button href={created ? `/my-games/${created.id}` : "/my-games?tab=created"}>{created ? "Открыть сводку" : "К созданным играм"}</Button></div>
       </div>}
+      {venueCandidate?.canonicalVenueId && !["form", "preview"].includes(step) && <VenueCandidatePhotoField model={venueCandidate} compact disabled={busy} />}
       </div>
   );
   return embedded ? content : <ConsumerShell active="games" title="Создать игру" mode="local">{content}</ConsumerShell>;
