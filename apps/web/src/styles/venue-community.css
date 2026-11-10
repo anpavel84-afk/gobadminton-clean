@@ -294,16 +294,18 @@
 .gb-venue-community--embedded { gap:0; }
 .gb-venue-community--embedded > [data-community-section] { border-top:1px solid var(--gb-line,#dfe4dc); padding:20px 0; scroll-margin-top:12px; }
 .gb-venue-community--embedded .gb-venue-community__panel,
-.gb-venue-community--embedded .gb-comments,
+.gb-consumer .gb-venue-community--embedded .gb-comments,
 .gb-venue-community--embedded > .gb-surface { border-radius:0; border:0; box-shadow:none; padding:20px 0; }
 .gb-venue-community--embedded .gb-venue-community__panel,
-.gb-venue-community--embedded .gb-comments { padding:0; }
-.gb-venue-community--embedded h2 { font-size:19px; }
+.gb-consumer .gb-venue-community--embedded .gb-comments { padding:0; }
+.gb-venue-community--embedded h2,
+.gb-consumer .gb-venue-community--embedded .gb-comments__title-row h2 { font-size:19px; }
 .gb-venue-community--embedded .gb-venue-community__rating-number { font-size:32px; }
 .gb-venue-community--embedded .gb-venue-community__guest { display:block; padding:12px; }
 .gb-venue-community--embedded .gb-venue-reviews__card-text { overflow-wrap:anywhere; white-space:pre-wrap; }
-/* D1: narrow inspector uses container width, not the desktop 3-column page composer. */
-.gb-venue-community--embedded .gb-comments__composer {
+/* D1: narrow inspector uses container width, not the desktop 3-column page composer.
+   Beat later .gb-consumer CommentsSection ties (composer 0,2; avatar 0,3; title 0,2,1; padding 0,2). */
+.gb-consumer .gb-venue-community--embedded .gb-comments__composer {
   display:grid;
   grid-template-columns:minmax(0,1fr);
   gap:10px;
@@ -311,20 +313,20 @@
   min-width:0;
   box-sizing:border-box;
 }
-.gb-venue-community--embedded .gb-comments__composer > .gb-comments__avatar,
-.gb-venue-community--embedded .gb-comments__composer > .avatar {
+.gb-consumer .gb-venue-community--embedded .gb-comments__composer > .gb-comments__avatar,
+.gb-consumer .gb-venue-community--embedded .gb-comments__composer > .avatar {
   display:none;
 }
-.gb-venue-community--embedded .gb-comments__field {
+.gb-consumer .gb-venue-community--embedded .gb-comments__field {
   min-width:0;
   width:100%;
 }
-.gb-venue-community--embedded .gb-comments__field textarea {
+.gb-consumer .gb-venue-community--embedded .gb-comments__field textarea {
   width:100%;
   min-width:0;
   box-sizing:border-box;
 }
-.gb-venue-community--embedded .gb-comments__composer > .gb-c23-btn {
+.gb-consumer .gb-venue-community--embedded .gb-comments__composer > .gb-c23-btn {
   grid-column:1 / -1;
   width:100%;
   justify-self:stretch;
