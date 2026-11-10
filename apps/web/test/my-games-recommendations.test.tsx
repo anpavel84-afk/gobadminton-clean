@@ -629,3 +629,26 @@ describe("FR-3B recommendation UI lifecycle", () => {
     expect(apiFetch).toHaveBeenCalledWith("/v1/me/game-recommendations?view=received&limit=20&cursor=page-2");
   });
 });
+
+
+describe("#539 recommendation placement", () => {
+  it("attaches all senders to the matching game while keeping the shared received mutation owner", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({ ok: true, status: 200, data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false } });
+    const second: GameRecommendation = { ...item, id: "second", peer: { ...item.peer, displayName: "Анна" } };
+    vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: { ...list, items: [item, second], nextCursor: null } });
+    let attachedRows: ReadonlyMap<string, ReactNode> = new Map();
+    let secondaryNode: ReactNode = null;
+    const props: Parameters<typeof GameRecommendationsSection>[0] = { me, fixedView: "received", compact: true, gameIds: new Set([item.game.id]),
+      renderWithGames: (attached: ReadonlyMap<string, ReactNode>, secondary: ReactNode) => {
+        attachedRows = attached; secondaryNode = secondary; return <div>{attached.get(item.game.id)}{secondary}</div>;
+      } };
+    hooks.cursor = 0; GameRecommendationsSection(props); flushEffects(); await settle();
+    hooks.cursor = 0; const tree = GameRecommendationsSection(props); flushEffects();
+    expect(attachedRows.size).toBe(1);
+    expect(secondaryNode).toBeNull();
+    expect(labelOf(tree)).toContain("Борис П.");
+    expect(labelOf(tree)).toContain("Анна");
+    activate(tree, "Скрыть"); await settle();
+    expect(apiFetch).toHaveBeenCalledWith(hideGameRecommendationPath(item.id), expect.objectContaining({ body: JSON.stringify({ expectedVersion: item.version }) }));
+  });
+});

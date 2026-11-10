@@ -8,7 +8,7 @@ import {
   pendingOwnNotice,
   resultsPath,
 } from "../src/lib/game-results";
-import type { MeGameResultsPage } from "../src/lib/consumer-types";
+import type { Game, ManagedGame, MeGameResultsPage } from "../src/lib/consumer-types";
 
 const baseAttendance = {
   contextId: "10000000-0000-4000-8000-000000000011",
@@ -187,12 +187,20 @@ vi.mock("../src/components/consumer/ConsumerShell", () => ({
 vi.mock("../src/components/consumer/games/GameRecommendationsSection", () => ({
   GameRecommendationsSection: () => null,
 }));
+vi.mock("../src/lib/messaging-api", () => ({
+  listInvitations: vi.fn(), invitationPath: (id: string) => `/v1/invitations/${id}`,
+}));
+vi.mock("../src/components/consumer/games/PostgameReminders", () => ({
+  usePostgameReminders: () => ({ items: [], loading: false, error: null, busyId: null, retry: vi.fn(), onLater: vi.fn() }),
+  PostgameReminderActions: () => null,
+}));
 
 vi.mock("../src/components/consumer/games/GameReviewsHistory", () => ({
   GameReviewsHistory: () => null,
 }));
 
 vi.mock("../src/lib/api-client", () => ({
+  apiFetch: vi.fn(),
   getMe: vi.fn(),
   getGame: vi.fn(),
   listAllMyParticipations: vi.fn(),
@@ -201,18 +209,26 @@ vi.mock("../src/lib/api-client", () => ({
 }));
 
 import {
+  apiFetch,
   getGame,
   getMe,
   listAllMyManagedGames,
   listAllMyParticipations,
   listMyGameResults,
 } from "../src/lib/api-client";
-import { MyGamesPage } from "../src/components/consumer/pages/MyGamesPage";
-import { OwnResultsHistoryCard } from "../src/components/consumer/games/GameDetailComposition";
+import type { GameInvitation } from "../src/lib/messaging-types";
+import { MutationNotice } from "../src/components/consumer/messages/MessageComposition";
+import { listInvitations } from "../src/lib/messaging-api";
+import { myGamesBucket, myGamesFilter, MyGamesInvitation, MyGamesPage } from "../src/components/consumer/pages/MyGamesPage";
+import { GameRecommendationsSection } from "../src/components/consumer/games/GameRecommendationsSection";
+import { OwnResultsHistoryCard, PersonalGameCard } from "../src/components/consumer/games/GameDetailComposition";
 
 function walk(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (!isValidElement<Record<string, unknown>>(node)) return [];
-  return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(walk)];
+  const composed = node.type === GameRecommendationsSection && typeof node.props.renderWithGames === "function"
+    ? node.props.renderWithGames(new Map(), null)
+    : null;
+  return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(walk), ...walk(composed)];
 }
 
 function labelOf(node: unknown): string {
@@ -223,7 +239,7 @@ function labelOf(node: unknown): string {
 }
 
 function textOf(node: ReactNode): string {
-  return labelOf(node);
+  return walk(node).map((element) => labelOf(element.props.children)).join(" ");
 }
 
 function flushEffects() {
@@ -263,6 +279,22 @@ const participation = {
   requestedAt: "2026-10-01T00:00:00.000Z",
 };
 
+const unionGame: Game = {
+  id: participation.gameId, version: 7, title: "44", status: "published", visibility: "public",
+  activityKind: "regular", trainer: null, trainingDescription: null,
+  organizer: { id: "organizer", displayName: "A", publicContact: "" },
+  venue: { id: "venue", name: "Зал", cityId: "city", address: "Адрес", timezone: "Europe/Moscow" },
+  startsAt: "2099-12-01T10:00:00Z", endsAt: "2099-12-01T12:00:00Z", timezone: "Europe/Moscow",
+  applicationDeadlineAt: "2099-12-01T09:00:00Z", capacity: 8, externalReservedCount: 0, confirmedCount: 1, availablePlaces: 7,
+  formatKey: "doubles", levelRule: { scaleId: "scale", scaleVersion: 1, allowedLevelIds: ["D"] },
+  settlement: { mode: "external", purpose: "no_trainer_fee", priceMinor: null, currency: null, terms: "Без оплаты" },
+};
+const unionInvite: GameInvitation = {
+  id: "invite", gameId: participation.gameId, status: "pending", version: 3,
+  inviterPublicPlayerId: "inviter", inviteePublicPlayerId: "recipient", expiresAt: "2099-12-01T09:00:00Z",
+  decidedAt: null, participationId: null, createdAt: "2026-11-01T00:00:00Z",
+};
+
 beforeEach(() => {
   resetHooks();
   nav.search = "view=history";
@@ -274,6 +306,7 @@ beforeEach(() => {
       dispatchEvent: EventTarget.prototype.dispatchEvent,
     }),
   );
+  vi.mocked(listInvitations).mockResolvedValue({ ok: true, status: 200, data: { items: [], nextCursor: null } });
   vi.mocked(getMe).mockResolvedValue({
     ok: true,
     status: 200,
@@ -353,9 +386,9 @@ describe("PG-4 MyGames private history on public getGame 404", () => {
     const tree = renderPage();
     flushEffects();
     const markup = textOf(tree);
-    expect(markup).toContain("Не удалось загрузить ваши итоги");
+    expect(markup).toContain("Не удалось загрузить: ваши итоги");
     expect(markup).toContain("Сервер временно недоступен");
-    expect(markup).toContain("Обновить итоги");
+    expect(markup).toContain("Обновить ваши итоги");
   });
 
   it("clears own results on session-changed and ignores deferred fetch", async () => {
@@ -459,9 +492,9 @@ describe("PG-4 MyGames private history on public getGame 404", () => {
     const upcoming = renderPage();
     flushEffects();
     const upcomingMarkup = textOf(upcoming);
-    expect(walk(upcoming).filter((el) => el.type === OwnResultsHistoryCard)).toHaveLength(0);
-    expect(upcomingMarkup).toContain("Пока нет участий");
-    expect(upcomingMarkup).toContain("Ближайшие события");
+    expect(walk(upcoming).filter((el) => el.type === OwnResultsHistoryCard)).toHaveLength(1);
+    expect(upcomingMarkup).toContain("Предстоящих игр пока нет.");
+    expect(upcomingMarkup).toContain("Предстоящие");
 
     nav.search = "view=history";
     resetHooks();
@@ -475,7 +508,7 @@ describe("PG-4 MyGames private history on public getGame 404", () => {
     expect((cards[0]!.props.item as { gameId: string }).gameId).toBe(
       "10000000-0000-4000-8000-000000000001",
     );
-    expect(textOf(history)).toContain("История участий");
+    expect(textOf(history)).toContain("История");
     expect(textOf(history)).toContain("Субботний бадминтон");
   });
 
@@ -500,10 +533,75 @@ describe("PG-4 MyGames private history on public getGame 404", () => {
     const tree = renderPage();
     flushEffects();
     const markup = textOf(tree);
-    expect(markup).toContain("История управляемых игр");
-    expect(markup).not.toContain("Ваши итоги");
+    expect(markup).toContain("История");
+    expect(markup).not.toContain("Чужое участие");
     expect(markup).not.toContain("own-results-orphan-history");
     expect(walk(tree).filter((el) => el.type === OwnResultsHistoryCard)).toHaveLength(0);
     expect(vi.mocked(listAllMyManagedGames)).toHaveBeenCalled();
+  });
+});
+
+
+describe("#539 union and URL compatibility", () => {
+  it("joins manager, participation, paginated invitations and own contexts into one card and one game fetch", async () => {
+    vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: unionGame });
+    vi.mocked(listAllMyManagedGames).mockResolvedValue({ ok: true, status: 200, data: [{ ...unionGame, management: { role: "manager", createdByMe: false } }] });
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [{ ...participation, status: "confirmed" }] });
+    vi.mocked(listInvitations)
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { items: [{ ...unionInvite, id: "old", status: "declined" }], nextCursor: "page2" } })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { items: [unionInvite], nextCursor: null } });
+    vi.mocked(listMyGameResults).mockResolvedValue({ ok: true, status: 200, data: { items: [ownItem(unionGame.id)], nextCursor: null } });
+    renderPage(); flushEffects(); await settle(); await settle();
+    const tree = renderPage(); flushEffects();
+    const cards = walk(tree).filter((element) => element.type === PersonalGameCard);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].props).toMatchObject({ owned: true, managementRelation: "Управляю", ownStatuses: ["confirmed"] });
+    expect(walk(tree).filter((element) => element.type === MyGamesInvitation)).toHaveLength(2);
+    expect(vi.mocked(listInvitations).mock.calls[1]).toEqual(["page2"]);
+    expect(getGame).toHaveBeenCalledTimes(1);
+  });
+
+  it("private invitation cannot accept; decline UNKNOWN retains the Messages packet and key until explicit retry", async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) });
+    vi.stubGlobal("crypto", { randomUUID: () => "immutable-key" });
+    vi.mocked(apiFetch).mockResolvedValue({ ok: false, status: 500, error: "unknown" });
+    const me = { id: "actor-a", csrfToken: "csrf", displayName: "A", locale: "ru", linkedProviders: [] };
+    const render = () => { hooks.cursor = 0; return MyGamesInvitation({ invitation: unionInvite, game: null, me, changed: vi.fn() }); };
+    let tree = render(); flushEffects();
+    const accept = walk(tree).find((element) => labelOf(element.props.children) === "Принять приглашение");
+    expect(accept?.props.disabled).toBe(true);
+    const decline = walk(tree).find((element) => labelOf(element.props.children) === "Отклонить");
+    expect(decline?.props.disabled).toBe(false);
+    if (typeof decline?.props.onClick !== "function") throw new Error("Missing decline action");
+    decline.props.onClick(); await settle();
+    tree = render(); flushEffects();
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(storage.get("gb-fr04-pending:actor-a:invitation:invite") ?? "null")).toEqual({ path: "/v1/invitations/invite/decline", body: { expectedVersion: 3 }, key: "immutable-key", method: "POST" });
+    const notice = walk(tree).find((element) => element.type === MutationNotice);
+    expect(notice?.props.mutation).toMatchObject({ pending: true });
+    const mutation = notice?.props.mutation;
+    if (!mutation || typeof mutation !== "object" || !("retry" in mutation) || typeof mutation.retry !== "function") throw new Error("Missing explicit retry");
+    mutation.retry(); await settle();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(apiFetch).mock.calls[1]).toEqual(vi.mocked(apiFetch).mock.calls[0]);
+  });
+
+  it("defaults to all while retaining legacy manager entry and invalid query fallback", () => {
+    expect(myGamesFilter(null, null)).toBe("all");
+    expect(myGamesFilter(null, "created")).toBe("manage");
+    expect(myGamesFilter("invites", "created")).toBe("invites");
+    expect(myGamesFilter("invalid", "created")).toBe("all");
+  });
+
+  it("does not let a terminal participation hide active management, or an old draft become past", () => {
+    const game: Game = { ...unionGame, endsAt: "2026-12-01T12:00:00Z" };
+    const managed: ManagedGame = { ...game, management: { role: "manager", createdByMe: false } };
+    const row = { id: "game", managed, parts: [participation], invites: [], own: [], reminders: [] };
+    const now = Date.parse("2026-11-01T12:00:00Z");
+    expect(myGamesBucket(row, game, now)).toBe("upcoming");
+    expect(myGamesBucket({ ...row, managed: undefined }, game, now)).toBe("terminal");
+    expect(myGamesBucket(row, { ...game, status: "draft", endsAt: "2020-01-01T12:00:00Z" }, now)).toBe("draft");
+    expect(myGamesBucket({ ...row, managed: undefined, parts: [] }, null, now)).toBe("unknown");
   });
 });
