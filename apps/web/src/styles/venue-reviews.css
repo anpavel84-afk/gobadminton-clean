@@ -51,6 +51,16 @@
 }
 
 .gb-venue-reviews__field select,
+.gb-venue-reviews__field textarea {
+  min-height: 44px;
+  border-radius: 16px;
+  border: 1px solid var(--gb-line);
+  background: var(--gb-white, #fff);
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--gb-ink);
+}
+
 /* Bounded amendment: edit-only native checkbox chips. */
 .gb-venue-reviews__topics {
   border: 0;
@@ -116,16 +126,6 @@
 .gb-venue-reviews__topics:disabled .gb-venue-reviews__topic-choice:has(input:checked) {
   background: var(--gb-lavender, #eee6ff);
   border-style: dashed;
-}
-
-.gb-venue-reviews__field textarea {
-  min-height: 44px;
-  border-radius: 16px;
-  border: 1px solid var(--gb-line);
-  background: var(--gb-white, #fff);
-  padding: 12px 14px;
-  font: inherit;
-  color: var(--gb-ink);
 }
 
 .gb-venue-reviews__field textarea {
