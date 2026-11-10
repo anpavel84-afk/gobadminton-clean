@@ -434,25 +434,55 @@ export function VenueReviewComposer({
                 {help}
               </p>
             ) : null}
-            <div className="gb-venue-reviews__field">
-              <label htmlFor="venue-review-topic">О чём хотите рассказать</label>
-              <select
-                id="venue-review-topic"
-                multiple={Boolean(edit)}
-                value={edit ? topics : topics[0] ?? ""}
-                onChange={(e) => {
-                  const values = Array.from(e.target.selectedOptions, option => option.value);
-                  setTopics(TOPICS.filter(topic => values.includes(topic.value)).map(topic => topic.value));
-                }}
-                disabled={locked}
+            {edit ? (
+              <fieldset
+                className="gb-venue-reviews__topics"
+                aria-describedby="venue-review-topics-help"
+                disabled={locked || readRequired}
               >
-                {TOPICS.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <legend>О чём хотите рассказать</legend>
+                <p id="venue-review-topics-help">Необязательно · можно выбрать несколько</p>
+                <div className="gb-venue-reviews__topic-options">
+                  {TOPICS.map((topic) => (
+                    <label key={topic.value} className="gb-venue-reviews__topic-choice">
+                      <input
+                        type="checkbox"
+                        checked={topics.includes(topic.value)}
+                        onChange={(e) => {
+                          if (locked || readRequired || context.current.revoked || sendLock.current || packetRef.current) return;
+                          const checked = e.currentTarget.checked;
+                          setTopics((currentTopics) => {
+                            if (currentTopics.includes(topic.value) === checked) return currentTopics;
+                            return TOPICS.filter((option) => option.value === topic.value
+                              ? checked : currentTopics.includes(option.value)).map((option) => option.value);
+                          });
+                        }}
+                      />
+                      <span>{topic.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ) : (
+              <div className="gb-venue-reviews__field">
+                <label htmlFor="venue-review-topic">О чём хотите рассказать</label>
+                <select
+                  id="venue-review-topic"
+                  value={topics[0] ?? ""}
+                  onChange={(e) => {
+                    const values = Array.from(e.target.selectedOptions, option => option.value);
+                    setTopics(TOPICS.filter(topic => values.includes(topic.value)).map(topic => topic.value));
+                  }}
+                  disabled={locked}
+                >
+                  {TOPICS.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="gb-venue-reviews__field">
               <label htmlFor="venue-review-text">Ваш опыт на площадке</label>
               <textarea
