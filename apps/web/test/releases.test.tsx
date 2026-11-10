@@ -457,7 +457,8 @@ describe("releases catalogue integrity", () => {
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
     expect(currentProse).toMatch(/Свои отзывы о площадках в профиле/i);
-    expect(currentProse).toMatch(/В описании возможностей площадки уточнено/i);
+    expect(currentProse).toContain("На комментарий или ответ в обсуждении можно пожаловаться.");
+    expect(currentProse).toContain("Для отправки жалобы нужен вход в аккаунт.");
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
