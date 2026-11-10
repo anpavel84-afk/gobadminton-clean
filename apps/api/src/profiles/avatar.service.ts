@@ -251,7 +251,7 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
             // must not parse an absent additive table in the reference query.
             const privateTable = await client.query<{ relation: string | null }>("SELECT to_regclass('public.venue_photo_submissions') AS relation");
             const privateRef = privateTable.rows[0]?.relation ? await client.query(
-              "SELECT 1 FROM venue_photo_submissions WHERE storage_key=$1 AND status='ready' AND expires_at>clock_timestamp()", [row.storage_key],
+              "SELECT 1 FROM venue_photo_submissions WHERE storage_key=$1 AND ((purpose='comment_attachment' AND status='ready' AND expires_at>clock_timestamp()) OR (purpose='official_candidate' AND (status='awaiting_review' OR EXISTS(SELECT 1 FROM privileged_audit_events a WHERE a.target_type='venue_photo_candidate' AND a.target_id=venue_photo_submissions.id::text AND a.legal_hold))))", [row.storage_key],
             ) : undefined;
             const publications=await client.query<{relation:string|null}>("SELECT to_regclass('public.entity_comment_photos') AS relation");
             const publishedRef=publications.rows[0]?.relation ? await client.query(`SELECT 1

@@ -1,3 +1,5 @@
+import { VenuePhotoCandidatesService, candidateReceipt, VENUE_CANDIDATE_RIGHTS, type CandidateRow } from "./venue-photo-candidates";
+import { galleryEvidenceSchema } from "./venue-gallery";
 import { Injectable } from "@nestjs/common";
 import { createHash, randomBytes } from "node:crypto";
 import type { PoolClient } from "pg";
@@ -110,6 +112,7 @@ export class VenueGalleryService {
     private readonly admin: AdminService,
     private readonly media: AvatarService,
     private readonly moderation: ContentModerationService,
+    private readonly candidates: VenuePhotoCandidatesService,
   ) {}
 
   private async scope(c: PoolClient, actor: AdminActor, id: string): Promise<ScopeRow> {
@@ -176,6 +179,126 @@ export class VenueGalleryService {
       });
       return this.receipt(row.version, items);
     });
+  }
+
+  /** Candidate owner is fenced before catalog/venue/candidate locks, including replay/read. */
+  private async candidateScope(c: PoolClient, actor: AdminActor, venueId: string, candidateId: string) {
+    const snapshot = (await c.query<{ owner_user_id: string }>(`SELECT owner_user_id FROM venue_photo_submissions
+      WHERE id=$1 AND venue_id=$2 AND purpose='official_candidate'`, [candidateId, venueId])).rows[0];
+    if (!snapshot) throw notFound("PHOTO_CANDIDATE_UNAVAILABLE", "Кандидат недоступен");
+    const owner = await c.query("SELECT id FROM users WHERE id=$1 AND status='active' FOR NO KEY UPDATE", [snapshot.owner_user_id]);
+    if (!owner.rowCount) throw notFound("PHOTO_CANDIDATE_UNAVAILABLE", "Кандидат недоступен");
+    await c.query("SELECT pg_advisory_xact_lock(hashtext('gobadminton_venue_catalog'))");
+    const venue = await this.scope(c, actor, venueId);
+    await this.candidates.ownerVenue(c, snapshot.owner_user_id, venueId);
+    const candidate = await this.candidates.row(c, candidateId, venueId);
+    // Fresh statement after all row-lock waits; do not use a pre-wait aggregate for capacity.
+    venue.count = Number((await c.query<{count:string}>(
+      "SELECT count(*)::text AS count FROM venue_gallery_items WHERE venue_id=$1 AND active", [venueId])).rows[0]!.count);
+    return { venue, candidate };
+  }
+
+  async candidateQueue(request: FastifyRequest, id: string) {
+    return this.admin.privilegedRead(request, "venue.manage", async (c, a) => {
+      await this.scope(c, a, id);
+      const rows = (await c.query<CandidateRow>(`SELECT * FROM venue_photo_submissions WHERE venue_id=$1
+        AND purpose='official_candidate' AND status='awaiting_review' ORDER BY created_at,id LIMIT 1`, [id])).rows;
+      await appendAudit(c, { actor: a, action: "venue.candidate_read", targetType: "venue", targetId: id,
+        permission: "venue.manage", reason: "operations_read" });
+      return { items: rows.map(row => ({ ...candidateReceipt(row),
+        previewPath: `/v1/admin/venues/${id}/photo-candidates/${row.id}/content` })) };
+    });
+  }
+
+  async candidateContent(request: FastifyRequest, id: string, candidateId: string) {
+    return this.admin.privilegedRead(request, "venue.manage", async (c, a) => {
+      const { candidate } = await this.candidateScope(c, a, id, candidateId);
+      if (candidate.status !== "awaiting_review") throw notFound("PHOTO_CANDIDATE_UNAVAILABLE", "Кандидат недоступен");
+      const bytes = await this.candidates.approvedBytes(c, candidate);
+      await appendAudit(c, { actor: a, action: "venue.candidate_preview", targetType: "venue_photo_candidate", targetId: candidateId,
+        permission: "venue.manage", reason: "operations_read" });
+      return bytes;
+    });
+  }
+
+  async decideCandidate(request: FastifyRequest, replayKey: string | undefined, id: string, candidateId: string,
+    input: { action: "accept" | "reject"; expectedVersion: number; expectedCandidateVersion: number }) {
+    type Prep = { textPrep: VenueImportTextPrep; authority: { userId: string; version: number; sessionId: string } };
+    let authority: Prep["authority"] | undefined;
+    let evidence: GalleryEvidence | undefined;
+    const pending = async (c: PoolClient, a: AdminActor) => {
+      const scoped = await this.candidateScope(c, a, id, candidateId);
+      if (scoped.venue.version !== input.expectedVersion || scoped.candidate.version !== input.expectedCandidateVersion
+        || scoped.candidate.status !== "awaiting_review") throw conflict("VERSION_CONFLICT", "Кандидат или площадка изменились");
+      return scoped;
+    };
+    return this.admin.privilegedRunWithExternalPrepare<Prep, ReturnType<typeof candidateReceipt>>(
+      request, replayKey, "venue.manage", true, `venue.candidate.${input.action}`, { id, candidateId, ...input },
+      async (c, a) => { await this.candidateScope(c, a, id, candidateId); },
+      async (c, a) => {
+        const { candidate, venue } = await pending(c, a);
+        if (input.action === "accept") {
+          if (venue.count >= VENUE_GALLERY_MAX) throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
+          const parsed = galleryEvidenceSchema.safeParse(candidate.evidence);
+          if (!parsed.success || parsed.data.creditKind !== "photo") throw conflict("GALLERY_EVIDENCE_INVALID", "Проверьте источник и права на фото");
+          evidence = parsed.data;
+          await this.candidates.approvedBytes(c, candidate);
+        }
+        authority = { userId: a.principal.user_id, version: a.principal.version, sessionId: a.sessionId };
+      },
+      async () => {
+        if (!authority) throw conflict("VENUE_AUTHORITY_CHANGED", "Права изменились");
+        let textPrep = emptyVenueImportTextPrep();
+        if (input.action === "accept" && evidence) {
+          const text = freeCreditTextCandidate(evidence.creditText, evidence.creditKind);
+          if (text) textPrep = { approval: await this.moderation.approveTexts(authority.userId, [text]),
+            committed: [{ surface: "venue_credit_text", text: evidence.creditText }] };
+        }
+        return { authority, textPrep };
+      },
+      async (c, a, keyHash, prep) => {
+        if (a.principal.user_id !== prep.authority.userId || a.principal.version !== prep.authority.version
+          || a.sessionId !== prep.authority.sessionId) throw conflict("VENUE_AUTHORITY_CHANGED", "Права изменились");
+        const { candidate, venue } = await pending(c, a);
+        let itemId: string | null = null;
+        let venueVersion = venue.version;
+        if (input.action === "accept") {
+          const parsed = galleryEvidenceSchema.safeParse(candidate.evidence);
+          if (!parsed.success || parsed.data.creditKind !== "photo") throw conflict("GALLERY_EVIDENCE_INVALID", "Проверьте источник и права на фото");
+          const currentEvidence = parsed.data;
+          await this.candidates.approvedBytes(c, candidate);
+          if (venue.count >= VENUE_GALLERY_MAX) throw conflict("VENUE_GALLERY_FULL", "У площадки уже максимум 8 изображений.");
+          const e = currentEvidence;
+          // Append only. An empty gallery may coexist with a legacy official cover: keep that cover intact.
+          const hasCover = (await c.query<{ cover_key: string | null }>("SELECT cover_key FROM venues WHERE id=$1", [id])).rows[0]!.cover_key;
+          itemId = (await c.query<{ id: string }>(`INSERT INTO venue_gallery_items
+            (venue_id,position,is_main,storage_key,moderation_approval_id,actor_id,credit_kind,credit_text,credit_url,
+             source_url,source_author,permission_basis,source_fingerprint)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+          [id, venue.count, venue.count === 0 && !hasCover, candidate.storage_key, candidate.image_approval_id, candidate.owner_user_id,
+            e.creditKind, e.creditText, e.creditUrl, e.sourceUrl ?? null, e.sourceAuthor ?? null, e.permissionBasis, e.sourceFingerprint ?? null])).rows[0]!.id;
+          if (venue.count === 0 && !hasCover) await this.syncMainCover(c, id, candidate.owner_user_id);
+          venueVersion = (await c.query<{ version: number }>("UPDATE venues SET version=version+1,updated_at=now() WHERE id=$1 RETURNING version", [id])).rows[0]!.version;
+          await bindVenueCreditPublication(c, this.moderation, prep.textPrep, { galleryItemId: itemId,
+            resourceVersion: venueVersion, actorUserId: a.principal.user_id, actorPrincipalId: a.principalId });
+        }
+        const status = input.action === "accept" ? "accepted" : "rejected";
+        const auditId = await appendAudit(c, { actor: a, action: `venue.candidate_${status}`,
+          targetType: "venue_photo_candidate", targetId: candidate.id, permission: "venue.manage", reason: "venue_gallery", keyHash,
+          before: { version: candidate.version, venueId: id, venueVersion: venue.version, ownerUserId: candidate.owner_user_id,
+            imageSha256: candidate.image_sha256, imageApprovalId: candidate.image_approval_id,
+            rightsVersion: VENUE_CANDIDATE_RIGHTS, evidence: candidate.evidence },
+          after: { status, version: candidate.version + 1, venueVersion, galleryItemId: itemId } });
+        const updated = (await c.query<CandidateRow>(`UPDATE venue_photo_submissions SET status=$2,version=version+1,
+          decision_audit_id=$3,gallery_item_id=$4 WHERE id=$1 RETURNING *`, [candidate.id, status, auditId, itemId])).rows[0]!;
+        if (input.action === "accept") {
+          await c.query("DELETE FROM avatar_media_gc WHERE storage_key=$1", [candidate.storage_key]);
+          await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'gallery',$3,$4)",
+            [id, venueVersion, a.principalId, auditId]);
+        } else await c.query("UPDATE avatar_media_gc SET not_before=now() WHERE storage_key=$1", [candidate.storage_key]);
+        return candidateReceipt(updated);
+      },
+    );
   }
 
   async add(request: FastifyRequest, replayKey: string | undefined, id: string, expectedVersion: number,

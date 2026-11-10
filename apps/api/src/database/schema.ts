@@ -849,9 +849,13 @@ export const venuePhotoSubmissions = pgTable("venue_photo_submissions", {
   status: text("status").notNull().default("ready"),
   version: integer("version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull().default(sql`now() + interval '1 hour'`),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).default(sql`now() + interval '1 hour'`),
+  evidence: jsonb("evidence"),
+  decisionAuditId: uuid("decision_audit_id").references(() => privilegedAuditEvents.id),
+  galleryItemId: uuid("gallery_item_id"),
   withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
-}, table => [index("venue_photo_submissions_owner_ready").on(table.ownerUserId, table.expiresAt).where(sql`${table.status}='ready'`)]);
+}, table => [index("venue_photo_submissions_owner_ready").on(table.ownerUserId, table.expiresAt).where(sql`${table.status}='ready'`),
+  uniqueIndex("venue_photo_candidates_one_pending").on(table.venueId).where(sql`${table.purpose}='official_candidate' AND ${table.status}='awaiting_review'`)]);
 
 /** #507 I2b immutable exact revision photo evidence; migration owns deferred invariants. */
 export const entityCommentPhotoOrigins = pgTable("entity_comment_photo_origins", {

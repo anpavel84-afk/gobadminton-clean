@@ -2,8 +2,8 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.42.0",
-    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed. #507 I2b API 0.42: atomic venue text-or-1–4 approved photos; exact current media and assigned historical case evidence; paginated community photos. Source candidate only; no UI/I3/release claim."
+    "version": "0.43.0",
+    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed. #507 I2b API 0.42: atomic venue text-or-1–4 approved photos; exact current media and assigned historical case evidence; paginated community photos. Source candidate only; no UI/I3/release claim. #507 I3a API 0.43: private real-creator official-photo candidates, scoped Admin review with fresh step-up, exact stored image approval and venue credit text publication binding. Backend source only; I3b UI NOT_IMPLEMENTED; no DEV/whole507 readiness claim."
   },
   "x-document-status": "DESIGN_DRAFT",
   "servers": [
@@ -25217,6 +25217,832 @@
         },
         "description": "24 plus next cursor. Order: immutable first publication timestamp and photo ID descending; retained edits do not reorder. Cursor binds canonical ID and full canonical family/catalog versions; mismatch -> 409 VENUE_CANONICAL_CHANGED, restart paging. Rechecks current media authority on each page. No UI/viewer implemented."
       }
+    },
+    "/venues/{venueId}/photo-candidates": {
+      "post": {
+        "tags": [
+          "Venues"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "operationId": "uploadOwnVenuePhotoCandidate",
+        "summary": "Submit optional official photo after successful real venue creation",
+        "description": "Only the actual canonical row creator with a current active consumer session/capabilities and live venue may upload. Successful dedup onto another creator grants no authority. Independent upload failure preserves successful venue creation. Cover sanitization and exact M1 ALLOW precede awaiting_review. One pending candidate per venue; replacement atomically withdraws the prior pending candidate with history retained. Rights v1 declares publication rights and recognizable-person permission; EXIF/geotags removed. No pre-venue reservation. Idempotency/UNKNOWN uses existing fences.",
+        "parameters": [
+          {
+            "name": "venueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-Photo-Rights",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "venue-candidate-rights-v1"
+            }
+          },
+          {
+            "name": "X-Gallery-Credit-Kind",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "photo"
+            },
+            "description": "Photo candidates only."
+          },
+          {
+            "name": "X-Gallery-Credit-Text",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Credit-Url",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Url",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Author",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Permission-Basis",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Wire encoding: UTF-8 text MUST be sent as encodeURIComponent ASCII ByteString; API decodes exactly once before semantic validation. Literal token `null` means absent optional. Raw non-ASCII (e.g. Cyrillic) is rejected by Fetch Headers / gateway."
+          },
+          {
+            "name": "X-Gallery-Source-Fingerprint",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional lowercase sha256 hex, or literal token `null`. ASCII only; not percent-encoded."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Persisted awaiting_review candidate; no official media changed.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenuePhotoCandidate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing rights/version/key or invalid input.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Active owner session required.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF/origin or current capability denied.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PHOTO_SUBMISSION_UNAVAILABLE; foreign, stale, withdrawn, expired or unavailable venue.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version/key conflict, capacity or command in progress.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Input exceeds 5 MiB.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Only exact JPEG/PNG/WebP containers.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed, animation, dimensions or content rejected.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Existing image attempt budget.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unavailable/UNKNOWN; reconcile same key, no blind provider replay.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/venue-photo-candidates/{candidateId}": {
+      "get": {
+        "tags": [
+          "Comments"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "operationId": "getOwnVenuePhotoCandidate",
+        "summary": "Read private owned candidate",
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized candidate receipt.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenuePhotoCandidate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Active owner session required.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF/origin or current capability denied.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Candidate unavailable for this current actor/venue/purpose.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reauthorizes active actor/session, current creator, live canonical venue and official_candidate purpose before receipt/bytes/conditional response. Accepted media stays under genuine gallery governance; owner withdrawal cannot alter it. No provider call for withdrawal."
+      },
+      "delete": {
+        "tags": [
+          "Comments"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "operationId": "withdrawOwnPendingVenuePhotoCandidate",
+        "summary": "Withdraw a pending owned candidate only",
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-Photo-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized candidate receipt.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenuePhotoCandidate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing/invalid key, version header or strict JSON command. VERSION_REQUIRED for header errors; INVALID_PHOTO_COMMAND for invalid parsed bodies; malformed JSON rejected by HTTP parser.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Active owner session required.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF/origin or current capability denied.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Candidate unavailable for this current actor/venue/purpose.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version or pending-state conflict; accepted official media is governed by gallery actions.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reauthorizes active actor/session, current creator, live canonical venue and official_candidate purpose before receipt/bytes/conditional response. Accepted media stays under genuine gallery governance; owner withdrawal cannot alter it. No provider call for withdrawal.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawVenuePhotoSubmissionCommand"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/venue-photo-candidates/{candidateId}/content": {
+      "get": {
+        "tags": [
+          "Comments"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "operationId": "getOwnVenuePhotoCandidateContent",
+        "summary": "Read private owned candidate",
+        "description": "Reauthorizes active actor/session, current creator, live canonical venue and official_candidate purpose before receipt/bytes/conditional response. Accepted media stays under genuine gallery governance; owner withdrawal cannot alter it. No provider call for withdrawal.",
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized exact pending PNG bytes; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Active owner session required.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF/origin or current capability denied.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Candidate unavailable for this current actor/venue/purpose.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/photo-candidates": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "listScopedVenuePhotoCandidates",
+        "x-client-surface": "admin-only",
+        "summary": "Read the bounded pending candidate queue",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized current result; Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 1,
+                      "items": {
+                        "$ref": "#/components/schemas/VenuePhotoCandidate"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required"
+          },
+          "403": {
+            "description": "venue.manage and applicable fresh step-up required"
+          },
+          "404": {
+            "description": "Outside current creator-or-superadmin/live venue scope"
+          },
+          "409": {
+            "description": "Version/canonical/policy/capacity conflict"
+          },
+          "503": {
+            "description": "Moderation unavailable or sealed UNKNOWN; no retry classification under same key"
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/photo-candidates/{candidateId}/content": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "getScopedVenuePhotoCandidateContent",
+        "x-client-surface": "admin-only",
+        "summary": "Private scoped pending preview; conditional headers never bypass authority",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized exact PNG bytes; no-store.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required"
+          },
+          "403": {
+            "description": "venue.manage required"
+          },
+          "404": {
+            "description": "Candidate/owner/venue unavailable"
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/photo-candidates/{candidateId}/decision": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "decideScopedVenuePhotoCandidate",
+        "x-client-surface": "admin-only",
+        "summary": "Genuine privileged accept/reject with fresh step-up",
+        "description": "Reuses existing venue.manage scope: active principal, creator-or-superadmin, live venue. Locks current owner, catalog, venue, gallery, candidate and exact stored approval/bytes. Rechecks both versions, rights and capacity 8. Accept reuses paid exact current-policy image ALLOW, prepares freeCreditTextCandidate via approveTexts outside DB locks and binds venue_credit_text atomically with gallery/provenance/audit. Append by default; existing official cover is preserved. Reject/withdraw/provider failure leave official media unchanged. Existing immutable audit binds the exact reviewed version/owner/bytes/rights/evidence. Same-key UNKNOWN is never replayed into external preparation.",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VenuePhotoCandidateDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized current result; Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenuePhotoCandidate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required"
+          },
+          "403": {
+            "description": "venue.manage and applicable fresh step-up required"
+          },
+          "404": {
+            "description": "Outside current creator-or-superadmin/live venue scope"
+          },
+          "409": {
+            "description": "Version/canonical/policy/capacity conflict"
+          },
+          "503": {
+            "description": "Moderation unavailable or sealed UNKNOWN; no retry classification under same key"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -41771,6 +42597,145 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "VenuePhotoCandidateEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "creditKind",
+          "creditText",
+          "creditUrl",
+          "sourceUrl",
+          "permissionBasis"
+        ],
+        "properties": {
+          "creditKind": {
+            "type": "string",
+            "const": "photo"
+          },
+          "creditText": {
+            "type": "string",
+            "minLength": 7,
+            "maxLength": 120,
+            "pattern": "^Фото: .+"
+          },
+          "creditUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
+            "maxLength": 300
+          },
+          "sourceUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
+            "maxLength": 300
+          },
+          "sourceAuthor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "permissionBasis": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "sourceFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "description": "Supplied real evidence under existing gallery rules. URLs are validated and never fetched. No invented author, license or permission."
+      },
+      "VenuePhotoCandidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "venueId",
+          "status",
+          "version",
+          "width",
+          "height",
+          "evidence",
+          "previewPath"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "venueId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "awaiting_review",
+              "accepted",
+              "rejected",
+              "withdrawn"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
+          },
+          "width": {
+            "type": "integer",
+            "const": 1200
+          },
+          "height": {
+            "type": "integer",
+            "const": 400
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/VenuePhotoCandidateEvidence"
+          },
+          "previewPath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Authenticated owner/Admin route only while awaiting_review. No guest candidate media URL."
+          }
+        }
+      },
+      "VenuePhotoCandidateDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "expectedVersion",
+          "expectedCandidateVersion"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "reject"
+            ]
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "expectedCandidateVersion": {
+            "type": "integer",
+            "const": 1
           }
         }
       }
