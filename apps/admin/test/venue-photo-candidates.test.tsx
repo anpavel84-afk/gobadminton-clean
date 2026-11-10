@@ -35,8 +35,8 @@ beforeEach(()=>{
   fetchMock=vi.fn<typeof fetch>();vi.stubGlobal("fetch",fetchMock);
   vi.stubEnv("NEXT_PUBLIC_ADMIN_BASE_PATH","");
   vi.stubGlobal("URL",class extends URL {
-    static createObjectURL=vi.fn(()=>"blob:private-candidate");
-    static revokeObjectURL=vi.fn();
+    static override createObjectURL=vi.fn(()=>"blob:private-candidate");
+    static override revokeObjectURL=vi.fn();
   });
 });
 afterEach(()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();vi.unstubAllEnvs();});

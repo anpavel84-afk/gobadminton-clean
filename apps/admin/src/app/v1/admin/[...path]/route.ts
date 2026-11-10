@@ -48,9 +48,13 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const coverAccess = new RegExp("^venues/" + uuid + "/cover/access$").test(path);
   const coverRoute = (request.method === "GET" && (cover || coverAccess)) || (cover && ["PUT", "DELETE"].includes(request.method));
   const gallery = galleryRoute(request.method, path);
+  const candidateQueue = request.method === "GET" && new RegExp("^venues/" + uuid + "/photo-candidates$").test(path);
+  const candidateContent = request.method === "GET" && new RegExp("^venues/" + uuid + "/photo-candidates/" + uuid + "/content$").test(path);
+  const candidateDecision = request.method === "POST" && new RegExp("^venues/" + uuid + "/photo-candidates/" + uuid + "/decision$").test(path);
+  const candidateRoute = candidateQueue || candidateContent || candidateDecision;
   if (!["GET", "POST"].includes(request.method) && !coverRoute && !gallery)
     return new Response(null, {status:404});
-  if ((coverRoute || gallery) && new URL(request.url).search) return new Response(null,{status:400});
+  if ((coverRoute || gallery || candidateRoute) && new URL(request.url).search) return new Response(null,{status:400});
   const callback = request.method === "GET" && /^auth\/(vk|yandex)\/callback$/.test(path);
   const caseDetail = /^cases\/[0-9a-f-]{36}$/.test(path);
   const caseEvidence = /^cases\/[0-9a-f-]{36}\/evidence(?:\/[0-9a-f-]{36})?$/.test(path);
@@ -62,7 +66,7 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const gameDetail = /^games\/[0-9a-f-]{36}$/.test(path);
   const gameCommand = /^games\/[0-9a-f-]{36}\/moderation\/commands$/.test(path);
   const venueRoute = request.method === "GET" ? /^venues(?:\/(?:duplicates|[0-9a-f-]{36}(?:\/games)?))?$/.test(path) : /^venues(?:\/(?:[0-9a-f-]{36}\/commands|duplicates\/[0-9a-f-]{36}\/dismiss))?$/.test(path);
-  if (!(coverRoute || gallery || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence || caseSource || caseCommunitySource : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
+  if (!(coverRoute || gallery || candidateRoute || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence || caseSource || caseCommunitySource : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   if (!adminRequestOrigin(request, config, callback))
     return Response.json({ code: "ADMIN_ORIGIN_REJECTED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
@@ -132,6 +136,8 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
       return new Response(null, { status: 303, headers: responseHeaders });
     }
     responseHeaders.set("Content-Type", upstream.headers.get("content-type") ?? "application/json");
+    if (candidateContent && upstream.status === 200 && upstream.headers.get("content-type") === "image/png")
+      return new Response(await upstream.arrayBuffer(), { status: upstream.status, headers: responseHeaders });
     return new Response(upstream.status === 204 ? null : await upstream.text(), { status: upstream.status, headers: responseHeaders });
   } catch {
     return Response.json({ code: "ADMIN_UPSTREAM_UNAVAILABLE" }, { status: 503, headers: { "Cache-Control": "no-store" } });

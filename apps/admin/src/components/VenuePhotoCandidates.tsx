@@ -22,7 +22,10 @@ type Props = {
 };
 const uuid = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const clean = (value: unknown, min: number, max: number): value is string => typeof value === "string"
-  && value.trim().length >= min && value.length <= max && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+  && value.trim().length >= min && value.length <= max && ![...value].some(char => {
+    const code = char.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  });
 function safeUrl(value: unknown): value is string {
   if (!clean(value, 1, 300) || !value.startsWith("https://") || /[\s\\]/.test(value)) return false;
   try { const url = new URL(value); return url.protocol === "https:" && !!url.hostname && !url.username && !url.password && (!url.port || url.port === "443"); }
