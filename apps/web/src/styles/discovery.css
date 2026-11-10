@@ -507,7 +507,7 @@
   .gb-discovery-selector__chevron { font-size: 16px; }
   .gb-discovery-create { min-height: 82px; grid-column: 1 / -1; }
   .gb-discovery-create__plus { width: 52px; height: 52px; }
-  /* #547 D3: swipe chips retained; hide cosmetic scrollbar; end padding for selected «С тренером». */
+  /* #547 D3: retain compact swipe chips and the existing 16px end clearance. */
   .gb-discovery-filters {
     margin: 2px 0 28px;
     padding: 3px;
@@ -529,6 +529,14 @@
     scroll-padding-inline-end: 16px;
   }
   .gb-discovery-chips::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  /* A soft edge signals more chips instead of an unexplained hard cut.
+     At the scroll endpoint the 10px fade sits inside the existing 16px
+     clearance, leaving the full last control/text (and focus ring) opaque.
+     Scope to compact discovery filters; map/create chip rows are unchanged. */
+  .gb-discovery-filters > .gb-discovery-chips {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent);
+  }
   .gb-discovery-chips > * { flex-shrink: 0; }
   .gb-discovery-chip { white-space: nowrap; }
   .gb-discovery-sort { display: none; }
