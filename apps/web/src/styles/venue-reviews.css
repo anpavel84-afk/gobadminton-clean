@@ -161,3 +161,47 @@
     font-size: 20px;
   }
 }
+
+/* #507 private profile composition; existing shell, buttons, dialog and tokens. */
+.gb-own-reviews {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  color: var(--gb-ink);
+}
+.gb-own-reviews__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.gb-own-reviews :is(h2, h3, p) { margin: 0; }
+.gb-own-reviews :is(p, blockquote) { overflow-wrap: anywhere; }
+.gb-own-reviews__collection:not([hidden]) { display: grid; gap: 20px; }
+.gb-own-reviews .gb-venue-reviews__card { display: grid; gap: 18px; border-radius: 22px; }
+.gb-own-reviews__own { display: grid; gap: 10px; }
+.gb-own-reviews__public {
+  display: grid;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--gb-line);
+}
+.gb-own-reviews__public blockquote { margin: 0; white-space: pre-wrap; line-height: 1.65; }
+.gb-own-reviews__hint {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--gb-wash, #f5f6f2);
+  color: var(--gb-ink-soft);
+  font-size: 13px;
+}
+.gb-own-reviews .gb-venue-reviews__card > .gb-c23-btn { justify-self: start; }
+.gb-own-reviews-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.gb-own-reviews-dialog .profile-dialog__body { min-width: 0; }
+.gb-own-reviews :is(button, a):focus-visible { outline: 3px solid var(--gb-purple, #7945de); outline-offset: 3px; }
+@media (max-width: 650px) {
+  .gb-own-reviews .gb-venue-reviews__card { padding: 20px; }
+  .gb-own-reviews .gb-venue-reviews__actions > button { flex: 1 1 140px; }
+  .gb-own-reviews-dialog { max-height: calc(100dvh - 24px); }
+}

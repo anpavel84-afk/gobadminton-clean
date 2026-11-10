@@ -22,6 +22,7 @@ import { PlayerProfileHero } from "../players/PlayerProfileContent";
 import { useSocialMutation } from "../messages/useSocialMutation";
 import { MutationNotice } from "../messages/MessageComposition";
 import { OwnUpcomingGames } from "../players/OwnUpcomingGames";
+import { OwnVenueReviews } from "../venues/OwnVenueReviews";
 
 export function ProfilePage() {
   const router = useRouter();
@@ -60,6 +61,13 @@ export function ProfilePage() {
   }
   useEffect(() => {
     let live = true;
+    const fence = () => {
+      live = false;
+      setMe(null); setSocial(null); setTrainer(null); setState("auth");
+      setEditing(false); setLookingEdit(false);
+    };
+    window.addEventListener("gb-private-expired", fence);
+    window.addEventListener("gb-session-changed", fence);
     setState("loading"); setSocial(null); setTrainer(null); setTrainerError(false); setSocialUnavailable(false);
     void (async () => {
       const m = await getMe(); if (!live) return;
@@ -81,7 +89,11 @@ export function ProfilePage() {
       }
       setNeedsRefresh(false); setState("ready");
     })();
-    return () => { live = false; };
+    return () => {
+      live = false;
+      window.removeEventListener("gb-private-expired", fence);
+      window.removeEventListener("gb-session-changed", fence);
+    };
   }, [reload]);
   function failed(result: ApiResult<unknown>) {
     if (result.ok) return;
@@ -222,6 +234,7 @@ export function ProfilePage() {
         {!socialUnavailable && social && <section className="profile-section"><SectionHeader title="Личные сообщения" eyebrow="Настройки сообщений" /><Toggle label="Разрешать личные сообщения" helper="Другие игроки смогут написать вам, когда ваш профиль виден в каталоге. Выключение блокирует новые входящие; история переписок сохраняется." on={social.contactPolicy === "requests"} disabled={locked || social.version < 1} onClick={toggleContactRequests} />{social.version < 1 && <p>Сначала сохраните игровой профиль.</p>}</section>}
         <section className="profile-section trainer-profile-control" data-surface="op-06"><SectionHeader title="Тренерский профиль" eyebrow="Опциональная информация игрока" />{trainerError ? <ProfileState title="Не удалось загрузить профиль тренера" state="error" retry={() => setReload(n => n + 1)} /> : <><Toggle label="Я тренер" helper={trainerActive ? "Отключает тренерский профиль. Управление созданными играми не отзывается." : "Добавляет информацию о тренировках в ваш профиль"} on={trainerActive} disabled={locked || (trainerActive && !trainer)} onClick={() => void onTrainerToggle()} />{trainerActive && trainer ? <div className="trainer-disclosure is-open"><div className="trainer-disclosure__content"><div className="trainer-disclosure__intro"><Avatar avatar={social?.avatar} name={trainer.displayName} tone="purple" /><span><small>Информация заполнена пользователем</small><h3>{trainer.displayName}</h3>{trainer.bio && <p>{trainer.bio}</p>}</span></div><div className="profile-form-actions"><Button href="/profile/trainer" variant="outline">Редактировать профиль тренера</Button><Button variant="ghost" disabled={locked} onClick={() => void onTrainerToggle()}>Отключить</Button></div></div></div> : <div className="trainer-profile-empty"><span>+</span><div><strong>Профиль тренера выключен</strong><p>Включите, чтобы добавить информацию о тренировках.</p></div></div>}</>}</section>
         <OwnUpcomingGames />
+        <OwnVenueReviews actorId={me.id} csrfToken={me.csrfToken} onUnauthorized={() => { setMe(null); setState("auth"); setEditing(false); setLookingEdit(false); }} />
         {!editing && !lookingEdit && feedback}
       </div><aside className="account-panel" data-surface="op-08"><small>Личный аккаунт</small><h2>Аккаунт</h2><Link href="/friends">Друзья <span>→</span></Link><Link href="/profile/settings/login-methods">Способы входа <span>→</span></Link><Link href="/profile/settings/sessions">Активные сессии <span>→</span></Link><Link href="/profile/settings">Настройки <span>→</span></Link><Link href="/help">Помощь и документы <span>→</span></Link><button type="button" className="account-panel__logout" disabled={!me || logoutBusy} onClick={() => void onLogout()}>{logoutBusy ? "Выходим…" : "Выйти"}</button><button type="button" className="account-panel__danger" disabled>Удалить аккаунт <small>Пока недоступно</small></button></aside></div>
     </>}

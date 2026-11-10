@@ -58,6 +58,25 @@ export type VenueReviewMutationReceipt = {
   notBefore: string | null;
 };
 
+export type WithdrawVenueReviewCommand = Readonly<{
+  action: "withdraw";
+  expectedVersion: number;
+}>;
+
+/** The existing withdraw contract increments exactly once and clears publication/intake. */
+export function isWithdrawVenueReviewReceipt(
+  value: unknown,
+  own: Pick<OwnVenueReview, "id" | "reviewHandle" | "version">,
+): value is VenueReviewMutationReceipt {
+  if (!value || typeof value !== "object") return false;
+  const receipt = value as Partial<VenueReviewMutationReceipt>;
+  return receipt.id === own.id && receipt.reviewHandle === own.reviewHandle
+    && Number.isSafeInteger(own.version) && own.version >= 1
+    && receipt.version === own.version + 1 && receipt.status === "withdrawn"
+    && receipt.publicVisible === false && receipt.receiptToken === null
+    && receipt.notBefore === null;
+}
+
 export function getVenueExperienceReviews(
   venueId: string,
   opts?: { cursor?: string; limit?: number; signal?: AbortSignal },
@@ -118,7 +137,7 @@ export function listOwnVenueReviews(signal?: AbortSignal) {
 
 export function venueReviewCommand(
   id: string,
-  body: Record<string, unknown>,
+  body: WithdrawVenueReviewCommand,
   csrfToken: string,
   idempotencyKey?: string,
 ) {
