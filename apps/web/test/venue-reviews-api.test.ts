@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { apiFetch } from "../src/lib/api-client";
 import { getOwnVenueReview, isSubmitVenueReviewReceipt, isWithdrawVenueReviewReceipt, listOwnVenueReviews, venueReviewCommand } from "../src/lib/venue-reviews-api";
+import type { SubmitVenueReviewCommand } from "../src/lib/venue-reviews-api";
 
 vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn() }));
 
@@ -50,7 +51,7 @@ describe("selected private edit wire contract", () => {
     expect(apiFetch).toHaveBeenLastCalledWith("/v1/me/venue-reviews/returned%2Fid", { signal: undefined });
     const body = { action: "submit_revision", expectedVersion: 17, gameId: "persisted-game",
       audience: "public_venue", text: "Exact text", topics: ["surface", "lighting"],
-      expectedBasisVersions: { outcomeVersion: 8, attendanceVersion: 9 }, consentProjectionHash: "exact-hash" } satisfies import("../src/lib/venue-reviews-api").SubmitVenueReviewCommand;
+      expectedBasisVersions: { outcomeVersion: 8, attendanceVersion: 9 }, consentProjectionHash: "exact-hash" } satisfies SubmitVenueReviewCommand;
     await venueReviewCommand("returned/id", body, "frozen-csrf", "frozen-key");
     expect(apiFetch).toHaveBeenLastCalledWith("/v1/me/venue-reviews/returned%2Fid/commands", {
       method: "POST", body: JSON.stringify(body), csrfToken: "frozen-csrf", idempotent: true,

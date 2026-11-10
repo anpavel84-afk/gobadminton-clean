@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as ApiClient from "../src/lib/api-client";
-import type { OwnVenueReview, VenueReviewMutationReceipt } from "../src/lib/venue-reviews-api";
+import type { OwnVenueReview, SelectedOwnVenueReview, VenueReviewMutationReceipt } from "../src/lib/venue-reviews-api";
 
 const transport = vi.hoisted(() => ({
   request: vi.fn(), refresh: vi.fn(),
@@ -296,7 +296,7 @@ describe("selected owner edit entry", () => {
     revisionId: "pending-exact", resourceVersion: 7, gameId: "persisted-older-game",
     basis: { gameId: "persisted-older-game", gameTitle: "Сохранённая игра", admission: "may_submit",
       reason: null, outcomeVersion: 8, attendanceVersion: 9, firstEligibleAt: null, helpHint: null },
-  } } satisfies import("../src/lib/venue-reviews-api").SelectedOwnVenueReview;
+  } } satisfies SelectedOwnVenueReview;
   it("fetches selected id before mounting editor, preserves pending body and does not scan latest30", async () => {
     transport.request.mockImplementation(async (path: string) => {
       if (path === ownPath) return ok({ items: [row] });
