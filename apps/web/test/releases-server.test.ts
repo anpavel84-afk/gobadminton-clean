@@ -752,7 +752,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.69"
       || row.application_version === "0.1.0-alpha.70"
       || row.application_version === "0.1.0-alpha.71"
-      || row.application_version === "0.1.0-alpha.72",
+      || row.application_version === "0.1.0-alpha.72"
+      || row.application_version === "0.1.0-alpha.73",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
