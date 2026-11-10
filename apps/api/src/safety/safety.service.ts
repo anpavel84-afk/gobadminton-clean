@@ -1,3 +1,4 @@
+import { revisionPhotoEvidence } from "../comments/comment-photo-publication";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { conflict, notFound, unprocessable, problem } from "../auth/problem";
@@ -754,7 +755,7 @@ export class SafetyService {
     if (!comment || comment.entity_kind !== "venue") {
       throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     }
-    if (comment.deleted_at || comment.body == null || comment.body.length < 1) {
+    if (comment.deleted_at) {
       throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     }
     const family = await canonicalVenueFamilyIds(client, resolved.canonicalId);
@@ -780,11 +781,14 @@ export class SafetyService {
     ).rows[0];
     if (!revision) throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     const secret = this.fingerprintSecret();
+    const photos=await revisionPhotoEvidence(client,comment.id,comment.version);
+    if (!comment.body && photos.length===0) throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
     const contentFingerprint = venueCommunityCommentReportFingerprint(secret, {
       commentId: comment.id,
       entityId: comment.entity_id,
       resourceVersion: comment.version,
       bodyText: comment.body,
+      photos,
     });
     return {
       subjectKind: "venue_comment",

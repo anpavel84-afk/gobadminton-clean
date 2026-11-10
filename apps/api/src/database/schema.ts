@@ -852,3 +852,17 @@ export const venuePhotoSubmissions = pgTable("venue_photo_submissions", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull().default(sql`now() + interval '1 hour'`),
   withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
 }, table => [index("venue_photo_submissions_owner_ready").on(table.ownerUserId, table.expiresAt).where(sql`${table.status}='ready'`)]);
+
+/** #507 I2b immutable exact revision photo evidence; migration owns deferred invariants. */
+export const entityCommentPhotoOrigins = pgTable("entity_comment_photo_origins", {
+  photoId: uuid("photo_id").primaryKey().references(() => venuePhotoSubmissions.id),
+  commentId: uuid("comment_id").notNull(),
+  firstPublishedAt: timestamp("first_published_at", {withTimezone:true}).notNull().defaultNow(),
+});
+export const entityCommentPhotos = pgTable("entity_comment_photos", {
+  commentId: uuid("comment_id").notNull(),
+  resourceVersion: integer("resource_version").notNull(),
+  photoId: uuid("photo_id").notNull().references(() => venuePhotoSubmissions.id),
+  position: integer("position").notNull(),
+}, t => [uniqueIndex("entity_comment_photos_revision_position").on(t.commentId,t.resourceVersion,t.position),
+  uniqueIndex("entity_comment_photos_revision_photo").on(t.commentId,t.resourceVersion,t.photoId)]);

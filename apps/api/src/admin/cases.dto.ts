@@ -107,6 +107,7 @@ export const reportPageSchema = casePageSchema.extend({ reportId: uuid.optional(
  */
 export const communityReportPageSchema = z
   .object({
+    photoId: uuid.optional(),
     cursor: z.string().min(1).max(256).optional(),
     limit: z.coerce.number().int().min(1).max(50).default(25),
   })

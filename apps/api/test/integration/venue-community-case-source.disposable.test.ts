@@ -243,18 +243,28 @@ run("#507 I1 F3 venue-community Cases source — disposable", () => {
     moderationState?: "clear" | "withheld";
   }): Promise<{ id: string; version: number }> {
     const id = randomUUID();
-    await pool.query(
-      `INSERT INTO entity_comments
-         (id, entity_kind, entity_id, parent_comment_id, author_user_id, body, version, moderation_state)
-       VALUES ($1, 'venue', $2, NULL, $3, $4, 1, $5)`,
-      [id, input.venueId, input.authorUserId, input.body, input.moderationState ?? "clear"],
-    );
-    await pool.query(
-      `INSERT INTO entity_comment_revisions
-         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
-       VALUES ($1, 'venue', $2, 1, $3, $4, false)`,
-      [id, input.venueId, input.authorUserId, input.body],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO entity_comments
+           (id, entity_kind, entity_id, parent_comment_id, author_user_id, body, version, moderation_state)
+         VALUES ($1, 'venue', $2, NULL, $3, $4, 1, $5)`,
+        [id, input.venueId, input.authorUserId, input.body, input.moderationState ?? "clear"],
+      );
+      await client.query(
+        `INSERT INTO entity_comment_revisions
+           (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
+         VALUES ($1, 'venue', $2, 1, $3, $4, false)`,
+        [id, input.venueId, input.authorUserId, input.body],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     return { id, version: 1 };
   }
 
@@ -390,22 +400,32 @@ run("#507 I1 F3 venue-community Cases source — disposable", () => {
     const commentReportId = commentReport.json().reportId as string;
 
     // Edit after report must not silently replace reported body.
-    await pool.query(
-      `UPDATE entity_comments SET body=$2, version=2, updated_at=clock_timestamp() WHERE id=$1`,
-      [comment.id, "EDITED_CURRENT_BODY_MUST_NOT_LEAK"],
-    );
-    await pool.query(
-      `INSERT INTO entity_comment_revisions
-         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, before_body, after_body, tombstone)
-       VALUES ($1, 'venue', $2, 2, $3, $4, $5, false)`,
-      [
-        comment.id,
-        venueId,
-        actorB.userId,
-        "EXACT_REPORTED_COMMENT_BODY",
-        "EDITED_CURRENT_BODY_MUST_NOT_LEAK",
-      ],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE entity_comments SET body=$2, version=2, updated_at=clock_timestamp() WHERE id=$1`,
+        [comment.id, "EDITED_CURRENT_BODY_MUST_NOT_LEAK"],
+      );
+      await client.query(
+        `INSERT INTO entity_comment_revisions
+           (comment_id, entity_kind, entity_id, resource_version, actor_user_id, before_body, after_body, tombstone)
+         VALUES ($1, 'venue', $2, 2, $3, $4, $5, false)`,
+        [
+          comment.id,
+          venueId,
+          actorB.userId,
+          "EXACT_REPORTED_COMMENT_BODY",
+          "EDITED_CURRENT_BODY_MUST_NOT_LEAK",
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
 
     const { caseId: aggCaseId } = await openAssignedCase(aggReportId, support);
     const { caseId: ownCaseId } = await openAssignedCase(ownReportId, support);
@@ -681,16 +701,26 @@ run("#507 I1 F3 venue-community Cases source — disposable", () => {
       detail: "PRIVATE_WITHHELD_DETAIL",
     });
 
-    await pool.query(
-      `UPDATE entity_comments SET body=NULL, deleted_at=now(), version=2 WHERE id=$1`,
-      [withheld.id],
-    );
-    await pool.query(
-      `INSERT INTO entity_comment_revisions
-         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, before_body, after_body, tombstone)
-       VALUES ($1, 'venue', $2, 2, $3, $4, NULL, true)`,
-      [withheld.id, venueId, actorA.userId, "OWN_WITHHELD_EXACT_BODY"],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE entity_comments SET body=NULL, deleted_at=now(), version=2 WHERE id=$1`,
+        [withheld.id],
+      );
+      await client.query(
+        `INSERT INTO entity_comment_revisions
+           (comment_id, entity_kind, entity_id, resource_version, actor_user_id, before_body, after_body, tombstone)
+         VALUES ($1, 'venue', $2, 2, $3, $4, NULL, true)`,
+        [withheld.id, venueId, actorA.userId, "OWN_WITHHELD_EXACT_BODY"],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     const afterDelete = await app.inject({
       method: "GET",
       url: `/v1/admin/cases/${caseId}/community-reports/${reportId}`,

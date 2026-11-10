@@ -208,6 +208,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0067_private_message_reports",
         "0068_venue_community_votes_comments",
         "0069_venue_comment_photo_submissions",
+        "0070_venue_comment_photo_publications",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_community_votes')::text AS name")).rows[0]

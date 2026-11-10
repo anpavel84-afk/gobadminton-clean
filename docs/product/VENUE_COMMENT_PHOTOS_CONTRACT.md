@@ -1,6 +1,6 @@
-# #507 I2a — private photo admission foundation
+# #507 I2a / I2b — venue comment photos contract
 
-Source scope only, based on accepted DEV76 `dd5b2c1496af57ca168d171decb384d2ecfec5c1`.
+Historical I2a source record below, based on accepted DEV76 `dd5b2c1496af57ca168d171decb384d2ecfec5c1`.
 Retained architecture SHA-256 `e36606544061503feda403c7f471e527ff201069574265858793b97eaa0c0107`,
 slices `f27414fc3556ef3f60899bc7b84ade9cb4349a23e702713cf6db2db499fc6335`,
 exact seam `9c415153006725e594472bc27c38d77aeb56cce94fb020c8048aac05ce771c54`,
@@ -80,9 +80,9 @@ policy without another provider call. Attempts, UNKNOWN reservations, budgets an
 history are retained; no archive table or system is introduced. It does not modify 0051.
 GC tolerates the absent additive table on N-1/rollback schemas.
 
-## Remaining delivery and checks
+## Historical I2a boundary and checks
 
-I2b must add atomic exact-comment-revision bindings, max four photos/text-or-photos rules,
+At the I2a boundary, I2b still had to add atomic exact-comment-revision bindings, max four photos/text-or-photos rules,
 current public-read/privacy/revocation checks, reporting and paginated community gallery.
 I2c must implement the retained composer/viewer UX inside existing R3.1 sheet semantics.
 I3 must implement optional creator candidate admission and genuine privileged official-gallery
@@ -118,7 +118,7 @@ No Admin login, seed command or real account is used.
 - `apps/api/test/integration/comment-photos.disposable.test.ts`
 - `docs/product/VENUE_COMMENT_PHOTOS_CONTRACT.md`
 
-## Author verification in the restricted export
+## Historical I2a author verification in the restricted export
 
 Actual PASS: existing friendship/game/unified generators in verification mode (outputs unchanged),
 existing Admin protocol checker (53 operations), JSON local-reference/private cookie-security
@@ -133,3 +133,138 @@ subsequent package commands explicitly disabled Corepack network. No package was
 No DB was opened and no migration/GC test was executed. Root must run those checks in the
 qualified dependency/disposable environment before QA/CI/DEV gates. This export has no Git
 operations, deployment, credentials, live-runtime edits or UAT evidence.
+
+## I2b continuation candidate — #507, attempt 2
+
+This section supersedes the historical I2a-only boundary above. The admitted source
+continues preserved WIP `fd305f11e68a25c2672ab30de9a6e928d77a8797` on accepted DEV77
+`65c7e59212eab0de2a9ecd50c36ed1c1e7854ad9`. It does not establish QA, CI, DEV acceptance,
+Owner UAT or completion of #507. The prior timed-out attempt and unfinished-cost UNKNOWN
+remain historical facts; no provider/cost reconciliation or paid execution is asserted here.
+OpenAPI `info.version=0.42.0` is the API contract version, not an application/release number.
+
+### Atomic publication
+
+POST `/venues/:venueId/comments` accepts optional `text`, ordered `photoIds` and
+`parentCommentId`. PUT `/comments/:commentId` requires `expectedVersion`; for venue
+comments omitted `photoIds` retain the current set and `[]` removes it. Omitted, null
+or blank text clears text. Nonempty text is trimmed and limited to 1000 Unicode code
+points. The resulting comment must contain text or one to four unique photos.
+Photo-only create/edit needs no invented empty text approval. Text, when present,
+still uses actual server text moderation and public masking. Game POST/PUT retain
+their strict text-required shapes and reject `photoIds`.
+
+Both commands retain cookie session, Origin, CSRF and Idempotency-Key requirements.
+Legacy text-only normalized hashes and successful receipts remain compatible. The existing
+MutationRunner reserves before external preparation; same-key processing/UNKNOWN is not
+replayed into a provider call. Current actor/session, ownership, canonical parent,
+expected version, exact staged bytes, approval and GC journal are checked before commit.
+Reject, unavailable provider and failed CAS leave the previous body and photos together.
+Publication reuses the existing exact-byte community image approval without another image
+classification. No new service, storage root, scheduler, worker or cost ledger is added.
+
+A new photo must be owned, ready, version 1, approved under the community policy,
+unexpired and staged for the current canonical venue. Only IDs retained from this same
+comment's immediately current revision may cross staging expiry. A removed ID cannot be
+reattached later; an ID cannot migrate to another comment, owner or physical venue.
+Published submissions cannot use private-stage DELETE; remove them through source
+comment edit/delete. Private preview authority still expires at its original TTL.
+
+Migration `0070` adds immutable origin and ordered exact-revision attachment tables.
+Deferred SQL checks reject empty/whitespace-only live content, game attachments, mismatched
+current body/revision, invalid ordering and attachments on tombstones. Historical revisions,
+origins, approvals and attempts are retained. Delete advances the version and leaves a null
+body and no current photos. Withhold/restore copies the same ordered IDs into a new staff
+revision; author edits never clear withholding. The rollback deliberately raises instead of
+silently discarding published UGC/history. Roll application traffic back with writes disabled
+and retain the additive schema; this is not permission to run the old writer against photo-only data.
+
+### Public reads, gallery and historical Cases evidence
+
+- GET `/comments/:commentId` provides the currently permitted source for gallery attribution.
+- GET/HEAD `/comments/:commentId/revisions/:version/photos/:photoId` requires that exact
+  current revision and attachment, a live clear comment, active unrestricted author,
+  readable canonical venue and no bilateral viewer block. Edit/removal, delete,
+  withholding and current rights changes revoke old URLs. Authorized responses are
+  full-frame sanitized PNG with `no-store` and `nosniff`; conditional headers never
+  bypass authorization or produce an unauthorized 304. There is no avatar alias.
+- GET `/venues/:venueId/community-photos` returns 24 items plus `nextCursor`, newest first
+  by immutable first publication timestamp and photo ID. Each item identifies its source
+  comment, parent comment, current resource version and source path. Each page applies
+  current read authority. The opaque cursor binds canonical ID and all family catalog
+  versions; merge/retire/restore changes return `409 VENUE_CANONICAL_CHANGED` with reset
+  information. Invalid cursors return `400 COMMENT_CURSOR_INVALID`. Paging is a current
+  projection, not a frozen snapshot; clients deduplicate IDs across pages.
+
+Reports bind the exact revision body and ordered photo IDs, approval IDs, content
+fingerprints and byte SHA values using the dedicated v2 HMAC. Text-only HMAC identities
+remain v1-compatible, including an empty photos array. Client fingerprints are not trusted.
+
+The existing GET `/admin/cases/:id/community-reports/:reportId` returns exact reported
+metadata and ordered historical photo references. Its optional `photoId` query returns
+that attachment's sanitized PNG through the same route. Every request requires current
+linked case assignment, `evidence.assigned.read`, independent human reviewer, fresh step-up
+and the existing internal Admin gate; consumer sessions and unassigned staff have no grant.
+The read is audited with IDs/versions only. Historical evidence never substitutes a newer
+authored revision. Staff withhold/restore lineage may remain actionable only when the body
+and ordered evidence are unchanged; any intervening authored edit makes the old report
+non-actionable. Public withholding revokes all photos while assigned historical evidence
+remains private. Missing collected/corrupt bytes fail closed, never fall back to raw keys.
+
+The existing AvatarService GC protects current comment references (including withheld
+content needed for restore) and exact reported historical references, as well as unexpired
+private stages and existing avatar/cover/gallery references. Other obsolete or abandoned
+bytes can be collected; immutable metadata does not imply all historical bytes are retained.
+No UI/composer/viewer or I3 official-gallery admission is included.
+
+### Verification and concrete remaining blockers
+
+The continuation uses local deterministic syntax/contract/policy checks only. Full pinned
+TypeScript, ESLint, OpenAPI parser, Vitest policy units, owned PostGIS publication/Cases and
+legacy photo suites, separate migration smoke, independent QA and release gates remain for
+the parent. Disposable suites retain their explicit test/loopback/empty-schema guard before
+Pool construction and the narrowly accepted hosted CI exception. Run with both default and
+JSON reporters; a skipped DB suite is not a PASS.
+
+The known obsolete I2a photo-only prohibition is replaced with an ownership-negative POST:
+a foreign actor cannot attach the owner's stage, and the owner can still read it afterward.
+All other assertions in that foundation test are preserved.
+
+There is one additional concrete compatibility blocker: the old I2a suite applies all
+migrations and its final test directly rolls back `0069`. After `0070`, the retained
+`entity_comment_photo_origins.photo_id` FK prevents dropping `venue_photo_submissions`.
+That old test must be exercised on its original `0069` schema in the separate migration
+smoke, or receive a bounded fixture update. This continuation does not remove the FK,
+rewrite `0069`, alter those other legacy assertions or claim that the legacy suite passes.
+
+The restricted export also omits root/web `AGENTS.md`: full Foundation static validation
+reports the missing required root file and twelve local links to those omitted files.
+The unchanged full Foundation unit suite consequently fails its documentation-inventory
+assertion (9 tests pass, 1 fails). Contract/local-reference/business-command rules are
+checked separately without waiving any finding. No missing instruction file is invented.
+No dependency installation, live database, deployment or independent QA is performed here.
+
+Actual continuation results in this export:
+
+- PASS: native Node 24 TypeScript syntax parsing of all 25 admitted TS paths (not typechecking).
+- PASS: Foundation contract/local-ref/security/command rules, 262 operations, zero findings;
+  scoped contract documentation local-link check also passes.
+- PASS: existing Admin protocol checker, unchanged 53-operation inventory; game, friendship
+  and unified generators in verification mode (no generated files written).
+- PASS: 13 direct native helper assertions for photo-only source availability, legacy HMAC
+  compatibility and ordered exact photo evidence. The report helper harness replaces only
+  its unused Nest exception import; this does not execute Vitest or transport/DB behavior.
+- PASS: existing dependency-free email contract policy test (one test).
+- FAIL: full Foundation static/unit documentation inventory because the export omits the
+  instruction files listed above. No contract rule/checker was exempted or modified.
+- BLOCKED: full OpenAPI checker cannot import `@apidevtools/swagger-parser` (no node_modules).
+  Pinned TSC, lint and Vitest were not run; dependencies were not installed. SQL, actual
+  media GET/HEAD/revocation, transaction/CAS/UNKNOWN races, GC, migrations/rollback and
+  disposable integration fixtures remain unexecuted here. The legacy rollback conflict
+  above is identified from source, not presented as an observed DB test result.
+
+Process deviation: the initial full Foundation unit command invoked the checker's existing
+`git ls-files` discovery internally before its filesystem fallback. This was a read-only
+attempt, contrary to the no-Git constraint; it was not repeated. Subsequent Foundation
+checks called its rule functions with filesystem enumeration and did not invoke Git.
+No Git mutation, network call, install or database connection was performed.

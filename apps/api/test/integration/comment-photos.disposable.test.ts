@@ -143,8 +143,10 @@ run("#507 I2a owned disposable private photo foundation", () => {
     const status=await get(photo.id);expect(status.json()).not.toHaveProperty("storage_key");
     expect((await app.inject({method:"GET",url:`/v1/media/avatars/${await storage(photo.id)}`})).statusCode).toBe(404);
     expect((await app.inject({method:"GET",url:`/v1/venues/${venue}/comments`})).json().items).toEqual([]);
-    const forbidden=await app.inject({method:"POST",url:`/v1/venues/${venue}/comments`,headers:headers(owner),payload:{text:"",photoIds:[photo.id]}});
-    expect([400,422]).toContain(forbidden.statusCode);
+    const forbidden=await app.inject({method:"POST",url:`/v1/venues/${venue}/comments`,headers:headers(other),payload:{text:"",photoIds:[photo.id]}});
+    expect(forbidden.statusCode).toBe(404);
+    expect(forbidden.json().code).toBe("PHOTO_SUBMISSION_UNAVAILABLE");
+    expect((await get(photo.id)).statusCode).toBe(200);
     expect((await pool.query("SELECT 1 FROM venue_gallery_items WHERE storage_key=$1",[await storage(photo.id)])).rowCount).toBe(0);
   });
   it("deduplicates concurrent/retried commands, separates venue hashes and seals provider UNKNOWN", async () => {
@@ -253,22 +255,50 @@ run("#507 I2a owned disposable private photo foundation", () => {
     expect(provider.calls-before).toBeLessThanOrEqual(1);
     const calls=provider.calls;expect((await upload()).statusCode).toBe(409);expect(provider.calls).toBe(calls);
   });
-  it("rolls migration down/up retaining paid approval reuse and journal cleanup", async () => {
+  it("refuses 0069/0070 destructive rollback without mutation and retains exact paid approval reuse", async () => {
     const photo=await ready(), filename=await storage(photo.id);
     const approval=(await pool.query(`SELECT a.* FROM content_moderation_approvals a
       JOIN venue_photo_submissions s ON s.image_approval_id=a.id WHERE s.id=$1`,[photo.id])).rows[0];
     expect(approval).toMatchObject({id:expect.any(String),content_type:"image",surface_key:"community_photo_image",
       policy_version:"community-photo-image-v1:inside1600-ladder-v1",decision:"allow"});
+    const stage=(await pool.query("SELECT image_approval_id,image_sha256 FROM venue_photo_submissions WHERE id=$1",[photo.id])).rows[0];
     const calls=provider.calls;
-    await pool.query(await readFile(path.join(migrationDir,"rollback/0069_venue_comment_photo_submissions.sql"),"utf8"));
-    expect((await pool.query("SELECT to_regclass('public.venue_photo_submissions') AS relation")).rows[0].relation).toBeNull();
-    expect((await pool.query("SELECT * FROM content_moderation_approvals WHERE id=$1",[approval.id])).rows).toEqual([approval]);
-    await media.cleanup();await expect(access(path.join(root,filename))).rejects.toMatchObject({code:"ENOENT"});
-    await pool.query(await readFile(path.join(migrationDir,"0069_venue_comment_photo_submissions.sql"),"utf8"));
-    expect((await pool.query("SELECT * FROM content_moderation_approvals WHERE id=$1",[approval.id])).rows).toEqual([approval]);
-    // A new command with identical bytes/policy must reuse the retained M1 identity.
+    async function snapshot() {
+      return (await pool.query(`SELECT jsonb_build_object(
+        'submissions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM venue_photo_submissions s),
+        'approvals',(SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM content_moderation_approvals a),
+        'gc',(SELECT jsonb_agg(to_jsonb(g) ORDER BY g.storage_key) FROM avatar_media_gc g),
+        'migrations',(SELECT jsonb_agg(to_jsonb(m) ORDER BY m.id) FROM schema_migrations m),
+        'origins',(SELECT jsonb_agg(to_jsonb(o) ORDER BY o.photo_id) FROM entity_comment_photo_origins o),
+        'photos',(SELECT jsonb_agg(to_jsonb(p) ORDER BY p.comment_id,p.resource_version,p.position) FROM entity_comment_photos p)
+      ) AS state`)).rows[0].state;
+    }
+    const before=await snapshot();
+    // This suite installs through 0070. Its FK must reject the old 0069 DROP;
+    // 0070 itself refuses destructive rollback. Application rollback retains additive schema.
+    // The pre-0070 0069 down/up PASS remains historical evidence; GC is covered above.
+    for (const [file,code] of [
+      ["0069_venue_comment_photo_submissions.sql","2BP01"],
+      ["0070_venue_comment_photo_publications.sql","P0001"],
+    ] as const) {
+      const client=await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await expect(client.query(await readFile(path.join(migrationDir,"rollback",file),"utf8")))
+          .rejects.toMatchObject({code});
+      } finally {
+        await client.query("ROLLBACK");client.release();
+      }
+      expect(await snapshot()).toEqual(before);
+      expect((await pool.query("SELECT to_regclass('public.venue_photo_submissions') AS relation")).rows[0].relation).toBe("venue_photo_submissions");
+      expect((await pool.query("SELECT * FROM content_moderation_approvals WHERE id=$1",[approval.id])).rows).toEqual([approval]);
+      await access(path.join(root,filename));
+      expect((await get(photo.id,owner,true)).statusCode).toBe(200);
+      expect(provider.calls).toBe(calls);
+    }
+    // A new command with identical sanitized bytes/policy must reuse the retained M1 identity.
     const reuploaded=await ready();
-    expect((await pool.query("SELECT image_approval_id FROM venue_photo_submissions WHERE id=$1",[reuploaded.id])).rows[0].image_approval_id).toBe(approval.id);
+    expect((await pool.query("SELECT image_approval_id,image_sha256 FROM venue_photo_submissions WHERE id=$1",[reuploaded.id])).rows[0]).toEqual(stage);
     expect(provider.calls).toBe(calls);
   });
 });

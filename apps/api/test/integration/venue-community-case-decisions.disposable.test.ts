@@ -1,3 +1,6 @@
+import sharp from "sharp";
+import { registerAvatarHttp } from "../../src/profiles/avatar-http";
+import { COMMENT_PHOTO_RIGHTS } from "../../src/comments/comment-photos";
 /**
  * #507 I1 F3 — disposable PostGIS coverage for assigned Cases venue_community_decide.
  * Skips unless RUN_DB_INTEGRATION=1 and isolated disposable DATABASE_URL.
@@ -7,7 +10,7 @@ import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -90,6 +93,7 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
   let env: AppEnv;
   let sessions: SessionService;
   let fake: FakeModerationProvider;
+  let mediaRoot:string;
   let actorA: Actor;
   let actorB: Actor;
   let venueId: string;
@@ -115,7 +119,9 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
     for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql")).sort()) {
       await migrate(file);
     }
+    mediaRoot=await mkdtemp(path.join(process.cwd(),".community-case-photos-"));
     env = loadEnv({
+      AVATAR_MEDIA_ROOT:mediaRoot,
       NODE_ENV: "test",
       APP_ENV: "local",
       HOST: "127.0.0.1",
@@ -147,6 +153,7 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
       new FastifyAdapter({ logger: false }),
     );
     await app.register(cookie);
+    registerAvatarHttp(app.getHttpAdapter().getInstance());
     app.setGlobalPrefix("v1");
     app.useGlobalFilters(new ProblemExceptionFilter());
     await app.init();
@@ -176,6 +183,7 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
     fetchSpy?.mockRestore();
     await app?.close();
     await pool?.end();
+    if(mediaRoot) await rm(mediaRoot,{recursive:true,force:true});
   });
 
   beforeEach(async () => {
@@ -269,18 +277,28 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
     moderationState?: "clear" | "withheld";
   }): Promise<{ id: string; version: number }> {
     const id = randomUUID();
-    await pool.query(
-      `INSERT INTO entity_comments
-         (id, entity_kind, entity_id, parent_comment_id, author_user_id, body, version, moderation_state)
-       VALUES ($1, 'venue', $2, NULL, $3, $4, 1, $5)`,
-      [id, input.venueId, input.authorUserId, input.body, input.moderationState ?? "clear"],
-    );
-    await pool.query(
-      `INSERT INTO entity_comment_revisions
-         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
-       VALUES ($1, 'venue', $2, 1, $3, $4, false)`,
-      [id, input.venueId, input.authorUserId, input.body],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO entity_comments
+           (id, entity_kind, entity_id, parent_comment_id, author_user_id, body, version, moderation_state)
+         VALUES ($1, 'venue', $2, NULL, $3, $4, 1, $5)`,
+        [id, input.venueId, input.authorUserId, input.body, input.moderationState ?? "clear"],
+      );
+      await client.query(
+        `INSERT INTO entity_comment_revisions
+           (comment_id, entity_kind, entity_id, resource_version, actor_user_id, after_body, tombstone)
+         VALUES ($1, 'venue', $2, 1, $3, $4, false)`,
+        [id, input.venueId, input.authorUserId, input.body],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     return { id, version: 1 };
   }
 
@@ -383,6 +401,50 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
     expect(res.statusCode).toBe(200);
     return res.json().items[0] as { count: number | null; average: number | null; state: string };
   }
+
+  it("#507 I2b photo-only reports preserve exact historical evidence, scoped bytes and withhold authority",async()=>{
+    const png=await sharp({create:{width:93,height:61,channels:3,background:"purple"}}).png().toBuffer();
+    const uploaded=await app.inject({method:"POST",url:`/v1/venues/${venueId}/comment-photos`,
+      headers:{...mutationHeaders(actorB,key()),"content-type":"image/png","x-photo-rights":COMMENT_PHOTO_RIGHTS},payload:png});
+    expect(uploaded.statusCode,uploaded.body).toBe(201);
+    const photo=uploaded.json(),imageCalls=fake.calls,textCalls=fake.textCalls;
+    const created=await app.inject({method:"POST",url:`/v1/venues/${venueId}/comments`,headers:mutationHeaders(actorB,key()),payload:{photoIds:[photo.id]}});
+    expect(created.statusCode,created.body).toBe(201);const comment=created.json();
+    const reported=await report(actorA,{targetKind:"venue_community",subjectKind:"venue_comment",venueId,
+      commentId:comment.id,expectedVersion:1,reasonCode:"inappropriate"});
+    expect(reported.statusCode,reported.body).toBe(201);
+    const support=await adminActor("support"),assigned=await openAssignedCase(reported.json().reportId,support);
+    const sourcePath=`/v1/admin/cases/${assigned.caseId}/community-reports/${reported.json().reportId}`;
+    const evidence=await app.inject({method:"GET",url:sourcePath,headers:adminHeaders(support)});
+    expect(evidence.statusCode,evidence.body).toBe(200);expect(evidence.json()).toMatchObject({sourceAvailable:true,text:null,reportedVersion:1});
+    const evidenceUrl=evidence.json().photos[0].url;
+    const unassigned=await adminActor("support");
+    expect((await app.inject({method:"GET",url:evidenceUrl,headers:adminHeaders(unassigned)})).statusCode).not.toBe(200);
+    await pool.query("UPDATE admin_sessions SET step_up_at=now()-interval '11 minutes' WHERE id=$1",[support.sessionId]);
+    expect((await app.inject({method:"HEAD",url:evidenceUrl,headers:{...adminHeaders(support),"if-none-match":"*"}})).statusCode).not.toBe(200);
+    await pool.query("UPDATE admin_sessions SET step_up_at=now() WHERE id=$1",[support.sessionId]);
+    expect((await app.inject({method:"GET",url:evidenceUrl,headers:{cookie:actorA.cookie}})).statusCode).not.toBe(200);
+    expect((await app.inject({method:"GET",url:evidenceUrl,headers:adminHeaders(support)})).statusCode).toBe(200);
+    const withheld=await decide(support,assigned.caseId,{action:"venue_community_decide",expectedCaseVersion:assigned.version,
+      expectedResourceVersion:1,reportId:reported.json().reportId,resourceKind:"comment",commentId:comment.id,
+      decision:"withhold",rationale:"Synthetic exact photo evidence",reasonCode:"synthetic_community"});
+    expect(withheld.statusCode,withheld.body).toBe(200);
+    expect((await app.inject({method:"GET",url:comment.photos[0].url,headers:{"if-none-match":"*"}})).statusCode).toBe(404);
+    const restored=await decide(support,assigned.caseId,{action:"venue_community_decide",expectedCaseVersion:withheld.json().caseVersion,
+      expectedResourceVersion:2,reportId:reported.json().reportId,resourceKind:"comment",commentId:comment.id,
+      decision:"restore",rationale:"Restore same exact photo evidence",reasonCode:"synthetic_community"});
+    expect(restored.statusCode,restored.body).toBe(200);expect(fake.calls).toBe(imageCalls);expect(fake.textCalls).toBe(textCalls);
+    const edited=await app.inject({method:"PUT",url:`/v1/comments/${comment.id}`,headers:mutationHeaders(actorB,key()),
+      payload:{text:"new authored revision",photoIds:[],expectedVersion:3}});
+    expect(edited.statusCode,edited.body).toBe(200);
+    const stale=await decide(support,assigned.caseId,{action:"venue_community_decide",expectedCaseVersion:restored.json().caseVersion,
+      expectedResourceVersion:4,reportId:reported.json().reportId,resourceKind:"comment",commentId:comment.id,
+      decision:"withhold",rationale:"Must not retarget",reasonCode:"synthetic_community"});
+    expect([404,409]).toContain(stale.statusCode);
+    const exact=await app.inject({method:"GET",url:sourcePath,headers:adminHeaders(support)});
+    expect(exact.json()).toMatchObject({sourceAvailable:true,text:null,reportedVersion:1,currentVersion:4,decisionCapability:null});
+    expect((await app.inject({method:"GET",url:evidenceUrl,headers:adminHeaders(support)})).statusCode).toBe(200);
+  });
 
   it("withholds/restores/retains votes and comments; public counts and own withheld view", async () => {
     const support = await adminActor("support");
@@ -896,16 +958,26 @@ run("#507 I1 F3 venue-community Cases decisions — disposable", () => {
       reasonCode: "spam",
     });
     expect(cReport.statusCode, cReport.body).toBe(201);
-    await pool.query(
-      `UPDATE entity_comments SET deleted_at=clock_timestamp(), body=NULL, version=2 WHERE id=$1`,
-      [comment.id],
-    );
-    await pool.query(
-      `INSERT INTO entity_comment_revisions
-         (comment_id, entity_kind, entity_id, resource_version, actor_user_id, before_body, after_body, tombstone)
-       VALUES ($1,'venue',$2,2,$3,'TOMBSTONE_COMMENT',NULL,true)`,
-      [comment.id, venueId, actorB.userId],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE entity_comments SET deleted_at=clock_timestamp(), body=NULL, version=2 WHERE id=$1`,
+        [comment.id],
+      );
+      await client.query(
+        `INSERT INTO entity_comment_revisions
+           (comment_id, entity_kind, entity_id, resource_version, actor_user_id, before_body, after_body, tombstone)
+         VALUES ($1,'venue',$2,2,$3,'TOMBSTONE_COMMENT',NULL,true)`,
+        [comment.id, venueId, actorB.userId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     const cCase = await openAssignedCase(cReport.json().reportId, support);
     const resurrect = await decide(support, cCase.caseId, {
       action: "venue_community_decide",

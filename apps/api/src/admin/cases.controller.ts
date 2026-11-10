@@ -1,5 +1,6 @@
-import { Body,Controller,Get,Header,Headers,HttpCode,Param,Post,Query,Req } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
+import { notFound } from "../auth/problem";
+import { Body,Controller,Get,Header,Headers,HttpCode,Param,Post,Query,Req,Res } from "@nestjs/common";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { parse,uuid } from "./dto";
 import { caseCreateSchema,caseCommandSchema,casePageSchema,caseHistorySchema,reportPageSchema,communityReportPageSchema } from "./cases.dto";
 import { AdminCasesService } from "./cases.service";
@@ -31,8 +32,14 @@ export class AdminCasesController {
   return this.cases.readMessageReport(request,parse(uuid,id),parse(uuid,reportId));
  }
  @Get("cases/:id/community-reports/:reportId") @Header("Cache-Control","no-store")
- communityReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Query() query:unknown,@Req() request:FastifyRequest){
+ async communityReportRead(@Param("id") id:string,@Param("reportId") reportId:string,@Query() query:unknown,
+   @Req() request:FastifyRequest,@Res({passthrough:true}) reply:FastifyReply){
   this.cases.enabled();
-  return this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),parse(communityReportPageSchema,query));
+  const page=parse(communityReportPageSchema,query);
+  const result=await this.cases.readCommunityReport(request,parse(uuid,id),parse(uuid,reportId),page,page.photoId);
+  if (!page.photoId) return result;
+  if (!("bytes" in result)) throw notFound("REPORT_UNAVAILABLE","Жалоба недоступна");
+  return reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff")
+    .header("Content-Security-Policy","default-src 'none'; sandbox").type("image/png").send(result.bytes);
  }
 }

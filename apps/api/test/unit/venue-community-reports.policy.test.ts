@@ -148,3 +148,19 @@ describe("#507 I1 F3 venue-community report policy", () => {
     ).toBe(`aggregate:${venueId}`);
   });
 });
+
+it("#507 I2b ordered exact photo evidence changes the fingerprint without changing legacy text identity",()=>{
+  const base={commentId:"c",entityId:"v",resourceVersion:1,bodyText:"text"};
+  const secret="synthetic-only";
+  const legacy=createHmac("sha256",secret).update(`${VENUE_COMMUNITY_COMMENT_FINGERPRINT_NS}:c:v:1:`).update("text").digest("hex");
+  expect(venueCommunityCommentReportFingerprint(secret,base)).toBe(legacy);
+  expect(venueCommunityCommentReportFingerprint(secret,{...base,photos:[]})).toBe(legacy);
+  const a={id:"a",approvalId:"approval-a",fingerprint:"fp-a",sha256:"sha-a"};
+  const b={id:"b",approvalId:"approval-b",fingerprint:"fp-b",sha256:"sha-b"};
+  const fingerprint=venueCommunityCommentReportFingerprint(secret,{...base,bodyText:null,photos:[a,b]});
+  for(const input of [{...base,bodyText:null,photos:[b,a]}, {...base,bodyText:null,photos:[a]},
+    {...base,bodyText:null,photos:[{...a,approvalId:"other"},b]}, {...base,photos:[a,b]},
+    {...base,resourceVersion:2,bodyText:null,photos:[a,b]}]) {
+    expect(venueCommunityCommentReportFingerprint(secret,input)).not.toBe(fingerprint);
+  }
+});

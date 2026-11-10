@@ -119,7 +119,7 @@ export type CommunityVoteSourceAvailability =
 export type CommunityCommentSourceAvailability =
   | {
       available: true;
-      text: string;
+      text: string | null;
       currentPublication: CommunityCommentPublication;
       currentVersion: number | null;
     }
@@ -160,6 +160,7 @@ export function evaluateCommunityVoteSourceAvailability(input: {
 export function evaluateCommunityCommentSourceAvailability(input: {
   revisionFound: boolean;
   reportedBody: string | null;
+  reportedPhotoCount?: number;
   expectedFingerprint: string;
   reportedFingerprint: string | null;
   currentDeleted: boolean;
@@ -175,7 +176,7 @@ export function evaluateCommunityCommentSourceAvailability(input: {
         ? "withheld"
         : input.currentVersion != null && input.currentVersion !== input.reportedVersion
           ? "edited"
-          : input.reportedBody == null || input.reportedBody.length < 1
+          : (input.reportedBody == null || input.reportedBody.length < 1) && !input.reportedPhotoCount
             ? "unavailable"
             : "live";
 
@@ -188,7 +189,7 @@ export function evaluateCommunityCommentSourceAvailability(input: {
       currentVersion: input.currentVersion,
     };
   }
-  if (input.reportedBody == null || input.reportedBody.length < 1) {
+  if ((input.reportedBody == null || input.reportedBody.length < 1) && !input.reportedPhotoCount) {
     return {
       available: false,
       reason: "empty_body",

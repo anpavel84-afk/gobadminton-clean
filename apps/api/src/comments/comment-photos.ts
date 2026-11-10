@@ -1,4 +1,6 @@
-import { Controller, Delete, Get, Header, Inject, Injectable, Param, Post, Req, Res } from "@nestjs/common";
+import { canonicalVenueFamilyIds } from "../venues/venue-community.query";
+import { publicPhotoAuthoritySql, publicPhotoView } from "./comment-photo-publication";
+import { Controller, Delete, Get, Header, Inject, Injectable, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
@@ -88,7 +90,7 @@ export class CommentPhotosService {
   }
   private async capacity(client: PoolClient, owner: string): Promise<void> {
     const count = await client.query<{ count: string }>(
-      "SELECT count(*) FROM venue_photo_submissions WHERE owner_user_id=$1 AND status='ready' AND expires_at>clock_timestamp()", [owner]);
+      "SELECT count(*) FROM venue_photo_submissions WHERE owner_user_id=$1 AND status='ready' AND expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM entity_comment_photo_origins o WHERE o.photo_id=venue_photo_submissions.id)", [owner]);
     if (Number(count.rows[0]!.count) >= 8) throw conflict("COMMENT_PHOTO_LIMIT", "Сначала используйте или удалите загруженные фото");
   }
   private async current(client: PoolClient, actor: AuthenticatedConsumer, id: string): Promise<PhotoRow> {
@@ -186,6 +188,83 @@ export class CommentPhotosService {
       return bytes;
     });
   }
+  private async publicRead<T>(work: (client: PoolClient)=>Promise<T>): Promise<T> {
+    const client=await this.pool.connect();
+    try { await client.query("BEGIN"); await client.query("SET LOCAL statement_timeout='10s'");
+      const result=await work(client); await client.query("COMMIT"); return result;
+    } catch(error) { await client.query("ROLLBACK").catch(()=>undefined); throw error; }
+    finally { client.release(); }
+  }
+  async publicContent(commentId: string, versionRaw: string, id: string, viewerId: string | null): Promise<Buffer> {
+    commentId=uuid(commentId);id=uuid(id);
+    if (!/^[1-9][0-9]{0,9}$/.test(versionRaw) || Number(versionRaw)>2147483647) throw unavailable();
+    return this.publicRead(async client=>{
+      // Identify author first, then actor → catalog → venue → comment → approval → journal.
+      const snapshot=(await client.query<{author_user_id:string;entity_id:string}>(
+        "SELECT author_user_id,entity_id FROM entity_comments WHERE id=$1 AND entity_kind='venue'",[commentId])).rows[0];
+      if (!snapshot) throw unavailable();
+      await client.query("SELECT id FROM users WHERE id=$1 FOR SHARE",[snapshot.author_user_id]);
+      await this.venue(client,snapshot.entity_id);
+      await client.query("SELECT id FROM entity_comments WHERE id=$1 FOR SHARE",[commentId]);
+      const row=(await client.query<PhotoRow>(`SELECT s.*,a.content_fingerprint
+        FROM entity_comments c JOIN entity_comment_photos p ON p.comment_id=c.id AND p.resource_version=c.version
+        JOIN venue_photo_submissions s ON s.id=p.photo_id JOIN content_moderation_approvals a ON a.id=s.image_approval_id
+        WHERE c.id=$1 AND c.version=$2 AND s.id=$3 AND ${publicPhotoAuthoritySql(this.env,"$4")}
+          AND a.provider_key=$5 FOR SHARE OF s,a`,[commentId,Number(versionRaw),id,viewerId,this.env.CONTENT_MODERATION_PROVIDER])).rows[0];
+      if (!row) throw unavailable();
+      const bytes=await this.media.readPrivateStage(client,row.storage_key,row.image_sha256);
+      if(this.moderation.fingerprint(bytes,"community_photo")!==row.content_fingerprint) throw unavailable();
+      // Fresh authorization after disk/journal waits, also before conditional/HEAD responses.
+      const fresh=await client.query(`SELECT 1 FROM entity_comments c
+        JOIN entity_comment_photos p ON p.comment_id=c.id AND p.resource_version=c.version
+        JOIN venue_photo_submissions s ON s.id=p.photo_id JOIN content_moderation_approvals a ON a.id=s.image_approval_id
+        WHERE c.id=$1 AND c.version=$2 AND s.id=$3 AND ${publicPhotoAuthoritySql(this.env,"$4")}
+          AND a.provider_key=$5`,[commentId,Number(versionRaw),id,viewerId,this.env.CONTENT_MODERATION_PROVIDER]);
+      if (!fresh.rowCount || !await resolveCanonicalVenue(client,snapshot.entity_id)) throw unavailable();
+      return bytes;
+    });
+  }
+  async aggregate(venueId: string, viewerId: string | null, rawCursor?: string) {
+    venueId=uuid(venueId);
+    return this.publicRead(async client=>{
+      const canonical=await this.venue(client,venueId);
+      const family=(await canonicalVenueFamilyIds(client,canonical)).sort();
+      // Include every family member's catalog version: merge/retire/restore changes reset paging.
+      const versions=(await client.query<{id:string;version:number}>(
+        "SELECT id,version FROM venues WHERE id=ANY($1::uuid[]) ORDER BY id",[family])).rows;
+      const scope=sha(Buffer.from(JSON.stringify({canonical,versions})));
+      let before: {at:string;id:string}|null=null;
+      if(rawCursor) {
+        try {
+          if(rawCursor.length>1024) throw new Error();
+          const parsed=JSON.parse(Buffer.from(rawCursor,"base64url").toString("utf8"));
+          if(parsed.scope!==scope) throw conflict("VENUE_CANONICAL_CHANGED", "Площадка изменилась; начните список заново",JSON.stringify({canonicalVenueId:canonical,reset:true}));
+          if(typeof parsed.at!=="string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(parsed.at)
+            || parsed.at.startsWith("0000") || !Number.isFinite(Date.parse(parsed.at))
+            || new Date(parsed.at).toISOString()!==`${parsed.at.slice(0,23)}Z`) throw new Error();
+          before={at:parsed.at,id:uuid(parsed.id)};
+        } catch(error) {
+          if(error instanceof ProblemHttpException && (error.getResponse() as ProblemBody).code==="VENUE_CANONICAL_CHANGED") throw error;
+          throw badRequest("COMMENT_CURSOR_INVALID", "Некорректный курсор");
+        }
+      }
+      const rows=(await client.query<{id:string;width:number;height:number;comment_id:string;parent_comment_id:string|null;version:number;at:string}>(`
+        SELECT s.id,s.width,s.height,c.id AS comment_id,c.parent_comment_id,c.version,
+          to_char(o.first_published_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at
+        FROM entity_comments c JOIN entity_comment_photos p ON p.comment_id=c.id AND p.resource_version=c.version
+        JOIN entity_comment_photo_origins o ON o.photo_id=p.photo_id
+        JOIN venue_photo_submissions s ON s.id=p.photo_id JOIN content_moderation_approvals a ON a.id=s.image_approval_id
+        WHERE c.entity_id=ANY($1::uuid[]) AND ${publicPhotoAuthoritySql(this.env,"$2")} AND a.provider_key=$3
+          AND ($4::timestamptz IS NULL OR (o.first_published_at,s.id)<($4::timestamptz,$5::uuid))
+        ORDER BY o.first_published_at DESC,s.id DESC LIMIT 25`,
+        [family,viewerId,this.env.CONTENT_MODERATION_PROVIDER,before?.at??null,before?.id??null])).rows;
+      const page=rows.slice(0,24), last=page[page.length-1];
+      return {venueId:canonical,items:page.map(row=>({...publicPhotoView(row,row.comment_id,row.version),
+        source:{commentId:row.comment_id,parentCommentId:row.parent_comment_id,resourceVersion:row.version,
+          path:`/v1/comments/${row.comment_id}`}})),nextCursor:rows.length>24 && last
+          ? Buffer.from(JSON.stringify({scope,at:last.at,id:last.id})).toString("base64url") : null};
+    });
+  }
   async withdraw(actor: AuthenticatedConsumer, id: string, key: string, version: unknown, command: unknown): Promise<Receipt> {
     id = uuid(id);
     const expected = expectedVersion(version, command);
@@ -201,6 +280,8 @@ export class CommentPhotosService {
         const found = await client.query<PhotoRow>("SELECT * FROM venue_photo_submissions WHERE id=$1 AND owner_user_id=$2 FOR UPDATE", [id, actor.userId]);
         const row = found.rows[0];
         if (!row) throw unavailable();
+        const published=await client.query("SELECT 1 FROM entity_comment_photo_origins WHERE photo_id=$1",[id]);
+        if (published.rowCount) throw conflict("PHOTO_ALREADY_PUBLISHED", "Удалите фото из комментария");
         if (row.status !== "ready" || row.version !== expected) throw conflict("VERSION_CONFLICT", "Фото изменилось");
         const updated = await client.query<PhotoRow>("UPDATE venue_photo_submissions SET status='withdrawn',version=version+1,withdrawn_at=clock_timestamp() WHERE id=$1 RETURNING *", [id]);
         await client.query("UPDATE avatar_media_gc SET not_before=now() WHERE storage_key=$1", [row.storage_key]);
@@ -237,6 +318,22 @@ export class CommentPhotosController {
     // Conditional headers never bypass current authorization; return an authorized PNG body.
     const bytes = await this.photos.content(await this.auth.requireSession(req), id);
     return reply.type("image/png").send(bytes);
+  }
+  @Get("comments/:commentId/revisions/:version/photos/:photoId")
+  async publicContent(@Req() req: FastifyRequest, @Param("commentId") commentId: string,
+    @Param("version") version: string, @Param("photoId") id: string, @Res() reply: FastifyReply) {
+    reply.header("Cache-Control","no-store").header("X-Content-Type-Options","nosniff")
+      .header("Content-Security-Policy","default-src 'none'; sandbox");
+    const viewer=await this.auth.optionalSession(req);
+    const bytes=await this.photos.publicContent(commentId,version,id,viewer?.userId??null);
+    // GET, automatic HEAD and conditional requests share full authorization; no cached 304 bypass.
+    return reply.type("image/png").send(bytes);
+  }
+  @Get("venues/:venueId/community-photos")
+  @Header("Cache-Control","no-store")
+  async aggregate(@Req() req: FastifyRequest, @Param("venueId") venueId: string, @Query("cursor") cursor?: string) {
+    const viewer=await this.auth.optionalSession(req);
+    return this.photos.aggregate(venueId,viewer?.userId??null,cursor);
   }
   @Delete("me/venue-photo-submissions/:photoId")
   @Header("Cache-Control", "no-store")

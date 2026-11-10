@@ -44,6 +44,24 @@ export const updateCommentRequest = z
   })
   .strict();
 
+// Venue-only shape. Shared game normalization remains strict and text-required.
+const photoIds = z.array(uuid.transform(v => v.toLowerCase())).max(4).refine(v => new Set(v).size === v.length);
+export const createVenueCommentRequest = z.object({
+  text: z.string().nullable().optional(), photoIds: photoIds.optional(), parentCommentId: uuid.nullable().optional(),
+}).strict();
+export const updateVenueCommentRequest = z.object({
+  text: z.string().nullable().optional(), photoIds: photoIds.optional(),
+  expectedVersion: z.number().int().min(1).max(2147483647),
+}).strict();
+export function normalizeVenueCommentText(raw: unknown): string | null {
+  if (raw === undefined || raw === null || (typeof raw === "string" && !raw.trim())) return null;
+  return normalizeCommentText(raw);
+}
+export function assertCommentContent(text: string | null, ids: readonly string[]): void {
+  if (text === null && ids.length === 0) throw unprocessable("COMMUNITY_ENTRY_EMPTY", "Добавьте текст или фото");
+}
+export type CommentPhotoView = { id: string; width: number; height: number; url: string };
+
 export const deleteCommentRequest = z
   .object({
     expectedVersion: z.number().int().min(1).max(2147483647),
@@ -75,6 +93,7 @@ export type CommentView = {
   mine: boolean;
   author: CommentAuthorView | null;
   replyCount: number;
+  photos?: CommentPhotoView[];
 };
 
 export type CommentPage = {
