@@ -792,3 +792,12 @@
 .gb-venue-booking-help__actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:12px; }
 .gb-court-booking { display:grid; gap:14px; }
 .gb-court-booking__source { margin:0; color:var(--gb-ink-soft); font-size:14px; }
+
+/* #507 optional venue candidate: reuse form/media primitives inside the current host. */
+.gb-venue-candidate { display: grid; gap: 16px; }
+.gb-venue-candidate > .gb-game-form-group-title, .gb-venue-candidate > p { margin: 0; }
+.gb-venue-candidate > p { font-size: 14px; line-height: 1.5; }
+.gb-venue-candidate .gb-game-field input[type="checkbox"] { display: inline-block; width: 18px; min-height: 18px; height: 18px; padding: 0; vertical-align: middle; }
+.gb-venue-candidate .gb-venue-media { height: auto; max-height: none; aspect-ratio: 3 / 1; border-radius: 12px; }
+.gb-venue-candidate .gb-venue-media img { display: block; height: 100%; }
+.gb-venue-candidate > .gb-c23-btn { justify-self: start; max-width: 100%; }
