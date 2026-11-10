@@ -952,12 +952,29 @@ run("#394 venue experience — disposable", () => {
     if (!pending) throw new Error("Missing actual human intake");
     await ageMaterialEdit(pending.revision_id);
     await humanApprovePending(pending.id, pending.version);
+    const storedRevisions = async () => (await pool.query<{
+      pending_revision_id: string | null; approved_revision_id: string;
+      id: string; resource_version: number; game_id: string; body_text: string;
+    }>(`SELECT s.pending_revision_id, s.approved_revision_id,
+        r.id, r.resource_version, r.game_id, r.body_text
+      FROM venue_review_slots s
+      JOIN venue_review_revisions r
+        ON r.slot_id=s.id AND r.id IN (s.pending_revision_id, s.approved_revision_id)
+      WHERE s.id=$1`, [id])).rows;
+    const approvedRevisions = await storedRevisions();
+    expect(approvedRevisions).toHaveLength(1);
+    const approvedRevision = approvedRevisions[0];
+    if (!approvedRevision) throw new Error("Missing persisted approved revision");
+    expect(approvedRevision).toMatchObject({ pending_revision_id: null,
+      approved_revision_id: approvedRevision.id, game_id: a.gameId, body_text: textA });
+    expect(approvedRevision.id).not.toBe(pending.revision_id);
     const read = () => app.inject({ method: "GET", url: path, headers: { cookie: participant.cookie } });
     const approved = await read();
     expect(approved.statusCode, approved.body).toBe(200);
     expect(approved.headers["cache-control"]).toBe("no-store");
     expect(approved.json()).toMatchObject({ id, text: textA, pendingRevision: null,
-      editContext: { revisionId: pending.revision_id, resourceVersion: 1, gameId: a.gameId,
+      approvedRevision: approvedRevision.resource_version,
+      editContext: { revisionId: approvedRevision.id, resourceVersion: approvedRevision.resource_version, gameId: a.gameId,
         basis: { gameId: a.gameId, admission: "may_submit", outcomeVersion: 1, attendanceVersion: 1 } } });
     const other = await app.inject({ method: "GET", url: path, headers: { cookie: outsider.cookie } });
     const absent = await app.inject({ method: "GET", url: `/v1/me/venue-reviews/${randomUUID()}`, headers: { cookie: outsider.cookie } });
@@ -985,14 +1002,23 @@ run("#394 venue experience — disposable", () => {
         audience: "self_draft", text: "Точный приватный текст B", topics: ["lighting", "amenities"],
         expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 } } });
     expect(revised.statusCode, revised.body).toBe(200);
+    const revisions = await storedRevisions();
+    expect(revisions).toHaveLength(2);
+    const pendingRevision = revisions.find((revision) => revision.id === revision.pending_revision_id);
+    const retainedApprovedRevision = revisions.find((revision) => revision.id === revision.approved_revision_id);
+    if (!pendingRevision || !retainedApprovedRevision) throw new Error("Missing persisted pending/approved revisions");
+    expect(pendingRevision).toMatchObject({ approved_revision_id: approvedRevision.id,
+      game_id: b.gameId, body_text: "Точный приватный текст B" });
+    expect(pendingRevision.id).not.toBe(retainedApprovedRevision.id);
+    expect(pendingRevision.resource_version).not.toBe(retainedApprovedRevision.resource_version);
+    expect(retainedApprovedRevision).toEqual({ ...approvedRevision, pending_revision_id: pendingRevision.id });
     const snapshot = await read();
     const selected = snapshot.json();
     expect(selected).toMatchObject({ version: revised.json().version, text: "Точный приватный текст B",
-      topics: ["lighting", "amenities"], pendingRevision: 2, approvedRevision: 1,
-      editContext: { resourceVersion: 2, gameId: b.gameId, basis: { gameId: b.gameId, admission: "may_submit" } } });
-    const revision = (await pool.query<{ id: string; game_id: string; resource_version: number }>(
-      "SELECT id, game_id, resource_version FROM venue_review_revisions WHERE id=$1", [selected.editContext.revisionId])).rows[0];
-    expect(revision).toEqual({ id: selected.editContext.revisionId, game_id: b.gameId, resource_version: selected.pendingRevision });
+      topics: ["lighting", "amenities"], pendingRevision: pendingRevision.resource_version,
+      approvedRevision: retainedApprovedRevision.resource_version,
+      editContext: { revisionId: pendingRevision.id, resourceVersion: pendingRevision.resource_version,
+        gameId: b.gameId, basis: { gameId: b.gameId, admission: "may_submit" } } });
     const state = async () => (await pool.query(
       `SELECT (SELECT jsonb_agg(to_jsonb(s)) FROM venue_review_slots s WHERE id=$1) AS slots,
         (SELECT jsonb_agg(to_jsonb(f)) FROM venue_review_event_fences f WHERE slot_id=$1) AS fences,
