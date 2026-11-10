@@ -24,8 +24,13 @@ function uuid(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw unavailable();
   return value.toLowerCase();
 }
-function expectedVersion(value: unknown): number {
+function expectedVersion(value: unknown, body: unknown): number {
   if (value !== "1") throw badRequest("VERSION_REQUIRED", "Требуется X-Photo-Version: 1");
+  // Both CAS representations are required; ready submissions have version 1 only.
+  if (!body || typeof body !== "object" || Array.isArray(body) ||
+    Object.keys(body).length !== 1 || (body as Record<string, unknown>).expectedVersion !== 1) {
+    throw badRequest("INVALID_PHOTO_COMMAND", "Требуется JSON expectedVersion: 1, совпадающий с X-Photo-Version");
+  }
   return 1;
 }
 type PhotoRow = {
@@ -181,9 +186,9 @@ export class CommentPhotosService {
       return bytes;
     });
   }
-  async withdraw(actor: AuthenticatedConsumer, id: string, key: string, version: unknown): Promise<Receipt> {
+  async withdraw(actor: AuthenticatedConsumer, id: string, key: string, version: unknown, command: unknown): Promise<Receipt> {
     id = uuid(id);
-    const expected = expectedVersion(version);
+    const expected = expectedVersion(version, command);
     const result = await this.mutations.runIdempotent({
       actorId: actor.userId, sessionId: actor.sessionId, operation: "comments.photos.withdraw", key,
       requestHash: this.idempotency.requestHash({ id, expected }),
@@ -237,6 +242,6 @@ export class CommentPhotosController {
   @Header("Cache-Control", "no-store")
   async withdraw(@Req() req: FastifyRequest, @Param("photoId") id: string) {
     const actor = await this.auth.requireCookieMutation(req);
-    return this.photos.withdraw(actor, id, this.idempotency.requireKey(req.headers["idempotency-key"]), req.headers["x-photo-version"]);
+    return this.photos.withdraw(actor, id, this.idempotency.requireKey(req.headers["idempotency-key"]), req.headers["x-photo-version"], req.body);
   }
 }

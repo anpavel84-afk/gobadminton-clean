@@ -108,7 +108,7 @@ run("#507 I2a owned disposable private photo foundation", () => {
       headers:{...(who?{cookie:who.cookie}:{}),...(conditional?{"if-none-match":"*","if-modified-since":new Date().toUTCString()}:{})}});
   }
   function withdraw(id: string,who=owner,idem=key(),version="1") {
-    return app.inject({method:"DELETE",url:`/v1/me/venue-photo-submissions/${id}`,headers:{...headers(who,idem),"x-photo-version":version}});
+    return app.inject({method:"DELETE",url:`/v1/me/venue-photo-submissions/${id}`,headers:{...headers(who,idem),"x-photo-version":version},payload:{expectedVersion:1}});
   }
   async function ready() {
     const response=await upload();expect(response.statusCode).toBe(201);return response.json<{id:string;previewPath:string;venueId:string}>();
@@ -181,6 +181,34 @@ run("#507 I2a owned disposable private photo foundation", () => {
     provider.fixture=async()=>{await pool.query("UPDATE app_sessions SET revoked_at=now() WHERE id=$1",[owner.sessionId]);return safeImageDecision();};
     expect((await upload()).statusCode).toBe(401);
     expect((await pool.query("SELECT 1 FROM venue_photo_submissions WHERE owner_user_id=$1",[owner.id])).rowCount).toBe(0);
+  });
+  it("rejects missing/invalid withdrawal JSON before reserving a command or changing the photo", async () => {
+    const photo=await ready(), idem=key(), calls=provider.calls;
+    const url=`/v1/me/venue-photo-submissions/${photo.id}`;
+    const commandHeaders={...headers(owner,idem),"x-photo-version":"1"};
+    const missing=await app.inject({method:"DELETE",url,headers:commandHeaders});
+    expect(missing.statusCode).toBe(400);expect(missing.json().code).toBe("INVALID_PHOTO_COMMAND");
+    for(const payload of ["null", "[]", "1", '"1"', "{}", '{"expectedVersion":"1"}',
+      '{"expectedVersion":true}', '{"expectedVersion":1.5}', '{"expectedVersion":0}',
+      '{"expectedVersion":2}', '{"expectedVersion":1,"extra":true}']) {
+      const response=await app.inject({method:"DELETE",url,headers:{...commandHeaders,"content-type":"application/json"},payload});
+      expect(response.statusCode).toBe(400);expect(response.json().code).toBe("INVALID_PHOTO_COMMAND");
+    }
+    expect((await app.inject({method:"DELETE",url,headers:{...commandHeaders,"content-type":"application/json"},payload:'{"expectedVersion":'})).statusCode).toBe(400);
+    const withoutVersion: Record<string,string>={...commandHeaders};delete withoutVersion["x-photo-version"];
+    for(const versionHeaders of [withoutVersion,{...commandHeaders,"x-photo-version":"2"}]) {
+      const response=await app.inject({method:"DELETE",url,headers:versionHeaders,payload:{expectedVersion:1}});
+      expect(response.statusCode).toBe(400);expect(response.json().code).toBe("VERSION_REQUIRED");
+    }
+    expect((await get(photo.id)).json()).toMatchObject({status:"ready",version:1});
+    expect((await pool.query("SELECT 1 FROM idempotency_records WHERE actor_id=$1 AND operation='comments.photos.withdraw'",[owner.id])).rowCount).toBe(0);
+    const withdrawn=await withdraw(photo.id,owner,idem);
+    expect(withdrawn.statusCode).toBe(200);expect(withdrawn.json()).toMatchObject({status:"withdrawn",version:2,previewPath:null});
+    const invalidReplay=await app.inject({method:"DELETE",url,headers:commandHeaders});
+    expect(invalidReplay.statusCode).toBe(400);expect(invalidReplay.json().code).toBe("INVALID_PHOTO_COMMAND");
+    expect((await withdraw(photo.id,owner,idem)).json()).toEqual(withdrawn.json());
+    expect((await withdraw(photo.id)).statusCode).toBe(409);
+    expect(provider.calls).toBe(calls);
   });
   it("denies changed canonical venue and expired/withdrawn stages, with provider-independent withdrawal", async () => {
     const photo=await ready(), filename=await storage(photo.id);

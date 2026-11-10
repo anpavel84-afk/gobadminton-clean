@@ -24833,7 +24833,7 @@
             }
           },
           "400": {
-            "description": "Missing rights/version/key or invalid input.",
+            "description": "Missing/invalid key, version header or strict JSON command. VERSION_REQUIRED for header errors; INVALID_PHOTO_COMMAND for invalid parsed bodies; malformed JSON rejected by HTTP parser.",
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -24884,6 +24884,17 @@
                   "type": "string",
                   "const": "no-store"
                 }
+              }
+            }
+          }
+        },
+        "description": "Required strict JSON command expectedVersion must be the number 1 and match X-Photo-Version: 1. Missing, extra, malformed, wrong-type or disagreeing bodies return 400 before mutation or replay. Existing active owner/session, Origin/CSRF, idempotency and version fences remain; withdrawal works after expiry or venue change without provider I/O.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawVenuePhotoSubmissionCommand"
               }
             }
           }
@@ -41310,6 +41321,20 @@
             "pattern": "^/v1/me/venue-photo-submissions/[0-9a-f-]{36}/content$"
           }
         }
+      },
+      "WithdrawVenuePhotoSubmissionCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "const": 1
+          }
+        },
+        "description": "Required ready-submission CAS version; must equal X-Photo-Version: 1, including on replay."
       }
     }
   }

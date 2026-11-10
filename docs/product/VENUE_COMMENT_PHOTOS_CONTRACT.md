@@ -16,7 +16,16 @@ All paths below have the existing `/v1` prefix. All responses use `Cache-Control
 | POST `/venues/:venueId/comment-photos` | Active cookie session, Origin/CSRF, Idempotency-Key (16–128 characters), raw JPEG/PNG/WebP and exact `X-Photo-Rights: community-photo-rights-v1`. Returns 201 owned ready receipt. |
 | GET `/me/venue-photo-submissions/:photoId` | Current authenticated owner, active account, current capability, canonical venue and unexpired ready submission. |
 | GET `/me/venue-photo-submissions/:photoId/content` | Same current checks plus exact stored byte SHA and approval fingerprint, then sanitized PNG. No guest route. |
-| DELETE `/me/venue-photo-submissions/:photoId` | Active cookie mutation, Origin/CSRF, Idempotency-Key, `X-Photo-Version: 1`. Atomic withdrawal returns version 2 with null preview. |
+| DELETE `/me/venue-photo-submissions/:photoId` | Active cookie mutation, Origin/CSRF, Idempotency-Key, `X-Photo-Version: 1` and required JSON `{"expectedVersion":1}`. Atomic withdrawal returns version 2 with null preview. |
+
+Withdrawal is a strict JSON command: `expectedVersion` is the only property and must be
+the number `1`, matching the still-required exact `X-Photo-Version: 1` header. Missing,
+malformed, non-object, extra-field, wrong-type or disagreeing bodies return 400 before
+any withdrawal receipt is reserved or photo state changes, including on replay.
+Missing/invalid headers retain `VERSION_REQUIRED`; invalid command bodies use
+`INVALID_PHOTO_COMMAND` (malformed JSON is rejected by the HTTP parser).
+The durable request hash remains the photo ID and validated expected version; valid
+same-key retries still replay the owned withdrawn receipt.
 
 Rights v1 means: I own this photo or have publication rights, and have permission from recognizable people to publish it. EXIF/geotags are removed. No face recognition, identity tagging, precise-location or presence verification is performed. This declaration is a bounded user action, not a claim that the service has verified legal ownership.
 
