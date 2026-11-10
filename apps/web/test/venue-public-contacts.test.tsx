@@ -26,8 +26,8 @@ vi.mock("react", async original => {
    if (!hooks.active) return actual.useMemo(factory, deps);
    return factory();
   },
-  useCallback<T extends (...args: never[]) => unknown>(fn: T, _deps?: readonly unknown[]) {
-   if (!hooks.active) return actual.useCallback(fn, _deps as never);
+  useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: React.DependencyList = []) {
+   if (!hooks.active) return actual.useCallback(fn, deps);
    return fn;
   },
   useContext<T>(context: React.Context<T>) {
