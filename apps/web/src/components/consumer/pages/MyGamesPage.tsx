@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { getGame, getMe, listAllMyManagedGames, listAllMyParticipations, listMyGameResults } from "../../../lib/api-client";
 import type { Game, ManagedGame, Me, MeGameResultsPage, Participation, PostgameReminder } from "../../../lib/consumer-types";
 import { isTerminalParticipation, managedGameRelationLabel, participationLabel } from "../../../lib/game-presentation";
-import { ownResultPendingNotice, resultsPath } from "../../../lib/game-results";
+import { ownResultPendingNotice } from "../../../lib/game-results";
 import { invitationPath, listInvitations } from "../../../lib/messaging-api";
 import type { AcceptInvitationResult, GameInvitation } from "../../../lib/messaging-types";
 import { invitationCopy } from "../../../lib/messaging-presentation";
@@ -282,6 +282,7 @@ export function MyGamesPage() {
   const terminal = visible.filter((row) => bucket(row) === "terminal");
   const unknown = visible.filter((row) => bucket(row) === "unknown");
   const attention = rows.filter((row) => row.reminders.length || row.own.some(ownResultPendingNotice));
+  const firstAttention = attention[0];
   function pathFor(next: Filter, history = historyEntry) { const params = new URLSearchParams(); if (next !== "all") params.set("filter", next); if (history) params.set("view", "history"); return `/my-games${params.size ? `?${params}` : ""}`; }
   const returnPath = pathFor(filter);
   function changed(id: string) { setFocusTarget(`my-game-${id}`); setReload((n) => n + 1); }
@@ -346,7 +347,7 @@ export function MyGamesPage() {
       {state === "auth" ? <div className="gb-game-feedback"><h2>Войдите, чтобы видеть свои игры</h2><AuthEntry returnPath={returnPath} /></div> : null}
       {state === "error" ? <div className="gb-game-feedback"><h2>Не удалось проверить вход</h2><Button onClick={() => setReload((n) => n + 1)}>Обновить</Button></div> : null}
       {state === "ready" && me ? <>
-        {attention.length ? <div className="gb-my-games-attention"><strong>После игры ждут ответа · {attention.length}{ownCursor ? "+" : ""}</strong><a href={`#my-game-${attention[0].id}`} onClick={(event) => { event.preventDefault(); router.replace(pathFor("all", true)); setFocusTarget(`my-game-${attention[0].id}`); }}>К итогам ↓</a></div> : null}
+        {firstAttention ? <div className="gb-my-games-attention"><strong>После игры ждут ответа · {attention.length}{ownCursor ? "+" : ""}</strong><a href={`#my-game-${firstAttention.id}`} onClick={(event) => { event.preventDefault(); router.replace(pathFor("all", true)); setFocusTarget(`my-game-${firstAttention.id}`); }}>К итогам ↓</a></div> : null}
         {sourceNotice(managed, "Управляемые игры", () => void loadManaged())}
         {sourceNotice(parts, "Заявки и участия", () => void loadParts())}
         {sourceNotice(invitations, "Приглашения", () => void loadInvitations())}

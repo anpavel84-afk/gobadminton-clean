@@ -555,7 +555,9 @@ describe("#539 union and URL compatibility", () => {
     const tree = renderPage(); flushEffects();
     const cards = walk(tree).filter((element) => element.type === PersonalGameCard);
     expect(cards).toHaveLength(1);
-    expect(cards[0].props).toMatchObject({ owned: true, managementRelation: "Управляю", ownStatuses: ["confirmed"] });
+    const firstCard = cards[0];
+    if (!firstCard) throw new Error("Expected the joined game card");
+    expect(firstCard.props).toMatchObject({ owned: true, managementRelation: "Управляю", ownStatuses: ["confirmed"] });
     expect(walk(tree).filter((element) => element.type === MyGamesInvitation)).toHaveLength(2);
     expect(vi.mocked(listInvitations).mock.calls[1]).toEqual(["page2"]);
     expect(getGame).toHaveBeenCalledTimes(1);

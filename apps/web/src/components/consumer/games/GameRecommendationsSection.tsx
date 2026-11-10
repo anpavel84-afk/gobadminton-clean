@@ -289,11 +289,15 @@ export function GameRecommendationsSection({
       ) : null}
       {secondaryItems.length > 0 && (
         <div className="gb-personal-list-items">
-          {compact ? [...secondaryGroups].map(([id, group]) => <article key={id} className="gb-personal-card" data-game-id={id}>
-            <div className="gb-personal-card__body"><h3>{group[0].game.title}</h3><strong>{formatRecommendationWhen(group[0].game)}</strong><p>Совет не подтверждает участие или наличие мест.</p></div>
-            <Button variant="outline" href={`/games/${encodeURIComponent(id)}`}>Открыть игру</Button>
-            {group.map((item) => renderItem(item, true))}
-          </article>) : secondaryItems.map((item) => renderItem(item))}
+          {compact ? [...secondaryGroups].map(([id, group]) => {
+            const firstItem = group[0];
+            if (!firstItem) return null;
+            return <article key={id} className="gb-personal-card" data-game-id={id}>
+              <div className="gb-personal-card__body"><h3>{firstItem.game.title}</h3><strong>{formatRecommendationWhen(firstItem.game)}</strong><p>Совет не подтверждает участие или наличие мест.</p></div>
+              <Button variant="outline" href={`/games/${encodeURIComponent(id)}`}>Открыть игру</Button>
+              {group.map((item) => renderItem(item, true))}
+            </article>;
+          }) : secondaryItems.map((item) => renderItem(item))}
         </div>
       )}
       {state === "ready" && nextCursor ? (
