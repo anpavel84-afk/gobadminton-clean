@@ -190,10 +190,10 @@ describe("releases catalogue integrity", () => {
     expect(row.fixes.join(" ")).toMatch(/кнопки «Подробнее» и «Поделиться» расположены у правого края/i);
     expect(row.known_limitations).toHaveLength(10);
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
   });
 
   it("preserves the exact ten-field trusted alpha.69 receipt before the accepted alpha.70 receipt", () => {
@@ -221,8 +221,8 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-8).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -236,10 +236,10 @@ describe("releases catalogue integrity", () => {
     expect(fixes).toMatch(/Выбор города, дня и типа игры, уровень в профиле и работа сервера остаются прежними/i);
     expect(row.known_limitations).toHaveLength(10);
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
   });
 
   it("preserves the exact ten-field trusted alpha.70 receipt before the accepted alpha.71 receipt", () => {
@@ -267,8 +267,8 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
@@ -276,10 +276,10 @@ describe("releases catalogue integrity", () => {
     expect(row.fixes.join(" ")).toMatch(/Незавершённые отправки и их точный повтор сохраняются.*явное восстановление/i);
     expect(row.known_limitations).toHaveLength(10);
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
   });
 
   it("preserves the exact ten-field accepted alpha.71 receipt before the accepted alpha.72 receipt", () => {
@@ -306,8 +306,8 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
     expect(row.additions).toHaveLength(0);
@@ -319,14 +319,60 @@ describe("releases catalogue integrity", () => {
     expect(gamesFix).toMatch(/заголовка и счётчика на телефоне.*отступы горизонтальных переключателей типа игры.*даты на компьютере.*размеры элементов компактного фильтра/i);
     expect(row.known_limitations).toHaveLength(10);
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
   });
 
 
-  it("preserves the exact ten-field accepted alpha.74 receipt before unaccepted alpha.75", () => {
+  it("preserves the exact ten-field accepted alpha.75 seed before unaccepted alpha.76", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.75");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toEqual([
+      "application_version", "title", "owner_uat", "additions", "fixes", "known_limitations",
+      "version_label", "source_sha", "api_contract_version", "deployments",
+    ]);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(3484);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "ad82dc20765c173f52869f9f49c49baca5f2dfd0d3cf0cd4add37196e2892b27",
+    );
+    expect(row.source_sha).toBe("0d8a23f782bd33f993d3a1b7b4850719307fae1b");
+    expect(row.version_label).toBe("0.1.0-alpha.75");
+    expect(row.api_contract_version).toBe("0.40.0");
+    expect(row.owner_uat).toBe("NOT_TESTED");
+    expect(row.deployments).toEqual([
+      {
+        "environment": "dev",
+        "status": "ACCEPTED",
+        "release_id": "r42754460186-a1",
+        "accepted_at": "2026-11-10T04:23:21Z",
+        "api_digest": "sha256:2fb3604d12d7f59353b4a12fffbbcc799115725b731f45b3eb23388afc469908",
+        "web_digest": "sha256:aeb8850736af9454c05a07f8f0874c8b5ad8248074f7e7eb8a55135d23a3c654",
+        "kind": "pipeline"
+      }
+    ]);
+    expect(row.title).toEqual("Свои отзывы о площадках в профиле");
+    expect(row.additions).toEqual([
+      "В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта."
+    ]);
+    expect(row.fixes).toEqual([
+      "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт."
+    ]);
+    expect(row.known_limitations).toHaveLength(10);
+    expect(row.known_limitations[0]).toBe("Редактирование опубликованного отзыва в пользовательском интерфейсе ещё не доступно");
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.74")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.76")).toBe(false);
+  });
+
+  it("preserves the exact ten-field accepted alpha.74 receipt before the accepted alpha.75 receipt", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.74");
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -354,15 +400,15 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.73")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
     expect(row.title).toBe("Прокрутка типов игр без обрезанных кнопок");
     expect(row.additions).toHaveLength(0);
     expect(row.fixes).toEqual(["На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым."]);
     expect(row.known_limitations[0]).toBe("Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно");
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.75")).toBe(false);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.76")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.73 receipt before the accepted alpha.74 receipt", () => {
@@ -393,11 +439,11 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.72")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.75")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-3)).toBe(row);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.76")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.72 receipt before the accepted alpha.73 receipt", () => {
@@ -433,15 +479,15 @@ describe("releases catalogue integrity", () => {
     expect(row.fixes).toEqual([
       "Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.",
     ]);
-    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.75")).toBe(false);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations.slice(1));
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(84);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.76")).toBe(false);
   });
 
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.75 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.75");
-    expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.76 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.76");
+    expect(API_CONTRACT_VERSION_NOTE).toBe("0.41.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
     expect(FIRST_NAMED_RELEASE.application_version).not.toBe(CURRENT_APPLICATION_VERSION);
@@ -456,9 +502,9 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toMatch(/Свои отзывы о площадках в профиле/i);
-    expect(currentProse).toContain("На комментарий или ответ в обсуждении можно пожаловаться.");
-    expect(currentProse).toContain("Для отправки жалобы нужен вход в аккаунт.");
+    expect(currentProse).toMatch(/Редактирование своих отзывов о площадках/i);
+    expect(currentProse).toContain("В своём профиле можно отредактировать свой отзыв о площадке и сохранить новую редакцию. Форма открывает сохранённые текст, темы и видимость выбранного отзыва; раздел доступен только владельцу аккаунта.");
+    expect(currentProse).toContain("Перед отправкой публичной редакции нужно просмотреть, что будет опубликовано, и заново подтвердить согласие.");
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -478,19 +524,21 @@ describe("releases catalogue integrity", () => {
     );
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/юридическ|контакт поддержки|удаление аккаунта/i);
     expect(CURRENT_NAMED_RELEASE.additions).toEqual([
-      "В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.",
+      "В своём профиле можно отредактировать свой отзыв о площадке и сохранить новую редакцию. Форма открывает сохранённые текст, темы и видимость выбранного отзыва; раздел доступен только владельцу аккаунта.",
+      "Перед отправкой публичной редакции нужно просмотреть, что будет опубликовано, и заново подтвердить согласие.",
     ]);
     const currentDelta = [...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes].join(" ");
-    expect(currentDelta).not.toMatch(/редактир|нов.*(?:допуск|срок|окн)|медиа|нативн|автоматическ.*удал|модераци.*(?:заверш|выполн)|приёмк.*пройдена/i);
+    expect(currentDelta).not.toMatch(/нов.*(?:допуск|срок|окн)|медиа|нативн|автоматическ.*удал|модераци.*(?:заверш|выполн)|приёмк.*пройдена/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Свои отзывы о площадках в профиле");
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Редактирование своих отзывов о площадках");
     expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
-      "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.",
+      "Если отзыв или условия его отправки изменились, нужно перечитать выбранный отзыв и подтвердить отправку заново.",
+      "Если результат отправки неизвестен, форма сохраняет отправленные данные для повторной проверки. После смены аккаунта данные прежнего пользователя скрываются.",
     ]);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
     expect(fixes).not.toMatch(/меню/i);
-    expect(fixes).toMatch(/На комментарий или ответ в обсуждении можно пожаловаться\./i);
-    expect(fixes).toMatch(/Для отправки жалобы нужен вход в аккаунт/i);
+    expect(fixes).toContain("Если отзыв или условия его отправки изменились, нужно перечитать выбранный отзыв и подтвердить отправку заново.");
+    expect(fixes).toContain("Если результат отправки неизвестен, форма сохраняет отправленные данные для повторной проверки. После смены аккаунта данные прежнего пользователя скрываются.");
     expect(fixes).not.toMatch(/автоматическ|автоотправ|сам.*публику|14.*дн|I2|I3|UGC|#549|нативн.*прилож|#507.*(?:DONE|заверш|выполн)/i);
     // D1 cause remains UNKNOWN; reset 2.0/session-only checks do not prove a repaired cause or persistence.
     expect(fixes).not.toMatch(/D1|причин|сброс|reset|2\.0|сесси|session|URL|storage|после перезагрузки|сохраняется после закрытия/i);
@@ -515,11 +563,11 @@ describe("releases catalogue integrity", () => {
     expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(
       /не требует подтверждать.*самому себе|не разрывается внутри слова|собственн.*посещени/i,
     );
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(10);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(9);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/проверка загрузки фотографии площадки в установленной версии ещё не выполнена/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/реальным аккаунтом.*перезагрузке.*390 и 1280.*ещё не выполнена/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/#506.*проверка маскирования.*редактирования с действующими правами.*разбора жалоб.*ещё не выполнена/i);
-    expect(CURRENT_NAMED_RELEASE.known_limitations[0]).toBe(
+    expect(CURRENT_NAMED_RELEASE.known_limitations).not.toContain(
       "Редактирование опубликованного отзыва в пользовательском интерфейсе ещё не доступно",
     );
     const currentLimitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
@@ -684,10 +732,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(79);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(83);
+    ).toBe(84);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -1287,18 +1335,25 @@ describe("releases page current known limitations SSR (#473)", () => {
     });
   });
 
-  it("renders private own reviews and the discussion-report copy clarification without stale release claims", async () => {
+  it("renders own review editing and public revision consent without stale release claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("Свои отзывы о площадках в профиле");
+    expect(html).toContain("Редактирование своих отзывов о площадках");
     for (const fix of CURRENT_NAMED_RELEASE.fixes) {
       expect(html).toContain(fix);
       expect(html.split(fix).length - 1).toBe(1);
     }
-    expect(html).toContain("На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.");
-    expect(html).toContain("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.");
-    expect(html.split("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.").length - 1).toBe(1);
+    for (const addition of [
+      "В своём профиле можно отредактировать свой отзыв о площадке и сохранить новую редакцию. Форма открывает сохранённые текст, темы и видимость выбранного отзыва; раздел доступен только владельцу аккаунта.",
+      "Перед отправкой публичной редакции нужно просмотреть, что будет опубликовано, и заново подтвердить согласие.",
+    ]) {
+      expect(html).toContain(addition);
+      expect(html.split(addition).length - 1).toBe(1);
+    }
+    expect(html).not.toContain("Свои отзывы о площадках в профиле");
+    expect(html).not.toContain("В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.");
+    expect(html).not.toContain("На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.");
     expect(html).not.toContain("Прокрутка типов игр без обрезанных кнопок");
     expect(html).not.toContain("На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым.");
     expect(html).not.toContain("Компактная карточка площадки и действия на карте");

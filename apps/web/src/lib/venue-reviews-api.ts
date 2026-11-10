@@ -48,6 +48,47 @@ export type OwnVenueReview = {
   receiptToken: string | null;
 };
 
+export type SelectedOwnVenueReview = OwnVenueReview & {
+  editContext: {
+    revisionId: string;
+    resourceVersion: number;
+    gameId: string;
+    basis: OwnVenueEligibilityBasis;
+  } | null;
+  editUnavailableReason: "withdrawn" | "missing_history" | null;
+};
+
+export type SubmitVenueReviewCommand = Readonly<{
+  action: "submit_revision";
+  expectedVersion: number;
+  gameId: string;
+  audience: VenueAudience;
+  expectedBasisVersions: { outcomeVersion: number; attendanceVersion: number };
+  text: string;
+  topics: VenueTopic[];
+  consentProjectionHash?: string;
+}>;
+
+/** Validate the owner identity before using a selected private response. */
+export function isSelectedOwnVenueReview(
+  value: SelectedOwnVenueReview, own: Pick<OwnVenueReview, "id" | "venueId" | "reviewHandle">,
+): boolean {
+  if (!value || value.id !== own.id || value.venueId !== own.venueId || value.reviewHandle !== own.reviewHandle
+    || !Number.isSafeInteger(value.version) || value.version < 1
+    || !Array.isArray(value.topics) || value.topics.length > 3 || value.topics.some(topic => !["surface", "lighting", "amenities"].includes(topic))
+    || (value.text !== null && typeof value.text !== "string")
+    || ![null, "self_draft", "public_venue"].includes(value.audience)) return false;
+  const edit = value.editContext;
+  if (edit === null) return value.editUnavailableReason === "withdrawn" || value.editUnavailableReason === "missing_history";
+  return Boolean(value.status !== "withdrawn" && value.editUnavailableReason === null && edit && typeof edit.revisionId === "string" && edit.revisionId
+    && Number.isSafeInteger(edit.resourceVersion) && edit.resourceVersion >= 1
+    && edit.resourceVersion === (value.pendingRevision ?? value.approvedRevision)
+    && typeof edit.gameId === "string" && edit.gameId && edit.basis && edit.basis.gameId === edit.gameId
+    && ["may_submit", "hold", "deny", "missing_history"].includes(edit.basis.admission)
+    && Number.isSafeInteger(edit.basis.outcomeVersion) && edit.basis.outcomeVersion >= 0
+    && Number.isSafeInteger(edit.basis.attendanceVersion) && edit.basis.attendanceVersion >= 0);
+}
+
 export type VenueReviewMutationReceipt = {
   id: string;
   version: number;
@@ -75,6 +116,25 @@ export function isWithdrawVenueReviewReceipt(
     && receipt.version === own.version + 1 && receipt.status === "withdrawn"
     && receipt.publicVisible === false && receipt.receiptToken === null
     && receipt.notBefore === null;
+}
+
+export function isSubmitVenueReviewReceipt(
+  value: unknown, own: Pick<OwnVenueReview, "id" | "reviewHandle" | "version">,
+  audience: VenueAudience,
+): value is VenueReviewMutationReceipt {
+  if (!value || typeof value !== "object" || !("id" in value) || !("reviewHandle" in value)
+    || !("version" in value) || !("status" in value) || !("publicVisible" in value)
+    || !("receiptToken" in value) || !("notBefore" in value)) return false;
+  return value.id === own.id && value.reviewHandle === own.reviewHandle && value.version === own.version + 1
+    && typeof value.publicVisible === "boolean" && (value.notBefore === null || typeof value.notBefore === "string")
+    && (audience === "self_draft"
+      ? (value.status === "self_draft" || value.status === "revision_waiting") && value.receiptToken === null
+      : (value.status === "submitted_waiting" || value.status === "revision_waiting")
+        && typeof value.receiptToken === "string" && value.receiptToken.length > 0);
+}
+
+export function getOwnVenueReview(id: string, signal?: AbortSignal) {
+  return apiFetch<SelectedOwnVenueReview>(`/v1/me/venue-reviews/${encodeURIComponent(id)}`, { signal });
 }
 
 export function getVenueExperienceReviews(
@@ -137,7 +197,7 @@ export function listOwnVenueReviews(signal?: AbortSignal) {
 
 export function venueReviewCommand(
   id: string,
-  body: WithdrawVenueReviewCommand,
+  body: WithdrawVenueReviewCommand | SubmitVenueReviewCommand,
   csrfToken: string,
   idempotencyKey?: string,
 ) {

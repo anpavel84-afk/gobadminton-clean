@@ -10,9 +10,10 @@ import { ProfileDialog } from "../src/components/consumer/players/ProfileComposi
 
 const api = vi.hoisted(() => ({ eligibility: vi.fn<typeof ReviewApi.getOwnVenueReviewEligibility>(),
   preview: vi.fn<typeof ReviewApi.previewVenueReviewConsent>(), send: vi.fn<typeof ReviewApi.createVenueReview>(),
+  selected: vi.fn<typeof ReviewApi.getOwnVenueReview>(), command: vi.fn<typeof ReviewApi.venueReviewCommand>(),
   reviews: vi.fn<typeof ReviewApi.getVenueExperienceReviews>() }));
 vi.mock("../src/lib/venue-reviews-api", async original => ({ ...await original<typeof ReviewApi>(), getOwnVenueReviewEligibility: api.eligibility,
-  previewVenueReviewConsent: api.preview, createVenueReview: api.send, getVenueExperienceReviews: api.reviews }));
+  getOwnVenueReview: api.selected, venueReviewCommand: api.command, previewVenueReviewConsent: api.preview, createVenueReview: api.send, getVenueExperienceReviews: api.reviews }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: { children: ReactNode; href: string }) =>
   createElement("a", { href, ...props }, children) }));
 
@@ -283,6 +284,22 @@ describe("mounted review operation ownership", () => {
 });
 
 describe("fixed-game admission", () => {
+  it("keeps create topics as one native selector and submits its selected value", async () => {
+    render(composer()); await ready();
+    const topic = screen.getByRole<HTMLSelectElement>("combobox", { name: "О чём хотите рассказать" });
+    expect(topic.multiple).toBe(false);
+    expect(topic.value).toBe("surface");
+    expect(within(topic).getAllByRole("option")).toHaveLength(3);
+    expect(screen.queryByRole("group", { name: "О чём хотите рассказать" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.change(topic, { target: { value: "amenities" } });
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Мой опыт" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1));
+    expect(api.send.mock.calls[0]?.[0].topics).toEqual(["amenities"]);
+    expect(api.command).not.toHaveBeenCalled();
+  });
+
   it("uses only the fixed game and fresh basis for a private write", async () => {
     api.eligibility.mockResolvedValue({ ok: true, status: 200, data: { bases: [
       { ...basis, gameId: "other-game", outcomeVersion: 99 }, basis,
@@ -359,4 +376,173 @@ it("shows the exact receipt's pending revision and independent public visibility
   expect(screen.getByText("Публичная версия отзыва доступна.")).toBeTruthy();
   expect(screen.getByText(/Публикация возможна не ранее 2026-11-10T12:00:00Z; она не гарантирована/)).toBeTruthy();
   expect(screen.queryByText(/Срок подачи/)).toBeNull();
+});
+
+
+const editable: ReviewApi.SelectedOwnVenueReview = {
+  id: "own-selected", reviewHandle: "selected-handle", venueId: venue, status: "revision_waiting", version: 7,
+  audience: "public_venue", text: "Сохранённый ожидающий текст", topics: ["surface", "lighting"],
+  pendingRevision: 4, approvedRevision: 2, publicVisible: true, notBefore: null,
+  firstEligibleAt: null, receiptToken: "old-intake", editUnavailableReason: null,
+  editContext: { revisionId: "persisted-revision", resourceVersion: 4, gameId: basis.gameId, basis },
+};
+async function editReady(own: ReviewApi.SelectedOwnVenueReview = editable) {
+  api.selected.mockResolvedValue({ ok: true, status: 200, data: own });
+  render(composer({ edit: own }));
+  await ready();
+}
+async function publicConsent() {
+  fireEvent.click(screen.getByRole("checkbox", { name: /Подтверждаю публикацию/ }));
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: /Подтверждаю публикацию/ })).toHaveProperty("checked", true));
+}
+describe("persisted selected revision Composer", () => {
+  it.each<{ topics: ReviewApi.VenueTopic[] }>([
+    { topics: [] }, { topics: ["surface"] }, { topics: ["surface", "lighting"] },
+    { topics: ["amenities", "surface", "lighting"] },
+  ])("preserves exact $topics prefill/text-only/UNKNOWN retry and invalidates text consent", async ({ topics }) => {
+    api.command.mockResolvedValueOnce({ ok: false, status: 503, error: "unknown" })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: {
+        id: editable.id, reviewHandle: editable.reviewHandle, version: 8, status: "revision_waiting",
+        publicVisible: true, receiptToken: "new-intake", notBefore: null,
+      } });
+    await editReady({ ...editable, topics });
+    expect(screen.getByLabelText("Ваш опыт на площадке")).toHaveProperty("value", editable.text);
+    const group = screen.getByRole<HTMLFieldSetElement>("group", { name: "О чём хотите рассказать" });
+    expect(group.getAttribute("aria-describedby")).toBe("venue-review-topics-help");
+    expect(screen.getByText("Необязательно · можно выбрать несколько").id).toBe("venue-review-topics-help");
+    expect(within(group).getAllByRole("checkbox")).toHaveLength(3);
+    const choices: Array<{ value: ReviewApi.VenueTopic; name: string }> = [
+      { value: "surface", name: "Покрытие" }, { value: "lighting", name: "Свет" }, { value: "amenities", name: "Удобства" },
+    ];
+    for (const { value, name } of choices) {
+      expect(within(group).getByRole("checkbox", { name })).toHaveProperty("checked", topics.includes(value));
+    }
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("checkbox", { name: /Подтверждаю публикацию/ })).toHaveProperty("checked", false);
+    await publicConsent();
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Новая редакция" } });
+    expect(screen.getByRole("checkbox", { name: /Подтверждаю публикацию/ })).toHaveProperty("checked", false);
+    expect(screen.getByRole("button", { name: /^Сохранить$/ })).toHaveProperty("disabled", true);
+    await publicConsent();
+    expect(api.preview).toHaveBeenLastCalledWith({ venueId: venue, text: "Новая редакция", topics }, "session-one");
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(api.command).toHaveBeenCalledTimes(1));
+    const original = api.command.mock.calls[0];
+    if (!original) throw new Error("Missing selected command");
+    expect(original[0]).toBe(editable.id);
+    expect(original[1]).toEqual({ action: "submit_revision", expectedVersion: 7, gameId: basis.gameId,
+      audience: "public_venue", text: "Новая редакция", topics,
+      expectedBasisVersions: { outcomeVersion: 7, attendanceVersion: 12 }, consentProjectionHash: "projection-one" });
+    expect(api.selected).toHaveBeenCalledTimes(2);
+    expect(api.eligibility).not.toHaveBeenCalled(); expect(api.send).not.toHaveBeenCalled();
+    await screen.findByText(/Не удалось подтвердить отправку/);
+    expect(group.disabled).toBe(true);
+    for (const checkbox of within(group).getAllByRole("checkbox")) expect(checkbox.matches(":disabled")).toBe(true);
+    forceNativeClose(screen.getByRole("dialog"));
+    fireEvent.click(screen.getByTestId("venue-review-resume"));
+    fireEvent.click(screen.getByRole("button", { name: "Проверить отправку" }));
+    await waitFor(() => expect(api.command).toHaveBeenCalledTimes(2));
+    expect(api.command.mock.calls[1]).toEqual(original);
+    expect(api.selected).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a same-value checkbox assignment; only an actual toggle orders topics and clears consent", async () => {
+    const topics: ReviewApi.VenueTopic[] = ["amenities", "surface", "lighting"];
+    await editReady({ ...editable, topics });
+    const group = screen.getByRole("group", { name: "О чём хотите рассказать" });
+    const surface = within(group).getByRole<HTMLInputElement>("checkbox", { name: "Покрытие" });
+    const lighting = within(group).getByRole<HTMLInputElement>("checkbox", { name: "Свет" });
+    const amenities = within(group).getByRole<HTMLInputElement>("checkbox", { name: "Удобства" });
+    const consent = screen.getByRole<HTMLInputElement>("checkbox", { name: /Подтверждаю публикацию/ });
+    await publicConsent();
+    expect(api.preview).toHaveBeenLastCalledWith({ venueId: venue, text: editable.text, topics }, "session-one");
+    // Model a native change reporting checked=true while draft membership is already true.
+    surface.checked = false;
+    fireEvent.click(surface);
+    expect(surface.checked).toBe(true);
+    expect(consent.checked).toBe(true);
+    expect(api.preview).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /^Сохранить$/ })).toHaveProperty("disabled", false);
+    fireEvent.change(screen.getByLabelText("Ваш опыт на площадке"), { target: { value: "Только текст" } });
+    expect(consent.checked).toBe(false);
+    await publicConsent();
+    expect(api.preview).toHaveBeenLastCalledWith({ venueId: venue, text: "Только текст", topics }, "session-one");
+    fireEvent.click(surface);
+    expect(consent.checked).toBe(false);
+    expect(screen.getByRole("button", { name: /^Сохранить$/ })).toHaveProperty("disabled", true);
+    await publicConsent();
+    expect(api.preview).toHaveBeenLastCalledWith({ venueId: venue, text: "Только текст", topics: ["lighting", "amenities"] }, "session-one");
+    fireEvent.click(lighting); fireEvent.click(amenities);
+    expect(within(group).getAllByRole<HTMLInputElement>("checkbox").map(input => input.checked)).toEqual([false, false, false]);
+    await publicConsent();
+    expect(api.preview).toHaveBeenLastCalledWith({ venueId: venue, text: "Только текст", topics: [] }, "session-one");
+    fireEvent.click(amenities);
+    expect(within(group).getAllByRole<HTMLInputElement>("checkbox").map(input => input.checked)).toEqual([false, false, true]);
+    fireEvent.click(surface); fireEvent.click(lighting);
+    await publicConsent();
+    expect(api.preview).toHaveBeenLastCalledWith({ venueId: venue, text: "Только текст", topics: ["surface", "lighting", "amenities"] }, "session-one");
+    expect(api.command).not.toHaveBeenCalled(); expect(api.send).not.toHaveBeenCalled();
+  });
+  it("requires explicit successful selected read after conflict; failed/unknown reads retain fence; no auto command", async () => {
+    const close = vi.fn(), fresh = vi.fn(), conflict = vi.fn();
+    api.selected.mockResolvedValue({ ok: true, status: 200, data: editable });
+    api.command.mockResolvedValue({ ok: false, status: 409, error: "conflict" });
+    render(composer({ edit: editable, onClose: close, onFreshRead: fresh, onConflict: conflict }));
+    await ready(); await publicConsent();
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await screen.findByRole("button", { name: "Перечитать выбранный отзыв" });
+    expect(conflict).toHaveBeenCalledTimes(1);
+    for (const status of [500, 0]) {
+      api.selected.mockResolvedValueOnce({ ok: false, status, error: "read unavailable" });
+      fireEvent.click(screen.getByRole("button", { name: "Перечитать выбранный отзыв" }));
+      await screen.findByText("Не удалось проверить допуск.");
+      expect(close).not.toHaveBeenCalled(); expect(fresh).not.toHaveBeenCalled();
+      expect(api.command).toHaveBeenCalledTimes(1);
+    }
+    const updated = { ...editable, version: 11 };
+    api.selected.mockResolvedValueOnce({ ok: true, status: 200, data: updated });
+    fireEvent.click(screen.getByRole("button", { name: "Перечитать выбранный отзыв" }));
+    await waitFor(() => expect(fresh).toHaveBeenCalledWith(updated));
+    expect(close).toHaveBeenCalledTimes(1); expect(api.command).toHaveBeenCalledTimes(1);
+  });
+  it("does not treat changed read version as proof of success or automatic submit", async () => {
+    api.selected.mockResolvedValueOnce({ ok: true, status: 200, data: editable })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { ...editable, version: 11 } });
+    render(composer({ edit: editable })); await ready(); await publicConsent();
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await screen.findByRole("button", { name: "Перечитать выбранный отзыв" });
+    expect(screen.getByRole("checkbox", { name: /Подтверждаю публикацию/ })).toHaveProperty("checked", false);
+    expect(api.command).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("selected edit actor fences", () => {
+  it.each(["gb-private-expired", "gb-session-changed"])("ignores delayed selected read after %s", async event => {
+    const pending = deferred<Awaited<ReturnType<typeof ReviewApi.getOwnVenueReview>>>();
+    api.selected.mockReturnValue(pending.promise);
+    render(composer({ edit: editable }));
+    await act(async () => { window.dispatchEvent(new Event(event)); });
+    await act(async () => pending.resolve({ ok: true, status: 200, data: editable }));
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(api.command).not.toHaveBeenCalled(); expect(api.send).not.toHaveBeenCalled();
+  });
+  it("ignores delayed edit receipt after actor change and never replays its packet", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof ReviewApi.venueReviewCommand>>>();
+    api.selected.mockResolvedValue({ ok: true, status: 200, data: editable });
+    api.command.mockReturnValue(pending.promise);
+    const submitted = vi.fn();
+    const view = render(composer({ edit: editable, onSubmitted: submitted }));
+    await ready(); await publicConsent(); fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(api.command).toHaveBeenCalledTimes(1));
+    api.selected.mockResolvedValue({ ok: false, status: 404, error: "unavailable" });
+    view.rerender(composer({ edit: editable, actorId: "another-owner", csrfToken: "new-csrf", onSubmitted: submitted }));
+    await act(async () => pending.resolve({ ok: true, status: 200, data: {
+      id: editable.id, reviewHandle: editable.reviewHandle, version: 8, status: "revision_waiting",
+      publicVisible: true, receiptToken: "new-intake", notBefore: null,
+    } }));
+    expect(submitted).not.toHaveBeenCalled();
+    expect(screen.queryByText("Новая версия ожидает проверки.")).toBeNull();
+    expect(api.command).toHaveBeenCalledTimes(1);
+  });
 });

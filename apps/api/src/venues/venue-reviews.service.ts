@@ -29,6 +29,7 @@ import {
   venueReviewReportRequest,
   type OwnVenueEligibilityBasisDto,
   type OwnVenueReviewDto,
+  type SelectedOwnVenueReviewDto,
   type PublicVenueReviewItemDto,
   type VenueReviewMutationReceiptDto,
   type VenueReviewsSummaryDto,
@@ -50,6 +51,7 @@ import {
   unavailable,
   withinSubmitWindow,
   writesUnavailable,
+  uuid,
   VENUE_REVIEW_PAGE_DEFAULT,
   VENUE_REVIEW_PAGE_MAX,
 } from "./venue-reviews.policy";
@@ -343,6 +345,7 @@ export class VenueReviewsService {
     userId: string,
     gameId: string,
     expectedVenueId: string | null,
+    lockGame = true,
   ): Promise<{
     verdict: ReturnType<typeof evaluateVenueExperienceAdmission>;
     game: GameLock;
@@ -355,7 +358,7 @@ export class VenueReviewsService {
     const game = (
       await client.query<GameLock>(
         `SELECT id, status, visibility, title, starts_at, ends_at, venue_id, created_by_user_id
-         FROM games WHERE id = $1 FOR UPDATE`,
+         FROM games WHERE id = $1 ${lockGame ? "FOR UPDATE" : ""}`,
         [gameId],
       )
     ).rows[0];
@@ -1270,6 +1273,91 @@ export class VenueReviewsService {
         receiptToken: r.receipt_token,
       })),
     };
+  }
+
+  async getMine(userId: string, reviewId: string): Promise<SelectedOwnVenueReviewDto> {
+    if (!uuid.safeParse(reviewId).success) unavailable();
+    const client = await this.pool.connect();
+    try {
+      // All body, version, visibility and admission reads share one snapshot. No fences
+      // or windows are initialized here; the command remains the authority at write time.
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      if (!(await this.installed(client))) unavailable();
+      const row = (await client.query<SlotRow & {
+        revision_id: string | null; resource_version: number | null; game_id: string | null;
+        audience: "self_draft" | "public_venue" | null; body_text: string | null;
+        topics: string[] | null; pending_version: number | null; approved_version: number | null;
+        not_before: Date | null; visible_id: string | null; visible_not_before: Date | null;
+        receipt_token: string | null;
+      }>(
+        `SELECT s.*, r.id AS revision_id, r.resource_version, r.game_id,
+                r.audience, r.body_text, r.topics,
+                pr.resource_version AS pending_version, ar.resource_version AS approved_version,
+                ar.not_before, vis.id AS visible_id, vis.not_before AS visible_not_before,
+                pi.receipt_token
+         FROM venue_review_slots s
+         LEFT JOIN venue_review_revisions r
+           ON r.id = COALESCE(s.pending_revision_id, s.approved_revision_id) AND r.slot_id = s.id
+         LEFT JOIN venue_review_revisions pr ON pr.id = s.pending_revision_id
+         LEFT JOIN venue_review_revisions ar ON ar.id = s.approved_revision_id
+         LEFT JOIN LATERAL (
+           SELECT id, not_before FROM venue_review_revisions
+           WHERE slot_id = s.id AND audience = 'public_venue' AND lifecycle = 'published'
+             AND not_before IS NOT NULL AND not_before <= transaction_timestamp()
+           ORDER BY not_before DESC, resource_version DESC LIMIT 1
+         ) vis ON true
+         LEFT JOIN LATERAL (
+           SELECT receipt_token FROM venue_review_pending_intakes
+           WHERE slot_id = s.id AND submitted_by_user_id = s.author_user_id
+             AND kind IN ('review_submit', 'appeal') AND status IN ('waiting_intake', 'linked')
+           ORDER BY created_at DESC LIMIT 1
+         ) pi ON true
+         WHERE s.id = $1 AND s.author_user_id = $2`, [reviewId, userId],
+      )).rows[0];
+      // Ownership is established before loading any game or attendance history.
+      if (!row) unavailable();
+      let editContext: SelectedOwnVenueReviewDto["editContext"] = null;
+      if (row.status !== "withdrawn" && row.revision_id && row.resource_version && row.game_id) {
+        const gameExists = (await client.query("SELECT 1 FROM games WHERE id = $1", [row.game_id])).rowCount;
+        if (gameExists) {
+          const adm = await this.loadAdmission(client, userId, row.game_id, row.canonical_venue_id, false);
+          const win = await this.loadSubmitWindow(client, userId, row.game_id, adm.canonicalVenueId ?? row.canonical_venue_id);
+          const first = win.firstEligibleAt ?? adm.firstEligibleCandidate;
+          let admission: OwnVenueEligibilityBasisDto["admission"] = adm.verdict.status;
+          let reason = adm.verdict.status === "may_submit" ? null : adm.verdict.reason;
+          if (admission === "may_submit") {
+            if (!first) { admission = "missing_history"; reason = "eligibility_anchor_missing"; }
+            else if (!withinSubmitWindow({ firstEligibleAt: first, now: new Date(),
+              appealOpen: win.appealOpen, remainingMsAtAppeal: win.remainingMsAtAppeal,
+              windowDeadlineAt: win.windowDeadlineAt })) {
+              admission = "deny"; reason = "window_closed";
+            }
+          }
+          editContext = {
+            revisionId: row.revision_id, resourceVersion: row.resource_version, gameId: row.game_id,
+            basis: { gameId: row.game_id, gameTitle: adm.game.title, admission, reason,
+              outcomeVersion: adm.outcomeVersion, attendanceVersion: adm.attendanceVersion,
+              firstEligibleAt: first?.toISOString() ?? null,
+              helpHint: admission === "missing_history" ? "missing_history" : this.helpHint(adm.verdict) },
+          };
+        }
+      }
+      const result: SelectedOwnVenueReviewDto = {
+        id: row.id, reviewHandle: row.public_handle, venueId: row.canonical_venue_id,
+        status: row.status, version: row.version, audience: row.audience, text: row.body_text,
+        topics: row.topics ?? [], pendingRevision: row.pending_version, approvedRevision: row.approved_version,
+        publicVisible: isPubliclyVisible({ slotStatus: row.status, approvedRevisionId: row.visible_id,
+          notBefore: row.visible_not_before, now: new Date(), basisUnderReview: row.basis_under_review }),
+        notBefore: row.not_before?.toISOString() ?? null,
+        firstEligibleAt: row.first_eligible_at?.toISOString() ?? null, receiptToken: row.receipt_token,
+        editContext, editUnavailableReason: row.status === "withdrawn" ? "withdrawn" : editContext ? null : "missing_history",
+      };
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
   }
 
   async ownCommand(

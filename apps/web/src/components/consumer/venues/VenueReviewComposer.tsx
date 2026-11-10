@@ -5,6 +5,12 @@ import { publicTextModerationNotice } from "../../../lib/api-client";
 import {
   createVenueReview,
   getOwnVenueReviewEligibility,
+  getOwnVenueReview,
+  isSelectedOwnVenueReview,
+  isSubmitVenueReviewReceipt,
+  venueReviewCommand,
+  type SelectedOwnVenueReview,
+  type SubmitVenueReviewCommand,
   previewVenueReviewConsent,
   type OwnVenueEligibilityBasis,
   type VenueAudience,
@@ -54,6 +60,10 @@ export function VenueReviewComposer({
   eligibilityRefresh,
   onClose,
   onSubmitted,
+  edit,
+  onConflict,
+  onFreshRead,
+  onUnauthorized,
 }: {
   venueId: string;
   csrfToken: string;
@@ -63,9 +73,17 @@ export function VenueReviewComposer({
   eligibilityRefresh?: object;
   onClose: () => void;
   onSubmitted?: () => void;
+  edit?: SelectedOwnVenueReview;
+  onConflict?: () => void;
+  onFreshRead?: (value: SelectedOwnVenueReview) => void;
+  onUnauthorized?: () => void;
 }) {
   const [bases, setBases] = useState<OwnVenueEligibilityBasis[]>([]);
-  const [topic, setTopic] = useState<VenueTopic | "">("surface");
+  const [topics, setTopics] = useState<VenueTopic[]>(["surface"]);
+  const [editSnapshot, setEditSnapshot] = useState(edit);
+  const [readRequired, setReadRequired] = useState(false);
+  const stale = useRef(false);
+  const [refreshSequence, setRefreshSequence] = useState(0);
   const [text, setText] = useState("");
   const [audience, setAudience] = useState<VenueAudience>("self_draft");
   const [consent, setConsent] = useState(false);
@@ -77,9 +95,9 @@ export function VenueReviewComposer({
   const [receipt, setReceipt] = useState<VenueReviewMutationReceipt | null>(null);
   const [nativeHidden, setNativeHidden] = useState(false);
   const [reopenSignal, setReopenSignal] = useState(0);
-  type Packet = {
-    body: Parameters<typeof createVenueReview>[0]; key: string;
-    actorId: string; csrf: string; generation: number;
+  type Packet = ({ kind: "create"; body: Parameters<typeof createVenueReview>[0] }
+    | { kind: "edit"; id: string; own: SelectedOwnVenueReview; body: SubmitVenueReviewCommand }) & {
+    key: string; actorId: string; csrf: string; generation: number;
   };
   const [packet, setPacket] = useState<Packet | null>(null);
   const packetRef = useRef<Packet | null>(null);
@@ -88,11 +106,12 @@ export function VenueReviewComposer({
   const sendLock = useRef(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   const previewSequence = useRef(0);
-  const context = useRef({ venueId, actorId, csrfToken, gameId, revoked: false });
+  const reviewId = edit?.id ?? null;
+  const context = useRef({ venueId, actorId, csrfToken, gameId, reviewId, revoked: false });
   // Fence before effects: a late response must never settle a different actor or venue.
   if (context.current.venueId !== venueId || context.current.actorId !== actorId
-    || context.current.csrfToken !== csrfToken || context.current.gameId !== gameId) {
-    context.current = { venueId, actorId, csrfToken, gameId, revoked: false };
+    || context.current.csrfToken !== csrfToken || context.current.gameId !== gameId || context.current.reviewId !== reviewId) {
+    context.current = { venueId, actorId, csrfToken, gameId, reviewId, revoked: false };
     epoch.current += 1;
     previewSequence.current += 1;
     packetRef.current = null;
@@ -100,9 +119,10 @@ export function VenueReviewComposer({
     setPacket(null); setBusy(false); setPreviewBusy(false);
     setNativeHidden(false);
     setConsent(false); setPreviewHash(null); setReceipt(null); setNotice(null);
-    setText(""); setAudience("self_draft"); setBases([]); setState("loading");
+    setText(""); setAudience("self_draft"); setTopics(["surface"]); setEditSnapshot(edit);
+    stale.current = false; setReadRequired(false); setBases([]); setState("loading");
   }
-  const draftKey = JSON.stringify([text, topic, gameId, audience]);
+  const draftKey = JSON.stringify([text, topics, gameId, audience]);
   const draft = useRef(draftKey);
   if (draft.current !== draftKey) {
     draft.current = draftKey;
@@ -120,7 +140,7 @@ export function VenueReviewComposer({
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; epoch.current += 1; };
-  }, [venueId, gameId, actorId, csrfToken]);
+  }, [venueId, gameId, actorId, csrfToken, reviewId]);
 
   useEffect(() => {
     // A same-context refresh may update an idle form, never an admitted operation.
@@ -130,24 +150,51 @@ export function VenueReviewComposer({
     const controller = new AbortController();
     const request = ++epoch.current;
     setState(context.current.revoked ? "auth" : "loading");
-    if (!context.current.revoked && actorId && csrfToken) void getOwnVenueReviewEligibility(venueId, controller.signal).then((result) => {
-      if (controller.signal.aborted || !mounted.current || request !== epoch.current || context.current.revoked) return;
-      if (!result.ok) {
-        if (result.status === 401 || result.status === 403) {
-          context.current.revoked = true;
-          setText(""); setConsent(false); setPreviewHash(null);
-          setState("auth");
-        } else setState("error");
-        return;
+    if (!context.current.revoked && actorId && csrfToken) void (async () => {
+      try {
+        if (edit) {
+          const result = await getOwnVenueReview(edit.id, controller.signal);
+          if (controller.signal.aborted || !mounted.current || request !== epoch.current || context.current.revoked) return;
+          if (!result.ok) {
+            if (result.status === 401 || result.status === 403) {
+              context.current.revoked = true; setText(""); setState("auth"); onUnauthorized?.();
+            } else setState("error");
+            return;
+          }
+          if (!isSelectedOwnVenueReview(result.data, edit)) { setState("error"); return; }
+          setEditSnapshot(result.data);
+          setBases(result.data.editContext ? [result.data.editContext.basis] : []);
+          setText(result.data.text ?? "");
+          setTopics(result.data.topics.filter((value): value is VenueTopic => TOPICS.some(topic => topic.value === value)));
+          setAudience(result.data.audience ?? "self_draft");
+          if (!stale.current && result.data.editContext && result.data.editContext.gameId !== gameId) {
+            stale.current = true; setReadRequired(true); onConflict?.(); setState("ready");
+            setNotice("Основание выбранной редакции изменилось. Перечитайте отзыв перед новым подтверждением.");
+            return;
+          }
+          // Only an explicit successful selected read clears a version-conflict fence.
+          if (stale.current) {
+            stale.current = false; setReadRequired(false); onFreshRead?.(result.data); onClose(); return;
+          }
+          setState("ready");
+        } else {
+          const result = await getOwnVenueReviewEligibility(venueId, controller.signal);
+          if (controller.signal.aborted || !mounted.current || request !== epoch.current || context.current.revoked) return;
+          if (!result.ok) {
+            if (result.status === 401 || result.status === 403) {
+              context.current.revoked = true; setText(""); setState("auth"); onUnauthorized?.();
+            } else setState("error");
+            return;
+          }
+          setBases(result.data.bases); setState("ready");
+        }
+      } catch {
+        if (!controller.signal.aborted && mounted.current && request === epoch.current) setState("error");
       }
-      setBases(result.data.bases);
-      setState("ready");
-    }).catch(() => {
-      if (!controller.signal.aborted && mounted.current && request === epoch.current) setState("error");
-    });
+    })();
     else setState("auth");
     return () => controller.abort();
-  }, [venueId, gameId, actorId, csrfToken, eligibilityRefresh]);
+  }, [venueId, gameId, actorId, csrfToken, eligibilityRefresh, edit, refreshSequence]);
 
   useEffect(() => {
     const fence = () => {
@@ -170,7 +217,7 @@ export function VenueReviewComposer({
 
   const selected = bases.find((b) => b.gameId === gameId);
   const help = venueReviewEligibilityHelp(selected);
-  const canSubmit = state === "ready" && !receipt && Boolean(gameId) && selected?.admission === "may_submit"
+  const canSubmit = state === "ready" && !readRequired && !receipt && Boolean(gameId) && selected?.admission === "may_submit"
     && text.trim().length >= 1 && text.trim().length <= 500
     && (audience === "self_draft" || (consent && previewHash));
   function current(generation: number) {
@@ -178,13 +225,13 @@ export function VenueReviewComposer({
   }
 
   async function ensurePreview(): Promise<string | null> {
-    if (audience !== "public_venue" || !csrf || locked) return null;
+    if (audience !== "public_venue" || !csrf || locked || readRequired) return null;
     const generation = epoch.current;
     const revision = ++previewSequence.current;
     const admittedDraft = draft.current;
     setPreviewBusy(true);
     try {
-      const result = await previewVenueReviewConsent({ venueId, text: text.trim(), topics: topic ? [topic] : [] }, csrf);
+      const result = await previewVenueReviewConsent({ venueId, text: text.trim(), topics }, csrf);
       if (!current(generation) || revision !== previewSequence.current || draft.current !== admittedDraft) return null;
       if (!result.ok) {
         setNotice(result.error || "Не удалось подготовить публичный просмотр.");
@@ -214,42 +261,77 @@ export function VenueReviewComposer({
     try {
       if (!pending) {
         // Recheck only a new write. UNKNOWN retries retain their entire admitted packet.
-        const result = await getOwnVenueReviewEligibility(venueId);
-        if (!current(generation) || draft.current !== admittedDraft || previewSequence.current !== admittedPreview) return;
-        if (!result.ok) {
-          setNotice(result.error || "Не удалось проверить допуск.");
-          setState(result.status === 401 || result.status === 403 ? "auth" : "error");
-          if (result.status === 401 || result.status === 403) {
-            context.current.revoked = true;
-            setText(""); setConsent(false); setPreviewHash(null);
+        let fresh: OwnVenueEligibilityBasis | undefined;
+        let freshOwn: SelectedOwnVenueReview | undefined;
+        if (edit) {
+          const result = await getOwnVenueReview(edit.id);
+          if (!current(generation) || draft.current !== admittedDraft || previewSequence.current !== admittedPreview) return;
+          if (!result.ok) {
+            setNotice(result.error || "Не удалось перечитать отзыв.");
+            setState(result.status === 401 || result.status === 403 ? "auth" : "error");
+            if (result.status === 401 || result.status === 403) {
+              context.current.revoked = true; setText(""); setConsent(false); setPreviewHash(null); onUnauthorized?.();
+            }
+            return;
           }
-          return;
+          if (!isSelectedOwnVenueReview(result.data, edit)) { setState("error"); return; }
+          freshOwn = result.data;
+          fresh = freshOwn.editContext?.basis;
+          const oldContext = editSnapshot?.editContext;
+          if (freshOwn.version !== editSnapshot?.version
+            || freshOwn.editContext?.revisionId !== oldContext?.revisionId
+            || freshOwn.editContext?.resourceVersion !== oldContext?.resourceVersion
+            || freshOwn.editContext?.gameId !== oldContext?.gameId
+            || fresh?.outcomeVersion !== selected?.outcomeVersion
+            || fresh?.attendanceVersion !== selected?.attendanceVersion) {
+            setEditSnapshot(freshOwn); setBases(fresh ? [fresh] : []);
+            setConsent(false); setPreviewHash(null); previewSequence.current += 1;
+            stale.current = true; setReadRequired(true); onConflict?.();
+            setNotice("Версия изменилась. Перечитайте выбранный отзыв и подтвердите заново.");
+            return;
+          }
+        } else {
+          const result = await getOwnVenueReviewEligibility(venueId);
+          if (!current(generation) || draft.current !== admittedDraft || previewSequence.current !== admittedPreview) return;
+          if (!result.ok) {
+            setNotice(result.error || "Не удалось проверить допуск.");
+            setState(result.status === 401 || result.status === 403 ? "auth" : "error");
+            if (result.status === 401 || result.status === 403) {
+              context.current.revoked = true; setText(""); setConsent(false); setPreviewHash(null); onUnauthorized?.();
+            }
+            return;
+          }
+          setBases(result.data.bases);
+          fresh = result.data.bases.find(b => b.gameId === gameId);
         }
-        setBases(result.data.bases);
-        const fresh = result.data.bases.find(b => b.gameId === gameId);
-        if (fresh?.admission !== "may_submit") return;
+        if (fresh?.admission !== "may_submit") { setBases(fresh ? [fresh] : []); return; }
         if (fresh.outcomeVersion !== selected?.outcomeVersion
           || fresh.attendanceVersion !== selected?.attendanceVersion) {
+          setConsent(false); setPreviewHash(null);
           setNotice("Данные игры изменились. Проверьте обновлённый допуск перед новой отправкой.");
           return;
         }
-        pending = {
-          key: crypto.randomUUID().replace(/-/g, ""), actorId, csrf, generation,
-          body: {
-            venueId, gameId, audience,
-            expectedBasisVersions: { outcomeVersion: fresh.outcomeVersion, attendanceVersion: fresh.attendanceVersion },
-            text: text.trim(), topics: topic ? [topic] : [],
-            ...(audience === "public_venue" && previewHash ? { consentProjectionHash: previewHash } : {}),
-          },
+        const body = {
+          gameId: fresh.gameId, audience,
+          expectedBasisVersions: { outcomeVersion: fresh.outcomeVersion, attendanceVersion: fresh.attendanceVersion },
+          text: text.trim(), topics: [...topics],
+          ...(audience === "public_venue" && previewHash ? { consentProjectionHash: previewHash } : {}),
         };
+        const identity = { key: crypto.randomUUID().replace(/-/g, ""), actorId, csrf, generation };
+        pending = freshOwn
+          ? { ...identity, kind: "edit", id: freshOwn.id, own: freshOwn,
+            body: { ...body, action: "submit_revision", expectedVersion: freshOwn.version } }
+          : { ...identity, kind: "create", body: { ...body, venueId } };
         packetRef.current = pending;
         setPacket(pending);
       }
       if (!current(pending.generation) || pending.actorId !== actorId || pending.csrf !== csrf
-        || pending.body.venueId !== venueId || pending.body.gameId !== gameId) return;
+        || (pending.kind === "create" && pending.body.venueId !== venueId) || pending.body.gameId !== gameId) return;
       const admitted = pending;
       // Exact in-memory packet only; retry never reads mutable controls or fresh credentials.
-      const result = await createVenueReview(admitted.body, admitted.csrf, admitted.key);
+      const result = admitted.kind === "edit"
+        ? await venueReviewCommand(admitted.id, admitted.body, admitted.csrf, admitted.key)
+        : await createVenueReview(admitted.body, admitted.csrf, admitted.key);
       if (!current(admitted.generation) || packetRef.current !== admitted) return;
       if (!result.ok) {
         if (result.status === 0 || result.status >= 500) {
@@ -260,13 +342,19 @@ export function VenueReviewComposer({
         setNotice(publicTextModerationNotice(result) || (result.status === 409
           ? "Версия изменилась. Закройте окно и перечитайте данные перед новой отправкой."
           : result.error || "Отправка недоступна для этой игры."));
-        if (result.status === 409) setState("error");
+        if (result.status === 409) {
+          setState("error"); setConsent(false); setPreviewHash(null);
+          if (edit) { stale.current = true; setReadRequired(true); onConflict?.(); }
+        }
         if (result.status === 401 || result.status === 403) {
           context.current.revoked = true;
           setNativeHidden(false); setText(""); setReceipt(null);
-          setConsent(false); setPreviewHash(null); setState("auth");
+          setConsent(false); setPreviewHash(null); setState("auth"); onUnauthorized?.();
         }
         return;
+      }
+      if (admitted.kind === "edit" && !isSubmitVenueReviewReceipt(result.data, admitted.own, admitted.body.audience)) {
+        setNotice("Не удалось подтвердить отправку. Исходный запрос сохранён."); return;
       }
       packetRef.current = null; setPacket(null);
       setReceipt(result.data);
@@ -297,7 +385,7 @@ export function VenueReviewComposer({
       onClick={() => { setNativeHidden(false); setReopenSignal(value => value + 1); }}
     >Проверить отправку</Button> : null}
     <ProfileDialog
-      title="Как вам площадка?"
+      title={edit ? "Изменить отзыв о площадке" : "Как вам площадка?"}
       onClose={requestClose}
       className="profile-dialog--postgame"
       lockBodyScroll
@@ -315,6 +403,10 @@ export function VenueReviewComposer({
         {state === "loading" ? <p role="status">Проверяем допуск по этой игре…</p> : null}
         {state === "auth" ? <p role="status">Войдите, чтобы поделиться опытом.</p> : null}
         {state === "error" ? <p role="alert">Не удалось проверить допуск.</p> : null}
+        {edit && (readRequired || state === "error") ? <div role="alert">
+          <p>Сначала успешно перечитайте выбранный отзыв. Затем потребуется новое подтверждение.</p>
+          <Button disabled={locked || state === "loading"} onClick={() => setRefreshSequence(value => value + 1)}>Перечитать выбранный отзыв</Button>
+        </div> : null}
         {previewBusy ? <p role="status">Подготавливаем публичный просмотр…</p> : null}
         {state !== "ready" && notice ? <p role="status">{notice}</p> : null}
         {state === "ready" ? (
@@ -342,21 +434,55 @@ export function VenueReviewComposer({
                 {help}
               </p>
             ) : null}
-            <div className="gb-venue-reviews__field">
-              <label htmlFor="venue-review-topic">О чём хотите рассказать</label>
-              <select
-                id="venue-review-topic"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value as VenueTopic | "")}
-                disabled={locked}
+            {edit ? (
+              <fieldset
+                className="gb-venue-reviews__topics"
+                aria-describedby="venue-review-topics-help"
+                disabled={locked || readRequired}
               >
-                {TOPICS.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <legend>О чём хотите рассказать</legend>
+                <p id="venue-review-topics-help">Необязательно · можно выбрать несколько</p>
+                <div className="gb-venue-reviews__topic-options">
+                  {TOPICS.map((topic) => (
+                    <label key={topic.value} className="gb-venue-reviews__topic-choice">
+                      <input
+                        type="checkbox"
+                        checked={topics.includes(topic.value)}
+                        onChange={(e) => {
+                          if (locked || readRequired || context.current.revoked || sendLock.current || packetRef.current) return;
+                          const checked = e.currentTarget.checked;
+                          setTopics((currentTopics) => {
+                            if (currentTopics.includes(topic.value) === checked) return currentTopics;
+                            return TOPICS.filter((option) => option.value === topic.value
+                              ? checked : currentTopics.includes(option.value)).map((option) => option.value);
+                          });
+                        }}
+                      />
+                      <span>{topic.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ) : (
+              <div className="gb-venue-reviews__field">
+                <label htmlFor="venue-review-topic">О чём хотите рассказать</label>
+                <select
+                  id="venue-review-topic"
+                  value={topics[0] ?? ""}
+                  onChange={(e) => {
+                    const values = Array.from(e.target.selectedOptions, option => option.value);
+                    setTopics(TOPICS.filter(topic => values.includes(topic.value)).map(topic => topic.value));
+                  }}
+                  disabled={locked}
+                >
+                  {TOPICS.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="gb-venue-reviews__field">
               <label htmlFor="venue-review-text">Ваш опыт на площадке</label>
               <textarea
@@ -397,13 +523,13 @@ export function VenueReviewComposer({
               <div className="gb-venue-reviews__preview">
                 <strong>Как увидят другие</strong>
                 <p className="gb-venue-reviews__card-meta">{previewHash ? previewAuthorLabel : "Участник игры"}
-                  {topic ? ` · ${TOPICS.find(t => t.value === topic)?.label}` : ""}</p>
+                  {topics.length ? ` · ${TOPICS.filter(t => topics.includes(t.value)).map(t => t.label).join(", ")}` : ""}</p>
                 <p className="gb-venue-reviews__card-text">{text.trim() || "—"}</p>
                 <label style={{ display: "flex", gap: 10, marginTop: 12, minHeight: 44 }}>
                   <input
                     type="checkbox"
                     checked={consent}
-                    disabled={locked || previewBusy || !text.trim()}
+                    disabled={locked || readRequired || previewBusy || !text.trim()}
                     onChange={(e) => {
                       const next = e.target.checked;
                       if (next) {

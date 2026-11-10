@@ -208,8 +208,9 @@ run("#394 venue experience — disposable", () => {
     endsAt: Date;
     attribution?: boolean;
     venueCreatedBy?: string;
+    venueId?: string;
   }) {
-    const venue = (
+    const venue = opts.venueId ? { id: opts.venueId } : (
       await pool.query<{ id: string }>(
         `INSERT INTO venues(
            city_id, name, address, timezone, location, created_by_user_id,
@@ -932,4 +933,140 @@ run("#394 venue experience — disposable", () => {
     expect(own.status).toBe("revision_waiting");
     expect(own.publicVisible).toBe(true);
   });
+
+  it("S2 selected owner snapshot: exact approved/pending game, older-than-latest30, read-only current gates and authoritative writes", async () => {
+    const a = await seedHeldGame({ organizerId: organizer.userId, participantId: participant.userId,
+      endsAt: new Date(Date.now() - 4 * 86400_000), venueCreatedBy: outsider.userId });
+    const headers = () => ({ cookie: participant.cookie, origin, "x-csrf-token": participant.csrfToken,
+      "idempotency-key": randomUUID() });
+    const textA = "Опубликованная редакция A для точного чтения сохранённой игры.";
+    const created = await app.inject({ method: "POST", url: "/v1/me/venue-reviews", headers: headers(),
+      payload: { venueId: a.venueId, gameId: a.gameId, audience: "public_venue", text: textA,
+        topics: ["surface"], expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 },
+        consentProjectionHash: projectionHash({ canonicalVenueId: a.venueId, audience: "public_venue", text: textA, topics: ["surface"] }) } });
+    expect(created.statusCode, created.body).toBe(200);
+    const id: string = created.json().id;
+    const path = `/v1/me/venue-reviews/${id}`;
+    const pending = (await pool.query<{ id: string; revision_id: string; version: number }>(
+      "SELECT id, revision_id, version FROM venue_review_pending_intakes WHERE slot_id=$1 AND status='waiting_intake'", [id])).rows[0];
+    if (!pending) throw new Error("Missing actual human intake");
+    await ageMaterialEdit(pending.revision_id);
+    await humanApprovePending(pending.id, pending.version);
+    const storedRevisions = async () => (await pool.query<{
+      pending_revision_id: string | null; approved_revision_id: string;
+      id: string; resource_version: number; game_id: string; body_text: string;
+    }>(`SELECT s.pending_revision_id, s.approved_revision_id,
+        r.id, r.resource_version, r.game_id, r.body_text
+      FROM venue_review_slots s
+      JOIN venue_review_revisions r
+        ON r.slot_id=s.id AND r.id IN (s.pending_revision_id, s.approved_revision_id)
+      WHERE s.id=$1`, [id])).rows;
+    const approvedRevisions = await storedRevisions();
+    expect(approvedRevisions).toHaveLength(1);
+    const approvedRevision = approvedRevisions[0];
+    if (!approvedRevision) throw new Error("Missing persisted approved revision");
+    expect(approvedRevision).toMatchObject({ pending_revision_id: null,
+      approved_revision_id: approvedRevision.id, game_id: a.gameId, body_text: textA });
+    expect(approvedRevision.id).not.toBe(pending.revision_id);
+    const read = () => app.inject({ method: "GET", url: path, headers: { cookie: participant.cookie } });
+    const approved = await read();
+    expect(approved.statusCode, approved.body).toBe(200);
+    expect(approved.headers["cache-control"]).toBe("no-store");
+    expect(approved.json()).toMatchObject({ id, text: textA, pendingRevision: null,
+      approvedRevision: approvedRevision.resource_version,
+      editContext: { revisionId: approvedRevision.id, resourceVersion: approvedRevision.resource_version, gameId: a.gameId,
+        basis: { gameId: a.gameId, admission: "may_submit", outcomeVersion: 1, attendanceVersion: 1 } } });
+    const other = await app.inject({ method: "GET", url: path, headers: { cookie: outsider.cookie } });
+    const absent = await app.inject({ method: "GET", url: `/v1/me/venue-reviews/${randomUUID()}`, headers: { cookie: outsider.cookie } });
+    expect(other.statusCode).toBe(404); expect(absent.statusCode).toBe(404);
+    for (const key of ["status", "code", "title", "type"]) expect(other.json()[key]).toEqual(absent.json()[key]);
+    expect(other.json()).not.toHaveProperty("editContext");
+    const guest = await app.inject({ method: "GET", url: path });
+    expect(guest.statusCode).toBe(401);
+    // All newer bases use the same canonical venue; selected A is genuinely outside latest30.
+    for (let index = 0; index < 31; index += 1) {
+      await seedHeldGame({ organizerId: organizer.userId, participantId: participant.userId,
+        venueId: a.venueId, endsAt: new Date(Date.now() - 86400_000 + index * 1000) });
+    }
+    const eligibility = await app.inject({ method: "GET", url: `/v1/me/venue-reviews/eligibility?venueId=${a.venueId}`,
+      headers: { cookie: participant.cookie } });
+    expect(eligibility.statusCode).toBe(200);
+    expect(eligibility.json().bases).toHaveLength(30);
+    expect(eligibility.json().bases.some((basis: { gameId: string }) => basis.gameId === a.gameId)).toBe(false);
+    expect((await read()).json().editContext).toMatchObject({ gameId: a.gameId, basis: { admission: "may_submit" } });
+    const b = await seedHeldGame({ organizerId: organizer.userId, participantId: participant.userId,
+      venueCreatedBy: outsider.userId, endsAt: new Date(Date.now() - 2 * 86400_000) });
+    await pool.query("UPDATE venues SET lifecycle_state='merged', canonical_venue_id=$2 WHERE id=$1", [b.venueId, a.venueId]);
+    const revised = await app.inject({ method: "POST", url: `${path}/commands`, headers: headers(),
+      payload: { action: "submit_revision", expectedVersion: approved.json().version, gameId: b.gameId,
+        audience: "self_draft", text: "Точный приватный текст B", topics: ["lighting", "amenities"],
+        expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 } } });
+    expect(revised.statusCode, revised.body).toBe(200);
+    const revisions = await storedRevisions();
+    expect(revisions).toHaveLength(2);
+    const pendingRevision = revisions.find((revision) => revision.id === revision.pending_revision_id);
+    const retainedApprovedRevision = revisions.find((revision) => revision.id === revision.approved_revision_id);
+    if (!pendingRevision || !retainedApprovedRevision) throw new Error("Missing persisted pending/approved revisions");
+    expect(pendingRevision).toMatchObject({ approved_revision_id: approvedRevision.id,
+      game_id: b.gameId, body_text: "Точный приватный текст B" });
+    expect(pendingRevision.id).not.toBe(retainedApprovedRevision.id);
+    expect(pendingRevision.resource_version).not.toBe(retainedApprovedRevision.resource_version);
+    expect(retainedApprovedRevision).toEqual({ ...approvedRevision, pending_revision_id: pendingRevision.id });
+    const snapshot = await read();
+    const selected = snapshot.json();
+    expect(selected).toMatchObject({ version: revised.json().version, text: "Точный приватный текст B",
+      topics: ["lighting", "amenities"], pendingRevision: pendingRevision.resource_version,
+      approvedRevision: retainedApprovedRevision.resource_version,
+      editContext: { revisionId: pendingRevision.id, resourceVersion: pendingRevision.resource_version,
+        gameId: b.gameId, basis: { gameId: b.gameId, admission: "may_submit" } } });
+    const state = async () => (await pool.query(
+      `SELECT (SELECT jsonb_agg(to_jsonb(s)) FROM venue_review_slots s WHERE id=$1) AS slots,
+        (SELECT jsonb_agg(to_jsonb(f)) FROM venue_review_event_fences f WHERE slot_id=$1) AS fences,
+        (SELECT jsonb_agg(to_jsonb(w)) FROM venue_review_submit_windows w WHERE author_user_id=$2) AS windows`,
+      [id, participant.userId])).rows;
+    const before = await state(); await read(); expect(await state()).toEqual(before);
+    await pool.query("UPDATE game_attendance SET value='unknown', version=version+1 WHERE participation_id=$1", [b.participationId]);
+    expect((await read()).json().editContext.basis).toMatchObject({ admission: "hold", attendanceVersion: 2 });
+    await pool.query("UPDATE game_attendance SET value='present', version=version+1 WHERE participation_id=$1", [b.participationId]);
+    await pool.query("UPDATE venue_review_submit_windows SET window_deadline_at=now()-interval '1 second' WHERE game_id=$1", [b.gameId]);
+    expect((await read()).json().editContext.basis).toMatchObject({ admission: "deny", reason: "window_closed" });
+    await pool.query(`UPDATE venue_review_submit_windows SET window_deadline_at=NULL,
+      appeal_opened_at=now(), remaining_ms_at_appeal=60000 WHERE game_id=$1`, [b.gameId]);
+    expect((await read()).json().editContext.basis.admission).toBe("may_submit");
+    const current = (await read()).json();
+    const command = { action: "submit_revision", expectedVersion: current.version, gameId: b.gameId,
+      audience: "self_draft", text: "Новый проверяемый текст", topics: [],
+      expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 3 } };
+    const staleSlot = await app.inject({ method: "POST", url: `${path}/commands`, headers: headers(),
+      payload: { ...command, expectedVersion: current.version - 1 } });
+    expect(staleSlot.statusCode).toBe(409); expect(staleSlot.json().code).toBe("VERSION_CONFLICT");
+    const staleBasis = await app.inject({ method: "POST", url: `${path}/commands`, headers: headers(),
+      payload: { ...command, expectedBasisVersions: { outcomeVersion: 1, attendanceVersion: 1 } } });
+    expect(staleBasis.statusCode).toBe(409); expect(staleBasis.json().code).toBe("VERSION_CONFLICT");
+    const badConsent = await app.inject({ method: "POST", url: `${path}/commands`, headers: headers(),
+      payload: { ...command, audience: "public_venue", consentProjectionHash: "0".repeat(64) } });
+    expect(badConsent.statusCode).toBe(422); expect(badConsent.json().code).toBe("VENUE_CONSENT_MISMATCH");
+    // Canonical attribution corrected to a different venue must deny the saved slot basis.
+    const elsewhere = await seedHeldGame({ organizerId: organizer.userId, participantId: outsider.userId,
+      endsAt: new Date(Date.now() - 86400_000) });
+    await pool.query("UPDATE venues SET lifecycle_state='merged', canonical_venue_id=$2 WHERE id=$1", [b.venueId, elsewhere.venueId]);
+    expect((await read()).json().editContext.basis.reason).toBe("wrong_venue");
+    // An unresolved canonical chain cannot be treated as a new game or permission.
+    await pool.query("UPDATE venues SET lifecycle_state='merged', canonical_venue_id=$2 WHERE id=$1", [elsewhere.venueId, b.venueId]);
+    expect((await read()).json().editContext.basis).toMatchObject({ admission: "missing_history", helpHint: "missing_history" });
+    const emptyId = randomUUID();
+    await pool.query(`INSERT INTO venue_review_slots
+      (id, author_user_id, canonical_venue_id, public_handle, status, version)
+      VALUES ($1,$2,$3,$4,'self_draft',1)`, [emptyId, participant.userId, elsewhere.venueId, randomUUID().replace(/-/g, "")]);
+    const missingBasis = await app.inject({ method: "GET", url: `/v1/me/venue-reviews/${emptyId}`,
+      headers: { cookie: participant.cookie } });
+    expect(missingBasis.statusCode).toBe(200);
+    expect(missingBasis.json()).toMatchObject({ text: null, editContext: null, editUnavailableReason: "missing_history" });
+    // Withdrawal ignores current edit admission and still preserves the selected GET truth.
+    const withdrawn = await app.inject({ method: "POST", url: `${path}/commands`, headers: headers(),
+      payload: { action: "withdraw", expectedVersion: current.version } });
+    expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+    expect((await read()).json()).toMatchObject({ status: "withdrawn", editContext: null, editUnavailableReason: "withdrawn" });
+  }, 60000);
+
 });

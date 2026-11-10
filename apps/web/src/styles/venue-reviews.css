@@ -61,6 +61,73 @@
   color: var(--gb-ink);
 }
 
+/* Bounded amendment: edit-only native checkbox chips. */
+.gb-venue-reviews__topics {
+  border: 0;
+  padding: 0;
+  margin: 18px 0;
+  min-inline-size: 0;
+}
+
+.gb-venue-reviews__topics legend {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.gb-venue-reviews__topics > p {
+  font-size: 12px;
+  color: var(--gb-ink-soft, #536159);
+  margin: 4px 0 10px;
+}
+
+.gb-venue-reviews__topic-options { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.gb-venue-reviews__topic-choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 9px;
+  border: 1px solid #cbd3ca;
+  border-radius: 12px;
+  background: var(--gb-white, #fff);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.gb-venue-reviews__topic-choice input {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--gb-purple, #7945de);
+}
+
+.gb-venue-reviews__topic-choice:has(input:checked) {
+  border-color: var(--gb-purple, #7945de);
+  background: var(--gb-lavender, #eee6ff);
+}
+
+.gb-venue-reviews__topic-choice:has(input:focus-visible) {
+  outline: 3px solid var(--gb-purple, #7945de);
+  outline-offset: 3px;
+}
+
+.gb-venue-reviews__topics:disabled .gb-venue-reviews__topic-choice {
+  cursor: default;
+  background: var(--gb-wash, #f5f6f2);
+  color: var(--gb-ink-soft, #536159);
+}
+
+.gb-venue-reviews__topics:disabled .gb-venue-reviews__topic-choice:has(input:checked) {
+  background: var(--gb-lavender, #eee6ff);
+  border-style: dashed;
+}
+
 .gb-venue-reviews__field textarea {
   min-height: 120px;
   resize: vertical;

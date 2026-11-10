@@ -182,6 +182,17 @@ export type OwnVenueReviewDto = {
   receiptToken: string | null;
 };
 
+/** Owner-only selected snapshot. Provenance belongs to the selected persisted revision. */
+export type SelectedOwnVenueReviewDto = OwnVenueReviewDto & {
+  editContext: {
+    revisionId: string;
+    resourceVersion: number;
+    gameId: string;
+    basis: OwnVenueEligibilityBasisDto;
+  } | null;
+  editUnavailableReason: "withdrawn" | "missing_history" | null;
+};
+
 export type VenueReviewMutationReceiptDto = {
   id: string;
   version: number;

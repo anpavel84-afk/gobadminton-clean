@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  getVenueExperienceReviews, isWithdrawVenueReviewReceipt, listOwnVenueReviews,
-  type OwnVenueReview, type VenueReviewMutationReceipt, type WithdrawVenueReviewCommand,
+  getOwnVenueReview, isSelectedOwnVenueReview, getVenueExperienceReviews, isWithdrawVenueReviewReceipt, listOwnVenueReviews,
+  type SelectedOwnVenueReview, type OwnVenueReview, type VenueReviewMutationReceipt, type WithdrawVenueReviewCommand,
 } from "../../../lib/venue-reviews-api";
+import { VenueReviewComposer, venueReviewEligibilityHelp } from "./VenueReviewComposer";
 import { Button } from "../Button";
 import { ProfileDialog } from "../players/ProfileComposition";
 import { useSocialMutation, type SocialMutationPending } from "../messages/useSocialMutation";
@@ -26,6 +27,10 @@ function OwnReviewsController({ actorId, csrfToken, onUnauthorized }: Props) {
   const [opened, setOpened] = useState(false);
   const [items, setItems] = useState<OwnVenueReview[]>([]);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error" | "auth">("idle");
+  const [edit, setEdit] = useState<SelectedOwnVenueReview | null>(null);
+  const [editLocked, setEditLocked] = useState(false);
+  const editStale = useRef<string | null>(null);
+  const editUnresolved = useRef(false);
   const [selected, setSelected] = useState<OwnVenueReview | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [readRequired, setReadRequired] = useState(false);
@@ -38,11 +43,15 @@ function OwnReviewsController({ actorId, csrfToken, onUnauthorized }: Props) {
   const stale = useRef(false);
   const admitted = useRef<{ actorId: string; own: OwnVenueReview; body: WithdrawVenueReviewCommand; key: string | null } | null>(null);
 
+  const updateEditLock = useCallback((value: boolean) => {
+    editUnresolved.current = value; setEditLocked(value);
+  }, []);
+
   function revoke() {
     revoked.current = true;
     readSequence.current += 1;
     admitted.current = null;
-    setItems([]); setSelected(null); setDialogOpen(false); setOpened(false);
+    setItems([]); setEdit(null); setEditLocked(false); setSelected(null); setDialogOpen(false); setOpened(false);
     setNotice(""); setState("auth");
     onUnauthorized();
   }
@@ -102,7 +111,7 @@ function OwnReviewsController({ actorId, csrfToken, onUnauthorized }: Props) {
 
   async function read() {
     // An own GET is never evidence resolving an UNKNOWN command.
-    if (reading.current || admitted.current || revoked.current || !live.current) return;
+    if (reading.current || admitted.current || editUnresolved.current || revoked.current || !live.current) return;
     reading.current = true;
     const sequence = ++readSequence.current;
     setState("loading");
@@ -122,7 +131,7 @@ function OwnReviewsController({ actorId, csrfToken, onUnauthorized }: Props) {
         setState("error"); return;
       }
       setItems(result.data.items);
-      stale.current = false; setReadRequired(false);
+      if (!editStale.current) { stale.current = false; setReadRequired(false); }
       setSelected(null); setDialogOpen(false); setNotice("");
       setReadRevision(value => value + 1); setState("ready");
     } catch {
@@ -131,30 +140,63 @@ function OwnReviewsController({ actorId, csrfToken, onUnauthorized }: Props) {
       if (sequence === readSequence.current) reading.current = false;
     }
   }
+  async function readSelected(row: OwnVenueReview, openEditor: boolean) {
+    if (reading.current || admitted.current || editUnresolved.current || revoked.current || !live.current
+      || !items.some(item => item.id === row.id)) return;
+    reading.current = true;
+    const sequence = ++readSequence.current;
+    setState("loading");
+    try {
+      const result = await getOwnVenueReview(row.id);
+      if (!live.current || revoked.current || sequence !== readSequence.current) return;
+      if (!result.ok) {
+        if (result.status === 401 || result.status === 403) revoke();
+        else { setState("error"); setNotice("Не удалось перечитать выбранный отзыв. Действия остаются заблокированы."); }
+        return;
+      }
+      if (!isSelectedOwnVenueReview(result.data, row)) { setState("error"); return; }
+      setItems(rows => rows.map(item => item.id === row.id ? result.data : item));
+      // A selected read is for stale-state recovery only, never UNKNOWN reconciliation.
+      if (editStale.current === row.id) {
+        editStale.current = null; stale.current = false; setReadRequired(false);
+        setEdit(null); setNotice("Отзыв перечитан. Выберите действие и подтвердите его заново.");
+      } else if (openEditor) {
+        if (result.data.editContext?.basis.admission === "may_submit" && result.data.status !== "withdrawn") {
+          setEdit(result.data); setNotice("");
+        } else {
+          setNotice(result.data.status === "withdrawn" ? "Отозванный отзыв нельзя отправить повторно."
+            : venueReviewEligibilityHelp(result.data.editContext?.basis) ?? "Редактирование недоступно.");
+        }
+      }
+      setReadRevision(value => value + 1); setState("ready");
+    } catch {
+      if (live.current && !revoked.current && sequence === readSequence.current) setState("error");
+    } finally { if (sequence === readSequence.current) reading.current = false; }
+  }
   function toggle() {
     setOpened(value => !value);
     if (state === "idle") void read();
   }
   function confirm() {
-    if (!selected || admitted.current || reading.current || stale.current || state !== "ready"
+    if (!selected || admitted.current || editUnresolved.current || reading.current || stale.current || state !== "ready"
       || revoked.current || !live.current || selected.status === "withdrawn"
       || !items.some(row => row.id === selected.id && row.version === selected.version)) return;
     const body: WithdrawVenueReviewCommand = Object.freeze({ action: "withdraw", expectedVersion: selected.version });
     admitted.current = { actorId, own: Object.freeze({ ...selected }), body, key: null };
     if (!mutation.run(`/v1/me/venue-reviews/${encodeURIComponent(selected.id)}/commands`, body)) admitted.current = null;
   }
-  const locked = mutation.busy || mutation.pending;
+  const locked = mutation.busy || mutation.pending || editLocked;
   if (state === "auth") return null;
   return <section className="profile-section gb-own-reviews" aria-label="Отзывы о площадках">
     <header className="gb-own-reviews__heading"><h2>Отзывы о площадках</h2><span className="gb-venue-reviews__badge gb-venue-reviews__badge--muted">Только вам</span></header>
     <Button variant="outline" aria-expanded={opened} aria-controls={contentId} onClick={toggle}>{opened ? "Свернуть отзывы" : "Открыть отзывы"}</Button>
     {notice && <p role="status">{notice}</p>}
-    {locked && <div role="status" className="gb-own-reviews__hint"><p>{mutation.busy ? "Отзываем…" : "Результат отзыва не подтверждён. Новые операции заблокированы; обновление списка не подтвердит эту отправку."}</p><Button variant="outline" onClick={() => setDialogOpen(true)}>Вернуться к операции</Button></div>}
+    {(mutation.busy || mutation.pending) && <div role="status" className="gb-own-reviews__hint"><p>{mutation.busy ? "Отзываем…" : "Результат отзыва не подтверждён. Новые операции заблокированы; обновление списка не подтвердит эту отправку."}</p><Button variant="outline" onClick={() => setDialogOpen(true)}>Вернуться к операции</Button></div>}
     <div id={contentId} hidden={!opened} className="gb-own-reviews__collection">
       <p className="gb-venue-reviews__hint">Здесь до 50 последних отзывов. Это неполная история: отсутствие отзыва в списке не означает, что он удалён или не существует.</p>
       {state === "loading" && <p role="status">Загружаем ваши отзывы…</p>}
       {state === "error" && <p role="alert">Не удалось загрузить ваши отзывы. Последнее подтверждённое состояние сохранено; действия недоступны до успешного чтения.</p>}
-      {readRequired && <p role="alert">Нужно успешное обновление списка. Ошибка чтения не снимает блокировку устаревшей версии.</p>}
+      {readRequired && <p role="alert">{editStale.current ? "Нужно успешно перечитать выбранный отзыв и подтвердить действие заново." : "Нужно успешное обновление списка. Ошибка чтения не снимает блокировку устаревшей версии."}</p>}
       <Button variant="outline" disabled={locked || state === "loading"} onClick={() => void read()}>Обновить список</Button>
       {state === "ready" && items.length === 0 && <p>В последних 50 отзывах записей нет. Более ранняя история здесь недоступна.</p>}
       <ul className="gb-venue-reviews__list">{items.map(row => <li key={row.id} className="gb-venue-reviews__card">
@@ -163,11 +205,29 @@ function OwnReviewsController({ actorId, csrfToken, onUnauthorized }: Props) {
         {row.status === "withdrawn" ? <p>Публикация снята. Повторная отправка этого отзыва недоступна.</p> : <>
           <div className="gb-own-reviews__own"><strong>{row.pendingRevision !== null || row.receiptToken ? "Ваш текст · ожидает обработки" : "Ваш текст"}</strong><p className="gb-venue-reviews__card-text">{row.text ?? "Текст не возвращён."}</p><p className="gb-venue-reviews__hint">Это ваш текст из личного списка, а не подтверждённая публичная цитата. Обработка может задержать публикацию.</p></div>
           {row.publicVisible ? <PublicQuotation key={`${row.id}:${readRevision}`} own={row} live={live} revoked={revoked} /> : <p>Публичная видимость не подтверждена.</p>}
-          <p className="gb-own-reviews__hint">Редактирование пока недоступно: в личном списке нет подтверждённой связи с исходной игрой. Отозвать отзыв можно независимо от срока редактирования.</p>
-          <Button variant="dark" disabled={locked || readRequired || state !== "ready"} onClick={() => { setSelected(row); setDialogOpen(true); mutation.setNotice(""); }}>Отозвать отзыв</Button>
+          <p className="gb-own-reviews__hint">Для редактирования перечитаем выбранный отзыв и проверим сохранённое основание. Отозвать отзыв можно независимо от срока редактирования.</p>
+          <Button variant="outline" disabled={locked || readRequired || state !== "ready" || Boolean(edit)} onClick={() => void readSelected(row, true)}>Изменить отзыв</Button>
+          {editStale.current === row.id && <Button variant="outline" disabled={locked || state === "loading"} onClick={() => void readSelected(row, false)}>Перечитать выбранный отзыв</Button>}
+          <Button variant="dark" disabled={locked || readRequired || state !== "ready" || Boolean(edit)} onClick={() => { setSelected(row); setDialogOpen(true); mutation.setNotice(""); }}>Отозвать отзыв</Button>
         </>}
       </li>)}</ul>
     </div>
+    {edit && <VenueReviewComposer venueId={edit.venueId} gameId={edit.editContext?.gameId ?? ""}
+      actorId={actorId} csrfToken={csrfToken} edit={edit}
+      onUnresolvedChange={updateEditLock} onUnauthorized={revoke}
+      onConflict={() => { editStale.current = edit.id; stale.current = true; setReadRequired(true); }}
+      onFreshRead={value => {
+        if (!live.current || revoked.current || editUnresolved.current) return;
+        setItems(rows => rows.map(row => row.id === value.id ? value : row));
+        editStale.current = null; stale.current = false; setReadRequired(false);
+      }}
+      onClose={() => { if (!editUnresolved.current) setEdit(null); }}
+      onSubmitted={() => {
+        editStale.current = edit.id; stale.current = true; setReadRequired(true);
+        setNotice("Редакция сохранена. Перед следующим действием перечитайте выбранный отзыв.");
+        setReadRevision(value => value + 1); router.refresh();
+      }}
+    />}
     {dialogOpen && selected && <ProfileDialog title="Отозвать отзыв?" className="gb-own-reviews-dialog" lockBodyScroll onClose={() => setDialogOpen(false)} onNativeClose={() => setDialogOpen(false)}>
       <div className="gb-own-reviews"><p>Публикация и ожидающая заявка будут сняты. Повторная отправка этого отзыва недоступна.</p>
         <div className="gb-own-reviews__hint"><strong>Ваш текст</strong><p className="gb-venue-reviews__card-text">{selected.text ?? "Текст не возвращён."}</p></div>

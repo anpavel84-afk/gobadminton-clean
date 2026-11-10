@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as ApiClient from "../src/lib/api-client";
-import type { OwnVenueReview, VenueReviewMutationReceipt } from "../src/lib/venue-reviews-api";
+import type { OwnVenueReview, SelectedOwnVenueReview, VenueReviewMutationReceipt } from "../src/lib/venue-reviews-api";
 
 const transport = vi.hoisted(() => ({
   request: vi.fn(), refresh: vi.fn(),
@@ -76,7 +76,7 @@ describe("private own collection and public truth", () => {
     expect(requireCall(transport.request.mock.calls, 0)[0]).toBe(ownPath);
     expect(screen.getByText(/до 50 последних/)).toBeTruthy();
     expect(screen.getByText(/отсутствие отзыва.*не означает/)).toBeTruthy();
-    expect(screen.getByText(/Редактирование пока недоступно/)).toBeTruthy();
+    expect(screen.getByText(/перечитаем выбранный отзыв/)).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(transport.request.mock.calls.every(([path]) => path === ownPath)).toBe(true);
   });
@@ -287,5 +287,57 @@ describe("actor and session fences", () => {
     fireEvent.click(button("Открыть отзывы"));
     await screen.findByText(/В последних 50 отзывах записей нет/);
     expect(commands()).toHaveLength(1);
+  });
+});
+
+
+describe("selected owner edit entry", () => {
+  const selected = { ...row, editUnavailableReason: null, editContext: {
+    revisionId: "pending-exact", resourceVersion: 7, gameId: "persisted-older-game",
+    basis: { gameId: "persisted-older-game", gameTitle: "Сохранённая игра", admission: "may_submit",
+      reason: null, outcomeVersion: 8, attendanceVersion: 9, firstEligibleAt: null, helpHint: null },
+  } } satisfies SelectedOwnVenueReview;
+  it("fetches selected id before mounting editor, preserves pending body and does not scan latest30", async () => {
+    transport.request.mockImplementation(async (path: string) => {
+      if (path === ownPath) return ok({ items: [row] });
+      if (path === `${ownPath}/${row.id}`) return ok(selected);
+      throw new Error("Unexpected request");
+    });
+    mount(); await open();
+    fireEvent.click(button("Изменить отзыв"));
+    const editor = await screen.findByRole("dialog", { name: "Изменить отзыв о площадке" });
+    await waitFor(() => expect(screen.getByLabelText("Ваш опыт на площадке").getAttribute("disabled")).toBeNull());
+    expect(editor.textContent).toContain("Сохранённая игра");
+    expect(screen.getByLabelText("Ваш опыт на площадке")).toHaveProperty("value", row.text);
+    expect(screen.getByRole("checkbox", { name: "Подтверждаю публикацию этого текста без моего профиля, игры и состава." })).toHaveProperty("checked", false);
+    expect(transport.request.mock.calls.some(([path]) => String(path).includes("eligibility"))).toBe(false);
+    expect(commands()).toHaveLength(0);
+  });
+  it.each(["hold", "deny", "missing_history"]) (
+    "keeps withdrawal independent when selected editing admission is %s", async admission => {
+      transport.request.mockImplementation(async (path: string) => {
+        if (path === ownPath) return ok({ items: [row] });
+        if (path === `${ownPath}/${row.id}`) return ok({ ...selected, editContext: {
+          ...selected.editContext, basis: { ...selected.editContext.basis, admission, reason: "unavailable" },
+        } });
+        if (path.endsWith("/commands")) return ok(receipt);
+        throw new Error("Unexpected request");
+      });
+      mount(); await open(); fireEvent.click(button("Изменить отзыв"));
+      await waitFor(() => expect(button("Отозвать отзыв").disabled).toBe(false));
+      expect(screen.queryByRole("textbox")).toBeNull();
+      confirm(); await screen.findByText("Отзыв отозван. Публикация и ожидающая заявка сняты.");
+      expect(commands()).toHaveLength(1);
+    },
+  );
+  it("fences delayed selected read after actor switch and never opens on failed read", async () => {
+    const pending = deferred<ReturnType<typeof ok>>();
+    transport.request.mockImplementation((path: string) => path === ownPath ? Promise.resolve(ok({ items: [row] })) : pending.promise);
+    const view = mount(); await open(); fireEvent.click(button("Изменить отзыв"));
+    view.rerender(<OwnVenueReviews actorId="owner-b" csrfToken="csrf-b" onUnauthorized={vi.fn()} />);
+    await act(async () => pending.resolve(ok(selected)));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(row.text ?? "")).toBeNull();
+    expect(commands()).toHaveLength(0);
   });
 });
