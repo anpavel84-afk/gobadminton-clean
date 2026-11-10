@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Children, isValidElement } from "react";
 import type * as React from "react";
 import type { ReactNode } from "react";
@@ -5,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
+import { VenueCommunityContent } from "../src/components/consumer/venues/VenueCommunityContent";
 import { VenueGallery } from "../src/components/consumer/venues/VenueGallery";
 import { nearestGameLabel } from "../src/lib/venue-popup";
 // Manual slots only while invoking the root under test as a function; SSR
@@ -78,6 +80,8 @@ it("renders the real cover and region with named keyboard buttons; opens once", 
   expect(html).toContain("/discovery/venue-illustrations/");
   expect(html).toContain('data-pending="illustration"');
   expect(html).toContain('data-fallback="illustration"');
+  // R3.1: illustration attribution stays on the 64px cover path — never a 6th copy row.
+  expect(html).not.toContain("gb-venue-illustration-label");
   expect(html).toContain("Иллюстрация");
   function activate(node: ReactNode): void {
     if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return;
@@ -355,6 +359,115 @@ it.each(["onPointerCancel", "onLostPointerCapture"])("%s does not swallow the ne
   expect(h.click(1).preventDefault).not.toHaveBeenCalled();
   (h.find("gb-venue-handle").props.onClick as () => void)();
   expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
+});
+
+it("keeps compact copy geometry honest: cover badge, gap 0, no sixth illustration row", () => {
+  const css = readFileSync(new URL("../src/styles/venue-popup.css", import.meta.url), "utf8");
+  expect(css).toMatch(/\.gb-consumer \.gb-venue-preview-copy \{[^}]*gap:0/);
+  expect(css).toContain(".gb-venue-preview-button .gb-venue-cover.gb-venue-preview-cover > .gb-venue-cover__badge");
+  expect(css).toContain(".gb-venue-preview-button .gb-venue-illustration-label { display: none !important; }");
+  expect(css).toContain("height:172px");
+  expect(css).toContain("grid-template-columns:64px minmax(0,1fr) 44px");
+  expect(css).toContain("height:128px");
+  hooks.active = true;
+  let tree: ReturnType<typeof VenuePreviewCard>;
+  try {
+    tree = VenuePreviewCard({
+      venue: {
+        ...venue,
+        name: "Синтетический зал с длинным названием для проверки компактной карточки",
+        address: "Тестовая улица, дом 15, спортивный комплекс, второй этаж",
+        profile: {
+          courtCount: null, amenities: { parking: null, showers: null }, description: null, updatedAt: null,
+          catalogSource: {
+            provider: "badminton4u.ru",
+            venueId: "B4U-V-33540253",
+            clubs: [{ id: "B4U-C-12", name: "Синтетический клуб", url: "https://badminton4u.ru/clubs/12" }],
+          },
+          gallery: { coverage: "cover_only", items: [] },
+        },
+      },
+      games: [game("2026-11-20T16:00:00Z", "2026-11-20T18:00:00Z")],
+      gamesReady: true,
+      now: Date.parse("2026-11-10T12:00:00Z"),
+      onOpen: () => {},
+      communitySummary: { venueId: "a", canonicalVenueId: "a", average: 4.3, count: 3, state: "available" },
+      communitySummaryState: "ready",
+    });
+  } finally {
+    hooks.active = false;
+  }
+  const html = renderToStaticMarkup(tree);
+  expect(html).toContain('data-has-source="true"');
+  expect(html).toContain("gb-venue-preview-time");
+  expect(html).toContain("gb-venue-preview-count");
+  expect(html).toContain("gb-venue-preview-source");
+  expect(html).not.toContain("gb-venue-illustration-label");
+  expect(html).not.toContain("data-community-actions");
+});
+
+it("keeps VenueCommunityContent under one overview host across desktop MQ flips", () => {
+  const media = { matches: false, listeners: [] as Array<() => void> };
+  Object.assign(window, {
+    matchMedia: (query: string) => ({
+      matches: query.includes("prefers-reduced-motion") ? false : media.matches,
+      addEventListener(_name: string, fn: () => void) { media.listeners.push(fn); },
+      removeEventListener(_name: string, fn: () => void) { media.listeners = media.listeners.filter(listener => listener !== fn); },
+      addListener(fn: () => void) { media.listeners.push(fn); },
+      removeListener(fn: () => void) { media.listeners = media.listeners.filter(listener => listener !== fn); },
+    }),
+  });
+  const props = {
+    venue,
+    games: [] as Game[],
+    gamesReady: true,
+    now: 0,
+    embedded: true,
+    active: true,
+    onCollapse() {},
+    onDeselect() {},
+    onCommunitySectionChange: vi.fn(),
+    onUnresolvedChange: vi.fn(),
+  };
+  const run = () => {
+    hooks.cursor = 0; hooks.active = true;
+    try { return VenueSheet(props); }
+    finally { hooks.active = false; }
+  };
+  hooks.slots = []; hooks.effects = []; hooks.cleanups = [];
+  run();
+  hooks.effects.splice(0).forEach(effect => effect());
+  const mobile = run();
+  const mobileCommunity = popupElements(mobile).find(node => node.type === VenueCommunityContent);
+  expect(mobileCommunity).toBeTruthy();
+  const mobileHost = popupElements(mobile).find(node =>
+    node.props.className === "gb-venue-sheet-scroll"
+    && popupElements(node).some(child => child.type === VenueCommunityContent));
+  expect(mobileHost).toBeTruthy();
+  media.matches = true;
+  media.listeners.forEach(fn => fn());
+  hooks.cursor = 0;
+  const desktop = run();
+  const desktopCommunity = popupElements(desktop).find(node => node.type === VenueCommunityContent);
+  expect(desktopCommunity).toBeTruthy();
+  const desktopHost = popupElements(desktop).find(node =>
+    node.props.className === "gb-desktop-overlay-body"
+    && popupElements(node).some(child => child.type === VenueCommunityContent));
+  expect(desktopHost).toBeTruthy();
+  expect(desktopHost?.props.hidden).toBe(false);
+  // Same overview-first-child host position: only the presentation class flips with MQ.
+  const overview = popupElements(desktop).find(node => node.props.className === "gb-venue-sheet-overview");
+  const overviewKids = Children.toArray((overview?.props.children ?? []) as ReactNode);
+  expect(isValidElement(overviewKids[0])).toBe(true);
+  expect((overviewKids[0] as React.ReactElement).props.className).toBe("gb-desktop-overlay-body");
+  media.matches = false;
+  media.listeners.forEach(fn => fn());
+  hooks.cursor = 0;
+  const back = run();
+  expect(popupElements(back).some(node =>
+    node.props.className === "gb-venue-sheet-scroll"
+    && popupElements(node).some(child => child.type === VenueCommunityContent))).toBe(true);
+  hooks.cleanups.forEach(fn => fn?.());
 });
 
 it("restores accepted69 compact preview without community jump actions", () => {

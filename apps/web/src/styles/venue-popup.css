@@ -12,8 +12,18 @@
 .gb-consumer .gb-venue-preview-source .gb-venue-source-credit { display:inline; }
 .gb-consumer .gb-venue-preview-cover { display:block; width:64px; height:64px; border-radius:var(--gb-radius-sm); overflow:hidden; }
 .gb-consumer .gb-venue-preview-cover img { display:block; width:100%; height:100%; object-fit:cover; }
-.gb-consumer .gb-venue-preview-copy { display:grid; min-width:0; gap:4px; }
+/* R3.1 addressed: 5 metadata rows must fit the 100px sourced row — gap 0 (Root design correction). */
+.gb-consumer .gb-venue-preview-copy { display:grid; min-width:0; gap:0; }
 .gb-consumer .gb-venue-preview-copy > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+/* Restore StyleGuide cover badge on compact 64px thumbs (games.css hid it for the old copy-column label). */
+.gb-consumer .gb-venue-preview-button .gb-venue-cover.gb-venue-preview-cover > .gb-venue-cover__badge,
+.gb-consumer .gb-venue-preview-button .gb-venue-cover.gb-venue-preview-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after,
+.gb-consumer .gb-venue-preview-button .gb-venue-gallery-wrap.gb-venue-preview-cover .gb-venue-cover > .gb-venue-cover__badge,
+.gb-consumer .gb-venue-preview-button .gb-venue-gallery-wrap.gb-venue-preview-cover .gb-venue-cover[data-fallback="illustration"]:not([data-pending]):not([data-state])::after {
+  display: block;
+}
+/* Compact preview never paints a 6th copy-column illustration pill. */
+.gb-consumer .gb-venue-preview-button .gb-venue-illustration-label { display: none !important; }
 .gb-consumer .gb-venue-preview-copy strong { font-size:17px; font-weight:700; }
 .gb-consumer .gb-venue-preview-address { font-size:14px; color:var(--gb-ink-soft); }
 .gb-consumer .gb-venue-preview-time, .gb-consumer .gb-venue-preview-count { font-size:13px; line-height:18px; min-height:18px; color:var(--gb-ink-soft); }

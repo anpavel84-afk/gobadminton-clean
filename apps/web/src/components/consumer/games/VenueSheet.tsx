@@ -210,37 +210,45 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         </header>
       )}
       <div className="gb-venue-sheet-overview">
-      {desktop ? <>
-        {infoOwnerActive ? (
-          <div className="gb-desktop-overlay-body" hidden={currentView !== "info"} inert={currentView !== "info" || undefined}>
+      {/* Stable info/community owner: same React parent across 390↔1280; only presentation class changes. */}
+      {infoOwnerActive ? (
+        <div
+          className={desktop ? "gb-desktop-overlay-body" : "gb-venue-sheet-scroll"}
+          hidden={desktop ? currentView !== "info" : undefined}
+          inert={desktop && currentView !== "info" ? true : undefined}
+        >
+          <div hidden={currentView !== "info"} inert={currentView !== "info" || undefined}>
             {infoBody}
           </div>
-        ) : null}
-        {currentView === "info" && createCta ? <footer className="gb-desktop-overlay-footer">{createCta}</footer> : null}
-        {currentView === "create" ? (
-          <div className="gb-desktop-overlay-body"><CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /></div>
-        ) : null}
-        {currentView === "game" && game ? (
-          <DesktopInspectorGame game={game} onVenueClick={() => setView("info")} />
-        ) : null}
-        {currentView === "schedule" ? (
-          <div className="gb-desktop-overlay-body">{scheduleBody}</div>
-        ) : null}
-      </> : <>
-        <div className="gb-venue-sheet-scroll">
-          {infoOwnerActive ? (
-            <div hidden={currentView !== "info"} inert={currentView !== "info" || undefined}>
-              {infoBody}
-            </div>
+          {!desktop && currentView === "create" ? (
+            <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} />
           ) : null}
+          {!desktop && currentView === "game" && game ? (
+            <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
+          ) : null}
+          {!desktop && currentView === "schedule" ? scheduleBody : null}
+        </div>
+      ) : !desktop ? (
+        <div className="gb-venue-sheet-scroll">
           {currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : null}
           {currentView === "game" && game ? (
             <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
           ) : null}
           {currentView === "schedule" ? scheduleBody : null}
         </div>
-        {currentView === "info" && createCta ? <footer className="gb-venue-sheet-create-footer">{createCta}</footer> : null}
-      </>}
+      ) : null}
+      {currentView === "info" && createCta ? (
+        <footer className={desktop ? "gb-desktop-overlay-footer" : "gb-venue-sheet-create-footer"}>{createCta}</footer>
+      ) : null}
+      {desktop && currentView === "create" ? (
+        <div className="gb-desktop-overlay-body"><CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /></div>
+      ) : null}
+      {desktop && currentView === "game" && game ? (
+        <DesktopInspectorGame game={game} onVenueClick={() => setView("info")} />
+      ) : null}
+      {desktop && currentView === "schedule" ? (
+        <div className="gb-desktop-overlay-body">{scheduleBody}</div>
+      ) : null}
       </div>
     </div>
   </>;

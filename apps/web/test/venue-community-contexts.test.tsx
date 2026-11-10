@@ -1,4 +1,5 @@
 /** @vitest-environment jsdom */
+import { readFileSync } from "node:fs";
 import { cleanup, render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import { createElement, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1839,4 +1840,14 @@ describe("mounted map and discovery lifecycle authorities", () => {
     expect(new URL(window.location.href).searchParams.get("view")).toBe("list");
     expect(attempts).toBe(2);
   });
+});
+
+it("R3.1 mounted owner contract: VenueSheet keeps one infoBody host across desktop presentation", () => {
+  const sheet = readFileSync(new URL("../src/components/consumer/games/VenueSheet.tsx", import.meta.url), "utf8");
+  expect(sheet).toContain("VenueCommunityContent");
+  expect(sheet).toContain('className={desktop ? "gb-desktop-overlay-body" : "gb-venue-sheet-scroll"}');
+  expect(sheet).toContain("hidden={desktop ? currentView !== \"info\" : undefined}");
+  expect(sheet).toContain("inert={desktop && currentView !== \"info\" ? true : undefined}");
+  expect(sheet.split("{infoBody}").length - 1).toBe(1);
+  expect(sheet).not.toMatch(/desktop \? <>[\s\S]*\{infoBody\}[\s\S]*: <>[\s\S]*\{infoBody\}/);
 });

@@ -3,7 +3,7 @@ import type { VenueCommunitySection } from "../venues/VenueCommunityContent";
 import type { ReactNode } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { nearestGameLabel, venueGameCount } from "../../../lib/venue-popup";
-import { VenueCover, venueCoverUrl } from "../venues/VenueCover";
+import { VenueCover } from "../venues/VenueCover";
 import { VenueGallery, type GalleryItem } from "../venues/VenueGallery";
 import { VenueSourceCredit, safeCatalogSource } from "../venues/VenueSourceCredit";
 import { VenueCommunityRating } from "../venues/VenueCommunityRating";
@@ -31,11 +31,9 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
   // Morph slot still goes through VenueGallery so ordered gallery + main-at-nonzero stay coherent.
   // Source credit is a sibling footer outside the 64px/minmax(0,1fr)/44px row button (not a 4th grid child).
   const multi = (venue.profile?.gallery?.items?.length ?? 0) > 1;
-  const galleryCount = venue.profile?.gallery?.items?.length ?? 0;
   const catalogSource = venue.profile?.catalogSource;
   const hasSource = Boolean(safeCatalogSource(catalogSource));
-  // Default illustration label sits in the copy column — not a 4th grid child / nested control.
-  const showDefaultIllustrationLabel = !venueCoverUrl(venue.cover?.uploadedUrl) && galleryCount === 0;
+  // Owner R3.1: illustration badge stays on the 64px cover (StyleGuide), not a 6th copy row.
   const media = coverSlot || multi
     ? <VenueGallery
         venue={venue}
@@ -62,9 +60,6 @@ export function VenuePreviewCard({ venue, games, gamesReady, now, onOpen, embedd
       {media}
       <span className="gb-venue-preview-copy">
         <strong>{venue.name}</strong><span className="gb-venue-preview-address">{venue.address}</span>
-        {showDefaultIllustrationLabel
-          ? <span className="gb-venue-illustration-label">Иллюстрация</span>
-          : null}
         {showCommunityRating ? (
           <VenueCommunityRating
             venueId={venue.id}
