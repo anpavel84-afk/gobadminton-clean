@@ -304,8 +304,8 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(82);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
   });
 
   it("preserves the exact ten-field trusted alpha.69 receipt before the accepted alpha.70 receipt", () => {
@@ -333,8 +333,8 @@ describe("history seed integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-7).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -350,8 +350,8 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(82);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
   });
 
   it("preserves the exact ten-field trusted alpha.70 receipt before the accepted alpha.71 receipt", () => {
@@ -379,8 +379,8 @@ describe("history seed integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-5).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
@@ -390,8 +390,8 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(82);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
   });
 
   it("preserves the exact ten-field accepted alpha.71 receipt before the accepted alpha.72 receipt", () => {
@@ -418,8 +418,8 @@ describe("history seed integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-5).map((item) => item.application_version)).toEqual([
-      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73",
+    expect(TRUSTED_HISTORICAL_SEED.slice(-6).map((item) => item.application_version)).toEqual([
+      "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
     expect(row.additions).toHaveLength(0);
@@ -433,11 +433,51 @@ describe("history seed integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(82);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
   });
 
-  it("preserves the exact ten-field accepted alpha.73 receipt before unaccepted alpha.74", () => {
+
+  it("preserves the exact ten-field accepted alpha.74 receipt before unaccepted alpha.75", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.74");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toEqual([
+      "application_version", "title", "owner_uat", "additions", "fixes", "known_limitations",
+      "version_label", "source_sha", "api_contract_version", "deployments",
+    ]);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(3566);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "bd1047c5d4a27eb91391ea917a12ab4a0428becfad16980bbdd5156809d6ad11",
+    );
+    expect(row.source_sha).toBe("a2e18dc96f36d80979a667ee47752ff60667a318");
+    expect(row.version_label).toBe("0.1.0-alpha.74");
+    expect(row.api_contract_version).toBe("0.40.0");
+    expect(row.owner_uat).toBe("NOT_TESTED");
+    expect(row.deployments).toEqual([{
+      environment: "dev",
+      status: "ACCEPTED",
+      release_id: "r42747213508-a1",
+      accepted_at: "2026-11-10T03:11:36Z",
+      api_digest: "sha256:21b5fdd93b65c89643fd9662fd8ac99163503821fc0d5e8aa0850ec3e93a6295",
+      web_digest: "sha256:094c8357fdbd5791bcc0b87ac9965670c12864f27021bb8e25e018909006330b",
+      kind: "pipeline",
+    }]);
+    const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.73")!;
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
+    expect(row.title).toBe("Прокрутка типов игр без обрезанных кнопок");
+    expect(row.additions).toHaveLength(0);
+    expect(row.fixes).toEqual(["На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым."]);
+    expect(row.known_limitations[0]).toBe("Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.75")).toBe(false);
+  });
+
+  it("preserves the exact ten-field accepted alpha.73 receipt before the accepted alpha.74 receipt", () => {
     const rows = TRUSTED_HISTORICAL_SEED.filter((row) => row.application_version === "0.1.0-alpha.73");
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
@@ -465,11 +505,11 @@ describe("history seed integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.72")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(82);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.74")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.75")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.72 receipt before the accepted alpha.73 receipt", () => {
@@ -505,15 +545,15 @@ describe("history seed integrity", () => {
     expect(row.fixes).toEqual([
       "Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.",
     ]);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual(row.known_limitations);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(82);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.74")).toBe(false);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(1)).toEqual(row.known_limitations.slice(1));
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(83);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.75")).toBe(false);
   });
 
-  it("keeps eighty-two confirmed seed deployments including accepted alpha.1–alpha.73 and dedupes identical live rows", () => {
+  it("keeps eighty-three confirmed seed deployments including accepted alpha.1–alpha.74 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
-    expect(seedCount).toBe(82);
+    expect(seedCount).toBe(83);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
       (row) => row.application_version === "0.1.0-alpha.63",
     );
@@ -579,10 +619,19 @@ describe("history seed integrity", () => {
       origin: "seed",
     }]);
     const ordered = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
-    expect(ordered.slice(0, 7).map((row) => row.application_version)).toEqual([
-      "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
+    expect(ordered.slice(0, 8).map((row) => row.application_version)).toEqual([
+      "0.1.0-alpha.74", "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
     ]);
     expect(ordered[0]).toMatchObject({
+      application_version: "0.1.0-alpha.74",
+      source_sha: "a2e18dc96f36d80979a667ee47752ff60667a318",
+      release_id: "r42747213508-a1",
+      accepted_at: "2026-11-10T03:11:36.000Z",
+      status: "ACCEPTED",
+      owner_uat: "NOT_TESTED",
+      origin: "seed",
+    });
+    expect(ordered[1]).toMatchObject({
       application_version: "0.1.0-alpha.73",
       source_sha: "c157c3b1a5cabc539a8ae1a6c2c468825336df7f",
       release_id: "r42742161818-a1",
@@ -591,7 +640,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    const alpha73 = TRUSTED_HISTORICAL_SEED.at(-1)!;
+    const alpha73 = TRUSTED_HISTORICAL_SEED.find((row) => row.application_version === "0.1.0-alpha.73")!;
     const receipt73 = alpha73.deployments[0]!;
     const withLive73 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, [{
       environment: "dev",
@@ -606,9 +655,9 @@ describe("history seed integrity", () => {
         web_digest: receipt73.web_digest,
       },
     }]);
-    expect(withLive73).toHaveLength(82);
-    expect(withLive73.filter((row) => row.application_version === "0.1.0-alpha.73")).toEqual([ordered[0]]);
-    expect(ordered[1]).toMatchObject({
+    expect(withLive73).toHaveLength(83);
+    expect(withLive73.filter((row) => row.application_version === "0.1.0-alpha.73")).toEqual([ordered[1]]);
+    expect(ordered[2]).toMatchObject({
       application_version: "0.1.0-alpha.72",
       source_sha: "ff3cb00c62c1206530bcc95aba13d196d5266474",
       release_id: "r42724583100-a1",
@@ -617,7 +666,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[2]).toMatchObject({
+    expect(ordered[3]).toMatchObject({
       application_version: "0.1.0-alpha.71",
       source_sha: "aeaee2dc4de8a0972015df039a153fa4ef06027f",
       release_id: "r42719450513-a1",
@@ -626,7 +675,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[3]).toMatchObject({
+    expect(ordered[4]).toMatchObject({
       application_version: "0.1.0-alpha.70",
       source_sha: "0968028ad7755a8087afbcb0fd8d3a09d7ddb97d",
       release_id: "r42714053715-a1",
@@ -635,7 +684,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[4]).toMatchObject({
+    expect(ordered[5]).toMatchObject({
       application_version: "0.1.0-alpha.69",
       source_sha: "5568044d725d306e3bb3ce032e767cf7d3586c60",
       release_id: "r42697926974-a1",
@@ -644,7 +693,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[5]).toMatchObject({
+    expect(ordered[6]).toMatchObject({
       source_sha: "2c33ce49d5b8ad704bf78524b8149c94e4d3e62e",
       release_id: "r42627002935-a1",
       accepted_at: "2026-11-09T13:42:50.000Z",
@@ -652,7 +701,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[6]).toMatchObject({
+    expect(ordered[7]).toMatchObject({
       source_sha: "04fdc58b53e79996ccdb21a7396c5d1525cfbd10",
       release_id: "r42613449482-a1",
       accepted_at: "2026-11-09T12:05:53.000Z",
@@ -663,7 +712,7 @@ describe("history seed integrity", () => {
     expect(buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).some(
       (row) => row.application_version === CURRENT_APPLICATION_VERSION,
     )).toBe(false);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(77);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(78);
     const live = {
       environment: "dev" as const,
       observed_at: "2026-11-01T00:06:00Z",
@@ -753,7 +802,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.70"
       || row.application_version === "0.1.0-alpha.71"
       || row.application_version === "0.1.0-alpha.72"
-      || row.application_version === "0.1.0-alpha.73",
+      || row.application_version === "0.1.0-alpha.73"
+      || row.application_version === "0.1.0-alpha.74",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -830,18 +880,23 @@ describe("history seed integrity", () => {
       && row.deployments[0]?.release_id === "r42449222181-a1"
       && row.deployments[0]?.accepted_at === "2026-11-08T05:18:57Z",
     )).toBe(true);
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.74");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.75");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.40.0");
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("NOT_TESTED");
     expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
-      "На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым.",
+      "В описании возможностей площадки уточнено: на комментарий или ответ в обсуждении можно пожаловаться через меню публикации. Для отправки жалобы нужен вход в аккаунт.",
     ]);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Прокрутка типов игр без обрезанных кнопок");
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(0);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Свои отзывы о площадках в профиле");
+    expect(CURRENT_NAMED_RELEASE.additions).toEqual([
+      "В своём профиле можно посмотреть свои отзывы о площадках и отозвать публикацию. Раздел доступен только владельцу аккаунта.",
+    ]);
+    const currentDelta = [...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes].join(" ");
+    expect(currentDelta).not.toMatch(/редактир|нов.*(?:допуск|срок|окн)|медиа|нативн|автоматическ.*удал|модераци.*(?:заверш|выполн)|приёмк.*пройдена/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
     expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(10);
     expect(CURRENT_NAMED_RELEASE.known_limitations[0]).toBe(
-      "Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно",
+      "Редактирование опубликованного отзыва в пользовательском интерфейсе ещё не доступно",
     );
     const currentLimitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
     expect(currentLimitations).not.toMatch(/вход.*отзыв.*ещё не\s*доступ/i);
@@ -1125,6 +1180,7 @@ describe("history seed integrity", () => {
       "2026-11-09T23:24:13Z",
       "2026-11-10T00:03:08Z",
       "2026-11-10T02:27:39Z",
+      "2026-11-10T03:11:36Z",
     ]);
   });
 
