@@ -4,11 +4,12 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 import sharp from "sharp";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { SessionService } from "../../src/auth/session.service";
+import { projectCurrentPhotosBatch } from "../../src/comments/comment-photo-publication";
 import { COMMENT_PHOTO_RIGHTS } from "../../src/comments/comment-photos";
 import { CommentsModule } from "../../src/comments/comments.module";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
@@ -54,6 +55,7 @@ run("#507 I2b exact revision photo publication", () => {
   let pool: Pool, app: NestFastifyApplication, sessions: SessionService, media: AvatarService;
   let provider: FakeModerationProvider, root: string, png: Buffer, owner: Actor, other: Actor, venue: string;
   let fixtureIndex = 0;
+  let env: ReturnType<typeof loadEnv>;
   beforeAll(async () => {
     const databaseUrl = disposableUrl();
     pool = new Pool({connectionString:databaseUrl,max:12,connectionTimeoutMillis:5000,application_name:"comment-photos-owned-synthetic"});
@@ -65,7 +67,7 @@ run("#507 I2b exact revision photo publication", () => {
       await pool.query("INSERT INTO schema_migrations(id) VALUES($1)",[file.replace(/\.sql$/,"")]);
     }
     root = await mkdtemp(path.join(process.cwd(),".comment-photos-disposable-"));
-    const env = loadEnv({NODE_ENV:"test",APP_ENV:"local",HOST:"127.0.0.1",DATABASE_URL:databaseUrl,
+    env = loadEnv({NODE_ENV:"test",APP_ENV:"local",HOST:"127.0.0.1",DATABASE_URL:databaseUrl,
       PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",
       AUTH_PEPPER:"comment-photos-synthetic-pepper-only",CONTENT_MODERATION_PROVIDER:"fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET:"comment-photos-synthetic-fingerprint-only",AVATAR_MEDIA_ROOT:root,
@@ -169,7 +171,9 @@ run("#507 I2b exact revision photo publication", () => {
   });
   it("revokes bytes for source deletion, bilateral block, restrictions and venue retirement before conditional responses",async()=>{
     const a=await ready(),made=await create({photoIds:[a.id]});expect(made.statusCode).toBe(201);const c=made.json();
-    await pool.query("INSERT INTO user_blocks(blocker_user_id,blocked_user_id) VALUES($1,$2)",[other.id,owner.id]);
+    const pair=(await pool.query<{id:string}>(`INSERT INTO social_pairs(user_low,user_high)
+      VALUES(LEAST($1::uuid,$2::uuid),GREATEST($1::uuid,$2::uuid)) RETURNING id`,[other.id,owner.id])).rows[0]!.id;
+    await pool.query("INSERT INTO user_blocks(blocker_user_id,blocked_user_id,pair_id) VALUES($1,$2,$3)",[other.id,owner.id,pair]);
     expect((await publicGet(c.photos[0].url,other)).statusCode).toBe(404);
     expect((await publicGet(c.photos[0].url)).statusCode).toBe(200);
     await pool.query("UPDATE users SET status='disabled' WHERE id=$1",[owner.id]);
@@ -228,6 +232,51 @@ run("#507 I2b exact revision photo publication", () => {
     }
     expect((await create({text:"  ",photoIds:[]})).statusCode).toBe(422);
     expect((await create({photoIds:Array(5).fill(randomUUID())})).statusCode).toBe(422);
+  });
+  it("projects a mixed comment page with bounded queries and fences every expected revision",async()=>{
+    const a=await ready(),b=await ready();
+    const first=await create({text:"first",photoIds:[b.id,a.id]});expect(first.statusCode,first.body).toBe(201);
+    const second=await create({text:"text only"});expect(second.statusCode,second.body).toBe(201);
+    const c=await ready();
+    const third=await create({photoIds:[c.id]});expect(third.statusCode,third.body).toBe(201);
+    const changed=await edit(first.json().id,{text:"second revision",expectedVersion:1});
+    expect(changed.statusCode,changed.body).toBe(200);
+    const calls=provider.calls,textCalls=provider.textCalls;
+    // Count SQL on the HTTP list's client, excluding unrelated background GC.
+    // Mixed rows catch per-item projection for both attached and empty comments.
+    const queries=vi.spyOn(Client.prototype,"query");
+    function listQueryCount() {
+      const index=queries.mock.calls.findIndex(([sql])=>typeof sql==="string" && sql.includes("AS reply_count"));
+      expect(index).toBeGreaterThanOrEqual(0);
+      const client=queries.mock.contexts[index];
+      expect(queries.mock.calls.filter(([sql],i)=>queries.mock.contexts[i]===client &&
+        typeof sql==="string" && sql.includes("JOIN entity_comment_photos p"))).toHaveLength(1);
+      return queries.mock.contexts.filter(context=>context===client).length;
+    }
+    try {
+      const small=await app.inject({method:"GET",url:`/v1/venues/${venue}/comments?limit=1`});
+      expect(small.statusCode,small.body).toBe(200);expect(small.json().items).toHaveLength(1);
+      const smallCount=listQueryCount();
+      queries.mockClear();
+      const page=await app.inject({method:"GET",url:`/v1/venues/${venue}/comments?limit=3`});
+      expect(page.statusCode,page.body).toBe(200);expect(page.json().items).toHaveLength(3);
+      expect(listQueryCount()).toBe(smallCount);
+      const items=page.json().items;
+      expect(items.find((c:{id:string})=>c.id===first.json().id)).toMatchObject({version:2,body:"second revision",photos:changed.json().photos});
+      expect(items.find((c:{id:string})=>c.id===second.json().id).photos).toEqual([]);
+      expect(items.find((c:{id:string})=>c.id===third.json().id).photos).toEqual(third.json().photos);
+      expect(changed.json().photos.map((p:{id:string})=>p.id)).toEqual([b.id,a.id]);
+    } finally {queries.mockRestore();}
+    const client=await pool.connect();
+    try {
+      // Crossed versions must not behave like independent id/version IN lists.
+      const stale=await projectCurrentPhotosBatch(client,env,[{id:first.json().id,version:1},{id:third.json().id,version:2}],null);
+      expect(stale.get(first.json().id)).toEqual([]);expect(stale.get(third.json().id)).toEqual([]);
+      const current=await projectCurrentPhotosBatch(client,env,[{id:first.json().id,version:2},{id:third.json().id,version:1},{id:second.json().id,version:1}],null);
+      expect(current.get(first.json().id)).toEqual(changed.json().photos);expect(current.get(third.json().id)).toEqual(third.json().photos);
+      expect(current.get(second.json().id)).toEqual([]);
+    } finally {client.release();}
+    expect(provider.calls).toBe(calls);expect(provider.textCalls).toBe(textCalls);
   });
   it("pages beyond 24 with exact source attribution and resets a cursor after merge",async()=>{
     for(let i=0;i<25;i++) {

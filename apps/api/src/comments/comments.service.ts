@@ -1,6 +1,6 @@
 import { ActorFenceService } from "../common/actor-fence.service";
 import { AvatarService } from "../profiles/avatar.service";
-import { bindPublicationPhotos, currentPhotoIds, projectCurrentPhotos, validatePublicationPhotos } from "./comment-photo-publication";
+import { bindPublicationPhotos, currentPhotoIds, projectCurrentPhotos, projectCurrentPhotosBatch, validatePublicationPhotos } from "./comment-photo-publication";
 import { createVenueCommentRequest, updateVenueCommentRequest, normalizeVenueCommentText, assertCommentContent } from "./comments.policy";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
@@ -265,8 +265,9 @@ export class CommentsService {
 
         const canCreate = await this.resolveCanCreate(client, kind, listEntityId, viewerId);
         const page = rows.slice(0, limit);
-        const items = await Promise.all(page.map(async row => ({...this.projectRow(row, viewerId),
-          ...(kind === "venue" ? {photos: await projectCurrentPhotos(client,this.env,row.id,viewerId,row.version)} : {})})));
+        const photos = kind === "venue" ? await projectCurrentPhotosBatch(client,this.env,page,viewerId) : null;
+        const items = page.map(row => ({...this.projectRow(row, viewerId),
+          ...(photos ? {photos: photos.get(row.id) ?? []} : {})}));
         await client.query("COMMIT");
         const hasMore = rows.length > limit;
         const last = page[page.length - 1];

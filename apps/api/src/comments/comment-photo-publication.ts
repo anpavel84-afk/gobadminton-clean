@@ -80,14 +80,24 @@ export function publicPhotoView(row: {id: string; width: number; height: number}
   return { id: row.id,width: row.width,height: row.height,
     url: `/v1/comments/${commentId}/revisions/${version}/photos/${row.id}` };
 }
-export async function projectCurrentPhotos(client: PoolClient, env: AppEnv, commentId: string, viewerId: string | null, version: number): Promise<CommentPhotoView[]> {
-  const rows = (await client.query<{id: string; width: number; height: number; version: number; entity_id: string}>(`SELECT s.id,s.width,s.height,c.version,c.entity_id
-    FROM entity_comments c JOIN entity_comment_photos p ON p.comment_id=c.id AND p.resource_version=c.version
+/** One statement binds each page item to its observed text revision and public photo authority. */
+export async function projectCurrentPhotosBatch(client: PoolClient, env: AppEnv,
+  comments: { id: string; version: number }[], viewerId: string | null): Promise<Map<string, CommentPhotoView[]>> {
+  const photos = new Map<string, CommentPhotoView[]>(comments.map(c => [c.id, []]));
+  if (!comments.length) return photos;
+  const rows = (await client.query<{id: string; width: number; height: number; version: number; comment_id: string}>(`SELECT s.id,s.width,s.height,c.version,c.id AS comment_id
+    FROM unnest($1::uuid[],$4::int[]) AS expected(id,version)
+    JOIN entity_comments c ON c.id=expected.id AND c.version=expected.version
+    JOIN entity_comment_photos p ON p.comment_id=c.id AND p.resource_version=c.version
     JOIN venue_photo_submissions s ON s.id=p.photo_id JOIN content_moderation_approvals a ON a.id=s.image_approval_id
-    WHERE c.id=$1 AND c.version=$4 AND ${publicPhotoAuthoritySql(env,"$2")} AND a.provider_key=$3 ORDER BY p.position`,
-    [commentId,viewerId,env.CONTENT_MODERATION_PROVIDER,version])).rows;
-  if (rows.length && !await resolveCanonicalVenue(client,rows[0]!.entity_id)) return [];
-  return rows.map(r=>publicPhotoView(r,commentId,r.version));
+    WHERE ${publicPhotoAuthoritySql(env,"$2")} AND a.provider_key=$3 ORDER BY c.id,p.position`,
+    [comments.map(c=>c.id),viewerId,env.CONTENT_MODERATION_PROVIDER,comments.map(c=>c.version)])).rows;
+  // publicPhotoAuthoritySql already resolves both comment and submission venues in this statement.
+  for (const row of rows) photos.get(row.comment_id)!.push(publicPhotoView(row,row.comment_id,row.version));
+  return photos;
+}
+export async function projectCurrentPhotos(client: PoolClient, env: AppEnv, commentId: string, viewerId: string | null, version: number): Promise<CommentPhotoView[]> {
+  return (await projectCurrentPhotosBatch(client,env,[{id:commentId,version}],viewerId)).get(commentId)!;
 }
 
 /** A case may follow its own immutable staff-only state transitions, never a new authored revision. */
