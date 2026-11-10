@@ -22,7 +22,7 @@ vi.mock("react", async original => {
   useLayoutEffect: (...args: Parameters<typeof actual.useLayoutEffect>) => hooks.active ? undefined : actual.useLayoutEffect(...args),
   useRef: (value: unknown) => hooks.active ? { current: value } : actual.useRef(value),
   useId: () => hooks.active ? "contacts" : actual.useId(),
-  useMemo<T>(factory: () => T, deps?: readonly unknown[]) {
+  useMemo<T>(factory: () => T, deps: React.DependencyList = []) {
    if (!hooks.active) return actual.useMemo(factory, deps);
    return factory();
   },

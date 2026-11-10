@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { PathnameContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VenuePublicContacts, VenueSheet, VenueSheetGameRow } from "../src/components/consumer/games/VenueSheet";
+import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { CreateGamePage, CreateGamePresentation, emptyDraft } from "../src/components/consumer/pages/CreateGamePage";
 import { initialCreateVenue, selectCreateVenue } from "../src/lib/venue-popup-create";
 import { venueCreatePath } from "../src/lib/games-venue-map";
@@ -167,8 +168,14 @@ describe("production venue popup presentation with real React", () => {
     expect(textContent(html).indexOf(venue.address)).toBeLessThan(textContent(html).indexOf("Контакты площадки"));
     expect(textContent(html).indexOf("Контакты площадки")).toBeLessThan(textContent(html).indexOf("Создать игру"));
     expect(render(false, [])).not.toContain("Создать игру на этой площадке");
-    expect(render(true, [game])).not.toContain("Создать игру на этой площадке");
-    for (const [markup, label] of [[html, "Создать игру на этой площадке"], [render(true, [game]), "Показать игры на этой площадке"]]) {
+    const withGames = render(true, [game]);
+    expect(withGames).toMatch(/<button[^>]*>Создать игру на этой площадке/);
+    expect(textContent(withGames).indexOf("Показать игры на этой площадке")).toBeLessThan(textContent(withGames).indexOf("Создать игру на этой площадке"));
+    for (const games of [[], [game]]) {
+      const compact = ssr(<VenuePreviewCard venue={supplied} games={games} gamesReady now={0} onOpen={noop} />);
+      expect(compact).not.toContain("Создать игру на этой площадке");
+    }
+    for (const [markup, label] of [[html, "Создать игру на этой площадке"], [withGames, "Создать игру на этой площадке"], [withGames, "Показать игры на этой площадке"]]) {
       expect(markup).toContain(`aria-label="${label}"`);
       expect(markup).toContain(`${label}<span aria-hidden="true">→</span></button>`);
     }

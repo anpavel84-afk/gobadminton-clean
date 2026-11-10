@@ -387,9 +387,26 @@ it.each([false, true])("keeps selected photo before/after load=%s through moving
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   await vi.advanceTimersByTimeAsync(220); renderer.render();
   expect(image.parentNode?.className).toContain("gb-venue-sheet-cover"); // same photo transfers once at end
+  const sheetCover = image.parentNode; const info = image.closest(".gb-venue-sheet-info"); const infoOwner = info?.parentNode;
+  if (!sheetCover || !info || !infoOwner) throw new Error("Missing retained photo owner");
   click(renderer, "Показать игры на этой площадке"); expect(output(renderer)).toContain("Игры на этой площадке"); expect(output(renderer)).toContain("Вечерняя игра");
-  expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
+  expect(photo()).toBe(image); expect(image.parentNode).toBe(sheetCover); expect(info.parentNode).toBe(infoOwner);
+  expect(infoOwner.contains(image)).toBe(true);
+  expect(infoOwner.props.hidden).toBe(true); expect(infoOwner.props.inert).toBe(true);
+  expect(image.getClientRects()).toHaveLength(0); expect(image.srcWrites).toEqual([cover]);
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
+  const first = surface(renderer).querySelector(".gb-venue-handle");
+  const scheduledGame = renderer.nodes().find(node => node.tag === "button" && text(node).includes(game.title));
+  if (!first || !scheduledGame) throw new Error("Missing schedule focus targets");
+  first.focus();
+  const tab = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: true });
+  window.dispatchEvent(tab);
+  expect(tab.defaultPrevented).toBe(true); expect(dom.activeElement).toBe(scheduledGame);
+  expect(infoOwner.contains(dom.activeElement)).toBe(false);
   click(renderer, "К информации о площадке"); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(image.parentNode).toBe(sheetCover); expect(info.parentNode).toBe(infoOwner);
+  expect(infoOwner.props.hidden).toBe(false); expect(infoOwner.props.inert).toBeUndefined();
+  expect(image.getClientRects()).toHaveLength(1);
   click(renderer, "Закрыть"); expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   click(renderer, "Развернуть площадку"); click(renderer, "Закрыть");
   transport.venues.mockResolvedValue({ ok: true, data: [{ ...venue, name: "Переименован" }] });
