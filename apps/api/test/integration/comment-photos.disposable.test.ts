@@ -19,20 +19,34 @@ import { registerAvatarHttp } from "../../src/profiles/avatar-http";
 import { AvatarService } from "../../src/profiles/avatar.service";
 import { buildTestCoreModule } from "./test-core.module";
 
-// Refuse any implicit/live database BEFORE constructing Pool. No CI fallback.
+// Refuse any implicit/live database BEFORE constructing Pool; hosted CI must be explicitly disposable.
 function disposableUrl(): string {
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error("Explicit empty owned disposable database required");
   const url = new URL(raw);
-  if (process.env.NODE_ENV !== "test" || !["postgres:","postgresql:"].includes(url.protocol)
-    || !["localhost","127.0.0.1","[::1]"].includes(url.hostname)
-    || url.pathname !== "/gobadminton_comment_photos_disposable" || url.search || url.hash) {
-    throw new Error("Refusing nonlocal/nonisolated/non-test database");
+  const dedicated = url.pathname === "/gobadminton_comment_photos_disposable";
+  const hosted =
+    url.pathname === "/gobadminton" &&
+    process.env.GITHUB_ACTIONS === "true" &&
+    process.env.GMAP1_DISPOSABLE_DB === "1" &&
+    /^gb-ci-\d+-\d+-\d+$/.test(process.env.PG_CONTAINER ?? "") &&
+    url.port === process.env.CI_DB_PORT;
+  if (
+    process.env.NODE_ENV !== "test" ||
+    !["postgres:", "postgresql:"].includes(url.protocol) ||
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+    url.search ||
+    url.hash ||
+    !(dedicated || hosted)
+  ) {
+    throw new Error("Refusing nonlocal/non-test/nonisolated DB before Pool construction");
   }
   return raw;
 }
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
 const origin = "http://127.0.0.1:3001";
+const adminOrigin = "http://localhost:18995";
+const adminPepper = "comment-photos-synthetic-admin-pepper-only";
 type Actor = { id: string; cookie: string; csrf: string; sessionId: string };
 const migrationDir = path.resolve(__dirname,"../../migrations");
 
@@ -55,6 +69,7 @@ run("#507 I2a owned disposable private photo foundation", () => {
       PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",
       AUTH_PEPPER:"comment-photos-synthetic-pepper-only",CONTENT_MODERATION_PROVIDER:"fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET:"comment-photos-synthetic-fingerprint-only",AVATAR_MEDIA_ROOT:root,
+      ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:adminOrigin,ADMIN_AUTH_PEPPER:adminPepper,
       USER_RESTRICTIONS_INTERNAL_ENABLED:"1"});
     provider = new FakeModerationProvider(env);
     const ref = await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),CommentsModule]})
@@ -210,12 +225,22 @@ run("#507 I2a owned disposable private photo foundation", () => {
     expect(provider.calls-before).toBeLessThanOrEqual(1);
     const calls=provider.calls;expect((await upload()).statusCode).toBe(409);expect(provider.calls).toBe(calls);
   });
-  it("rolls migration down/up on this owned schema while retaining journal cleanup", async () => {
+  it("rolls migration down/up retaining paid approval reuse and journal cleanup", async () => {
     const photo=await ready(), filename=await storage(photo.id);
+    const approval=(await pool.query(`SELECT a.* FROM content_moderation_approvals a
+      JOIN venue_photo_submissions s ON s.image_approval_id=a.id WHERE s.id=$1`,[photo.id])).rows[0];
+    expect(approval).toMatchObject({id:expect.any(String),content_type:"image",surface_key:"community_photo_image",
+      policy_version:"community-photo-image-v1:inside1600-ladder-v1",decision:"allow"});
+    const calls=provider.calls;
     await pool.query(await readFile(path.join(migrationDir,"rollback/0069_venue_comment_photo_submissions.sql"),"utf8"));
     expect((await pool.query("SELECT to_regclass('public.venue_photo_submissions') AS relation")).rows[0].relation).toBeNull();
+    expect((await pool.query("SELECT * FROM content_moderation_approvals WHERE id=$1",[approval.id])).rows).toEqual([approval]);
     await media.cleanup();await expect(access(path.join(root,filename))).rejects.toMatchObject({code:"ENOENT"});
     await pool.query(await readFile(path.join(migrationDir,"0069_venue_comment_photo_submissions.sql"),"utf8"));
-    expect((await upload()).statusCode).toBe(201);
+    expect((await pool.query("SELECT * FROM content_moderation_approvals WHERE id=$1",[approval.id])).rows).toEqual([approval]);
+    // A new command with identical bytes/policy must reuse the retained M1 identity.
+    const reuploaded=await ready();
+    expect((await pool.query("SELECT image_approval_id FROM venue_photo_submissions WHERE id=$1",[reuploaded.id])).rows[0].image_approval_id).toBe(approval.id);
+    expect(provider.calls).toBe(calls);
   });
 });

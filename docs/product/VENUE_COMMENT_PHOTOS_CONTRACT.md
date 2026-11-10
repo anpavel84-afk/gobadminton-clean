@@ -64,7 +64,11 @@ because GC rechecks live references. No new timer, store or service is introduce
 0069 is additive: private submissions and dedicated approval surface only. SQL guards keep
 admission facts immutable, permit only ready → withdrawn/version 1 → 2, and require a real
 allow approval for the dedicated policy. Rollback journals every stage before dropping the
-private schema and removes its unused dedicated approvals/surface. It does not modify 0051.
+private submission table and guard function. It retains paid community approval rows and
+their identities, plus the backward-compatible additive `community_photo_image` surface
+allowance. Reapplying 0069 reuses a still-valid M1 approval for identical sanitized bytes and
+policy without another provider call. Attempts, UNKNOWN reservations, budgets and cost
+history are retained; no archive table or system is introduced. It does not modify 0051.
 GC tolerates the absent additive table on N-1/rollback schemas.
 
 ## Remaining delivery and checks
@@ -78,9 +82,15 @@ moderation/reporting and official media remain in their existing ownership paths
 
 Targeted tests accompany the sanitizer, M1 isolation/failure and guarded disposable API/GC/
 rollback paths. The disposable suite requires `NODE_ENV=test`, `RUN_DB_INTEGRATION=1`, and
-an explicit loopback database named `gobadminton_comment_photos_disposable` with an empty
-application schema. It never falls back to a configured DEV/PROD database. No seed command
-or real account is used.
+an explicit loopback database with an empty application schema. Local runs require the
+dedicated name `gobadminton_comment_photos_disposable`. The adjacent venue-reviews guard's
+hosted disposable exception permits `/gobadminton` only when `GITHUB_ACTIONS=true`,
+`GMAP1_DISPOSABLE_DB=1`, `PG_CONTAINER` matches `^gb-ci-\d+-\d+-\d+$`, and the URL port
+matches `CI_DB_PORT`; the test/loopback/protocol/no-query/no-fragment checks still apply.
+Local/VPS runs must use the dedicated name without pretending to be hosted CI. Restrictions
+remain enabled with local Admin simulation, isolated `http://localhost:18995` Admin origin
+and a dedicated synthetic Admin pepper. It never falls back to a configured DEV/PROD database.
+No Admin login, seed command or real account is used.
 
 ## Actual changed files
 
