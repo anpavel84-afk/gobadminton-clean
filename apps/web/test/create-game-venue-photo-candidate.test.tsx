@@ -95,6 +95,76 @@ async function fillAndConfirm() {
   await act(async () => resolveVenue(json(venue, 201)));
 }
 describe("I3b canonical creation and independent game cover", () => {
+  it("corrects a definite photo HTTP 422 after publication and sends a fresh confirmed command for the retained canonical venue", async () => {
+    const candidatePath = `/v1/venues/${venueId}/photo-candidates`;
+    const candidateId = "10000000-0000-4000-8000-000000000003";
+    const previewPath = `/v1/me/venue-photo-candidates/${candidateId}/content`;
+    const correctedEvidence = {
+      creditKind: "photo", creditText: "Фото: Анна", creditUrl: "https://example.org/anna",
+      sourceUrl: "https://example.org/corrected-photo", sourceAuthor: null,
+      permissionBasis: "Разрешение автора на исправленный источник",
+    };
+    const originalFetch = vi.mocked(fetch).getMockImplementation();
+    if (!originalFetch) throw new Error("Expected the strict creation fixture");
+    let finishPhoto: (response: Response) => void = () => { throw new Error("Expected the first candidate upload"); };
+    let attempts = 0;
+    vi.mocked(fetch).mockImplementation(async (path: RequestInfo | URL, init?: RequestInit) => {
+      if (String(path) === candidatePath && init?.method === "POST") {
+        if (++attempts === 1) return new Promise<Response>(done => { finishPhoto = done; });
+        return json({ id: candidateId, venueId, status: "awaiting_review", version: 1,
+          width: 1200, height: 400, evidence: correctedEvidence, previewPath }, 201);
+      }
+      if (String(path) === previewPath && !init?.method) return new Response("private-png", { headers: { "Content-Type": "image/png" } });
+      return originalFetch(path, init);
+    });
+    await fillAndConfirm();
+    await screen.findByRole("heading", { name: "Игра опубликована" });
+    expect(calls(candidatePath, "POST")).toHaveLength(1);
+    const first = calls(candidatePath, "POST")[0]![1]!;
+    const firstHeaders = new Headers(first.headers);
+    expect(gameCoverRequest).toHaveBeenCalledTimes(1);
+    const gameCoverBytes = vi.mocked(gameCoverRequest).mock.calls[0]![4];
+    expect(await gameCoverBytes?.text()).toBe("GAME-DERIVATIVE");
+
+    await act(async () => finishPhoto(json({ code: "INVALID_PHOTO" }, 422)));
+    fireEvent.click(await screen.findByRole("button", { name: "Исправить фото площадки" }));
+    expect(screen.getByLabelText("Выбрать фото площадки").hasAttribute("disabled")).toBe(false);
+    const rights = screen.getByRole("checkbox", { name: /Подтверждаю право/ }) as HTMLInputElement;
+    expect(rights.checked).toBe(false);
+    fireEvent.change(screen.getByLabelText("Ссылка на источник фото (HTTPS)"), { target: { value: correctedEvidence.sourceUrl } });
+    fireEvent.change(screen.getByLabelText("Основание разрешения на публикацию"), { target: { value: correctedEvidence.permissionBasis } });
+    expect(screen.getByRole("button", { name: "Подтвердить фото площадки и права" }).hasAttribute("disabled")).toBe(true);
+    expect(calls(candidatePath, "POST")).toHaveLength(1);
+    fireEvent.click(rights);
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить фото площадки и права" }));
+    const send = await screen.findByRole("button", { name: "Отправить подтверждённое фото" });
+    expect(calls(candidatePath, "POST")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Проверить / повторить ту же команду фото" })).toBeNull();
+
+    fireEvent.click(send);
+    await screen.findByText("Статус: на рассмотрении");
+    await screen.findByAltText("Приватное фото площадки на рассмотрении");
+    expect(calls(candidatePath, "POST")).toHaveLength(2);
+    const second = calls(candidatePath, "POST")[1]![1]!;
+    const secondHeaders = new Headers(second.headers);
+    expect(second.body).toBe(first.body);
+    expect(firstHeaders.get("Idempotency-Key")).toBeTruthy();
+    expect(secondHeaders.get("Idempotency-Key")).toBeTruthy();
+    expect(secondHeaders.get("Idempotency-Key")).not.toBe(firstHeaders.get("Idempotency-Key"));
+    expect(secondHeaders.get("X-Photo-Rights")).toBe("venue-candidate-rights-v1");
+    expect(secondHeaders.get("X-Gallery-Source-Url")).toBe(encodeURIComponent(correctedEvidence.sourceUrl));
+    expect(secondHeaders.get("X-Gallery-Permission-Basis")).toBe(encodeURIComponent(correctedEvidence.permissionBasis));
+    expect(firstHeaders.get("X-Gallery-Source-Url")).toBe(encodeURIComponent("https://example.org/photo"));
+    expect(calls("/v1/venues", "POST")).toHaveLength(1);
+    expect(calls("/v1/games", "POST")).toHaveLength(1);
+    expect(JSON.parse(String(calls("/v1/games", "POST")[0]![1]?.body)).venueId).toBe(venueId);
+    expect(calls(`/v1/games/${gameId}/publish`, "POST")).toHaveLength(1);
+    expect(gameCoverRequest).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(gameCoverRequest).mock.calls[0]![4]).toBe(gameCoverBytes);
+    expect(screen.getByRole("heading", { name: "Игра опубликована" })).toBeTruthy();
+    expect(screen.queryByLabelText("Выбрать фото площадки")).toBeNull();
+    expect(screen.getByRole("button", { name: "Снять предложение фото" })).toBeTruthy();
+  });
   it.each([503, 404])("keeps canonical success and game progression after optional photo HTTP %s, never recreating either for photo retry", async code => {
     photoStatus = code; await fillAndConfirm();
     await screen.findByRole("heading", { name: "Игра опубликована" });

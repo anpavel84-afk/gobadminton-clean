@@ -40,6 +40,7 @@ export function useVenuePhotoCandidate(actor: string, csrf: string, host: string
   const withdrawal = useRef<{ id: string; key: string; version: 1 } | null>(null);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<Stage>("empty");
+  const [canCorrectUpload, setCanCorrectUpload] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [crop, setCrop] = useState({ x: .5, y: .5 });
   const [prepared, setPrepared] = useState<{ bytes: Blob; hash: string } | null>(null);
@@ -63,7 +64,7 @@ export function useVenuePhotoCandidate(actor: string, csrf: string, host: string
   useEffect(() => {
     owner.current = scope; active.current = enabled; ++generation.current;
     packet.current = null; venue.current = ""; owned.current = null; withdrawal.current = null; running.current = false; setBusy(false);
-    setVisibleScope(scope); setFile(null); setPrepared(null); setReceipt(null); setStage("empty"); setRights(false); setEvidence(emptyEvidence()); setNotice("");
+    setVisibleScope(scope); setFile(null); setPrepared(null); setReceipt(null); setStage("empty"); setCanCorrectUpload(false); setRights(false); setEvidence(emptyEvidence()); setNotice("");
     const retire = () => {
       active.current = false; ++generation.current;
       for (const c of controllers.current) c.abort();
@@ -131,6 +132,7 @@ export function useVenuePhotoCandidate(actor: string, csrf: string, host: string
     const c = new AbortController(); controllers.current.add(c); running.current = true; setBusy(true);
     const timer = setTimeout(() => c.abort(), 45000); timers.current.add(timer);
     setStage("sending");
+    if (action === "upload") setCanCorrectUpload(false);
     if (action !== "upload") revokePreview();
     try {
       const result = action === "upload"
@@ -164,6 +166,9 @@ export function useVenuePhotoCandidate(actor: string, csrf: string, host: string
       } else if (!result.ok && result.status >= 400 && result.status < 500 && result.status !== 408 && result.status !== 409) {
         // A failed refresh does not prove withdrawal or acceptance. Retain exact command for recovery.
         setStage(action === "upload" ? "failed" : "unknown"); revokePreview();
+        // Only a definite validation rejection permits a new command in the saved-game view.
+        // Auth/ownership denial and uncertain outcomes do not grant this recovery path.
+        setCanCorrectUpload(action === "upload" && result.status === 422);
         setNotice(result.status === 404 ? "Фото недоступно: право автора проверяет сервер, в том числе при совпадении с чужой площадкой. Площадка сохранена; создание игры можно продолжить."
           : "Сервер не подтвердил фото. Проверьте права, источник и текущий статус. Площадка сохранена; создание игры можно продолжить.");
       } else {
@@ -190,6 +195,7 @@ export function useVenuePhotoCandidate(actor: string, csrf: string, host: string
     busy: visible && busy, stage: visible ? stage : "empty", preview: visible ? preview : null, evidence, rights,
     receipt: visible ? receipt : null, notice: visible ? notice : "", locked: !visible || locked,
     hasFile: visible && Boolean(file), crop, canonicalVenueId: visible ? venue.current : "",
+    canCorrectUpload: visible && canCorrectUpload,
     canConfirm: visible && !locked && Boolean(prepared) && rights && isCandidateEvidence(evidence),
     select(next: File) { if (edit()) { setPrepared(null); setFile(next); setCrop({ x: .5, y: .5 }); } },
     changeCrop(next: { x: number; y: number }) { if (edit()) { setPrepared(null); setCrop(next); } },

@@ -8,6 +8,7 @@ export function VenueCandidatePhotoField({ model, disabled = false, compact = fa
   model: VenuePhotoCandidateModel; disabled?: boolean; compact?: boolean;
 }) {
   const locked = disabled || model.locked;
+  const showEditor = !compact || (model.canCorrectUpload && model.stage !== "failed");
   const textFields: Array<{ key: keyof Pick<CandidateEvidence, "creditText" | "creditUrl" | "sourceUrl" | "sourceAuthor" | "permissionBasis">; label: string; max: number }> = [
     { key: "creditText", label: "Подпись фото (Фото: имя автора)", max: 120 },
     { key: "creditUrl", label: "Ссылка на автора / подпись (HTTPS)", max: 300 },
@@ -18,7 +19,8 @@ export function VenueCandidatePhotoField({ model, disabled = false, compact = fa
   return <section className="gb-game-form-group gb-venue-candidate" aria-label="Фото площадки" aria-busy={model.stage === "sending" || model.stage === "preparing"}>
     <h2 className="gb-game-form-group-title">Фото площадки · необязательно</h2>
     <p>Предложение фото не меняет фото этой игры. До принятия сотрудником оно приватное; официальная галерея и обложка остаются прежними.</p>
-    {!compact && <>
+    {compact && model.canCorrectUpload && model.stage === "failed" && <Button variant="outline" disabled={locked} onClick={model.invalidateConfirmation}>Исправить фото площадки</Button>}
+    {showEditor && <>
       <label className="gb-game-field">Выбрать фото площадки<input type="file" aria-label="Выбрать фото площадки" accept="image/jpeg,image/png,image/webp" disabled={locked} onChange={e => {
         const file = e.target.files?.[0]; e.target.value = ""; if (file) model.select(file);
       }} /><small>Исходник: JPEG, PNG, WebP до 10 МиБ и 50 Мп. Подготовим фрагмент 1200 × 400 до 512 КиБ без EXIF и геометок. API принимает до 5 МиБ.</small></label>
@@ -34,7 +36,7 @@ export function VenueCandidatePhotoField({ model, disabled = false, compact = fa
     </>}
     {model.preview && <div className="gb-venue-media"><img src={model.preview} alt={model.receipt ? "Приватное фото площадки на рассмотрении" : "Подготовленный фрагмент фото площадки"} style={{ width: "100%", aspectRatio: "3 / 1", objectFit: "cover" }} /></div>}
     <p role="status">{model.stage === "preparing" ? "Подготавливаем фото площадки…" : model.stage === "sending" ? "Проверяем предложение фото…" : model.notice}</p>
-    {compact && model.hasFile && model.stage === "prepared" && <p>Фото не подтверждено и отправлено не будет. Вернитесь к редактированию или продолжите без него.</p>}
+    {!showEditor && model.hasFile && model.stage === "prepared" && <p>Фото не подтверждено и отправлено не будет. Вернитесь к редактированию или продолжите без него.</p>}
     {model.canonicalVenueId && <p>Площадка сохранена. Действия с фото не создают её или игру повторно.</p>}
     {model.stage === "confirmed" && model.canonicalVenueId && <Button disabled={disabled} onClick={model.send}>Отправить подтверждённое фото</Button>}
     {model.stage === "unknown" && <Button variant="outline" disabled={disabled} onClick={model.retry}>Проверить / повторить ту же команду фото</Button>}
