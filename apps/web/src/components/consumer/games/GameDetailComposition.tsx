@@ -22,24 +22,27 @@ type OwnResultsItem = MeGameResultsPage["items"][number];
  * Compact own-history row from /me/game-results when public getGame is missing.
  * Shows only server-proven title/date/own mark/provenance/notice — never invents venue/opponent.
  */
-export function OwnResultsHistoryCard({ item }: { item: OwnResultsItem }) {
+export function OwnResultsHistoryCard({ item, embedded = false }: { item: OwnResultsItem; embedded?: boolean }) {
+  const Tag = embedded ? "div" : "article";
   const badge = formatGameDateBadge(item.endsAt ?? undefined);
   const pending = ownResultPendingNotice(item);
   const source = item.attendance.assertion.source
     ? attendanceSourceLabel(item.attendance.assertion.source)
     : null;
   return (
-    <article
+    <Tag
       className="gb-postgame-history-entry"
       data-surface="own-results-history"
-      data-game-id={item.gameId}
+      data-game-id={embedded ? undefined : item.gameId}
+      data-context-id={item.contextId}
     >
       <div className="gb-postgame__date" aria-hidden>
         <strong>{badge.day}</strong>
         <span>{badge.month}</span>
       </div>
       <div className="gb-postgame-history-entry__body">
-        <h3>{item.gameTitle ?? "Игра"}</h3>
+        {!embedded ? <h3>{item.gameTitle ?? "Игра"}</h3> : null}
+        <small>{item.endsAt ? `${new Date(item.endsAt).toLocaleString("ru-RU")} · ваше местное время` : "Дата недоступна"}</small>
         <p>
           Ваша отметка: {attendanceLabel(item.attendance.value)}
           {item.attendance.late ? " · опоздание" : ""}
@@ -56,11 +59,11 @@ export function OwnResultsHistoryCard({ item }: { item: OwnResultsItem }) {
         ) : null}
       </div>
       <div className="gb-postgame-history-entry__action">
-        <Button variant="outline" href={resultsPath(item.gameId)}>
-          Участники / Итоги →
+        <Button variant="outline" href={resultsPath(item.gameId, item.attendance.dispute?.status === "open" ? "clarification" : undefined)}>
+          {item.attendance.dispute?.status === "open" ? "Уточнение открыто →" : "Участники / Итоги →"}
         </Button>
       </div>
-    </article>
+    </Tag>
   );
 }
 
@@ -136,12 +139,18 @@ export function PersonalGameCard({
   ownStatus,
   owned = false,
   managementRelation = null,
+  compact = false, ownStatuses = [], children, returnPath, cardId,
 }: {
   game: Game;
   ownStatus?: ParticipationStatus;
   owned?: boolean;
   /** Honest created-by-me vs managed-by-me label from server management projection. */
   managementRelation?: string | null;
+  compact?: boolean;
+  ownStatuses?: ParticipationStatus[];
+  children?: ReactNode;
+  returnPath?: string;
+  cardId?: string;
 }) {
   const when = discoveryGameWhen(game);
   const format = discoveryFormat(game.formatKey);
@@ -153,6 +162,32 @@ export function PersonalGameCard({
   const levelLabel = owned ? levels : (levels ? `Уровни ${levels}` : "");
   const meta = [levelLabel, format, capacityStatusLabel(game)].filter(Boolean).join(" · ");
   const terms = settlementTerms(game.settlement);
+  if (compact) {
+    const badge = formatGameDateBadge(game.startsAt, game.timezone);
+    const statuses = [...new Set(ownStatuses)];
+    const managementHref = `/my-games/${encodeURIComponent(game.id)}${returnPath ? `?from=${encodeURIComponent(returnPath)}` : ""}`;
+    const live = game.status === "published" && Date.parse(game.startsAt) <= Date.now() && Date.parse(game.endsAt) > Date.now();
+    return <article id={cardId} tabIndex={-1} className="gb-my-game-card" data-game-id={game.id} data-management={managementRelation ?? undefined}>
+      <div className="gb-my-game-date" aria-hidden="true"><strong>{badge.day}</strong><span>{badge.month}</span></div>
+      <div className="gb-my-game-body">
+        <p className="gb-my-game-when">{when.day} · {when.time} · время площадки</p>
+        <h3><Link href={owned ? managementHref : `/games/${encodeURIComponent(game.id)}`}>{game.title}</Link></h3>
+        <p>{game.venue.name}</p>{meta ? <small>{meta}</small> : null}
+        <div className="gb-my-game-badges">
+          {managementRelation ? <GameStatusBadge tone="subtle">{managementRelation}</GameStatusBadge> : null}
+          {owned || game.status === "cancelled" || game.status === "completed" ? <GameStatusBadge tone={game.status}>{({ draft: "Черновик", published: "Опубликовано", cancelled: "Игра отменена", completed: "Завершена" }[game.status])}</GameStatusBadge> : null}
+          {statuses.map((status) => <GameStatusBadge key={status} tone={status}>{participationLabel(status)}</GameStatusBadge>)}
+          {live ? <GameStatusBadge tone="confirmed">Идёт сейчас</GameStatusBadge> : null}
+        </div>
+        {statuses.includes("pending") ? <p>Заявка на рассмотрении. Организатор ещё не подтвердил место.</p> : null}
+      </div>
+      <div className="gb-my-game-actions">
+        <Button variant="outline" href={owned ? managementHref : `/games/${encodeURIComponent(game.id)}`}>{owned ? game.status === "draft" ? "Продолжить" : "Управление →" : "Открыть игру →"}</Button>
+        {(owned && game.status !== "draft") || statuses.includes("confirmed") ? <Button variant="ghost" href={resultsPath(game.id)}>Участники / Итоги</Button> : null}
+      </div>
+      <div className="gb-my-game-extras">{children}</div>
+    </article>;
+  }
   return <article className="gb-personal-card" data-tone={tone} data-management={managementRelation ?? undefined}>
     <div className="gb-personal-card__media">
       <GameCover game={game} />

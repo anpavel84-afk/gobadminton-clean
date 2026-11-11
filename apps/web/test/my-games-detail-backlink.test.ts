@@ -18,12 +18,21 @@ describe("Owner breadcrumb correction · My Games managed detail", () => {
       '<Button variant="ghost" className="gb-game-back" href="/games">',
     );
     expect(owned).toContain(
-      '<Button variant="ghost" className="gb-game-back" href="/my-games?tab=created">',
+      '<Button variant="ghost" className="gb-game-back" href={backHref}>',
     );
     expect(owned).toContain("← Мои игры");
     expect(owned).not.toContain('className="gb-c23-back"');
     expect(owned).not.toContain("← Назад");
     expect(owned).not.toContain("useRouter");
+  });
+
+  it("bounds return context to the My Games filter and history query", async () => {
+    const owned = await readFile(path.join(componentDir, "OwnedGameSummaryPage.tsx"), "utf8");
+    const card = await readFile(path.join(componentDir, "../games/GameDetailComposition.tsx"), "utf8");
+    expect(owned).toContain('key === "filter"');
+    expect(owned).toContain('key === "view" && value === "history"');
+    expect(owned).toContain('key === "tab" && value === "created"');
+    expect(card).toContain('encodeURIComponent(returnPath)');
   });
 
   it("retains My Games navigation and applicant management behavior", async () => {
@@ -32,7 +41,8 @@ describe("Owner breadcrumb correction · My Games managed detail", () => {
       "utf8",
     );
     expect(owned).toContain('active="my-games"');
-    expect(owned).toContain('href="/my-games?tab=created"');
+    expect(owned).toContain('myGamesBacklink(new URLSearchParams(window.location.search).get("from"))');
+    expect(owned).toContain('return "/my-games?tab=created"');
     expect(owned).toContain("<ManagerApplicants");
     expect(owned).toContain("onAction={(action, item, reason)");
   });

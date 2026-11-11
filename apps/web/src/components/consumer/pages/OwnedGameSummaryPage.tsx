@@ -25,12 +25,30 @@ import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 
+/** Only the owning My Games list can supply this bounded return context. */
+export function myGamesBacklink(raw: string | null): string {
+  if (!raw || !/^\/my-games(?:\?[^#]*)?$/.test(raw)) return "/my-games?tab=created";
+  const query = raw.split("?")[1];
+  const params = new URLSearchParams(query);
+  for (const [key, value] of params) {
+    if (key === "filter" && ["all", "manage", "participate", "invites"].includes(value)) continue;
+    if (key === "tab" && value === "created") continue;
+    if (key === "view" && value === "history") continue;
+    return "/my-games?tab=created";
+  }
+  return raw;
+}
+
 /**
  * Managed Game summary + admitted participation manager controls.
  * Reachable for creator owners and non-creator managers from /v1/me/games.
  * Capacity / cancel / capacity-edit remain unavailable. Server enforces authz + seats.
  */
 export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
+  const [backHref, setBackHref] = useState("/my-games?tab=created");
+  useEffect(() => {
+    setBackHref(myGamesBacklink(new URLSearchParams(window.location.search).get("from")));
+  }, []);
   const [game, setGame] = useState<ManagedGame | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [applicants, setApplicants] = useState<Participation[]>([]);
@@ -197,7 +215,7 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
   return (
     <ConsumerShell active="my-games" title="Управление игрой" mode="local">
       <header className="gb-page-local-header">
-        <Button variant="ghost" className="gb-game-back" href="/my-games?tab=created">
+        <Button variant="ghost" className="gb-game-back" href={backHref}>
           ← Мои игры
         </Button>
       </header>
@@ -227,7 +245,7 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
           <p>
             Возможно, доступ изменился. Вернитесь к списку управляемых игр.
           </p>
-          <Button variant="primary" href="/my-games?tab=created">
+          <Button variant="primary" href={backHref}>
             К управляемым
           </Button>
         </div>
@@ -276,7 +294,7 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
                 {(game.status === "published" || game.status === "completed" || game.status === "cancelled") ? (
                   <Button variant="outline" href={resultsPath(game.id)}>Участники / Итоги</Button>
                 ) : null}
-                <Button variant="outline" href="/my-games?tab=created">К управляемым играм</Button>
+                <Button variant="outline" href={backHref}>К управляемым играм</Button>
               </div>
             </aside>
           </div>

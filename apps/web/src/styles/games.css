@@ -801,3 +801,73 @@
 .gb-venue-candidate .gb-venue-media { height: auto; max-height: none; aspect-ratio: 3 / 1; border-radius: 12px; }
 .gb-venue-candidate .gb-venue-media img { display: block; height: 100%; }
 .gb-venue-candidate > .gb-c23-btn { justify-self: start; max-width: 100%; }
+
+/* #539: approved compact personal list, using the existing shell and tokens. */
+.gb-my-games--unified { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.gb-my-games--unified .gb-my-games-header { align-items: center; }
+.gb-my-games-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+.gb-my-games-toolbar .gb-game-segmented { display: flex; flex-wrap: wrap; gap: 8px; }
+.gb-my-games-toolbar .gb-game-segmented button { min-height: 44px; padding: 10px 18px; border-radius: 999px; }
+.gb-my-games-toolbar a, .gb-my-games-attention a { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; font-weight: 600; }
+.gb-my-games-section { margin-block: 28px 36px; }
+.gb-my-games-section > h2 { font-size: 26px; margin: 0 0 16px; }
+.gb-my-games-section > h3 { font-size: 18px; margin-top: 24px; }
+.gb-my-games-attention { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; border-radius: 12px; background: var(--gb-purple-soft, #eee6ff); font-size: 14px; }
+.gb-my-games-source { margin-block: 12px; padding: 8px 16px; border-left: 3px solid var(--gb-line); display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.gb-my-games-source p { margin: 0; }
+.gb-my-game-card { display: grid; grid-template-columns: 68px minmax(0, 1fr) minmax(160px, 240px); align-items: start; gap: 20px; padding: 24px; margin-block: 12px; border: 1px solid var(--gb-line); border-radius: 20px; background: var(--gb-white, white); scroll-margin-top: 24px; }
+.gb-my-game-date { border-radius: 12px; background: var(--gb-paper); text-align: center; padding: 10px 4px; line-height: 1.2; }
+.gb-my-game-date strong { display: block; font-size: 28px; font-weight: 650; }
+.gb-my-game-date span { display: block; margin-top: 4px; font-size: 12px; color: var(--gb-ink-soft); }
+.gb-my-game-body { min-width: 0; }
+.gb-my-game-body h3 { margin: 5px 0; font-size: 21px; line-height: 1.35; }
+.gb-my-game-body h3 a { display: inline-flex; align-items: center; min-height: 44px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.gb-my-game-body h3 a:hover { text-decoration: underline; }
+.gb-my-game-body p { margin: 5px 0; font-size: 14px; }
+.gb-my-game-body small, .gb-my-game-when { color: var(--gb-ink-soft); font-size: 13px; }
+.gb-my-game-badges { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 12px; }
+.gb-my-game-badges .gb-game-status { white-space: normal; }
+.gb-my-game-actions { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.gb-my-game-actions .gb-c23-btn { width: 100%; }
+.gb-my-game-extras { grid-column: 2 / -1; min-width: 0; }
+.gb-my-game-extras:empty { display: none; }
+.gb-my-game-subline { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-top: 1px solid var(--gb-line); padding-top: 12px; margin-top: 12px; font-size: 14px; }
+.gb-my-game-subline > div { min-width: 0; }
+.gb-my-game-subline p { color: var(--gb-ink-soft); font-size: 13px; margin: 4px 0; }
+.gb-my-game-subline .message-notice { flex-basis: 100%; }
+.gb-my-game-subline .gb-personal-card__body:empty { display: none; }
+.gb-my-game-subline .gb-personal-card__action { padding: 0; }
+.gb-my-game-unavailable { padding: 20px 24px; margin-block: 12px; border: 1px solid var(--gb-line); border-radius: 20px; background: var(--gb-white, white); scroll-margin-top: 24px; }
+.gb-my-game-unavailable > .gb-game-status { margin: 4px; white-space: normal; }
+.gb-my-games--unified .gb-postgame-history-entry { margin-top: 12px; padding: 12px 0; border: 0; border-top: 1px solid var(--gb-line); border-radius: 0; }
+.gb-my-games-disclosure { margin-top: 20px; border-block: 1px solid var(--gb-line); }
+.gb-my-games-disclosure > summary { min-height: 56px; padding-block: 14px; cursor: pointer; font-weight: 600; }
+.gb-my-games-disclosure > section { margin-block: 16px; }
+.gb-my-games--unified .gb-my-games-recommendations { border: 0; padding: 0; background: transparent; }
+.gb-my-games--unified .gb-my-games-recommendations h2 { font-size: 21px; }
+.gb-my-games--unified .gb-my-games-recommendations .gb-personal-card { background: transparent; border-inline: 0; border-radius: 0; padding-inline: 0; }
+.gb-my-games--unified .gb-c23-btn { min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
+.gb-my-games--unified :is(button, a, summary):focus-visible, .gb-my-games--unified [tabindex="-1"]:focus { outline: 3px solid var(--gb-purple, #7945de); outline-offset: 4px; }
+.gb-my-games--unified #history { scroll-margin-top: 24px; }
+@media (max-width: 1050px) {
+ .gb-my-game-card { grid-template-columns: 60px minmax(0, 1fr); gap: 16px; padding: 20px; }
+ .gb-my-game-actions { grid-column: 2 / -1; flex-direction: row; flex-wrap: wrap; }
+ .gb-my-game-actions .gb-c23-btn { width: auto; }
+}
+@media (max-width: 720px) {
+ .gb-my-games--unified .gb-my-games-header { flex-direction: row; justify-content: space-between; gap: 12px; }
+ .gb-my-games--unified .gb-my-games-header h1 { font-size: 32px; margin: 0; }
+ .gb-my-games--unified .gb-my-games-header .gb-c23-btn { width: auto; font-size: 12px; padding-inline: 12px; }
+ .gb-my-games-toolbar .gb-game-segmented button { flex: none; max-width: 100%; padding-inline: 13px; font-size: 12px; overflow-wrap: normal; }
+ .gb-my-game-card { grid-template-columns: 48px minmax(0, 1fr); gap: 14px 12px; padding: 18px; border-radius: 18px; }
+ .gb-my-game-date strong { font-size: 24px; }
+ .gb-my-game-body h3 { font-size: 18px; }
+ .gb-my-game-actions, .gb-my-game-extras { grid-column: 1 / -1; }
+ .gb-my-game-actions .gb-c23-btn { flex: 1 1 auto; }
+ .gb-my-game-subline .profile-form-actions { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+ .gb-my-game-subline .profile-form-actions .gb-c23-btn { flex: 1 1 auto; }
+ .gb-my-games--unified .gb-postgame-history-entry { display: flex; flex-wrap: wrap; gap: 12px; }
+ .gb-my-games--unified .gb-postgame-history-entry__body { flex: 1 1 180px; min-width: 0; }
+ .gb-my-game-unavailable { padding: 18px; }
+}
+.gb-my-games-invite-count { display: inline-flex; align-items: center; justify-content: center; margin-left: 6px; min-width: 20px; height: 20px; border-radius: 50%; background: var(--gb-purple-soft, #eee6ff); color: var(--gb-ink); font-size: 12px; }
