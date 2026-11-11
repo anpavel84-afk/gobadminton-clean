@@ -165,10 +165,10 @@ vi.mock("react", async (original) => {
   };
 });
 
-const nav = vi.hoisted(() => ({ search: "view=history" }));
+const nav = vi.hoisted(() => ({ search: "view=history", replace: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ replace: nav.replace, push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
@@ -298,6 +298,7 @@ const unionInvite: GameInvitation = {
 beforeEach(() => {
   resetHooks();
   nav.search = "view=history";
+  nav.replace.mockReset();
   vi.stubGlobal(
     "window",
     Object.assign(new EventTarget(), {
@@ -543,6 +544,62 @@ describe("PG-4 MyGames private history on public getGame 404", () => {
 
 
 describe("#539 union and URL compatibility", () => {
+  it("empty legacy manager filter shows all through the existing history URL without resetting sources or acknowledging notices", async () => {
+    nav.search = "tab=created&view=history";
+    nav.replace.mockImplementation((href: string) => { nav.search = href.split("?")[1] ?? ""; });
+    const own = ownItem("10000000-0000-4000-8000-000000000099");
+    vi.mocked(getGame).mockImplementation(async (id) => id === unionGame.id
+      ? { ok: true, status: 200, data: unionGame }
+      : { ok: false, status: 404, error: "not found" });
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [{ ...participation, status: "confirmed" }] });
+    vi.mocked(listInvitations).mockResolvedValue({ ok: true, status: 200, data: { items: [unionInvite], nextCursor: null } });
+    vi.mocked(listMyGameResults).mockResolvedValue({ ok: true, status: 200, data: { items: [own], nextCursor: "cursor-2" } });
+
+    renderPage(); flushEffects(); await settle();
+    let tree = renderPage(); flushEffects();
+    expect(textOf(tree)).toContain("В этом фильтре нет предстоящих игр.");
+    expect(textOf(tree)).not.toContain("Пока нет ваших игр");
+    expect(walk(tree).filter((el) => el.type === PersonalGameCard)).toHaveLength(0);
+    expect(walk(tree).filter((el) => el.type === OwnResultsHistoryCard)).toHaveLength(0);
+    const showAll = walk(tree).find((el) => labelOf(el.props.children) === "Показать все");
+    if (typeof showAll?.props.onClick !== "function") throw new Error("Missing show-all action");
+    showAll.props.onClick();
+    expect(nav.replace).toHaveBeenCalledExactlyOnceWith("/my-games?view=history");
+    expect(myGamesFilter(new URLSearchParams(nav.search).get("filter"), new URLSearchParams(nav.search).get("tab"))).toBe("all");
+
+    tree = renderPage(); flushEffects(); await settle();
+    expect(walk(tree).filter((el) => el.type === PersonalGameCard)).toHaveLength(1);
+    expect(walk(tree).filter((el) => el.type === MyGamesInvitation)).toHaveLength(1);
+    const ownCards = walk(tree).filter((el) => el.type === OwnResultsHistoryCard);
+    expect(ownCards).toHaveLength(1);
+    expect(ownCards[0]?.props.item).toBe(own);
+    expect(textOf(tree)).toContain("Показать ещё итоги");
+    expect(own.attendance?.acknowledgedVersion).toBeNull();
+    expect(own.notice?.acknowledgedAt).toBeNull();
+    expect(getMe).toHaveBeenCalledTimes(1);
+    expect(listAllMyManagedGames).toHaveBeenCalledTimes(1);
+    expect(listAllMyParticipations).toHaveBeenCalledTimes(1);
+    expect(listInvitations).toHaveBeenCalledTimes(1);
+    expect(listMyGameResults).toHaveBeenCalledTimes(1);
+    expect(getGame).toHaveBeenCalledTimes(2);
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps find-game navigation when all relation sources are genuinely empty", async () => {
+    nav.search = "filter=invites";
+    vi.mocked(listAllMyParticipations).mockResolvedValue({ ok: true, status: 200, data: [] });
+    vi.mocked(listMyGameResults).mockResolvedValue({ ok: true, status: 200, data: { items: [], nextCursor: null } });
+
+    renderPage(); flushEffects(); await settle();
+    const tree = renderPage(); flushEffects();
+
+    expect(textOf(tree)).toContain("Пока нет ваших игр");
+    expect(walk(tree).some((el) => labelOf(el.props.children) === "Показать все")).toBe(false);
+    expect(walk(tree).some((el) => el.props.href === "/games" && labelOf(el.props.children) === "Найти игру")).toBe(true);
+    expect(nav.replace).not.toHaveBeenCalled();
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
   it("joins manager, participation, paginated invitations and own contexts into one card and one game fetch", async () => {
     vi.mocked(getGame).mockResolvedValue({ ok: true, status: 200, data: unionGame });
     vi.mocked(listAllMyManagedGames).mockResolvedValue({ ok: true, status: 200, data: [{ ...unionGame, management: { role: "manager", createdByMe: false } }] });

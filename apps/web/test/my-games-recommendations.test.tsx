@@ -632,6 +632,50 @@ describe("FR-3B recommendation UI lifecycle", () => {
 
 
 describe("#539 recommendation placement", () => {
+  it("direct received entry keeps attached-only advice without claiming there are no recommendations", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({ ok: true, status: 200, data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false } });
+    vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: { ...list, nextCursor: null } });
+    const props: Parameters<typeof GameRecommendationsSection>[0] = {
+      me, fixedView: "received", compact: true, showEmpty: true, gameIds: new Set([item.game.id]),
+      renderWithGames: (attached, secondary) => <><article data-game-id={item.game.id}>{attached.get(item.game.id)}</article>{secondary}</>,
+    };
+
+    hooks.cursor = 0;
+    GameRecommendationsSection(props);
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    const tree = GameRecommendationsSection(props);
+    flushEffects();
+
+    expect(elements(tree).some((el) => el.props.title === "Пока нет советов")).toBe(false);
+    const card = elements(tree).find((el) => el.props["data-game-id"] === item.game.id);
+    expect(labelOf(card)).toContain(item.peer.displayName);
+    expect(elements(tree).filter((el) => typeof el.props.onClick === "function" && labelOf(el.props.children) === "Скрыть")).toHaveLength(1);
+    expect(apiFetch).toHaveBeenCalledExactlyOnceWith("/v1/me/game-recommendations?view=received&limit=20");
+  });
+
+  it("direct received entry still shows no advice after a complete genuinely empty read", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({ ok: true, status: 200, data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false } });
+    vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: { ...list, items: [], nextCursor: null } });
+    const props: Parameters<typeof GameRecommendationsSection>[0] = {
+      me, fixedView: "received", compact: true, showEmpty: true, gameIds: new Set([item.game.id]),
+      renderWithGames: (attached, secondary) => <>{attached.get(item.game.id)}{secondary}</>,
+    };
+
+    hooks.cursor = 0;
+    GameRecommendationsSection(props);
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    const tree = GameRecommendationsSection(props);
+    flushEffects();
+
+    expect(elements(tree).filter((el) => el.props.title === "Пока нет советов")).toHaveLength(1);
+    expect(labelOf(tree)).not.toContain(item.peer.displayName);
+    expect(elements(tree).some((el) => labelOf(el.props.children) === "Ещё")).toBe(false);
+  });
+
   it("attaches all senders to the matching game while keeping the shared received mutation owner", async () => {
     vi.mocked(getSocialCapabilities).mockResolvedValue({ ok: true, status: 200, data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false } });
     const second: GameRecommendation = { ...item, id: "second", peer: { ...item.peer, displayName: "Анна" } };

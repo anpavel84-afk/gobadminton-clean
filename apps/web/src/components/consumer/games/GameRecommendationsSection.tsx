@@ -275,7 +275,7 @@ export function GameRecommendationsSection({
           Обновите раздел перед действиями.
         </ProfileState>
       )}
-      {state === "ready" && secondaryItems.length === 0 && !nextCursor && (
+      {state === "ready" && items.length === 0 && !nextCursor && (
         <ProfileState title={view === "received" ? "Пока нет советов" : "Вы ещё никому не советовали"}>
           {view === "received"
             ? "Когда друг посоветует публичную игру, она появится здесь."

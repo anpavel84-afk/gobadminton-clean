@@ -317,7 +317,7 @@ export function MyGamesPage() {
   function content(attached: ReadonlyMap<string, ReactNode> = new Map(), secondary: ReactNode = null) {
     return <>
       <section aria-labelledby="upcoming-title" className="gb-my-games-section"><h2 id="upcoming-title">Предстоящие</h2>
-        {upcoming.length ? upcoming.map((row) => card(row, attached)) : <p className="gb-my-games-empty">{listLoading ? "Проверяем предстоящие игры…" : filter === "all" ? "Предстоящих игр пока нет." : "В этом фильтре нет предстоящих игр."} <Button variant="ghost" href="/games">Найти игру</Button></p>}
+        {upcoming.length ? upcoming.map((row) => card(row, attached)) : <p className="gb-my-games-empty">{listLoading ? "Проверяем предстоящие игры…" : filter === "all" ? "Предстоящих игр пока нет." : "В этом фильтре нет предстоящих игр."} {filter !== "all" && rows.length ? <Button variant="ghost" onClick={() => router.replace(pathFor("all"))}>Показать все</Button> : <Button variant="ghost" href="/games">Найти игру</Button>}</p>}
         {drafts.length ? <details className="gb-my-games-disclosure" open><summary>Черновики</summary>{drafts.map((row) => card(row, attached))}</details> : null}
       </section>
       {filter === "all" || search.get("rec") === "received" ? secondary : null}
