@@ -655,6 +655,50 @@ describe("#539 recommendation placement", () => {
     expect(apiFetch).toHaveBeenCalledExactlyOnceWith("/v1/me/game-recommendations?view=received&limit=20");
   });
 
+  it("direct received entry keeps attached advice and pagination without a false no-visible-records message", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({ ok: true, status: 200, data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false } });
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ ok: true, status: 200, data: list })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { ...list, items: [], nextCursor: null } });
+    const props: Parameters<typeof GameRecommendationsSection>[0] = {
+      me, fixedView: "received", compact: true, showEmpty: true, gameIds: new Set([item.game.id]),
+      renderWithGames: (attached, secondary) => <><article data-game-id={item.game.id}>{attached.get(item.game.id)}</article>{secondary}</>,
+    };
+
+    hooks.cursor = 0;
+    GameRecommendationsSection(props);
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    let tree = GameRecommendationsSection(props);
+    flushEffects();
+
+    const card = elements(tree).find((el) => el.props["data-game-id"] === item.game.id);
+    expect(labelOf(card)).toContain(item.peer.displayName);
+    expect(labelOf(card)).toContain("Совет друга");
+    expect(elements(card).filter((el) => typeof el.props.onClick === "function" && labelOf(el.props.children) === "Скрыть")).toHaveLength(1);
+    expect(elements(tree).some((el) => el.props.title === "Пока нет советов")).toBe(false);
+    expect(elements(tree).some((el) => el.props.title === "Проверяем доступные советы")).toBe(false);
+    expect(labelOf(tree)).not.toContain("На этой странице нет видимых записей");
+    const nextPage = elements(tree).find((el) => typeof el.props.onClick === "function" && labelOf(el.props.children) === "Ещё");
+    expect(nextPage).toBeTruthy();
+    expect(nextPage!.props.disabled).toBe(false);
+    expect(apiFetch).toHaveBeenCalledExactlyOnceWith("/v1/me/game-recommendations?view=received&limit=20");
+
+    activate(tree, "Ещё");
+    hooks.cursor = 0;
+    GameRecommendationsSection(props);
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection(props);
+    flushEffects();
+
+    expect(apiFetch).toHaveBeenLastCalledWith("/v1/me/game-recommendations?view=received&limit=20&cursor=next-page");
+    expect(labelOf(elements(tree).find((el) => el.props["data-game-id"] === item.game.id))).toContain(item.peer.displayName);
+    expect(elements(tree).some((el) => el.props.title === "Пока нет советов")).toBe(false);
+  });
+
   it("direct received entry still shows no advice after a complete genuinely empty read", async () => {
     vi.mocked(getSocialCapabilities).mockResolvedValue({ ok: true, status: 200, data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false } });
     vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: { ...list, items: [], nextCursor: null } });

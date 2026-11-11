@@ -282,7 +282,7 @@ export function GameRecommendationsSection({
             : "Совет другу можно отправить со страницы публичной будущей игры."}
         </ProfileState>
       )}
-      {state === "ready" && secondaryItems.length === 0 && nextCursor ? (
+      {state === "ready" && items.length === 0 && nextCursor ? (
         <ProfileState title="Проверяем доступные советы">
           На этой странице нет видимых записей. Загрузите следующую — список ещё не исчерпан.
         </ProfileState>
