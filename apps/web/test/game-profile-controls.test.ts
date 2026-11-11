@@ -163,9 +163,11 @@ describe("game-profile-controls-v001", () => {
     expect(client).toContain("getMyManagedGame");
     expect(page).toContain("listAllMyManagedGames");
     expect(page).toContain("managedGameRelationLabel");
-    expect(page).toContain('data-list="managed-by-me"');
-    expect(page).toContain("Управляю");
-    expect(page).toContain("Созданные мной и управляемые");
+    expect(page).toContain('className="gb-my-games gb-my-games--unified"');
+    expect(page).toContain('manage: "Создаю и управляю"');
+    expect(page).toContain('filter === "manage" ? row.managed');
+    expect(page).toContain("for (const game of managed.data) row(game.id).managed = game");
+    expect(page).toContain("managementRelation={row.managed ? managedGameRelationLabel(row.managed.management) : null}");
     expect(owned).toContain("getMyManagedGame");
     expect(owned).toContain("managedGameRelationLabel");
     expect(owned).not.toContain("getMyCreatedGame");

@@ -147,7 +147,9 @@ describe("Consumer v002.3 shell and gate integrity", () => {
     expect(client).toContain("listAllMyManagedGames");
     expect(client).toContain("listMyCreatedGames");
     expect(page).toContain("listAllMyManagedGames");
-    expect(page).toContain('data-list="managed-by-me"');
+    expect(page).toContain('className="gb-my-games gb-my-games--unified"');
+    expect(page).toContain("for (const game of managed.data) row(game.id).managed = game");
+    expect(page).toContain("owned={Boolean(row.managed)}");
     expect(page).toContain("managedGameRelationLabel");
     expect(page).not.toContain("listGames(");
     expect(page).not.toContain("localStorage");
@@ -163,10 +165,15 @@ describe("Consumer v002.3 shell and gate integrity", () => {
 
   it("keeps managed-games auth/loading/error/empty distinct from discovery", async () => {
     const page = await readSource("../src/components/consumer/pages/MyGamesPage.tsx");
-    expect(page).toContain('data-state="auth"');
-    expect(page).toContain('data-state="loading"');
-    expect(page).toContain('data-state="error"');
-    expect(page).toContain('data-state="empty"');
+    expect(page).toMatch(/state === "auth"[^\n]*Войдите, чтобы видеть свои игры/);
+    expect(page).toMatch(/state === "loading"[^\n]*aria-busy="true"[^\n]*Загружаем ваши игры/);
+    expect(page).toMatch(/state === "error"[^\n]*Не удалось проверить вход/);
+    expect(page).toContain('data-state={source.state}');
+    expect(page).toContain('sourceNotice(managed, "Управляемые игры", () => void loadManaged())');
+    expect(page).toContain('source.state === "loading" ? `${title}: загружаем…`');
+    expect(page).toContain('source.state === "unavailable" ? `${title}: недоступны. Это не пустой список.` : `Не удалось загрузить: ${title.toLowerCase()}. ${source.error ?? ""}`');
+    expect(page).toContain('const sourcesReady = [managed, parts, invitations, own].every((source) => source.state === "ready") && !reminders.loading && !reminders.error');
+    expect(page).toMatch(/sourcesReady && !rows.length[^\n]*Пока нет ваших игр/);
     expect(page).toContain("listAllMyManagedGames()");
     expect(page).not.toContain('data-blocker="owned-games-list"');
   });

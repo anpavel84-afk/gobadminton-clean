@@ -226,7 +226,9 @@ beforeEach(() => {
   mutation.onRefresh = null;
   mutation.storageKey = "";
   memoryStore.clear();
-  vi.stubGlobal("window", new EventTarget());
+  vi.stubGlobal("window", Object.assign(new EventTarget(), {
+    location: { search: "" },
+  }));
   vi.stubGlobal("sessionStorage", {
     getItem: (key: string) => memoryStore.get(key) ?? null,
     setItem: (key: string, value: string) => { memoryStore.set(key, value); },

@@ -114,21 +114,31 @@ describe("WEB-01 Games completion", () => {
     const page = await readSource(
       "../src/components/consumer/pages/MyGamesPage.tsx",
     );
-    expect(page).toContain("Участвую");
-    expect(page).toContain("Управляю");
-    expect(page).toContain("Созданные мной и управляемые");
+    expect(page).toContain('participate: "Заявки и участие"');
+    expect(page).toContain('manage: "Создаю и управляю"');
+    expect(page).toContain('filter === "manage" ? row.managed : filter === "participate" ? row.parts.length');
     expect(page).toContain("listAllMyManagedGames");
     expect(page).toContain("listAllMyParticipations");
-    expect(page).toContain('data-list="managed-by-me"');
+    expect(page).toContain('className="gb-my-games gb-my-games--unified"');
+    expect(page).toContain("for (const game of managed.data) row(game.id).managed = game");
+    expect(page).toContain("for (const part of parts.data) row(part.gameId).parts.push(part)");
     expect(page).toContain("gb-my-games-header");
-    expect(page).toContain('ownStatus={participation.status}');
-    expect(page).toContain('aria-pressed={view === "history"}');
-    expect(page).toContain('onClick={() => go(relation, "history")}');
-    expect(page).toContain(">История</button>");
-    expect(page).toContain('view === "history"');
+    expect(page).toContain('<Button href="/games/create">Создать игру</Button>');
+    expect(page).toContain("ownStatuses={row.parts.map((part) => part.status)}");
+    expect(page).toContain("owned={Boolean(row.managed)}");
+    expect(page).toContain("managementRelation={row.managed ? managedGameRelationLabel(row.managed.management) : null}");
+    expect(page).toContain('aria-pressed={filter === value}');
+    expect(page).toContain('onClick={() => router.replace(pathFor(value))}');
+    expect(page).toContain('href="#history"');
+    expect(page).toContain('setFocusTarget("history")');
+    expect(page).toContain('<h2 id="history" tabIndex={-1}>История</h2>');
     expect(page).not.toContain('data-gated="D-HIST"');
-    expect(page).toContain("isParticipatingHistoryRow");
-    expect(page).toContain("isActiveCreatedGame");
+    expect(page).toContain('if (row.managed && game?.status === "draft") return "draft"');
+    expect(page).toContain('game?.status === "completed" || (Number.isFinite(ends) && ends <= now)');
+    expect(page).toContain("!isTerminalParticipation(part.status)");
+    expect(page).toContain('game?.status === "cancelled" || !active');
+    expect(page).toContain('const past = visible.filter((row) => bucket(row) === "past")');
+    expect(page).toContain('const terminal = visible.filter((row) => bucket(row) === "terminal")');
   });
 
   it("preserves Players gate and admitted Messages header; Games allows Radar status without player slot fields", async () => {
