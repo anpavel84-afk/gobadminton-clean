@@ -1,0 +1,6 @@
+# Owner created-game organizer avatar fix (source-only)
+Owner [#15](https://github.com/anpavel84-afk/gobadminton-clean/issues/15).
+
+Bug: in a game CREATED BY the logged-in player, their round avatar shows initials/empty even though profile avatar uploaded and DEV moderation worked. Verify real `MyGamesView.tsx`, `MyGamesPage.tsx`, game detail, `DiscoveryGameCard.tsx` and server `games.service.ts` DTO. Today DiscoveryGameCard uses `<span className="gb-discovery-avatar">initials</span>` unconditionally; `organizer.displayName` is separate from real `created_by_user_id`. Do not attach the trainer or an unrelated organizer's image to the creator.
+
+Add a public-safe optional resolved creator/host avatar/media URL via the existing Profile avatar policy, scoped to game visibility and authenticated viewer. Render image with alt and robust initials fallback, version/change/removed cache invalidation. Ensure created-by-me, My Games managed, public discovery, detail and joined game contexts display correct actor's image, and no private data/media path leaks. Tests on 20 synthetic DEV users/games and real uploaded avatar, with absent/changed/broken image and unauthorized cases. Produce pinned source SHA/tree/branch, negative QA handoff. No live PROD migration or independent QA self-approval.
