@@ -1,0 +1,23 @@
+{
+  "schema": "GB_CONTEXT_SOURCE_HANDOFF_V1",
+  "status": "PREPARED_TESTED_NOT_INSTALLED",
+  "machine_admission": false,
+  "github_pr_contains": "delivery record only; actual source commits and rules are in verified Git bundle",
+  "base": "ff0acea256d6f4717f2c5f8853128e7893150625",
+  "preserves_continuity_pr_235": "7ded6ac5f9108b950c887d9953380006dbd70817",
+  "doc_commit": "03d2d7af4ff600bccd95881c4125d02419c3b675",
+  "payload_commit": "bffedbc5f3e3820fe1476b777858043f3cdd8b6b",
+  "ref_only_release_commit": "730b0a7d9a1f21c0d4333e420112bb85980be7ab",
+  "tested_candidate": "509d462b2fcae5e018770622aac43245bab2c5d9",
+  "artifact_base": "https://files.anpavel.ru/projects/gobadminton/engineering/context-exchange-20261023-509d462/",
+  "bundle": {"file": "context-exchange.bundle", "bytes": 51800, "sha256": "1ab807ebdbc3cd4f3affa78874e15890ebcccd58e19569309ef79166f3567836"},
+  "patch": {"file": "context-exchange.patch", "bytes": 166161, "sha256": "7723adcd0a03b0a7a3b647c10d5cbc415cc312ec04d3a21c241885172ef250d9"},
+  "proposed_canonical_rules": {"file": "ENGINEERING_OPERATING_MODEL-1.3.md", "bytes": 100818, "sha256": "38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c"},
+  "bundle_prerequisites": ["ff0acea256d6f4717f2c5f8853128e7893150625", "b0e4d233bc150f42ada86c4c0f56897c57e0d0fe"],
+  "validation": {"new_focused_tests": 14, "full_train_suite_tests": 447, "existing_skips": 1, "suite_result": "OK", "independent_QA": false, "provider_calls": 0, "installed_runtime_changes": 0, "https_hash_match": true, "fresh_bundle_import_exact_candidate": true},
+  "observed_initial_AGY_payload": {"semantic_bytes": 63015, "wire_bytes": 63542, "full_rules_bytes": 57544, "rules_share_percent": 91.32, "provider_input_tokens": null, "cause_of_chat_stalls_proven": false},
+  "offline_result": {"qa_policy_capsule_bytes": 3939, "synthetic_diagnosis_before_bytes": 98497, "synthetic_diagnosis_after_bytes": 26193, "synthetic_reduction_percent": 73.41, "real_latency_and_cost_savings_measured": false},
+  "next_action": "existing PMA imports exact bundle into separate review checkout and publishes via authorized write channel; no reimplementation, no live canary interruption",
+  "source_push_blocker": "existing server SSH deploy key is read-only; permissions not changed",
+  "effective_rules_revision_changed": false
+}
