@@ -1,0 +1,13 @@
+{
+  "installer_sha256": "57400728a9fdccdae9957a8097bca156db6a9d74a31473d10321a2c6edeef5be",
+  "wrapper_before": "8f627b8945255d1a251703e87f4aad8f0634b448d4685c7ddab96681bf52b8a4",
+  "wrapper_after": "7f8c35461b7a23d48677512e60d6abc6f1f53c5af0bb5372a9b006a5c6f0822f",
+  "pins_before": {
+    "autonomous_issues.py": "0b367097be3aa5596327ebec14807b6f8ca39904e6a7279dbcb67b057c23f293",
+    "slots.py": "4fc51152b0f8a5bc97743101feca7e5f5e97c7ad791d6783def0b3bd3d6324b7"
+  },
+  "pins_after": {
+    "autonomous_issues.py": "9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7",
+    "slots.py": "1b4708b6ff64071074399cfcfd3c4c73f93501efdcd9266e9dafc61b927fb98c"
+  }
+}

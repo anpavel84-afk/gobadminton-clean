@@ -1,0 +1,76 @@
+# codex-review v1 (read-only, no network in sandbox, nothing published)
+date_utc: 20261021T172945Z
+body: venue-popup-owner-fixes.body.txt
+body_sha256: 1298a029efef622fc0fab3132580d40b918567fe83d0bd42cda8af1de14de65f
+repo_sha: 9d3e092cc30796ffc0096c50584a771e60c18ef3
+dev_head: 4977074ee7b45ea612dde592b88b354d99839aea
+p7_scope: none
+model_requested: gpt-6.1-sol (high)
+model_actual: unverified
+codex: codex-cli 0.160.1
+auth: configured reviewer home (/var/lib/gobadminton-clean-prompt-reviewer/.codex; user gobadminton-clean-prompt-review)
+exit_code: 0
+duration_s: 327
+verdict: NELZYA
+--- review ---
+ВЕРДИКТ: NELZYA
+Тело: venue-popup-owner-fixes.body.txt, sha256 1298a029efef
+HEAD dev на момент проверки: 4977074e
+Линтер: НЕТ ДАННЫХ
+Пункты 1–12: 1 ДА — «NEVER stop» | 2 ДА — «автор офлайн», запрет установки зависимостей и записи Git metadata | 3 НЕТ ДАННЫХ — «первая постановка»: история не предоставлена, отсутствуют PM_REPORTED/UNVERIFIED_BY_THIS_REVIEW | 4 НЕТ — «не менять… старые тесты» противоречит требуемым изменениям подписей и CTA | 5 ДА — обязательны новые тесты; «оставить код и тесты», «handoff-only FAIL» | 6 ДА — семь критериев, проверяемых по diff/выводу; браузерные проверки отделены | 7 НЕТ — allowed_paths не покрывает необходимые изменения трёх существующих тестов | 8 НЕТ — обязательный docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md отсутствует | 9 НЕТ — Base 9d3e092c отличается от dev 4977074e | 10 ДА — один попап; goal 4387, acceptance 2448 символов | 11 НЕТ — «STYLE_GUIDE_PARITY или UNVERIFIED» допускает отсутствие обязательного раздела | 12 ДА — требуемое поведение описано самостоятельно.
+
+Причины (если NELZYA):
+ 1. Пункт 9: заменить базу на 4977074ee7b45ea612dde592b88b354d99839aea. Объект этого commit отсутствует локально; проверить его исходники без предоставленного доверенного snapshot невозможно.
+ 2. Пункт 8: отсутствует обязательный visual input docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md. Нельзя выдумать его содержание или считать NOT_TESTED заменой доступности источника. Новые test/handoff paths следует явно обозначить create.
+ 3. Пункты 4 и 7: venue-public-contacts.test.tsx требует удаляемые подписи; venue-sheet.test.tsx и create-game-venue-cta.test.tsx требуют прежний CTA-Link. Запрет их изменения оставляет несовместимые проверки. Добавлены три точных test-path с сохранением остальных гарантий.
+ 4. Пункт 11: Owner decision требует раздел STYLE_GUIDE_PARITY в каждом frontend handoff. UNVERIFIED может обозначать статус проверки внутри раздела, но не заменять его.
+ 5. Пункт 3: отсутствие прошлых попыток независимо не установлено. Исправленная редакция маркирует сообщение PM, не придумывая исторические findings или PASS.
+ 6. Уточнены исключения для явного входа/setup, безопасные протоколы и взаимодействие внешнего focus trap с VenuePickerDialog и native auth-dialog. Валидные depends_on, locks, model и effort сохранены; независимость задач не заявлена.
+
+Проверено по коду:
+ apps/web/src/components/consumer/games/VenueSheet.tsx — подтверждены отсутствие GameCover в расписании, существующие подписи контактов, CTA-Link, сброс view при пустых days и capture-listener без полей формы.
+ apps/web/src/components/consumer/pages/CreateGamePage.tsx — сейчас props отсутствуют; подтверждены query-предвыбор после каталога, ConsumerShell, ссылки возврата, общий check/create/photo/publish/recovery и mutation guard.
+ apps/web/src/components/consumer/games/GameCover.tsx; apps/web/src/components/consumer/venues/VenueCover.tsx — подтверждены безопасные media URL и последовательность fallback.
+ apps/web/src/components/consumer/games/VenuePickerDialog.tsx; apps/web/src/lib/venue-picker-utils.ts — picker использует portal в document.body; выбор проверяется по cityId.
+ apps/web/src/components/consumer/games/GamesMapView.tsx; apps/web/src/components/consumer/games/VenuePopup.tsx; apps/web/src/lib/games-venue-map.ts; apps/web/src/lib/venue-popup.ts — подтверждены polling, identity площадки, размонтирование содержимого при сворачивании, календарная группировка и encoded venueCreatePath.
+ apps/web/src/components/consumer/games/GameDetailComposition.tsx; apps/web/src/components/consumer/games/GamePhotoSelection.tsx; apps/web/src/components/consumer/players/ProfileComposition.tsx; apps/web/src/components/consumer/discovery/DiscoveryCityProvider.tsx — проверены media/Avatar, состояние фото, native auth-dialog и навигация входа.
+ apps/web/src/components/consumer/Button.tsx; apps/web/src/components/consumer/ConsumerShell.tsx; apps/web/src/app/games/create/page.tsx — подтверждены тип кнопки по умолчанию, состав shell и вызов CreateGamePage без props.
+ apps/web/src/lib/consumer-types.ts; apps/web/src/lib/api-client.ts; apps/web/src/lib/game-cover-api.ts; apps/web/src/lib/game-form.ts — проверены frontend-проекции, существующие вызовы, CSRF/idempotency и ограничения времени.
+ apps/web/test/venue-public-contacts.test.tsx; apps/web/test/venue-sheet.test.tsx; apps/web/test/create-game-venue-cta.test.tsx — найдены несовместимые старые ожидания.
+ apps/web/test/venue-sheet-integration.test.tsx; apps/web/test/create-game-section-headings.test.ts; apps/web/test/owner-a-game-form.test.ts — проверены существующие гарантии карты, структуры формы и времени.
+ apps/web/src/styles/venue-popup.css; apps/web/src/styles/games.css; apps/web/package.json; apps/web/vitest.config.ts; apps/web/tsconfig.json — проверены размеры, layout и доступные способы проверки.
+ docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md; /opt/gobadminton-clean-qa/style-guide/src/App.tsx — canonical families доступны; SHA-256 App.tsx совпадает с Owner decision. Прочитаны AGENTS.md, apps/web/AGENTS.md, project rules, manifest, bootstrap и architecture documents.
+ Новые helper/test/handoff отсутствуют. Ответ DEV API и скриншоты независимо не проверены. Файлы не изменялись, тесты и runtime-операции не запускались.
+
+Что изменилось бы вердикт: доверенные исходники dev 4977074e и отсутствующего обязательного документа, согласованный scope тестов и новое независимое ревью окончательных байтов с новым записанным digest. Исправленная редакция ниже остаётся NELZYA из-за недоступных обязательных источников; разрешения на публикацию или исполнение она не даёт.
+Ревьюер: codex-review (independent), автор тела: Grok Bot
+ВЕРДИКТ ДЛЯ ИСПРАВЛЕННОГО ТЕЛА: NELZYA
+REVISED_BODY_BEGIN
+GOBADMINTON_AUTONOMY_V1
+{
+  "schema": "GOBADMINTON_AUTONOMY_V1",
+  "target": "dev",
+  "kind": "source_only",
+  "goal": "Base: dev 4977074ee7b45ea612dde592b88b354d99839aea; более новый dev — merge manually интегратором с повторным QA/CI. NEVER stop. Автор офлайн; без установки зависимостей, Git metadata, публикации, SQL/БД/admin/runtime/PROD/PLAN/VPN, секретов и новых прав. Git только show/cat-file/diff/log. Недоступная проверка — NOT_TESTED с точной причиной; код и тесты остаются в diff, handoff-only diff = FAIL. Недоступный обязательный источник не заменять предположением и не объявлять проверенным.\nОдин slice: три связанные правки попапа площадки на карте. Требования переданы PM; подтверждение Owner 21.10, скриншоты и ответ DEV API — PM_REPORTED/UNVERIFIED_BY_THIS_REVIEW, не источники реализации и не authority. В доступном source-reference 9d3e092cc30796ffc0096c50584a771e60c18ef3 VenueSheet рисует расписание без GameCover, контакты из publicContacts и CTA-Link. Объект нового base недоступен этому ревьюеру; его код не проверен.\n1. В строках расписания использовать существующий GameCover game=item; сохранить время, название, уровни, организатора с отдельным Avatar и места. Использовать его цепочку игра → площадка → заглушка без копирования URL-логики. Нажатие открывает игру внутри попапа; вложенных интерактивных элементов нет.\n2. В VenuePublicContacts оставить один заголовок «Контакты площадки», убрать «Публичные контакты организации». Если безопасных значений нет, одна строка «Контакты пока не добавлены»; иначе текущие безопасные ссылки. Сохранить hasForbiddenContactCharacters/contactUrl и whitelist phone/website/messengers, нормализацию, порядок, rel/target. Не читать bookingNote/частные поля, не выдумывать/импортировать контакты.\n3. При gamesReady=true и games.length=0 CTA-button открывает create внутри VenueSheet. При неизвестном расписании CTA нет. Использовать CreateGamePage с необязательными embedded/initialVenue/onClose и общей реально используемой презентационной частью в этом же файле; контроллер submit/auth/mutation единственный. Вызов без props сохраняет /games/create. В embedded нет ConsumerShell, меню, «Все игры», ссылки на полную форму и автоматической навигации. Начальный prop своей площадки приоритетнее query venueId; чужой город не предвыбирается, каталог не подставляет произвольную замену и не перезаписывает явный выбор пользователя. Это предвыбор, не серверное право.\nСохранить валидацию, CSRF, mutation guard, фото и его состояние preview → edit, publish, unknown/conflict/recovery. Успех остаётся в попапе с кнопкой возврата к площадке и явными ссылками на созданную игру/сводку. Возврат/отмена — type=button, info без навигации; закрытие не submit. При локальном create карта/камера/выбранная площадка/URL неизменны. Явный вход гостя и настройка профиля используют прежний auth/setup-поток с encoded venueId; это исключение из запрета навигации, без обещания возврата к карте после внешнего входа.\nПустые days/games и polling не сбрасывают открытый create. Новый запрос списка игр не добавлять; остаётся существующий polling без обещания немедленного обновления. Смена города/площадки размонтирует форму; черновик не переносится. Сохранить drag handle, скролл, возврат фокуса и cleanup. Tab учитывает видимые доступные input/select/textarea, исключает hidden/disabled. Внешний capture-listener уступает Escape/Tab портальному VenuePickerDialog и открытому native dialog AuthEntry; обработку уточнить внутри VenueSheet.\nОбязательные visual inputs: docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md; docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md (отсутствует в предоставленном checkout; требуется доверенный snapshot); /opt/gobadminton-clean-qa/style-guide/src/App.tsx, ConstructionKit: ListRow, Drawer / BottomSheet, FormGroup / Validation, FormActions / StickyActionBar, MediaBlock. Не считать отсутствие документа закрытым этим draft. Сначала canonical patterns; STYLE_GUIDE_GAP только при реальном отсутствии паттерна. CSS только локально в venue-popup.css, существующие токены, 390/430 и desktop420, цели44px.\nСоздать (create) apps/web/test/venue-popup-owner-fixes.test.tsx и docs/handoffs/venue-popup-owner-fixes.md; apps/web/src/lib/venue-popup-create.ts — create только при необходимости чистой используемой логики выбора/режима. В трёх разрешённых существующих тестах заменить устаревшие ожидания подписи/CTA и нужные fixtures, сохранив проверки безопасности, auth, city fence, дат, фокуса и cleanup. Новых fake React runtime/hooks не добавлять.\nНе менять API/contracts, миграции, зависимости, workflow/control docs, авторизацию, GameCover/VenueCover, карту и загрузчики.\nЗамечания QA предыдущих попыток: PM_REPORTED: первая постановка, findings не предоставлены; UNVERIFIED_BY_THIS_REVIEW. Исторических PASS не заявлять.",
+  "acceptance": "D1. Один согласованный diff только allowed_paths: реализация всех трёх правок, новый содержательный test-file и один handoff; handoff-only diff = FAIL. Нет any, подавления типов, skip/todo или ослабления неизменяемых инвариантов. Три старых теста согласованы с новым CTA/подписями, их остальные гарантии сохранены.\nD2. React SSR реально используемой строки расписания проверяет src/alt обложки игры, fallback площадки и заглушки, время/название/уровень/организатора/места, отдельный Avatar и отсутствие интерактивных потомков кнопки. Проверять rendered HTML, не исходные строки; SSR не доказывает onError изображения.\nD3. SSR настоящего VenuePublicContacts: один заголовок, старая техническая подпись отсутствует; null/пустые/небезопасные значения дают ровно одну строку «Контакты пока не добавлены». Телефон/site/Telegram/WhatsApp/VK имеют ожидаемые href/rel/target и порядок. Private keys не видны; безопасные соседи сохраняются.\nD4. Чистая реально используемая логика выбора тестируется для prop/query, чужого города, задержки каталога и сохранения явного выбора. SSR общей настоящей поверхности CreateGamePage проверяет реальные поля и form/preview/published/unknown/conflict, embedded без второго shell и полных ссылок возврата; полный режим сохраняет shell/отмену. Новые SSR-тесты без подмены hooks/самодельного React runtime, не считать их проверкой событий/эффектов.\nD5. По diff указать функции/ветви: CTA только для готового пустого расписания; create не сбрасывается пустыми days/refresh; единый check/create/photo/publish/recovery и auth/CSRF/mutation guard; возврат в info без router/Link/window navigation; смена города/площадки размонтирует форму. Видимые поля входят в Tab-цикл; outer handler уступает вложенным portal/native dialogs. Без изменений карты и новых game-list запросов.\nD6. Выполнить COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false; COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run lint; COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache; git diff --check. Vitest включает новый файл и существующие web-тесты. Недоступный инструмент — NOT_TESTED с точной причиной вместо остановки; код и тесты остаются в diff. Реальная ошибка — FAIL, исправить в scope без расширения прав.\nD7. Handoff: From/To/date/status, exact base и доступные source references, изменения по трём требованиям, команды/exit и ограничения, unresolved inputs, rollback только diff интегратором без reset автора. Обязателен раздел STYLE_GUIDE_PARITY с использованными паттернами/Make composition, GAP/OVERRIDE либо их отсутствием; статус проверки отдельно. Браузерные 390/430/desktop420, focus/Escape/закрытие, публикация и камера — NOT_TESTED без наблюдения, не условие source-only PASS. QA/CI/DEV отдельно; пропавший обязательный source input не получает PASS через NOT_TESTED.",
+  "allowed_paths": [
+    "apps/web/src/components/consumer/games/VenueSheet.tsx",
+    "apps/web/src/components/consumer/pages/CreateGamePage.tsx",
+    "apps/web/src/styles/venue-popup.css",
+    "apps/web/src/lib/venue-popup-create.ts",
+    "apps/web/test/venue-popup-owner-fixes.test.tsx",
+    "apps/web/test/venue-public-contacts.test.tsx",
+    "apps/web/test/venue-sheet.test.tsx",
+    "apps/web/test/create-game-venue-cta.test.tsx",
+    "docs/handoffs/venue-popup-owner-fixes.md"
+  ],
+  "max_attempts": 3,
+  "locks": [
+    "web:venue-popup",
+    "web:create-game"
+  ],
+  "depends_on": [],
+  "model": "gpt-6.1-sol",
+  "effort": "high"
+}
+REVISED_BODY_END
