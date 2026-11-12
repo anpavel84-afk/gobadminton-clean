@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -32,7 +34,10 @@ try:
 except ImportError:
     msvcrt = None  # type: ignore
 
-ROOT = Path(__file__).resolve().parent
+_CODE_ROOT = Path(__file__).resolve().parent
+ROOT = (Path("/srv/gobadminton-clean/runner")
+        if _CODE_ROOT.is_relative_to(Path("/opt/gobadminton-clean/runner-code"))
+        else _CODE_ROOT)
 CONFIG_PATH = ROOT / "config.json"
 RUNNER_STATE_PATH = ROOT / "state.json"
 BACKLOG_PATH = ROOT / "backlog.json"
@@ -55,6 +60,28 @@ BRANCH = "pm/autopilot-local"
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def owner_input_backoff(state: dict[str, Any], owner_key: str, *, now: float) -> bool:
+    """Retry failed transport/planner attempts; unchanged successful decisions wait."""
+    if state.get("last_owner_input_key") != owner_key:
+        return False
+    outcome = state.get("last_owner_attempt_outcome")
+    if outcome is None:
+        # Recover the deployed pre-fix failure without treating an arbitrary
+        # no_safe_action summary as an execution error. Persist classification
+        # before status changes to backoff so it survives subsequent restarts.
+        if (state.get("status") == "owner_instruction_planner_error_retriable"
+                or (state.get("status") == "owner_instruction_backoff"
+                    and state.get("last_result") == "planner author identity unavailable")):
+            outcome = state["last_owner_attempt_outcome"] = "planner_error"
+    if outcome != "planner_error":
+        return True
+    attempted = state.get("last_owner_no_action_epoch")
+    if (type(attempted) not in (int, float) or not math.isfinite(attempted)
+            or attempted <= 0 or not math.isfinite(now)):
+        return True
+    return now - attempted < OWNER_NO_ACTION_REPLAN_SECONDS
 
 
 def load_json(path: Path, default: Any = None) -> Any:
@@ -107,6 +134,16 @@ def pending_owner_instructions(
 ) -> list[dict[str, Any]]:
     allowed = {str(x) for x in statuses}
     items: list[dict[str, Any]] = []
+    cfg = load_json(CONFIG_PATH, {}) or {}
+    if (cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+            and cfg.get("owner_issue_intake_enabled") is True):
+        # Exact GitHub Owner ID+Issue comment evidence, not a claimed
+        # authorization from an arbitrary public issue/comment.
+        from github_owner_issue_intake import poll_once, IntakeHold
+        try:
+            poll_once(ROOT, load_json(BACKLOG_PATH, {}) or {})
+        except IntakeHold as exc:
+            raise RuntimeError("authenticated Owner Issue intake held: " + str(exc)) from exc
     if not OWNER_INBOX_DIR.is_dir():
         return items
     for path in sorted(OWNER_INBOX_DIR.glob("*.json")):
@@ -272,7 +309,37 @@ def pending_tasks(backlog: dict[str, Any], state: dict[str, Any]) -> list[dict[s
 
 
 
-def planning_input_key(backlog, state, sync_result, owner_items=()):
+def runtime_readiness_key(cfg: dict[str, Any]) -> str:
+    """Bounded readiness change hint; never a policy authorization or secret."""
+    policies = []
+    for path in (
+        "/etc/gobadminton-clean-control-plane/clean-publisher-policy.json",
+        "/var/lib/gobadminton-clean-trusted-qa-evidence/policy.json",
+    ):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                        or info.st_mode & 0o022 or info.st_size > 65536):
+                    policies.append("invalid")
+                    continue
+                data = stream.read(65537)
+                policies.append(hashlib.sha256(data).hexdigest()
+                                if len(data) <= 65536 else "invalid")
+        except FileNotFoundError:
+            policies.append("absent")
+        except OSError:
+            policies.append("unreadable")
+    projection = {
+        "owner_issue_intake_enabled": cfg.get("owner_issue_intake_enabled") is True,
+        "github_repo_write_authorized": cfg.get("github_repo_write_authorized") is True,
+        "fixed_policy_digests": policies,
+    }
+    return hashlib.sha256(json.dumps(projection, sort_keys=True).encode()).hexdigest()
+
+
+def planning_input_key(backlog, state, sync_result, owner_items=(), *, runtime_readiness=None):
     """Semantic source/evidence fingerprint, independent of monitor timestamps."""
     receipts = {}
     for task in backlog.get('tasks', []):
@@ -286,6 +353,8 @@ def planning_input_key(backlog, state, sync_result, owner_items=()):
               'gates': [state.get(k) for k in ('paused', 'blocked', 'global_gates', 'project_global_blocker')],
               'receipts': receipts,
               'owner': [{k: item.get(k) for k in ('id', 'origin', 'text', 'payload')} for item in owner_items]}
+    if runtime_readiness is not None:
+        inputs['runtime_readiness'] = runtime_readiness
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
@@ -510,6 +579,96 @@ def build_prompt(
     if cfg.get('autopilot_budget_mode') == 'compact':
         from compact_pm_brief import render
         return render(owner_items, active_admission_only)
+    if cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean":
+        if owner_items is None:
+            owner_items = pending_owner_instructions()
+        requests = [{
+            "id": v.get("id"), "origin": v.get("origin"),
+            "text_sha256": v.get("text_sha256"),
+            "task_ids": v.get("task_ids"),
+            "text": str(v.get("text") or "")[:7000],
+        } for v in owner_items if isinstance(v, dict)]
+        return (
+            "GoBadminton CLEAN PM. ONE already-authorized DEV source-only "
+            "planning/publication action, not an implementation executor.\\n"
+            "Read AGENTS.md, docs/assignments/20261013/, the exact current "
+            "GitHub Issues #4/#12/#13/#14/#15, the real six-task canonical "
+            "queue, immutable history and current main OID.\\n"
+            "Authenticated Owner Inbox inputs (still subject to exact "
+            "publication_guard, CAS and protected QA): "
+            + json.dumps(requests, ensure_ascii=False, sort_keys=True) + "\\n"
+            "Source-only DEV work, never PROD. Prefer existing prepared "
+            "Friends S1 producer+own QA and Radar Map producer+own QA; "
+            "do not duplicate draft PR19/PR20 code or import legacy 551 tasks. "
+            "F2/F3 shared locks must serialize. Do not activate Avatar until "
+            "its recorded predecessor and real write-path safety permit.\\n"
+            "Select Codex model/effort by scoped task risk, no Cursor fallback, "
+            "no sandbox bypass, no writes outside the PM worktree. Never edit "
+            "Runner state, Owner Inbox, trust or application source.\\n"
+            "For any source/QA admission: genuine Owner instruction ID and "
+            "SHA256(trimmed UTF-8 instruction text), exact immutable Git source, "
+            "the matching separate QA pair, unique task IDs, non-conflicting "
+            "real file/lock scopes, the sole existing publication_guard "
+            "pre-push and remote main compare-and-swap. No raw main push. "
+            "No self-signed PASS or untrusted legacy evidence.\\n"
+            "The planner prepares permitted PM documents in its worktree and "
+            "returns its exact action/task_ids/owner_binding_path JSON proposal. "
+            "Do NOT push Git or invoke publication_guard --publish yourself. "
+            "The host commits the bounded PM diff and submits it to the separately "
+            "credentialed Clean Publisher, which retains publication_guard/CAS. "
+            "For already prepared first tasks, reuse Friends candidate "
+            "f98b1ed42e3f3847ac305e487cf3a706d6a458f2 and Radar candidate "
+            "ed1ad372751b25f1d4bddae1f13e1b3876ef5bec as task base_sha; "
+            "their automatically claimed producers verify these sources rather "
+            "than redevelop them. Each producer still needs its own newly executed "
+            "protected QA job. Do not copy manual QA PASS into runtime.\\n"
+            "The Owner explicitly authorized the fixed v002 Friends/Radar "
+            "verification continuations after ENV prerequisites are ready. "
+            "Preserve every original v001 BLOCKED receipt/history and quarantine "
+            "its original pair. This verification admission is allowed even when "
+            "a prior receipt also reports Foundation FAIL or unverified Radar "
+            "Style Guide parity; dependency-only failure is not a prerequisite. "
+            "Once the root Publisher policy registers them, "
+            "use only friends-dev-s1-api-20261013-v002 and "
+            "radar-dev-map-ui-20261013-v002 with their exact qa- counterparts "
+            "as new ordinary source-only verification pairs, the same prepared "
+            "base SHAs and existing Owner instruction binding. Never rearm a "
+            "terminal ID or invent a new Owner comment/authority. The host seeds "
+            "private dependencies from the matching protected offline cache before "
+            "launch; the producer must not install dependencies. These are ENV "
+            "continuations of the same approved products; do not add recovery_from "
+            "or relax any independent QA gate. Carry every prior Foundation FAIL "
+            "and unverified Radar Style Guide parity finding into the new task "
+            "acceptance criteria with its exact original immutable evidence. "
+            "Require targeted producer verification and its own protected QA "
+            "to check and report each finding within the existing scope, including "
+            "actual Radar Style Guide parity evidence. Its frozen canonical reference "
+            "is root-read-only at /opt/gobadminton-clean-qa/style-guide; cite and "
+            "verify its manifest and Owner-pinned App.tsx/CSS, and include this "
+            "reference path in both Radar producer and QA task acceptance. "
+            "Unresolved findings remain "
+            "FAIL/BLOCKED; admitting a verification task does not accept a "
+            "candidate, invent PASS, authorize DEV release, erase failures or "
+            "authorize product redevelopment. Preserve "
+            "the original receipt/history evidence in an immutable PM report. "
+            "Leave Avatar disabled.\\n"
+            "Clean Publisher authority is the root-owned exact Owner-bound "
+            "/etc/gobadminton-clean-control-plane/clean-publisher-policy.json, "
+            "its immutable installed module pins and separate service/credential. "
+            "You are deliberately NOT given its credential. Do not call that "
+            "absence a blocker when the protected service is configured. Its "
+            "exclusive publication lock and remote main SHA CAS fence transport. "
+            "Do not manufacture historical V3/G1-G6 proofs or require activating "
+            "the old Publisher. Optional writer_bridge policy, if present, must "
+            "still validate; the adapter never weakens its checks.\\n"
+            "If canonical single-writer credentials/policy, distinct nonauthor "
+            "root QA, or protected Owner binding are absent, write "
+            "no_safe_action with exact blocker and STOP. Do not claim a Git "
+            "comment started a Runner task, nor claim DEV deployed.\\n"
+            "Return exactly one JSON receipt. Host Codex --output-last-message "
+            "writes /srv/gobadminton-clean/runner/autopilot-receipt.json; "
+            "do not edit control-state directly. No secret output."
+        )
     runtime = str(ROOT)
     if owner_items is None:
         owner_items = pending_owner_instructions()
@@ -732,7 +891,11 @@ def launch_planner(
     except (OSError, ValueError, RuntimeError) as exc:
         return False, 'publication safety setup failed: ' + str(exc), None
     prompt = build_prompt(cfg, owner_items=owner_items, active_admission_only=active_admission_only)
-    planner_executor = str(cfg.get("autopilot_planner_executor") or "cursor").strip().lower()
+    clean = cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+    planner_executor = str(cfg.get("autopilot_planner_executor")
+                           or ("codex" if clean else "cursor")).strip().lower()
+    if clean and planner_executor != "codex":
+        return False, "clean-root planner must use Codex workspace sandbox", None
     worktrees_root = str(Path(str(cfg["workspace"])).parent / "worktrees")
     if planner_executor == "codex":
         cli = str(cfg.get("codex_cli") or "")
@@ -747,9 +910,13 @@ def launch_planner(
         cmd = [
             cli, "exec", "--color", "never",
             "-C", str(WORKTREE),
-            "--dangerously-bypass-approvals-and-sandbox",
+            "--approve-for-me",
+            "--output-last-message", str(AUTOPILOT_RECEIPT_PATH),
             "--model", model,
         ]
+        if clean:
+            cmd += ["--disable", "apps", "--disable", "remote_plugin", "--disable", "hooks",
+                    "--ignore-user-config", "-c", "apps._default.enabled=false"]
         if effort in {"low", "medium", "high", "xhigh", "extra_high"}:
             normalized = "xhigh" if effort == "extra_high" else effort
             cmd += ["-c", f'model_reasoning_effort="{normalized}"']
@@ -796,8 +963,11 @@ def launch_planner(
                 env={
                     **publication_env,
                     "PATH": ":".join([
-                        str(cfg.get("node_bin") or ""),
-                        str(cfg.get("local_bin") or ""),
+                        str(cfg.get("node_bin") or
+                            ("/home/agentagency-dev/.local/node-v24.21.0/bin"
+                             if clean else "")),
+                        str(cfg.get("local_bin") or
+                            ("/home/agentagency-dev/.local/bin" if clean else "")),
                         os.environ.get("PATH", ""),
                     ]),
                 },
@@ -851,6 +1021,13 @@ def launch_planner(
         return False, str(receipt.get("summary") or "planner reported error"), receipt
     if rc != 0:
         return False, f"planner exit {rc} despite receipt", receipt
+    if (clean and cfg.get("github_repo_write_authorized") is True
+            and receipt.get("action") in {"enqueued", "merged", "merged_and_enqueued"}):
+        try:
+            from clean_publish_submit import prepare_pm_proposal
+            receipt = prepare_pm_proposal(WORKTREE, receipt)
+        except Exception as exc:
+            return False, "separated PM Publisher rejected proposal: " + str(exc), receipt
     state = load_json(RUNNER_STATE_PATH, {}) or {}
     if runner.lane_local_block(state) and receipt.get("action") in {
         "enqueued", "merged_and_enqueued", "merged", "quarantined"}:
@@ -1166,7 +1343,18 @@ def main() -> int:
                 continue
 
             lane_recovery = runner.lane_local_block(runner_state)
-            owner_items = pending_owner_instructions()
+            try:
+                owner_items = pending_owner_instructions()
+            except RuntimeError as error:
+                from github_owner_issue_intake import IntakeHold
+                if not isinstance(error.__cause__, IntakeHold):
+                    raise
+                # Transport denial holds new planning without a restart storm.
+                ap_state.update(status="owner_intake_transport_held",
+                                hold_reason=str(error)[:250])
+                write_json(AUTOPILOT_STATE_PATH, ap_state)
+                wait_for_wake(ACTIVE_POLL_SECONDS)
+                continue
             if runner_state.get("blocked") and not lane_recovery:
                 ap_state["status"] = "runner_blocked"
                 ap_state["last_result"] = runner_state.get("blocked")
@@ -1194,8 +1382,11 @@ def main() -> int:
                 before_owner_backlog["_canonical_commit"] = str(
                     (ap_state.get("backlog_sync") or {}).get("canonical_commit") or ""
                 )
-                owner_key = planning_input_key(backlog, runner_state, ap_state.get('backlog_sync') or {}, owner_items)
-                if ap_state.get('last_owner_input_key') == owner_key:
+                owner_key = planning_input_key(
+                    backlog, runner_state, ap_state.get('backlog_sync') or {}, owner_items,
+                    runtime_readiness=runtime_readiness_key(cfg),
+                )
+                if owner_input_backoff(ap_state, owner_key, now=time.time()):
                     ap_state["status"] = "owner_instruction_backoff"
                     write_json(AUTOPILOT_STATE_PATH, ap_state)
                     wait_for_wake(ACTIVE_POLL_SECONDS)
@@ -1253,10 +1444,14 @@ def main() -> int:
                     # a persuasive Codex completion message or a PR alone.
                     update_owner_instruction_status(owner_items, "PLANNED", summary)
                     ap_state["last_owner_no_action_epoch"] = 0
+                    ap_state["last_owner_attempt_outcome"] = "published"
                     ap_state["status"] = f"owner_instruction_{action or 'planned'}"
                 elif ok:
                     update_owner_instruction_status(owner_items, "ACKNOWLEDGED", summary)
                     ap_state["last_owner_no_action_epoch"] = time.time()
+                    ap_state["last_owner_attempt_outcome"] = (
+                        "no_safe_action" if action == "no_safe_action" else "publication_unverified"
+                    )
                     ap_state["status"] = (
                         "owner_instruction_acknowledged_no_safe_action" if action == "no_safe_action"
                         else "owner_instruction_publication_unverified"
@@ -1264,6 +1459,7 @@ def main() -> int:
                 else:
                     update_owner_instruction_status(owner_items, "ACKNOWLEDGED", summary)
                     ap_state["last_owner_no_action_epoch"] = time.time()
+                    ap_state["last_owner_attempt_outcome"] = "planner_error"
                     ap_state["status"] = "owner_instruction_planner_error_retriable"
                 write_json(AUTOPILOT_STATE_PATH, ap_state)
                 log(f"owner instruction planning result ok={ok} action={action!r}: {summary}")

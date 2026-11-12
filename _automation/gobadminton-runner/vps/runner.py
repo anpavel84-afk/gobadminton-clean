@@ -26,13 +26,17 @@ from typing import Any
 import psutil
 import backlog_sync
 import writer_bridge
+import clean_runtime_access
 
 try:
     import msvcrt
 except ImportError:
     msvcrt = None  # type: ignore
 
-ROOT = Path(__file__).resolve().parent
+_CODE_ROOT = Path(__file__).resolve().parent
+ROOT = (Path("/srv/gobadminton-clean/runner")
+        if _CODE_ROOT.is_relative_to(Path("/opt/gobadminton-clean/runner-code"))
+        else _CODE_ROOT)
 BACKLOG_PATH = ROOT / "backlog.json"
 STATE_PATH = ROOT / "state.json"
 CONFIG_PATH = ROOT / "config.json"
@@ -86,6 +90,10 @@ def atomic_write_json(path: Path, data: Any) -> None:
     )
     payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp.write_text(payload, encoding="utf-8")
+    mode, gid = clean_runtime_access.file_access(path)
+    if gid is not None:
+        os.chown(tmp, -1, gid)
+    os.chmod(tmp, mode)
     try:
         os.replace(tmp, path)
     except PermissionError:
@@ -585,6 +593,11 @@ def validate_receipt(path: Path, task_id: str) -> tuple[bool, str]:
         return False, f"receipt task_id mismatch: {data.get('task_id')!r}"
     if data.get("project") != "GoBadminton":
         return False, "receipt project must be GoBadminton"
+    if (data.get("ok") is True and task_id in {
+            "friends-dev-s1-api-20261013-v001", "radar-dev-map-ui-20261013-v001"}):
+        from clean_publish_submit import producer_is_published
+        if not producer_is_published(task_id, data):
+            return False, "producer completion requires actual separated Publisher observation"
     if data.get("ok") is True:
         return True, str(data.get("summary") or "ok")
     return False, str(data.get("reason") or data.get("summary") or "receipt ok!=true")
@@ -2296,6 +2309,11 @@ def block_prompt(task: dict[str, Any]) -> str:
     rows = "\n".join(
         f"- {i+1}/{len(blocks)} {b['id']} · {b['title']}" for i, b in enumerate(blocks)
     )
+    if task.get("_workspace") and str(task.get("executor") or "").lower() == "codex":
+        return ("PM block plan (execute in order):\\n" + rows +
+                "\\nRunner owns progress/control-state and host-captured receipt. "
+                "Do not edit Runner files; include truthful block outcomes "
+                "in final JSON.\\n")
     return f"""
 PM block plan (execute in this order):
 {rows}
@@ -2388,7 +2406,11 @@ Owner/safety hard blocker:
 A task/lane-local terminal blocker must use owner_blocker=false and blocker_scope="lane_local".
 For independent QA include verdict PASS|PASS_WITH_NONBLOCKING_GAPS|FAIL|BLOCKED.
 QA FAIL/BLOCKED is terminal for that immutable candidate and must not be retried.
-Exit only after the receipt file exists.
+When using scoped Codex, return ONE valid JSON object as the FINAL
+response. The Codex host CLI writes --output-last-message to the fixed Runner
+receipt path after execution. Do not write control-state, receipts, progress,
+Owner inbox, system configuration, or sibling worktrees directly.
+The Runner validates host-written JSON before recording completion.
 """
 
 
@@ -2397,10 +2419,108 @@ def _v2_task_worktree(cfg: dict[str, Any], task: dict[str, Any]) -> Path:
     return root / f"runner-{_v2_slug(str(task['id']))}"
 
 
+def _clean_dependency_cache(task_id: str) -> tuple[Path, str] | None:
+    app = {"friends-dev-s1-api-20261013-v001": "api",
+           "radar-dev-map-ui-20261013-v001": "web",
+           "friends-dev-s1-api-20261013-v002": "api",
+           "radar-dev-map-ui-20261013-v002": "web"}.get(task_id)
+    return (Path("/opt/gobadminton-clean-qa/dependencies") / app, app) if app else None
+
+
+def _root_protected_dependency_path(path: Path) -> None:
+    import stat
+    info = path.lstat()
+    if info.st_uid != 0 or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o022):
+        raise RuntimeError("dependency cache is not root-owned/read-only")
+    if not (stat.S_ISLNK(info.st_mode) or stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        raise RuntimeError("dependency cache contains unsupported file type")
+
+
+def _seed_clean_dependencies(cfg: dict[str, Any], task: dict[str, Any], worktree: Path) -> None:
+    """Snapshot fixed preinstalled dependencies; never install packages/network."""
+    import hashlib
+    import stat
+    import tempfile
+    binding = _clean_dependency_cache(str(task.get("id") or ""))
+    if cfg.get("project_repo") != "anpavel84-afk/gobadminton-clean" or binding is None:
+        return
+    cache, app = binding
+    resolved = worktree.resolve(strict=True)
+    if worktree.is_symlink() or resolved != _v2_task_worktree(cfg, task).resolve(strict=True):
+        raise RuntimeError("dependency destination is not the exact task worktree")
+    import clean_publish_submit
+    clean_publish_submit.workspace(str(task["id"]), worktree)
+    if clean_publish_submit.git(worktree, "status", "--porcelain", "--untracked-files=all"):
+        raise RuntimeError("dependency seeding requires clean Git source")
+    for directory in (cache, *cache.parents):
+        _root_protected_dependency_path(directory)
+        if directory.is_symlink():
+            raise RuntimeError("dependency cache root ancestry is symlinked")
+    lock = cache / "pnpm-lock.yaml"
+    _root_protected_dependency_path(lock)
+    candidate_lock = worktree / "pnpm-lock.yaml"
+    if (lock.is_symlink() or not candidate_lock.is_file() or candidate_lock.is_symlink()
+            or hashlib.sha256(lock.read_bytes()).digest() != hashlib.sha256(
+                candidate_lock.read_bytes()).digest()):
+        raise RuntimeError("dependency cache lock differs from candidate lock")
+    relatives = (Path("node_modules"), Path("apps") / app / "node_modules",
+                 Path("packages/contracts/node_modules"))
+    for relative in relatives:
+        destination = worktree / relative
+        if not destination.parent.resolve().is_relative_to(resolved) or destination.is_symlink():
+            raise RuntimeError("dependency destination ancestry escapes worktree")
+    for relative in relatives:
+        root = cache / relative
+        if not root.is_dir() or root.is_symlink():
+            raise RuntimeError("required dependency cache directory missing/symlinked")
+        for directory in (root, *root.parents):
+            if not directory.is_relative_to(cache):
+                break
+            _root_protected_dependency_path(directory)
+            if directory.is_symlink():
+                raise RuntimeError("dependency directory ancestry is symlinked")
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            for entry in [Path(directory), *(Path(directory) / name for name in dirs + files)]:
+                _root_protected_dependency_path(entry)
+                if entry.is_symlink():
+                    target = os.readlink(entry)
+                    destination = worktree / entry.relative_to(cache)
+                    if (Path(target).is_absolute() or not entry.resolve().is_relative_to(cache)
+                            or not (destination.parent / target).resolve().is_relative_to(resolved)):
+                        raise RuntimeError("dependency symlink escapes snapshot/worktree")
+    # All validation precedes mutation. Each producer receives its own copied
+    # files, not links to the reviewer/cache store or another producer.
+    with tempfile.TemporaryDirectory(prefix=".runner-dependencies-", dir=worktree) as stage:
+        staging = Path(stage)
+        for relative in relatives:
+            shutil.copytree(cache / relative, staging / relative, symlinks=True)
+        for directory, dirs, files in os.walk(staging, followlinks=False):
+            os.chmod(directory, 0o700)
+            for name in files:
+                item = Path(directory) / name
+                if not item.is_symlink():
+                    os.chmod(item, 0o700 if item.stat().st_mode & 0o111 else 0o600)
+        for relative in relatives:
+            destination = worktree / relative
+            if not destination.parent.resolve().is_relative_to(resolved) or destination.is_symlink():
+                raise RuntimeError("dependency destination ancestry escapes worktree")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(staging / relative, destination)
+        for relative in relatives:
+            for directory, dirs, files in os.walk(worktree / relative, followlinks=False):
+                for name in dirs + files:
+                    item = Path(directory) / name
+                    if item.is_symlink() and not item.resolve().is_relative_to(resolved):
+                        raise RuntimeError("installed dependency symlink escapes worktree")
+
+
 def prepare_task_worktree(cfg: dict[str, Any], task: dict[str, Any]) -> Path:
     primary = Path(str(cfg["workspace"]))
     path = _v2_task_worktree(cfg, task)
     if (path / ".git").exists() or (path / ".git").is_file():
+        _seed_clean_dependencies(cfg, task, path)
         return path
     if path.exists() and any(path.iterdir()):
         raise RuntimeError(f"task worktree path exists but is not a git worktree: {path}")
@@ -2424,6 +2544,7 @@ def prepare_task_worktree(cfg: dict[str, Any], task: dict[str, Any]) -> Path:
     )
     if add.returncode != 0:
         raise RuntimeError(f"cannot create task worktree {path}: {add.stderr.strip()[:500]}")
+    _seed_clean_dependencies(cfg, task, path)
     return path
 
 
@@ -2459,13 +2580,50 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     if executor == "codex" and not model:
         model = str(cfg.get("codex_default_model") or "gpt-6-sol").strip()
     sandbox = str(task.get("sandbox") or "workspace").strip().lower()
+    clean = cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
     workspace = str(task.get("_workspace") or cfg["workspace"])
-    worktrees = str(cfg.get("worktrees_root") or (Path(str(cfg["workspace"])).parent / "worktrees"))
+    worktrees = str(cfg.get("worktrees_root") or
+                    (Path(str(cfg["workspace"])).parent / "worktrees"))
+    if clean and sandbox != "read-only" and not task.get("_workspace"):
+        raise RuntimeError("clean source producer must have an isolated worktree")
+    if clean and task.get("_workspace"):
+        task_path = Path(workspace).resolve()
+        base = Path(worktrees).resolve()
+        expected = _v2_task_worktree(cfg, task).resolve()
+        if (task_path != expected or task_path.parent != base
+                or task_path == base or Path(workspace).is_symlink()):
+            raise RuntimeError("clean task worktree must match its exact task identity")
     env = dict(os.environ)
-    prefixes = [str(cfg.get("node_bin") or "").strip(), str(cfg.get("local_bin") or "").strip()]
+    prefixes = [
+        str(cfg.get("node_bin") or
+            ("/home/agentagency-dev/.local/node-v24.21.0/bin" if clean else "")).strip(),
+        str(cfg.get("local_bin") or
+            ("/home/agentagency-dev/.local/bin" if clean else "")).strip(),
+    ]
     prefixes = [x for x in prefixes if x]
     if prefixes:
         env["PATH"] = os.pathsep.join(prefixes + [env.get("PATH", "")])
+
+    if clean and sandbox == "full":
+        raise RuntimeError("clean executor full sandbox bypass is not authorized")
+    if clean and executor != "codex":
+        raise RuntimeError("clean DEV executor requires scoped Codex, not Cursor")
+
+    if clean and "source_qa" in task and cfg.get("trusted_qa_job_enabled") is True:
+        if sandbox != "read-only":
+            raise RuntimeError("protected Clean QA requires read-only task")
+        from clean_qa_job import SUITES
+        if task.get("id") not in SUITES:
+            raise RuntimeError("unregistered protected Clean QA suite")
+        job = Path("/opt/gobadminton-clean/runner-code/current/clean_qa_job.py")
+        import clean_qa_job
+        clean_qa_job.protected(job.resolve())
+        # The actual root-owned QA service independently observes the admitted
+        # active claim. This unprivileged child only waits for verified evidence.
+        return subprocess.Popen(["/usr/bin/python3", "-I", str(job), "--wait", task["id"]],
+                                cwd=workspace, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True, env=env)
 
     if executor == "cursor":
         cli = str(cfg.get("cursor_agent") or "") or (shutil.which("agent") or shutil.which("cursor-agent") or "")
@@ -2487,6 +2645,9 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
         if not cli or not Path(cli).is_file():
             raise RuntimeError("Codex CLI not found")
         cmd = [cli, "exec", "--color", "never", "-C", workspace]
+        if clean:
+            cmd += ["--disable", "apps", "--disable", "remote_plugin", "--disable", "hooks",
+                    "--ignore-user-config", "-c", "apps._default.enabled=false"]
         if sandbox == "full":
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
         elif sandbox == "read-only":
@@ -2502,7 +2663,14 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
                        "that message; it is not an independently authorized root QA "
                        "receipt. Failure to prove a reviewer/job means BLOCKED.")
         else:
-            cmd += ["--approve-for-me", "--add-dir", str(ROOT), "--add-dir", worktrees]
+            if clean:
+                # Host CLI captures final JSON. Model cannot write Runner state
+                # or sibling worktrees via --add-dir.
+                cmd += ["--approve-for-me", "--output-last-message",
+                        str(readonly_receipt_path(task))]
+            else:
+                cmd += ["--approve-for-me", "--add-dir", str(ROOT),
+                        "--add-dir", worktrees]
         if model:
             cmd += ["--model", model]
         if effort in {"low", "medium", "high", "xhigh", "extra_high"}:
@@ -2521,8 +2689,136 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     )
 
 
+def _clean_pm_source() -> Path:
+    """The installed root-owned release is the only Clean planner ancestor."""
+    import stat
+    current = Path("/opt/gobadminton-clean/runner-code/current")
+    if current.lstat().st_uid != 0:
+        raise ValueError("untrusted Clean release pointer")
+    source = (current / "autopilot.py").resolve(strict=True)
+    base = Path("/opt/gobadminton-clean/runner-code")
+    if not source.is_relative_to(base) or source.name != "autopilot.py":
+        raise ValueError("Clean planner release escaped fixed source root")
+    for item in (source, *source.parents):
+        info = item.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("Clean release ancestry is not root protected")
+        if item == source and not stat.S_ISREG(info.st_mode):
+            raise ValueError("Clean planner source is not a regular file")
+    return source
+
+
+def _clean_pm_state() -> dict[str, Any]:
+    import stat
+    runtime = Path("/srv/gobadminton-clean/runner")
+    authority = clean_runtime_access.policy()
+    if (authority.get("submitter_uid") != 1002 or authority.get("runtime_gid") != 978
+            or not clean_runtime_access.directory_allowed(runtime, 1002)):
+        raise ValueError("Clean state runtime lacks exact root-pinned service/group authority")
+    directory = runtime.lstat()
+    if directory.st_gid != 978 or stat.S_IMODE(directory.st_mode) != 0o2770:
+        raise ValueError("Clean state runtime is not the dedicated shared directory")
+    path = "/srv/gobadminton-clean/runner/autopilot-state.json"
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 1002 or info.st_gid != 978
+                or info.st_nlink != 1 or info.st_mode & 0o022 or not 0 < info.st_size <= 65536):
+            raise ValueError("Clean Autopilot state is not protected")
+        data = stream.read(65537)
+        after = os.fstat(stream.fileno())
+        final = Path(path).lstat()
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (identity(info) != identity(after) or identity(info) != identity(final)
+                or len(data) != info.st_size):
+            raise ValueError("Clean Autopilot state changed during read")
+    def unique(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise ValueError("duplicate Clean Autopilot state field")
+            value[key] = item
+        return value
+    result = json.loads(data, object_pairs_hook=unique)
+    if not isinstance(result, dict):
+        raise ValueError("invalid Clean Autopilot state")
+    return result
+
+
+def _clean_pm_cgroup(proc: Any) -> bool:
+    return any(line.split(":", 2)[-1].rstrip("/") ==
+               "/system.slice/gobadminton-clean-autopilot.service"
+               for line in Path(f"/proc/{proc.pid}/cgroup").read_text().splitlines())
+
+
+def _clean_pm_args(args: list[str]) -> bool:
+    planning = "/srv/gobadminton-clean/worktrees/pm-autopilot"
+    if not any(Path(args[j]).name == "codex" and args[j + 1] == "exec"
+               for j in range(min(2, len(args) - 1))):
+        return False
+    if (args.count("-C") != 1 or args[args.index("-C") + 1] != planning
+            or "--ignore-user-config" not in args or "--approve-for-me" not in args):
+        return False
+    forbidden = ("--add-dir", "--cd", "--workspace", "--sandbox", "-s",
+                 "--profile", "-p", "--enable", "--dangerously-bypass-approvals-and-sandbox",
+                 "--dangerously-bypass-hook-trust")
+    if any(arg == item or arg.startswith(item + "=") for arg in args for item in forbidden):
+        return False
+    disabled = [args[j + 1] for j, arg in enumerate(args[:-1]) if arg == "--disable"]
+    if sorted(disabled) != ["apps", "hooks", "remote_plugin"]:
+        return False
+    config = [args[j + 1] for j, arg in enumerate(args[:-1]) if arg in {"-c", "--config"}]
+    if ("apps._default.enabled=false" not in config
+            or any(x != "apps._default.enabled=false" and
+                   not re.fullmatch(r'model_reasoning_effort="?(low|medium|high|xhigh)"?', x)
+                   for x in config)
+            or any(arg.startswith("--config=") or (arg.startswith("-c") and arg != "-c")
+                   or (arg.startswith("-p") and arg != "-p") for arg in args)):
+        return False
+    return (args.count("--output-last-message") == 1
+            and args[args.index("--output-last-message") + 1] ==
+            "/srv/gobadminton-clean/runner/autopilot-receipt.json")
+
+
+def _clean_managed_pm_planner(proc: Any, cfg: dict[str, Any]) -> bool:
+    import pwd
+    source = _clean_pm_source()
+    uid = pwd.getpwnam("agentagency-dev").pw_uid
+    if uid != 1002 or cfg.get("workspace") != "/srv/gobadminton-clean/repo":
+        return False
+    if Path(proc.cwd()).resolve() != Path("/srv/gobadminton-clean/worktrees/pm-autopilot"):
+        return False
+    state = _clean_pm_state()
+    ap_pid, planner_pid = state.get("pid"), state.get("planner_pid")
+    if (type(ap_pid) is not int or type(planner_pid) is not int
+            or min(ap_pid, planner_pid) <= 0 or ap_pid == planner_pid
+            or state.get("status") != "planning"):
+        return False
+    lineage = [proc, *proc.parents()]
+    planner = next((p for p in lineage if p.pid == planner_pid), None)
+    ancestor = next((p for p in lineage if p.pid == ap_pid), None)
+    if (planner is None or ancestor is None or
+            not any(p.pid == ap_pid for p in planner.parents())):
+        return False
+    if any(p.uids().real != uid or not _clean_pm_cgroup(p)
+           for p in (proc, planner, ancestor)):
+        return False
+    ap_args = ancestor.cmdline()
+    if (len(ap_args) != 5 or ap_args[:4] != ["/usr/bin/python3", "-E", "-s", "-B"]
+            or ap_args[4] != "/opt/gobadminton-clean/runner-code/current/autopilot.py"
+            or Path(ap_args[4]).resolve(strict=True) != source):
+        return False
+    return _clean_pm_args([str(x) for x in planner.cmdline()])
+
+
 def managed_pm_planner(proc: Any, cfg: dict[str, Any]) -> bool:
     """Recognize only managed PM planner processes and their helper descendants."""
+    if cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean":
+        try:
+            return _clean_managed_pm_planner(proc, cfg)
+        except (psutil.Error, OSError, ValueError, KeyError, IndexError, AttributeError,
+                clean_runtime_access.AccessHold):
+            return False
     dev = Path(str(cfg.get("dev_root") or Path(str(cfg["workspace"])).parent)).resolve()
     planning = dev / "worktrees/pm-autopilot"
     try:
@@ -3186,6 +3482,24 @@ def run_claimed(cfg: dict[str, Any], task: dict[str, Any], claim: dict[str, Any]
         proc.wait()
         cleanup_executor_process_group(proc.pid)
         log(f"agent exited code={proc.returncode} task={tid} executor={active_executor}")
+        if (cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+                and cfg.get("github_repo_write_authorized") is True
+                and tid in {"friends-dev-s1-api-20261013-v001", "radar-dev-map-ui-20261013-v001"}
+                and proc.returncode == 0):
+            proposal = read_receipt(rpath) or {}
+            if (proposal.get("ok") is True and proposal.get("project") == "GoBadminton"
+                    and proposal.get("task_id") == tid):
+                try:
+                    from clean_publish_submit import finish_producer
+                    _v2_update_active(tid, {"phase": "INTEGRATING", "agent_pid": None})
+                    finish_producer(task, worktree, proposal, executor_pid=proc.pid,
+                                    executor_exit_code=proc.returncode)
+                except Exception as exc:
+                    # Keep the real process/publication history; do not convert
+                    # an unconfirmed source proposal into completed work.
+                    mark_blocked(tid, "separated Publisher observation failed: " + str(exc),
+                                 blocker_scope="lane_local")
+                    return
         ok, reason = validate_receipt(rpath, tid)
         data = read_receipt(rpath) or {}
 
@@ -3217,6 +3531,9 @@ def run_claimed(cfg: dict[str, Any], task: dict[str, Any], claim: dict[str, Any]
                     continue
                 ok, reason = validate_receipt(rpath, tid)
                 data = read_receipt(rpath) or {}
+
+        if proc.returncode != 0:
+            ok, reason = False, f"executor exited nonzero ({proc.returncode}); receipt is not completion"
 
         if tid.startswith("qa-") or "source_review" in task:
             verdict = str(data.get("verdict") or "").upper()
