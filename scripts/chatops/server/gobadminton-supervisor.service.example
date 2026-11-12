@@ -1,0 +1,20 @@
+# PARALLEL_SLOTS_V1 supervisor (example; the installer renders the real unit). NOT installed by this PR.
+[Unit]
+Description=GoBadminton slot supervisor (PM scheduler; no GitHub writes, no keys)
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+User=gb-supervisor
+SupplementaryGroups=gb-slots
+ExecStart=/usr/bin/python3 -B /usr/local/lib/gobadminton-slots/slots.py supervise --config /etc/gobadminton-slots/supervisor.json
+Restart=on-failure
+RestartSec=30
+UMask=0022
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/gobadminton-autonomy/assign /var/lib/gobadminton-autonomy/locks
+[Install]
+WantedBy=multi-user.target
