@@ -1,0 +1,272 @@
+{
+ "schema": "GoBadminton.PmMap.v001",
+ "nodes": [
+  {
+   "issue": 94,
+   "title": "M1d.body.txt",
+   "status": "active",
+   "depends_on": [],
+   "locks": [
+    "web:games-map"
+   ],
+   "solo": [],
+   "profile": {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "source": "default"
+   },
+   "allowed_paths": [
+    "apps/web/src/components/consumer/games/GamesVenueMap.tsx",
+    "apps/web/src/lib/games-venue-map.ts",
+    "apps/web/src/styles/radar-geographic.css",
+    "apps/web/src/styles/venue-schedule-card.css",
+    "apps/web/test/**",
+    "docs/handoffs/**"
+   ],
+   "deps": [],
+   "blocked_by_deps": []
+  },
+  {
+   "issue": 96,
+   "title": "M0b.body.txt",
+   "status": "queued",
+   "depends_on": [
+    94
+   ],
+   "locks": [
+    "web:games-map"
+   ],
+   "solo": [],
+   "profile": {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "source": "default"
+   },
+   "allowed_paths": [
+    "apps/web/src/components/consumer/games/GamesVenueMap.tsx",
+    "apps/web/src/components/consumer/games/GamesMapView.tsx",
+    "apps/web/src/components/consumer/games/GamesMapViewport.tsx",
+    "apps/web/src/components/consumer/games/GamesMapDebugPanel.tsx",
+    "apps/web/src/components/consumer/pages/GamesDiscoveryPage.tsx",
+    "apps/web/src/lib/games-map-diagnostics.ts",
+    "apps/web/src/lib/games-map-debug.ts",
+    "apps/web/src/lib/games-venue-map.ts",
+    "apps/web/src/styles/radar-geographic.css",
+    "apps/web/src/styles/discovery.css",
+    "apps/web/test/**",
+    "docs/handoffs/**"
+   ],
+   "deps": [
+    {
+     "issue": 94,
+     "status": "open"
+    }
+   ],
+   "blocked_by_deps": [
+    94
+   ]
+  },
+  {
+   "issue": 97,
+   "title": "T0a-2.body.txt",
+   "status": "queued",
+   "depends_on": [],
+   "locks": [
+    "web:create-game"
+   ],
+   "solo": [],
+   "profile": {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "source": "default"
+   },
+   "allowed_paths": [
+    "apps/web/src/lib/booking-request.ts",
+    "apps/web/src/lib/consumer-types.ts",
+    "apps/web/src/components/consumer/pages/CreateGamePage.tsx",
+    "apps/web/src/components/consumer/games/BookingGuide.tsx",
+    "apps/web/src/styles/games.css",
+    "apps/web/test/**"
+   ],
+   "deps": [],
+   "blocked_by_deps": []
+  },
+  {
+   "issue": 98,
+   "title": "T0a-3.body.txt",
+   "status": "queued",
+   "depends_on": [],
+   "locks": [
+    "web:game-detail"
+   ],
+   "solo": [],
+   "profile": {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "source": "default"
+   },
+   "allowed_paths": [
+    "apps/web/src/components/consumer/games/GameDetailComposition.tsx",
+    "apps/web/src/components/consumer/games/VenueContactsCard.tsx",
+    "apps/web/src/components/consumer/pages/GameDetailPage.tsx",
+    "apps/web/src/components/consumer/pages/MyGamesPage.tsx",
+    "apps/web/src/lib/api-client.ts",
+    "apps/web/src/lib/consumer-types.ts",
+    "apps/web/src/styles/games.css",
+    "apps/web/test/**"
+   ],
+   "deps": [],
+   "blocked_by_deps": []
+  },
+  {
+   "issue": 99,
+   "title": "T0a-4.body.txt",
+   "status": "queued",
+   "depends_on": [
+    97,
+    98
+   ],
+   "locks": [
+    "api:games"
+   ],
+   "solo": [
+    "solo_path:apps/api/migrations/0037_game_booking_status.sql",
+    "solo_path:apps/api/migrations/rollback/0037_game_booking_status.sql",
+    "solo_path:apps/api/src/database/schema.ts",
+    "solo_path:packages/contracts/openapi.json",
+    "solo_path:packages/contracts/src/**"
+   ],
+   "profile": {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "source": "default"
+   },
+   "allowed_paths": [
+    "apps/api/migrations/0037_game_booking_status.sql",
+    "apps/api/migrations/rollback/0037_game_booking_status.sql",
+    "apps/api/src/database/schema.ts",
+    "apps/api/src/games/games.controller.ts",
+    "apps/api/src/games/games.service.ts",
+    "apps/api/test/integration/**",
+    "packages/contracts/openapi.json",
+    "packages/contracts/src/**",
+    "apps/web/src/lib/api-client.ts",
+    "apps/web/src/lib/consumer-types.ts",
+    "apps/web/src/components/consumer/games/GameActionBar.tsx",
+    "apps/web/src/components/consumer/pages/GameDetailPage.tsx",
+    "apps/web/src/styles/games.css",
+    "apps/web/test/**",
+    "docs/api/API_POLICY.md"
+   ],
+   "deps": [
+    {
+     "issue": 97,
+     "status": "open"
+    },
+    {
+     "issue": 98,
+     "status": "open"
+    }
+   ],
+   "blocked_by_deps": [
+    97,
+    98
+   ]
+  }
+ ],
+ "pairs": [
+  {
+   "a": 94,
+   "b": 96,
+   "parallel_candidate": false,
+   "why_not": [
+    "locks",
+    "paths",
+    "depends"
+   ]
+  },
+  {
+   "a": 94,
+   "b": 97,
+   "parallel_candidate": false,
+   "why_not": [
+    "paths"
+   ]
+  },
+  {
+   "a": 94,
+   "b": 98,
+   "parallel_candidate": false,
+   "why_not": [
+    "paths"
+   ]
+  },
+  {
+   "a": 94,
+   "b": 99,
+   "parallel_candidate": false,
+   "why_not": [
+    "solo",
+    "paths"
+   ]
+  },
+  {
+   "a": 96,
+   "b": 97,
+   "parallel_candidate": false,
+   "why_not": [
+    "paths"
+   ]
+  },
+  {
+   "a": 96,
+   "b": 98,
+   "parallel_candidate": false,
+   "why_not": [
+    "paths"
+   ]
+  },
+  {
+   "a": 96,
+   "b": 99,
+   "parallel_candidate": false,
+   "why_not": [
+    "solo",
+    "paths"
+   ]
+  },
+  {
+   "a": 97,
+   "b": 98,
+   "parallel_candidate": false,
+   "why_not": [
+    "paths"
+   ]
+  },
+  {
+   "a": 97,
+   "b": 99,
+   "parallel_candidate": false,
+   "why_not": [
+    "solo",
+    "paths",
+    "depends"
+   ]
+  },
+  {
+   "a": 98,
+   "b": 99,
+   "parallel_candidate": false,
+   "why_not": [
+    "solo",
+    "paths",
+    "depends"
+   ]
+  }
+ ],
+ "cycles": [],
+ "rejected": [],
+ "advice": "ADVISORY ONLY: claiming is unchanged; the executor stays the only authority",
+ "fingerprint": "02a98bdad8518fd5cc2dae6af12f90a8e661a4866c27b83e278c0831d93a4242",
+ "generated_at": "2026-10-19T05:51:47Z"
+}
