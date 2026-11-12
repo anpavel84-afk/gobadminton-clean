@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7
+# DEV PREP ONLY. Radar source: 16b97821cccec15d9b26f4e8e2b3073dd0bb3ee3
+# Packaging-only COPY packages/contracts from PR #182.
+# Explicit build-time Radar map version; NEVER used for PROD.
+FROM node:24.21.0-bookworm-slim AS build
+WORKDIR /app
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN corepack enable && corepack prepare pnpm@10.18.0 --activate
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc tsconfig.base.json ./
+COPY scripts/check-node.mjs scripts/check-node.mjs
+COPY apps/web/package.json apps/web/package.json
+COPY apps/api/package.json apps/api/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/tooling/package.json packages/tooling/package.json
+RUN pnpm install --frozen-lockfile --filter @gobadminton/web...
+COPY apps/web apps/web
+COPY packages/contracts packages/contracts
+COPY packages/tooling packages/tooling
+ARG NEXT_PUBLIC_RADAR_MAP_CANDIDATE=moscow-20261007-p4-098a869f-v001
+ENV NEXT_PUBLIC_RADAR_MAP_CANDIDATE=${NEXT_PUBLIC_RADAR_MAP_CANDIDATE}
+ENV API_BASE_URL=http://api:3000
+RUN pnpm --filter @gobadminton/web run build
+
+FROM node:24.21.0-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV HOSTNAME=0.0.0.0
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN useradd --system --uid 10001 --create-home gobadminton
+COPY --from=build --chown=gobadminton:gobadminton /app/apps/web/.next/standalone ./
+COPY --from=build --chown=gobadminton:gobadminton /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build --chown=gobadminton:gobadminton /app/apps/web/public ./apps/web/public
+USER gobadminton
+EXPOSE 3001
+CMD ["node", "apps/web/server.js"]
