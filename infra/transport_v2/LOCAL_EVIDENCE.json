@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "scope": "author local source/nginx/mTLS; NOT XHTTP runtime or original-host QA",
+  "base_sha": "71aaabd97cf81f387ccc1f50258a81d54289b3b2",
+  "files_sha256": {
+    "docs/decisions/ADR-TRANSPORT-20261012-REVERSE-XHTTP-LANES.md": "a2481db17f8537bc3e1b46fdfeeed1e2233728eeaf6a3c1e9263914aa972dd4d",
+    "infra/transport_v2/test_transport.py": "f4c8bc119688ffa739b070149c9eafcb6a77d9dbe77b78661c11477445f62e3a",
+    "infra/transport_v2/transport.py": "898011ff843504f676ce1c5d9284372576bcf628f77715b9afc4171f9ac3ed32"
+  },
+  "python": "3.13.5",
+  "nginx": "1.26.3",
+  "runs": [
+    {
+      "id": "R1",
+      "result": "FAIL",
+      "tests": 26,
+      "errors": 1,
+      "cause": "local fixture CA lacked keyUsage required by Python 3.13 strict TLS validation",
+      "log_sha256": "b86cfc024481f470c736bfa40ec475b7e2776fe2487fe60002583aed6ac9f9ca"
+    },
+    {
+      "id": "R2",
+      "result": "PASS",
+      "tests": 26,
+      "log_sha256": "1cb224c7663818627c5618d5bb73deedad840a052a7c90cc6641fae2cf804877"
+    },
+    {
+      "id": "FINAL",
+      "result": "PASS",
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 10.848,
+      "log_sha256": "7fe9c78cf1a4480c4cc05db47792a5704c08fe14350a5aa7c758a2afb63aceb5"
+    }
+  ],
+  "evidence": {
+    "sequential_large_uploads": 100,
+    "sizes_kib": [
+      4,
+      8,
+      16,
+      24,
+      32,
+      64,
+      384,
+      512
+    ],
+    "directions": [
+      "upload",
+      "download"
+    ],
+    "integrity": "SHA256",
+    "fixture_lane_transport": "transparent loopback TCP relay, NOT XHTTP"
+  },
+  "xray_binary_available": false,
+  "xray_candidate_engine_test": "NOT_RUN",
+  "cross_border_test": "NOT_RUN",
+  "independent_qa": "NOT_RUN",
+  "github_ci": "NOT_RUN",
+  "installed": false,
+  "deployed": false,
+  "product_authenticated_smoke": "NOT_RUN",
+  "operator_paused": true,
+  "production_mutation": false
+}
