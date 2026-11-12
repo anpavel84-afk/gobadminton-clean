@@ -219,10 +219,20 @@ def validate_resume(active, comment, since, now=None):
     return value
 
 
+def headless_parkable(active):
+    """PARK_V1.1: the single headless shape: developing produced no diff (no head, no PR)."""
+    return bool(active and active.get('phase') == 'blocked' and active.get('head') is None
+                and active.get('pr') is None and active.get('resume_phase') == 'developing'
+                and active.get('reason') == 'zero diff' and SHA.fullmatch(active.get('base') or '')
+                and type(active.get('attempt')) is int)
+
+
 def validate_park(active, comment, since, used=(), now=None):
-    """One-shot Owner marker that parks a genuinely blocked task; bound to issue/head/attempt."""
-    require(active and active.get('phase') == 'blocked' and SHA.fullmatch(active.get('head') or '')
-            and type(active.get('attempt')) is int, 'task not parkable')
+    """One-shot Owner marker that parks a genuinely blocked task; bound to issue/head/attempt
+    (headless 'zero diff' task: head null and bound to base instead)."""
+    headless = headless_parkable(active)
+    require(active and active.get('phase') == 'blocked' and type(active.get('attempt')) is int
+            and (headless or SHA.fullmatch(active.get('head') or '')), 'task not parkable')
     require(not resume_eligible(active), 'resumable task must use RESUME')
     require(type(comment.get('id')) is int and comment['id'] > 0, 'invalid comment id')
     require(comment['id'] not in used and comment['id'] not in active.get('parks', []),
@@ -240,11 +250,15 @@ def validate_park(active, comment, since, used=(), now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     require(since <= created <= now, 'park outside enrollment window')
     value = loads(raw)
-    require(isinstance(value, dict) and set(value) == {
-        'schema', 'issue', 'head', 'attempt', 'reason', 'allow_successors'}, 'unexpected park fields')
+    fields = {'schema', 'issue', 'head', 'attempt', 'reason', 'allow_successors'}
+    require(isinstance(value, dict) and set(value) == (fields | {'base'} if headless else fields),
+            'unexpected park fields')
     require(value['schema'] == PARK_MARKER, 'park scope')
     require(type(value['issue']) is int and value['issue'] == active['issue'], 'park issue mismatch')
-    require(isinstance(value['head'], str) and value['head'] == active['head'], 'park head mismatch')
+    if headless:
+        require(value['head'] is None and value['base'] == active['base'], 'park headless binding mismatch')
+    else:
+        require(isinstance(value['head'], str) and value['head'] == active['head'], 'park head mismatch')
     require(type(value['attempt']) is int and value['attempt'] == active['attempt'],
             'park attempt mismatch')
     require(isinstance(value['reason'], str) and 1 <= len(value['reason']) <= 500, 'park reason size')
