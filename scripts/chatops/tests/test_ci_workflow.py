@@ -45,7 +45,7 @@ class ProductWorkflow(unittest.TestCase):
                     break
                 step[key] = value
             self.steps.append(step)
-        self.assertEqual(len(self.steps), 6)
+        self.assertEqual(len(self.steps), 7)
         self.assertEqual(self.steps[0]['uses'],
                          'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683')
         self.assertEqual(self.steps[1], {'uses': './.github/actions/ci-setup'})
@@ -54,6 +54,10 @@ class ProductWorkflow(unittest.TestCase):
             if command != 'typecheck':
                 expected['if'] = 'success() || failure()'
             self.assertEqual(step, expected)
+        self.mobile = self.steps[5]
+        self.assertEqual(set(self.mobile), {'name', 'run', 'if'})
+        self.assertEqual(self.mobile['name'], 'Mobile M1 native checks within web source')
+        self.assertEqual(self.mobile['if'], 'success() || failure()')
         self.addon = self.steps[-1]
         self.assertEqual(set(self.addon), {'name', 'run'})
         self.assertTrue(self.addon['name'].startswith('Admin-only extra '))
@@ -97,6 +101,20 @@ class ProductWorkflow(unittest.TestCase):
                 'Build Admin standalone images at root and /admin (no push)')]
             with self.subTest(previous_yaml_if=package), self.assertRaisesRegex(gate.Hold, 'unexpected skipped step'):
                 gate.successful(run, bad, SHA, gate.CI_JOBS)
+
+    def test_mobile_checks_run_only_in_web_and_fail_closed(self):
+        commands = [f'--filter @gobadminton/mobile run {step}' for step in
+                    ('typecheck', 'lint', 'test:unit', 'export:check')]
+        stubs = '\npnpm() { echo "$*"; [ "$*" != "$FAIL_COMMAND" ]; }\n'
+        for package in self.packages:
+            for fail in ('none', *commands):
+                script = stubs + self.mobile['run'].replace('${{ matrix.package }}', package)
+                result = subprocess.run(['bash', '--noprofile', '--norc', '-c', script],
+                                        env=dict(os.environ, FAIL_COMMAND=fail), text=True, capture_output=True)
+                expected = commands if fail == 'none' else commands[:commands.index(fail) + 1]
+                with self.subTest(package=package, fail=fail):
+                    self.assertEqual(result.stdout.splitlines(), expected if package == 'web' else [])
+                    self.assertEqual(result.returncode == 0, package != 'web' or fail == 'none', result.stderr)
 
     def test_receiver_has_full_history_for_immutable_controller_provenance(self):
         receiver = self.source.split('\n  receiver:\n', 1)[1]

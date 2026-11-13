@@ -1,0 +1,47 @@
+{
+  "name": "@gobadminton/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "engines": {
+    "node": "24.21.0"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint app src test assets/brand-mark.ts",
+    "test:unit": "node --experimental-strip-types --test test/*.test.ts",
+    "export:check": "expo export --platform android --output-dir dist/android && expo export --platform ios --output-dir dist/ios"
+  },
+  "dependencies": {
+    "@gobadminton/contracts": "workspace:*",
+    "@expo/metro-runtime": "58.0.17",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "58.0.25",
+    "expo-constants": "58.0.16",
+    "expo-font": "58.0.12",
+    "expo-linking": "58.0.17",
+    "expo-router": "58.0.31",
+    "expo-splash-screen": "58.0.14",
+    "expo-status-bar": "58.0.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "5.11.1",
+    "react-native-screens": "4.30.1",
+    "react-native-svg": "15.16.0",
+    "react-native-web": "0.21.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.36.0",
+    "@types/node": "24.5.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "9.36.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.44.1"
+  },
+  "type": "module"
+}
