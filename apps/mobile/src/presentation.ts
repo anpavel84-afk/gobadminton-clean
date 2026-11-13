@@ -1,4 +1,47 @@
 import type { PublicGame } from './public-api.ts';
+
+// Pure native subset of web discovery-presentation.ts/discoveryFormat.
+// Unsupported keys have no consumer label and are omitted.
+export function formatLabel(key: string): string | null {
+  switch (key) {
+    case 'doubles': return 'Парная игра';
+    case 'singles': return 'Одиночная игра';
+    case 'mixed':
+    case 'mixed_doubles': return 'Микст';
+    default: return null;
+  }
+}
+
+// web level-guide.ts: exact scale/version identity; NTRP v1 half-steps
+// 1.0…7.0 and gb-social-pilot v1 symbols only. Never guess a foreign scale.
+export function levelLabel(rule: PublicGame['levelRule']): string {
+  if (!rule.allowedLevelIds.length) return 'Не указаны';
+  const unknown = 'Уточните у организатора';
+  if (rule.scaleVersion !== 1) return unknown;
+  if (rule.scaleId === 'ntrp') {
+    const values = rule.allowedLevelIds.map(id => {
+      const trimmed = id.trim().replace(',', '.');
+      const value = Number(trimmed);
+      const snapped = Math.round(value * 2) / 2;
+      return trimmed && Number.isFinite(value) && value >= 1 && value <= 7 && Math.abs(value - snapped) <= 1e-9
+        ? snapped.toFixed(1).replace('.', ',') : null;
+    });
+    return values.every(value => value !== null) ? `NTRP ${values.join(' · ')}` : unknown;
+  }
+  if (rule.scaleId === 'gb-social-pilot') {
+    const labels = rule.allowedLevelIds.map(id => {
+      switch (id) {
+        case 'beginner': return 'Начинающий';
+        case 'intermediate': return 'Средний';
+        case 'advanced': return 'Продвинутый';
+        default: return null;
+      }
+    });
+    return labels.every(label => label !== null) ? labels.join(' · ') : unknown;
+  }
+  return unknown;
+}
+
 export function gameTime(game: PublicGame) {
   const format = new Intl.DateTimeFormat('ru-RU', {
     timeZone: game.timezone, day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',

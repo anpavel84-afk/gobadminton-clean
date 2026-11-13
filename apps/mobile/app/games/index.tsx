@@ -2,19 +2,16 @@ import { useCallback } from 'react';
 import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { selectedCity } from '../../src/entry.ts';
-import { useResource } from '../../src/hooks.ts';
+import { useResource, useUpcomingItems } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
-import type { GamePage } from '../../src/public-api.ts';
+import type { GamePage, PublicGame } from '../../src/public-api.ts';
+import { appendUpcomingPage } from '../../src/upcoming.ts';
 import { usePreferences } from '../../src/state.tsx';
 import { gameTime, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { colors } from '../../src/theme.ts';
 import { ErrorState, Header, Hero, Label, Loading, Page, PrimaryButton, TextButton, styles } from '../../src/components/ui.tsx';
 
-function appendPage(previous: GamePage, page: GamePage): GamePage {
-  const items = new Map(previous.items.map(item => [item.id, item]));
-  page.items.forEach(item => items.set(item.id, item));
-  return { items: [...items.values()], nextCursor: page.nextCursor };
-}
+const noGames: PublicGame[] = [];
 export default function GuestGames() {
   const { preferences, hydrated, storageError } = usePreferences();
   const router = useRouter();
@@ -26,10 +23,11 @@ export default function GuestGames() {
   const gamesTask = useCallback((signal: AbortSignal): Promise<GamePage> => cityId
     ? publicApi.games(cityId, undefined, signal) : Promise.resolve({ items: [], nextCursor: null }), [cityId]);
   const { state, retry, resource } = useResource(key, gamesTask);
+  const items = useUpcomingItems(state.data?.items ?? noGames);
   const more = () => {
     const cursor = state.data?.nextCursor;
     if (!cityId || !cursor || state.status === 'loading') return;
-    void resource.load(key, signal => publicApi.games(cityId, cursor, signal), appendPage);
+    void resource.load(key, signal => publicApi.games(cityId, cursor, signal), appendUpcomingPage);
   };
   const selectCity = () => router.push('/city');
   return <Page>
@@ -48,15 +46,15 @@ export default function GuestGames() {
       <PrimaryButton title="Выбрать город" onPress={selectCity} />
     </View>}
     {city && <>
-      <Label accessibilityRole="header" style={styles.subtitle}>Игры · {city.nameRu}</Label>
+      <Label accessibilityRole="header" style={styles.subtitle}>Предстоящие игры · {city.nameRu}</Label>
       {state.status === 'loading' && <Loading />}
       {state.status === 'error' && <ErrorState error={state.error} retry={state.data?.nextCursor ? more : retry} />}
-      {state.status === 'ready' && !state.data?.items.length && <View style={styles.card} accessibilityLiveRegion="polite">
+      {state.status === 'ready' && !items.length && <View style={styles.card} accessibilityLiveRegion="polite">
         <Label style={styles.subtitle}>Игр пока нет</Label>
-        <Label>Для этого города в каталоге сейчас нет игр.</Label>
+        <Label>Для этого города сейчас нет предстоящих игр в загруженной части каталога.</Label>
         <TextButton title="Обновить" onPress={retry} />
       </View>}
-      {state.data?.items.map(game => <View key={game.id} style={styles.card}>
+      {items.map(game => <View key={game.id} style={styles.card}>
         <Label style={styles.subtitle} accessibilityRole="header">{game.title}</Label>
         <Label>{gameTime(game)}</Label>
         <Label>{game.venue.name} · {game.venue.address}</Label>

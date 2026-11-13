@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
-import { deadline, gameTime, settlementLabel, statusLabel } from '../../src/presentation.ts';
+import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { ErrorState, Header, Label, Loading, Page, PrimaryButton, styles } from '../../src/components/ui.tsx';
 
 export default function PublicGameDetails() {
@@ -13,6 +13,7 @@ export default function PublicGameDetails() {
   const task = useCallback((signal: AbortSignal) => publicApi.game(id, signal), [id]);
   const { state, retry } = useResource(`game:${id}`, task);
   const game = state.data;
+  const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
   return <Page>
     <Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />
@@ -30,8 +31,8 @@ export default function PublicGameDetails() {
       </View>
       <View style={styles.card}>
         <Label accessibilityRole="header" style={styles.subtitle}>Условия</Label>
-        <Label>Формат: {game.formatKey}</Label>
-        <Label>Уровни: {game.levelRule.allowedLevelIds.length ? game.levelRule.allowedLevelIds.join(', ') : 'не указаны'} (шкала {game.levelRule.scaleId}, версия {game.levelRule.scaleVersion})</Label>
+        {format && <Label>Формат: {format}</Label>}
+        <Label>Уровни: {levelLabel(game.levelRule)}</Label>
         <Label>Вместимость: {game.capacity}</Label>
         <Label>Подтверждено в приложении: {game.confirmedCount}</Label>
         <Label>Зарезервировано вне приложения: {game.externalReservedCount}</Label>
@@ -39,7 +40,7 @@ export default function PublicGameDetails() {
         <Label>{settlementLabel(game)}</Label>
         <Label>{game.settlement.terms || 'Дополнительные условия расчётов не указаны.'}</Label>
         <Label>Расчёты проходят вне приложения.</Label>
-        {game.activityKind === 'trainer_led' && <Label>Занятие с тренером{game.trainer ? `: ${game.trainer.displayName} (по заявлению тренера)` : ''}</Label>}
+        {game.activityKind === 'trainer_led' && <Label>{game.trainer ? `Тренер: ${game.trainer.displayName}` : 'Занятие с тренером'}</Label>}
         {game.trainingDescription && <Label>{game.trainingDescription}</Label>}
       </View>
       <View style={styles.card}>

@@ -1,4 +1,5 @@
 import type { Game } from '@gobadminton/contracts/game-types';
+import { futureItems } from './upcoming.ts';
 
 // Type-only subpath: contracts' root index uses node:fs and must never enter Metro.
 export type PublicGame = Pick<Game, 'id' | 'title' | 'status' | 'visibility' | 'venue' |
@@ -71,7 +72,7 @@ export function parsePage(value: unknown): GamePage {
   return { items: row.items.map(game), nextCursor: row.nextCursor as string | null };
 }
 export type PublicApi = ReturnType<typeof createPublicApi>;
-export function createPublicApi(fetcher: typeof fetch = fetch) {
+export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number = Date.now) {
   // No arbitrary URL, method, headers, body, cookies or account configuration is accepted.
   async function get(path: string, signal?: AbortSignal): Promise<unknown> {
     const controller = new AbortController();
@@ -106,8 +107,11 @@ export function createPublicApi(fetcher: typeof fetch = fetch) {
     async cities(signal?: AbortSignal) { return parseCities(await get('/cities', signal)); },
     async games(cityId: string, cursor?: string, signal?: AbortSignal) {
       if (!cityId.trim()) throw new PublicApiError('invalid');
-      const query = `cityId=${encodeURIComponent(cityId)}&limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
-      return parsePage(await get(`/games?${query}`, signal));
+      const startsFrom = new Date(now()).toISOString();
+      const query = `cityId=${encodeURIComponent(cityId)}&limit=20&startsFrom=${encodeURIComponent(startsFrom)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      const page = parsePage(await get(`/games?${query}`, signal));
+      // Receipt time is authoritative: a delayed response can already be past.
+      return { ...page, items: futureItems(page.items, now()) };
     },
     async game(id: string, signal?: AbortSignal) {
       if (!id.trim()) throw new PublicApiError('unavailable');

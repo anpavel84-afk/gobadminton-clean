@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { colors, interaction, motionPolicy, primaryLabelStyle, primarySurface, typography } from '../src/theme.ts';
 import { brandMarkXml } from '../assets/brand-mark.ts';
@@ -32,6 +33,7 @@ test('approved assets retain exact bytes and SVG renders with SvgXml, one brand 
   assert.equal((ui.match(/accessibilityLabel="GoBadminton"/g) ?? []).length, 1);
 });
 test('native font/scaling/safe area/keyboard and static Reduce Motion wiring', () => {
+  assert.equal(JSON.parse(read('../app.json')).expo.ios.supportsTablet, false);
   assert.equal(typography.fontFamily, 'Onest'); assert.equal(typography.allowFontScaling, true);
   const ui = read('../src/components/ui.tsx');
   assert.match(ui, /paddingBottom: insets.bottom \+ 24/);

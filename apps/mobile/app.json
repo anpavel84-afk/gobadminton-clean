@@ -11,7 +11,7 @@
     "orientation": "default",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "ru.gobadminton.mobile.dev"
     },
     "android": {

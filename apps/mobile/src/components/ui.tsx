@@ -1,4 +1,5 @@
 import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import type { ImageSourcePropType } from 'react-native';
 import type { ComponentProps, PropsWithChildren } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -6,6 +7,10 @@ import { SvgXml } from 'react-native-svg';
 import { brandMarkXml } from '../../assets/brand-mark.ts';
 import { colors, interaction, primaryLabelStyle, primarySurface, typography } from '../theme.ts';
 import { PublicApiError } from '../public-api.ts';
+
+// Metro needs a literal require to bundle the native image asset.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const racketImage: ImageSourcePropType = require('../../assets/racket-v1.webp');
 
 export function Label({ style, ...props }: ComponentProps<typeof Text>) {
   return <Text {...props} allowFontScaling={typography.allowFontScaling} style={[styles.text, style]} />;
@@ -54,7 +59,7 @@ export function TrajectoryArtwork({ compact = false }: { compact?: boolean }) {
   return <View pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
     style={{ alignItems: 'center', justifyContent: 'center', height: diameter + 48, overflow: 'hidden', width: '100%' }}>
     <View style={{ width: diameter, height: diameter, borderRadius: diameter / 2, overflow: 'hidden', backgroundColor: colors.purpleInk }}>
-      <Image source={require('../../assets/racket-v1.webp')} resizeMode="cover" accessible={false} style={{ width: '100%', height: '100%' }} />
+      <Image source={racketImage} resizeMode="cover" accessible={false} style={{ width: '100%', height: '100%' }} />
     </View>
     <View style={[styles.orbit, { width: diameter * 1.3, height: diameter * 1.3, borderRadius: diameter,
       transform: [{ rotate: '-24deg' }, { scaleY: 0.42 }] }]} />

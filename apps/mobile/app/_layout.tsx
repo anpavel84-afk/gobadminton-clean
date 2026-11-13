@@ -13,6 +13,8 @@ export default function RootLayout() {
   const reduceMotion = useReduceMotion();
   useEffect(() => {
     let active = true;
+    // Metro needs a literal require to bundle the native font asset.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadAsync({ Onest: require('../assets/onest.ttf') }).then(() => { if (active) setFont('ready'); })
       .catch(() => { if (active) setFont('error'); });
     return () => { active = false; };
