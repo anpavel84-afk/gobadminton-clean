@@ -37,6 +37,16 @@ jobs:
         if: success() || failure()
       - run: pnpm --filter @gobadminton/${{ matrix.package }} run test:unit
         if: success() || failure()
+      - name: Mobile M1 native checks within web source
+        if: success() || failure()
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.package }}" = web ]; then
+            pnpm --filter @gobadminton/mobile run typecheck
+            pnpm --filter @gobadminton/mobile run lint
+            pnpm --filter @gobadminton/mobile run test:unit
+            pnpm --filter @gobadminton/mobile run export:check
+          fi
       - name: Admin-only extra path regression and standalone root/path builds
         run: |
           set -euo pipefail

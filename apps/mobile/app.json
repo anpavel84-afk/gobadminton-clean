@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "GoBadminton DEV",
+    "slug": "gobadminton-mobile-dev",
+    "version": "0.1.0",
+    "scheme": "gobadminton-dev",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "orientation": "default",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ru.gobadminton.mobile.dev"
+    },
+    "android": {
+      "package": "ru.gobadminton.mobile.dev",
+      "permissions": [],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/onest.ttf"
+          ]
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
