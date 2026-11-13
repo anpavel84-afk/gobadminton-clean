@@ -8,6 +8,34 @@ import { brandMarkXml } from '../assets/brand-mark.ts';
 import { settlementLabel, gameTime } from '../src/presentation.ts';
 import { game } from './fixtures.ts';
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+test('native packaging blocks unused template permissions alongside microphone and location', () => {
+  const config = JSON.parse(read('../app.json')).expo;
+  for (const permission of [
+    'android.permission.RECORD_AUDIO',
+    'android.permission.ACCESS_FINE_LOCATION',
+    'android.permission.ACCESS_COARSE_LOCATION',
+    'android.permission.READ_EXTERNAL_STORAGE',
+    'android.permission.WRITE_EXTERNAL_STORAGE',
+    'android.permission.SYSTEM_ALERT_WINDOW',
+    'android.permission.VIBRATE',
+  ]) {
+    assert.ok(config.android.blockedPermissions.includes(permission), `${permission} must be blocked`);
+  }
+  assert.ok(!config.android.blockedPermissions.includes('android.permission.INTERNET'));
+  assert.deepEqual(config.android.permissions, []);
+  assert.ok(config.plugins.includes('expo-router'));
+});
+test('native icon and technical splash bind the approved product icon with exact bytes', () => {
+  const config = JSON.parse(read('../app.json')).expo;
+  assert.equal(config.icon, './assets/icon.png');
+  const splash = config.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-splash-screen');
+  assert.equal(splash?.[1].image, './assets/icon.png');
+  const icon = readFileSync(new URL(`../${config.icon}`, import.meta.url));
+  assert.equal(icon.byteLength, 13670);
+  const sha = createHash('sha256').update(icon).digest('hex');
+  assert.equal(sha, '76469bebd216158794f6c39643b143ba4f6d16886cd326297146bb5d46d835cd');
+  assert.equal(JSON.parse(read('../assets/provenance.json')).assets['icon.png'], sha);
+});
 test('every primary state uses pure black, opaque labels; native target sizes', () => {
   assert.equal(colors.purple, '#7945DE'); assert.equal(colors.lime, '#A7F447');
   assert.equal(primaryLabelStyle.color, '#000000'); assert.equal(primaryLabelStyle.opacity, 1);

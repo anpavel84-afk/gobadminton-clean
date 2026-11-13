@@ -5,6 +5,17 @@
   "assets": {
     "racket-v1.webp": "fa6573736c163e59542c7af37b53270079d1d3cd10ffc00863ff8fba43d0a670",
     "go-badminton.svg": "b168aeb3545164eb173b694b2caa5d0eff98d864d4482233af9bec1bb65c8827",
-    "onest.ttf": "3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589"
+    "onest.ttf": "3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589",
+    "icon.png": "76469bebd216158794f6c39643b143ba4f6d16886cd326297146bb5d46d835cd"
+  },
+  "assetSources": {
+    "icon.png": {
+      "source": "apps/web/public/brand/pwa/icon-512.png",
+      "method": "Byte-exact copy of the existing approved product asset for the native app icon and technical splash image.",
+      "bytes": 13670,
+      "width": 512,
+      "height": 512,
+      "limitation": "512px product asset; store and iOS readiness are not verified."
+    }
   }
 }
