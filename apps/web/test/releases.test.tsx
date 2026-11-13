@@ -922,8 +922,8 @@ describe("releases catalogue integrity", () => {
     expect(currentProse).toContain("Мобильное приложение: гостевой просмотр и тестовая сборка Android");
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
-    expect(currentProse).not.toMatch(/operator|alias/i);
-    expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|MutationRunner|OpenAPI|Cases|legacy|replay/i);
+    expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
+    expect(currentProse).not.toMatch(/\bSafety\b|PG-4|PG-3|\bPROD\b|MutationRunner|OpenAPI|Cases|legacy|replay/i);
     expect(currentProse).not.toMatch(
       /directoryVisible|contactPolicy|owner_default|\bACTIVE\b|\bOFF\b|login\/reread|pristine|synthetic/i,
     );
@@ -1901,7 +1901,7 @@ describe("releases page current known limitations SSR (#473)", () => {
     expect(current.textContent).toContain("Фактическая установка этого номера появится после выпуска");
     expect(current.textContent).not.toContain(alpha82.title);
     expect(current.textContent).not.toContain(alpha83.title);
-    expect(current.textContent).not.toMatch(/r42933691199-a1|8bf111018170|2026-11-11T00:49:15Z|r42863201852-a1|17a9c596|2026-11-10T17:33:38Z|r42889702522-a1|6c551d21|2026-11-10T19:59:30Z|sha256:/);
+    expect(current.textContent).not.toMatch(/ACCEPTED|r42933691199-a1|8bf111018170|2026-11-11T00:49:15Z|r42863201852-a1|17a9c596|2026-11-10T17:33:38Z|r42889702522-a1|6c551d21|2026-11-10T19:59:30Z|sha256:/);
     expect(html).not.toContain("Серверный API фотографий в комментариях площадок");
     expect(html).not.toContain("В API жалоб и служебных дел сохраняются точные фотографии той редакции комментария, на которую пожаловались; доступ к ним отдельно проверяется по действующим служебным правам.");
     expect(html).not.toContain("Приватная серверная подготовка фотографий площадок");
