@@ -257,7 +257,8 @@ class FoundationExceptionsTest(unittest.TestCase):
                 self.document = copy.deepcopy(self.contract)
                 op = self.document['paths'][route]['delete']
                 self.assertNotIn('requestBody', op)
-                self.assertEqual(op['security'], [{'cookieSession': []}])
+                self.assertEqual(op['security'], [{'cookieSession': []}, {'NativeBearer': []}]
+                                 if route == '/me/sessions/{sessionId}' else [{'cookieSession': []}])
                 for name in ['Origin', 'X-CSRF-Token']:
                     self.assertTrue(next(p for p in op['parameters'] if p.get('name') == name)['required'])
                 for change in ['missing', 'optional']:
