@@ -27,26 +27,6 @@ const VALID_SHA = "11558239cf284a2f20e3c1c6906ae217c703325f";
 const VALID_SHA_UPPER = "11558239CF284A2F20E3C1C6906AE217C703325F";
 const OTHER_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-// Messages notes are now accepted history; current create/manage notes are checked separately.
-const alpha88 = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.88")!;
-
-describe("alpha.89 pending metadata and accepted parent", () => {
-  it("keeps alpha.88 as the latest accepted history without inventing an alpha.89 deployment", () => {
-    const rows = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
-    expect(rows).toHaveLength(97);
-    expect(rows[0]).toMatchObject({
-      application_version: "0.1.0-alpha.88",
-      source_sha: "d8dcb45607fa99c79ec983c511fc569cc5897449",
-      release_id: "r43587434004-a1", accepted_at: "2026-11-14T11:11:45.000Z",
-      environment: "dev", status: "ACCEPTED", owner_uat: "FAIL_RECHECK_PENDING", origin: "seed",
-    });
-    expect(rows.some(row => row.application_version === "0.1.0-alpha.89")).toBe(false);
-    expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
-    expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
-    expect(alpha88.owner_uat).toBe("FAIL_RECHECK_PENDING");
-  });
-});
-
 describe("releases DEV runtime guard", () => {
   afterEach(() => {
     delete process.env.API_BASE_URL;
@@ -315,7 +295,7 @@ describe("history seed integrity", () => {
       ...projection, accepted: { ...projection.accepted, source_sha: alpha75.source_sha },
     }]);
     expect(projectionOnly[0]).toMatchObject({ origin: "live_projection", additions: [], fixes: [] });
-    expect([...alpha88.additions, ...alpha88.fixes]).not.toContain(historical.fixes[0]);
+    expect([...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes]).not.toContain(historical.fixes[0]);
     const previousSha = process.env.GIT_SHA;
     process.env.GIT_SHA = unknownSha;
     try {
@@ -549,10 +529,10 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-5)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.89")).toBe(false);
-    expect(alpha88.known_limitations.slice(4, 6)).toEqual(row.known_limitations.slice(1, 3));
-    expect(alpha88.known_limitations[6]).toBe("Физический iPhone, провайдер доставки и GoBad ещё не проверены; результат проверки мобильного прототипа владельцем указан выше; служебный разбор отзывов после обычного входа ещё не проверен");
-    expect(alpha88.known_limitations.slice(7)).toEqual(row.known_limitations.slice(4));
+    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(4, 6)).toEqual(row.known_limitations.slice(1, 3));
+    expect(CURRENT_NAMED_RELEASE.known_limitations[6]).toBe("Физический iPhone, провайдер доставки и GoBad ещё не проверены; результат проверки мобильного прототипа владельцем указан выше; служебный разбор отзывов после обычного входа ещё не проверен");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(7)).toEqual(row.known_limitations.slice(4));
     expect(row.known_limitations[0]).toBe("Нативный мобильный онбординг (#522) ещё не реализован");
   });
 
@@ -610,11 +590,11 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-3)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some(row => row.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some(row => row.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
-    expect(alpha88.known_limitations.slice(3)).toEqual(row.known_limitations.slice(3));
-    expect(alpha88.known_limitations[1]).toBe(row.known_limitations[1]);
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(3)).toEqual(row.known_limitations.slice(3));
+    expect(CURRENT_NAMED_RELEASE.known_limitations[1]).toBe(row.known_limitations[1]);
   });
 
   it("describes alpha.86 as partial prepared work with the actual device rejection retained", () => {
@@ -714,7 +694,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-6)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((count, item) => count + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -756,7 +736,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-7)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((count, item) => count + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -804,7 +784,7 @@ describe("history seed integrity", () => {
     ]);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -851,7 +831,7 @@ describe("history seed integrity", () => {
     ]);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -902,7 +882,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-10)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -943,7 +923,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-11)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -1001,7 +981,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-12)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -1049,7 +1029,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-13)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -1097,7 +1077,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.at(-14)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.74 receipt before the accepted alpha.75 receipt", () => {
@@ -1136,7 +1116,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.73 receipt before the accepted alpha.74 receipt", () => {
@@ -1171,7 +1151,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.72 receipt before the accepted alpha.73 receipt", () => {
@@ -1210,10 +1190,10 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(TRUSTED_HISTORICAL_SEED).toHaveLength(92);
     expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(97);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
   });
 
-  it("keeps ninety-seven confirmed seed deployments including accepted alpha.1–alpha.88 and dedupes identical live rows", () => {
+  it("keeps ninety-six confirmed seed deployments including accepted alpha.1–alpha.87 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
     expect(seedCount).toBe(97);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
@@ -1295,6 +1275,13 @@ describe("history seed integrity", () => {
       "0.1.0-alpha.86",
       "0.1.0-alpha.85", "0.1.0-alpha.84", "0.1.0-alpha.83", "0.1.0-alpha.82", "0.1.0-alpha.81", "0.1.0-alpha.80", "0.1.0-alpha.79", "0.1.0-alpha.78", "0.1.0-alpha.77", "0.1.0-alpha.76", "0.1.0-alpha.75", "0.1.0-alpha.74", "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
     ]);
+    expect(ordered[0]).toMatchObject({
+      application_version: "0.1.0-alpha.88",
+      source_sha: "d8dcb45607fa99c79ec983c511fc569cc5897449",
+      release_id: "r43587434004-a1", accepted_at: "2026-11-14T11:11:45.000Z",
+      environment: "dev", status: "ACCEPTED", kind: "pipeline",
+      owner_uat: "FAIL_RECHECK_PENDING", origin: "seed",
+    });
     expect(ordered[1]).toMatchObject({
       application_version: "0.1.0-alpha.87",
       source_sha: "6b8fedb5918ff25d9b6bc4ea33a04af65812e54d",
@@ -1302,7 +1289,7 @@ describe("history seed integrity", () => {
       environment: "dev", status: "ACCEPTED", kind: "pipeline",
       owner_uat: "FAIL_RECHECK_PENDING", origin: "seed",
     });
-    expect(ordered.some(row => row.application_version === "0.1.0-alpha.89")).toBe(false);
+    expect(ordered.some(row => row.application_version === CURRENT_APPLICATION_VERSION)).toBe(false);
     expect(ordered[2]).toMatchObject({
       application_version: "0.1.0-alpha.86",
       source_sha: "a12f0141ad592ffef71c85b0ee5d2688cb8a0762",
@@ -1591,8 +1578,7 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.84"
       || row.application_version === "0.1.0-alpha.85"
       || row.application_version === "0.1.0-alpha.86"
-      || row.application_version === "0.1.0-alpha.87"
-      || row.application_version === "0.1.0-alpha.88",
+      || row.application_version === "0.1.0-alpha.87",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
@@ -1673,9 +1659,9 @@ describe("history seed integrity", () => {
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.44.0");
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
-    expect(alpha88.fixes).toHaveLength(2);
-    expect(alpha88.title).toBe("Мобильное приложение: сообщения и ответы на приглашения");
-    expect(alpha88.additions).toHaveLength(3);
+    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Мобильное приложение: создание игры и сводка организатора");
+    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
     const alpha80 = TRUSTED_HISTORICAL_SEED.find((row) => row.application_version === "0.1.0-alpha.80")!;
     const alpha80Delta = [...alpha80.additions, ...alpha80.fixes].join(" ");
     expect(alpha80Delta).toMatch(/до 4 проверенных фотографий.*комментарию, ответу или редактируемому.*только фотографий без текста/);
@@ -1721,16 +1707,16 @@ describe("history seed integrity", () => {
     expect(alpha83Delta).toMatch(/Одобрение или отклонение.*свежего повторного подтверждения входа.*актуальных версий и явного решения/);
     expect(alpha83Delta).toMatch(/Проверка содержимого сохраняется.*не более 8.*без замены обложки, общей очереди и автоматического одобрения/);
     expect(alpha83Delta).toMatch(/неизвестном результате решения Admin.*переход в другой раздел не теряет.*данные и ключ решения.*восстановление.*явным.*тот же запрос/);
-    expect(alpha88.known_limitations.join(" ")).toMatch(/alpha\.82.*серверная часть.*alpha\.83.*пользовательская форма.*служебное рассмотрение.*обычным аккаунтом и служебной ролью ещё не выполнена/);
-    expect(alpha88.known_limitations).toContain("Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована серверная часть предложения фотографии создателем площадки; в alpha.83 добавлены пользовательская форма при создании новой площадки и служебное рассмотрение предложений выбранной площадки. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).toMatch(/alpha\.82.*серверная часть.*alpha\.83.*пользовательская форма.*служебное рассмотрение.*обычным аккаунтом и служебной ролью ещё не выполнена/);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toContain("Кнопка загрузки, добавление фотографий к комментариям площадок и показ текущих одобренных фотографий внутри комментариев реализованы в alpha.80. Нижняя постраничная галерея фотографий сообщества, полноэкранный просмотр и переход к текущей публикации реализованы в alpha.81. В alpha.82 реализована серверная часть предложения фотографии создателем площадки; в alpha.83 добавлены пользовательская форма при создании новой площадки и служебное рассмотрение предложений выбранной площадки. Проверка этого сценария с обычным аккаунтом и служебной ролью ещё не выполнена.");
     expect(alpha84Delta).not.toMatch(/#507.*(?:DONE|заверш|выполн)|проверка владельцем пройдена|нативный интерфейс доступен/i);
     expect(alpha84Delta).not.toMatch(/(?:^|[^а-яё])нов[а-яё]*\s+(?:допуск|срок|окн)[а-яё]*|медиа|нативн|автоматическ.*удал|модераци[яи]\s+(?:полностью\s+)?(?:завершена|выполнена)|приёмк.*пройдена/iu);
-    expect(alpha88.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
-    expect(alpha88.known_limitations).toHaveLength(12);
-    expect(alpha88.known_limitations).not.toContain(
+    expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).toHaveLength(12);
+    expect(CURRENT_NAMED_RELEASE.known_limitations).not.toContain(
       "Редактирование опубликованного отзыва в пользовательском интерфейсе ещё не доступно",
     );
-    const currentLimitations = alpha88.known_limitations.join(" ");
+    const currentLimitations = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
     expect(currentLimitations).not.toMatch(/вход.*отзыв.*ещё не\s*доступ/i);
     expect(currentLimitations).not.toMatch(/карте площадок.*ещё не\s*доступ/i);
     expect(currentLimitations).not.toMatch(/публичного автора без замены/i);
@@ -2026,7 +2012,6 @@ describe("history seed integrity", () => {
       "2026-11-13T23:59:31Z",
       "2026-11-14T06:09:30Z",
       "2026-11-14T07:48:15Z",
-      "2026-11-14T11:11:45Z",
     ]);
   });
 
