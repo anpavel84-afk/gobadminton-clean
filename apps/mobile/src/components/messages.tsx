@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { PropsWithChildren } from 'react';
 import { AppState, FlatList, Image, TextInput, View } from 'react-native';
-import type { ViewToken } from 'react-native';
+import type { FlatListProps } from 'react-native';
 import { useFocusEffect, usePathname, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import type { MessagesCoordinator } from '../messages-coordinator.ts';
@@ -18,9 +18,10 @@ const Owner = createContext<MessagesCoordinator | null>(null);
 export function MessagesOwner({ children }: PropsWithChildren) {
   const auth = useAuth(), owner = auth.messages;
   useEffect(() => {
+    const release = owner.mount();
     owner.setForeground(AppState.currentState === 'active');
     const listener = AppState.addEventListener('change', state => { owner.setForeground(state === 'active'); if (state === 'active') void owner.loadCounts(); });
-    return () => { listener.remove(); owner.setForeground(false); };
+    return () => { listener.remove(); release(); owner.setForeground(false); };
   },[owner]);
   useEffect(() => { if (auth.status === 'authenticated') void owner.loadCounts(); },[auth.status,owner]);
   return <Owner.Provider value={owner}>{children}</Owner.Provider>;
@@ -54,9 +55,7 @@ export function NativeMessagesInbox() {
   const { state,owner } = useMessages(), auth = useAuth(), router = useRouter();
   useFocusEffect(useCallback(() => {
     if (auth.status !== 'authenticated') return;
-    void owner.loadInbox();
-    const listener = AppState.addEventListener('change', s => { if (s === 'active') void owner.loadInbox(); });
-    return () => { listener.remove(); owner.focus(null); };
+    return owner.leaseFocus('inbox');
   },[owner,auth.status]));
   return <ScreenFrame header={<Label accessibilityRole="header" style={styles.subtitle}>Сообщения</Label>}>
     {auth.status !== 'authenticated' ? <PrivateEntry /> : <>
@@ -86,15 +85,14 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   const [showMembers,setShowMembers] = useState(false);
   const list = useRef<FlatList<DirectMessage>>(null), nearBottom = useRef(false), visibleIds = useRef<string[]>([]), initialScroll = useRef(true);
   const readVisible = useCallback(() => owner.visible(resourceRef.current,visibleIds.current,nearBottom.current),[owner]);
-  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken<DirectMessage>[] }) => {
+  const onViewable = useRef<NonNullable<FlatListProps<DirectMessage>['onViewableItemsChanged']>>(({ viewableItems }) => {
     visibleIds.current = viewableItems.filter(v => v.isViewable).map(v => v.item.id); readVisible();
   }).current;
   useFocusEffect(useCallback(() => {
     if (auth.status !== 'authenticated') return;
     initialScroll.current = true; nearBottom.current = false; visibleIds.current = [];
-    owner.focus(resourceRef.current);
-    const foreground = AppState.addEventListener('change', s => { if (s === 'active') { initialScroll.current = true; void owner.loadDetail(resourceRef.current); } });
-    return () => { foreground.remove(); nearBottom.current = false; visibleIds.current = []; owner.focus(null); };
+    const release = owner.leaseFocus(resourceRef.current);
+    return () => { nearBottom.current = false; visibleIds.current = []; release(); };
   },[owner,key,auth.status]));
   const h = detail?.header, direct = h && 'requestState' in h ? h : null, chat = h && 'lifecycleState' in h ? h : null, invitation = h && 'status' in h ? h : null;
   const title = direct?.peer.displayName ?? (chat ? 'Чат игры' : 'Приглашение в игру');

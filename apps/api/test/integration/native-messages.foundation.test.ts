@@ -185,7 +185,11 @@ run("native Messages · self-migrating isolated database", () => {
     const third=await actor(); await profile(third); const legacy=await direct(third,p.publicPlayerId);
     await pool.query("UPDATE conversations SET request_state='pending',request_expires_at=now()+interval '1 day' WHERE id=$1",[legacy.id]);
     expect((await app.inject({method:'POST',url:`/v1/conversations/${legacy.id}/decline`,headers:bearer(player),payload:{expectedVersion:legacy.version}})).json().requestState).toBe('declined');
-    for(const url of [`/v1/conversations/${dm.id}`,chat]) {
+    const replayKey=randomUUID(), replayPayload={kind:'text',text:'Established history before block',clientMessageId:randomUUID()};
+    const dmUrl=`/v1/conversations/${dm.id}`;
+    const beforeBlock=await app.inject({method:'POST',url:dmUrl+'/messages',headers:bearer(owner,replayKey),payload:replayPayload});
+    expect(beforeBlock.statusCode).toBe(201);
+    for(const url of [dmUrl,chat]) {
       const payload={kind:'text',text:'Text fixture',clientMessageId:randomUUID()}, key=randomUUID();
       const sent=await app.inject({method:'POST',url:url+'/messages',headers:bearer(owner,key),payload}); expect(sent.statusCode).toBe(201);
       expect((await app.inject({method:'POST',url:url+'/messages',headers:bearer(owner,key),payload})).json()).toEqual(sent.json());
@@ -199,11 +203,24 @@ run("native Messages · self-migrating isolated database", () => {
       expect((await app.inject({url:url+'/messages',headers:bearer(other)})).statusCode).toBe(404);
     }
     expect((await app.inject({url:chat+'/members',headers:bearer(player)})).json().items.length).toBeGreaterThan(1);
-    // Block affects current access as well as receipt replay, never a public cache fallback.
+    // Established member history stays readable; fresh writes and receipt replay recheck block policy.
     const ownerProfile = (await app.inject({url:'/v1/me/social-profile',headers:bearer(owner)})).json();
     expect((await app.inject({method:'PUT',url:`/v1/me/blocks/${ownerProfile.publicPlayerId}`,headers:browser(player),payload:{}})).statusCode).toBe(200);
     expect((await app.inject({url:`/v1/invitations/${waiting.id}`,headers:bearer(player)})).statusCode).toBe(404);
-    expect((await app.inject({url:`/v1/conversations/${dm.id}`,headers:bearer(player)})).statusCode).toBe(404);
+    for (const url of [dmUrl,dmUrl+'/messages']) {
+      const native=await app.inject({url,headers:bearer(player)}), cookieRead=await app.inject({url,headers:browser(player)});
+      expect(native.statusCode).toBe(200); expect(cookieRead.statusCode).toBe(200);
+      expect(native.json()).toEqual(cookieRead.json());
+      expect((await app.inject({url,headers:bearer(other)})).statusCode).toBe(404);
+    }
+    const historyAfterBlock=await app.inject({url:dmUrl+'/messages',headers:bearer(player)});
+    expect(historyAfterBlock.json().items.map((m:{id:string})=>m.id)).toContain(beforeBlock.json().messageId);
+    for (const a of [owner,player]) {
+      const denied=await app.inject({method:'POST',url:dmUrl+'/messages',headers:bearer(a),payload:{kind:'text',text:'Blocked new send',clientMessageId:randomUUID()}});
+      expect(denied.statusCode).toBe(404); expect(denied.json().code).toBe('RESOURCE_UNAVAILABLE');
+    }
+    const replay=await app.inject({method:'POST',url:dmUrl+'/messages',headers:bearer(owner,replayKey),payload:replayPayload});
+    expect(replay.statusCode).toBe(404); expect(replay.json().code).toBe('RESOURCE_UNAVAILABLE');
   });
   it('malformed/duplicate/mixed/revoked/disabled bearer, cookie Origin/CSRF and neighboring closed routes', async () => {
     const owner=await actor(), player=await actor(); await profile(owner); const p=await profile(player); const dm=await direct(owner,p.publicPlayerId);

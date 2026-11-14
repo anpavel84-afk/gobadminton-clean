@@ -8,6 +8,9 @@ Main navigation follows the accepted WEB white bar, soft lime icon circle and
 30×3 lime underline. Root Messages state keeps immutable UNKNOWN packets and drafts
 across tab changes without resetting the existing participation owner. Retry is
 explicit and reuses the exact packet; logout/access loss clears private state.
+Focused foreground DM catches up every 3 seconds; game chats and inbox/counts refresh
+every 15 seconds. Polling pauses on blur, background and any unresolved Messages
+packet, retains loaded thread history/cursors, and never sends or retries commands.
 Read mutations require incoming RN-viewable rows, focus, foreground and near-bottom.
 
 Exactly 17 existing operations opt into native principals. Cookie Origin/CSRF,
