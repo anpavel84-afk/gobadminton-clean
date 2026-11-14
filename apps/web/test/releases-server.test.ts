@@ -1149,7 +1149,7 @@ describe("history seed integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
   });
 
-  it("keeps ninety-three confirmed seed deployments including accepted alpha.1–alpha.84 and dedupes identical live rows", () => {
+  it("keeps ninety-four confirmed seed deployments including accepted alpha.1–alpha.85 and dedupes identical live rows", () => {
     const seedCount = TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0);
     expect(seedCount).toBe(94);
     const alpha63 = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []).filter(
@@ -1225,44 +1225,52 @@ describe("history seed integrity", () => {
       origin: "seed",
     }]);
     const ordered = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
-    expect(ordered.slice(0, 18).map((row) => row.application_version)).toEqual([
-      "0.1.0-alpha.84", "0.1.0-alpha.83", "0.1.0-alpha.82", "0.1.0-alpha.81", "0.1.0-alpha.80", "0.1.0-alpha.79", "0.1.0-alpha.78", "0.1.0-alpha.77", "0.1.0-alpha.76", "0.1.0-alpha.75", "0.1.0-alpha.74", "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
+    expect(ordered.slice(0, 19).map((row) => row.application_version)).toEqual([
+      "0.1.0-alpha.85", "0.1.0-alpha.84", "0.1.0-alpha.83", "0.1.0-alpha.82", "0.1.0-alpha.81", "0.1.0-alpha.80", "0.1.0-alpha.79", "0.1.0-alpha.78", "0.1.0-alpha.77", "0.1.0-alpha.76", "0.1.0-alpha.75", "0.1.0-alpha.74", "0.1.0-alpha.73", "0.1.0-alpha.72", "0.1.0-alpha.71", "0.1.0-alpha.70", "0.1.0-alpha.69", "0.1.0-alpha.68", "0.1.0-alpha.67",
     ]);
     expect(ordered[0]).toMatchObject({
+      application_version: "0.1.0-alpha.85",
+      source_sha: "fd9c4cfa2a14694fc6cf3d1f4d8b3f60c0a8d210",
+      release_id: "r43530368242-a1",
+      accepted_at: "2026-11-13T23:59:31.000Z",
+      environment: "dev", status: "ACCEPTED", kind: "pipeline",
+      owner_uat: "FAIL", origin: "seed",
+    });
+    expect(ordered[1]).toMatchObject({
       application_version: "0.1.0-alpha.84",
       source_sha: "8bf111018170ae6200bbb56fa24ff2af9dc61c4a",
       release_id: "r42933691199-a1", accepted_at: "2026-11-11T00:49:15.000Z",
       status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
     });
-    expect(ordered[1]).toMatchObject({
+    expect(ordered[2]).toMatchObject({
       application_version: "0.1.0-alpha.83",
       source_sha: "6c551d21ac57847db62e916d74914ef3bd14e409",
       release_id: "r42889702522-a1",
       accepted_at: "2026-11-10T19:59:30.000Z",
       status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
     });
-    expect(ordered[2]).toMatchObject({
+    expect(ordered[3]).toMatchObject({
       application_version: "0.1.0-alpha.82",
       source_sha: "17a9c596cd7a5c3c9f95b4c7f4c14acbf2f221cb",
       release_id: "r42863201852-a1",
       accepted_at: "2026-11-10T17:33:38.000Z",
       status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
     });
-    expect(ordered[3]).toMatchObject({
+    expect(ordered[4]).toMatchObject({
       application_version: "0.1.0-alpha.81",
       source_sha: "d9c1e57d6350b7b9e3f0d76db6ac5e535112fd95",
       release_id: "r42850039504-a1",
       accepted_at: "2026-11-10T16:05:00.000Z",
       status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
     });
-    expect(ordered[4]).toMatchObject({
+    expect(ordered[5]).toMatchObject({
       application_version: "0.1.0-alpha.80",
       source_sha: "d4c6e04374fa98412174994536f95f529b153f4c",
       release_id: "r42832327907-a1",
       accepted_at: "2026-11-10T14:22:08.000Z",
       status: "ACCEPTED", owner_uat: "NOT_TESTED", origin: "seed",
     });
-    expect(ordered[5]).toMatchObject({
+    expect(ordered[6]).toMatchObject({
       application_version: "0.1.0-alpha.79",
       source_sha: "701dd73c914d075fbca5695ba67455fba84642a2",
       release_id: "r42819887411-a2",
@@ -1271,7 +1279,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[6]).toMatchObject({
+    expect(ordered[7]).toMatchObject({
       application_version: "0.1.0-alpha.78",
       source_sha: "db867399609190852db67650ad5c0973b5dd88e9",
       release_id: "r42813886246-a1",
@@ -1280,7 +1288,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[7]).toMatchObject({
+    expect(ordered[8]).toMatchObject({
       application_version: "0.1.0-alpha.77",
       source_sha: "65c7e59212eab0de2a9ecd50c36ed1c1e7854ad9",
       release_id: "r42800435924-a1",
@@ -1289,7 +1297,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[8]).toMatchObject({
+    expect(ordered[9]).toMatchObject({
       application_version: "0.1.0-alpha.76",
       source_sha: "dd5b2c1496af57ca168d171decb384d2ecfec5c1",
       release_id: "r42783213882-a1",
@@ -1298,7 +1306,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[9]).toMatchObject({
+    expect(ordered[10]).toMatchObject({
       application_version: "0.1.0-alpha.75",
       source_sha: "0d8a23f782bd33f993d3a1b7b4850719307fae1b",
       release_id: "r42754460186-a1",
@@ -1307,7 +1315,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[10]).toMatchObject({
+    expect(ordered[11]).toMatchObject({
       application_version: "0.1.0-alpha.74",
       source_sha: "a2e18dc96f36d80979a667ee47752ff60667a318",
       release_id: "r42747213508-a1",
@@ -1316,7 +1324,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[11]).toMatchObject({
+    expect(ordered[12]).toMatchObject({
       application_version: "0.1.0-alpha.73",
       source_sha: "c157c3b1a5cabc539a8ae1a6c2c468825336df7f",
       release_id: "r42742161818-a1",
@@ -1341,8 +1349,8 @@ describe("history seed integrity", () => {
       },
     }]);
     expect(withLive73).toHaveLength(94);
-    expect(withLive73.filter((row) => row.application_version === "0.1.0-alpha.73")).toEqual([ordered[11]]);
-    expect(ordered[12]).toMatchObject({
+    expect(withLive73.filter((row) => row.application_version === "0.1.0-alpha.73")).toEqual([ordered[12]]);
+    expect(ordered[13]).toMatchObject({
       application_version: "0.1.0-alpha.72",
       source_sha: "ff3cb00c62c1206530bcc95aba13d196d5266474",
       release_id: "r42724583100-a1",
@@ -1351,7 +1359,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[13]).toMatchObject({
+    expect(ordered[14]).toMatchObject({
       application_version: "0.1.0-alpha.71",
       source_sha: "aeaee2dc4de8a0972015df039a153fa4ef06027f",
       release_id: "r42719450513-a1",
@@ -1360,7 +1368,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[14]).toMatchObject({
+    expect(ordered[15]).toMatchObject({
       application_version: "0.1.0-alpha.70",
       source_sha: "0968028ad7755a8087afbcb0fd8d3a09d7ddb97d",
       release_id: "r42714053715-a1",
@@ -1369,7 +1377,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[15]).toMatchObject({
+    expect(ordered[16]).toMatchObject({
       application_version: "0.1.0-alpha.69",
       source_sha: "5568044d725d306e3bb3ce032e767cf7d3586c60",
       release_id: "r42697926974-a1",
@@ -1378,7 +1386,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[16]).toMatchObject({
+    expect(ordered[17]).toMatchObject({
       source_sha: "2c33ce49d5b8ad704bf78524b8149c94e4d3e62e",
       release_id: "r42627002935-a1",
       accepted_at: "2026-11-09T13:42:50.000Z",
@@ -1386,7 +1394,7 @@ describe("history seed integrity", () => {
       owner_uat: "NOT_TESTED",
       origin: "seed",
     });
-    expect(ordered[17]).toMatchObject({
+    expect(ordered[18]).toMatchObject({
       source_sha: "04fdc58b53e79996ccdb21a7396c5d1525cfbd10",
       release_id: "r42613449482-a1",
       accepted_at: "2026-11-09T12:05:53.000Z",
@@ -1498,7 +1506,8 @@ describe("history seed integrity", () => {
       || row.application_version === "0.1.0-alpha.81"
       || row.application_version === "0.1.0-alpha.82"
       || row.application_version === "0.1.0-alpha.83"
-      || row.application_version === "0.1.0-alpha.84",
+      || row.application_version === "0.1.0-alpha.84"
+      || row.application_version === "0.1.0-alpha.85",
     )).toBe(true);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
