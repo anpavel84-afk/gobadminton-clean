@@ -3,6 +3,8 @@ import type { ImageSourcePropType } from 'react-native';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { usePathname, useRouter } from 'expo-router';
+import { canonicalGamePath } from '../native-auth-protocol.ts';
 import { SvgXml } from 'react-native-svg';
 import { brandMarkXml } from '../../assets/brand-mark.ts';
 import { colors, interaction, primaryLabelStyle, primarySurface, typography } from '../theme.ts';
@@ -17,10 +19,10 @@ export function Label({ style, ...props }: ComponentProps<typeof Text>) {
 }
 export function BrandLockup({ launch = false, light = false }: { launch?: boolean; light?: boolean }) {
   return <View accessible accessibilityRole="image" accessibilityLabel="GoBadminton" style={[styles.brand, launch && { flex: 1, alignSelf: 'center', justifyContent: 'center' }]}>
-    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.mark, launch && { width: 168, height: 96 }]}>
-      <SvgXml xml={brandMarkXml} width={launch ? 168 : 47} height={launch ? 96 : 32} accessible={false} />
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.mark, !light && !launch && { width: 112, height: 64 }, launch && { width: 168, height: 96 }]}>
+      <SvgXml xml={brandMarkXml} width={launch ? 168 : light ? 47 : 112} height={launch ? 96 : light ? 32 : 63.7} style={!light && !launch ? { transform: [{ translateX: -7.71 }] } : undefined} accessible={false} />
     </View>
-    {!launch && <Text accessible={false} allowFontScaling={false} style={[styles.brandName, light && { color: colors.onPurple }]}>
+    {!launch && light && <Text accessible={false} allowFontScaling={false} style={[styles.brandName, light && { color: colors.onPurple }]}>
       <Text style={{ fontWeight: '700' }}>Go</Text><Text style={{ fontWeight: '500' }}>Badminton</Text>
     </Text>}
   </View>;
@@ -61,9 +63,16 @@ export function Page({ children, purple = false, keyboard = false, header }: Pro
   </ScreenFrame>;
 }
 export function Header({ back, light = false, action }: { back?: () => void; light?: boolean; action?: ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const returnTo = canonicalGamePath(pathname);
   return <View style={styles.header}>
     {back && <TextButton title="Назад" onPress={back} light={light} />}
     <BrandLockup light={light} />
+    {!light && <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
+      {pathname !== '/city' && <TextButton title="Город" onPress={() => router.push('/city')} />}
+      {pathname !== '/profile' && <TextButton title="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })} />}
+    </View>}
     {action}
   </View>;
 }

@@ -27,7 +27,24 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.VIBRATE"
       ],
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "dev.gobadminton.ru",
+              "path": "/auth/native/callback"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "plugins": [
       "expo-router",
@@ -44,6 +61,12 @@
         {
           "image": "./assets/icon.png",
           "backgroundColor": "#FFFFFF"
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
         }
       ]
     ],

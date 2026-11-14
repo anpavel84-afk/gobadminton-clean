@@ -1,18 +1,22 @@
 import { useCallback } from 'react';
+import { useAuth } from '../../src/auth.tsx';
+import { gamePath } from '../../src/native-auth-protocol.ts';
 import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
 import { PublicGameMedia } from '../../src/components/game-card.tsx';
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
-import { ErrorState, Header, Label, Loading, Page, PrimaryButton, styles } from '../../src/components/ui.tsx';
+import { ErrorState, Header, Label, Loading, Page, TextButton, styles } from '../../src/components/ui.tsx';
 
 export default function PublicGameDetails() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const id = typeof params.id === 'string' ? params.id : '';
   const router = useRouter();
+  const auth = useAuth();
   const task = useCallback((signal: AbortSignal) => publicApi.game(id, signal), [id]);
-  const { state, retry } = useResource(`game:${id}`, task);
+  // Session establishment rereads public conditions even if this route stays mounted.
+  const { state, retry } = useResource(`game:${id}:${auth.me?.session.id ?? 'public'}`, task);
   const game = state.data;
   const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
@@ -50,8 +54,9 @@ export default function PublicGameDetails() {
         <Label selectable>{game.organizer.publicContact || 'Публичный контакт не указан.'}</Label>
       </View>
       <View style={styles.card}>
-        <Label>Сейчас доступен гостевой просмотр. Вход и подача заявки в этой версии приложения пока недоступны.</Label>
-        <PrimaryButton title="Подача заявки пока недоступна" disabled />
+        <Label>Подача заявки в native пока недоступна. Вход не отправляет заявку автоматически.</Label>
+        {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" />
+          : auth.status !== 'authenticated' && <TextButton title="Войти и вернуться к этой игре" onPress={() => router.push({ pathname: '/profile', params: { returnTo: gamePath(game.id) ?? '' } })} />}
       </View>
     </>}
   </Page>;

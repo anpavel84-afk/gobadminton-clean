@@ -1,3 +1,128 @@
+# GoBadminton native #522 · current auth/profile SOURCE ONLY · 2026-11-14
+
+This bounded candidate adds one persistent root AuthProvider/session coordinator,
+system-browser PKCE sign-in source, real NativeMe/profile and owned-session lifecycle,
+exact HTTPS callback handling and Android association source. It uses qualified backend
+`05602db92f3c864d263218992d10963f2650d31b`; supplied Root focused security PASS closes the
+two retained backend whole FAIL findings without deleting their history. **Not deployed,
+not independently reviewed, not full product parity.** Native flag remains default0,
+registry/live auth/PROD are unavailable. **Samsung S23 Owner FAIL remains; native visual
+NOT_VERIFIED; full Android-first/iOS native parity MANDATORY_NOT_COMPLETE.**
+
+Current working source destinations: optional intro, manual city, real upcoming public
+games with pagination/errors/retry, direct public game conditions and `/profile`.
+One canonical SVG replaces the separate product wordmark; E lockup remains intro only.
+Header provides city/profile access and contextual Back. Card source now has overlay
+activity badge when genuine media exists, actual available/total seats, Trainer before
+Organizer, accepted arrow and user-initiated RN Share of the canonical public game URL.
+Share cancellation/failure is honest; manual selectable URL fallback contains no current
+queries. No fake photos, reputation, counts, application action or inert root tabs.
+
+The coordinator stores refresh and version1 pending PKCE in SecureStore
+`gobadminton.mobile.auth.v1`, never AsyncStorage; access remains in memory. Legacy city/
+story preferences are unchanged. Unknown secure versions are preserved and fail closed.
+There is no disk Me cache. Identity/session rows are exposed only for the exact verified
+secure actor/session after durable refresh commit. Hydration has an allocated placeholder.
+Refresh is singleflight; durable one-use consumption before dispatch means lost response,
+process death or commit failure requires fresh sign-in. Generation fences cover callbacks,
+rotation, private reads and serialized secure writes. Logout clears private memory at once,
+queues secure clear and attempts one bounded remote revoke; remote/storage failure is
+explicitly unconfirmed, with no persisted credential retry queue.
+
+Sign-in requests truthful GET `/auth/methods`, then native `/transactions`; native default-off
+returns unavailable and keeps the game intent. Only the exact Root-reviewed HTTPS tuple
+`gobadminton-native-dev` / `https://dev.gobadminton.ru/auth/native/callback` is accepted.
+Crypto is expo-crypto random32 + S256; callback checks unique code/state, expiry and pending
+generation, and duplicate Linking/WebBrowser delivery exchanges once. Router native-intent
+consumes callback before navigation; sanitized callback screen never reads credentials.
+Native never calls browser bind/complete/cancel, sets Origin, adds cookies or bypasses guards.
+Login returns to the SAME canonical game and rereads public conditions; zero auto-join/
+apply/create. Current bearer operations are ONLY `/me` and owned sessions list/revoke/
+revoke-others. Profile shows actual id-derived identity displayName/locale/linkedProviders
+and session lifecycle, with no invented email/photo/edit capability.
+
+Android exact-path autoVerify + source assetlinks use package `ru.gobadminton.mobile.dev`
+and ONLY owned public SHA256
+`5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`.
+This is not live association/registry/signing/device verification. iOS Team/AASA is absent:
+no fake entitlement or custom-scheme auth fallback; verified iOS callback runtime is HOLD.
+The web callback fallback does not read/render/log raw URL/code and removes its query.
+No credentials, providers, SMTP, live writes, browser/device actions or package downloads
+were used by this author. The private export has no .git or dependencies; no source SHA,
+commit, lock resolution, release, merge or DEV acceptance is claimed.
+
+Dependency manifest only: Crypto ~58.0.8, SecureStore ~58.0.3, WebBrowser ~58.0.8; installed
+baseline Linking58.0.17/Expo58.0.25/RN0.88.1/React19.3.0/Router58.0.31 retained. These new
+ranges are supplied installed SDK compatibility, not exact resolved patches. Trusted
+parent generates the lock and verifies binary integration. `@gobadminton/contracts/native-auth`
+is a pure type-only subpath with typesVersions; root node:fs never enters mobile.
+No expo-updates dependency/config/remote config/OTA implementation in this auth slice.
+The mandatory next standard signed-update foundation, backward compatibility, four eventual
+roots and scenario table are reconciled in `docs/platforms/IOS_ANDROID.md` and
+`docs/integrations/AUTH.md`, retaining historical text. Owned service/account/trust readiness
+is UNKNOWN; default disabled, embedded last-working fallback, next-natural-cold-launch-only
+policy, no hot auth/form replacement. Owner same-binary signed OTA A→B proof is **NOT_DONE**.
+
+## Current author checks and remaining gates
+
+- PASS: Node24.21.0 dependency-free units, **37 named tests (26 retained + 11 new), 0 failures**:
+  `node --experimental-strip-types --test --test-isolation=none apps/mobile/test/*.test.ts`.
+  New tests cover RFC S256, exact/duplicate/expired callback, actual NativeMe wire fields,
+  storage version/restart, singleflight rotation, lost exchange/refresh response, stale actor/
+  logout/private completion, secure write ordering/failure and same-game return with zero mutation.
+- PASS: direct deterministic JSON assertions for exact Android callback/package/owned certificate,
+  absent fake iOS association, SDK58 manifest ranges, pure contracts export/typesVersions,
+  and no expo-updates implementation. This is source consistency, not association/device proof.
+- Initial new-test execution FAIL: Node strip-only rejected a TypeScript parameter property.
+  Replaced it with an ordinary typed field; subsequent focused and full named tests PASS.
+  This failed author attempt remains recorded; it was not a provider/model call or independent QA.
+- NOT_TESTED: typecheck, lint, Expo Android/iOS exports, native builds, existing backend/security
+  runtime suites, Product/security CI, DEV smoke and real auth lifecycle. No node_modules,
+  tsc or eslint is installed here; installation/download/lock/SDK actions are forbidden.
+- NOT_DONE: independent QA, CI, trusted generated lock, verified Android registration/sign-in/
+  restart/logout, actual device visual/UAT. No ready/active/release claim follows unit PASS.
+
+Mandatory concrete product gaps: working Players/My Games/Messages roots; game applications,
+withdraw/organizer/create, full discovery date/filters/map; explicit bearer ports for each
+private operation; profile edits/reauth/link/email/avatar; venues/maps/Radar; UGC/results and
+remaining accepted consumer behavior. Card avatar and real role-reputation/history disclosure
+are not ported; no invented replacement controls were added. Full card/disclosure/layout parity
+and Samsung S23 recheck remain required. iOS Team/AASA/signing/macOS readiness, store compliance
+and actual signed OTA service/A→B proof are external holds, not waived requirements.
+
+Exact changed paths for this bounded client pass (22; no lock/backend/CI/OPS/old asset edits):
+
+```text
+apps/mobile/package.json
+apps/mobile/app.json
+apps/mobile/README.md
+apps/mobile/app/_layout.tsx
+apps/mobile/app/+native-intent.tsx
+apps/mobile/app/auth/native/callback.tsx
+apps/mobile/app/profile.tsx
+apps/mobile/app/games/[id].tsx
+apps/mobile/src/native-auth-protocol.ts
+apps/mobile/src/native-api.ts
+apps/mobile/src/auth-coordinator.ts
+apps/mobile/src/auth-runtime.ts
+apps/mobile/src/auth.tsx
+apps/mobile/src/components/ui.tsx
+apps/mobile/src/components/game-card.tsx
+apps/mobile/src/components/discovery-icon.tsx
+apps/mobile/test/auth.test.ts
+packages/contracts/package.json
+apps/web/public/.well-known/assetlinks.json
+apps/web/src/app/auth/native/callback/page.tsx
+docs/platforms/IOS_ANDROID.md
+docs/integrations/AUTH.md
+```
+
+Repository instruction lookup found no root or scoped AGENTS.md in this private export.
+Web fallback follows the supplied hash-pinned installed Next page guide; no unavailable
+original worktree, baseline reconstruction, secret or live runtime was accessed.
+
+## Historical source/QA/harness lineage (preserved below)
+
 # GoBadminton native M1 · #522 · E «Траектория»
 
 React Native + managed Expo Router foundation on accepted alpha84
