@@ -38,7 +38,7 @@ export class AuthCoordinator {
       send: packet => this.participationRead(access => packet.kind === 'request'
         ? deps.api.requestParticipation(access, packet.gameId, packet.body, packet.key)
         : deps.api.withdrawParticipation(access, packet.participationId, packet.body, packet.key), packet.actor),
-    }, deps.random);
+    }, deps.random, undefined, id => this.participationRead(access => deps.api.gameDetail(access, id)));
   }
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
   private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {

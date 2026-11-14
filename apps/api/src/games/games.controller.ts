@@ -66,6 +66,8 @@ export class GamesController {
   ) {
     // Set before validation so public error responses are also no-store.
     reply.header("Cache-Control", "no-store");
+    // Discovery stays credential-free; only the exact detail route opts into bearer.
+    if (request.headers.authorization !== undefined) await this.auth.optionalSession(request);
     const filter = parseMapQuery(request.raw.url ?? request.url);
     const abort = new AbortController();
     const onClose = () => { if (!reply.raw.writableEnded) abort.abort(); };
@@ -104,7 +106,9 @@ export class GamesController {
     @Param("gameId") gameId: string,
     @Req() request: FastifyRequest,
   ) {
-    const consumer = await this.auth.optionalSession(request);
+    const consumer = request.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(request)
+      : await this.auth.optionalSession(request);
     return this.games.getGame(gameId, consumer?.userId ?? null);
   }
 

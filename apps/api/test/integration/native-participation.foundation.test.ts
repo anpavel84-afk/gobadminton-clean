@@ -70,7 +70,7 @@ run("bounded native participation principal opt-in", () => {
   type Actor = Awaited<ReturnType<typeof actor>>;
   const browser = (a: Actor, key = randomUUID()) => ({ origin, cookie: a.cookie, "x-csrf-token": a.csrfToken, "idempotency-key": key });
   const bearer = (a: Actor, key = randomUUID()) => ({ authorization: `Bearer ${a.accessToken}`, "idempotency-key": key });
-  async function game(owner: Actor, capacity = 2) {
+  async function game(owner: Actor, capacity = 2, options: { draft?: boolean; visibility?: "public" | "unlisted" } = {}) {
     const venue = await app.inject({ method: "POST", url: "/v1/venues", headers: browser(owner), payload: {
       cityId: MOSCOW_CITY_ID, name: "Native fixture", address: "Fixture", timezone: "Europe/Moscow", latitude: 55.75, longitude: 37.62,
     } }); expect([200, 201]).toContain(venue.statusCode);
@@ -78,11 +78,12 @@ run("bounded native participation principal opt-in", () => {
     const draft = await app.inject({ method: "POST", url: "/v1/games", headers: browser(owner), payload: {
       venueId: venue.json().id, hostDisplayName: "Fixture host", hostPublicContact: "telegram:@fixture", title: "Native fixture",
       startsAt: starts.toISOString(), endsAt: new Date(+starts + 7200000).toISOString(), applicationDeadlineAt: new Date(+starts - 86400000).toISOString(),
-      timezone: "Europe/Moscow", capacity, externalReservedCount: 0, visibility: "public", formatKey: "doubles", activityKind: "regular",
+      timezone: "Europe/Moscow", capacity, externalReservedCount: 0, visibility: options.visibility ?? "public", formatKey: "doubles", activityKind: "regular",
       levelRule: { scaleId: "ntrp", scaleVersion: 1, allowedLevelIds: ["3.0", "3.5"] },
       settlement: { mode: "external", purpose: "no_trainer_fee", priceMinor: null, currency: null, terms: "Outside app" },
     } }); expect(draft.statusCode).toBe(201);
     const id = draft.json().id as string;
+    if (options.draft) return draft.json() as { id: string; version: number };
     const seat = (await pool.query("SELECT id FROM participations WHERE game_id=$1 AND user_id=$2", [id, owner.id])).rows[0].id;
     expect((await app.inject({ method: "POST", url: `/v1/participations/${seat}/withdraw`, headers: browser(owner), payload: { expectedVersion: 1 } })).statusCode).toBe(200);
     const published = await app.inject({ method: "POST", url: `/v1/games/${id}/publish`, headers: browser(owner), payload: { expectedVersion: draft.json().version + 1 } });
@@ -117,6 +118,36 @@ run("bounded native participation principal opt-in", () => {
     const pending = await app.inject({ method: "POST", url, headers: bearer(player), payload: { expectedGameVersion: fresh.version } }); expect(pending.statusCode).toBe(201);
     expect((await app.inject({ method: "POST", url: withdraw, headers: bearer(player), payload: { expectedVersion: pending.json().version } })).json().status).toBe("withdrawn");
   });
+  it("authorizes own draft and unlisted participation detail without exposing private games to outsiders or removed participants", async () => {
+    const owner = await actor(), player = await actor(), outsider = await actor();
+    const draft = await game(owner, 2, { draft: true });
+    const draftUrl = `/v1/games/${draft.id}`;
+    expect((await app.inject({ url: draftUrl, headers: bearer(owner) })).statusCode).toBe(200);
+    expect((await app.inject({ url: draftUrl, headers: { cookie: owner.cookie } })).statusCode).toBe(200);
+    expect((await app.inject({ url: draftUrl, headers: bearer(outsider) })).statusCode).toBe(404);
+    expect((await app.inject({ url: draftUrl })).statusCode).toBe(404);
+    const g = await game(owner, 2, { visibility: "unlisted" }), url = `/v1/games/${g.id}`;
+    expect((await app.inject({ url })).statusCode).toBe(404);
+    expect((await app.inject({ url, headers: bearer(outsider) })).statusCode).toBe(404);
+    const requested = await app.inject({ method: "POST", url: `${url}/participations`, headers: bearer(player), payload: { expectedGameVersion: g.version } });
+    expect(requested.statusCode).toBe(201); const part = requested.json();
+    expect((await app.inject({ url, headers: bearer(player) })).statusCode).toBe(200);
+    const confirmed = await app.inject({ method: "POST", url: `/v1/participations/${part.id}/confirm`, headers: browser(owner), payload: { expectedVersion: part.version } });
+    expect(confirmed.statusCode).toBe(200);
+    expect((await app.inject({ url, headers: bearer(player) })).statusCode).toBe(200);
+    const withdrawn = await app.inject({ method: "POST", url: `/v1/participations/${part.id}/withdraw`, headers: bearer(player), payload: { expectedVersion: confirmed.json().version } });
+    expect(withdrawn.statusCode).toBe(200);
+    expect((await app.inject({ url, headers: bearer(player) })).statusCode).toBe(200);
+    const current = (await app.inject({ url, headers: bearer(owner) })).json();
+    const again = await app.inject({ method: "POST", url: `${url}/participations`, headers: bearer(player), payload: { expectedGameVersion: current.version } });
+    expect(again.statusCode).toBe(201);
+    const confirmedAgain = await app.inject({ method: "POST", url: `/v1/participations/${again.json().id}/confirm`, headers: browser(owner), payload: { expectedVersion: again.json().version } });
+    expect(confirmedAgain.statusCode).toBe(200);
+    const removed = await app.inject({ method: "POST", url: `/v1/participations/${again.json().id}/remove`, headers: browser(owner), payload: { expectedVersion: confirmedAgain.json().version, reason: "Fixture removal" } });
+    expect(removed.statusCode).toBe(200);
+    expect((await app.inject({ url, headers: bearer(player) })).statusCode).toBe(404);
+    expect((await app.inject({ url, headers: bearer(owner) })).statusCode).toBe(200);
+  });
   it("preserves browser CSRF/Origin and rejects invalid/mixed/revoked/disabled native authority without public credential fallback", async () => {
     const owner = await actor(), player = await actor(), g = await game(owner);
     const url = `/v1/games/${g.id}/participations`, payload = { expectedGameVersion: g.version };
@@ -131,12 +162,21 @@ run("bounded native participation principal opt-in", () => {
       expect((await app.inject({ url: route, headers: { ...bearer(player), cookie: player.cookie } })).statusCode).toBe(403);
       expect((await disabledApp.inject({ url: route, headers: bearer(player) })).statusCode).toBe(404);
     }
-    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: bearer(player) })).statusCode).toBe(401);
+    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: bearer(player) })).statusCode).toBe(200);
     expect((await app.inject({ url: `/v1/games/${g.id}` })).statusCode).toBe(200);
+    for (const authorization of ["", "Basic invalid", "Bearer invalid", `Bearer ${"x".repeat(43)}`]) {
+      expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { authorization } })).statusCode).toBe(401);
+    }
+    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { ...bearer(player), cookie: player.cookie } })).statusCode).toBe(403);
+    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { authorization: [`Bearer ${player.accessToken}`, `Bearer ${player.accessToken}`] } })).statusCode).toBe(401);
+    expect((await app.inject({ url: "/v1/games", headers: bearer(player) })).statusCode).toBe(401);
+    expect((await app.inject({ url: `/v1/games/map?cityId=${MOSCOW_CITY_ID}`, headers: bearer(player) })).statusCode).toBe(401);
+    expect((await disabledApp.inject({ url: `/v1/games/${g.id}`, headers: bearer(player) })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url, headers: { authorization: "Bearer invalid", "idempotency-key": randomUUID() }, payload })).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url, headers: { ...bearer(player), cookie: player.cookie }, payload })).statusCode).toBe(403);
     expect((await disabledApp.inject({ method: "POST", url, headers: bearer(player), payload })).statusCode).toBe(404);
     await app.get(SessionService).revokeSession(player.sessionId);
+    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: bearer(player) })).statusCode).toBe(401);
     expect((await app.inject({ url: "/v1/me/participations", headers: bearer(player) })).statusCode).toBe(401);
     expect((await app.inject({ method: "POST", url, headers: bearer(player), payload })).statusCode).toBe(401);
     const inactive = await actor(); await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [inactive.id]);

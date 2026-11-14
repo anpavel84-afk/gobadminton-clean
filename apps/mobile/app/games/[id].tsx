@@ -19,14 +19,22 @@ export default function PublicGameDetails() {
   // Session establishment rereads public conditions even if this route stays mounted.
   const { state, retry } = useResource(`game:${id}:${auth.me?.session.id ?? 'public'}`, task);
   const privateSnapshot = useSyncExternalStore(auth.participation.subscribe, auth.participation.getSnapshot, auth.participation.getSnapshot);
-  const currentDetail = auth.status === 'authenticated' && privateSnapshot.actor?.actorId === auth.me?.id && privateSnapshot.actor?.sessionId === auth.me?.session.id
-    ? privateSnapshot.details[id] : undefined;
-  const game = currentDetail?.status === 'ready' ? currentDetail.game : state.data;
+  const actor = auth.me?.id, session = auth.me?.session.id;
+  const authenticated = auth.status === 'authenticated';
+  useEffect(() => {
+    if (authenticated) void auth.participation.loadDetail(id);
+  }, [auth.participation, id, actor, session, authenticated]);
+  const gameRead = authenticated && privateSnapshot.actor?.actorId === actor && privateSnapshot.actor?.sessionId === session
+    ? privateSnapshot.games[id] : undefined;
+  const game = authenticated ? gameRead?.status === 'ready' ? gameRead.game : undefined : state.data;
+  const loading = authenticated ? !gameRead || gameRead.status === 'loading' : state.status === 'loading';
+  const error = authenticated ? gameRead?.status === 'error' : state.status === 'error';
+  const retryDetail = authenticated ? () => void auth.participation.loadDetail(id) : retry;
   const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
   return <Page header={<Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />}>
-    {state.status === 'loading' && <Loading title="Загружаем условия игры…" />}
-    {state.status === 'error' && <ErrorState error={state.error} retry={retry} />}
+    {loading && <Loading title="Загружаем условия игры…" />}
+    {error && <ErrorState error={authenticated ? gameRead?.error : state.error} retry={retryDetail} />}
     {game && <>
       <Label accessibilityRole="header" style={styles.title}>{game.title}</Label>
       <Label>{statusLabel(game)}</Label>
@@ -66,9 +74,6 @@ function ParticipationArea({ gameId }: { gameId: string }) {
   const auth = useAuth(), router = useRouter(), coordinator = auth.participation;
   const snapshot = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
   const session = auth.me?.session.id;
-  useEffect(() => {
-    if (auth.status === 'authenticated') void coordinator.loadDetail(gameId);
-  }, [coordinator, gameId, session, auth.status]);
   const detail = snapshot.actor?.actorId === auth.me?.id && snapshot.actor?.sessionId === session ? snapshot.details[gameId] : undefined;
   const own = dominantParticipation(detail?.parts ?? []), command = detail?.command;
   const locked = command?.state === 'sending' || command?.state === 'unknown';

@@ -1604,10 +1604,10 @@
             "cookieSession": []
           },
           {
-            "bearerSession": []
+            "NativeBearer": []
           }
         ],
-        "summary": "Public DTO; draft requires manager. Unlisted share-token access is out of F-03 scope (returns 404 unless manager).",
+        "summary": "Game detail: public published games allow anonymous reads; draft requires an active manager; non-draft unlisted games also allow current pending/confirmed/withdrawn participants. Explicit native bearer is validated while enabled; invalid, duplicate or mixed credentials never fall back to anonymous. Taken-down participant restrictions remain unchanged. Share-token access is out of scope.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ShareToken"
@@ -1616,6 +1616,12 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/Game"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
           },
           "404": {
             "$ref": "#/components/responses/Problem"

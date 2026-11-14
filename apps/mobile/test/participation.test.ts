@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
-import { ParticipationCoordinator, ParticipationError, parseCursorPage, parseParticipation, parseManagedGame, myGameRows } from '../src/participation.ts';
+import { createPublicApi, PublicApiError } from '../src/public-api.ts';
+import { ParticipationCoordinator, ParticipationError, parseCursorPage, parseParticipation, parseAuthenticatedGame, parseManagedGame, myGameRows } from '../src/participation.ts';
 import type { Actor, Command, ParticipationPort } from '../src/participation.ts';
 import { game as fixture } from './fixtures.ts';
 import type { Game, Participation } from '@gobadminton/contracts/game-types';
@@ -138,4 +139,85 @@ test('coordinator boundary retains login on business rejection but clears all pr
   assert.deepEqual(auth.participation.getSnapshot().own.items, []);
   status = 401; await auth.participation.loadOwn(); assert.equal(auth.getSnapshot().status, 'guest');
   assert.equal(auth.participation.getSnapshot().actor, null); assert.deepEqual(auth.participation.getSnapshot().own.items, []);
+});
+
+test('closed exact detail read validates real private Game without management and keeps public transport strict', async () => {
+  const privateGame = { ...game, status: 'draft', visibility: 'unlisted' };
+  const parsed = parseAuthenticatedGame({ ...privateGame, privateExtra: 'discard' });
+  assert.equal(parsed.status, 'draft'); assert.equal(parsed.visibility, 'unlisted');
+  assert.equal('management' in parsed, false); assert.equal('privateExtra' in parsed, false);
+  assert.throws(() => parseManagedGame(privateGame));
+  for (const invalid of [{ ...privateGame, version: 0 }, { ...privateGame, venue: {} }, { ...privateGame, availablePlaces: -1 },
+    { ...privateGame, settlement: { mode: 'external', purpose: 'trainer_fee', priceStatus: 'fixed', terms: '' } }]) {
+    assert.throws(() => parseAuthenticatedGame(invalid), ParticipationError);
+  }
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fetcher: typeof fetch = async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response(JSON.stringify(privateGame)); };
+  await createNativeApi(fetcher).gameDetail('private-access', 'game/a');
+  assert.match(calls[0]!.url, /\/v1\/games\/game%2Fa$/);
+  assert.equal(calls[0]!.init.method, 'GET'); assert.equal(calls[0]!.init.credentials, 'omit'); assert.equal(calls[0]!.init.redirect, 'error');
+  assert.deepEqual(calls[0]!.init.headers, { Accept: 'application/json', Authorization: 'Bearer private-access' });
+  await assert.rejects(createPublicApi(fetcher).game(game.id), PublicApiError);
+  assert.deepEqual(calls[1]!.init.headers, { Accept: 'application/json' });
+});
+test('only actual public 404 falls back to authorized detail; row and detail share actor-private data without automatic commands', async () => {
+  const s = setup(), privateGame: Game = { ...game, status: 'draft', visibility: 'unlisted' };
+  let publicError = new PublicApiError('unavailable', 404), privateCalls = 0;
+  const coordinator = new ParticipationCoordinator(s.port, () => 'unused-key', async () => { throw publicError; },
+    async () => { privateCalls++; return privateGame; });
+  coordinator.setActor(actor);
+  await Promise.all([coordinator.loadGame(game.id), coordinator.loadDetail(game.id)]);
+  assert.equal(privateCalls, 1);
+  assert.equal(coordinator.getSnapshot().games[game.id]?.game?.status, 'draft');
+  assert.equal(coordinator.getSnapshot().details[game.id]?.game, coordinator.getSnapshot().games[game.id]?.game);
+  assert.equal(s.sent.length, 0); assert.equal('management' in coordinator.getSnapshot().games[game.id]!.game!, false);
+  for (const error of [new PublicApiError('network'), new PublicApiError('server', 503), new PublicApiError('invalid')]) {
+    publicError = error; await coordinator.loadGame(game.id);
+    assert.equal(privateCalls, 1); assert.equal(coordinator.getSnapshot().games[game.id]?.status, 'error');
+    assert.equal(coordinator.getSnapshot().games[game.id]?.game, undefined);
+    assert.equal(coordinator.getSnapshot().details[game.id]?.game, undefined);
+  }
+});
+test('private access rejection clears detail, row resource and late managed projection, preserving UNKNOWN packet', async () => {
+  const s = setup(), privateGame: Game = { ...game, visibility: 'unlisted' };
+  let denied = false;
+  const projection = parseManagedGame({ ...privateGame, management: { role: 'manager', createdByMe: false } });
+  s.port.managed = async () => ({ items: [projection], nextCursor: null });
+  s.port.send = async () => { throw new ParticipationError('network'); };
+  const coordinator = new ParticipationCoordinator(s.port, () => 'immutable-key', async () => { throw new PublicApiError('unavailable', 404); },
+    async () => { if (denied) throw new ParticipationError('business', 404); return privateGame; });
+  coordinator.setActor(actor); await coordinator.loadManaged(); await coordinator.loadDetail(game.id);
+  coordinator.review(game.id, 'request'); await coordinator.confirm(game.id);
+  const command = coordinator.getSnapshot().details[game.id]!.command!;
+  assert.equal(command.state, 'unknown');
+  const late = deferred<{ items: typeof projection[]; nextCursor: null }>();
+  s.port.managed = async () => late.promise;
+  const managed = coordinator.loadManaged(); denied = true; await coordinator.loadGame(game.id);
+  late.resolve({ items: [projection], nextCursor: null }); await managed;
+  assert.equal(coordinator.getSnapshot().games[game.id]?.game, undefined);
+  assert.equal(coordinator.getSnapshot().details[game.id]?.game, undefined);
+  assert.deepEqual(coordinator.getSnapshot().managed.items, []);
+  assert.equal(coordinator.getSnapshot().details[game.id]?.command?.packet, command.packet);
+  assert.equal(coordinator.getSnapshot().details[game.id]?.command?.state, 'unknown');
+  await coordinator.confirm(game.id); assert.equal(coordinator.getSnapshot().details[game.id]?.command?.packet, command.packet);
+});
+test('late private response cannot reappear after logout or account/session switch; no detail resurrection after row 404', async () => {
+  for (const next of [null, { actorId: 'actor-b', sessionId: 'session-b', generation: 2 }, { ...actor, sessionId: 'session-new', generation: 2 }]) {
+    const s = setup(), gate = deferred<Game>();
+    const coordinator = new ParticipationCoordinator(s.port, () => 'unused', async () => { throw new PublicApiError('unavailable', 404); }, async () => gate.promise);
+    coordinator.setActor(actor); const work = coordinator.loadDetail(game.id);
+    await new Promise(resolve => setImmediate(resolve)); coordinator.setActor(next);
+    gate.resolve({ ...game, visibility: 'unlisted' }); await work;
+    assert.deepEqual(coordinator.getSnapshot().games, {}); assert.deepEqual(coordinator.getSnapshot().details, {});
+    assert.deepEqual(coordinator.getSnapshot().managed.items, []); assert.equal(s.sent.length, 0);
+  }
+  const s = setup(), parts = deferred<{ items: Participation[]; nextCursor: null }>(); let denied = false;
+  s.port.own = async () => parts.promise;
+  const coordinator = new ParticipationCoordinator(s.port, () => 'unused', async () => { throw new PublicApiError('unavailable', 404); },
+    async () => { if (denied) throw new ParticipationError('business', 404); return { ...game, visibility: 'unlisted' }; });
+  coordinator.setActor(actor); const detail = coordinator.loadDetail(game.id);
+  await new Promise(resolve => setImmediate(resolve)); denied = true; await coordinator.loadGame(game.id);
+  parts.resolve({ items: [part], nextCursor: null }); await detail;
+  assert.equal(coordinator.getSnapshot().details[game.id]?.game, undefined);
+  assert.equal(coordinator.getSnapshot().games[game.id]?.game, undefined);
 });

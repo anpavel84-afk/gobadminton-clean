@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
+import { PublicApiError, publicApi } from '../src/public-api.ts';
+import { game as fixture } from './fixtures.ts';
 import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath,
   parseCallback, parseNativeMe, parseSecureEnvelope } from '../src/native-auth-protocol.ts';
 import type { PendingLogin, SecureEnvelope } from '../src/native-auth-protocol.ts';
@@ -176,4 +178,36 @@ test('generated pending uses S256 and survives restart; lost exchange response c
   assert.equal(resumed.calls.length, 1); assert.equal(JSON.parse(resumed.stored()!).pending, undefined);
   assert.equal(resumed.auth.getSnapshot().me, null);
   assert.doesNotMatch(JSON.stringify(resumed.auth.getSnapshot()), /accessToken|refreshToken|verifier|lost response/);
+});
+
+test('private detail fallback stays inside auth core; revoked bearer and late logout response clear all private resources', async t => {
+  t.mock.method(publicApi, 'game', async () => { throw new PublicApiError('unavailable', 404); });
+  const game = { ...fixture, version: 7, status: 'draft', visibility: 'unlisted' };
+  const s = setup(sessionEnvelope()); let revoked = false, gate: ReturnType<typeof deferred<unknown>> | null = null;
+  s.setHandler(async path => {
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === '/me') return me;
+    if (path.startsWith('/me/participations')) return { items: [], nextCursor: null };
+    if (path.startsWith('/me/games')) return { items: [{ ...game, management: { role: 'owner', createdByMe: true } }], nextCursor: null };
+    if (path === `/games/${game.id}`) return gate ? gate.promise : revoked ? new Response('{}', { status: 401 }) : game;
+    return { ok: true };
+  });
+  await s.auth.hydrate(); await s.auth.participation.loadManaged(); await s.auth.participation.loadDetail(game.id);
+  assert.equal(s.auth.participation.getSnapshot().games[game.id]?.game?.status, 'draft');
+  assert.equal(s.auth.participation.getSnapshot().details[game.id]?.game?.visibility, 'unlisted');
+  const call = s.calls.find(call => call.path === `/games/${game.id}`)!;
+  assert.deepEqual(call.init.headers, { Accept: 'application/json', Authorization: `Bearer ${credentials.accessToken}` });
+  assert.doesNotMatch(JSON.stringify(s.auth.getSnapshot()), /accessToken|refreshToken|management/);
+  revoked = true; await s.auth.participation.loadGame(game.id);
+  assert.equal(s.auth.getSnapshot().status, 'guest'); assert.equal(s.auth.participation.getSnapshot().actor, null);
+  assert.deepEqual(s.auth.participation.getSnapshot().games, {}); assert.deepEqual(s.auth.participation.getSnapshot().details, {});
+  assert.deepEqual(s.auth.participation.getSnapshot().managed.items, []);
+  // A second genuine session exercises logout while a private response is still in flight.
+  const other = setup(sessionEnvelope()); gate = deferred();
+  other.setHandler(async path => path === '/auth/native/refresh' ? credentials : path === '/me' ? me
+    : path === `/games/${game.id}` ? gate!.promise : { items: [], nextCursor: null });
+  await other.auth.hydrate(); const work = other.auth.participation.loadGame(game.id);
+  await new Promise(resolve => setImmediate(resolve)); await other.auth.logout(); gate.resolve(game); await work;
+  assert.deepEqual(other.auth.participation.getSnapshot().games, {});
+  assert.deepEqual(other.auth.participation.getSnapshot().details, {}); assert.equal(other.auth.getSnapshot().me, null);
 });

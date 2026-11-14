@@ -1,5 +1,5 @@
 import type { Game, Participation } from '@gobadminton/contracts/game-types';
-import { publicApi } from './public-api.ts';
+import { PublicApiError, publicApi } from './public-api.ts';
 
 export type ManagedGame = Game & { management: { role: 'owner' | 'manager'; createdByMe: boolean } };
 export type CursorPage<T> = { items: T[]; nextCursor: string | null };
@@ -42,12 +42,11 @@ export function gameVersion(game: unknown): number {
   if (!integer(version)) throw new ParticipationError('invalid');
   return version;
 }
-export function parseManagedGame(value: unknown): ManagedGame {
-  const r = record(value), m = record(r.management), v = record(r.venue), o = record(r.organizer);
+export function parseAuthenticatedGame(value: unknown): Game {
+  const r = record(value), v = record(r.venue), o = record(r.organizer);
   const l = record(r.levelRule), s = record(r.settlement);
   if (!['id', 'title', 'formatKey', 'timezone'].every(k => string(r[k])) || !r.id || !integer(r.version) ||
       !['draft', 'published', 'cancelled', 'completed'].includes(String(r.status)) || !['public', 'unlisted'].includes(String(r.visibility)) ||
-      !['owner', 'manager'].includes(String(m.role)) || typeof m.createdByMe !== 'boolean' ||
       !['id', 'name', 'address', 'cityId', 'timezone'].every(k => string(v[k])) ||
       !string(o.displayName) || !string(o.publicContact) || !(o.id === null || string(o.id)) ||
       !['startsAt', 'endsAt', 'applicationDeadlineAt'].every(k => date(r[k])) ||
@@ -62,7 +61,42 @@ export function parseManagedGame(value: unknown): ManagedGame {
     if (!string(t.profileId) || !string(t.displayName) || t.declarationSource !== 'self_declared') throw new ParticipationError('invalid');
   }
   try { new Intl.DateTimeFormat('ru', { timeZone: r.timezone as string }); } catch { throw new ParticipationError('invalid'); }
-  return r as unknown as ManagedGame;
+  const cover = (value: unknown): { uploadedUrl: string | null } | undefined => {
+    if (value === undefined) return undefined;
+    const c = record(value);
+    if (!(c.uploadedUrl === null || string(c.uploadedUrl))) throw new ParticipationError('invalid');
+    return { uploadedUrl: c.uploadedUrl };
+  };
+  const settlement: Game['settlement'] = s.purpose === 'trainer_fee' && s.priceStatus === 'fixed'
+    ? { mode: 'external', purpose: 'trainer_fee', priceStatus: 'fixed', priceUnit: 'per_player_per_session',
+      priceMinor: s.priceMinor as string, currency: s.currency as string, terms: s.terms as string }
+    : s.purpose === 'trainer_fee'
+      ? { mode: 'external', purpose: 'trainer_fee', priceStatus: 'by_agreement', priceMinor: null, currency: null, terms: s.terms as string }
+      : { mode: 'external', purpose: 'no_trainer_fee', priceMinor: null, currency: null, terms: s.terms as string };
+  if (!(s.purpose === 'trainer_fee' && s.priceStatus === 'fixed') && (s.priceMinor !== null || s.currency !== null)) throw new ParticipationError('invalid');
+  const trainer = r.trainer === null ? null : record(r.trainer);
+  // Copy only validated contract fields; an authenticated read confers no invented management role.
+  return {
+    id: r.id as string, version: r.version as number, title: r.title as string,
+    status: r.status as Game['status'], visibility: r.visibility as Game['visibility'],
+    organizer: { id: o.id as string | null, displayName: o.displayName as string, publicContact: o.publicContact as string },
+    venue: { id: v.id as string, name: v.name as string, address: v.address as string, cityId: v.cityId as string,
+      timezone: v.timezone as string, ...(v.cover === undefined ? {} : { cover: cover(v.cover) }) },
+    startsAt: r.startsAt as string, endsAt: r.endsAt as string, applicationDeadlineAt: r.applicationDeadlineAt as string,
+    timezone: r.timezone as string, capacity: r.capacity as number, confirmedCount: r.confirmedCount as number,
+    externalReservedCount: r.externalReservedCount as number, availablePlaces: r.availablePlaces as number,
+    formatKey: r.formatKey as string,
+    levelRule: { scaleId: l.scaleId as string, scaleVersion: l.scaleVersion as number, allowedLevelIds: [...l.allowedLevelIds] as string[] },
+    settlement, activityKind: r.activityKind as Game['activityKind'], trainingDescription: r.trainingDescription as string | null,
+    trainer: trainer ? { profileId: trainer.profileId as string, displayName: trainer.displayName as string, declarationSource: 'self_declared' } : null,
+    ...(r.cover === undefined ? {} : { cover: cover(r.cover) }),
+  };
+}
+export function parseManagedGame(value: unknown): ManagedGame {
+  const r = record(value), m = record(r.management);
+  const game = parseAuthenticatedGame(value);
+  if (!['owner', 'manager'].includes(String(m.role)) || typeof m.createdByMe !== 'boolean') throw new ParticipationError('invalid');
+  return { ...game, management: { role: m.role as 'owner' | 'manager', createdByMe: m.createdByMe } };
 }
 export type Actor = Readonly<{ actorId: string; sessionId: string; generation: number }>;
 export type Command = Readonly<{ actor: Actor; gameId: string; key: string } & (
@@ -71,7 +105,8 @@ export type Command = Readonly<{ actor: Actor; gameId: string; key: string } & (
 export type CommandState = { packet: Command; state: 'sending' | 'unknown' | 'settled' | 'rejected'; result?: Participation; code?: string };
 export type ReadState<T> = { status: 'idle' | 'loading' | 'ready' | 'error'; items: T[] };
 export type Detail = { status: 'loading' | 'ready' | 'error'; game?: Game; parts: Participation[]; review?: 'request' | 'withdraw'; command?: CommandState };
-export type ParticipationSnapshot = { actor: Actor | null; own: ReadState<Participation>; managed: ReadState<ManagedGame>; details: Record<string, Detail> };
+export type GameRead = { status: 'loading' | 'ready' | 'error'; game?: Game; error?: unknown };
+export type ParticipationSnapshot = { actor: Actor | null; own: ReadState<Participation>; managed: ReadState<ManagedGame>; details: Record<string, Detail>; games: Record<string, GameRead> };
 export type ParticipationPort = {
   own: (cursor?: string) => Promise<CursorPage<Participation>>;
   managed: (cursor?: string) => Promise<CursorPage<ManagedGame>>;
@@ -83,23 +118,26 @@ export function sameActor(a: Actor | null, b: Actor | null) {
 }
 /** Root-owned state survives route unmounts. Reads never dispatch commands or retry UNKNOWN. */
 export class ParticipationCoordinator {
-  private snapshot: ParticipationSnapshot = { actor: null, own: initial(), managed: initial(), details: {} };
+  private snapshot: ParticipationSnapshot = { actor: null, own: initial(), managed: initial(), details: {}, games: {} };
   private listeners = new Set<() => void>();
   private reads = { own: 0, managed: 0 };
   private detailReads = new Map<string, number>();
+  private gameReads = new Map<string, Promise<Game>>();
+  private deniedGames = new Set<string>();
+  private readPrivateGame?: (id: string) => Promise<unknown>;
   private port: ParticipationPort;
   private random: () => string;
   private readGame: (id: string) => Promise<unknown>;
-  constructor(port: ParticipationPort, random: () => string, readGame: (id: string) => Promise<unknown> = id => publicApi.game(id)) {
-    this.port = port; this.random = random; this.readGame = readGame;
+  constructor(port: ParticipationPort, random: () => string, readGame: (id: string) => Promise<unknown> = id => publicApi.game(id), readPrivateGame?: (id: string) => Promise<unknown>) {
+    this.port = port; this.random = random; this.readGame = readGame; this.readPrivateGame = readPrivateGame;
   }
   getSnapshot = () => this.snapshot;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   private show(patch: Partial<ParticipationSnapshot>) { this.snapshot = { ...this.snapshot, ...patch }; this.listeners.forEach(fn => fn()); }
   setActor(actor: Actor | null) {
     if ((!actor && !this.snapshot.actor) || sameActor(actor, this.snapshot.actor)) return;
-    this.reads.own++; this.reads.managed++; this.detailReads.clear();
-    this.show({ actor: actor ? Object.freeze({ ...actor }) : null, own: initial(), managed: initial(), details: {} });
+    this.reads.own++; this.reads.managed++; this.detailReads.clear(); this.gameReads.clear(); this.deniedGames.clear();
+    this.show({ actor: actor ? Object.freeze({ ...actor }) : null, own: initial(), managed: initial(), details: {}, games: {} });
   }
   private current(actor: Actor | null) { return sameActor(actor, this.snapshot.actor); }
   private detail(id: string, patch: Partial<Detail>) {
@@ -136,21 +174,66 @@ export class ParticipationCoordinator {
     const valid = () => this.current(actor) && serial === this.reads.managed;
     this.show({ managed: { status: 'loading', items: [] } });
     try {
-      const items = await this.pages(this.port.managed, valid, items => this.show({ managed: { status: 'loading', items } }));
-      if (valid()) this.show({ managed: { status: 'ready', items } });
+      const visible = (items: ManagedGame[]) => items.filter(game => !this.deniedGames.has(game.id));
+      const items = await this.pages(this.port.managed, valid, items => this.show({ managed: { status: 'loading', items: visible(items) } }));
+      if (valid()) this.show({ managed: { status: 'ready', items: visible(items) } });
     } catch { if (valid()) this.show({ managed: { ...this.snapshot.managed, status: 'error' } }); }
   };
+  /** Actor-scoped game resource shared by own rows and details, never the public catalog cache. */
+  private gameRead(id: string): Promise<Game> {
+    const actor = this.snapshot.actor;
+    if (!actor) return Promise.reject(new ParticipationError('stale'));
+    const running = this.gameReads.get(id);
+    if (running) return running;
+    const valid = () => this.current(actor) && this.gameReads.get(id) === work;
+    const work: Promise<Game> = Promise.resolve().then(async () => {
+      try {
+        let raw: unknown;
+        try { raw = await this.readGame(id); }
+        catch (error) {
+          // Only a real public 404 permits the closed authenticated read. Network/parse failures stay failures.
+          if (!(error instanceof PublicApiError) || error.status !== 404 || !this.readPrivateGame) throw error;
+          if (!valid()) throw new ParticipationError('stale');
+          raw = await this.readPrivateGame(id);
+        }
+        if (!valid()) throw new ParticipationError('stale');
+        const game = parseAuthenticatedGame(raw);
+        if (game.id !== id) throw new ParticipationError('invalid');
+        this.deniedGames.delete(id);
+        this.show({ games: { ...this.snapshot.games, [id]: { status: 'ready', game } } });
+        return game;
+      } catch (error) {
+        if (valid()) {
+          const denied = error instanceof ParticipationError && [401, 403, 404].includes(error.status) ||
+            error instanceof PublicApiError && error.status === 404;
+          if (denied) this.deniedGames.add(id);
+          // A rejected resource cannot leave a private detail or managed DTO available to another view.
+          const detail = this.snapshot.details[id];
+          const displayError = error instanceof ParticipationError
+            ? new PublicApiError([403, 404].includes(error.status) ? 'unavailable' : error.kind === 'invalid' ? 'invalid' : 'network', error.status || undefined)
+            : error;
+          this.show({ games: { ...this.snapshot.games, [id]: { status: 'error', error: displayError } },
+            ...(detail ? { details: { ...this.snapshot.details, [id]: { ...detail, status: 'error', game: undefined, parts: [], review: undefined } } } : {}),
+            ...(denied ? { managed: { ...this.snapshot.managed, items: this.snapshot.managed.items.filter(game => game.id !== id) } } : {}) });
+        }
+        throw error;
+      } finally { if (this.gameReads.get(id) === work) this.gameReads.delete(id); }
+    });
+    this.gameReads.set(id, work);
+    this.show({ games: { ...this.snapshot.games, [id]: { status: 'loading' } } });
+    return work;
+  }
+  loadGame = async (id: string) => { try { await this.gameRead(id); } catch { /* Resource carries safe failure state. */ } };
   loadDetail = async (id: string) => {
     const actor = this.snapshot.actor, serial = (this.detailReads.get(id) ?? 0) + 1; this.detailReads.set(id, serial);
     if (!actor) return;
     const valid = () => this.current(actor) && this.detailReads.get(id) === serial;
     this.detail(id, { status: 'loading', game: undefined, parts: [] });
     try {
-      const [raw, all] = await Promise.all([this.readGame(id), this.pages(this.port.own, valid)]);
+      const [game, all] = await Promise.all([this.gameRead(id), this.pages(this.port.own, valid)]);
       if (!valid()) return;
       if (all.some(p => p.userId !== actor.actorId)) throw new ParticipationError('invalid');
-      gameVersion(raw); const game = raw as Game;
-      if (game.id !== id) throw new ParticipationError('invalid');
+      if (this.snapshot.games[id]?.status !== 'ready' || this.snapshot.games[id]?.game !== game) throw new ParticipationError('stale');
       const parts = all.filter(p => p.gameId === id);
       let command = this.snapshot.details[id]?.command;
       if (command?.state === 'unknown') {
