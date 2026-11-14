@@ -6,10 +6,11 @@ import * as WebBrowser from 'expo-web-browser';
 import { useRouter } from 'expo-router';
 import { nativeAuth } from './auth-runtime.ts';
 import { NATIVE_REDIRECT, isNativeCallback } from './native-auth-protocol.ts';
+import type { PlayersCoordinator } from './players.ts';
 import type { ParticipationCoordinator } from './participation.ts';
 import type { AuthSnapshot } from './auth-coordinator.ts';
 
-type AuthContext = AuthSnapshot & { participation: ParticipationCoordinator; signIn: (returnPath?: string | null) => Promise<void>;
+type AuthContext = AuthSnapshot & { players: PlayersCoordinator; participation: ParticipationCoordinator; signIn: (returnPath?: string | null) => Promise<void>;
   logout: () => Promise<void>; cancel: () => Promise<void>; validate: () => Promise<void>;
   loadSessions: () => Promise<void>; revokeSession: (id: string | null) => Promise<void> };
 const Context = createContext<AuthContext | null>(null);
@@ -52,7 +53,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       } catch { await nativeAuth.cancelLogin(start.generation); }
     } finally { browserBusy.current = false; }
   }
-  return <Context.Provider value={{ ...snapshot, participation: nativeAuth.participation, signIn, logout: () => nativeAuth.logout(), cancel: () => nativeAuth.cancelLogin(),
+  return <Context.Provider value={{ ...snapshot, players: nativeAuth.players, participation: nativeAuth.participation, signIn, logout: () => nativeAuth.logout(), cancel: () => nativeAuth.cancelLogin(),
     validate: nativeAuth.validate, loadSessions: nativeAuth.loadSessions, revokeSession: nativeAuth.revokeSession }}>{children}</Context.Provider>;
 }
 export function useAuth() {

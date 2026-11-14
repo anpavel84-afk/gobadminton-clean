@@ -193,8 +193,8 @@ describe("releases catalogue integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
   });
 
   it("preserves the exact ten-field trusted alpha.69 receipt before the accepted alpha.70 receipt", () => {
@@ -222,9 +222,10 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-18).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-19).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
+      "0.1.0-alpha.86",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -240,8 +241,8 @@ describe("releases catalogue integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
   });
 
   it("preserves the exact ten-field trusted alpha.70 receipt before the accepted alpha.71 receipt", () => {
@@ -269,9 +270,10 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-17).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-18).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
+      "0.1.0-alpha.86",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
@@ -281,8 +283,8 @@ describe("releases catalogue integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
   });
 
   it("preserves the exact ten-field accepted alpha.71 receipt before the accepted alpha.72 receipt", () => {
@@ -309,9 +311,10 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-17).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-18).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
+      "0.1.0-alpha.86",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
     expect(row.additions).toHaveLength(0);
@@ -325,8 +328,8 @@ describe("releases catalogue integrity", () => {
     expect(row.known_limitations[0]).toBe("Общее состояние сообщества на карте площадок, вход в отзыв после конкретной игры и снятие публичного автора без замены ещё не доступны");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
   });
 
 
@@ -354,10 +357,10 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find(item => item.application_version === "0.1.0-alpha.83")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-3)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.known_limitations.slice(4, 6)).toEqual(row.known_limitations.slice(1, 3));
     expect(CURRENT_NAMED_RELEASE.known_limitations[6]).toBe("Физический iPhone, провайдер доставки и GoBad ещё не проверены; результат проверки мобильного прототипа владельцем указан выше; служебный разбор отзывов после обычного входа ещё не проверен");
     expect(CURRENT_NAMED_RELEASE.known_limitations.slice(7)).toEqual(row.known_limitations.slice(4));
@@ -388,13 +391,48 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find(item => item.application_version === "0.1.0-alpha.84")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
+    expect(TRUSTED_HISTORICAL_SEED.at(-2)).toBe(row);
+  });
+
+  it("preserves the exact ten-field accepted alpha.86 seed and actual Owner rejection", () => {
+    const rows = TRUSTED_HISTORICAL_SEED.filter(row => row.application_version === "0.1.0-alpha.86");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(Object.keys(row)).toHaveLength(10);
+    const input = JSON.stringify(row, null, 2) + "\n";
+    expect(Buffer.byteLength(input, "utf8")).toBe(7419);
+    expect(createHash("sha256").update(input).digest("hex")).toBe(
+      "349794af09fc721909aeb91d7581bcfebd9d91c931664bf64bdc6b5984ae62ac",
+    );
+    expect(row.source_sha).toBe("a12f0141ad592ffef71c85b0ee5d2688cb8a0762");
+    expect(row.version_label).toBe("0.1.0-alpha.86");
+    expect(row.api_contract_version).toBe("0.44.0");
+    expect(row.owner_uat).toBe("FAIL_RECHECK_PENDING");
+    expect(row.deployments).toEqual([{
+      environment: "dev", status: "ACCEPTED", release_id: "r43563817043-a1",
+      accepted_at: "2026-11-14T06:09:30Z",
+      api_digest: "sha256:53a456c0310ebe1be3294280c1b1d447570a6f8b8d4aaae0123b768ebe7c153e",
+      web_digest: "sha256:82f2a9d304c542bf19b3e0df67fd974f203eb4e50e723dfb8e358bc1cf78ed91",
+      kind: "pipeline",
+    }]);
+    const previous = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.85")!;
+    expect(previous.owner_uat).toBe("FAIL");
+    expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(TRUSTED_HISTORICAL_SEED.at(-1)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some(row => row.application_version === "0.1.0-alpha.87")).toBe(false);
+    expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
+    expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
+    expect(CURRENT_NAMED_RELEASE.known_limitations.slice(3)).toEqual(row.known_limitations.slice(3));
+    expect(CURRENT_NAMED_RELEASE.known_limitations[1]).toBe(row.known_limitations[1]);
   });
 
   it("describes alpha.86 as partial prepared work with the actual device rejection retained", () => {
-    const delta = [...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes].join(" ");
-    expect(CURRENT_NAMED_RELEASE.additions).toHaveLength(3);
-    expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
+    const alpha86 = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.86")!;
+    const delta = [...alpha86.additions, ...alpha86.fixes].join(" ");
+    expect(alpha86.additions).toHaveLength(3);
+    expect(alpha86.fixes).toHaveLength(2);
     expect(delta).toMatch(/Подготовлена основа входа.*сохранения сессии.*своего профиля.*включение и проверка на телефоне ещё предстоят/);
     expect(delta).toMatch(/явная подача заявки.*отзыв своей заявки.*«Моих игр».*по своим правам.*на телефоне ещё не подтверждена/);
     expect(delta).toMatch(/Вводные экраны.*отдельное оформление.*основные экраны и карточки.*принятому веб-приложению/);
@@ -404,22 +442,22 @@ describe("releases catalogue integrity", () => {
     expect(delta).not.toMatch(/SHA|11e4ebb2f9f7bc1b7fa4cf41a2f46055bad23d8b|слияния/);
     expect(delta).not.toMatch(/Android-пакета|серверная квитанция|arm64-v8a|debug|Metro/);
     expect(delta).not.toMatch(/Product CI7|ACCEPTED|APK.*(?:удерживается|не опубликован)|ссылка для скачивания ещё не опубликована/);
-    const limits = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
-    expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
+    const limits = alpha86.known_limitations.join(" ");
+    expect(alpha86.owner_uat).toBe("FAIL_RECHECK_PENDING");
     expect(limits).toMatch(/Полное равенство.*обязательно и ещё не достигнуто.*управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар/);
     expect(limits).toMatch(/Владелец отклонил.*alpha\.85.*Samsung S23.*#522 от 14 ноября 2026 года.*Историческая оценка alpha\.85 исправлена на отказ.*ещё не прошёл повторную проверку на физическом телефоне/);
     expect(limits).toMatch(/Мобильный вход по умолчанию выключен.*Реальный вход, перенос сессии, действия с закрытыми данными.*подтверждённым ссылкам ещё не проверены/);
     expect(limits).toMatch(/Для iPhone ещё не подтверждены.*команда разработчика Apple.*привязка ссылок.*сборка.*физическом устройстве.*публикация в магазине/);
     expect(limits).toMatch(/Подписанные обновления по сети.*двух вариантов.*удалённые настройки ещё не проверены.*учётной записи обновлений и средств подписи неизвестна/);
     expect(limits).not.toMatch(/Проверка на устройствах и приёмка владельцем ещё не выполнены/);
-    expect([CURRENT_NAMED_RELEASE.title, delta, limits].join(" ")).not.toMatch(
+    expect([alpha86.title, delta, limits].join(" ")).not.toMatch(
       /\bDEV\b|\bPROD\b|READY|ACTIVE|operator|alias|PG-\d|Safety|MutationRunner|OpenAPI|Cases|legacy|replay|ACCEPTED|sha256:|0\.44\.0|миграци|чёрные кнопки/i,
     );
   });
 
   it("retains historical native M1 notes separately from the current prerelease", () => {
     const alpha85 = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.85")!;
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.86");
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.87");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.44.0");
     expect(CURRENT_NAMED_RELEASE.application_version).toBe(CURRENT_APPLICATION_VERSION);
     expect(alpha85.title).toBe("Мобильное приложение: гостевой просмотр и тестовая сборка Android");
@@ -484,10 +522,10 @@ describe("releases catalogue integrity", () => {
     ]);
     const previous = TRUSTED_HISTORICAL_SEED.find(item => item.application_version === "0.1.0-alpha.82")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-3)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((count, item) => count + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-4)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((count, item) => count + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -526,10 +564,10 @@ describe("releases catalogue integrity", () => {
     ]);
     const previous = TRUSTED_HISTORICAL_SEED.find(item => item.application_version === "0.1.0-alpha.81")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-4)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((count, item) => count + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-5)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((count, item) => count + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some(item => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -564,8 +602,8 @@ describe("releases catalogue integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.80")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-5)).toBe(row);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.at(-6)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -575,9 +613,9 @@ describe("releases catalogue integrity", () => {
         ? "Физический iPhone, провайдер доставки и GoBad ещё не проверены; результат проверки мобильного прототипа владельцем указан выше; служебный разбор отзывов после обычного входа ещё не проверен"
         : note),
     ]);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -611,8 +649,8 @@ describe("releases catalogue integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.79")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-6)).toBe(row);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.at(-7)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -622,9 +660,9 @@ describe("releases catalogue integrity", () => {
         ? "Физический iPhone, провайдер доставки и GoBad ещё не проверены; результат проверки мобильного прототипа владельцем указан выше; служебный разбор отзывов после обычного входа ещё не проверен"
         : note),
     ]);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -661,7 +699,7 @@ describe("releases catalogue integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.78")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.known_limitations).toEqual(previous.known_limitations);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -672,10 +710,10 @@ describe("releases catalogue integrity", () => {
         : note),
     ]);
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-7)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-8)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -702,7 +740,7 @@ describe("releases catalogue integrity", () => {
     expect(row.deployments[0]?.accepted_at).toBe("2026-11-10T12:28:54Z");
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -713,10 +751,10 @@ describe("releases catalogue integrity", () => {
         : note),
     ]);
     expect(row.owner_uat).toBe("NOT_TESTED");
-    expect(TRUSTED_HISTORICAL_SEED.at(-8)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-9)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -761,7 +799,7 @@ describe("releases catalogue integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.76")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.known_limitations).toEqual(previous.known_limitations);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -771,10 +809,10 @@ describe("releases catalogue integrity", () => {
         ? "Физический iPhone, провайдер доставки и GoBad ещё не проверены; результат проверки мобильного прототипа владельцем указан выше; служебный разбор отзывов после обычного входа ещё не проверен"
         : note),
     ]);
-    expect(TRUSTED_HISTORICAL_SEED.at(-9)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-10)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -819,10 +857,10 @@ describe("releases catalogue integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.75")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-10)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-11)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
     expect(CURRENT_NAMED_RELEASE.source_sha).toBeNull();
     expect(CURRENT_NAMED_RELEASE.owner_uat).toBe("FAIL_RECHECK_PENDING");
   });
@@ -867,10 +905,10 @@ describe("releases catalogue integrity", () => {
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.74")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-11)).toBe(row);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED.at(-12)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.74 receipt before the accepted alpha.75 receipt", () => {
@@ -901,15 +939,15 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.73")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-12)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.at(-13)).toBe(row);
     expect(row.title).toBe("Прокрутка типов игр без обрезанных кнопок");
     expect(row.additions).toHaveLength(0);
     expect(row.fixes).toEqual(["На экране «Игры» край списка типов игр подсказывает возможность прокрутки, а последний переключатель виден целиком. При переходе с клавиатуры список прокручивается так, чтобы переключатель в фокусе оставался полностью видимым."]);
     expect(row.known_limitations[0]).toBe("Управление опубликованным отзывом — редактирование и отзыв публикации — в пользовательском интерфейсе ещё не доступно");
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.73 receipt before the accepted alpha.74 receipt", () => {
@@ -940,11 +978,11 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.72")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.at(-13)).toBe(row);
+    expect(TRUSTED_HISTORICAL_SEED.at(-14)).toBe(row);
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
   });
 
   it("preserves the exact ten-field accepted alpha.72 receipt before the accepted alpha.73 receipt", () => {
@@ -981,13 +1019,13 @@ describe("releases catalogue integrity", () => {
       "Отзыв о площадке теперь открывается из итогов конкретной игры при подтверждённом сервером допуске. Общая кнопка и выбор другой игры на публичной площадке убраны; опубликованные отзывы остаются доступны для чтения.",
     ]);
     expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!.known_limitations).toEqual(row.known_limitations.slice(1));
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
-    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(94);
-    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.86")).toBe(false);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
+    expect(TRUSTED_HISTORICAL_SEED.reduce((n, item) => n + item.deployments.length, 0)).toBe(95);
+    expect(TRUSTED_HISTORICAL_SEED.some((item) => item.application_version === "0.1.0-alpha.87")).toBe(false);
   });
 
-  it("keeps first alpha.1 baseline literal while current descriptor is alpha.86 delta", () => {
-    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.86");
+  it("keeps first alpha.1 baseline literal while current descriptor is alpha.87 delta", () => {
+    expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.87");
     expect(API_CONTRACT_VERSION_NOTE).toBe("0.44.0");
     expect(FIRST_NAMED_APPLICATION_VERSION).toBe("0.1.0-alpha.1");
     expect(FIRST_NAMED_RELEASE.application_version).toBe(FIRST_NAMED_APPLICATION_VERSION);
@@ -1003,7 +1041,7 @@ describe("releases catalogue integrity", () => {
       ...CURRENT_NAMED_RELEASE.known_limitations,
       CURRENT_NAMED_RELEASE.title,
     ].join(" ");
-    expect(currentProse).toContain("Мобильное приложение: промежуточная версия и основа входа");
+    expect(currentProse).toContain("Мобильное приложение: навигация и просмотр игроков");
     expect(currentProse).toMatch(/1 января 2027|2027 UTC/i);
     expect(currentProse).toMatch(/приёмк|iPhone|GoBad|#506|#522/i);
     expect(currentProse).not.toMatch(/\bDEV\b|operator|alias/i);
@@ -1075,7 +1113,7 @@ describe("releases catalogue integrity", () => {
     expect(alpha84Delta).not.toMatch(/#507.*(?:DONE|заверш|выполн)|проверка владельцем пройдена|нативный интерфейс доступен/i);
     expect(alpha84Delta).not.toMatch(/(?:^|[^а-яё])нов[а-яё]*\s+(?:допуск|срок|окн)[а-яё]*|медиа|нативн|автоматическ.*удал|модераци[яи]\s+(?:полностью\s+)?(?:завершена|выполнена)|приёмк.*пройдена/iu);
     expect(CURRENT_NAMED_RELEASE.known_limitations.join(" ")).not.toMatch(/(?:просмотр|отзыв публикации).*ещё не доступ/i);
-    expect(CURRENT_NAMED_RELEASE.title).toBe("Мобильное приложение: промежуточная версия и основа входа");
+    expect(CURRENT_NAMED_RELEASE.title).toBe("Мобильное приложение: навигация и просмотр игроков");
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
     const fixes = CURRENT_NAMED_RELEASE.fixes.join(" ");
     expect(fixes).not.toMatch(/меню/i);
@@ -1274,10 +1312,10 @@ describe("releases catalogue integrity", () => {
       && row.api_contract_version === "0.27.0"
       && row.title === "Жалоба на полученный приватный отзыв",
     )).toBe(true);
-    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(89);
+    expect(TRUSTED_HISTORICAL_SEED).toHaveLength(90);
     expect(
       TRUSTED_HISTORICAL_SEED.reduce((n, row) => n + row.deployments.length, 0),
-    ).toBe(94);
+    ).toBe(95);
     expect(TRUSTED_HISTORICAL_SEED.some((row) =>
       row.application_version === "0.1.0-alpha.55"
       && row.source_sha === "edc6744ce0f96dcaa922dafcd373fdab8e482bf8"
@@ -1928,13 +1966,15 @@ describe("releases page current known limitations SSR (#473)", () => {
     ]);
   });
 
-  it("renders alpha.86 partial native notes with API 0.44.0 and no stale release claims", async () => {
+  it("renders alpha.87 partial native notes with API 0.44.0 and no stale release claims", async () => {
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const tree = await ReleasesPage();
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain("0.1.0-alpha.86");
-    expect(html).toContain("Мобильное приложение: промежуточная версия и основа входа");
-    expect(html.split("Мобильное приложение: промежуточная версия и основа входа").length - 1).toBe(1);
+    const alpha86 = TRUSTED_HISTORICAL_SEED.find(row => row.application_version === "0.1.0-alpha.86")!;
+    const alpha86Text = [...alpha86.additions, ...alpha86.fixes, ...alpha86.known_limitations].join(" ");
+    expect(html).toContain("0.1.0-alpha.87");
+    expect(html).toContain("Мобильное приложение: навигация и просмотр игроков");
+    expect(html.split("Мобильное приложение: навигация и просмотр игроков").length - 1).toBe(1);
     expect(CURRENT_NAMED_RELEASE.fixes).toHaveLength(2);
     expect(html).toContain("Что исправлено");
     expect(html).toContain("Что добавлено");
@@ -1957,26 +1997,35 @@ describe("releases page current known limitations SSR (#473)", () => {
     for (const note of [...alpha83.additions, ...alpha83.fixes]) expect(html).not.toContain(note);
     const document = new DOMParser().parseFromString(html, "text/html");
     const current = document.querySelector("[aria-labelledby='releases-named']")!;
-    expect(current.textContent).toContain("0.1.0-alpha.86");
+    expect(current.textContent).toContain("0.1.0-alpha.87");
     expect(current.textContent).toContain(CURRENT_NAMED_RELEASE.title);
     expect([...current.querySelectorAll(".gb-releases-list-block li")].map(item => item.textContent)).toEqual([
       ...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes,
     ]);
     expect(current.textContent).toMatch(/GoBadminton.*Onest.*чёрный текст на зелёных кнопках/);
     expect(current.textContent).toMatch(/Вводные экраны.*отдельное оформление.*основные экраны и карточки.*принятому веб-приложению/);
-    expect(current.textContent).toMatch(/Подготовлена основа входа.*сохранения сессии.*своего профиля/);
-    expect(current.textContent).toMatch(/явная подача заявки.*отзыв своей заявки.*«Моих игр».*по своим правам/);
-    expect(current.textContent).toMatch(/включение и проверка на телефоне ещё предстоят.*Работа этих действий на телефоне ещё не подтверждена/);
+    expect(alpha86Text).toMatch(/Подготовлена основа входа.*сохранения сессии.*своего профиля/);
+    expect(alpha86Text).toMatch(/явная подача заявки.*отзыв своей заявки.*«Моих игр».*по своим правам/);
+    expect(alpha86Text).toMatch(/включение и проверка на телефоне ещё предстоят.*Работа этих действий на телефоне ещё не подтверждена/);
+    expect(current.textContent).toMatch(/переходы.*«Игры».*«Игроки».*«Мои игры».*своего профиля/);
+    expect(current.textContent).toMatch(/каталог и карточка игрока.*поиск и фильтры.*подгрузка следующих страниц.*ошибках и повторная загрузка/i);
+    expect(current.textContent).toMatch(/сохранение входа и настроек между запусками.*физическом телефоне ещё не подтверждена/);
+    expect(current.textContent).toMatch(/Отмена входа сохраняет гостевой просмотр/);
+    expect(html).toMatch(/Полное равенство.*обязательно и ещё не достигнуто.*сообщения, карты, радар.*Каталог и карточка игрока подготовлены в исходном коде; сообщения ещё не реализованы/);
+    expect(html).toMatch(/на тестовом стенде он уже включён для зарегистрированного приложения.*сохраняют существующую настройку/);
+    expect(current.textContent).not.toContain("431b88222d31e045fea2f98be394feaffcbf5274");
+    expect(current.textContent).not.toContain("r43563817043-a1");
+    expect(current.textContent).not.toContain("a12f0141ad592ffef71c85b0ee5d2688cb8a0762");
     expect(current.textContent).not.toMatch(/SHA|11e4ebb2f9f7bc1b7fa4cf41a2f46055bad23d8b|слияния/);
     expect(current.textContent).not.toMatch(/Android-пакета|серверная квитанция|arm64-v8a|debug|Metro/);
     expect(current.textContent).not.toMatch(/Product CI7|ACCEPTED|APK.*(?:удерживается|не опубликован)|ссылка для скачивания ещё не опубликована/);
-    expect(current.textContent).toMatch(/компактнее.*безопасные отступы.*увеличенный системный размер шрифта/);
-    expect(current.textContent).toMatch(/открытие доступных пользователю закрытых игр/);
-    expect(current.textContent).toMatch(/у непубличных карточек убрана отправка публичной ссылки/);
-    expect(html).toMatch(/Полное равенство.*обязательно и ещё не достигнуто.*управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар/);
+    expect(alpha86Text).toMatch(/компактнее.*безопасные отступы.*увеличенный системный размер шрифта/);
+    expect(alpha86Text).toMatch(/открытие доступных пользователю закрытых игр/);
+    expect(alpha86Text).toMatch(/у непубличных карточек убрана отправка публичной ссылки/);
+    expect(alpha86Text).toMatch(/Полное равенство.*обязательно и ещё не достигнуто.*управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар/);
     expect(html).toMatch(/Владелец отклонил.*alpha\.85.*Samsung S23.*#522 от 14 ноября 2026 года.*ещё не прошёл повторную проверку на физическом телефоне/);
     expect(html).toMatch(/Для iPhone ещё не подтверждены.*физическом устройстве.*Публикация в магазинах не выполнялась.*полный объём #522 не завершён/);
-    expect(html).toMatch(/Мобильный вход по умолчанию выключен.*Реальный вход.*закрытыми данными.*подтверждённым ссылкам ещё не проверены/);
+    expect(alpha86Text).toMatch(/Мобильный вход по умолчанию выключен.*Реальный вход.*закрытыми данными.*подтверждённым ссылкам ещё не проверены/);
     expect(html).toMatch(/Подписанные обновления по сети.*двух вариантов.*удалённые настройки ещё не проверены.*средств подписи неизвестна/);
     expect(html).not.toContain("Нативный мобильный онбординг (#522) ещё не реализован");
     expect(current.textContent).not.toMatch(/https?:\/\/|#522.*(?:DONE|полностью заверш)|store-approved|production-ready|проверка на устройствах пройдена/i);

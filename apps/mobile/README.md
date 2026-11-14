@@ -1,3 +1,25 @@
+## Current bounded #522 source on alpha.86 (2026-11-14)
+
+Adds real native Игры → Игроки → Мои игры navigation, with Profile in the header;
+`/players` and `/players/:publicPlayerId` use the current public projection, city/name/
+looking/trainer filters, cursor pages, read retry and unavailable states. Auth and
+participation owners remain above the Stack; authenticated icon entry waits for both
+storage owners and skips intro. Only the two Players GETs gain native principal opt-in.
+Android source `versionCode` is 2 (`versionName` remains 0.1.0); this is separate from
+server alpha.86. No APK was patched, built or published here.
+
+Author deterministic checks: 57 cases across the eight affected/related pure suites
+passed using Node 24 directly (including preserved UNKNOWN/participation fences). Typecheck/lint/DB integration/Expo export/build/device visual:
+NOT_TESTED (no dependencies in this private export). A typecheck invocation reached
+Corepack's missing-pnpm download and failed DNS; no package was installed and no
+retry was made. The new isolated DB suite self-migrates its fresh disposable CI DB.
+Independent QA/CI/DEV acceptance remain the trusted parent's work. Samsung S23 Owner
+UAT remains FAIL_RECHECK_PENDING; native rendering NOT_VERIFIED. Full parity remains
+MANDATORY_NOT_COMPLETE: Messages, Players private actions, full MyGames management,
+invites/recommendations/postgame, maps/Radar, UGC/updates and iOS remain mandatory.
+
+Earlier passes and their historical status/evidence follow unchanged.
+
 # #522 bounded Games → explicit application → My Games source candidate
 
 This pass adds only native participation request, own pending/confirmed withdrawal,

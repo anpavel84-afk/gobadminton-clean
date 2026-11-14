@@ -27,3 +27,15 @@ test('persistence accepts only story completion and a nonsensitive city ID', () 
     assert.deepEqual(parsePreferences(raw), emptyPreferences);
   }
 });
+
+test('icon entry waits both hydration owners, skips intro for restored auth, and preserves pending/deep return', async () => {
+  const { hydratedEntryRoute } = await import('../src/entry.ts');
+  const auth = { status: 'authenticated', returnPath: null };
+  assert.equal(hydratedEntryRoute(emptyPreferences, false, auth), null);
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { ...auth, status: 'hydrating' }), null);
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, auth), '/games');
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { ...auth, returnPath: '/games/selected-game' }), '/games/selected-game');
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'signing-in', returnPath: '/games/selected-game' }), '/profile');
+  for (const path of ['/games/selected-game', '/auth/native/callback', '/players/public-a']) assert.equal(hydratedEntryRoute(emptyPreferences, true, auth, path), null);
+  assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'guest', returnPath: null }), '/story');
+});

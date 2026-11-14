@@ -1,10 +1,12 @@
+import { PlayersError, parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
+import type { PlayerFilters } from './players.ts';
 import { ParticipationError, parseCursorPage, parseAuthenticatedGame, parseManagedGame, parseParticipation } from './participation.ts';
 import { NATIVE_CLIENT_ID, NATIVE_ORIGIN, NativeAuthError, parseMethods } from './native-auth-protocol.ts';
 import type { NativeExchangeRequest, NativeTransactionRequest } from '@gobadminton/contracts/native-auth';
 
 export function createNativeApi(fetcher: typeof fetch = fetch) {
   // Deliberately closed route surface: never forward caller URLs, cookies, Origin or browser bridge commands.
-  async function request(path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown, access?: string, key?: string, participation = false): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown, access?: string, key?: string, participation = false, players = false): Promise<unknown> {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
@@ -24,17 +26,20 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
           : [400, 403, 404, 409, 422].includes(response.status) ? 'business' : 'network', response.status, code);
       }
       if (response.status === 401 || response.status === 403) throw new NativeAuthError('authority');
+      if (players && !response.ok) throw new PlayersError(response.status === 404 ? 'unavailable' : 'server', response.status);
       if (response.status === 404 || response.status === 503) throw new NativeAuthError('unavailable');
       if (!response.ok) throw new NativeAuthError('invalid');
       return await response.json();
     } catch (error) {
-      if (error instanceof NativeAuthError || error instanceof ParticipationError) throw error;
+      if (error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError) throw error;
       if (participation) throw new ParticipationError(error instanceof SyntaxError ? 'invalid' : 'network');
       // Never forward server errors, response text, fetch URLs or credentials.
       throw new NativeAuthError(error instanceof SyntaxError ? 'invalid' : 'network');
     } finally { clearTimeout(timeout); }
   }
   return {
+    players: async (access: string, filters: PlayerFilters, cursor?: string) => parsePlayerPage(await request(`/players?${playerQuery(filters, cursor)}`, 'GET', undefined, access, undefined, false, true)),
+    player: async (access: string, id: string) => parsePlayer(await request(`/players/${encodeURIComponent(id)}`, 'GET', undefined, access, undefined, false, true)),
     gameDetail: async (access: string, gameId: string) => parseAuthenticatedGame(await request(`/games/${encodeURIComponent(gameId)}`, 'GET', undefined, access, undefined, true)),
     ownParticipations: async (access: string, cursor?: string) => parseCursorPage(await request(`/me/participations?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseParticipation),
     managedGames: async (access: string, cursor?: string) => parseCursorPage(await request(`/me/games?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseManagedGame),

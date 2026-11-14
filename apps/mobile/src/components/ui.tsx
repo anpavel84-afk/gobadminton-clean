@@ -8,6 +8,7 @@ import { canonicalGamePath } from '../native-auth-protocol.ts';
 import { SvgXml } from 'react-native-svg';
 import { brandMarkXml } from '../../assets/brand-mark.ts';
 import { colors, interaction, primaryLabelStyle, primarySurface, typography } from '../theme.ts';
+import { PlayersError } from '../players.ts';
 import { PublicApiError } from '../public-api.ts';
 
 // Metro needs a literal require to bundle the native image asset.
@@ -70,8 +71,6 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
     {back && <TextButton title="Назад" onPress={back} light={light} />}
     <BrandLockup light={light} />
     {!light && <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
-      {pathname !== '/games' && <TextButton title="Игры" onPress={() => router.push('/games')} />}
-      {pathname !== '/my-games' && <TextButton title="Мои игры" onPress={() => router.push('/my-games')} />}
       {pathname !== '/city' && <TextButton title="Город" onPress={() => router.push('/city')} />}
       {pathname !== '/profile' && <TextButton title="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })} />}
     </View>}
@@ -99,10 +98,12 @@ export function Loading({ title = 'Загружаем игры…' }: { title?: 
   </View>;
 }
 export function ErrorState({ error, retry }: { error: unknown; retry: () => void }) {
-  const unavailable = error instanceof PublicApiError && error.kind === 'unavailable';
+  const apiError = error instanceof PublicApiError || error instanceof PlayersError;
+  const unavailable = apiError && error.kind === 'unavailable';
+  const serviceUnavailable = apiError && error.status === 503;
   return <View style={styles.card} accessibilityLiveRegion="polite">
-    <Label accessibilityRole="header" style={styles.subtitle}>{unavailable ? 'Недоступно' : 'Не удалось загрузить'}</Label>
-    <Label>{unavailable ? 'Данные не найдены или больше недоступны.' : 'Проверьте соединение и попробуйте ещё раз.'}</Label>
+    <Label accessibilityRole="header" style={styles.subtitle}>{unavailable ? 'Недоступно' : serviceUnavailable ? 'Сервис временно недоступен' : 'Не удалось загрузить'}</Label>
+    <Label>{unavailable ? 'Данные не найдены или больше недоступны.' : serviceUnavailable ? 'Попробуйте немного позже.' : 'Проверьте соединение и попробуйте ещё раз.'}</Label>
     <PrimaryButton title="Повторить" onPress={retry} />
   </View>;
 }

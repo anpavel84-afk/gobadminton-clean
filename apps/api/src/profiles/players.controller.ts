@@ -22,7 +22,9 @@ export class PlayersController {
     @Query("looking") lookingRaw?: string,
     @Query("trainer") trainerRaw?: string,
   ) {
-    const consumer = await this.auth.optionalSession(request);
+    const consumer = request.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(request)
+      : await this.auth.optionalSession(request);
     const limit =
       limitRaw === undefined || limitRaw === ""
         ? undefined
@@ -50,7 +52,9 @@ export class PlayersController {
     @Req() request: FastifyRequest,
     @Param("publicPlayerId") publicPlayerId: string,
   ) {
-    const consumer = await this.auth.optionalSession(request);
+    const consumer = request.headers.authorization !== undefined
+      ? await this.auth.requirePrincipal(request)
+      : await this.auth.optionalSession(request);
     return this.profiles.getDirectoryPlayer(
       consumer?.userId ?? null,
       publicPlayerId,

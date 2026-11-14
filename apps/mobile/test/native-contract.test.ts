@@ -101,3 +101,20 @@ test('conditions use server counts, timezone and external price terms without im
     priceUnit: 'per_player_per_session', priceMinor: '150050', currency: 'RUB', terms: '' } } as const;
   assert.equal(settlementLabel(fixed), '1500.50 RUB / игрока за занятие');
 });
+
+test('native navigation/version source binds canonical WEB order and paths while owners stay above Stack', () => {
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 2);
+  const nav = read('../src/components/main-navigation.tsx');
+  const paths = read('../../web/src/components/consumer/nav-icon-paths.tsx');
+  for (const section of ['games', 'players', 'mine']) {
+    const block = paths.slice(paths.indexOf(`  ${section}: <>`)).split('</>')[0]!;
+    for (const path of block.matchAll(/d="([^"]+)"/g)) assert.ok(nav.includes(`d="${path[1]}"`));
+  }
+  assert.ok(nav.indexOf("path: '/games'") < nav.indexOf("path: '/players'"));
+  assert.ok(nav.indexOf("path: '/players'") < nav.indexOf("path: '/my-games'"));
+  assert.doesNotMatch(nav, /path: '\/(messages|profile)'|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
+  const layout = read('../app/_layout.tsx');
+  assert.match(layout, /<AuthProvider><MainNavigation><Stack/);
+  assert.doesNotMatch(layout, /key=/);
+  assert.match(nav, /paddingBottom: insets.bottom/);
+});
