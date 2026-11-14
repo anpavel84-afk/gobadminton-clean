@@ -76,6 +76,7 @@ const empty = (scope: string | null): PlayersSnapshot => ({ scope,
 /** One cache owner, scoped to the auth generation; monotonic requests fence A→B→A and logout. */
 export class PlayersCoordinator {
   private snapshot = empty(null);
+  private lastFilters: PlayerFilters | null = null;
   private reader: Reader | null = null;
   private generation = 0;
   private listSequence = 0;
@@ -86,11 +87,13 @@ export class PlayersCoordinator {
   private show(snapshot: PlayersSnapshot) { this.snapshot = snapshot; this.listeners.forEach(fn => fn()); }
   setScope(scope: string | null, reader: Reader | null) {
     if (scope === this.snapshot.scope) return;
+    this.lastFilters = null;
     this.generation++; this.reader = reader; this.show(empty(scope));
   }
   loadList = async (filters: PlayerFilters, cursor?: string) => {
     const reader = this.reader, generation = this.generation, key = playerFilterKey(filters), old = this.snapshot.list;
     if (!reader || (cursor && (old.key !== key || old.data?.nextCursor !== cursor || old.loadingMore || old.status !== 'ready'))) return;
+    this.lastFilters = { ...filters };
     const sequence = ++this.listSequence;
     this.show({ ...this.snapshot, list: cursor ? { ...old, loadingMore: true, moreError: null }
       : { key, status: 'loading', data: null, error: null, moreError: null, loadingMore: false } });
@@ -106,7 +109,7 @@ export class PlayersCoordinator {
         : { key, status: 'error', data: null, error, moreError: null, loadingMore: false } });
     }
   };
-  loadDetail = async (id: string) => {
+  loadDetail = async (id: string, safetyReread = false) => {
     const reader = this.reader, generation = this.generation, sequence = ++this.detailSequence;
     if (!reader) return;
     this.show({ ...this.snapshot, detail: { id, status: 'loading', data: null, error: null } });
@@ -117,9 +120,14 @@ export class PlayersCoordinator {
       this.show({ ...this.snapshot, detail: { id, status: 'ready', data, error: null } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.detailSequence) return;
-      if (error instanceof PlayersError && error.status === 404) { this.clearUnavailable(error); return; }
+      if (!safetyReread && error instanceof PlayersError && error.status === 404) { this.clearUnavailable(error); return; }
       this.show({ ...this.snapshot, detail: { id, status: 'error', data: null, error } });
     }
+  };
+  rereadSafety = (peer: string) => {
+    ++this.listSequence;
+    if (this.lastFilters) void this.loadList(this.lastFilters);
+    if (this.snapshot.detail.id === peer) void this.loadDetail(peer, true);
   };
   private clearUnavailable(error: unknown) {
     this.generation++; this.listSequence++; this.detailSequence++;

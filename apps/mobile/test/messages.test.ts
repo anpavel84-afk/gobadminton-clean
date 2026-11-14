@@ -333,3 +333,194 @@ test('all-filter reconciliation coalesces reads, fences background results and f
   assert.equal(owner.getSnapshot().inbox,null); assert.equal(owner.getSnapshot().counts,null);
   assert.match(owner.getSnapshot().notice ?? '',/Доступ/);
 });
+
+test('verified safety fence holds only peer writes, retains original UNKNOWN/draft/history and rejects a late success', async () => {
+  const gate = deferred<unknown>(), sent: MessagePacket[] = [];
+  const { owner,port } = setup({ send: async p => { sent.push(p); return gate.promise; } });
+  owner.focus(resource); await tick(); const rendered = owner.getSnapshot(); owner.draft(resource,'retained');
+  const work = owner.act(resource,'send'); const packet = owner.getSnapshot().pending['direct:thread-a']!.packet;
+  owner.setPeerSafety('public-b',true); gate.resolve({}); await work;
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet,packet); assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown');
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'retained'); assert.equal(owner.getSnapshot().detail?.messages.length,3);
+  await owner.retry(resource); await owner.act(resource,'send',undefined,rendered.viewGeneration,rendered.actor); assert.equal(sent.length,1);
+  assert.equal(owner.mayDispatchSafety({...packet,resource:{kind:'game',id:'game'}}),true);
+  assert.equal(owner.mayDispatchSafety({...packet,action:'read'}),true);
+  owner.setPeerSafety('public-b',false); assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet,packet);
+  // A different direct peer still sends under current server headers.
+  port.direct = async () => ({...header,id:'other-thread',peer:{publicPlayerId:'other-peer',displayName:'Other'}});
+  owner.focus({kind:'direct',id:'other-thread'}); // existing UNKNOWN retains the accepted global read HOLD
+  assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown');
+});
+
+test('unblock rereads direct authority without fabricating deletion/history or accepting same-peer stale rendered send', async () => {
+  const { owner,sent } = setup(); owner.focus(resource); await tick(); const rendered = owner.getSnapshot();
+  owner.setPeerSafety('public-b',true); await tick(); assert.equal(owner.getSnapshot().detail?.messages.length,3);
+  await owner.act(resource,'send'); assert.equal(sent.length,0);
+  owner.setPeerSafety('public-b',false); await tick(); owner.draft(resource,'current');
+  await owner.act(resource,'send',undefined,rendered.viewGeneration,rendered.actor); assert.equal(sent.length,0);
+  await owner.act(resource,'send'); assert.equal(sent.length,1);
+});
+
+test('block then later unblock cannot revive a pre-block send callback or its pre-wire dispatch permit', async () => {
+  const gate=deferred<unknown>(); const {owner}=setup({send:async () => gate.promise});
+  owner.focus(resource); await tick(); owner.draft(resource,'Original'); const work=owner.act(resource,'send');
+  const packet=owner.getSnapshot().pending['direct:thread-a']!.packet, permit=owner.safetyPermit(packet);
+  owner.setPeerSafety('public-b',true); owner.setPeerSafety('public-b',false);
+  assert.equal(owner.mayDispatchSafety(packet,permit),false);
+  gate.resolve({}); await work;
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet,packet);
+  assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown'); assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'Original');
+});
+
+test('verified safety receives changed GET views during UNKNOWN, preserves packet/draft/history, and keeps ordinary HOLD', async () => {
+  const sent: MessagePacket[] = [], reads = { inbox: 0, counts: 0, detail: 0 };
+  const time = fakeClock(); let changed = false;
+  const updatedCounts = { ...counts, dmUnread: 8 }, updatedPage = { ...page, counts: updatedCounts, items: [{ ...page.items[0]!, title: 'Server changed' }] };
+  const { owner } = setup({
+    inbox: async () => { reads.inbox++; return changed ? updatedPage : page; },
+    counts: async () => { reads.counts++; return changed ? updatedCounts : counts; },
+    direct: async () => { reads.detail++; return changed ? { ...header, version: 9, requestState: 'closed' } : header; },
+    // The first event targets a different peer from the UNKNOWN; only authorized headers bind direct peers.
+    send: async p => { sent.push(p); throw new MessagesError('network'); },
+  }, time.clock);
+  const root = owner.mount(); owner.focus(resource); await tick();
+  owner.draft(resource, 'Original bytes'); await owner.act(resource, 'send');
+  const packet = owner.getSnapshot().pending['direct:thread-a']!.packet, bytes = JSON.stringify(packet);
+  owner.setPeerSafety('other-peer', true, 'unrelated-thread'); await tick();
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet);
+  changed = true; owner.setPeerSafety('public-b', true); await tick();
+  assert.equal(owner.getSnapshot().detail?.header?.version, 9);
+  assert.equal((owner.getSnapshot().detail?.header as Conversation).requestState, 'closed');
+  assert.deepEqual(owner.getSnapshot().counts, updatedCounts); assert.deepEqual(owner.getSnapshot().inbox, updatedPage);
+  assert.equal(owner.getSnapshot().detail?.messages.length, 3);
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'], 'Original bytes');
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet); assert.equal(JSON.stringify(packet), bytes);
+  assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state, 'unknown');
+  const acceptedReads = { ...reads };
+  await owner.loadInbox(); await owner.loadCounts(); await owner.loadDetail(resource); await owner.catchUp(resource);
+  owner.visible(resource, ['m-9007199254740995'], true); await owner.retry(resource); await time.advance(60000);
+  assert.deepEqual(reads, acceptedReads); assert.equal(sent.length, 1); assert.equal(time.size(), 0);
+  root();
+});
+
+test('safety coalesces occupied lanes then receives one genuinely fresh followup after stale in-flight results', async () => {
+  const oldInbox = deferred<InboxPage>(), oldCounts = deferred<typeof counts>(), oldHeader = deferred<Conversation>();
+  const reads = { inbox: 0, counts: 0, detail: 0 }; let changed = false, writes = 0;
+  const { owner } = setup({
+    inbox: async () => { reads.inbox++; return changed ? { ...page, items: [], counts: { ...counts, dmUnread: 0 } } : oldInbox.promise; },
+    counts: async () => { reads.counts++; return changed ? { ...counts, dmUnread: 0 } : oldCounts.promise; },
+    direct: async () => { reads.detail++; return reads.detail === 1 ? header : changed ? { ...header, version: 10, unreadCount: 0 } : oldHeader.promise; },
+    send: async () => { writes++; throw new MessagesError('network'); },
+  });
+  owner.focus(resource); await tick();
+  const inbox = owner.loadInbox(), count = owner.loadCounts(), detail = owner.catchUp(resource); await tick();
+  owner.draft(resource, 'Preserve'); await owner.act(resource, 'send');
+  const packet = owner.getSnapshot().pending['direct:thread-a']!.packet;
+  changed = true; owner.setPeerSafety('public-b', true); owner.setPeerSafety('public-b', true);
+  assert.deepEqual(reads, { inbox: 1, counts: 1, detail: 2 });
+  oldInbox.resolve(page); oldCounts.resolve(counts); oldHeader.resolve({ ...header, version: 99 });
+  await Promise.all([inbox, count, detail]); await tick();
+  assert.deepEqual(reads, { inbox: 2, counts: 2, detail: 3 });
+  assert.equal(owner.getSnapshot().detail?.header?.version, 10); assert.equal(owner.getSnapshot().counts?.dmUnread, 0);
+  assert.deepEqual(owner.getSnapshot().inbox?.items, []);
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet); assert.equal(writes, 1);
+});
+
+test('safety-only reads and queued followups cannot cross actor/session, logout or A→B→A view changes', async () => {
+  // Every lane must fence both response publication and a queued followup at these boundaries.
+  for (const boundary of ['actor', 'session', 'logout', 'view', 'background'] as const) {
+    for (const occupied of [false, true]) {
+      const gate = deferred<InboxPage>(), countGate = deferred<typeof counts>(), headerGate = deferred<Conversation>();
+      const reads = { inbox: 0, counts: 0, detail: 0 }; let delayed = false;
+      const { owner } = setup({
+        inbox: async () => { reads.inbox++; return gate.promise; },
+        counts: async () => { reads.counts++; return countGate.promise; },
+        direct: async () => { reads.detail++; return delayed ? headerGate.promise : header; },
+        send: async () => { throw new MessagesError('network'); },
+      });
+      owner.focus(resource); await tick(); delayed = true;
+      const old = occupied ? Promise.all([owner.loadInbox(), owner.loadCounts(), owner.catchUp(resource)]) : Promise.resolve();
+      await tick(); owner.draft(resource, 'Keep'); await owner.act(resource, 'send');
+      owner.setPeerSafety('public-b', true); await tick();
+      assert.deepEqual(reads, { inbox: 1, counts: 1, detail: 2 });
+      if (boundary === 'actor') owner.setActor({ ...actor, actorId: 'B', generation: 2 });
+      if (boundary === 'session') owner.setActor({ ...actor, sessionId: 'new', generation: 2 });
+      if (boundary === 'logout') owner.setActor(null);
+      if (boundary === 'view') { owner.focus({ kind: 'direct', id: 'B' }); owner.focus(resource); }
+      if (boundary === 'background') { owner.setForeground(false); owner.setForeground(true); }
+      gate.resolve({ ...page, items: [{ ...page.items[0]!, title: 'Stale secret' }] });
+      countGate.resolve({ ...counts, dmUnread: 99 }); headerGate.resolve({ ...header, version: 99 });
+      await old; await tick();
+      assert.equal(owner.getSnapshot().inbox, null, `${boundary}/${occupied}`);
+      assert.notEqual(owner.getSnapshot().counts?.dmUnread, 99, `${boundary}/${occupied}`);
+      assert.notEqual(owner.getSnapshot().detail?.header?.version, 99, `${boundary}/${occupied}`);
+      assert.deepEqual(reads, { inbox: 1, counts: 1, detail: 2 }, `${boundary}/${occupied}: no queued replay`);
+    }
+  }
+});
+
+test('safety private404 hides denied DTOs, keeps exact UNKNOWN/draft and recovers only authorized same-owner views', async () => {
+  const { owner, port } = setup({ send: async () => { throw new MessagesError('network'); } });
+  owner.focus(resource); await tick(); await owner.loadInbox();
+  owner.draft(resource, 'Keep'); await owner.act(resource, 'send');
+  const packet = owner.getSnapshot().pending['direct:thread-a']!.packet;
+  const bytes = JSON.stringify(packet), rendered = owner.getSnapshot();
+  port.direct = async () => { throw new MessagesError('private', 404); };
+  port.inbox = async () => { throw new MessagesError('network'); };
+  owner.setPeerSafety('public-b', true); await tick();
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet);
+  const denied = owner.getSnapshot();
+  assert.equal(denied.detail?.status, 'error'); assert.equal(denied.detail?.header, null);
+  assert.deepEqual(denied.detail?.messages, []); assert.deepEqual(denied.detail?.members, []);
+  assert.equal(denied.detail?.ownId, null); assert.equal(denied.detail?.cursor, null);
+  assert.equal(denied.inbox, null); assert.equal(denied.counts, null);
+  assert.equal(denied.pending['direct:thread-a']?.state, 'unknown'); assert.equal(JSON.stringify(packet), bytes);
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'], 'Keep');
+  port.direct = async () => ({ ...header, version: 99, peer: { publicPlayerId: 'different-peer', displayName: 'Wrong target' } });
+  owner.setPeerSafety('public-b', true); await tick();
+  assert.equal(owner.getSnapshot().detail?.header, null);
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet);
+  port.direct = async () => ({ ...header, requestState: 'closed' });
+  owner.setPeerSafety('public-b', false); await tick();
+  assert.equal((owner.getSnapshot().detail?.header as Conversation).requestState, 'closed');
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet);
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'], 'Keep');
+  await owner.retry(resource, rendered.viewGeneration, rendered.actor);
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet);
+  let retried: MessagePacket | undefined;
+  port.send = async p => { retried = p; return {}; };
+  await owner.retry(resource);
+  assert.strictEqual(retried, packet); assert.equal(JSON.stringify(retried), bytes);
+  assert.equal(owner.getSnapshot().pending['direct:thread-a'], undefined);
+});
+
+test('safety network failure retains still-authorized history and UNKNOWN without treating it as denial', async () => {
+  const { owner, port } = setup({ send: async () => { throw new MessagesError('network'); } });
+  owner.focus(resource); await tick(); await owner.loadInbox();
+  owner.draft(resource, 'Keep'); await owner.act(resource, 'send');
+  const packet = owner.getSnapshot().pending['direct:thread-a']!.packet;
+  port.direct = async () => { throw new MessagesError('network'); };
+  port.inbox = async () => { throw new MessagesError('network'); };
+  owner.setPeerSafety('public-b', true); await tick();
+  assert.equal(owner.getSnapshot().detail?.status, 'ready');
+  assert.deepEqual(owner.getSnapshot().detail?.messages.map(m => m.text), [message('9007199254740993').text, message('9007199254740994').text, message('9007199254740995').text]);
+  assert.deepEqual(owner.getSnapshot().inbox, page);
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet, packet);
+});
+
+test('late safety denial cannot hide a replacement actor or focus and cannot restore private ownership after logout', async () => {
+  for (const boundary of ['actor', 'focus', 'logout'] as const) {
+    const gate = deferred<void>();
+    const { owner, port } = setup({ send: async () => { throw new MessagesError('network'); } });
+    owner.focus(resource); await tick(); owner.draft(resource, 'Original'); await owner.act(resource, 'send');
+    port.direct = async () => { await gate.promise; throw new MessagesError('private', 404); };
+    owner.setPeerSafety('public-b', true); await tick();
+    if (boundary === 'actor') owner.setActor({ ...actor, actorId: 'replacement', sessionId: 'new', generation: 2 });
+    if (boundary === 'focus') { owner.focus({ kind: 'direct', id: 'other-thread' }); owner.focus(resource); }
+    if (boundary === 'logout') owner.setActor(null);
+    const current = owner.getSnapshot(); gate.resolve(); await tick();
+    assert.strictEqual(owner.getSnapshot(), current, boundary);
+    assert.equal(owner.getSnapshot().detail, null);
+    if (boundary !== 'focus') { assert.deepEqual(owner.getSnapshot().pending, {}); assert.deepEqual(owner.getSnapshot().drafts, {}); }
+  }
+});

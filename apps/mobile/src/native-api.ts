@@ -1,3 +1,5 @@
+import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
+import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
 import type { ContactPacket } from './contact.ts';
 import { ProfileError, parseOwnProfile } from './profile.ts';
@@ -14,7 +16,7 @@ import type { NativeExchangeRequest, NativeTransactionRequest } from '@gobadmint
 
 export function createNativeApi(fetcher: typeof fetch = fetch) {
   // Deliberately closed route surface: never forward caller URLs, cookies, Origin or browser bridge commands.
-  async function request(path: string, method: 'GET' | 'POST' | 'DELETE' | 'PATCH', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false, profile = false): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false, profile = false, safety = false): Promise<unknown> {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
@@ -23,6 +25,11 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
           ...(access ? { Authorization: `Bearer ${access}` } : {}), ...(key ? { 'Idempotency-Key': key } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      if (safety && !response.ok) {
+        let code = 'UNKNOWN';
+        try { const problem = await response.json(); if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code; } catch { /* No private response text retained. */ }
+        throw new SafetyError(response.status === 401 ? 'authority' : response.status < 500 && [400,403,404,409,422,429].includes(response.status) && code !== 'COMMAND_IN_PROGRESS' ? 'business' : 'network', response.status, code);
+      }
       if (profile && !response.ok) {
         let code = 'UNKNOWN';
         try { const problem = await response.json(); if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code; } catch { /* No raw text retained. */ }
@@ -52,7 +59,8 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       if (!response.ok) throw new NativeAuthError('invalid');
       return await response.json();
     } catch (error) {
-      if (error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError || error instanceof MessagesError || error instanceof ProfileError) throw error;
+      if (error instanceof SafetyError || error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError || error instanceof MessagesError || error instanceof ProfileError) throw error;
+      if (safety) throw new SafetyError(error instanceof SyntaxError ? 'invalid' : 'network');
       if (profile) throw new ProfileError(error instanceof SyntaxError ? 'invalid' : 'network');
       if (messages) throw new MessagesError(error instanceof SyntaxError ? 'invalid' : 'network');
       if (participation) throw new ParticipationError(error instanceof SyntaxError ? 'invalid' : 'network');
@@ -62,6 +70,10 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
   }
   const privateMessage = (path: string, access: string, body?: MessageBody, key?: string) => request(path, body === undefined ? 'GET' : 'POST', body, access, key, false, false, true);
   return {
+    safetyMutation: async (access: string, packet: SafetyPacket) => {
+      const wire = safetyWire(packet);
+      return parseSafetyReceipt(packet, await request(wire.path, wire.method, wire.body, access, packet.key, false, false, false, false, true));
+    },
     contactState: async (access: string, target: string) => parseContactState(await privateMessage(`/me/contact-state?targetPublicPlayerId=${encodeURIComponent(messageId(target))}`, access), target),
     createContact: async (access: string, packet: ContactPacket) => parseContactResult(await request('/conversations/requests', 'POST', {
       targetPublicPlayerId: packet.body.targetPublicPlayerId, text: packet.body.text, clientMessageId: packet.body.clientMessageId,

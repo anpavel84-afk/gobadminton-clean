@@ -27,7 +27,7 @@ export class BlocksController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("publicPlayerId") publicPlayerId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const result = await this.safety.block(
       consumer.userId,
@@ -46,7 +46,7 @@ export class BlocksController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("publicPlayerId") publicPlayerId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const result = await this.safety.unblock(
       consumer.userId,

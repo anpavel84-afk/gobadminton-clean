@@ -14,10 +14,13 @@ export type MessagesClock = { now: () => number; schedule: (callback: () => void
 const clock: MessagesClock = { now: () => Date.now(), schedule: (callback, delay) => {
   const timer = setTimeout(callback,delay); return () => clearTimeout(timer);
 } };
+type ReadLane = 'counts' | 'inbox' | 'detail';
+// A safety event or explicit safety replay grants one GET per affected lane, never a mutation permit.
+type SafetyRead = { generation: number; revision: number; focus: number; view: number; peer: string; blocked: boolean; filter: InboxFilter; resource?: MessageResource };
 type Pending = { packet: MessagePacket; state: 'sending' | 'unknown' };
 type Detail = { resource: MessageResource; status: 'loading' | 'ready' | 'error'; header: Conversation | GameChat | GameInvitation | null;
   messages: DirectMessage[]; cursor: string | null; members: GameChatMember[]; ownId: string | null; error: string | null; loadingMore: boolean };
-export type MessagesSnapshot = { actor: Actor | null; counts: InboxCounts | null; countsLoading: boolean;
+export type MessagesSnapshot = { viewGeneration: number; actor: Actor | null; counts: InboxCounts | null; countsLoading: boolean;
   filter: InboxFilter; inbox: InboxPage | null; inboxStatus: 'idle' | 'loading' | 'ready' | 'error'; inboxError: boolean; loadingMore: boolean;
   detail: Detail | null; drafts: Readonly<Record<string,string>>; pending: Readonly<Record<string,Pending>>; notice: string | null };
 export const resourceKey = (r: MessageResource) => `${r.kind}:${r.id}`;
@@ -25,7 +28,7 @@ export const resourceKey = (r: MessageResource) => `${r.kind}:${r.id}`;
 const inboxKey = (item: InboxItem) => `${item.kind === 'dm_request' ? 'dm' : item.kind}:${item.id}`;
 const matchesFilter = (item: InboxItem, filter: InboxFilter) => filter === 'all' || (filter === 'unread' ? item.unreadCount > 0 : item.attention);
 const accessLossNotice = 'Доступ к сообщениям утрачен. Проверьте сеанс.';
-const initial = (actor: Actor | null): MessagesSnapshot => ({ actor, counts: null, countsLoading: false, filter: 'all', inbox: null,
+const initial = (actor: Actor | null): MessagesSnapshot => ({ viewGeneration: 0, actor, counts: null, countsLoading: false, filter: 'all', inbox: null,
   inboxStatus: 'idle', inboxError: false, loadingMore: false, detail: null, drafts: {}, pending: {}, notice: null });
 /** Root-owned, actor/session/generation fenced. Tab lifetimes never own mutation packets. */
 export class MessagesCoordinator {
@@ -35,13 +38,18 @@ export class MessagesCoordinator {
   private listRevision = 0;
   private detailRevision = 0;
   private countsRevision = 0;
+  private safetyPeers = new Set<string>();
+  private safetyAttempts = new WeakMap<MessagePacket, number>();
+  private directPeers = new Map<string, string>();
   private accessLoss: { revision: number; key: string } | null = null;
   private foreground = true;
   private focused: string | null = null;
   private focusResource: MessageResource | null = null;
   private roots = new Set<symbol>();
   private focusLease = 0;
-  private reads = new Set<'counts' | 'inbox' | 'detail'>();
+  private reads = new Set<ReadLane>();
+  private safetyReadGeneration = 0;
+  private safetyReads = new Map<ReadLane, SafetyRead>();
   private cancelTimer: (() => void) | null = null;
   private polling = false;
   private detailDue = 0;
@@ -57,7 +65,7 @@ export class MessagesCoordinator {
     this.roots.add(lease); if (first) this.resetDue(); this.schedule();
     return () => {
       if (!this.roots.delete(lease)) return;
-      if (!this.roots.size) { ++this.listRevision; ++this.detailRevision; ++this.countsRevision; }
+      if (!this.roots.size) { this.clearSafetyReads(); ++this.listRevision; ++this.detailRevision; ++this.countsRevision; }
       this.schedule();
     };
   };
@@ -107,21 +115,39 @@ export class MessagesCoordinator {
       this.polling = false; this.schedule();
     }
   }
-  private beginRead(lane: 'counts' | 'inbox' | 'detail') {
-    if (!this.snapshot.actor || !this.foreground || this.blocked() || this.reads.has(lane)) return false;
+  private beginRead(lane: ReadLane, safety?: SafetyRead) {
+    if (!this.snapshot.actor || !this.foreground || (safety ? !this.validSafetyRead(safety) : this.blocked()) || this.reads.has(lane)) return false;
     this.reads.add(lane); this.schedule(); return true;
   }
-  private endRead(lane: 'counts' | 'inbox' | 'detail') { this.reads.delete(lane); this.schedule(); }
+  private endRead(lane: ReadLane) { this.reads.delete(lane); this.runSafetyRead(lane); this.schedule(); }
+  private clearSafetyReads() { ++this.safetyReadGeneration; this.safetyReads.clear(); }
+  private validSafetyRead(read: SafetyRead) {
+    return read.generation === this.safetyReadGeneration && read.revision === this.revision && !!this.snapshot.actor && this.foreground &&
+      read.focus === this.focusLease && read.view === this.snapshot.viewGeneration && read.filter === this.snapshot.filter &&
+      this.safetyPeers.has(read.peer) === read.blocked;
+  }
+  private runSafetyRead(lane: ReadLane) {
+    const read = this.safetyReads.get(lane);
+    if (!read || this.reads.has(lane)) return;
+    this.safetyReads.delete(lane);
+    if (!this.validSafetyRead(read)) return;
+    if (lane === 'counts') void this.readCounts(read);
+    else if (lane === 'inbox') void this.readInbox(read.filter, undefined, false, read);
+    else if (read.resource && this.directPeers.get(read.resource.id) === read.peer) void this.readDetail(read.resource, false, read);
+  }
   getSnapshot = () => this.snapshot;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   private show(patch: Partial<MessagesSnapshot>) { this.snapshot = { ...this.snapshot, ...patch }; this.listeners.forEach(fn => fn()); this.schedule(); }
   setActor(actor: Actor | null) {
     if ((!actor && !this.snapshot.actor) || sameActor(actor, this.snapshot.actor)) return;
+    this.clearSafetyReads();
     ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision; this.focused = null; this.focusResource = null; ++this.focusLease; this.resetDue();
-    this.accessLoss = null; this.snapshot = initial(actor); this.show({});
+    this.safetyPeers.clear(); this.directPeers.clear();
+    this.accessLoss = null; this.snapshot = initial(actor); this.show({ viewGeneration: this.focusLease });
   }
   setForeground(active: boolean) {
     if (active === this.foreground) return;
+    this.clearSafetyReads();
     this.foreground = active; ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
     this.resetDue();
     this.show({ loadingMore: false, countsLoading: false, detail: this.snapshot.detail ? { ...this.snapshot.detail, loadingMore: false } : null });
@@ -135,45 +161,57 @@ export class MessagesCoordinator {
     }
   }
   focus(resource: MessageResource | null) {
+    this.clearSafetyReads();
     ++this.detailRevision; ++this.listRevision; ++this.focusLease;
     this.focused = resource ? resourceKey(resource) : null; this.focusResource = resource;
     // Pending packets/drafts stay in the root owner on tab unmount.
-    this.show({ detail: null }); this.resetDue();
+    this.show({ detail: null, viewGeneration: this.snapshot.viewGeneration + 1 }); this.resetDue();
     if (resource && this.foreground) void this.loadDetail(resource);
     this.schedule();
   }
-  private valid(revision: number) { return revision === this.revision && !!this.snapshot.actor && this.foreground && !this.blocked(); }
-  private failed(error: unknown): boolean {
+  private valid(revision: number, safety?: SafetyRead) { return revision === this.revision && !!this.snapshot.actor && this.foreground && (safety ? this.validSafetyRead(safety) : !this.blocked()); }
+  private failed(error: unknown, safety?: SafetyRead): boolean {
     if (error instanceof MessagesError && error.kind === 'private') {
+      if (safety && ![401, 403, 404].includes(error.status)) return false;
+      this.clearSafetyReads();
       ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
       // Keep only the mounted route intent/lease so its existing refresh and blur
-      // handlers still work. All private DTOs, drafts and packets are discarded.
+      // handlers still work. A safety-only denial hides private DTOs but must not
+      // discard an unresolved write or its actor-owned draft to hide the view.
       const resource = this.focusResource, notice = accessLossNotice;
       this.accessLoss = resource ? { revision: this.revision, key: resourceKey(resource) } : null;
+      const retained: Partial<MessagesSnapshot> = safety ? { drafts: this.snapshot.drafts,
+        pending: Object.fromEntries(Object.entries(this.snapshot.pending).map(([key, value]) => {
+          this.safetyAttempts.set(value.packet, this.safetyPermit(value.packet) + 1);
+          return [key, { packet: value.packet, state: 'unknown' as const }];
+        })) } : {};
+      const viewGeneration = this.snapshot.viewGeneration + 1;
       this.snapshot = initial(this.snapshot.actor);
-      this.show({ notice, inboxStatus: this.focused === 'inbox' ? 'error' : 'idle',
+      this.show({ ...retained, viewGeneration, notice, inboxStatus: this.focused === 'inbox' ? 'error' : 'idle',
         detail: resource ? { resource, status: 'error', header: null, messages: [], cursor: null, members: [], ownId: null, error: notice, loadingMore: false } : null });
       return true;
     }
     return false;
   }
-  loadCounts = async () => {
-    if (!this.beginRead('counts')) return;
+  loadCounts = () => this.readCounts();
+  private readCounts = async (safety?: SafetyRead) => {
+    if (!this.beginRead('counts', safety)) return;
     const revision = this.revision, request = ++this.countsRevision;
     this.show({ countsLoading: true });
-    try { const counts = await this.port.counts(); if (this.valid(revision) && request === this.countsRevision) this.show({ counts, countsLoading: false }); }
-    catch (error) { if (this.valid(revision) && request === this.countsRevision && !this.failed(error)) this.show({ counts: null, countsLoading: false }); }
+    try { const counts = await this.port.counts(); if (this.valid(revision, safety) && request === this.countsRevision) this.show({ counts, countsLoading: false }); }
+    catch (error) { if (this.valid(revision, safety) && request === this.countsRevision && !this.failed(error, safety)) this.show({ counts: safety ? this.snapshot.counts : null, countsLoading: false }); }
     finally { this.endRead('counts'); }
   };
-  loadInbox = async (filter = this.snapshot.filter, cursor?: string, quiet = false) => {
+  loadInbox = (filter = this.snapshot.filter, cursor?: string, quiet = false) => this.readInbox(filter, cursor, quiet);
+  private readInbox = async (filter: InboxFilter, cursor?: string, quiet = false, safety?: SafetyRead) => {
     const old = this.snapshot.filter === filter ? this.snapshot.inbox : null;
     if (!this.snapshot.actor || !this.foreground || cursor && (this.snapshot.loadingMore || this.snapshot.filter !== filter || old?.nextCursor !== cursor)) return;
-    if (!this.beginRead('inbox')) return;
+    if (!this.beginRead('inbox', safety)) return;
     const revision = this.revision, request = ++this.listRevision;
-    this.show({ filter, loadingMore: !!cursor, inboxStatus: cursor || quiet && old ? 'ready' : 'loading', inbox: cursor || quiet ? old : null, inboxError: false });
+    this.show({ filter, loadingMore: !!cursor, inboxStatus: cursor || quiet && old ? 'ready' : 'loading', inbox: cursor || quiet || safety ? old : null, inboxError: false });
     try {
       const page = await this.port.inbox(filter,cursor);
-      if (!this.valid(revision) || request !== this.listRevision) return;
+      if (!this.valid(revision, safety) || request !== this.listRevision) return;
       if (cursor && page.nextCursor === cursor) throw new MessagesError('invalid');
       let inbox = page;
       if (old && (cursor || quiet)) {
@@ -188,7 +226,7 @@ export class MessagesCoordinator {
           const visited = new Set<string>();
           while (missing.size) {
             const authoritative = await this.port.inbox('all',scanCursor);
-            if (!this.valid(revision) || request !== this.listRevision) return;
+            if (!this.valid(revision, safety) || request !== this.listRevision) return;
             for (const item of authoritative.items) {
               const key = inboxKey(item);
               if (missing.delete(key)) updates.set(key,item);
@@ -205,16 +243,17 @@ export class MessagesCoordinator {
         inbox = { ...page, items: [...merged.values()].filter(item => !missing.has(inboxKey(item)) && matchesFilter(item,filter)), nextCursor: cursor ? page.nextCursor : old.nextCursor };
       }
       this.show({ inbox, counts: page.counts, inboxStatus: 'ready', loadingMore: false });
-    } catch (error) { if (this.valid(revision) && request === this.listRevision && !this.failed(error)) this.show({ inboxStatus: cursor || quiet && old ? 'ready' : 'error', inboxError: true, loadingMore: false }); }
+    } catch (error) { if (this.valid(revision, safety) && request === this.listRevision && !this.failed(error, safety)) this.show({ inboxStatus: cursor || quiet && old ? 'ready' : 'error', inboxError: true, loadingMore: false }); }
     finally { this.endRead('inbox'); }
   };
-  loadDetail = async (resource: MessageResource, older = false) => {
+  loadDetail = (resource: MessageResource, older = false) => this.readDetail(resource, older);
+  private readDetail = async (resource: MessageResource, older = false, safety?: SafetyRead) => {
     const key = resourceKey(resource), previous = this.snapshot.detail;
     if (!this.snapshot.actor || !this.foreground || this.focused !== key || older && (!previous?.cursor || previous.loadingMore || previous.status !== 'ready')) return;
-    if (!this.beginRead('detail')) return;
+    if (!this.beginRead('detail', safety)) return;
     const revision = this.revision, request = ++this.detailRevision;
     const fresh: Detail = { resource, status: 'loading', header: null, messages: [], cursor: null, members: [], ownId: null, error: null, loadingMore: false };
-    this.show({ detail: older && previous ? { ...previous, loadingMore: true, error: null } : fresh });
+    this.show({ detail: previous && (older || safety) ? { ...previous, loadingMore: older, error: null } : fresh });
     try {
       let detail: Detail;
       if (older && previous) {
@@ -223,21 +262,23 @@ export class MessagesCoordinator {
         detail = { ...previous, messages: mergeMessages(previous.messages,page.items), cursor: page.nextCursor, loadingMore: false };
       } else {
         const ownId = await this.port.identity();
-        if (!this.valid(revision) || request !== this.detailRevision) return;
+        if (!this.valid(revision, safety) || request !== this.detailRevision) return;
         if (resource.kind === 'invitation') detail = { ...fresh, ownId, status: 'ready', header: await this.port.invitation(resource.id) };
         else {
           const [header,page,members] = await Promise.all([resource.kind === 'direct' ? this.port.direct(resource.id) : this.port.game(resource.id),
             this.port.history(resource), resource.kind === 'game' ? this.port.members(resource.id) : Promise.resolve([])]);
-          detail = { ...fresh, ownId, status: 'ready', header, messages: mergeMessages([],page.items), cursor: page.nextCursor, members };
+          detail = { ...fresh, ownId, status: 'ready', header, messages: mergeMessages(safety && previous ? previous.messages : [],page.items), cursor: safety && previous ? previous.cursor : page.nextCursor, members };
         }
       }
-      if (this.valid(revision) && request === this.detailRevision && this.focused === key) {
+      if (safety && resource.kind === 'direct' && detail.header && 'peer' in detail.header && detail.header.peer.publicPlayerId !== safety.peer) return;
+      if (this.valid(revision, safety) && request === this.detailRevision && this.focused === key) {
         const resolved = this.accessLoss?.revision === revision && this.accessLoss.key === key;
         if (resolved) this.accessLoss = null;
+        if (resource.kind === 'direct' && detail.header && 'peer' in detail.header) this.directPeers.set(resource.id, detail.header.peer.publicPlayerId);
         this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
       }
     } catch (error) {
-      if (this.valid(revision) && request === this.detailRevision && !this.failed(error)) this.show({ detail: older && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
+      if (this.valid(revision, safety) && request === this.detailRevision && !this.failed(error, safety)) this.show({ detail: (older || safety) && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
     } finally { this.endRead('detail'); }
   };
   /** Catch up with decimal strings. Every page is authorized; generation prevents cursor/A→B→A publication. */
@@ -264,13 +305,52 @@ export class MessagesCoordinator {
     } catch (error) { if (this.valid(revision) && request === this.detailRevision && !this.failed(error)) this.show({ notice: 'Не удалось обновить сообщения' }); }
     finally { this.endRead('detail'); }
   };
-  draft(resource: MessageResource, text: string) {
-    const key = resourceKey(resource); if (this.snapshot.pending[key]) return;
+  isPeerSafetyHeld = (peer: string) => this.safetyPeers.has(peer);
+  safetyPermit = (packet: MessagePacket) => this.safetyAttempts.get(packet) ?? 0;
+  mayDispatchSafety = (packet: MessagePacket, permit = this.safetyPermit(packet)) => permit === this.safetyPermit(packet) && !this.safetyHeld(packet.resource, packet.action);
+  private safetyHeld(resource: MessageResource, action: MessageAction) {
+    return resource.kind === 'direct' && action !== 'read' && this.safetyPeers.has(this.directPeers.get(resource.id) ?? '');
+  }
+  /** A peer fence affects writes only. Accepted direct history and unrelated command owners remain intact. */
+  setPeerSafety = (peer: string, blocked: boolean, conversationId?: string) => {
+    if (conversationId) this.directPeers.set(conversationId, peer);
+    if (blocked) this.safetyPeers.add(peer); else this.safetyPeers.delete(peer);
+    const pending = { ...this.snapshot.pending };
+    for (const [key, value] of Object.entries(pending)) if (this.safetyHeld(value.packet.resource, value.packet.action)) {
+      this.safetyAttempts.set(value.packet, this.safetyPermit(value.packet) + 1);
+      pending[key] = { ...value, state: 'unknown' };
+    }
+    const affected = this.snapshot.detail?.resource.kind === 'direct' && this.directPeers.get(this.snapshot.detail.resource.id) === peer;
+    const held = Object.values(pending).some(p => this.safetyHeld(p.packet.resource, p.packet.action));
+    this.show({ pending, ...(affected ? { viewGeneration: this.snapshot.viewGeneration + 1 } : {}),
+      ...(held ? { notice: 'Блокировка приостановила исходный запрос к этому игроку. Результат остаётся неизвестным; пакет сохранён.' } : {}) });
+    this.rereadPeerSafety(peer, conversationId);
+  };
+  /** Read-only authority refresh after a historical receipt; never changes peer fences. */
+  rereadPeerSafety = (peer: string, conversationId?: string) => {
+    if (!this.snapshot.actor) return;
+    if (conversationId) this.directPeers.set(conversationId, peer);
+    const resource = this.focusResource;
+    const affected = resource?.kind === 'direct' && this.directPeers.get(resource.id) === peer;
+    if (affected) ++this.detailRevision;
+    ++this.listRevision; ++this.countsRevision;
+    // Coalesce behind existing reads; their pre-event responses are fenced by the
+    // revisions above. Each lane then gets exactly one fresh GET-only followup,
+    // including when an unrelated original mutation remains UNKNOWN.
+    this.clearSafetyReads();
+    const read: SafetyRead = { generation: this.safetyReadGeneration, revision: this.revision, focus: this.focusLease,
+      view: this.snapshot.viewGeneration, peer, blocked: this.safetyPeers.has(peer), filter: this.snapshot.filter,
+      ...(affected && resource ? { resource } : {}) };
+    for (const lane of ['inbox', 'counts', ...(read.resource ? ['detail'] as const : [])] as const) this.safetyReads.set(lane, read);
+    for (const lane of ['inbox', 'counts', 'detail'] as const) this.runSafetyRead(lane);
+  };
+  draft(resource: MessageResource, text: string, expectedView = this.snapshot.viewGeneration, expectedActor = this.snapshot.actor) {
+    const key = resourceKey(resource); if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, this.snapshot.actor) || this.safetyHeld(resource, 'send') || this.snapshot.pending[key]) return;
     this.show({ drafts: { ...this.snapshot.drafts, [key]: text } });
   }
-  act = async (resource: MessageResource, action: MessageAction, throughSeq?: string) => {
+  act = async (resource: MessageResource, action: MessageAction, throughSeq?: string, expectedView = this.snapshot.viewGeneration, expectedActor = this.snapshot.actor) => {
     const actor = this.snapshot.actor, detail = this.snapshot.detail, key = resourceKey(resource);
-    if (!actor || !this.foreground || this.focused !== key || !detail || detail.status !== 'ready' || !detail.header || this.snapshot.pending[key]) return;
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, actor) || this.safetyHeld(resource, action) || !actor || !this.foreground || this.focused !== key || !detail || detail.status !== 'ready' || !detail.header || this.snapshot.pending[key]) return;
     const h = detail.header; let body: MessageBody, clientMessageId: string | undefined;
     if (action === 'send') {
       const text = (this.snapshot.drafts[key] ?? '').trim();
@@ -296,22 +376,23 @@ export class MessagesCoordinator {
   /** Called only from RN viewability; opening a thread/header lastSeq never marks history read. */
   visible = (resource: MessageResource, ids: string[], nearBottom: boolean) => {
     const detail = this.snapshot.detail;
-    if (!detail || detail.status !== 'ready' || !detail.ownId || !this.foreground || !nearBottom || this.focused !== resourceKey(resource) || !detail.header || !('readThroughSeq' in detail.header)) return;
+    if (this.blocked() || !detail || detail.status !== 'ready' || !detail.ownId || !this.foreground || !nearBottom || this.focused !== resourceKey(resource) || !detail.header || !('readThroughSeq' in detail.header)) return;
     const incoming = detail.messages.filter(m => ids.includes(m.id) && m.authorPublicPlayerId !== null && m.authorPublicPlayerId !== detail.ownId);
     const last = mergeMessages([],incoming).at(-1);
     if (last && BigInt(last.seq) > BigInt(detail.header.readThroughSeq)) void this.act(resource,'read',last.seq);
   };
-  retry = async (resource: MessageResource) => {
+  retry = async (resource: MessageResource, expectedView = this.snapshot.viewGeneration, expectedActor = this.snapshot.actor) => {
     const pending = this.snapshot.pending[resourceKey(resource)];
-    if (!pending || pending.state !== 'unknown' || !this.foreground || !sameActor(pending.packet.actor,this.snapshot.actor)) return;
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor,this.snapshot.actor) || !pending || this.safetyHeld(resource, pending.packet.action) || pending.state !== 'unknown' || !this.foreground || !sameActor(pending.packet.actor,this.snapshot.actor)) return;
     this.show({ pending: { ...this.snapshot.pending, [resourceKey(resource)]: { ...pending, state: 'sending' } } });
     await this.dispatch(pending.packet);
   };
   private async dispatch(packet: MessagePacket) {
-    const revision = this.revision, key = resourceKey(packet.resource);
+    const revision = this.revision, key = resourceKey(packet.resource), permit = this.safetyPermit(packet) + 1;
+    this.safetyAttempts.set(packet, permit);
     try {
       const result = await this.port.send(packet);
-      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor)) return;
+      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || !this.mayDispatchSafety(packet, permit)) return;
       const pending = { ...this.snapshot.pending }; delete pending[key];
       const drafts = { ...this.snapshot.drafts }; if (packet.action === 'send') delete drafts[key];
       let detail = this.snapshot.detail;
@@ -326,7 +407,7 @@ export class MessagesCoordinator {
       if (packet.action !== 'read' && this.focused === key && packet.resource.kind !== 'invitation') void this.catchUp(packet.resource);
       void this.loadCounts();
     } catch (error) {
-      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || this.failed(error)) return;
+      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || !this.mayDispatchSafety(packet, permit) || this.failed(error)) return;
       if (error instanceof MessagesError && error.kind === 'business' && !['IDEMPOTENCY_KEY_REUSED','KEY_REUSED','CLIENT_MESSAGE_ID_REUSED','CLIENT_MESSAGE_ID_UNAVAILABLE'].includes(error.code)) {
         const pending = { ...this.snapshot.pending }; delete pending[key];
         this.show({ pending, notice: error.status === 429 ? 'Слишком часто. Черновик сохранён.' : 'Действие отклонено. Черновик сохранён; обновите условия.' });

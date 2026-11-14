@@ -2918,6 +2918,10 @@
     "/me/blocks/{publicPlayerId}": {
       "put": {
         "operationId": "putMyBlock",
+        "security": [
+          { "cookieSession": [] },
+          { "NativeBearer": [] }
+        ],
         "tags": [
           "Safety"
         ],
@@ -2993,6 +2997,10 @@
       },
       "delete": {
         "operationId": "deleteMyBlock",
+        "security": [
+          { "cookieSession": [] },
+          { "NativeBearer": [] }
+        ],
         "tags": [
           "Safety"
         ],
@@ -3070,6 +3078,10 @@
     "/reports": {
       "post": {
         "operationId": "createAbuseReport",
+        "security": [
+          { "cookieSession": [] },
+          { "NativeBearer": [] }
+        ],
         "tags": [
           "Safety"
         ],

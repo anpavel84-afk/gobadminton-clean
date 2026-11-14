@@ -348,4 +348,68 @@ run("native Messages · self-migrating isolated database", () => {
     expect((await app.inject({url,headers:bearer(player)})).statusCode).toBe(401);
     expect((await app.inject({method:'POST',url:url+'/read',headers:bearer(player),payload:{throughSeq:'1'}})).statusCode).toBe(401);
   });
+  it('native safety three route opt-ins preserve bearer containment, cookie Origin/CSRF and idempotency requirements', async () => {
+    const owner=await actor(), player=await actor(); await profile(owner); const p=await profile(player);
+    const routes=[
+      {method:'PUT' as const,url:'/v1/me/blocks/'+p.publicPlayerId,payload:{}},
+      {method:'DELETE' as const,url:'/v1/me/blocks/'+p.publicPlayerId,payload:{}},
+      {method:'POST' as const,url:'/v1/reports',payload:{targetKind:'player',targetPublicPlayerId:p.publicPlayerId,reasonCode:'spam',detail:null}},
+    ];
+    for (const route of routes) {
+      const guest=await app.inject({...route,headers:{}}); expect(guest.statusCode).toBe(403); expect(guest.json().code).toBe('ORIGIN_REJECTED');
+      for (const headers of [{authorization:'Basic invalid'}, {authorization:'Bearer invalid'}, {authorization:`Bearer ${'x'.repeat(43)}`},
+        {Authorization:[`Bearer ${owner.accessToken}`,`Bearer ${owner.accessToken}`]}]) expect((await app.inject({...route,headers})).statusCode).toBe(401);
+      expect((await app.inject({...route,headers:{...bearer(owner),cookie:owner.cookie}})).statusCode).toBe(403);
+      expect((await disabledApp.inject({...route,headers:bearer(owner)})).statusCode).toBe(404);
+      const noCsrf=await app.inject({...route,headers:{cookie:owner.cookie,origin,'idempotency-key':randomUUID()}});
+      expect(noCsrf.statusCode).toBe(403); expect(noCsrf.json().code).toBe('CSRF_REQUIRED');
+      const badOrigin=await app.inject({...route,headers:{...browser(owner),origin:'https://evil.test'}});
+      expect(badOrigin.statusCode).toBe(403); expect(badOrigin.json().code).toBe('ORIGIN_REJECTED');
+      expect((await app.inject({...route,headers:{authorization:`Bearer ${owner.accessToken}`}})).statusCode).toBe(400);
+    }
+    await app.get(SessionService).revokeSession(owner.sessionId);
+    for (const route of routes) expect((await app.inject({...route,headers:bearer(owner)})).statusCode).toBe(401);
+    expect((await pool.query('SELECT 1 FROM abuse_reports WHERE reporter_user_id=$1',[owner.id])).rowCount).toBe(0);
+    expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_user_id=$1',[owner.id])).rowCount).toBe(0);
+  });
+  it('native block/unblock receipts and reports use authoritative source, explicit message consent and accepted history privacy', async () => {
+    const owner=await actor(), player=await actor(), outsider=await actor();
+    const own=await profile(owner), p=await profile(player); await profile(outsider);
+    const dm=await direct(owner,p.publicPlayerId), url='/v1/conversations/'+dm.id;
+    const history=await app.inject({url:url+'/messages',headers:bearer(player)}); expect(history.statusCode).toBe(200);
+    const selected=history.json().items[0] as {id:string;authorPublicPlayerId:string;text:string};
+    expect(selected.authorPublicPlayerId).toBe(own.publicPlayerId);
+    const payload={targetKind:'message',messageId:selected.id,conversationId:dm.id,reasonCode:'harassment',detail:null,shareMessageWithSupport:true};
+    const noConsent=await app.inject({method:'POST',url:'/v1/reports',headers:bearer(player),payload:{...payload,shareMessageWithSupport:false}});
+    expect(noConsent.statusCode).toBe(422); expect(noConsent.json().code).toBe('MESSAGE_REPORT_CONSENT_REQUIRED');
+    expect((await app.inject({method:'POST',url:'/v1/reports',headers:bearer(outsider),payload})).statusCode).toBe(404);
+    expect((await app.inject({method:'POST',url:'/v1/reports',headers:bearer(owner),payload})).statusCode).toBe(404);
+    expect((await app.inject({method:'POST',url:'/v1/reports',headers:bearer(player),payload:{...payload,conversationId:randomUUID()}})).statusCode).toBe(404);
+    const reportKey=randomUUID(), submitted=await app.inject({method:'POST',url:'/v1/reports',headers:bearer(player,reportKey),payload});
+    expect(submitted.statusCode).toBe(201); expect(submitted.json()).toMatchObject({status:'submitted'});
+    expect(Object.keys(submitted.json()).sort()).toEqual(['reportId','status','createdAt'].sort());
+    expect(Number.isFinite(Date.parse(submitted.json().createdAt))).toBe(true);
+    expect((await app.inject({method:'POST',url:'/v1/reports',headers:bearer(player,reportKey),payload})).json()).toEqual(submitted.json());
+    const binding=(await pool.query('SELECT message_id,conversation_id,author_user_id,reporter_user_id,share_consent FROM message_report_bindings WHERE report_id=$1',[submitted.json().reportId])).rows[0];
+    expect(binding).toEqual({message_id:selected.id,conversation_id:dm.id,author_user_id:owner.id,reporter_user_id:player.id,share_consent:true});
+    const playerPayload={targetKind:'player',targetPublicPlayerId:own.publicPlayerId,reasonCode:'spam',detail:null}, playerKey=randomUUID();
+    const reported=await app.inject({method:'POST',url:'/v1/reports',headers:bearer(player,playerKey),payload:playerPayload}); expect(reported.statusCode).toBe(201);
+    expect((await app.inject({method:'POST',url:'/v1/reports',headers:bearer(player,playerKey),payload:playerPayload})).json()).toEqual(reported.json());
+    const stored=(await pool.query('SELECT target_kind,target_public_player_id,detail,evidence_refs FROM abuse_reports WHERE id=$1',[reported.json().reportId])).rows[0];
+    expect(stored).toEqual({target_kind:'player',target_public_player_id:own.publicPlayerId,detail:null,evidence_refs:[]});
+    const blockUrl='/v1/me/blocks/'+own.publicPlayerId, blockKey=randomUUID();
+    const blocked=await app.inject({method:'PUT',url:blockUrl,headers:bearer(player,blockKey),payload:{}});
+    expect(blocked.statusCode).toBe(200); expect(blocked.json()).toEqual({publicPlayerId:own.publicPlayerId,blocked:true});
+    expect((await app.inject({method:'PUT',url:blockUrl,headers:bearer(player,blockKey),payload:{}})).json()).toEqual(blocked.json());
+    for (const a of [owner,player]) expect((await app.inject({method:'POST',url:url+'/messages',headers:bearer(a),payload:{kind:'text',text:'Blocked',clientMessageId:randomUUID()}})).statusCode).toBe(404);
+    expect((await app.inject({url:url+'/messages',headers:bearer(player)})).json()).toEqual(history.json());
+    expect((await app.inject({url:url+'/messages',headers:bearer(outsider)})).statusCode).toBe(404);
+    const unblockKey=randomUUID(), unblocked=await app.inject({method:'DELETE',url:blockUrl,headers:bearer(player,unblockKey),payload:{}});
+    expect(unblocked.statusCode).toBe(200); expect(unblocked.json()).toEqual({publicPlayerId:own.publicPlayerId,blocked:false});
+    expect((await app.inject({method:'DELETE',url:blockUrl,headers:bearer(player,unblockKey),payload:{}})).json()).toEqual(unblocked.json());
+    // No fabricated restoration: permissions are read again from the existing endpoint.
+    expect((await app.inject({url,headers:bearer(player)})).json().requestState).toBe('accepted');
+    const fresh=await app.inject({method:'POST',url:url+'/messages',headers:bearer(player),payload:{kind:'text',text:'After authoritative unblock',clientMessageId:randomUUID()}}); expect(fresh.statusCode).toBe(201);
+  });
+
 });

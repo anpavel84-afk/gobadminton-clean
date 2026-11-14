@@ -1,3 +1,192 @@
+# #522 native safety ADDRESS3 · SOURCE_CANDIDATE · PARTIAL
+
+Bounded repair on C3 `c78caf422480483e8674d18f0c1e967b748eaa88`.
+C3 parent remains FAIL (`410c86d8028a17290ffcfff02fd47bdddd3002330cad7317e739927f919a9ece`):
+mobile TS2769 at the owning safety test; its 85 units/lint/Expo/archive PASS and
+retained API 8/contracts evidence are historical, not rerun here. The owning test
+now imports genuine Node URL, retaining runtime assertions. Root manual related
+findings `2d898512af306be945dd92cf0e04ab315480908df59860cb7835ab1d79a13927` and
+controlled private404 repro `f616b537819d35f7bf4b441fb663b6a173c766edc7197424be1d6cbe05023e89`
+are addressed as source findings, not independent QA.
+
+- Explicit safety replay finishes the original immutable command, retains its
+  receipt as history and invokes separate read-only contact/messages/players
+  authority reads. It never applies a historical relationship fence or claims a
+  current block/unblock. Fresh verified first-action fences remain.
+- Authoritative safety-only 401/403/404 hides private message DTOs and invalidates
+  stale reads/results while retaining actor-owned UNKNOWN packets and drafts.
+  Network failures retain still-authorized history. Authorized same-owner reads
+  recover the view; only explicit original-packet reconciliation retries a write.
+  Ordinary HOLD, bounded/coalesced GETs and actor/session/focus/logout fences remain.
+
+Author-only Node 24 owning run: 63/64 passed; the new recovery test's malformed
+mock send receipt failed. After correcting that test fixture, targeted followup
+passed 3/3 (recovery plus added stale replay/denial boundaries); the other 63
+accepted checks are reused. Logs retain the failure. No dependency resolution,
+TypeScript/lint/Expo, CI, independent QA, device/build, DB or runtime checks ran here.
+No focused C3 QA ran; Root fresh mobile checks and focused independent original
+three plus related-delta/manual/type closure remain pending, not a second whole QA.
+
+Three prior source runs, manual/protection evidence, first whole FAIL
+`6821f5f535d89ab13d015b3de0af0c622ad113ee7bd2bb79ad672cb3600adea6` and C2 parent
+PASS `cc0f8c81b4b0b52713bfa7d320ac23c07423be7a02a6b54a151abde18087dec5` remain retained.
+Wrapper PARTIAL; full parity MANDATORY_NOT_COMPLETE; Owner FAIL / S23 FAIL;
+native visual NOT_VERIFIED; iOS/real OTA unfinished. Accepted DEV
+`53eafa4cd7013993a4be016c5bf87ee209cae4c3` and app code 7 remain unchanged.
+Only seven admitted paths change; all other export bytes and every earlier README
+byte remain intact. No GitHub/CI/merge/deploy/PROD/runtime action; Root ACK pending.
+
+# #522 native safety ADDRESS2 · SOURCE_CANDIDATE · PARTIAL
+
+Bounded author repair on supplied C2 `210537db62fad94455ac8b84bd60a778d8aa8d5f`.
+The first independent whole safety QA remains **FAIL** (one P1, two P2), evidence
+SHA-256 `6821f5f535d89ab13d015b3de0af0c622ad113ee7bd2bb79ad672cb3600adea6`.
+This note records an author candidate for focused three-finding/related-delta review,
+not a second whole review, independent QA PASS or release acceptance.
+
+- A validated player URL exposes explicit «Снять мою блокировку» even after cold
+  startup with no local receipt, profile 404 and no DM. The fallback person label is
+  neutral «Игрок»; 404 never proves existence or block state. Opening/confirmation
+  selection does not write; only explicit submission uses the existing DELETE and
+  server rights/idempotency. Invalid route/focus identifiers are rejected safely.
+- Same-owner reauthentication retains lastBlocks only as action history. It never
+  reapplies those receipts as peer fences or current UI send gates. Current verified
+  action fences still apply; reopened profile/contact/direct views use existing
+  authoritative reads. No block-state endpoint or inferred state is introduced.
+  Original UNKNOWN packets and the unsent form/focus restoration fix are retained.
+- Verified safety events grant one bounded GET-only reread of inbox/counts and the
+  exact affected direct detail even while any original message packet is UNKNOWN.
+  Occupied lanes coalesce and then issue a fresh followup; actor/session, view,
+  foreground, peer and request fences reject stale results. Ordinary polling/read
+  HOLD remains. Packets/key/body, drafts and loaded history survive; no automatic
+  resend, inbox deletion, friendship or pending-request restoration is fabricated.
+
+Author-only deterministic owning units: **61 passed, 0 failed/skipped/cancelled**
+(29 auth, 24 messages, 8 safety), including the existing 53 tests and eight added
+regressions. Run with Node 24.21.0:
+`node --experimental-strip-types --test --test-isolation=none apps/mobile/test/safety.test.ts apps/mobile/test/messages.test.ts apps/mobile/test/auth.test.ts`.
+Mock transport exercises actual NativeApi/AuthCoordinator GET/DELETE handling and
+changed message views during UNKNOWN; coordinator tests cover occupied-lane
+followups and stale responses. UI source wiring is checked without React/native
+rendering. These units do not constitute TypeScript, independent QA, device, build,
+CI, DB, smoke or runtime evidence. Dependencies were not resolved or installed.
+
+Both completed normal safety source runs remain retained, including ADDRESS1
+receipt `bb2896f89b7aead0dbf9b0f90d6731400ac2d057f43dc8219f08556972559d15`.
+Prior parent PASS `cc0f8c81b4b0b52713bfa7d320ac23c07423be7a02a6b54a151abde18087dec5`
+(77 native / 8 DB source evidence) is retained, not rerun or relabelled.
+Root manual precheck `be5237f9c37aa51e62a0891c4fd1a6a6f2a356b61e7ab4282f542e02b9bd15a8`
+and protection `ef0b41cb2b41b23500de6592e0f1efc2f36cb45966866ad982de5c15e975c38d`
+remain distinct from independent QA FAIL. Historical contact qualification and
+FAIL/UNKNOWN/cost history remain. Root's fresh mobile-only checks and focused
+independent three-finding/related-delta review are still pending.
+
+Source wrapper remains PARTIAL; full native parity is MANDATORY_NOT_COMPLETE,
+Owner FAIL / S23 FAIL remain, native visual is NOT_VERIFIED, iOS/real OTA unfinished.
+Accepted DEV `53eafa4cd7013993a4be016c5bf87ee209cae4c3` is unchanged. Existing
+code-7 build preparations remain ineligible; no new APK/device/build/source-whole
+PASS is claimed. No GitHub/CI/deploy/PROD/runtime operations were performed.
+Only the nine admitted mobile paths change; API/contracts, fixture, app version,
+dependencies/assets and all other supplied export bytes remain untouched.
+Every earlier README byte follows as an unchanged suffix.
+
+# #522 native safety ADDRESS1 · 2026-11-14 · SOURCE_CANDIDATE
+
+Addresses retained Root manual P2 SAFETY-UNSENT-REAUTH-FOCUS on supplied source
+`e3ee70846e00f24d07b1c4772712c826768707ee`: same-owner verified reauthentication
+followed by the same mounted screen's focus/open retains unsent detail/reason/dialog.
+Each open still advances the view fence and clears message selection/sharing consent;
+account B and explicit logout erase private form state. No automatic send, disk draft
+or process-death restoration is added; UNKNOWN packets/reconciliation remain unchanged.
+
+Two added regressions failed before the fix. Author-only Node 24 owning units then
+passed **33 tests (27 auth + 6 safety), 0 failures/skips**, using mocked transport:
+`node --experimental-strip-types --test --test-isolation=none apps/mobile/test/safety.test.ts apps/mobile/test/auth.test.ts`.
+This includes real AuthCoordinator validation/login plus the mounted screen's status-driven
+focus cleanup/open sequence; it is not React/native rendering or device evidence.
+No parent checks or independent QA have run. DB, CI, builds and DEV acceptance are
+NOT_TESTED here; supplied accepted DEV `53eafa4cd7013993a4be016c5bf87ee209cae4c3`
+is unchanged. Full native parity remains UNFINISHED, Owner FAIL / S23 FAIL remain,
+and native visual status remains NOT_VERIFIED. All earlier README bytes follow intact.
+
+# #522 native communication safety · SOURCE_CANDIDATE
+
+Bounded private-export source candidate on actual accepted alpha91 base
+`53eafa4cd7013993a4be016c5bf87ee209cae4c3`, after the admitted owned APK6.
+This source delta is NOT a DEV release, APK7 publication, independent QA PASS,
+physical-phone acceptance or whole-native parity claim.
+
+Native player profile and direct conversation now expose explicit block/unblock
+confirmation naming the player, player reports, and reports of one explicitly
+selected already-loaded live incoming message from the displayed peer. Message
+sharing consent starts off and resets on selection/context changes. Exact reason
+labels, optional trimmed/null detail (max 1000), Cancel/Back, native scrollable
+modal/safe-area/keyboard controls and existing black-on-green CTAs are retained.
+Opening, authentication, restoration, selection and refreshing never send a safety
+command. Blocking does not cancel game participation or remove common game-chat
+rights; unblocking does not restore ended friendship or closed pending requests.
+
+The bounded Auth-owned safety coordinator freezes original actor/context/action,
+method/path/body/key and retains uncertain commands across navigation. Verified
+same-owner reauthentication restores quarantined state without replay; only an
+informed explicit reconciliation sends the identical packet under current
+verified authority. Logout/account B erase safety state and fence late callbacks.
+Invalid receipts, network/timeout/5xx and COMMAND_IN_PROGRESS stay UNKNOWN. A
+reconciliation denial also retains the original UNKNOWN. Block receipts bind
+both target and boolean; report receipts validate actual ID/status/date without
+inventing a target echo. No GET block state is invented: UI labels a retained
+receipt as the last confirmed action, not fresh state after another operation.
+
+Verified peer blocks fence stale contact/direct writes, including pending pre-wire
+work and late callbacks after a later unblock. Existing Contact/Messages UNKNOWN
+packets, drafts and accepted history survive that fence. Affected authorized
+views reread through existing endpoints; no inbox deletion or privilege restoration
+is fabricated. Target-profile safety 404 does not clear unrelated player rows.
+Profile, Participation and GameManagement owners remain independent.
+
+Only BlocksController PUT/DELETE and ReportsController POST opt into
+requirePrincipalMutation; only their OpenAPI operation security fields add
+cookieSession/NativeBearer. Existing cookie Origin/CSRF, services, idempotency and
+receipts remain unchanged. NativeApi adds closed PUT/safety projections only:
+no arbitrary URL/method, cookie/Origin, automatic private text or evidenceRefs.
+API contract remains 0.44.0; schema inventory remains 72. app.json changes only
+versionCode 6 -> 7, with only the matching expected literal changed in the native
+contract test. VersionName 0.1.0, package ru.gobadminton.mobile.dev, dependencies,
+assets, configuration flags and existing native registry remain unchanged.
+
+Author deterministic verification: safety 5, contact 16, messages 20 and auth 26
+unit cases passed with Node 24.21.0, mocked fetch and no network/device execution.
+The first author run exposed unsupported strip-only parameter properties; these
+were replaced with ordinary fields. The new root fixture initially missed the
+history query string and was corrected; final owning runs pass. All old tests,
+assertions and prior README bytes remain intact. Existing isolated self-migrating
+native Messages DB fixture gains two focused safety cases for the three routes,
+transport containment, cookie guards, idempotency, block/send/history privacy,
+player reports and authoritative consent-bound message reports. DB fixture
+execution is NOT_DONE by author; no new harness/environment was introduced.
+
+Parent-owned types/lint/contracts, owning DB, Expo exports, independent QA,
+Product CI7, DEV acceptance/readback, APK7 build/signing/publication and physical
+Android keyboard/Back/safe-area/font-scale/block/report recheck remain NOT_DONE.
+Owner_UAT=FAIL_RECHECK_PENDING; native_runtime_visual=NOT_VERIFIED;
+full_native_parity=MANDATORY_NOT_COMPLETE; iOS and real OTA remain NOT_DONE.
+Game-member safety, venue reports and remaining native parity are mandatory
+unfinished scope. No runtime, GitHub, DB, dependency resolution, build, signing,
+publishing or live actions were performed by this author.
+
+Retained qualification is the first whole contact FAIL plus focused two-P2 PASS,
+not a whole-source PASS. Four normal source receipt lineages remain:
+
+- First contact: 2407a0867a65dca4b56d13e54d7f76ec4a460713907c0fb5d1f6998937cecc3e.
+- ADDRESS1: 3dde4144a24103b2265c3ea2ca6bbb4b86da8d7a1a4e85a3badf074e7f51844a.
+- ADDRESS2: d44256ec6b989854993fb24c8f803c7dc19ed85674e34999774923c2cfe644f8.
+- ADDRESS3 P2: 88e17937d55ad1706b74e18fcd81782e10f46230e4e43b388aeb0570f020c66d.
+
+Raw Owner FAIL, costs, historical UNKNOWN and all earlier qualification/release
+limitations are preserved. Every previous README byte follows verbatim as history.
+
+---
+
 # #522 CONTACT ADDRESS3 · two P2 source repairs
 
 This bounded author delta addresses both P2 findings from the FIRST whole
