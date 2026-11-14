@@ -38,7 +38,10 @@ export function CreateGame() {
         {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
       </> : state.context === 'setup' ? <>
         <Label>Для создания и публикации игры нужен заполненный профиль с именем и городом. Для создания также выберите вручную город поиска.</Label>
-        {(!state.profile?.cityId || !state.profile?.displayName.trim()) && <Label>Обязательный следующий шаг — заполнить имя и город в профиле. Редактирование профиля в native ещё не перенесено; заполните профиль в веб-приложении и обновите проверку здесь.</Label>}
+        {(!state.profile?.cityId || !state.profile?.displayName.trim()) && <>
+          <Label>Обязательный следующий шаг — заполнить имя и город в профиле.</Label>
+          <TextButton title="Заполнить имя и город" onPress={() => router.push({ pathname: '/profile', params: { returnTo: '/games/create' } })} />
+        </>}
         <TextButton title="Выбрать город поиска" onPress={() => router.push('/city')} />
         <TextButton title="Обновить проверку профиля" onPress={() => void owner.loadContext(preferences.cityId)} />
         {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}

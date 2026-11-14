@@ -262,7 +262,7 @@ run("native Messages · self-migrating isolated database", () => {
     expect((await app.inject({method:'POST',url:url+'/messages',headers:{cookie:owner.cookie,origin,'idempotency-key':randomUUID()},payload})).json().code).toBe('CSRF_REQUIRED');
     expect((await app.inject({method:'POST',url:url+'/messages',headers:{...browser(owner),origin:'https://evil.test'},payload})).json().code).toBe('ORIGIN_REJECTED');
     expect((await app.inject({method:'POST',url:url+'/messages',headers:browser(owner),payload})).statusCode).toBe(201);
-    for(const [method,closed] of [['POST','/v1/conversations/requests'],['POST',url+'/messages/'+randomUUID()+'/hide'],['POST',`/v1/me/inbox/items/dm/${dm.id}/read`],['PATCH','/v1/me/social-profile'],['POST','/v1/games/'+randomUUID()+'/invitations'],['POST','/v1/invitations/'+randomUUID()+'/revoke']] as const) {
+    for(const [method,closed] of [['POST','/v1/conversations/requests'],['POST',url+'/messages/'+randomUUID()+'/hide'],['POST',`/v1/me/inbox/items/dm/${dm.id}/read`],['PATCH','/v1/me/game-preferences'],['POST','/v1/games/'+randomUUID()+'/invitations'],['POST','/v1/invitations/'+randomUUID()+'/revoke']] as const) {
       expect([401,403]).toContain((await app.inject({method,url:closed,headers:bearer(player),payload:{}})).statusCode);
     }
     await app.get(SessionService).revokeSession(player.sessionId);

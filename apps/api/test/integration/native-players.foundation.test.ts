@@ -158,4 +158,79 @@ run("bounded native public Players principal opt-in", () => {
     // Neighbouring private read remains cookie-only: this slice grants no broader bearer surface.
     expect((await app.inject({ url: "/v1/me/discovery-preference", headers: bearer(peer) })).statusCode).toBe(401);
   });
+
+  it("native own name/city save preserves full policies and supports authorized replay, conflict and actor isolation", async () => {
+    const a = await actor(), b = await actor();
+    await profile(a, "Profile Before");
+    const url = "/v1/me/social-profile";
+    const read = async (who: Actor) => {
+      const response = await app.inject({ url, headers: bearer(who) });
+      expect(response.statusCode).toBe(200); expect(response.headers["cache-control"]).toBe("no-store");
+      return response.json();
+    };
+    let before = await read(a);
+    const seed = await app.inject({ method: "PATCH", url, headers: browser(a), payload: {
+      expectedVersion: before.version, level: { scaleId: "future-profile-scale", scaleVersion: 7, levelId: "retained-level", provenance: "self_declared" },
+      contactPolicy: "closed", socialEligible: false,
+    } }); expect(seed.statusCode).toBe(200); before = seed.json();
+    const hide = await app.inject({ method: "PUT", url: url + "/visibility", headers: browser(a), payload: { expectedVersion: before.version, directoryVisible: false } });
+    expect(hide.statusCode).toBe(200); before = await read(a);
+    const provenance = async () => (await pool.query("SELECT directory_visibility_provenance, consent_policy_version, opted_in_at, radar_consented, radar_consent_policy_version, radar_consented_at FROM player_social_profiles WHERE user_id=$1", [a.id])).rows[0];
+    const priorProvenance = await provenance();
+    const key = randomUUID(), payload = { expectedVersion: before.version, displayName: "Native Own Name", cityId: MOSCOW_CITY_ID };
+    const save = await app.inject({ method: "PATCH", url, headers: bearer(a, key), payload });
+    expect(save.statusCode).toBe(200); expect(save.headers["cache-control"]).toBe("no-store");
+    const saved = save.json(); expect(saved.version).toBe(before.version + 1); expect(saved.displayName).toBe(payload.displayName); expect(saved.cityId).toBe(payload.cityId);
+    for (const field of ["level", "bio", "areaKey", "directoryVisible", "contactPolicy", "socialEligible", "consentPolicyVersion", "optedInAt", "radarConsented", "radarConsentPolicyVersion", "radarConsentedAt", "lookingForGame", "trainer"]) expect(saved[field]).toEqual(before[field]);
+    expect(await provenance()).toEqual(priorProvenance);
+    const replay = await app.inject({ method: "PATCH", url, headers: bearer(a, key), payload });
+    expect(replay.statusCode).toBe(200); expect(replay.json()).toEqual(saved); expect(await read(a)).toEqual(saved);
+    const returned = { ...a, ...await app.get(NativeSessionService).transaction(client => app.get(NativeSessionService).issue(client, a.id, "native.fixture")) };
+    const afterReauth = await app.inject({ method: "PATCH", url, headers: bearer(returned, key), payload });
+    expect(afterReauth.statusCode).toBe(200); expect(afterReauth.json()).toEqual(saved);
+    await app.get(SessionService).revokeSession(returned.sessionId);
+    expect((await app.inject({ method: "PATCH", url, headers: bearer(returned, key), payload })).statusCode).toBe(401);
+    const changed = await app.inject({ method: "PATCH", url, headers: bearer(a, key), payload: { ...payload, displayName: "Changed packet" } });
+    expect(changed.statusCode).toBe(409); expect(changed.json().code).toMatch(/KEY_REUSED/);
+    const stale = await app.inject({ method: "PATCH", url, headers: bearer(a), payload });
+    expect(stale.statusCode).toBe(409); expect(stale.json().code).toBe("VERSION_CONFLICT");
+    // Same key under B is B's independent mutation, never an A receipt or identity.
+    const ownB = await read(b);
+    const isolated = await app.inject({ method: "PATCH", url, headers: bearer(b, key), payload: { ...payload, expectedVersion: ownB.version, displayName: "Other Own Name" } });
+    expect(isolated.statusCode).toBe(200); expect(isolated.json().publicPlayerId).not.toBe(saved.publicPlayerId); expect(await read(a)).toEqual(saved);
+    // Deliberate repeated edit consumes the returned version.
+    const next = await app.inject({ method: "PATCH", url, headers: bearer(a), payload: { ...payload, expectedVersion: saved.version, displayName: "Native Next Name" } });
+    expect(next.statusCode).toBe(200); expect(next.json().version).toBe(saved.version + 1);
+    const stable = await read(a);
+    for (const invalid of [{ cityId: randomUUID() }, { displayName: "хуй" }, { email: "private@example.test" }, { userId: b.id }, { publicPlayerId: ownB.publicPlayerId }]) {
+      const rejected = await app.inject({ method: "PATCH", url, headers: bearer(a), payload: { ...payload, expectedVersion: stable.version, ...invalid } });
+      expect(rejected.statusCode).toBe(422);
+      expect(rejected.json().code).toBe("cityId" in invalid ? "CITY_ID_INVALID" : "displayName" in invalid ? "PUBLIC_TEXT_CONTENT_REJECTED" : "PRIVATE_IDENTITY_NOT_ACCEPTED");
+      expect(await read(a)).toEqual(stable);
+    }
+  });
+  it("keeps own PATCH cookie Origin/CSRF and native malformed/revoked/disabled/mixed authority gates without anonymous fallback", async () => {
+    const a = await actor(), inactive = await actor(), url = "/v1/me/social-profile";
+    const own = await app.inject({ url, headers: bearer(a) }); expect(own.statusCode).toBe(200);
+    const payload = { expectedVersion: own.json().version, displayName: "Native Gate Name", cityId: MOSCOW_CITY_ID };
+    for (const authorization of ["", "Basic invalid", "Bearer invalid", `Bearer ${"x".repeat(43)}`]) {
+      expect((await app.inject({ method: "PATCH", url, headers: { authorization, "idempotency-key": randomUUID() }, payload })).statusCode).toBe(401);
+    }
+    expect((await app.inject({ method: "PATCH", url, headers: { Authorization: [`Bearer ${a.accessToken}`, `Bearer ${a.accessToken}`], "idempotency-key": randomUUID() }, payload })).statusCode).toBe(401);
+    expect((await app.inject({ method: "PATCH", url, headers: { ...bearer(a), cookie: a.cookie }, payload })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PATCH", url, headers: { "idempotency-key": randomUUID() }, payload })).statusCode).toBe(403);
+    expect((await disabledApp.inject({ method: "PATCH", url, headers: bearer(a), payload })).statusCode).toBe(404);
+    expect((await app.inject({ method: "PATCH", url, headers: { ...browser(a), origin: "https://outside.example.test" }, payload })).statusCode).toBe(403);
+    const noCsrf = { origin, cookie: a.cookie, "idempotency-key": randomUUID() };
+    expect((await app.inject({ method: "PATCH", url, headers: noCsrf, payload })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PATCH", url, headers: { ...browser(a), "x-csrf-token": "invalid" }, payload })).statusCode).toBe(403);
+    const cookieSave = await disabledApp.inject({ method: "PATCH", url, headers: browser(a), payload }); expect(cookieSave.statusCode).toBe(200);
+    await app.get(SessionService).revokeSession(a.sessionId);
+    expect((await app.inject({ method: "PATCH", url, headers: bearer(a), payload })).statusCode).toBe(401);
+    await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [inactive.id]);
+    expect((await app.inject({ method: "PATCH", url, headers: bearer(inactive), payload })).statusCode).toBe(401);
+    const browserRead = await app.inject({ url, headers: { cookie: a.cookie } }); expect(browserRead.statusCode).toBe(200);
+    expect(browserRead.json()).toEqual(cookieSave.json());
+  });
+
 });

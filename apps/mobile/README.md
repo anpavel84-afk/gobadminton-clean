@@ -1,3 +1,83 @@
+# #522 CURRENT · native own profile name/city source candidate
+
+Root-admitted base supplied with this task: `0104a264f0ae97b9639fd46ab0c10a91304d5a31`
+(alpha.89). This private export has no accessible Git history; live admission,
+release/readback/history seed and public APK4 proofs were supplied by Root and
+were not independently reread by this author. All historical source, FAIL,
+UNKNOWN, cost, metadata and Owner S23 FAIL records below remain preserved.
+
+Existing `/profile` now edits the authoritative own social-profile name and
+catalog city with explicit Save and Cancel. It uses the existing white shell,
+Onest, safe-inset keyboard page, navigation and green CTA with black text. Empty
+200 is editable; malformed required DTO/version is rejected. No account display
+name/email fallback, automatic city/geolocation or search-city update is used.
+Create setup links to this editor with the existing local `/games/create` return;
+explicit return rereads readiness without creating, joining or publishing.
+Existing direct owned/delegated draft publication still revalidates profile.
+
+Only PATCH `/me/social-profile` gains `requirePrincipalMutation` and explicit
+OpenAPI cookieSession/NativeBearer security. GET, visibility, server DTO/policies,
+service code, API 0.44.0, schema72, auth/session/restriction code and the existing
+enabled native registry remain unchanged. The native transport exposes one fixed
+PATCH and projects exactly expectedVersion, trimmed nonblank displayName (max80)
+and catalog cityId. Privacy, eligibility, visibility, contact/Radar consent,
+looking intent, level, bio, area and identifiers are omitted from the payload;
+completion grants no consent or activation. Cookie Origin/CSRF stays enforced.
+
+A bounded root ProfileCoordinator owns the frozen key/body/original identity and
+selected city label across route unmounts. Double taps cannot dispatch twice.
+Network/5xx/invalid receipt/COMMAND_IN_PROGRESS remains UNKNOWN; unverified guests
+see no private draft/packet. Only authoritative same-actor identity restores the
+packet; explicit informed reconciliation uses the unchanged original key/body
+with current authenticated authority. Logout and account B erase active and
+quarantined private data; generation fences reject old completions. Stale409
+blocks new edits/saves until explicit authoritative reread and review. Controlled
+moderation rejection/unavailability keeps the form and neutral retry guidance.
+Profile saves leave Participation, Messages and management packets/references
+independent. No generic mutation framework or automatic write was introduced.
+
+Android source versionCode changes **4 → 5** only; versionName **0.1.0**, package,
+permissions/blockedPermissions, intent filters, callbacks, icons/assets/plugins
+and the frozen dependency lock remain unchanged. The native-contract file differs
+only by its mandated expected literal **4 → 5**. The legacy Messages fixture
+changes only its closed PATCH neighbor to `/v1/me/game-preferences`, retaining
+its `{}` payload, [401,403] containment and all other old assertions.
+
+Actual author verification (Node 24.21.0, no dependency installation):
+
+```sh
+node --experimental-strip-types --test --test-isolation=none apps/mobile/test/profile.test.ts apps/mobile/test/auth.test.ts apps/mobile/test/game-management.test.ts apps/mobile/test/native-contract.test.ts
+```
+
+**61 named tests PASS, 0 FAIL, 0 skipped**, including the full unchanged
+native-contract suite apart from its authorized version literal. This is author
+selfcheck, not independent QA. Deterministic comparison confirms only the selected
+OpenAPI operation security changes (including original absent security-field
+presence); app.json, native-contract and legacy Messages match their exact
+permitted substitutions. Lock SHA-256 remains
+`7d36b3b79e8137012a3246e1ef0625298320eab10dd5b118a0017f15f17ad80a`.
+
+The existing native-players fixture retains both prior cases and its fresh
+loopback DB/migration guards, adding own save/read/replay/new-session replay,
+conflict, authority, cookie Origin/CSRF, privacy/provenance/unknown-level
+preservation, invalid city, moderated name and private-identity rejection checks.
+**Both owning DB fixtures are NOT_TESTED here.** Root owns execution through the
+existing disposable harness; no new DB, env variable, CI case or workflow is added.
+Typecheck, lint and both Expo exports are **NOT_TESTED** (dependencies absent;
+installation/resolution forbidden). Mandatory CI/security, independent QA,
+binary build/sign/publication and DEV acceptance remain for the trusted process.
+No alpha.90 receipt/source/date/APK URL or release-history acceptance is invented.
+
+Physical phone rendering/keyboard/cancel/offline/account-switch flow and Owner
+UAT remain **NOT_TESTED / FAIL_RECHECK_PENDING**; native visual **NOT_VERIFIED**.
+Full native parity remains **MANDATORY_NOT_COMPLETE**. Photo/cover upload, crop
+and moderation, accepted NTRP/pilot/none/keep/full-identity level guidance, bio,
+area, privacy/Radar/looking/trainer controls and all other parity remain mandatory
+unfinished. iOS and real OTA remain **NOT_DONE**. No device, store, PROD or full
+parity acceptance is claimed. Source delivery is a candidate pending Root gates.
+
+## Historical source/QA/harness lineage (preserved verbatim)
+
 # #522 CURRENT · address3 source maintenance
 
 Supplied actual address2 base: `b2af9342288449261b09d5d74993f78a70c3a451`.

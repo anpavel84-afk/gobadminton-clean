@@ -1,3 +1,5 @@
+import { ProfileError, parseOwnProfile } from './profile.ts';
+import type { ProfilePacket } from './profile.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
 import type { ManagementPacket } from './game-management.ts';
 import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
@@ -10,7 +12,7 @@ import type { NativeExchangeRequest, NativeTransactionRequest } from '@gobadmint
 
 export function createNativeApi(fetcher: typeof fetch = fetch) {
   // Deliberately closed route surface: never forward caller URLs, cookies, Origin or browser bridge commands.
-  async function request(path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'DELETE' | 'PATCH', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false, profile = false): Promise<unknown> {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
@@ -19,6 +21,13 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
           ...(access ? { Authorization: `Bearer ${access}` } : {}), ...(key ? { 'Idempotency-Key': key } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      if (profile && !response.ok) {
+        let code = 'UNKNOWN';
+        try { const problem = await response.json(); if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code; } catch { /* No raw text retained. */ }
+        const moderationStatus: Record<string, number> = { PUBLIC_TEXT_CONTENT_REJECTED: 422, MODERATION_TEMPORARILY_UNAVAILABLE: 503, MODERATION_POLICY_MISMATCH: 503, MODERATION_RATE_LIMITED: 429 };
+        throw new ProfileError(response.status === 401 ? 'authority'
+          : code !== 'COMMAND_IN_PROGRESS' && (moderationStatus[code] === response.status || [400,403,404,409,422,429].includes(response.status)) ? 'business' : 'network', response.status, code);
+      }
       if (messages && !response.ok) {
         let code = 'UNKNOWN';
         try { const problem = await response.json(); if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code; } catch { /* no response text retained */ }
@@ -41,7 +50,8 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       if (!response.ok) throw new NativeAuthError('invalid');
       return await response.json();
     } catch (error) {
-      if (error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError || error instanceof MessagesError) throw error;
+      if (error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError || error instanceof MessagesError || error instanceof ProfileError) throw error;
+      if (profile) throw new ProfileError(error instanceof SyntaxError ? 'invalid' : 'network');
       if (messages) throw new MessagesError(error instanceof SyntaxError ? 'invalid' : 'network');
       if (participation) throw new ParticipationError(error instanceof SyntaxError ? 'invalid' : 'network');
       // Never forward server errors, response text, fetch URLs or credentials.
@@ -50,6 +60,10 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
   }
   const privateMessage = (path: string, access: string, body?: MessageBody, key?: string) => request(path, body === undefined ? 'GET' : 'POST', body, access, key, false, false, true);
   return {
+    ownProfile: async (access: string) => parseOwnProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, false, false, false, true)),
+    saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH', {
+      expectedVersion: packet.body.expectedVersion, displayName: packet.body.displayName, cityId: packet.body.cityId,
+    }, access, packet.key, false, false, false, true)),
     creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
     gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
     ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),
