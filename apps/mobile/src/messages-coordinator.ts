@@ -15,7 +15,7 @@ const clock: MessagesClock = { now: () => Date.now(), schedule: (callback, delay
   const timer = setTimeout(callback,delay); return () => clearTimeout(timer);
 } };
 type ReadLane = 'counts' | 'inbox' | 'detail';
-// A verified safety event grants one GET per affected lane, never a mutation permit.
+// A safety event or explicit safety replay grants one GET per affected lane, never a mutation permit.
 type SafetyRead = { generation: number; revision: number; focus: number; view: number; peer: string; blocked: boolean; filter: InboxFilter; resource?: MessageResource };
 type Pending = { packet: MessagePacket; state: 'sending' | 'unknown' };
 type Detail = { resource: MessageResource; status: 'loading' | 'ready' | 'error'; header: Conversation | GameChat | GameInvitation | null;
@@ -170,16 +170,24 @@ export class MessagesCoordinator {
     this.schedule();
   }
   private valid(revision: number, safety?: SafetyRead) { return revision === this.revision && !!this.snapshot.actor && this.foreground && (safety ? this.validSafetyRead(safety) : !this.blocked()); }
-  private failed(error: unknown): boolean {
+  private failed(error: unknown, safety?: SafetyRead): boolean {
     if (error instanceof MessagesError && error.kind === 'private') {
+      if (safety && ![401, 403, 404].includes(error.status)) return false;
       this.clearSafetyReads();
       ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
       // Keep only the mounted route intent/lease so its existing refresh and blur
-      // handlers still work. All private DTOs, drafts and packets are discarded.
+      // handlers still work. A safety-only denial hides private DTOs but must not
+      // discard an unresolved write or its actor-owned draft to hide the view.
       const resource = this.focusResource, notice = accessLossNotice;
       this.accessLoss = resource ? { revision: this.revision, key: resourceKey(resource) } : null;
+      const retained: Partial<MessagesSnapshot> = safety ? { drafts: this.snapshot.drafts,
+        pending: Object.fromEntries(Object.entries(this.snapshot.pending).map(([key, value]) => {
+          this.safetyAttempts.set(value.packet, this.safetyPermit(value.packet) + 1);
+          return [key, { packet: value.packet, state: 'unknown' as const }];
+        })) } : {};
+      const viewGeneration = this.snapshot.viewGeneration + 1;
       this.snapshot = initial(this.snapshot.actor);
-      this.show({ notice, inboxStatus: this.focused === 'inbox' ? 'error' : 'idle',
+      this.show({ ...retained, viewGeneration, notice, inboxStatus: this.focused === 'inbox' ? 'error' : 'idle',
         detail: resource ? { resource, status: 'error', header: null, messages: [], cursor: null, members: [], ownId: null, error: notice, loadingMore: false } : null });
       return true;
     }
@@ -191,7 +199,7 @@ export class MessagesCoordinator {
     const revision = this.revision, request = ++this.countsRevision;
     this.show({ countsLoading: true });
     try { const counts = await this.port.counts(); if (this.valid(revision, safety) && request === this.countsRevision) this.show({ counts, countsLoading: false }); }
-    catch (error) { if (this.valid(revision, safety) && request === this.countsRevision && (safety || !this.failed(error))) this.show({ counts: safety ? this.snapshot.counts : null, countsLoading: false }); }
+    catch (error) { if (this.valid(revision, safety) && request === this.countsRevision && !this.failed(error, safety)) this.show({ counts: safety ? this.snapshot.counts : null, countsLoading: false }); }
     finally { this.endRead('counts'); }
   };
   loadInbox = (filter = this.snapshot.filter, cursor?: string, quiet = false) => this.readInbox(filter, cursor, quiet);
@@ -235,7 +243,7 @@ export class MessagesCoordinator {
         inbox = { ...page, items: [...merged.values()].filter(item => !missing.has(inboxKey(item)) && matchesFilter(item,filter)), nextCursor: cursor ? page.nextCursor : old.nextCursor };
       }
       this.show({ inbox, counts: page.counts, inboxStatus: 'ready', loadingMore: false });
-    } catch (error) { if (this.valid(revision, safety) && request === this.listRevision && (safety || !this.failed(error))) this.show({ inboxStatus: cursor || quiet && old ? 'ready' : 'error', inboxError: true, loadingMore: false }); }
+    } catch (error) { if (this.valid(revision, safety) && request === this.listRevision && !this.failed(error, safety)) this.show({ inboxStatus: cursor || quiet && old ? 'ready' : 'error', inboxError: true, loadingMore: false }); }
     finally { this.endRead('inbox'); }
   };
   loadDetail = (resource: MessageResource, older = false) => this.readDetail(resource, older);
@@ -270,7 +278,7 @@ export class MessagesCoordinator {
         this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
       }
     } catch (error) {
-      if (this.valid(revision, safety) && request === this.detailRevision && (safety || !this.failed(error))) this.show({ detail: (older || safety) && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
+      if (this.valid(revision, safety) && request === this.detailRevision && !this.failed(error, safety)) this.show({ detail: (older || safety) && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
     } finally { this.endRead('detail'); }
   };
   /** Catch up with decimal strings. Every page is authorized; generation prevents cursor/A→B→A publication. */
@@ -313,18 +321,26 @@ export class MessagesCoordinator {
       pending[key] = { ...value, state: 'unknown' };
     }
     const affected = this.snapshot.detail?.resource.kind === 'direct' && this.directPeers.get(this.snapshot.detail.resource.id) === peer;
-    if (affected) ++this.detailRevision;
-    ++this.listRevision; ++this.countsRevision;
     const held = Object.values(pending).some(p => this.safetyHeld(p.packet.resource, p.packet.action));
     this.show({ pending, ...(affected ? { viewGeneration: this.snapshot.viewGeneration + 1 } : {}),
       ...(held ? { notice: 'Блокировка приостановила исходный запрос к этому игроку. Результат остаётся неизвестным; пакет сохранён.' } : {}) });
+    this.rereadPeerSafety(peer, conversationId);
+  };
+  /** Read-only authority refresh after a historical receipt; never changes peer fences. */
+  rereadPeerSafety = (peer: string, conversationId?: string) => {
+    if (!this.snapshot.actor) return;
+    if (conversationId) this.directPeers.set(conversationId, peer);
+    const resource = this.focusResource;
+    const affected = resource?.kind === 'direct' && this.directPeers.get(resource.id) === peer;
+    if (affected) ++this.detailRevision;
+    ++this.listRevision; ++this.countsRevision;
     // Coalesce behind existing reads; their pre-event responses are fenced by the
     // revisions above. Each lane then gets exactly one fresh GET-only followup,
     // including when an unrelated original mutation remains UNKNOWN.
     this.clearSafetyReads();
     const read: SafetyRead = { generation: this.safetyReadGeneration, revision: this.revision, focus: this.focusLease,
-      view: this.snapshot.viewGeneration, peer, blocked, filter: this.snapshot.filter,
-      ...(affected && this.snapshot.detail ? { resource: this.snapshot.detail.resource } : {}) };
+      view: this.snapshot.viewGeneration, peer, blocked: this.safetyPeers.has(peer), filter: this.snapshot.filter,
+      ...(affected && resource ? { resource } : {}) };
     for (const lane of ['inbox', 'counts', ...(read.resource ? ['detail'] as const : [])] as const) this.safetyReads.set(lane, read);
     for (const lane of ['inbox', 'counts', 'detail'] as const) this.runSafetyRead(lane);
   };

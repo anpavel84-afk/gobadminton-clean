@@ -24,7 +24,8 @@ export class SafetyCoordinator {
   private snapshot = empty(null, 0); private generation = 0; private listeners = new Set<() => void>();
   private quarantine: { owner: string; snapshot: Snapshot } | null = null;
   private inFlight: SafetyPacket | null = null;
-  private port: { send: (packet: SafetyPacket, authority: Actor) => Promise<unknown>; verified: (peer: string, blocked: boolean, context: SafetyContext) => void };
+  private port: { send: (packet: SafetyPacket, authority: Actor) => Promise<unknown>; verified: (peer: string, blocked: boolean, context: SafetyContext) => void;
+    reread: (context: SafetyContext, authority: Actor) => void };
   private random: () => string;
   constructor(port: SafetyCoordinator['port'], random: () => string) { this.port = port; this.random = random; }
   getSnapshot = () => this.snapshot;
@@ -113,10 +114,14 @@ export class SafetyCoordinator {
       if ('blocked' in receipt) {
         this.show({ lastBlocks: { ...this.snapshot.lastBlocks, [packet.context.peerId]: receipt.blocked },
           lastNames: { ...this.snapshot.lastNames, [packet.context.peerId]: packet.context.name } });
-        this.port.verified(packet.context.peerId, receipt.blocked, packet.context);
+        // An idempotent replay can return an actor-owned receipt from before a
+        // later external action. It says nothing about the current relationship.
+        if (!reconciling && valid()) this.port.verified(packet.context.peerId, receipt.blocked, packet.context);
       }
+      if (!valid()) return;
       this.show({ command: undefined, dialog: null, detail: '', selected: null, consent: false,
-        notice: packet.action === 'report' ? 'Жалоба отправлена.' : packet.action === 'block' ? 'Игрок заблокирован.' : 'Блокировка снята. Возможность общения проверяется заново.' });
+        notice: packet.action === 'report' ? 'Жалоба отправлена.' : reconciling ? 'Исходное действие подтверждено. Текущее состояние проверяется заново.' : packet.action === 'block' ? 'Игрок заблокирован.' : 'Блокировка снята. Возможность общения проверяется заново.' });
+      if (reconciling && 'blocked' in receipt && this.current(view, actor) && sameContext(this.snapshot.context, packet.context)) this.port.reread(packet.context, actor);
     } catch (error) {
       if (!valid()) return;
       if (!reconciling && error instanceof SafetyError && error.kind === 'business' && !['KEY_REUSED','IDEMPOTENCY_KEY_REUSED'].includes(error.code))

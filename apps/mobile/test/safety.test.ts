@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { SafetyCoordinator, safetyPeerId } from '../src/safety-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { parseSafetyReceipt, REPORT_REASONS, reportDetail, reportable, SafetyError } from '../src/safety.ts';
@@ -12,16 +13,16 @@ const message: DirectMessage = { id: 'incoming', conversationId: 'conversation',
 const report = { reportId: 'ec05b131-750e-4b91-a1a1-425373c3fba0', status: 'submitted', createdAt: '2026-11-14T00:00:00.000Z' };
 const deferred = <T>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { resolve, promise }; };
 function setup() {
-  const calls: { path: string; init: RequestInit }[] = [], effects: unknown[] = [];
+  const calls: { path: string; init: RequestInit }[] = [], effects: unknown[] = [], rereads: unknown[] = [];
   let serial = 0, handler = async (packet: { path: string; init: RequestInit }): Promise<unknown> => packet.path === '/reports' ? report : { publicPlayerId: 'peer', blocked: packet.init.method === 'PUT' };
   const api = createNativeApi(async (url, init) => {
     const call = { path: String(url).replace('https://dev.gobadminton.ru/v1', ''), init: init! }; calls.push(call);
     const result = await handler(call); return result instanceof Response ? result : new Response(JSON.stringify(result));
   });
-  const owner = new SafetyCoordinator({ send: (p, a) => api.safetyMutation(a.actorId, p), verified: (...args) => { effects.push(args); } }, () => `key-${++serial}`);
+  const owner = new SafetyCoordinator({ send: (p, a) => api.safetyMutation(a.actorId, p), verified: (...args) => { effects.push(args); }, reread: (...args) => { rereads.push(args); } }, () => `key-${++serial}`);
   owner.setActor(actor); owner.open(context);
   const view = () => owner.getSnapshot().viewGeneration;
-  return { owner, api, calls, effects, view, handler: (fn: typeof handler) => { handler = fn; } };
+  return { owner, api, calls, effects, rereads, view, handler: (fn: typeof handler) => { handler = fn; } };
 }
 test('exact reasons, blank detail, closed wire projection and strict receipts with no invented target echo', async () => {
   assert.deepEqual(REPORT_REASONS.map(r => [r.code, r.label]), [['harassment','Оскорбления / давление'],['spam','Спам'],['fake_profile','Поддельный профиль'],['inappropriate','Неприемлемый контент'],['other','Другое']]);
@@ -113,7 +114,7 @@ test('double dispatch, network/5xx/in-progress/invalid receipts retain one froze
   }
   s.handler(async () => { throw new Error('timeout'); }); await s.owner.reconcile(v,actor);
   s.handler(async () => ({publicPlayerId:'peer',blocked:true})); await s.owner.reconcile(v,actor);
-  assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.effects.length,1);
+  assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.effects.length,0); assert.deepEqual(s.rereads,[[context,actor]]);
   for (const c of s.calls) { assert.equal(c.init.body,s.calls[0]!.init.body); assert.equal((c.init.headers as Record<string,string>)['Idempotency-Key'],packet.key); }
   s.owner.choose('unblock',v,actor); await s.owner.submit([],v,actor); // wrong boolean is UNKNOWN, never stale block success
   assert.equal(s.owner.getSnapshot().command?.status,'unknown'); assert.doesNotMatch(s.owner.getSnapshot().notice!,/^Игрок заблокирован/);
@@ -169,4 +170,21 @@ test('historical block receipt survives same-owner reauth as history without rep
   assert.equal(s.effects.length, 1); assert.equal(s.calls.length, 1);
   s.owner.choose('unblock', s.view(), returned); await s.owner.submit([], s.view(), returned);
   assert.equal(s.effects.length, 2); assert.deepEqual(s.effects[1], ['peer', false, context]);
+});
+
+test('late historical block reconciliation cannot reread or fence a replaced focus/session or logout', async () => {
+  for (const boundary of ['focus', 'session', 'logout'] as const) {
+    const s = setup(); s.handler(async () => { throw new SafetyError('network'); });
+    s.owner.choose('block', s.view(), actor); await s.owner.submit([], s.view(), actor);
+    const packet = s.owner.getSnapshot().command!.packet, gate = deferred<unknown>();
+    s.handler(async () => gate.promise); const replay = s.owner.reconcile(s.view(), actor);
+    if (boundary === 'focus') { s.owner.blur(s.view()); s.owner.open(context); }
+    if (boundary === 'session') s.owner.setActor({ ...actor, sessionId: 'replaced', generation: 2 });
+    if (boundary === 'logout') s.owner.forget();
+    gate.resolve({ publicPlayerId: 'peer', blocked: true }); await replay;
+    assert.deepEqual(s.effects, []); assert.deepEqual(s.rereads, []); assert.deepEqual(s.owner.getSnapshot().lastBlocks, {});
+    if (boundary !== 'logout') assert.strictEqual(s.owner.getSnapshot().command?.packet, packet);
+    else assert.equal(s.owner.getSnapshot().command, undefined);
+    assert.equal(s.calls.length, 2);
+  }
 });

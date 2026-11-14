@@ -88,6 +88,15 @@ export class AuthCoordinator {
         this.messages.setPeerSafety(peer, blocked, context.conversationId);
         this.players.rereadSafety(peer);
       },
+      reread: (context, authority) => {
+        if (!this.matchesActor(authority)) return;
+        // Replay receipts are history only. Existing reads establish current
+        // authorized views without inventing either a block or an unblock.
+        if (this.contact.getSnapshot().target === context.peerId) void this.contact.open(context.peerId);
+        if (!this.matchesActor(authority)) return;
+        this.messages.rereadPeerSafety(context.peerId, context.conversationId);
+        if (this.matchesActor(authority)) this.players.rereadSafety(context.peerId);
+      },
     }, deps.random);
     this.gameManagement = new GameManagementCoordinator({
       profile: () => this.participationRead(access => deps.api.creatorProfile(access)),

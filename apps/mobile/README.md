@@ -1,3 +1,41 @@
+# #522 native safety ADDRESS3 · SOURCE_CANDIDATE · PARTIAL
+
+Bounded repair on C3 `c78caf422480483e8674d18f0c1e967b748eaa88`.
+C3 parent remains FAIL (`410c86d8028a17290ffcfff02fd47bdddd3002330cad7317e739927f919a9ece`):
+mobile TS2769 at the owning safety test; its 85 units/lint/Expo/archive PASS and
+retained API 8/contracts evidence are historical, not rerun here. The owning test
+now imports genuine Node URL, retaining runtime assertions. Root manual related
+findings `2d898512af306be945dd92cf0e04ab315480908df59860cb7835ab1d79a13927` and
+controlled private404 repro `f616b537819d35f7bf4b441fb663b6a173c766edc7197424be1d6cbe05023e89`
+are addressed as source findings, not independent QA.
+
+- Explicit safety replay finishes the original immutable command, retains its
+  receipt as history and invokes separate read-only contact/messages/players
+  authority reads. It never applies a historical relationship fence or claims a
+  current block/unblock. Fresh verified first-action fences remain.
+- Authoritative safety-only 401/403/404 hides private message DTOs and invalidates
+  stale reads/results while retaining actor-owned UNKNOWN packets and drafts.
+  Network failures retain still-authorized history. Authorized same-owner reads
+  recover the view; only explicit original-packet reconciliation retries a write.
+  Ordinary HOLD, bounded/coalesced GETs and actor/session/focus/logout fences remain.
+
+Author-only Node 24 owning run: 63/64 passed; the new recovery test's malformed
+mock send receipt failed. After correcting that test fixture, targeted followup
+passed 3/3 (recovery plus added stale replay/denial boundaries); the other 63
+accepted checks are reused. Logs retain the failure. No dependency resolution,
+TypeScript/lint/Expo, CI, independent QA, device/build, DB or runtime checks ran here.
+No focused C3 QA ran; Root fresh mobile checks and focused independent original
+three plus related-delta/manual/type closure remain pending, not a second whole QA.
+
+Three prior source runs, manual/protection evidence, first whole FAIL
+`6821f5f535d89ab13d015b3de0af0c622ad113ee7bd2bb79ad672cb3600adea6` and C2 parent
+PASS `cc0f8c81b4b0b52713bfa7d320ac23c07423be7a02a6b54a151abde18087dec5` remain retained.
+Wrapper PARTIAL; full parity MANDATORY_NOT_COMPLETE; Owner FAIL / S23 FAIL;
+native visual NOT_VERIFIED; iOS/real OTA unfinished. Accepted DEV
+`53eafa4cd7013993a4be016c5bf87ee209cae4c3` and app code 7 remain unchanged.
+Only seven admitted paths change; all other export bytes and every earlier README
+byte remain intact. No GitHub/CI/merge/deploy/PROD/runtime action; Root ACK pending.
+
 # #522 native safety ADDRESS2 · SOURCE_CANDIDATE · PARTIAL
 
 Bounded author repair on supplied C2 `210537db62fad94455ac8b84bd60a778d8aa8d5f`.
