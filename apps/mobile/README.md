@@ -1,3 +1,38 @@
+# #522 CURRENT · address3 source maintenance
+
+Supplied actual address2 base: `b2af9342288449261b09d5d74993f78a70c3a451`.
+Address1 `e5a7ca9784a658a99a0c6302a5288b4d0619d8b7` fixed same-owner UNKNOWN
+quarantine while retaining the immutable command key/body. Type-only address2
+`b2af9342288449261b09d5d74993f78a70c3a451` has actual mobile TSC and exact-file
+lint **PASS**, per supplied receipt
+`ba3d544f636e5089f019af96fcd03e4bf931324f86d702ab19b135401d32cf65`.
+Retained evidence: **103/103 mobile units**, **2 Expo exports** (Android/iOS),
+**4/4 management DB cases** and **2/2 Players DB cases**; not rerun by this author.
+
+Positive native coverage for the selected **8** operations is retained, including
+authorized private roster/confirm in the actual management cases. This static
+legacy regression maintenance moves only two old negative sentinels to remaining
+cookie-only neighbors: GET `/v1/me/discovery-preference` keeps **401** and POST
+`/v1/games/:id/cancel` keeps **403**, bearer owner and `{ expectedVersion: 1 }`.
+This avoids premature positive-confirm mutation before the unchanged browser
+confirm, withdraw, capacity and version assertions. No earlier legacy runtime
+failure is claimed; fresh legacy-fixture lint/DB verification remains for Root.
+
+Independent whole-source QA (original B through address3, all four normal source
+attempts), Product/security CI, build/APK4 and a new DEV release remain **NOT_DONE**;
+delivery is **PARTIAL**, Owner UAT **FAIL_RECHECK_PENDING**, native visual
+**NOT_VERIFIED**, full native parity **MANDATORY_NOT_COMPLETE**. Earlier FAIL,
+UNKNOWN and attempt history remains preserved. Native 0.1.0/code4, API 0.44.0,
+schema72, owned5208 and the existing enabled native registry remain unchanged.
+
+## HISTORICAL original a366 source text — preserved verbatim below
+
+The old **Known CI blocker** and check/status statements below describe original
+`a366` source history; the CURRENT prefix above records subsequent evidence and
+this repair. They are not current blocker or release claims.
+
+---
+
 # #522 native create/publish and game management · source candidate on accepted alpha.88
 
 Bounded source work in the private export only, admitted base
