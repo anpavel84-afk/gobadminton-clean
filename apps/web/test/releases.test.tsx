@@ -2011,7 +2011,8 @@ describe("releases page current known limitations SSR (#473)", () => {
     expect(current.textContent).toMatch(/полученного приглашения, принятие и отклонение.*актуальных сведений.*игры по ссылке/);
     expect(current.textContent).toMatch(/«Игры», «Игроки», «Мои игры» и «Сообщения»/);
     expect(current.textContent).toMatch(/сохраняет ранее загруженные страницы и выбранный фильтр/);
-    expect(current.textContent).toMatch(/Начало нового общения, создание и отзыв приглашений, скрытие, жалобы, блокировка, настройки общения и подбор по взаимному интересу ещё обязательны к реализации/);
+    const limits = document.querySelector("[aria-labelledby='releases-limits']")!;
+    expect(limits.textContent).toMatch(/Начало нового общения, создание и отзыв приглашений, скрытие, жалобы, блокировка, настройки общения и подбор по взаимному интересу ещё обязательны к реализации/);
     expect(current.textContent).not.toContain("сообщения ещё не реализованы");
     expect(current.textContent).not.toMatch(/ed778a9932d6ed71c140964470bf8133e9be03be|6b8fedb5918ff25d9b6bc4ea33a04af65812e54d|r43571758154-a1/);
     expect(current.textContent).toMatch(/GoBadminton.*Onest.*чёрный текст на зелёных кнопках/);
