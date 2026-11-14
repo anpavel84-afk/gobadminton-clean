@@ -55,9 +55,9 @@ for file in "${files[@]}"; do
   docker exec "$NAME" dropdb -U gobadminton --if-exists --force "$db"
   docker exec "$NAME" createdb -U gobadminton "$db"
   export DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/$db"
-  # These two historical suites expect an already migrated disposable schema.
+  # These historical and native foundation suites expect an already migrated disposable schema.
   case $(basename "$file") in
-    radar.geographic.test.ts|qa.g1-independent.test.ts)
+    radar.geographic.test.ts|qa.g1-independent.test.ts|native-auth.foundation.test.ts|native-participation.foundation.test.ts)
       pnpm --filter @gobadminton/api exec tsx src/database/migrate.ts ;;
   esac
   report="$ROOT/_out/test-results/$(basename "$file").json"

@@ -59,8 +59,8 @@ export class AdminUserRestrictionsService {
         reversalOf=(await c.query<{audit_id:string}>("SELECT audit_id FROM user_restriction_actions WHERE restriction_id=$1 AND action='restrict'",[restrictionId])).rows[0]!.audit_id;
         await c.query("UPDATE user_restrictions SET revoked_at=clock_timestamp(),revoked_by=$2,revoke_reason_code=$3,version=version+1 WHERE id=$1",[restrictionId,actor.principalId,input.reasonCode]);
       } else {
-        const revoked=await c.query(`UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE user_id=$1 AND audience=$2
-          AND revoked_at IS NULL AND expires_at>clock_timestamp() RETURNING id`,[userId,CONSUMER_AUDIENCE]);
+        const revoked=await c.query(`UPDATE app_sessions SET revoked_at=clock_timestamp() WHERE user_id=$1 AND audience=ANY($2::text[])
+          AND revoked_at IS NULL AND expires_at>clock_timestamp() RETURNING id`,[userId,[CONSUMER_AUDIENCE,"consumer_native"]]);
         revokedCount=revoked.rowCount??0;
         await c.query("DELETE FROM radar_presences WHERE user_id=$1",[userId]);
       }

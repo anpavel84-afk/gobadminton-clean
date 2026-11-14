@@ -1,3 +1,181 @@
+# #522 bounded Games → explicit application → My Games source candidate
+
+This pass adds only native participation request, own pending/confirmed withdrawal,
+all-page own participation reads and managed-game reads. Four existing API controller
+operations opt into verified native principals; manager/applicant-list routes keep
+cookie-only authority and browser mutations keep Origin/CSRF. Public catalog/detail
+requests remain credential-free. Existing auth protocol, services, MutationRunner,
+registry, flag defaults, migrations, dependencies, assets and release files are unchanged.
+
+- Game detail rereads current public conditions and every own participation cursor page.
+  Login returns to the same game without POST. A separate review and explicit confirmation
+  sends expectedGameVersion and a random idempotency key. Pending does not reserve a place.
+  Own pending/confirmed withdrawal reviews the action and sends expectedVersion.
+- Root-owned participation state survives route unmount/navigation. Sending/UNKNOWN holds
+  one frozen actor/session/game/participation/body/key packet; reads cannot replay it or
+  create a new key. No unresolved retry is offered. Rereads may reveal pending/confirmed
+  request or withdrawn result; otherwise the packet remains honestly unresolved and blocked.
+  Unsent review intent stays with its game. Logout, account switch and authority loss clear
+  private rows/commands; stale reads and callbacks cannot restore them. This route-state
+  memory is not a durable offline command journal or a claim of process-kill recovery.
+- `/my-games`, reachable in the existing product header, combines owner/manager projection
+  from `/me/games` with applications, deduped by gameId. Real filters cover all, managed,
+  applications, pending and confirmed. Existing native cards render actual available data;
+  unavailable public details remain unavailable, including private/unlisted detail reads.
+  Partial/failed cursor sources remain explicit and never become an empty list. Managed
+  cards are read-only; organizer.id does not grant management. No fake management or chat.
+
+Author selfchecks: `node --experimental-strip-types --test --test-isolation=none
+apps/mobile/test/*.test.ts` — **47/47 PASS**, including 10 targeted participation tests
+and all retained assertions. A focused initial run found incorrect 401 error classification;
+it was corrected and the focused/full units passed. Final related auth/participation
+rerun after session-fence hardening: **21/21 PASS**. OpenAPI JSON/source selfcheck
+confirmed exactly four opt-ins, preserved cookie/manager boundaries and unchanged 0.44.0. API integration source uses fake OAuth
+and the existing disposable PostGIS pattern; it is **NOT_TESTED** here. No `.git`,
+node_modules, tsc or eslint is available in this export. No install/download/Corepack,
+real DB/SMTP/DEV/provider/device/network call or baseline reconstruction was performed.
+Parent must run actual API integration, contracts/security/Product CI, mobile typecheck,
+lint/exports, independent QA, builds, DEV acceptance/smoke and release stage.
+
+**Source only; no alpha86 release receipt.** Accepted server remains supplied
+`fd9c4cfa2a14694fc6cf3d1f4d8b3f60c0a8d210` / alpha85 / API0.43; source native auth API0.44
+and migration72 remain undeployed/disabled. Default native flag0; PROD unavailable.
+Samsung S23 Owner FAIL / recheck pending and native visual NOT_VERIFIED remain.
+Mandatory full Android-first/iOS parity is unfinished: management/create, invitations,
+recommendations, postgame, Players/Messages, full discovery/date/filters/map, profile
+editing/link/reauth, venues/Radar and other accepted surfaces still require later ports.
+Actual Android/iOS binary, verified associations/provider lifecycle, store/OTA proof,
+independent QA/CI and Owner device/UAT are not established by these unit tests.
+
+All prior attempts, timeout/QA lineage and limitations are retained below as history.
+
+---
+
+# GoBadminton native #522 · current auth/profile SOURCE ONLY · 2026-11-14
+
+This bounded candidate adds one persistent root AuthProvider/session coordinator,
+system-browser PKCE sign-in source, real NativeMe/profile and owned-session lifecycle,
+exact HTTPS callback handling and Android association source. It uses qualified backend
+`05602db92f3c864d263218992d10963f2650d31b`; supplied Root focused security PASS closes the
+two retained backend whole FAIL findings without deleting their history. **Not deployed,
+not independently reviewed, not full product parity.** Native flag remains default0,
+registry/live auth/PROD are unavailable. **Samsung S23 Owner FAIL remains; native visual
+NOT_VERIFIED; full Android-first/iOS native parity MANDATORY_NOT_COMPLETE.**
+
+Current working source destinations: optional intro, manual city, real upcoming public
+games with pagination/errors/retry, direct public game conditions and `/profile`.
+One canonical SVG replaces the separate product wordmark; E lockup remains intro only.
+Header provides city/profile access and contextual Back. Card source now has overlay
+activity badge when genuine media exists, actual available/total seats, Trainer before
+Organizer, accepted arrow and user-initiated RN Share of the canonical public game URL.
+Share cancellation/failure is honest; manual selectable URL fallback contains no current
+queries. No fake photos, reputation, counts, application action or inert root tabs.
+
+The coordinator stores refresh and version1 pending PKCE in SecureStore
+`gobadminton.mobile.auth.v1`, never AsyncStorage; access remains in memory. Legacy city/
+story preferences are unchanged. Unknown secure versions are preserved and fail closed.
+There is no disk Me cache. Identity/session rows are exposed only for the exact verified
+secure actor/session after durable refresh commit. Hydration has an allocated placeholder.
+Refresh is singleflight; durable one-use consumption before dispatch means lost response,
+process death or commit failure requires fresh sign-in. Generation fences cover callbacks,
+rotation, private reads and serialized secure writes. Logout clears private memory at once,
+queues secure clear and attempts one bounded remote revoke; remote/storage failure is
+explicitly unconfirmed, with no persisted credential retry queue.
+
+Sign-in requests truthful GET `/auth/methods`, then native `/transactions`; native default-off
+returns unavailable and keeps the game intent. Only the exact Root-reviewed HTTPS tuple
+`gobadminton-native-dev` / `https://dev.gobadminton.ru/auth/native/callback` is accepted.
+Crypto is expo-crypto random32 + S256; callback checks unique code/state, expiry and pending
+generation, and duplicate Linking/WebBrowser delivery exchanges once. Router native-intent
+consumes callback before navigation; sanitized callback screen never reads credentials.
+Native never calls browser bind/complete/cancel, sets Origin, adds cookies or bypasses guards.
+Login returns to the SAME canonical game and rereads public conditions; zero auto-join/
+apply/create. Current bearer operations are ONLY `/me` and owned sessions list/revoke/
+revoke-others. Profile shows actual id-derived identity displayName/locale/linkedProviders
+and session lifecycle, with no invented email/photo/edit capability.
+
+Android exact-path autoVerify + source assetlinks use package `ru.gobadminton.mobile.dev`
+and ONLY owned public SHA256
+`5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`.
+This is not live association/registry/signing/device verification. iOS Team/AASA is absent:
+no fake entitlement or custom-scheme auth fallback; verified iOS callback runtime is HOLD.
+The web callback fallback does not read/render/log raw URL/code and removes its query.
+No credentials, providers, SMTP, live writes, browser/device actions or package downloads
+were used by this author. The private export has no .git or dependencies; no source SHA,
+commit, lock resolution, release, merge or DEV acceptance is claimed.
+
+Dependency manifest only: Crypto ~58.0.8, SecureStore ~58.0.3, WebBrowser ~58.0.8; installed
+baseline Linking58.0.17/Expo58.0.25/RN0.88.1/React19.3.0/Router58.0.31 retained. These new
+ranges are supplied installed SDK compatibility, not exact resolved patches. Trusted
+parent generates the lock and verifies binary integration. `@gobadminton/contracts/native-auth`
+is a pure type-only subpath with typesVersions; root node:fs never enters mobile.
+No expo-updates dependency/config/remote config/OTA implementation in this auth slice.
+The mandatory next standard signed-update foundation, backward compatibility, four eventual
+roots and scenario table are reconciled in `docs/platforms/IOS_ANDROID.md` and
+`docs/integrations/AUTH.md`, retaining historical text. Owned service/account/trust readiness
+is UNKNOWN; default disabled, embedded last-working fallback, next-natural-cold-launch-only
+policy, no hot auth/form replacement. Owner same-binary signed OTA A→B proof is **NOT_DONE**.
+
+## Current author checks and remaining gates
+
+- PASS: Node24.21.0 dependency-free units, **37 named tests (26 retained + 11 new), 0 failures**:
+  `node --experimental-strip-types --test --test-isolation=none apps/mobile/test/*.test.ts`.
+  New tests cover RFC S256, exact/duplicate/expired callback, actual NativeMe wire fields,
+  storage version/restart, singleflight rotation, lost exchange/refresh response, stale actor/
+  logout/private completion, secure write ordering/failure and same-game return with zero mutation.
+- PASS: direct deterministic JSON assertions for exact Android callback/package/owned certificate,
+  absent fake iOS association, SDK58 manifest ranges, pure contracts export/typesVersions,
+  and no expo-updates implementation. This is source consistency, not association/device proof.
+- Initial new-test execution FAIL: Node strip-only rejected a TypeScript parameter property.
+  Replaced it with an ordinary typed field; subsequent focused and full named tests PASS.
+  This failed author attempt remains recorded; it was not a provider/model call or independent QA.
+- NOT_TESTED: typecheck, lint, Expo Android/iOS exports, native builds, existing backend/security
+  runtime suites, Product/security CI, DEV smoke and real auth lifecycle. No node_modules,
+  tsc or eslint is installed here; installation/download/lock/SDK actions are forbidden.
+- NOT_DONE: independent QA, CI, trusted generated lock, verified Android registration/sign-in/
+  restart/logout, actual device visual/UAT. No ready/active/release claim follows unit PASS.
+
+Mandatory concrete product gaps: working Players/My Games/Messages roots; game applications,
+withdraw/organizer/create, full discovery date/filters/map; explicit bearer ports for each
+private operation; profile edits/reauth/link/email/avatar; venues/maps/Radar; UGC/results and
+remaining accepted consumer behavior. Card avatar and real role-reputation/history disclosure
+are not ported; no invented replacement controls were added. Full card/disclosure/layout parity
+and Samsung S23 recheck remain required. iOS Team/AASA/signing/macOS readiness, store compliance
+and actual signed OTA service/A→B proof are external holds, not waived requirements.
+
+Exact changed paths for this bounded client pass (22; no lock/backend/CI/OPS/old asset edits):
+
+```text
+apps/mobile/package.json
+apps/mobile/app.json
+apps/mobile/README.md
+apps/mobile/app/_layout.tsx
+apps/mobile/app/+native-intent.tsx
+apps/mobile/app/auth/native/callback.tsx
+apps/mobile/app/profile.tsx
+apps/mobile/app/games/[id].tsx
+apps/mobile/src/native-auth-protocol.ts
+apps/mobile/src/native-api.ts
+apps/mobile/src/auth-coordinator.ts
+apps/mobile/src/auth-runtime.ts
+apps/mobile/src/auth.tsx
+apps/mobile/src/components/ui.tsx
+apps/mobile/src/components/game-card.tsx
+apps/mobile/src/components/discovery-icon.tsx
+apps/mobile/test/auth.test.ts
+packages/contracts/package.json
+apps/web/public/.well-known/assetlinks.json
+apps/web/src/app/auth/native/callback/page.tsx
+docs/platforms/IOS_ANDROID.md
+docs/integrations/AUTH.md
+```
+
+Repository instruction lookup found no root or scoped AGENTS.md in this private export.
+Web fallback follows the supplied hash-pinned installed Next page guide; no unavailable
+original worktree, baseline reconstruction, secret or live runtime was accessed.
+
+## Historical source/QA/harness lineage (preserved below)
+
 # GoBadminton native M1 · #522 · E «Траектория»
 
 React Native + managed Expo Router foundation on accepted alpha84
@@ -132,3 +310,95 @@ Address1 changed files (all relative to `apps/mobile/`): `package.json`, `app.js
 `src/upcoming.ts`, `test/native-contract.test.ts`, `test/public-api.test.ts`,
 `test/presentation.test.ts`, `test/upcoming.test.ts`, and this README. The private
 export has no `.git`; no new commit SHA or branch verification is claimed.
+
+## #522 bounded compact correction · 2026-11-14
+
+The Owner rejected M1 product scope and compact rendering on Samsung S23.
+Historical compiler/QA/CI/APK/server evidence above remains historical technical
+evidence; it is **not full native product acceptance**. This source repair follows
+the fully read Root compact specification
+`ab7f3dd8d50c216afaf1b65ed36317f8d7f203939b51cf3e8d899c0809baa529`.
+The exact S23 logical viewport, font scale, density and navigation mode are unknown.
+
+E is now **intro only**. Its approved assets, wordmark, purple surface and black
+labels on green primary buttons remain. Skip shares the persistent brand header;
+three progress marks, centered two-part title/lime emphasis and grouped actions
+replace the separate nine-child composition. Artwork consumes the space left
+by the measured text and actions below the measured header, with logical window
+width/height/fontScale and all four safe edges. Decoration may disappear on short
+windows; enlarged text and actions retain natural sizing and scroll in the purple
+surface. This sizing policy is not a rendered fit/device PASS.
+
+Existing guest screens use accepted mobile-web hierarchy and tokens directly
+read from these owning references (read-only):
+
+- `apps/web/src/components/consumer/{ConsumerShell,RootNav,NavIcon,Logo}.tsx`, `nav-items.ts`
+  and `styles/{consumer-tokens,foundation,mobile-controls}.css`: white persistent
+  header, 16dp product gutters, ink/secondary text, line colors and bordered controls.
+- `pages/GamesDiscoveryPage.tsx`, `discovery/{DiscoveryComposition,DiscoveryGameCard}.tsx`
+  and `styles/discovery.css`: compact copy without E art, city/current date scope,
+  210dp cover when published media exists, date/time/title/venue/terms/host hierarchy.
+- `games/GameCover.tsx` and `venues/VenueCover.tsx`: only server-projected
+  `/v1/media/game-covers/<64 lowercase hex>.png` and venue equivalents are accepted.
+  The detail CTA arrow ports the exact path from `apps/web/public/discovery/arrow.svg`
+  through native SVG primitives. Relative paths resolve only against the fixed DEV API origin. No arbitrary remote
+  URL, provider image or stock illustration is introduced. Missing media renders no
+  fabricated photo; failed images have a real retry, with game-to-venue fallback.
+
+The city input is near the top, below fixed chrome, and selection dismisses the
+keyboard. The catalog owns one FlatList with stable IDs, explicit pagination and
+existing request/expiry fences; Back keeps the existing mounted feed. Direct
+public detail remains independent of entry/city preferences. No private API,
+authentication, mutation, fake actions, tabs or new destinations were added.
+The “Когда / Все ближайшие” block is a static description of the real query,
+not a date-picker control. Full date/filter behavior is still missing parity.
+
+The original **22 named tests remain**, with assertions adapted for persistent
+chrome/FlatList and stronger presence checks. Four additional pure regressions
+cover compact layout allocation, short/enlarged layouts, the safe media policy
+through real DTO parsing, and card date/city presentation. Synthetic group sizes
+are function inputs, not recorded native measurements. Source assertions are not
+rendering proof. No tests/builds were run in this bounded author pass: the parent
+owns execution, and this private export has no node_modules or .git. No installation,
+network, SDK/Gradle, provider, GitHub, publication or deployment call was made.
+
+| Current compact handoff | Status |
+|---|---|
+| Source | BOUNDED_CANDIDATE; independent QA pending |
+| 22 existing + 4 added tests | NOT_TESTED by this author; parent execution required |
+| Typecheck / lint / Expo exports / native builds | NOT_TESTED; parent execution required |
+| Native compact 360×780, 393×~850 at 1.0/1.3/2.0; short landscape | NOT_TESTED |
+| Keyboard, Cyrillic font weights, gesture/3-button navigation contrast | NOT_TESTED |
+| Samsung S23 visual recheck / Owner product validation | NOT_TESTED / existing FAIL retained |
+| Full native parity / #522 | UNFINISHED / OPEN, InProgress |
+
+Next mandatory work remains real four-tab navigation and its destinations, native
+auth/profile, Players, My games, Messages, full game filters/date/map/create/share,
+join/participation/organizer flows, venues/Radar and accepted UGC behavior, with
+existing privacy/role boundaries. Profile is not a fifth bottom tab. This compact
+patch cannot establish full parity or close #522. Trusted parent still owns native
+captures (with actual logical dimensions, scale, density, safe edges and OS/nav-mode
+metadata), independent QA/CI, build/import/commit and any accepted DEV release.
+
+Exact changed paths for this compact source pass (no generated/release files):
+
+```text
+apps/mobile/app/+not-found.tsx
+apps/mobile/app/city.tsx
+apps/mobile/app/games/[id].tsx
+apps/mobile/app/games/index.tsx
+apps/mobile/app/story.tsx
+apps/mobile/src/components/discovery-icon.tsx
+apps/mobile/src/components/game-card.tsx
+apps/mobile/src/components/ui.tsx
+apps/mobile/src/layout.ts
+apps/mobile/src/media.ts
+apps/mobile/src/presentation.ts
+apps/mobile/src/public-api.ts
+apps/mobile/src/theme.ts
+apps/mobile/test/compact-layout.test.ts
+apps/mobile/test/media.test.ts
+apps/mobile/test/native-contract.test.ts
+apps/mobile/test/presentation.test.ts
+apps/mobile/README.md
+```

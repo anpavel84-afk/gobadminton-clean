@@ -4,7 +4,7 @@ import copy
 import json
 import unittest
 
-from check_foundation import ROOT, contract_errors, markdown_errors, repository_files
+from check_foundation import ROOT, NATIVE_PROOF_COMMANDS, contract_errors, markdown_errors, repository_files
 
 
 class FoundationExceptionsTest(unittest.TestCase):
@@ -26,6 +26,119 @@ class FoundationExceptionsTest(unittest.TestCase):
         # MutationRunner receipts. Any regression must produce a fresh finding.
         self.assertEqual(self.findings(), [])
         self.assertEqual(sum(len(markdown_errors(p)) for p in repository_files() if p.suffix == '.md'), 0)
+
+    def test_native_protocol_exact_seven_fail_closed(self):
+        # Mutate real declarations, including non-mutating moved methods: a protocol
+        # marker must never provide a generic /auth/native/ policy escape.
+        for route in NATIVE_PROOF_COMMANDS:
+            for change in ('moved route', 'unknown native route', 'method put', 'method get',
+                           'missing marker', 'wrong marker', 'missing operation', 'wrong operation',
+                           'inherited security', 'wrong security', 'anonymous alternative',
+                           'missing body', 'optional body', 'missing json', 'extra content',
+                           'missing schema', 'wrong schema', 'null schema', 'credentials'):
+                with self.subTest(route=route, change=change):
+                    self.document = copy.deepcopy(self.contract)
+                    item = self.document['paths'][route]
+                    op = item['post']
+                    target, method = route, 'POST'
+                    if change in ('moved route', 'unknown native route'):
+                        target = '/unrelated/proof' if change == 'moved route' else route + '/unknown'
+                        self.document['paths'][target] = self.document['paths'].pop(route)
+                    elif change.startswith('method '):
+                        method = change.split()[1].upper()
+                        item[method.lower()] = item.pop('post')
+                    elif change == 'missing marker': op.pop('x-native-auth-protocol')
+                    elif change == 'wrong marker': op['x-native-auth-protocol'] = 'bound-single-use-v1'
+                    elif change == 'missing operation': op.pop('operationId')
+                    elif change == 'wrong operation': op['operationId'] = 'inventedProof'
+                    elif change == 'inherited security': op.pop('security')
+                    elif change == 'wrong security': op['security'] = [{'bearerSession': []}]
+                    elif change == 'anonymous alternative': op['security'].append({})
+                    elif change == 'missing body': op.pop('requestBody')
+                    elif change == 'optional body': op['requestBody']['required'] = False
+                    elif change == 'missing json': op['requestBody']['content'] = {}
+                    elif change == 'extra content': op['requestBody']['content']['text/plain'] = {}
+                    elif change == 'missing schema': op['requestBody']['content']['application/json'].pop('schema')
+                    elif change == 'wrong schema': op['requestBody']['content']['application/json']['schema'] = {'type': 'string'}
+                    elif change == 'null schema': op['requestBody']['content']['application/json']['schema'] = None
+                    elif change == 'credentials': op.pop('x-native-credentials')
+                    self.assertIn(f'{method} {target}: invalid closed native proof protocol declaration', self.findings())
+                    if method != 'GET': self.assert_idempotency(target, method)
+            with self.subTest(route=route, change='missing route'):
+                self.document = copy.deepcopy(self.contract)
+                self.document['paths'].pop(route)
+                self.assertIn(f'POST {route}: missing closed native proof protocol command', self.findings())
+
+    def test_native_proof_body_field_constraints(self):
+        for route, (_, schema_name) in NATIVE_PROOF_COMMANDS.items():
+            for change in ('type', 'required', 'properties', 'constraint', 'additional properties'):
+                with self.subTest(route=route, change=change):
+                    self.document = copy.deepcopy(self.contract)
+                    op = self.document['paths'][route]['post']
+                    schema = (self.document['components']['schemas'][schema_name] if schema_name
+                              else op['requestBody']['content']['application/json']['schema'])
+                    if change == 'type': schema['type'] = 'string'
+                    elif change == 'required':
+                        schema['required'] = [] if schema_name else ['invented']
+                    elif change == 'properties': schema['properties']['invented'] = {'type': 'string'}
+                    elif change == 'constraint':
+                        if schema_name: schema['properties']['clientId'].pop('pattern')
+                        else: schema.pop('properties')
+                    elif change == 'additional properties': schema['additionalProperties'] = True
+                    self.assert_idempotency(route)
+        # Optional fields still carry binding/credential constraints.
+        for schema_name, field in [('NativeTransactionRequest', 'returnPath'),
+                                   ('NativeTransactionRequest', 'codeChallenge'),
+                                   ('NativeTransactionRequest', 'codeChallengeMethod'),
+                                   ('NativeExchangeRequest', 'verifier'),
+                                   ('NativeLogoutRequest', 'refreshToken')]:
+            with self.subTest(schema=schema_name, field=field):
+                self.document = copy.deepcopy(self.contract)
+                self.document['components']['schemas'][schema_name]['properties'][field] = {'type': 'string'}
+                route = next(r for r, (_, name) in NATIVE_PROOF_COMMANDS.items() if name == schema_name)
+                self.assert_idempotency(route)
+
+    def test_native_browser_binding_and_complete_csrf(self):
+        for route, (_, schema_name) in NATIVE_PROOF_COMMANDS.items():
+            if schema_name: continue
+            original = self.contract['paths'][route]['post']
+            for parameter in original['parameters']:
+                for change in ('missing', 'required', 'schema'):
+                    with self.subTest(route=route, parameter=parameter['name'], change=change):
+                        self.document = copy.deepcopy(self.contract)
+                        op = self.document['paths'][route]['post']
+                        p = next(p for p in op['parameters'] if p['name'] == parameter['name'])
+                        if change == 'missing': op['parameters'].remove(p)
+                        elif change == 'required': p['required'] = not p['required']
+                        else: p['schema'] = {'type': 'integer'}
+                        self.assert_idempotency(route)
+            self.document = copy.deepcopy(self.contract)
+            self.document['paths'][route]['post'].pop('x-native-browser-binding')
+            self.assert_idempotency(route)
+        complete = '/auth/native/transactions/{transactionId}/complete'
+        for name in ('cookieSession', 'NativeBindingCookie'):
+            for change in ('missing', 'type', 'in', 'name', 'alternative'):
+                with self.subTest(scheme=name, change=change):
+                    self.document = copy.deepcopy(self.contract)
+                    schemes = self.document['components']['securitySchemes']
+                    if change == 'missing': schemes.pop(name)
+                    elif change == 'alternative':
+                        self.document['paths'][complete]['post']['security'] = [{name: []}]
+                    else: schemes[name][change] = 'wrong'
+                    self.assert_idempotency(complete)
+        self.document = copy.deepcopy(self.contract)
+        op = self.document['paths'][complete]['post']
+        op['parameters'] = [p for p in op['parameters'] if p['name'] != 'X-CSRF-Token']
+        self.assertIn(f'POST {complete}: cookie mutation needs declared CSRF behavior', self.findings())
+
+    def test_native_marker_cannot_exempt_business_mutation(self):
+        route = '/me/role-reviews'
+        op = self.document['paths'][route]['post']
+        op['x-native-auth-protocol'] = 'native-pkce-bound-single-use-v1'
+        op['parameters'] = [p for p in op['parameters'] if p.get('name') not in ('Idempotency-Key', 'X-CSRF-Token')
+                            and p.get('$ref') not in ('#/components/parameters/IdempotencyKey', '#/components/parameters/CsrfToken')]
+        self.assert_idempotency(route)
+        self.assertIn(f'POST {route}: cookie mutation needs declared CSRF behavior', self.findings())
 
     def test_dev_qa_key_closed_protocol(self):
         route = '/admin/auth/dev-qa-key'
@@ -144,7 +257,8 @@ class FoundationExceptionsTest(unittest.TestCase):
                 self.document = copy.deepcopy(self.contract)
                 op = self.document['paths'][route]['delete']
                 self.assertNotIn('requestBody', op)
-                self.assertEqual(op['security'], [{'cookieSession': []}])
+                self.assertEqual(op['security'], [{'cookieSession': []}, {'NativeBearer': []}]
+                                 if route == '/me/sessions/{sessionId}' else [{'cookieSession': []}])
                 for name in ['Origin', 'X-CSRF-Token']:
                     self.assertTrue(next(p for p in op['parameters'] if p.get('name') == name)['required'])
                 for change in ['missing', 'optional']:

@@ -65,3 +65,5 @@ export {
   isRegionalCityId,
 } from "./regional-cities.js";
 export type { RegionalCity, RegionalCityId } from "./regional-cities.js";
+
+export type * from "./native-auth.js";

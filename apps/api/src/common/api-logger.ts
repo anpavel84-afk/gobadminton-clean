@@ -5,7 +5,8 @@ import type { FastifyServerOptions } from "fastify";
 // Keep the raw request untouched: OAuth handlers still receive code and state.
 export const apiLogger: FastifyServerOptions["logger"] = {
   serializers: {
-    req: (req) => ({ method: req.method, path: String(req.url ?? "").split(/[?#]/, 1)[0] }),
+    req: (req) => ({ method: req.method, path: String(req.url ?? "").split(/[?#]/, 1)[0]!
+      .replace(/^(\/v1\/auth\/native\/transactions\/)[^/]+/, "$1[REDACTED]") }),
     res: (res) => ({ statusCode: res.statusCode }),
     err: () => ({ type: "RequestError", message: "Request failed", stack: "Error details suppressed" }),
   },

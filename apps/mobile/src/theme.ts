@@ -2,10 +2,10 @@ export const colors = {
   purple: '#7945DE', lime: '#A7F447', primaryLabel: '#000000', pressed: '#94DE37',
   disabled: '#C9DDB1', disabledBorder: '#8B9C78', paper: '#F5F6F2', card: '#FFFFFF',
   ink: '#13221A', secondary: '#536159', lavender: '#EEE6FF', purpleInk: '#6131B5',
-  cityInk: '#4C2A8B', onPurple: '#FFFFFF', storyBody: '#F0E9FF',
+  line: '#DFE4DC', lineDark: '#CBD3CA', limeSoft: '#EAFFCD', onPurple: '#FFFFFF', storyBody: '#F0E9FF',
 } as const;
 export const typography = { fontFamily: 'Onest', allowFontScaling: true } as const;
-export const primaryLabelStyle = { color: '#000000', opacity: 1, fontFamily: 'Onest', fontSize: 16, lineHeight: 23, textAlign: 'center' } as const;
+export const primaryLabelStyle = { color: '#000000', opacity: 1, fontFamily: 'Onest', fontSize: 16, lineHeight: 23, fontWeight: '700', textAlign: 'center' } as const;
 export function primarySurface(disabled: boolean, pressed: boolean) {
   return {
     backgroundColor: disabled ? colors.disabled : pressed ? colors.pressed : colors.lime,

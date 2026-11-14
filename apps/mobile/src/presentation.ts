@@ -1,5 +1,9 @@
 import type { PublicGame } from './public-api.ts';
 
+export function canShareGame(game: Pick<PublicGame, 'status' | 'visibility'>): boolean {
+  return game.status === 'published' && game.visibility === 'public';
+}
+
 // Pure native subset of web discovery-presentation.ts/discoveryFormat.
 // Unsupported keys have no consumer label and are omitted.
 export function formatLabel(key: string): string | null {
@@ -61,4 +65,15 @@ export function settlementLabel(game: PublicGame) {
 }
 export function statusLabel(game: PublicGame) {
   return { published: 'Опубликована', cancelled: 'Отменена', completed: 'Завершена', draft: 'Черновик' }[game.status];
+}
+
+/** Accepted discovery date/time hierarchy, always in the game's actual timezone. */
+export function cardWhen(game: PublicGame) {
+  return {
+    day: new Intl.DateTimeFormat('ru-RU', { timeZone: game.timezone, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(game.startsAt)),
+    time: `${new Intl.DateTimeFormat('ru-RU', { timeZone: game.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(game.startsAt))} — ${new Intl.DateTimeFormat('ru-RU', { timeZone: game.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(game.endsAt))}`,
+  };
+}
+export function discoveryCityHeading(name: string) {
+  return name === 'Москва' ? 'в Москве' : name === 'Санкт-Петербург' ? 'в Санкт-Петербурге' : `· ${name}`;
 }

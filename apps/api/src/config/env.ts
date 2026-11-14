@@ -1,3 +1,4 @@
+import { parseNativeClients } from "../auth/native-auth-security";
 import { z } from "zod";
 
 const appEnvSchema = z.enum(["local", "mvp", "stage", "prod"]);
@@ -57,6 +58,8 @@ export const envSchema = z
           "PUBLIC_WEB_ORIGIN must be a hostname (or loopback). Do not hard-code a public VPS IP.",
       }),
     ALLOWED_WEB_ORIGINS: z.string().optional(),
+    NATIVE_AUTH_ENABLED: z.enum(["0", "1"]).default("0"),
+    NATIVE_AUTH_CLIENTS_JSON: z.string().max(16384).default("[]"),
     AUTH_PEPPER: z
       .string()
       .min(32, "AUTH_PEPPER must be at least 32 characters")
@@ -206,6 +209,17 @@ export const envSchema = z
       ),
   })
   .superRefine((raw, ctx) => {
+    try {
+      const clients = parseNativeClients(raw.NATIVE_AUTH_CLIENTS_JSON);
+      if (raw.NATIVE_AUTH_ENABLED === "1") {
+        const origins = [raw.PUBLIC_WEB_ORIGIN, raw.PUBLIC_API_ORIGIN, ...splitCsv(raw.ALLOWED_WEB_ORIGINS)];
+        const local = raw.NODE_ENV === "test" && raw.APP_ENV === "local" &&
+          origins.every(origin => { const url = new URL(origin); return url.origin === origin && url.protocol === "https:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname); });
+        const dev = ["mvp", "stage"].includes(raw.APP_ENV) && origins.every(origin => origin === "https://dev.gobadminton.ru");
+        if (!clients.length || raw.APP_ENV === "prod" || (!local && !dev) || raw.COOKIE_SECURE === false || (local && raw.COOKIE_SECURE !== true)) throw new Error("Native auth requires secure local test or exact DEV; PROD forbidden");
+      }
+    } catch { ctx.addIssue({ code: "custom", path: ["NATIVE_AUTH_CLIENTS_JSON"], message: "Invalid native registry or environment; native PROD unavailable" }); }
+
     if (raw.FRIENDS_INTERNAL_ENABLED === "1" && (raw.NODE_ENV === "production" || raw.APP_ENV === "prod")) {
       const dev = ["mvp", "stage"].includes(raw.APP_ENV)
         && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
@@ -358,6 +372,8 @@ export const envSchema = z
       PUBLIC_API_ORIGIN: raw.PUBLIC_API_ORIGIN,
       PUBLIC_WEB_ORIGIN: raw.PUBLIC_WEB_ORIGIN,
       ALLOWED_WEB_ORIGINS: allowedWebOrigins,
+      NATIVE_AUTH_ENABLED: raw.NATIVE_AUTH_ENABLED === "1",
+      NATIVE_AUTH_CLIENTS: parseNativeClients(raw.NATIVE_AUTH_CLIENTS_JSON),
       AUTH_PEPPER: raw.AUTH_PEPPER,
       CASES_INTERNAL_ENABLED: raw.CASES_INTERNAL_ENABLED === "1",
       CASE_EVIDENCE_SYNTHETIC_TTL_SECONDS: raw.CASE_EVIDENCE_SYNTHETIC_TTL_SECONDS,

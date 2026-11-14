@@ -1,4 +1,7 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { NativeSessionService } from "./native-session.service";
+import { explicitBearer } from "./native-auth-security";
+import { CONSUMER_AUDIENCE } from "./constants";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import type { AppEnv } from "../config/env";
 import { APP_ENV } from "../tokens";
@@ -19,9 +22,11 @@ export class ConsumerAuthService {
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly sessions: SessionService,
     private readonly identities: IdentityService,
+    @Optional() private readonly native?: NativeSessionService,
   ) {}
 
   async requireSession(request: FastifyRequest): Promise<AuthenticatedConsumer> {
+    if (request.headers.authorization !== undefined) throw unauthorized("BEARER_NOT_ALLOWED");
     const sessionToken = readCookie(request, SESSION_COOKIE);
     if (!sessionToken) throw unauthorized();
     const session = await this.sessions.lookupActiveSession(sessionToken);
@@ -31,6 +36,25 @@ export class ConsumerAuthService {
       throw unauthorized("ACCOUNT_INACTIVE", "Аккаунт недоступен");
     }
     return { userId: session.userId, sessionId: session.id };
+  }
+
+  /** Explicit route opt-in only. Invalid explicit bearer never falls back to cookie/guest. */
+  async requirePrincipal(request: FastifyRequest) {
+    const bearer = explicitBearer(request);
+    if (bearer !== null) {
+      if (!this.native) throw unauthorized();
+      return this.native.lookup(bearer);
+    }
+    return { ...await this.requireSession(request), audience: CONSUMER_AUDIENCE, transport: "cookie" as const };
+  }
+
+  async requirePrincipalMutation(request: FastifyRequest) {
+    const bearer = explicitBearer(request);
+    if (bearer !== null) {
+      if (!this.native) throw unauthorized();
+      return this.native.lookup(bearer);
+    }
+    return { ...await this.requireCookieMutation(request), audience: CONSUMER_AUDIENCE, transport: "cookie" as const };
   }
 
   async requireCookieMutation(
@@ -57,6 +81,7 @@ export class ConsumerAuthService {
   async optionalSession(
     request: FastifyRequest,
   ): Promise<AuthenticatedConsumer | null> {
+    if (request.headers.authorization !== undefined) throw unauthorized("BEARER_NOT_ALLOWED");
     const sessionToken = readCookie(request, SESSION_COOKIE);
     if (!sessionToken) return null;
     const session = await this.sessions.lookupActiveSession(sessionToken);

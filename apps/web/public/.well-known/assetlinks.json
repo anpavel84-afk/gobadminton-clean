@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ru.gobadminton.mobile.dev",
+      "sha256_cert_fingerprints": ["52:08:FA:BA:0B:47:4C:6C:94:E4:C2:37:CB:C3:45:A1:0C:7D:3D:0F:5B:3E:B2:85:AC:8E:27:1F:9B:D8:C0:51"]
+    }
+  }
+]

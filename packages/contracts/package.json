@@ -9,7 +9,8 @@
     "./package.json": "./package.json",
     "./game-types": "./src/game.generated.ts",
     "./friendship-types": "./src/friendship.generated.ts",
-    "./regional-cities": "./src/regional-cities.ts"
+    "./regional-cities": "./src/regional-cities.ts",
+    "./native-auth": "./src/native-auth.ts"
   },
   "scripts": {
     "check": "node ./scripts/check-openapi.mjs",
@@ -35,6 +36,9 @@
       ],
       "regional-cities": [
         "src/regional-cities.ts"
+      ],
+      "native-auth": [
+        "src/native-auth.ts"
       ]
     }
   }

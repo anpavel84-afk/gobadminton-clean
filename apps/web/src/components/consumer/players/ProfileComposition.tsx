@@ -118,7 +118,11 @@ export function ProfileDialog({ title, onClose, children, size = "normal", class
   return <dialog ref={ref} className={classes} aria-label={title} aria-describedby={describedBy} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header><div className="profile-dialog__body">{children}</div></dialog>;
 }
 /** Shared chooser: provider starts only after an explicit selection, even for one provider. */
-export function AuthChooser({ returnPath, intent, onClose }: { returnPath: string; intent?: AuthIntent; onClose: () => void }) {
+export function AuthChooser({ returnPath, intent, onClose, nativeReturn, onNativeLogin }: {
+  returnPath: string; intent?: AuthIntent; onClose: () => void;
+  nativeReturn?: boolean; onNativeLogin?: () => void;
+}) {
+  const bridgeReturn = nativeReturn === true && /^\/auth\/native\?transactionId=[A-Za-z0-9_-]{43}$/.test(returnPath);
   const [providers, setProviders] = useState<Array<"vk" | "yandex">>([]);
   const [emailAvailable, setEmailAvailable] = useState(false);
   const [emailBusy, setEmailBusy] = useState(false);
@@ -147,7 +151,7 @@ export function AuthChooser({ returnPath, intent, onClose }: { returnPath: strin
     setBusy(true); setError("");
     const safeReturn = safeAuthReturnPath(returnPath);
     writeAuthIntent(intent ?? { kind: "return", path: safeReturn });
-    const result = await startAuth(provider, profileSetupPath(safeReturn));
+    const result = await startAuth(provider, bridgeReturn ? safeReturn : profileSetupPath(safeReturn));
     if (!alive.current) return;
     if (!result.ok) { starting.current = false; setBusy(false); setError("Не удалось начать вход. Попробуйте ещё раз."); return; }
     window.location.href = result.data.authorizationUrl;
@@ -156,7 +160,8 @@ export function AuthChooser({ returnPath, intent, onClose }: { returnPath: strin
     window.dispatchEvent(new Event("gb-session-changed"));
     const safeReturn = safeAuthReturnPath(emailSuccess ?? returnPath);
     writeAuthIntent(intent ?? {kind: "return", path: safeReturn});
-    window.location.assign(profileSetupPath(safeReturn));
+    if (bridgeReturn && onNativeLogin) { onNativeLogin(); return; }
+    window.location.assign(bridgeReturn ? safeReturn : profileSetupPath(safeReturn));
   }
   return <div className="fr3"><ProfileDialog title="Войти в GoBadminton" onClose={onClose}>
     {emailSuccess ? <><p role="status">Вы вошли в GoBadminton. Продолжите, чтобы вернуться к выбранному действию.</p><Button onClick={continueEmail}>Продолжить</Button></> : <>

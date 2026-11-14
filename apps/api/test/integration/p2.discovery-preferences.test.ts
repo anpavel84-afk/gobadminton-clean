@@ -308,13 +308,16 @@ describeIntegration("P2 private discovery preference on real PostgreSQL/PostGIS"
     for (const override of [
       { origin: "https://foreign.test" }, { origin: "" },
       { "x-csrf-token": "" }, { "x-csrf-token": "invalid" },
-      { authorization: "Bearer unsupported" },
     ]) {
       const r = await app.inject({ method: "PUT", url: route, headers: { ...headers, ...override }, payload: input });
       expect(r.statusCode).toBe(403);
       expect(r.headers["content-type"]).toContain("application/problem+json");
       expect(r.headers["cache-control"]).toContain("no-store");
     }
+    const unsupportedBearer = await app.inject({ method: "PUT", url: route, headers: { ...headers, authorization: "Bearer unsupported" }, payload: input });
+    expect(unsupportedBearer.statusCode).toBe(401);
+    expect(unsupportedBearer.headers["content-type"]).toContain("application/problem+json");
+    expect(unsupportedBearer.headers["cache-control"]).toContain("no-store");
     expect((await app.inject({ method: "PUT", url: route, headers: { ...headers, "idempotency-key": "" }, payload: input })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: route, headers: { authorization: "Bearer unsupported" } })).statusCode).toBe(401);
     expect((await put(owner, { ...input, userId: other.userId })).statusCode).toBe(422);

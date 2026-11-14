@@ -230,6 +230,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0069_venue_comment_photo_submissions",
         "0070_venue_comment_photo_publications",
         "0071_venue_photo_candidates",
+        "0072_native_auth_sessions",
       ]);
       expect(
         (await pool.query("SELECT to_regclass('public.venue_community_votes')::text AS name")).rows[0]
@@ -1140,6 +1141,8 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
       // 0045 additive gallery: physical table + URL helper, beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.venue_gallery_items')::text AS name")).rows[0]?.name).toBe("venue_gallery_items");
       expect((await pool.query("SELECT to_regprocedure('public.venue_gallery_item_url(uuid)') IS NOT NULL AS ok")).rows[0]?.ok).toBe(true);
+      expect((await pool.query("SELECT to_regclass('public.native_refresh_tokens')::text AS name")).rows[0]?.name).toBe("native_refresh_tokens");
+      expect((await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='app_sessions'::regclass AND conname='app_sessions_transport_check'")).rows).toHaveLength(1);
       // 0046 attendance: physical tables beyond ledger filename alone.
       expect((await pool.query("SELECT to_regclass('public.game_attendance')::text AS name")).rows[0]?.name).toBe("game_attendance");
       expect((await pool.query("SELECT to_regclass('public.game_attendance_notices')::text AS name")).rows[0]?.name).toBe("game_attendance_notices");

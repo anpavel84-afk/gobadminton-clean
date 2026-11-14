@@ -17,7 +17,7 @@ export class MeGamesController {
     @Query("cursor") cursor?: string,
     @Query("limit") limitRaw?: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     const limit =
       limitRaw === undefined || limitRaw === ""
         ? undefined

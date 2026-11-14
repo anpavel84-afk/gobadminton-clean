@@ -179,6 +179,117 @@ def consumer_oauth_link_exemption(document: dict, route: str, method: str,
     }.items())
 
 
+
+# Closed native proof protocol from NativeAuthController/Service. These commands
+# consume proofs/credentials, not MutationRunner receipts. Never match a prefix.
+NATIVE_PROOF_COMMANDS = {
+    "/auth/native/transactions": ("nativeAuthCreate", "NativeTransactionRequest"),
+    "/auth/native/exchange": ("nativeAuthExchange", "NativeExchangeRequest"),
+    "/auth/native/refresh": ("nativeAuthRefresh", "NativeRefreshRequest"),
+    "/auth/native/logout": ("nativeAuthLogout", "NativeLogoutRequest"),
+    "/auth/native/transactions/{transactionId}/bind": ("nativeAuthBind", None),
+    "/auth/native/transactions/{transactionId}/complete": ("nativeAuthComplete", None),
+    "/auth/native/transactions/{transactionId}/cancel": ("nativeAuthCancel", None),
+}
+NATIVE_OPAQUE = {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+NATIVE_CLIENT = {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$"}
+NATIVE_REDIRECT = {"type": "string", "format": "uri", "maxLength": 512}
+NATIVE_REQUEST_FIELDS = {
+    "NativeTransactionRequest": ({
+        "clientId": NATIVE_CLIENT, "redirectUri": NATIVE_REDIRECT,
+        "codeChallenge": NATIVE_OPAQUE, "codeChallengeMethod": {"type": "string", "const": "S256"},
+        "state": {"type": "string", "pattern": "^[A-Za-z0-9_-]{16,128}$"},
+        "returnPath": {"type": "string", "maxLength": 512},
+    }, {"clientId", "redirectUri", "codeChallenge", "codeChallengeMethod", "state"}),
+    "NativeExchangeRequest": ({
+        "clientId": NATIVE_CLIENT, "redirectUri": NATIVE_REDIRECT, "code": NATIVE_OPAQUE,
+        "verifier": {"type": "string", "pattern": "^[A-Za-z0-9._~-]{43,128}$"},
+    }, {"clientId", "redirectUri", "code", "verifier"}),
+    "NativeRefreshRequest": ({"clientId": NATIVE_CLIENT, "refreshToken": NATIVE_OPAQUE},
+                             {"clientId", "refreshToken"}),
+    "NativeLogoutRequest": ({"clientId": NATIVE_CLIENT, "refreshToken": NATIVE_OPAQUE}, {"clientId"}),
+}
+
+
+def native_proof_exemption(document: dict, route: str, method: str,
+                           operation: dict, parameters: list[dict]) -> bool:
+    command = NATIVE_PROOF_COMMANDS.get(route)
+    if (method != "post" or command is None
+            or operation.get("operationId") != command[0]
+            or operation.get("x-native-auth-protocol") != "native-pkce-bound-single-use-v1"):
+        return False
+    oid, schema_name = command
+    browser = schema_name is None
+    complete = oid == "nativeAuthComplete"
+    bind = oid == "nativeAuthBind"
+    logout = oid == "nativeAuthLogout"
+    credentials = ("reject-authorization; " + ("active-consumer-session-fence" if complete else "no-consumer-login-required")
+                   if browser else "reject-consumer-cookie; " + ("native-bearer-or-body-refresh" if logout else "reject-authorization"))
+    if operation.get("x-native-credentials") != credentials:
+        return False
+    expected_security = ([{"cookieSession": [], "NativeBindingCookie": []}] if complete
+                         else [{"NativeBindingCookie": []}] if browser and not bind else [])
+    if operation.get("security") != expected_security:
+        return False
+    schemes = document.get("components", {}).get("securitySchemes", {})
+    for name, cookie in (("cookieSession", "__Host-gb_session"),
+                         ("NativeBindingCookie", "__Host-gb_native_binding")):
+        if any(name in choice for choice in expected_security) and not all(
+            schemes.get(name, {}).get(key) == value
+            for key, value in {"type": "apiKey", "in": "cookie", "name": cookie}.items()
+        ):
+            return False
+    body = operation.get("requestBody", {})
+    if not isinstance(body, dict):
+        return False
+    content = body.get("content", {})
+    if (body.get("required") is not True or not isinstance(content, dict)
+            or set(content) != {"application/json"} or not isinstance(content["application/json"], dict)):
+        return False
+    schema = content["application/json"].get("schema", {})
+    if schema_name:
+        if schema != {"$ref": "#/components/schemas/" + schema_name}:
+            return False
+        schema = document.get("components", {}).get("schemas", {}).get(schema_name, {})
+        if not isinstance(schema, dict):
+            return False
+        props, required = NATIVE_REQUEST_FIELDS[schema_name]
+        if (schema.get("type") != "object" or schema.get("additionalProperties") is not False
+                or schema.get("properties") != props or set(schema.get("required", [])) != required
+                or set(schema) != {"type", "additionalProperties", "properties", "required"}):
+            return False
+    elif schema != {"type": "object", "properties": {}, "required": [], "additionalProperties": False}:
+        return False
+    # Reject duplicate, unexpected or inherited credential/binding parameters.
+    expected_parameters = {}
+    if browser:
+        if operation.get("x-native-browser-binding") != ("establish-or-match" if bind else "require-match"):
+            return False
+        expected_parameters = {
+            ("path", "transactionId"): (True, NATIVE_OPAQUE),
+            ("header", "X-Native-Auth"): (True, {"type": "string", "const": "1"}),
+            ("header", "Origin"): (True, {"type": "string"}),
+        }
+        if bind:
+            expected_parameters[("cookie", "__Host-gb_native_binding")] = (False, NATIVE_OPAQUE)
+        if complete:
+            expected_parameters[("header", "X-CSRF-Token")] = (True, {"type": "string"})
+    elif logout:
+        expected_parameters[("header", "Authorization")] = (False, {
+            "type": "string", "pattern": "^Bearer [A-Za-z0-9_-]{43}$",
+        })
+    if len(parameters) != len(expected_parameters):
+        return False
+    actual = {(p.get("in"), p.get("name")): (p.get("required"), p.get("schema")) for p in parameters}
+    if actual != expected_parameters:
+        return False
+    if browser:
+        origin = next(p for p in parameters if p.get("name") == "Origin")
+        if origin.get("description") != "Exact allowed consumer web Origin; validated by native browser bridge.":
+            return False
+    return True
+
+
 def markdown_errors(path: Path) -> list[str]:
     errors: list[str] = []
     text = path.read_text(encoding="utf-8")
@@ -277,6 +388,12 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                     and headers.get("origin", {}).get("required") is True
                     and headers.get("x-gb-email-auth", {}).get("required") is True
                 )
+                native_proof = native_proof_exemption(document, route, method, operation, parameters)
+                native_candidate = (route in NATIVE_PROOF_COMMANDS
+                                    or "x-native-auth-protocol" in operation
+                                    or oid in {entry[0] for entry in NATIVE_PROOF_COMMANDS.values()})
+                if native_candidate and not native_proof:
+                    errors.append(f"{label}: invalid closed native proof protocol declaration")
                 if method in MUTATIONS:
                     # Deliberately admitted private read POSTs cannot persist geo/receipt mutations.
                     read_post = (
@@ -291,12 +408,12 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                     )
                     if read_post and "idempotency-key" in headers:
                         errors.append(f"{label}: private read must not require a durable command receipt")
-                    if (not read_post and not email_proof
+                    if (not read_post and not email_proof and not native_proof
                             and not admin_proof_exemption(document, route, method, operation, headers)
                             and not consumer_oauth_link_exemption(document, route, method, operation, headers)
                             and not headers.get("idempotency-key", {}).get("required")):
                         errors.append(f"{label}: business mutation needs required Idempotency-Key")
-                    if "x-csrf-token" not in headers:
+                    if not native_proof and "x-csrf-token" not in headers:
                         errors.append(f"{label}: cookie mutation needs declared CSRF behavior")
                     body = operation.get("requestBody", {})
                     bodyless_delete = method == "delete" and route in BODYLESS_DELETES and "requestBody" not in operation
@@ -306,8 +423,11 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                     for scheme in choice:
                         if scheme not in schemes:
                             errors.append(f"{label}: unknown security scheme {scheme}")
-            except (KeyError, ValueError, TypeError, IndexError) as exc:
+            except (KeyError, ValueError, TypeError, IndexError, AttributeError) as exc:
                 errors.append(f"{label}: malformed parameter/security structure: {exc}")
+    for route in NATIVE_PROOF_COMMANDS:
+        if "post" not in document.get("paths", {}).get(route, {}):
+            errors.append(f"POST {route}: missing closed native proof protocol command")
     if not ids:
         errors.append("contract: no operations")
     schemas = document.get("components", {}).get("schemas", {})
