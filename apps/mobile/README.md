@@ -1,3 +1,36 @@
+# #522 CONTACT ADDRESS1 · bounded source correction
+
+FC-RETURN: both guest contact CTAs now retain `/messages/new/<peer>`. The native
+return whitelist adds only that exact typed local route; old game/direct/game-chat/
+invitation forms and malformed/encoded/query/hash/external path rejections remain.
+Actual AuthCoordinator begin/callback and secure pending-login restart tests return
+the selected peer only after verified identity, with zero automatic contact sends.
+
+FC-DRAFT: unsent draft dictionaries and selected context are quarantined privately
+under the original authoritative actorId, even without a command. Repeated null
+boundaries hide private state; verified same-owner reauth/new session restores a
+usable draft. Account B and explicit logout/forget erase it; stale reads/rendered
+actions remain fenced. Existing UNKNOWN packets keep their original actor, key,
+body and clientMessageId and require explicit same-packet reconciliation. Draft
+retention is in-memory only, with no process-death/private-draft persistence claim.
+
+Author offline checks: 35 named auth/contact units passed (24 auth, 11 contact),
+including retained 503/invalid-receipt/UNKNOWN cases; focused reruns of the strengthened
+real-login logout regression and four return/CTA checks also passed. Typecheck is NOT_RUN: this export
+has no project node_modules or installed tsc; no dependency resolution was attempted.
+Only the six admitted paths changed; cumulative source scope is 18, including
+native-auth-protocol.ts. Source versionCode remains 6, with no version bump.
+
+Root's retained two-finding precheck FAIL is not independent QA or a parent FAIL.
+Parent gates, owning Messages DB fixture, first cumulative independent QA and DEV
+acceptance remain pending with Root/trusted process. The owning fixture is unchanged
+at SHA-256 `04329fc9e9a0c4c9956199168bee5dca33125b96ede44dc24a5ebf9dc4434182`.
+Owner S23 FAIL_RECHECK_PENDING, native visual NOT_VERIFIED, mandatory unfinished full
+native parity, unfinished iOS/OTA and all previous FAIL/UNKNOWN history remain.
+All previous README bytes are preserved below as history.
+
+---
+
 # #522 CURRENT · native first-contact source candidate
 
 This bounded source slice adds **Написать** on an existing native player profile,

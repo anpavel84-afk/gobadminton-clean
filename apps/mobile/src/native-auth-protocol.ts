@@ -46,9 +46,11 @@ export function canonicalGamePath(value: unknown): string | null {
     return `/games/${encodeURIComponent(id)}` === value ? value : null;
   } catch { return null; }
 }
-/** Exact typed private destinations only; encoded segments, queries and actions are rejected. */
+/** Exact typed private destinations only, including a selected new-contact peer; no queries or actions. */
 export function canonicalMessagePath(value: unknown): string | null {
   if (value === '/messages') return value;
+  // Compare the full match as well: JavaScript's $ alone permits a final newline.
+  if (typeof value === 'string' && value.match(/^\/messages\/new\/[A-Za-z0-9_-]{1,128}$/)?.[0] === value) return value;
   return typeof value === 'string' && /^\/messages\/(direct|game|invitations)\/[A-Za-z0-9_-]{1,128}$/.test(value) ? value : null;
 }
 export function canonicalReturnPath(value: unknown): string | null { return value === '/games/create' || typeof value === 'string' && /^\/games\/manage\/[A-Za-z0-9_-]{1,128}$/.test(value) ? value : canonicalGamePath(value) ?? canonicalMessagePath(value); }

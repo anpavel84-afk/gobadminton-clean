@@ -22,7 +22,7 @@ const unavailable = 'Общение сейчас недоступно. Можн�
 /** Bounded root owner for directory first contact. No polling, persistence or automatic sending. */
 export class ContactCoordinator {
   private snapshot = initial(); private serial = 0; private listeners = new Set<() => void>();
-  private quarantine: { packet: ContactPacket; drafts: Record<string, string> } | null = null;
+  private quarantine: { actorId: string; target: string | null; packet?: ContactPacket; drafts: Record<string, string> } | null = null;
   private port: Port; private random: () => string;
   constructor(port: Port, random: () => string) { this.port = port; this.random = random; }
   getSnapshot = () => this.snapshot;
@@ -30,12 +30,15 @@ export class ContactCoordinator {
   private show(patch: Partial<Snapshot>) { this.snapshot = { ...this.snapshot, ...patch }; this.listeners.forEach(fn => fn()); }
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.snapshot.actor) || !actor && !this.snapshot.actor) return;
-    if (this.snapshot.command) this.quarantine = { packet: this.snapshot.command.packet, drafts: this.snapshot.drafts };
-    if (actor && this.quarantine?.packet.actor.actorId !== actor.actorId) this.quarantine = null;
+    // Bind even unsent drafts to the last authoritative principal, never to a login attempt.
+    if (this.snapshot.actor) this.quarantine = { actorId: this.snapshot.actor.actorId, target: this.snapshot.target,
+      packet: this.snapshot.command?.packet, drafts: this.snapshot.drafts };
+    if (actor && this.quarantine?.actorId !== actor.actorId) this.quarantine = null;
     const saved = actor ? this.quarantine : null;
     if (actor) this.quarantine = null;
     ++this.serial; this.snapshot = initial(actor ? Object.freeze({ ...actor }) : null);
-    this.show(saved ? { command: { packet: saved.packet, status: 'unknown' }, drafts: saved.drafts, notice: unknownNotice } : {});
+    this.show(saved ? { target: saved.target, drafts: saved.drafts,
+      ...(saved.packet ? { command: { packet: saved.packet, status: 'unknown' }, notice: unknownNotice } : {}) } : {});
   }
   forget = () => { ++this.serial; this.quarantine = null; this.snapshot = initial(); this.show({}); };
   private valid(actor: Actor, serial: number, target: string) {

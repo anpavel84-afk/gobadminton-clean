@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { createNativeApi } from '../src/native-api.ts';
 import { ContactCoordinator } from '../src/contact-coordinator.ts';
 import { parseContactState, parseContactResult } from '../src/contact.ts';
@@ -27,6 +29,61 @@ function setup() {
   return { owner, calls, api, setHandler: (h: typeof handler) => { handler = h; }, writes: () => calls.filter(c => c.init.method === 'POST') };
 }
 async function compose(s: ReturnType<typeof setup>) { await s.owner.open('peer'); s.owner.draft('peer', '  Привет!  '); }
+
+test('both guest contact CTAs pass the selected peer to signIn', () => {
+  const source = readFileSync(new URL('../src/components/contact-editor.tsx', import.meta.url), 'utf8');
+  const action = source.slice(source.indexOf('export function NativeContactAction'), source.indexOf('export function ContactEditor'));
+  const editor = source.slice(source.indexOf('export function ContactEditor'));
+  for (const entry of [action, editor]) {
+    assert.match(entry, /onPress=\{\(\) => \{ void auth\.signIn\(`\/messages\/new\/\$\{target\}`\); \}\}/);
+    assert.doesNotMatch(entry, /auth\.signIn\('\/messages'\)/);
+  }
+});
+
+test('unsent drafts and selection stay hidden through repeated null and restore only for the original owner, without sending', async () => {
+  const s = setup(); await compose(s);
+  s.setHandler(async path => path.startsWith('/players/') ? { ...player, publicPlayerId: 'other' } : { ...none, targetPublicPlayerId: 'other' });
+  await s.owner.open('other'); s.owner.draft('other', 'Второй черновик');
+  const drafts = { peer: '  Привет!  ', other: 'Второй черновик' };
+  assert.equal(s.owner.getSnapshot().command, undefined);
+  const before = s.calls.length;
+  s.owner.setActor(null); s.owner.setActor(null);
+  assert.deepEqual(s.owner.getSnapshot().drafts, {}); assert.equal(s.owner.getSnapshot().target, null);
+  assert.equal(s.owner.getSnapshot().player, null); assert.equal(s.owner.getSnapshot().contact, null);
+  s.owner.draft('other', 'unverified edit'); await s.owner.send(); await s.owner.reconcile();
+  assert.equal(s.calls.length, before);
+  const renewed = { ...actor, sessionId: 'renewed-A', generation: 2 };
+  s.owner.setActor(renewed);
+  assert.deepEqual(s.owner.getSnapshot().drafts, drafts); assert.equal(s.owner.getSnapshot().target, 'other');
+  assert.equal(s.owner.getSnapshot().status, 'idle'); assert.equal(s.owner.getSnapshot().command, undefined);
+  await s.owner.open('other'); s.owner.draft('other', 'Можно продолжить', renewed);
+  assert.equal(s.owner.getSnapshot().drafts.other, 'Можно продолжить');
+  s.owner.setActor(null); s.owner.setActor(null); s.owner.setActor({ ...renewed, generation: 3 });
+  assert.equal(s.owner.getSnapshot().drafts.other, 'Можно продолжить');
+  assert.equal(s.owner.getSnapshot().drafts.peer, drafts.peer); assert.equal(s.writes().length, 0);
+  // A verified different principal permanently erases A's private quarantine.
+  s.owner.setActor(null); s.owner.setActor({ actorId: 'B', sessionId: 'B', generation: 4 });
+  assert.deepEqual(s.owner.getSnapshot().drafts, {}); assert.equal(s.owner.getSnapshot().target, null);
+  s.owner.setActor(actor); assert.deepEqual(s.owner.getSnapshot().drafts, {});
+  s.setHandler(async path => path.startsWith('/players/') ? player : none); await compose(s);
+  s.owner.setActor(null); s.owner.forget(); s.owner.setActor(actor);
+  assert.deepEqual(s.owner.getSnapshot().drafts, {}); assert.equal(s.owner.getSnapshot().target, null);
+  assert.equal(s.writes().length, 0);
+});
+
+test('old-session reads and rendered callbacks cannot alter restored unsent drafts or selection', async () => {
+  const s = setup(); await compose(s); const oldActor = s.owner.getSnapshot().actor;
+  const late = deferred<unknown>(); s.setHandler(async () => late.promise);
+  const work = s.owner.open('peer');
+  s.owner.setActor(null); s.owner.setActor({ ...actor, sessionId: 'new-A', generation: 2 });
+  s.setHandler(async path => path.startsWith('/players/') ? player : none); await s.owner.open('peer');
+  s.owner.draft('peer', 'Новый текст'); const current = s.owner.getSnapshot();
+  late.resolve(existing); await work;
+  s.owner.draft('peer', 'stale edit', oldActor); await s.owner.send('peer', oldActor); await s.owner.reconcile('peer', oldActor);
+  assert.strictEqual(s.owner.getSnapshot(), current);
+  assert.equal(current.drafts.peer, 'Новый текст'); assert.equal(current.conversation, null);
+  assert.equal(current.status, 'ready'); assert.equal(s.writes().length, 0);
+});
 
 test('actual NativeApi sends exact directory body once on explicit send; opening/reopening never creates', async () => {
   const s = setup(); await compose(s); s.owner.blur(); await s.owner.open('peer');

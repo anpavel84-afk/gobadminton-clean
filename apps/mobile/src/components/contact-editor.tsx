@@ -16,7 +16,7 @@ function useContact(target: string) {
 }
 export function NativeContactAction({ target }: { target: string }) {
   const { auth, owner, state, current } = useContact(target), router = useRouter();
-  if (auth.status === 'guest') return <PrimaryButton title="Войти, чтобы написать" onPress={() => { void auth.signIn('/messages'); }} />;
+  if (auth.status === 'guest') return <PrimaryButton title="Войти, чтобы написать" onPress={() => { void auth.signIn(`/messages/new/${target}`); }} />;
   if (auth.status !== 'authenticated') return <Label>Проверьте вход, чтобы написать.</Label>;
   if (!current || state.status === 'loading') return <PrimaryButton title="Проверяем…" disabled />;
   if (state.status === 'ready' || state.status === 'existing') {
@@ -40,7 +40,7 @@ export function ContactEditor({ target }: { target: string }) {
   const text = current ? state.drafts[target] ?? '' : '';
   return <Page keyboard header={<Header back={() => router.canGoBack() ? router.back() : router.replace('/messages')} />}>
     <Label accessibilityRole="header">Сообщение</Label>
-    {auth.status !== 'authenticated' ? <><Label>Войдите, чтобы написать.</Label><PrimaryButton title="Войти" onPress={() => { void auth.signIn('/messages'); }} /></>
+    {auth.status !== 'authenticated' ? <><Label>Войдите, чтобы написать.</Label><PrimaryButton title="Войти" onPress={() => { void auth.signIn(`/messages/new/${target}`); }} /></>
       : !current || state.status === 'loading' ? <Loading title="Загружаем профиль…" />
       : <>
         {state.player && <Label>{state.player.displayName}</Label>}
