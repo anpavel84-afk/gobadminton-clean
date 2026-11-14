@@ -156,6 +156,6 @@ run("bounded native public Players principal opt-in", () => {
       expect((await app.inject({ url })).statusCode).toBe(200);
     }
     // Neighbouring private read remains cookie-only: this slice grants no broader bearer surface.
-    expect((await app.inject({ url: "/v1/me/social-profile", headers: bearer(peer) })).statusCode).toBe(401);
+    expect((await app.inject({ url: "/v1/me/game-preferences", headers: bearer(peer) })).statusCode).toBe(401);
   });
 });

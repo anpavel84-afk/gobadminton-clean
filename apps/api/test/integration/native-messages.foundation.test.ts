@@ -139,6 +139,11 @@ run("native Messages · self-migrating isolated database", () => {
     expect((await pool.query('SELECT 1 FROM participations WHERE game_id=$1 AND user_id=$2',[g.id,player.id])).rowCount).toBe(0);
     for (const headers of [{},bearer(player),bearer(outsider)]) expect((await app.inject({url:`/v1/games/${g.id}`,headers})).statusCode).toBe(404);
     expect((await app.inject({url,headers:bearer(outsider)})).statusCode).toBe(404);
+    const cookieDetail=await app.inject({url,headers:{cookie:player.cookie}}); expect(cookieDetail.statusCode).toBe(200);
+    expect(Object.keys(cookieDetail.json()).sort()).toEqual([
+      'id','gameId','status','version','inviterPublicPlayerId','inviteePublicPlayerId','expiresAt','decidedAt','participationId','createdAt',
+    ].sort());
+    expect(cookieDetail.json()).not.toHaveProperty('acceptanceContext');
     const detail=await app.inject({url,headers:bearer(player)}); expect(detail.statusCode).toBe(200);
     expect(detail.json().acceptanceContext).toMatchObject({gameVersion:g.version,title:'Native fixture',availablePlaces:1,settlementTerms:'Outside app'});
     expect((await app.inject({url,headers:bearer(owner)})).json().acceptanceContext).toBeNull();

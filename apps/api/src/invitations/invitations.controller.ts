@@ -87,7 +87,11 @@ export class InvitationsController {
     @Req() request: FastifyRequest,
   ) {
     const consumer = await this.auth.requirePrincipal(request);
-    return this.invitations.getOne(consumer.userId, invitationId);
+    return this.invitations.getOne(
+      consumer.userId,
+      invitationId,
+      consumer.transport === "bearer",
+    );
   }
 
   @Post("invitations/:invitationId/accept")
