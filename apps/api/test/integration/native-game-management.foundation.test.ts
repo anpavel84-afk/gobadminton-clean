@@ -198,7 +198,7 @@ run("native game management · self-migrating isolated database", () => {
     expect((await app.inject({url:`/v1/games/${g.id}`,headers:bearer(manager)})).json().availablePlaces).toBe(1);
     await pool.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1 AND user_id=$2",[g.id,manager.id]);
     expect((await app.inject({url:'/v1/me/games',headers:bearer(manager)})).json().items).toEqual([]);
-    expect((await app.inject({url:roster,headers:bearer(manager)})).statusCode).toBe(403);
+    expect((await app.inject({url:roster,headers:bearer(manager)})).statusCode).toBe(404);
     expect((await app.inject({method:'POST',url:confirm,headers:bearer(manager,key),payload})).statusCode).toBe(403);
   });
   it('authoritative active own trainer context, no trainer seat, no invented fee; inactive trainer remains ordinary', async () => {

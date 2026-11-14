@@ -27,7 +27,16 @@ export function CreateGame() {
   return <Page keyboard header={<Header back={() => router.canGoBack() ? router.back() : router.replace('/games')} />}>
     <Label style={styles.title} accessibilityRole="header">Создать игру</Label>
     {auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !active ? <><Label>Войдите, чтобы создать игру.</Label><PrimaryButton title="Войти" onPress={() => void auth.signIn('/games/create')} /></>
-      : state.created ? <>
+      : blocked && state.command ? <>
+        <Label>Сначала проверьте результат прежнего действия. Проверка повторит только его; следующее действие не выполнится автоматически.</Label>
+        {state.command.packet.kind === 'create' && <>
+          <Label>{state.command.packet.body.title || 'Игра'} · {new Date(state.command.packet.body.startsAt).toLocaleString('ru-RU', { timeZone: state.command.packet.body.timezone })} · {state.command.packet.body.timezone}</Label>
+          <Label>Вместимость: {state.command.packet.body.capacity} · Публичный контакт: {state.command.packet.body.hostPublicContact}</Label>
+          <Label>{state.command.packet.body.settlement.terms}</Label>
+        </>}
+        <ManagementCommand />
+        {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
+      </> : state.created ? <>
         <Label style={styles.subtitle}>{state.created.status === 'published' ? 'Игра опубликована' : 'Черновик создан'}</Label>
         <ManagedTerms game={state.created} />
         <Label>{state.created.activityKind === 'regular' ? 'Создатель обычной игры занимает место по правилам сервиса.' : 'Тренер не занимает место участника автоматически.'}</Label>

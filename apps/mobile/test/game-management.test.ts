@@ -124,3 +124,82 @@ test('manager roster loading/error blocks decisions and late pagination cannot r
   s.owner.setActor(null); gate.resolve({items:[{...part,id:'next'}],nextCursor:null}); await work;
   assert.deepEqual(s.owner.getSnapshot().details,{});
 });
+
+test('root repro: UNKNOWN create is private to the verified owner across reauth and only explicit reconciliation repeats the original key/body', async () => {
+  const s = setup({ send: async () => { if (s.sent.length === 1) throw new ParticipationError('network'); return g; } });
+  await preview(s.owner); await s.owner.publishPreview();
+  const original = s.sent[0]!, body = JSON.stringify(original.body);
+  assert.equal(s.owner.getSnapshot().command?.status,'unknown');
+  s.owner.setActor(null);
+  const guest = s.owner.getSnapshot();
+  assert.equal(guest.command,undefined); assert.equal(guest.preview,null); assert.equal(guest.created,null);
+  assert.equal(guest.profile,null); assert.equal(guest.preferences,null); assert.deepEqual(guest.details,{});
+  assert.equal(guest.form.contact,''); assert.equal(guest.creationReference,null);
+  await s.owner.reconcile(); await s.owner.publishPreview(); assert.equal(s.sent.length,1);
+  const returned = {...actor,sessionId:'new-session',generation:2};
+  s.owner.setActor(returned); assert.equal(s.owner.getSnapshot().command?.status,'unknown');
+  assert.equal(s.sent.length,1); // Auth return itself cannot dispatch.
+  await s.owner.loadContext('city-1'); s.owner.update({...form,title:'must not replace UNKNOWN'}); s.owner.preview(); await s.owner.publishPreview();
+  assert.equal(s.sent.length,1); assert.equal(s.owner.getSnapshot().form.contact,'');
+  await s.owner.reconcile();
+  assert.deepEqual(s.sent.map(p => [p.kind,p.key,JSON.stringify(p.body)]),[['create',original.key,body],['create',original.key,body]]);
+  assert.deepEqual(s.sent[1]!.actor,returned); assert.deepEqual(original.actor,actor);
+  assert.strictEqual(s.sent[1]!.body,original.body); assert.ok(Object.isFrozen(s.sent[1]));
+  assert.equal(s.owner.getSnapshot().created?.status,'draft'); assert.equal(s.sent.length,2);
+  await s.owner.publishPreview(); assert.equal(s.sent.length,2);
+  await s.owner.publishDraft(g.id); assert.equal(s.sent[2]?.kind,'publish');
+});
+
+test('UNKNOWN publish and manager rejection retain original game/version/reason across new authenticated generations', async () => {
+  for (const kind of ['publish','reject'] as const) {
+    let recover = false;
+    const s = setup({ game: async () => ({...g,status:'published'}), send: async p => {
+      if (p.kind === 'create') return g;
+      if (!recover) throw new ParticipationError('network');
+      return p.kind === 'publish' ? {...g,status:'published',version:8} : {...part,status:'rejected',version:4};
+    } });
+    if (kind === 'publish') { await preview(s.owner); await s.owner.publishPreview(); }
+    else { await s.owner.loadDetail(g.id); await s.owner.decide(g.id,part.id,'reject','Original reason'); }
+    const original = s.sent.at(-1)!, before = s.sent.length;
+    assert.equal(original.kind,kind); assert.equal(s.owner.getSnapshot().command?.status,'unknown');
+    s.owner.setActor(null); assert.equal(s.owner.getSnapshot().command,undefined); assert.deepEqual(s.owner.getSnapshot().details,{});
+    s.owner.setActor({...actor,sessionId:'returned',generation:2});
+    assert.equal(s.sent.length,before); assert.equal(s.owner.getSnapshot().command?.status,'unknown');
+    await s.owner.publishDraft(g.id); await s.owner.decide(g.id,part.id,'confirm',''); assert.equal(s.sent.length,before);
+    recover = true; await s.owner.reconcile();
+    const replay = s.sent.at(-1)!;
+    assert.equal(replay.kind,kind); assert.equal(replay.key,original.key); assert.strictEqual(replay.body,original.body);
+    assert.equal(replay.kind !== 'create' && replay.gameId,g.id);
+    if (replay.kind === 'reject') { assert.equal(replay.participationId,part.id); assert.deepEqual(replay.body,{expectedVersion:3,reason:'Original reason'}); }
+    else assert.deepEqual(replay.body,{expectedVersion:7});
+    assert.equal(s.sent.length,before+1);
+  }
+});
+
+test('explicit logout and authoritative account B permanently wipe quarantined UNKNOWN create and context', async () => {
+  for (const clear of ['logout-active','logout-guest','account-B'] as const) {
+    const s = setup({ send: async () => { throw new ParticipationError('network'); } });
+    await preview(s.owner); await s.owner.publishPreview();
+    if (clear !== 'logout-active') s.owner.setActor(null);
+    if (clear === 'account-B') s.owner.setActor({...actor,actorId:'B',sessionId:'session-B',generation:2});
+    else s.owner.forgetCreation();
+    const cleared = s.owner.getSnapshot();
+    assert.equal(cleared.command,undefined); assert.equal(cleared.preview,null); assert.equal(cleared.form.contact,'');
+    assert.equal(cleared.profile,null); assert.equal(cleared.creationReference,null); assert.deepEqual(cleared.details,{});
+    s.owner.setActor(null); s.owner.setActor({...actor,sessionId:'A-returned',generation:3});
+    await s.owner.reconcile(); assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.sent.length,1);
+  }
+});
+
+test('reauth while create is sending quarantines UNKNOWN and fences the old response after explicit new-generation reconciliation', async () => {
+  const gate = deferred<Game>();
+  const s = setup({ send: async () => s.sent.length === 1 ? gate.promise : g });
+  await preview(s.owner); const oldWork = s.owner.publishPreview(), original = s.sent[0]!;
+  s.owner.setActor(null); s.owner.setActor({...actor,sessionId:'new-session',generation:2});
+  assert.equal(s.owner.getSnapshot().command?.status,'unknown'); assert.equal(s.sent.length,1);
+  await s.owner.reconcile(); assert.equal(s.sent[1]?.key,original.key); assert.strictEqual(s.sent[1]?.body,original.body);
+  assert.equal(s.owner.getSnapshot().created?.id,g.id);
+  gate.resolve({...g,id:'stale-draft',version:99}); await oldWork;
+  assert.deepEqual(s.owner.getSnapshot().creationReference,{id:g.id,version:7});
+  assert.equal(s.owner.getSnapshot().command?.status,'settled'); assert.equal(s.sent.length,2);
+});

@@ -71,6 +71,8 @@ function freeze<T>(v: T): T { if (v && typeof v === 'object') { Object.values(v)
 /** Persistent root domain: route changes do not reset packets. No disk/auth-envelope migration. */
 export class GameManagementCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private contextRead = 0; private contactEdited = false; private resumeKnown: { actorId: string; id: string; version: number } | null = null; private detailReads = new Map<string, number>();
+  // Quarantined while identity is unavailable; never part of the guest snapshot.
+  private resumePending: ManagementPacket | null = null;
   private port: ManagementPort; private random: () => string; private now: () => number;
   constructor(port: ManagementPort, random: () => string, now: () => number = Date.now) { this.port = port; this.random = random; this.now = now; }
   getSnapshot = () => this.state;
@@ -78,13 +80,24 @@ export class GameManagementCoordinator {
   private show(p: Partial<ManagementSnapshot>) { this.state = { ...this.state, ...p }; this.listeners.forEach(f => f()); }
   setActor(actor: Actor | null) {
     if (sameActor(actor,this.state.actor) || !actor && !this.state.actor) return;
-    if (!actor && this.state.actor && this.state.creationReference) this.resumeKnown = { actorId: this.state.actor.actorId, ...this.state.creationReference };
+    if (this.state.actor) {
+      if (this.state.creationReference) this.resumeKnown = { actorId: this.state.actor.actorId, ...this.state.creationReference };
+      // Losing an in-flight response is also UNKNOWN, even if it later succeeds.
+      if (this.locked()) this.resumePending = this.state.command!.packet;
+    }
     if (actor && this.resumeKnown?.actorId !== actor.actorId) this.resumeKnown = null;
+    if (actor && this.resumePending?.actor.actorId !== actor.actorId) this.resumePending = null;
+    const pending = actor && this.resumePending ? freeze({ ...this.resumePending, actor: { ...actor } }) : null;
+    if (actor) this.resumePending = null;
     this.contextRead++; this.contactEdited = false; this.detailReads.clear(); this.state = initial(); this.show({ actor: actor ? Object.freeze({ ...actor }) : null,
-      creationReference: actor && this.resumeKnown ? { id: this.resumeKnown.id, version: this.resumeKnown.version } : null });
+      creationReference: actor && this.resumeKnown ? { id: this.resumeKnown.id, version: this.resumeKnown.version } : null,
+      ...(pending ? { command: { packet: pending, status: 'unknown' as const }, notice: 'Результат прежнего действия неизвестен. Проверка повторит только его с прежними условиями и ключом; публикация после создания потребует отдельного подтверждения.' } : {}) });
   }
-  /** Explicit logout forgets even the nonprivate canonical resume reference. */
-  forgetCreation = () => { this.resumeKnown = null; this.show({ creationReference: null }); };
+  /** Explicit logout wipes quarantined packets and active private data before fencing auth. */
+  forgetCreation = () => {
+    this.resumeKnown = null; this.resumePending = null; this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
+    this.state = initial(); this.show({});
+  };
   private current(actor: Actor | null) { return sameActor(actor,this.state.actor); }
   private locked() { return ['sending','unknown'].includes(this.state.command?.status ?? ''); }
   update = (patch: Partial<CreationForm>) => {

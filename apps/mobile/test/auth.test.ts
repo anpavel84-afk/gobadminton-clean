@@ -325,3 +325,59 @@ test('new root management owner shares secure actor fences, leaves Messages UNKN
   assert.doesNotMatch(JSON.stringify(owner.getSnapshot()),/accessToken|refreshToken|verifier/);
   await s.auth.logout(); assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().form.contact,'');
 });
+
+test('involuntary auth loss preserves UNKNOWN create until authoritative same-owner callback; explicit logout clears it', async t => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate();
+  t.mock.method(publicApi,'venues',async () => ({items:[fixture.venue],nextCursor:null}));
+  const owner = s.auth.gameManagement, verified = deferred<unknown>();
+  let phase: 'unknown' | 'lost' | 'return' | 'reconcile' = 'unknown';
+  s.setHandler(async path => {
+    if (path === '/me') return phase === 'return' ? verified.promise : me;
+    if (path === '/me/social-profile') return {cityId:'city-1',trainer:false,displayName:'Creator'};
+    if (path === '/me/game-preferences') return {version:0,defaultPublicGameContact:null};
+    if (path === '/games') {
+      if (phase !== 'reconcile') throw new Error('UNKNOWN create');
+      return {...fixture,status:'draft',version:7};
+    }
+    if (path.endsWith('/publish')) throw new Error('UNKNOWN publish');
+    if (path === '/auth/native/refresh' && phase === 'lost') throw new Error('lost session');
+    if (path === '/auth/methods') return {items:[{method:'vk',type:'oauth',available:true}]};
+    if (path === '/auth/native/transactions') return {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`};
+    if (path === '/auth/native/exchange') return {...credentials,sessionId:'new-session'};
+    return {ok:true};
+  });
+  await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@private-creator'});
+  owner.preview(); await owner.publishPreview();
+  const original = owner.getSnapshot().command!.packet;
+  assert.equal(owner.getSnapshot().command?.status,'unknown');
+  phase = 'lost'; await s.auth.refresh();
+  assert.equal(s.auth.getSnapshot().status,'unverifiable'); assert.equal(owner.getSnapshot().command,undefined);
+  assert.equal(owner.getSnapshot().form.contact,''); assert.equal(owner.getSnapshot().preview,null);
+  await owner.reconcile(); assert.equal(s.calls.filter(c => c.path === '/games').length,1);
+  await s.auth.beginLogin('/games/create');
+  const login = JSON.parse(s.stored()!).pending as PendingLogin;
+  phase = 'return';
+  const work = s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(owner.getSnapshot().actor,null); assert.equal(owner.getSnapshot().command,undefined);
+  verified.resolve({...me,session:{...me.session,id:'new-session'}});
+  assert.equal(await work,'/games/create');
+  const restored = owner.getSnapshot().command!;
+  assert.equal(restored.status,'unknown'); assert.equal(restored.packet.key,original.key); assert.strictEqual(restored.packet.body,original.body);
+  assert.equal(restored.packet.actor.sessionId,'new-session'); assert.notEqual(restored.packet.actor.generation,original.actor.generation);
+  assert.equal(s.calls.filter(c => c.path === '/games').length,1);
+  phase = 'reconcile'; await owner.reconcile();
+  const creates = s.calls.filter(c => c.path === '/games');
+  assert.equal(creates.length,2); assert.equal(creates[1]!.init.body,creates[0]!.init.body);
+  assert.equal((creates[1]!.init.headers as Record<string,string>)['Idempotency-Key'],original.key);
+  assert.equal(s.calls.filter(c => c.path.endsWith('/publish')).length,0);
+  assert.equal(owner.getSnapshot().created?.status,'draft');
+  // Explicit logout must also erase an active UNKNOWN, not merely its visible reference.
+  phase = 'unknown'; await owner.publishDraft(fixture.id); assert.equal(owner.getSnapshot().command?.status,'unknown');
+  await s.auth.logout(); assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().creationReference,null);
+  assert.equal(owner.getSnapshot().actor,null); assert.equal(owner.getSnapshot().form.contact,'');
+  await s.auth.beginLogin('/games/create');
+  const next = JSON.parse(s.stored()!).pending as PendingLogin;
+  phase = 'return'; await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('d')}&state=${next.state}`);
+  assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().creationReference,null);
+});
