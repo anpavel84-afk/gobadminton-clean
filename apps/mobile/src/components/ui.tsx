@@ -70,6 +70,8 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
     {back && <TextButton title="Назад" onPress={back} light={light} />}
     <BrandLockup light={light} />
     {!light && <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
+      {pathname !== '/games' && <TextButton title="Игры" onPress={() => router.push('/games')} />}
+      {pathname !== '/my-games' && <TextButton title="Мои игры" onPress={() => router.push('/my-games')} />}
       {pathname !== '/city' && <TextButton title="Город" onPress={() => router.push('/city')} />}
       {pathname !== '/profile' && <TextButton title="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })} />}
     </View>}

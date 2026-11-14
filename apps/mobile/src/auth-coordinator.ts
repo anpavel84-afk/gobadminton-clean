@@ -1,3 +1,5 @@
+import { ParticipationCoordinator, ParticipationError, sameActor } from './participation.ts';
+import type { Actor } from './participation.ts';
 import type { NativeMe } from '@gobadminton/contracts/native-auth';
 import type { NativeApi } from './native-api.ts';
 import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, canonicalGamePath,
@@ -27,12 +29,50 @@ export class AuthCoordinator {
   private writable = true;
   private starting: Promise<{ url: string; generation: string } | null> | null = null;
   private snapshot: AuthSnapshot = { status: 'hydrating', me: null, sessions: [], returnPath: null, notice: null };
-  constructor(deps: AuthDependencies) { this.deps = deps; this.now = deps.now ?? Date.now; }
+  readonly participation: ParticipationCoordinator;
+  constructor(deps: AuthDependencies) {
+    this.deps = deps; this.now = deps.now ?? Date.now;
+    this.participation = new ParticipationCoordinator({
+      own: cursor => this.participationRead(access => deps.api.ownParticipations(access, cursor)),
+      managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
+      send: packet => this.participationRead(access => packet.kind === 'request'
+        ? deps.api.requestParticipation(access, packet.gameId, packet.body, packet.key)
+        : deps.api.withdrawParticipation(access, packet.participationId, packet.body, packet.key), packet.actor),
+    }, deps.random);
+  }
+  /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
+  private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {
+    const epoch = this.epoch;
+    if (!actor || !this.matchesActor(actor)) throw new ParticipationError('stale');
+    try {
+      const token = await this.token(epoch); this.check(epoch);
+      if (!this.matchesActor(actor)) throw new ParticipationError('stale');
+      const result = await operation(token); this.check(epoch);
+      if (!this.matchesActor(actor)) throw new ParticipationError('stale');
+      return result;
+    } catch (error) {
+      if (epoch !== this.epoch) throw new ParticipationError('stale');
+      if ((error instanceof ParticipationError && error.kind === 'authority') ||
+          (error instanceof NativeAuthError && ['authority', 'expired'].includes(error.kind))) await this.fail(epoch, new NativeAuthError('authority'));
+      throw error;
+    }
+  }
+  private matchesActor(actor: Actor) {
+    return actor.generation === this.epoch && sameActor(actor, this.participation.getSnapshot().actor);
+  }
   getSnapshot = (): AuthSnapshot => this.snapshot;
   refreshDelay = () => Math.max(1, (this.access?.expiresAt ?? this.now()) - this.now() + 1);
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private show(patch: Partial<AuthSnapshot>) {
-    this.snapshot = { ...this.snapshot, ...patch }; this.listeners.forEach(listener => listener());
+    this.snapshot = { ...this.snapshot, ...patch };
+    if (this.snapshot.status === 'authenticated' && this.snapshot.me) {
+      this.participation.setActor({ actorId: this.snapshot.me.id, sessionId: this.snapshot.me.session.id, generation: this.epoch });
+    } else if (this.snapshot.status !== 'hydrating') {
+      // A transient unverifiable identity must also fence callbacks if this session is later validated again.
+      if (this.participation.getSnapshot().actor?.generation === this.epoch) this.epoch++;
+      this.participation.setActor(null);
+    }
+    this.listeners.forEach(listener => listener());
   }
   private check(epoch: number) { if (epoch !== this.epoch) throw new NativeAuthError('stale'); }
   private empty(returnPath = this.snapshot.returnPath): SecureEnvelope {

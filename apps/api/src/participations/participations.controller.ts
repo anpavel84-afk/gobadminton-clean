@@ -47,7 +47,7 @@ export class ParticipationsController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       expectedGameVersion?: number;
@@ -72,7 +72,7 @@ export class ParticipationsController {
     @Query("cursor") cursor?: string,
     @Query("limit") limitRaw?: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     const limit =
       limitRaw === undefined || limitRaw === ""
         ? undefined
@@ -133,7 +133,7 @@ export class ParticipationsController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { expectedVersion?: number };
     const result = await this.participations.withdraw(

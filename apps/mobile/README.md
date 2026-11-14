@@ -1,3 +1,56 @@
+# #522 bounded Games → explicit application → My Games source candidate
+
+This pass adds only native participation request, own pending/confirmed withdrawal,
+all-page own participation reads and managed-game reads. Four existing API controller
+operations opt into verified native principals; manager/applicant-list routes keep
+cookie-only authority and browser mutations keep Origin/CSRF. Public catalog/detail
+requests remain credential-free. Existing auth protocol, services, MutationRunner,
+registry, flag defaults, migrations, dependencies, assets and release files are unchanged.
+
+- Game detail rereads current public conditions and every own participation cursor page.
+  Login returns to the same game without POST. A separate review and explicit confirmation
+  sends expectedGameVersion and a random idempotency key. Pending does not reserve a place.
+  Own pending/confirmed withdrawal reviews the action and sends expectedVersion.
+- Root-owned participation state survives route unmount/navigation. Sending/UNKNOWN holds
+  one frozen actor/session/game/participation/body/key packet; reads cannot replay it or
+  create a new key. No unresolved retry is offered. Rereads may reveal pending/confirmed
+  request or withdrawn result; otherwise the packet remains honestly unresolved and blocked.
+  Unsent review intent stays with its game. Logout, account switch and authority loss clear
+  private rows/commands; stale reads and callbacks cannot restore them. This route-state
+  memory is not a durable offline command journal or a claim of process-kill recovery.
+- `/my-games`, reachable in the existing product header, combines owner/manager projection
+  from `/me/games` with applications, deduped by gameId. Real filters cover all, managed,
+  applications, pending and confirmed. Existing native cards render actual available data;
+  unavailable public details remain unavailable, including private/unlisted detail reads.
+  Partial/failed cursor sources remain explicit and never become an empty list. Managed
+  cards are read-only; organizer.id does not grant management. No fake management or chat.
+
+Author selfchecks: `node --experimental-strip-types --test --test-isolation=none
+apps/mobile/test/*.test.ts` — **47/47 PASS**, including 10 targeted participation tests
+and all retained assertions. A focused initial run found incorrect 401 error classification;
+it was corrected and the focused/full units passed. Final related auth/participation
+rerun after session-fence hardening: **21/21 PASS**. OpenAPI JSON/source selfcheck
+confirmed exactly four opt-ins, preserved cookie/manager boundaries and unchanged 0.44.0. API integration source uses fake OAuth
+and the existing disposable PostGIS pattern; it is **NOT_TESTED** here. No `.git`,
+node_modules, tsc or eslint is available in this export. No install/download/Corepack,
+real DB/SMTP/DEV/provider/device/network call or baseline reconstruction was performed.
+Parent must run actual API integration, contracts/security/Product CI, mobile typecheck,
+lint/exports, independent QA, builds, DEV acceptance/smoke and release stage.
+
+**Source only; no alpha86 release receipt.** Accepted server remains supplied
+`fd9c4cfa2a14694fc6cf3d1f4d8b3f60c0a8d210` / alpha85 / API0.43; source native auth API0.44
+and migration72 remain undeployed/disabled. Default native flag0; PROD unavailable.
+Samsung S23 Owner FAIL / recheck pending and native visual NOT_VERIFIED remain.
+Mandatory full Android-first/iOS parity is unfinished: management/create, invitations,
+recommendations, postgame, Players/Messages, full discovery/date/filters/map, profile
+editing/link/reauth, venues/Radar and other accepted surfaces still require later ports.
+Actual Android/iOS binary, verified associations/provider lifecycle, store/OTA proof,
+independent QA/CI and Owner device/UAT are not established by these unit tests.
+
+All prior attempts, timeout/QA lineage and limitations are retained below as history.
+
+---
+
 # GoBadminton native #522 · current auth/profile SOURCE ONLY · 2026-11-14
 
 This bounded candidate adds one persistent root AuthProvider/session coordinator,

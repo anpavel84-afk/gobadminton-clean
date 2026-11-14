@@ -925,6 +925,7 @@
     },
     "/me/games": {
       "get": {
+        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
         "operationId": "listMyManagedGames",
         "tags": [
           "Games"
@@ -2038,6 +2039,7 @@
         }
       },
       "post": {
+        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
         "operationId": "requestParticipation",
         "tags": [
           "Participation"
@@ -2097,6 +2099,7 @@
     },
     "/me/participations": {
       "get": {
+        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
         "operationId": "listMyParticipations",
         "tags": [
           "Participation"
@@ -2234,6 +2237,7 @@
         }
       ],
       "post": {
+        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
         "operationId": "withdrawParticipation",
         "tags": [
           "Participation"
@@ -26622,7 +26626,7 @@
       "NativeBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Opaque hash-backed native access; 600 seconds. Only /me and owned session routes opt in; never combine with browser cookie."
+        "description": "Opaque hash-backed native access; 600 seconds. Only explicitly admitted routes opt in: /me, owned sessions, /me/games, /me/participations, participation request and own withdraw. Never combine with browser cookie."
       }
     },
     "parameters": {

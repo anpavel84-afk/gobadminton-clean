@@ -137,11 +137,23 @@ revokes only the native session/family, and is idempotent without cookie logout 
 Persisted global/IP/operation counters bound attempts; auth bodies are bounded to 4 KiB.
 The existing API logger allowlist omits request bodies, credentials, query and error text.
 
-Only GET `/me`, GET `/me/sessions`, DELETE `/me/sessions/:sessionId` and POST
-`/me/sessions/revoke-others` opt into native bearer. Invalid, duplicate or mixed explicit
+GET `/me`, GET `/me/sessions`, DELETE `/me/sessions/:sessionId` and POST
+`/me/sessions/revoke-others` opt into native bearer. The subsequent bounded #522
+participation source also opts in GET `/me/participations`, POST
+`/games/:gameId/participations`, POST `/participations/:participationId/withdraw`
+and GET `/me/games`, using the existing principal helpers. Invalid, duplicate or mixed explicit
 Authorization fails closed. Native `/me` has session metadata and no browser CSRF secret;
 browser `/me` is unchanged. Linking, email change, reauth, Admin and all other private
-consumer routes remain cookie-only. Session ownership/idempotency, Push/Radar cleanup,
+consumer routes remain cookie-only, including applicant-list and manager confirm/reject/remove.
+Public games/detail reads remain credential-free: optionalSession rejects bearer.
+The mobile coordinator retains credentials privately, reads every participation cursor page,
+and holds an immutable actor/session/version/body/key packet across navigation while sending
+or UNKNOWN. It never auto-applies after sign-in or replays an ambiguous command; explicit
+rereads can show the current result or an unresolved state. Business 403/409/422 do not
+log out the actor; 401 clears private state. Managed authority comes only from `/me/games`.
+The added isolated integration fixture is NOT_TESTED here; pinned dependencies and the
+existing disposable PostGIS harness are required. API source stays 0.44; accepted server
+alpha85/API0.43 and native binary/device receipts remain separate. Session ownership/idempotency, Push/Radar cleanup,
 User-before-Session fencing and independent account restriction enforcement remain in force.
 Explicit Admin consumer-session revocation includes both server-issued consumer audiences.
 
