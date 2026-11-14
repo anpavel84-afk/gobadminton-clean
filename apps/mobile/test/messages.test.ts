@@ -67,10 +67,35 @@ test('A→B→A, background, stale cursor and logout responses cannot restore pr
   assert.equal(owner.getSnapshot().detail,null); assert.deepEqual(owner.getSnapshot().pending,{});
 });
 test('private access loss clears DTOs and pending ownership, while moderation/rate failures retain drafts', async () => {
-  const { owner,port }=setup({ send: async () => { throw new MessagesError('business',429,'RATE_LIMITED'); } });
-  owner.focus(resource); await tick(); owner.draft(resource,'retain'); await owner.act(resource,'send'); assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'retain'); assert.deepEqual(owner.getSnapshot().pending,{});
+  const time=fakeClock();
+  const { owner,port }=setup({ send: async () => { throw new MessagesError('business',429,'RATE_LIMITED'); } },time.clock);
+  await owner.loadInbox(); await owner.loadCounts();
+  assert.deepEqual(owner.getSnapshot().inbox,page); assert.deepEqual(owner.getSnapshot().counts,counts);
+  const root=owner.mount(), focus=owner.leaseFocus(resource); await tick(); owner.draft(resource,'retain'); await owner.act(resource,'send'); assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'retain'); assert.deepEqual(owner.getSnapshot().pending,{});
   port.direct=async () => { throw new MessagesError('private',404); }; await owner.loadDetail(resource);
-  assert.equal(owner.getSnapshot().detail,null); assert.deepEqual(owner.getSnapshot().drafts,{}); assert.equal(owner.getSnapshot().inbox,null);
+  assert.equal(owner.getSnapshot().detail?.status,'error'); assert.equal(owner.getSnapshot().detail?.header,null);
+  assert.deepEqual(owner.getSnapshot().detail?.messages,[]); assert.equal(owner.getSnapshot().detail?.cursor,null);
+  assert.equal(owner.getSnapshot().detail?.ownId,null); assert.deepEqual(owner.getSnapshot().detail?.members,[]);
+  assert.deepEqual(owner.getSnapshot().drafts,{}); assert.deepEqual(owner.getSnapshot().pending,{});
+  assert.equal(owner.getSnapshot().inbox,null); assert.equal(owner.getSnapshot().counts,null);
+  assert.match(owner.getSnapshot().detail?.error ?? '',/Доступ/);
+  // Same mounted route's existing refresh callback must make a new authorized read.
+  let recovered=0;
+  port.direct=async () => { recovered++; return {...header,version:8}; };
+  await owner.loadDetail(resource);
+  assert.equal(recovered,1); assert.equal(owner.getSnapshot().detail?.status,'ready');
+  assert.equal(owner.getSnapshot().detail?.header?.version,8); assert.deepEqual(owner.getSnapshot().drafts,{});
+  focus(); assert.equal(time.size(),0);
+  const nextFocus=owner.leaseFocus(resource); await tick();
+  // A denied request followed by an in-flight recovery cannot cross an actor/session change.
+  port.direct=async () => { throw new MessagesError('private',403); }; await owner.loadDetail(resource);
+  const stale=deferred<Conversation>(); port.direct=async () => stale.promise;
+  const recovering=owner.loadDetail(resource); await tick();
+  owner.setActor({...actor,actorId:'internal-b',sessionId:'new-session',generation:2});
+  stale.resolve(header); await recovering;
+  assert.equal(owner.getSnapshot().detail,null); assert.equal(owner.getSnapshot().inbox,null);
+  assert.deepEqual(owner.getSnapshot().drafts,{}); assert.deepEqual(owner.getSnapshot().pending,{});
+  nextFocus(); root(); assert.equal(time.size(),0);
 });
 test('direct request and invitation decisions use actual server versions and own public identity, never internal id', async () => {
   const { owner,sent }=setup({ direct: async () => ({ ...header,requestState:'pending' }) }); owner.focus(resource); await tick(); await owner.act(resource,'accept'); assert.deepEqual(sent[0]?.body,{ expectedVersion:7 });
@@ -172,14 +197,49 @@ test('a poll interrupted by sending/UNKNOWN cannot continue history or publish a
   assert.equal(owner.getSnapshot().detail?.cursor,'old'); assert.equal(time.size(),0); focus(); root();
 });
 
-test('quiet inbox refresh keeps displayed rows while pending, then applies authoritative kind/filter changes', async () => {
-  const time=fakeClock(), gate=deferred<InboxPage>(); let calls=0;
-  const request={...page.items[0]!,kind:'dm_request' as const,id:'same-thread'};
-  const {owner,sent}=setup({inbox:async()=>{ calls++; return calls===2 ? gate.promise : calls===1 ? {...page,items:[request]} : {...page,items:[]}; }},time.clock);
+test('quiet first-page polling reconciles identities without dropping older pages or their boundary', async () => {
+  const time=fakeClock(), gate=deferred<InboxPage>(); const queries:(string|undefined)[]=[];
+  const request={...page.items[0]!,kind:'dm_request' as const,id:'same-thread',conversationId:'same-thread'};
+  const older={...page.items[3]!,id:'older-chat'}, oldest={...page.items[2]!,id:'oldest-invite'};
+  const updated={...request,kind:'dm' as const,title:'Accepted',attention:false,unreadCount:0};
+  const fresh={...page.items[2]!,id:'fresh-invite'};
+  let polls=0;
+  const {owner,sent}=setup({inbox:async(_filter,cursor)=>{
+    queries.push(cursor);
+    if (cursor==='page-2') return {...page,items:[older],nextCursor:'page-3'};
+    if (cursor==='page-3') return {...page,items:[oldest],nextCursor:null};
+    polls++; return polls===1 ? {...page,items:[request],nextCursor:'page-2'} : polls===2 ? gate.promise : {...page,items:[],nextCursor:null};
+  }},time.clock);
   const root=owner.mount(), focus=owner.leaseFocus('inbox'); await tick();
-  await time.advance(15000); assert.equal(owner.getSnapshot().inboxStatus,'ready'); assert.deepEqual(owner.getSnapshot().inbox?.items,[request]);
-  gate.resolve({...page,items:[{...request,kind:'dm'}]}); await tick();
-  assert.deepEqual(owner.getSnapshot().inbox?.items.map(i=>i.kind),['dm']);
-  await time.advance(15000); assert.deepEqual(owner.getSnapshot().inbox?.items,[]); assert.deepEqual(sent,[]);
-  focus(); root();
+  await owner.loadInbox('all','page-2'); owner.draft(resource,'unsent');
+  await time.advance(15000);
+  assert.equal(owner.getSnapshot().inboxStatus,'ready'); assert.deepEqual(owner.getSnapshot().inbox?.items,[request,older]);
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,'page-3');
+  gate.resolve({...page,counts:{...counts,dmUnread:0},items:[fresh,updated],nextCursor:'new-first-boundary'}); await tick();
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[fresh,updated,older]);
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,'page-3'); assert.equal(owner.getSnapshot().inbox?.counts.dmUnread,0);
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'unsent');
+  // No absence-deletion inference, even from an empty first-page response.
+  await time.advance(15000); assert.deepEqual(owner.getSnapshot().inbox?.items,[fresh,updated,older]);
+  await owner.loadInbox('all',owner.getSnapshot().inbox?.nextCursor ?? undefined);
+  assert.deepEqual(queries,[undefined,'page-2',undefined,undefined,'page-3']);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[fresh,updated,older,oldest]);
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,null); assert.deepEqual(sent,[]);
+  focus(); root(); assert.equal(time.size(),0);
+});
+for (const filter of ['unread','attention'] as const) test(`quiet ${filter} updates remove only known nonmatching identities; explicit refresh resets`, async () => {
+  const request={...page.items[0]!,kind:'dm_request' as const,id:'changed'};
+  const older={...page.items[3]!,id:'older'};
+  const updated={...request,kind:'dm' as const,attention:false,unreadCount:0};
+  let calls=0;
+  const {owner}=setup({inbox:async(_filter,cursor)=>{
+    if (cursor) return {...page,items:[older],nextCursor:'keep-boundary'};
+    calls++; return calls===1 ? {...page,items:[request],nextCursor:'older-page'} : {...page,items:[updated],nextCursor:'new-boundary'};
+  }});
+  await owner.loadInbox(filter); await owner.loadInbox(filter,'older-page');
+  await owner.loadInbox(filter,undefined,true);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[older]); assert.equal(owner.getSnapshot().filter,filter);
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,'keep-boundary');
+  await owner.loadInbox('all');
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[updated]); assert.equal(owner.getSnapshot().inbox?.nextCursor,'new-boundary');
 });

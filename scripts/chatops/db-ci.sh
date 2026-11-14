@@ -55,6 +55,13 @@ for file in "${files[@]}"; do
   docker exec "$NAME" dropdb -U gobadminton --if-exists --force "$db"
   docker exec "$NAME" createdb -U gobadminton "$db"
   export DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/$db"
+  # Messages owns a random disposable DB and needs the same container's admin DB.
+  # Clear inherited values for every other suite; never accept an external fallback.
+  unset NATIVE_MESSAGES_TEST_DATABASE_URL
+  case $(basename "$file") in
+    native-messages.foundation.test.ts)
+      export NATIVE_MESSAGES_TEST_DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/postgres" ;;
+  esac
   # These historical and native foundation suites expect an already migrated disposable schema.
   case $(basename "$file") in
     radar.geographic.test.ts|qa.g1-independent.test.ts|native-auth.foundation.test.ts|native-participation.foundation.test.ts)

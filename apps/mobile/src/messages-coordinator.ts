@@ -1,5 +1,5 @@
 import { MessagesError, mergeMessages, mutationPath, parseInvitation, seq } from './messages.ts';
-import type { Conversation, DirectMessage, GameChat, GameChatMember, GameInvitation, InboxCounts, InboxFilter, InboxPage, MessageResource, MessageAction, MessageBody, MessagePage } from './messages.ts';
+import type { Conversation, DirectMessage, GameChat, GameChatMember, GameInvitation, InboxCounts, InboxFilter, InboxItem, InboxPage, MessageResource, MessageAction, MessageBody, MessagePage } from './messages.ts';
 import type { Actor } from './participation.ts';
 import { sameActor } from './participation.ts';
 export type MessagePacket = Readonly<{ actor: Readonly<Actor>; resource: Readonly<MessageResource>; action: MessageAction;
@@ -21,6 +21,9 @@ export type MessagesSnapshot = { actor: Actor | null; counts: InboxCounts | null
   filter: InboxFilter; inbox: InboxPage | null; inboxStatus: 'idle' | 'loading' | 'ready' | 'error'; inboxError: boolean; loadingMore: boolean;
   detail: Detail | null; drafts: Readonly<Record<string,string>>; pending: Readonly<Record<string,Pending>>; notice: string | null };
 export const resourceKey = (r: MessageResource) => `${r.kind}:${r.id}`;
+// A direct request becomes a DM without changing its underlying inbox identity.
+const inboxKey = (item: InboxItem) => `${item.kind === 'dm_request' ? 'dm' : item.kind}:${item.id}`;
+const matchesFilter = (item: InboxItem, filter: InboxFilter) => filter === 'all' || (filter === 'unread' ? item.unreadCount > 0 : item.attention);
 const initial = (actor: Actor | null): MessagesSnapshot => ({ actor, counts: null, countsLoading: false, filter: 'all', inbox: null,
   inboxStatus: 'idle', inboxError: false, loadingMore: false, detail: null, drafts: {}, pending: {}, notice: null });
 /** Root-owned, actor/session/generation fenced. Tab lifetimes never own mutation packets. */
@@ -141,9 +144,13 @@ export class MessagesCoordinator {
   private failed(error: unknown): boolean {
     if (error instanceof MessagesError && error.kind === 'private') {
       ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
-      this.focused = null; this.focusResource = null; ++this.focusLease;
-      // Do not retain private DTOs, drafts or packets after authority/access loss. No public fallback.
-      this.snapshot = initial(this.snapshot.actor); this.show({ notice: 'Доступ к сообщениям утрачен. Проверьте сеанс.' }); return true;
+      // Keep only the mounted route intent/lease so its existing refresh and blur
+      // handlers still work. All private DTOs, drafts and packets are discarded.
+      const resource = this.focusResource, notice = 'Доступ к сообщениям утрачен. Проверьте сеанс.';
+      this.snapshot = initial(this.snapshot.actor);
+      this.show({ notice, inboxStatus: this.focused === 'inbox' ? 'error' : 'idle',
+        detail: resource ? { resource, status: 'error', header: null, messages: [], cursor: null, members: [], ownId: null, error: notice, loadingMore: false } : null });
+      return true;
     }
     return false;
   }
@@ -156,7 +163,7 @@ export class MessagesCoordinator {
     finally { this.endRead('counts'); }
   };
   loadInbox = async (filter = this.snapshot.filter, cursor?: string, quiet = false) => {
-    const old = this.snapshot.inbox;
+    const old = this.snapshot.filter === filter ? this.snapshot.inbox : null;
     if (!this.snapshot.actor || !this.foreground || cursor && (this.snapshot.loadingMore || this.snapshot.filter !== filter || old?.nextCursor !== cursor)) return;
     if (!this.beginRead('inbox')) return;
     const revision = this.revision, request = ++this.listRevision;
@@ -165,7 +172,15 @@ export class MessagesCoordinator {
       const page = await this.port.inbox(filter,cursor);
       if (!this.valid(revision) || request !== this.listRevision) return;
       if (cursor && page.nextCursor === cursor) throw new MessagesError('invalid');
-      const inbox = cursor && old ? { ...page, items: [...new Map([...old.items,...page.items].map(i => [`${i.kind}:${i.id}`,i])).values()] } : page;
+      let inbox = page;
+      if (old && (cursor || quiet)) {
+        const updates = new Map(page.items.map(item => [inboxKey(item),item]));
+        const items = cursor ? [...old.items,...page.items] : [...page.items,...old.items];
+        // First-page absence is not deletion. Keep the loaded boundary; only an
+        // authoritative replacement of the same entity can change its kind/filter.
+        const merged = new Map(items.map(item => [inboxKey(item),updates.get(inboxKey(item)) ?? item]));
+        inbox = { ...page, items: [...merged.values()].filter(item => matchesFilter(item,filter)), nextCursor: cursor ? page.nextCursor : old.nextCursor };
+      }
       this.show({ inbox, counts: page.counts, inboxStatus: 'ready', loadingMore: false });
     } catch (error) { if (this.valid(revision) && request === this.listRevision && !this.failed(error)) this.show({ inboxStatus: cursor || quiet && old ? 'ready' : 'error', inboxError: true, loadingMore: false }); }
     finally { this.endRead('inbox'); }
