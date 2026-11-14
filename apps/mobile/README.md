@@ -1,3 +1,46 @@
+# #522 native Messages source candidate on accepted alpha.87
+
+Source routes: `/messages`, `/messages/direct/:id`, `/messages/game/:id`,
+`/messages/invitations/:id`. All four existing inbox kinds open native screens;
+all/unread/attention, pagination/refresh, direct request decisions, text send,
+older/catchup history, game members and invitation decisions use closed bearer APIs.
+Main navigation follows the accepted WEB white bar, soft lime icon circle and
+30×3 lime underline. Root Messages state keeps immutable UNKNOWN packets and drafts
+across tab changes without resetting the existing participation owner. Retry is
+explicit and reuses the exact packet; logout/access loss clears private state.
+Read mutations require incoming RN-viewable rows, focus, foreground and near-bottom.
+
+Exactly 17 existing operations opt into native principals. Cookie Origin/CSRF,
+Idempotency-Key, existing mutation services/locks and neighboring cookie-only routes
+remain. GET invitation adds recipient-only pending acceptance context, including
+current gameVersion and actual terms, without granting public/unlisted game access.
+API stays 0.44.0; native versionName 0.1.0 / Android versionCode 3. No registry,
+activation, signing, deployment, provider, dependency or migration change.
+
+Author selfcheck: **77/77 mobile units PASS** (68 retained + 9 Messages/auth tests),
+using `node --experimental-strip-types --test --test-isolation=none
+apps/mobile/test/*.test.ts`. Author tests are not independent QA. The isolated DB
+suite requires `RUN_DB_INTEGRATION=1` and a dedicated loopback admin
+`NATIVE_MESSAGES_TEST_DATABASE_URL` ending in `/postgres`; it creates, self-migrates
+and drops only a random `native_messages_*` database. It uses fake OAuth/moderation,
+HTTP PKCE/session issuance and real service guards. **DB, typecheck, lint, contract
+validator, Android/iOS bundles, device/auth smoke and runtime visual: NOT_TESTED**
+in this dependency-free export. Root must run the owning gates and independent QA.
+The contract-only Foundation rules found no errors across 276 operations; existing
+Friendship/Game/Unified generated types verified unchanged; existing Admin protocol check passed (56 operations). Full Foundation static
+check returned **FAIL** solely for omitted `AGENTS.md` files/references in this export;
+no gate or missing source was reconstructed. No Git metadata is exposed here; canonical admission/alpha.87 acceptance are supplied
+Root evidence, not locally reverified or replaced by a new release claim.
+
+Source only. Full native parity remains MANDATORY_NOT_COMPLETE; new contact,
+invitation create/revoke, hide/report/block/preferences/social-matched UI and the
+remaining accepted WEB surfaces remain mandatory later slices. Existing DEV native
+registry stays enabled; no activation replay. Owner Samsung S23 FAIL_RECHECK_PENDING,
+native visual NOT_VERIFIED, prior FAIL/timeouts/UNKNOWN/cost evidence and all earlier
+source/release history below remain unchanged. No phone PASS, fullnative or DONE claim.
+
+---
+
 ## Current bounded #522 source on alpha.86 (2026-11-14)
 
 Adds real native Игры → Игроки → Мои игры navigation, with Profile in the header;

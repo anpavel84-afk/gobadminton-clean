@@ -27,7 +27,7 @@ export class MeSocialProfileController {
   @Get()
   @Header("Cache-Control", "no-store")
   async getOwn(@Req() request: FastifyRequest) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.profiles.getOwn(consumer.userId);
   }
 

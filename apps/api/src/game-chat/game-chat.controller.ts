@@ -28,7 +28,7 @@ export class GameChatController {
     @Req() request: FastifyRequest,
     @Param("gameId") gameId: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.chat.getOrEnsureChat(consumer.userId, gameId);
   }
 
@@ -41,7 +41,7 @@ export class GameChatController {
     @Query("afterSeq") afterSeq?: string,
     @Query("limit") limitRaw?: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     const limit =
       limitRaw === undefined || limitRaw === ""
         ? undefined
@@ -60,7 +60,7 @@ export class GameChatController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("gameId") gameId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       text?: string;
@@ -85,7 +85,7 @@ export class GameChatController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("gameId") gameId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { throughSeq?: string | number };
     if (body.throughSeq === undefined || body.throughSeq === null) {
@@ -108,7 +108,7 @@ export class GameChatController {
     @Req() request: FastifyRequest,
     @Param("gameId") gameId: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.chat.listMembers(consumer.userId, gameId);
   }
 }

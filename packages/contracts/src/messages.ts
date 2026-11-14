@@ -1,0 +1,23 @@
+/** Pure Messages wire types. Safe for type-only imports in native clients. API 0.44 additive projection. */
+export type MessagePage<T> = { items: T[]; nextCursor: string | null };
+export type InboxFilter = 'all' | 'unread' | 'attention';
+export type InboxCounts = { pendingRequestCount: number; pendingInvitationCount: number; dmUnread: number; gameChatUnread: number };
+export type MessagePeer = { publicPlayerId: string; displayName: string; avatar?: { uploadedUrl: string | null; providerUrl: string | null } };
+export type Conversation = { id: string; kind: 'direct'; requestState: 'pending' | 'accepted' | 'declined' | 'expired' | 'closed'; version: number;
+  peer: MessagePeer; role: 'initiator' | 'recipient'; lastMessageSeq: string; readThroughSeq: string; unreadCount: number };
+export type GameChat = { id: string; kind: 'game'; gameId: string; lifecycleState: 'active' | 'closed'; version: number;
+  lastMessageSeq: string; readThroughSeq: string; unreadCount: number; memberRole: 'manager' | 'member' };
+export type GameChatMember = { publicPlayerId: string; displayName: string; role: 'manager' | 'member' };
+export type DirectMessage = { id: string; conversationId: string; seq: string; kind: 'text'; authorPublicPlayerId: string | null;
+  createdAt: string; contentState: 'live' | 'tombstoned' | 'purged'; text: string | null };
+export type InvitationContext = { gameVersion: number; title: string; startsAt: string; endsAt: string; timezone: string;
+  applicationDeadlineAt: string; venueName: string; venueAddress: string; formatKey: string; activityKind: string;
+  trainingDescription: string | null; trainerDisplayName: string | null; levelScaleId: string; levelScaleVersion: number; allowedLevelIds: string[]; availablePlaces: number;
+  settlementPurpose: string | null; priceStatus: string | null; priceMinor: string | null; currency: string | null; settlementTerms: string };
+export type GameInvitation = { id: string; gameId: string; status: 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked' | 'cancelled_by_game';
+  version: number; inviterPublicPlayerId: string | null; inviteePublicPlayerId: string | null; expiresAt: string | null;
+  participationId: string | null; acceptanceContext?: InvitationContext | null };
+export type InboxItem = { kind: 'dm' | 'dm_request' | 'game_invitation' | 'game_chat'; id: string; lastActivityAt: string;
+  title: string; subtitle: string; unreadCount: number; attention: boolean; conversationId: string | null; invitationId: string | null;
+  gameId: string | null; peer: MessagePeer | null };
+export type InboxPage = MessagePage<InboxItem> & { counts: InboxCounts };

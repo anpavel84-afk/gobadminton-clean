@@ -86,7 +86,7 @@ export class InvitationsController {
     @Param("invitationId") invitationId: string,
     @Req() request: FastifyRequest,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.invitations.getOne(consumer.userId, invitationId);
   }
 
@@ -97,7 +97,7 @@ export class InvitationsController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       expectedVersion?: number;
@@ -121,7 +121,7 @@ export class InvitationsController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { expectedVersion?: number };
     const result = await this.invitations.decline(

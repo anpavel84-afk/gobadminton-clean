@@ -1,10 +1,12 @@
+import { MessagesCoordinator } from './messages-coordinator.ts';
+import { MessagesError } from './messages.ts';
 import { PlayersCoordinator, PlayersError } from './players.ts';
 import { publicApi, PublicApiError } from './public-api.ts';
 import { ParticipationCoordinator, ParticipationError, sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import type { NativeMe } from '@gobadminton/contracts/native-auth';
 import type { NativeApi } from './native-api.ts';
-import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, canonicalGamePath,
+import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, canonicalReturnPath,
   parseCallback, parseCredentials, parseNativeMe, parseSecureEnvelope, parseSessions, parseTransaction } from './native-auth-protocol.ts';
 import type { PendingLogin, SecureEnvelope, SecureSession, NativeSessionRow } from './native-auth-protocol.ts';
 
@@ -33,8 +35,20 @@ export class AuthCoordinator {
   private snapshot: AuthSnapshot = { status: 'hydrating', me: null, sessions: [], returnPath: null, notice: null };
   readonly players = new PlayersCoordinator();
   readonly participation: ParticipationCoordinator;
+  readonly messages: MessagesCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
+    this.messages = new MessagesCoordinator({
+      inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
+      counts: () => this.participationRead(access => deps.api.inboxCounts(access)),
+      identity: () => this.participationRead(access => deps.api.messageIdentity(access)),
+      direct: id => this.participationRead(access => deps.api.conversation(access,id)),
+      game: id => this.participationRead(access => deps.api.gameChat(access,id)),
+      members: id => this.participationRead(access => deps.api.chatMembers(access,id)),
+      invitation: id => this.participationRead(access => deps.api.invitation(access,id)),
+      history: (r,before,after) => this.participationRead(access => deps.api.messageHistory(access,r,before,after)),
+      send: packet => this.participationRead(access => deps.api.messageMutation(access,packet.resource,packet.action,packet.body,packet.key),packet.actor),
+    },deps.random);
     this.participation = new ParticipationCoordinator({
       own: cursor => this.participationRead(access => deps.api.ownParticipations(access, cursor)),
       managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
@@ -55,7 +69,7 @@ export class AuthCoordinator {
       return result;
     } catch (error) {
       if (epoch !== this.epoch) throw new ParticipationError('stale');
-      if ((error instanceof ParticipationError && error.kind === 'authority') ||
+      if ((error instanceof MessagesError && error.status === 401) || (error instanceof ParticipationError && error.kind === 'authority') ||
           (error instanceof NativeAuthError && ['authority', 'expired'].includes(error.kind))) await this.fail(epoch, new NativeAuthError('authority'));
       throw error;
     }
@@ -76,6 +90,7 @@ export class AuthCoordinator {
       this.participation.setActor(null);
     }
     const actor = this.participation.getSnapshot().actor;
+    if (this.snapshot.status !== 'hydrating') this.messages.setActor(actor);
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -191,7 +206,7 @@ export class AuthCoordinator {
     await this.logout(false);
     if (this.epoch !== before + 1 || !this.writable) return null;
     const epoch = this.epoch;
-    const intent = canonicalGamePath(returnPath) ?? this.snapshot.returnPath;
+    const intent = canonicalReturnPath(returnPath) ?? this.snapshot.returnPath;
     this.envelope = this.empty(intent);
     this.show({ status: 'signing-in', me: null, sessions: [], returnPath: intent, notice: null });
     try {
