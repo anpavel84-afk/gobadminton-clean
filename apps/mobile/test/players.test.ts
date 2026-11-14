@@ -40,6 +40,11 @@ test('player level labels cover the full canonical NTRP v1 catalog and preserve 
   assert.equal(playerLevelLabel({ scaleId: 'gb-social-pilot', scaleVersion: 1, levelId: 'unknown' }), 'Уровень не указан');
   assert.equal(playerLevelLabel(null), 'Уровень не указан');
 });
+test('pilot level labels return unknown text for inherited and unrecognized IDs', () => {
+  for (const levelId of ['__proto__', 'constructor', 'toString', 'anotherunknown']) {
+    assert.equal(playerLevelLabel({ scaleId: 'gb-social-pilot', scaleVersion: 1, levelId }), 'Уровень не указан', levelId);
+  }
+});
 test('media permits only existing upload/provider authorities, rejects authority tricks and preserves initials fallback', () => {
   const hash = 'a'.repeat(64);
   assert.equal(playerMediaUrl(`/v1/media/avatars/${hash}.png`, 'avatar'), `https://dev.gobadminton.ru/v1/media/avatars/${hash}.png`);
