@@ -88,11 +88,12 @@ run("native Messages · self-migrating isolated database", () => {
         while (true) {
           const remainingMs = deadline - Date.now();
           if (remainingMs <= 0) throw Error(`Native Messages fixture cleanup leak: ${remainingConnections} connections remain in ${databaseName} after ${drainTimeoutMs}ms; database was not dropped`);
-          const activity = await admin.query<{ count: number }>({
+          const query = {
             text: "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = $1",
             values: [databaseName],
             query_timeout: remainingMs,
-          });
+          };
+          const activity = await admin.query<{ count: number }>(query);
           remainingConnections = activity.rows[0]!.count;
           if (remainingConnections === 0) break;
           await new Promise(resolve => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
