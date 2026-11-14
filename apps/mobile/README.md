@@ -1,3 +1,49 @@
+# #522 CONTACT ADDRESS3 · two P2 source repairs
+
+This bounded author delta addresses both P2 findings from the FIRST whole
+independent review of base `b5b7328ab55d5f6effec16fc4444d0681abc09e5`.
+Contact success receipts now reject `seq > conversation.lastMessageSeq` with
+`MessagesError('invalid')`; equal sequences and older duplicate receipts remain
+valid. HTTP 200 with an inconsistent receipt retains the original frozen UNKNOWN
+packet, draft, key and body until explicit same-packet reconciliation succeeds.
+
+The editor's draft/send/reconcile callbacks carry their rendered view generation.
+Open, blur, authoritative actor changes and forget invalidate that generation;
+typing and dispatch updates keep it stable so rapid current-screen input works.
+Authoritative actor/session/peer fences, same-owner private unsent-draft quarantine,
+immutable UNKNOWN packets and explicit reconciliation without auto-send remain.
+
+Author offline verification: all 15 owning contact unit tests passed, including
+real NativeApi HTTP 200 inconsistent-receipt/reconciliation and same-peer,
+same-actor, same-session stale edit/send/reconcile regressions. Fetch is mocked;
+no external network or device execution is claimed. Existing assertions remain.
+Only the five admitted paths changed. Source versionCode 6 and the native registry,
+API/contracts, DB/schema, dependencies and configuration are unchanged.
+
+Immutable history remains retained, not replaced by this repair:
+
+- Three prior normal source receipts: first contact
+  `2407a0867a65dca4b56d13e54d7f76ec4a460713907c0fb5d1f6998937cecc3e`,
+  ADDRESS1 `3dde4144a24103b2265c3ea2ca6bbb4b86da8d7a1a4e85a3badf074e7f51844a`,
+  ADDRESS2 `d44256ec6b989854993fb24c8f803c7dc19ed85674e34999774923c2cfe644f8`.
+- Manual Root precheck FAIL
+  `8fb77611a1168cb1c0ed83bb6f891caf76ea76cf03f93980e45a11224d502ea7`;
+  parent FAIL `44bca0364446541483d2e25c655b899d1265f00546fd548c0ff228315eae77fe`;
+  qualified prior parent composite
+  `c2d72c2f0a2c61c9158dc09fa56a678a0c4412219429aa2ba05ac82e60e1cd70`.
+- FIRST whole independent QA: FAIL with two P2 findings,
+  `8f44d703e99236c0325fc965cad31280bd49ce1f0e05381a6049a9c768f18d84`.
+
+Fresh parent gates and focused independent QA of both findings plus related delta
+are NOT_DONE. Parent must run fresh mobile TSC, affected lint, contact/auth/native-
+contract units and both Expo exports, retaining unchanged API/contracts/DB6 evidence.
+No new whole-source PASS is claimed. Build, signing, publication, device checks and
+DEV acceptance are NOT_DONE here. Owner FAIL_RECHECK_PENDING, native visual
+NOT_VERIFIED, unfinished mandatory full native parity and prior FAIL/UNKNOWN history
+remain. Every previous README byte is preserved verbatim below as history.
+
+---
+
 # #522 CONTACT ADDRESS2 · test expectation and README history correction
 
 The test-only anonymous case now follows the existing auth contract: without

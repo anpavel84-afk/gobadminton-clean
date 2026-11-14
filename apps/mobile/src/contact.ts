@@ -37,7 +37,7 @@ export function contactConversation(value: unknown, target: string, id?: string)
 export function parseContactResult(value: unknown, target: string): ContactResult {
   const r = row(value), conversation = contactConversation(r.conversation, target), receipt = row(r.receipt);
   const conversationId = messageId(receipt.conversationId), sequence = seq(receipt.seq);
-  if (conversationId !== conversation.id || sequence === '0' || typeof receipt.createdAt !== 'string' ||
+  if (conversationId !== conversation.id || sequence === '0' || BigInt(sequence) > BigInt(conversation.lastMessageSeq) || typeof receipt.createdAt !== 'string' ||
     !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(receipt.createdAt) || !Number.isFinite(Date.parse(receipt.createdAt)) ||
     new Date(receipt.createdAt).toISOString().slice(0, 19) !== receipt.createdAt.slice(0, 19) ||
     (receipt.outcome !== 'created' && receipt.outcome !== 'duplicate')) return invalid();

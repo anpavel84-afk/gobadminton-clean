@@ -13,10 +13,10 @@ type Port = {
   send: (packet: ContactPacket, authority: Actor) => Promise<ContactResult>;
 };
 type Command = { packet: ContactPacket; status: 'sending' | 'unknown' };
-type Snapshot = { actor: Actor | null; target: string | null; status: 'idle' | 'loading' | 'ready' | 'existing' | 'unavailable' | 'error';
+type Snapshot = { actor: Actor | null; target: string | null; viewGeneration: number; status: 'idle' | 'loading' | 'ready' | 'existing' | 'unavailable' | 'error';
   contact: ContactState | null; player: PublicPlayer | null; conversation: Conversation | null;
   drafts: Record<string, string>; command?: Command; notice: string | null };
-const initial = (actor: Actor | null = null): Snapshot => ({ actor, target: null, status: 'idle', contact: null, player: null, conversation: null, drafts: {}, notice: null });
+const initial = (actor: Actor | null = null, viewGeneration = 0): Snapshot => ({ actor, target: null, viewGeneration, status: 'idle', contact: null, player: null, conversation: null, drafts: {}, notice: null });
 const unknownNotice = 'Результат неизвестен. Проверка повторит только прежнее сообщение с тем же ключом и данными.';
 const unavailable = 'Общение сейчас недоступно. Можно вернуться к списку игроков или открыть сообщения.';
 /** Bounded root owner for directory first contact. No polling, persistence or automatic sending. */
@@ -36,17 +36,17 @@ export class ContactCoordinator {
     if (actor && this.quarantine?.actorId !== actor.actorId) this.quarantine = null;
     const saved = actor ? this.quarantine : null;
     if (actor) this.quarantine = null;
-    ++this.serial; this.snapshot = initial(actor ? Object.freeze({ ...actor }) : null);
+    this.snapshot = initial(actor ? Object.freeze({ ...actor }) : null, ++this.serial);
     this.show(saved ? { target: saved.target, drafts: saved.drafts,
       ...(saved.packet ? { command: { packet: saved.packet, status: 'unknown' }, notice: unknownNotice } : {}) } : {});
   }
-  forget = () => { ++this.serial; this.quarantine = null; this.snapshot = initial(); this.show({}); };
+  forget = () => { this.quarantine = null; this.snapshot = initial(null, ++this.serial); this.show({}); };
   private valid(actor: Actor, serial: number, target: string) {
     return serial === this.serial && sameActor(actor, this.snapshot.actor) && target === this.snapshot.target;
   }
   blur = () => {
     ++this.serial;
-    this.show({ target: null, status: 'idle', contact: null, player: null, conversation: null,
+    this.show({ viewGeneration: this.serial, target: null, status: 'idle', contact: null, player: null, conversation: null,
       ...(this.snapshot.command ? { command: { ...this.snapshot.command, status: 'unknown' }, notice: unknownNotice } : {}) });
   };
   /** Opening/reopening reads only. UNKNOWN is kept even when an existing header becomes visible. */
@@ -55,7 +55,7 @@ export class ContactCoordinator {
     if (!actor) return;
     try { messageId(target); } catch { this.blur(); this.show({ status: 'unavailable', notice: unavailable }); return; }
     const serial = ++this.serial;
-    this.show({ target, status: 'loading', contact: null, player: null, conversation: null,
+    this.show({ viewGeneration: serial, target, status: 'loading', contact: null, player: null, conversation: null,
       ...(this.snapshot.command ? { command: { ...this.snapshot.command, status: 'unknown' }, notice: unknownNotice } : { notice: null }) });
     try { await this.read(target, actor, serial); }
     catch (error) {
@@ -82,22 +82,24 @@ export class ContactCoordinator {
     }
     this.show({ contact, player, status: 'ready' }); return contact;
   }
-  draft = (target: string, text: string, expectedActor = this.snapshot.actor) => {
-    if (!sameActor(expectedActor, this.snapshot.actor) || !this.snapshot.actor || this.snapshot.target !== target || this.snapshot.command || this.snapshot.status !== 'ready') return;
+  // Rendered callbacks carry a view generation, stable across typing and dispatch updates.
+  // Only open/blur/actor/forget boundaries replace it; request serials still fence async work.
+  draft = (target: string, text: string, expectedActor = this.snapshot.actor, expectedView = this.snapshot.viewGeneration) => {
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, this.snapshot.actor) || !this.snapshot.actor || this.snapshot.target !== target || this.snapshot.command || this.snapshot.status !== 'ready') return;
     this.show({ drafts: { ...this.snapshot.drafts, [target]: text } });
   };
-  send = async (expectedTarget = this.snapshot.target, expectedActor = this.snapshot.actor) => {
+  send = async (expectedTarget = this.snapshot.target, expectedActor = this.snapshot.actor, expectedView = this.snapshot.viewGeneration) => {
     const { actor, target, status, command, drafts } = this.snapshot;
-    if (!sameActor(expectedActor, actor) || expectedTarget !== target || !actor || !target || status !== 'ready' || command) return;
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, actor) || expectedTarget !== target || !actor || !target || status !== 'ready' || command) return;
     const text = (drafts[target] ?? '').trim();
     if (!text || text.length > 2000) return;
     const packet: ContactPacket = Object.freeze({ actor: Object.freeze({ ...actor }), key: this.random(),
       body: Object.freeze({ targetPublicPlayerId: target, text, clientMessageId: this.random() }) });
     await this.dispatch(packet, actor, false);
   };
-  reconcile = async (expectedTarget = this.snapshot.target, expectedActor = this.snapshot.actor) => {
+  reconcile = async (expectedTarget = this.snapshot.target, expectedActor = this.snapshot.actor, expectedView = this.snapshot.viewGeneration) => {
     const { actor, target, command } = this.snapshot;
-    if (!sameActor(expectedActor, actor) || expectedTarget !== target || !actor || !command || command.status !== 'unknown' || target !== command.packet.body.targetPublicPlayerId || actor.actorId !== command.packet.actor.actorId) return;
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, actor) || expectedTarget !== target || !actor || !command || command.status !== 'unknown' || target !== command.packet.body.targetPublicPlayerId || actor.actorId !== command.packet.actor.actorId) return;
     await this.dispatch(command.packet, actor, true);
   };
   private async dispatch(packet: ContactPacket, authority: Actor, retry: boolean) {

@@ -46,11 +46,11 @@ export function ContactEditor({ target }: { target: string }) {
         {state.player && <Label>{state.player.displayName}</Label>}
         {(state.status === 'ready' || ownCommand) && <>
           <TextInput accessibilityLabel="Текст сообщения" multiline maxLength={2000} value={text} editable={!command}
-            placeholder="Сообщение" onChangeText={value => owner.draft(target, value, state.actor)} style={styles.input} />
-          {!command && <PrimaryButton title="Отправить" disabled={!text.trim() || text.trim().length > 2000} onPress={() => { void owner.send(target, state.actor); }} />}
+            placeholder="Сообщение" onChangeText={value => owner.draft(target, value, state.actor, state.viewGeneration)} style={styles.input} />
+          {!command && <PrimaryButton title="Отправить" disabled={!text.trim() || text.trim().length > 2000} onPress={() => { void owner.send(target, state.actor, state.viewGeneration); }} />}
         </>}
         {state.notice && <Label accessibilityLiveRegion="polite">{state.notice}</Label>}
-        {ownCommand && command?.status === 'unknown' && <PrimaryButton title="Проверить результат" onPress={() => { void owner.reconcile(target, state.actor); }} />}
+        {ownCommand && command?.status === 'unknown' && <PrimaryButton title="Проверить результат" onPress={() => { void owner.reconcile(target, state.actor, state.viewGeneration); }} />}
         {ownCommand && command?.status === 'sending' && <Label>Отправляем…</Label>}
         {command && !ownCommand && <><Label>Сначала проверьте результат прежнего сообщения.</Label><TextButton title="К прежнему сообщению" onPress={() => router.replace(`/messages/new/${command.packet.body.targetPublicPlayerId}`)} /></>}
         {!command && (state.status === 'error' || state.status === 'unavailable') && <TextButton title="Проверить снова" onPress={() => { void owner.open(target); }} />}

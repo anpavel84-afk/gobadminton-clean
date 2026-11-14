@@ -112,6 +112,49 @@ test('strict contact target/state and receipt validation rejects malformed, mism
   assert.equal(parseContactResult(result, 'peer').receipt.outcome, 'created');
 });
 
+test('receipt sequence cannot exceed the header, while an older duplicate remains valid', () => {
+  for (const outcome of ['created', 'duplicate']) {
+    for (const [lastMessageSeq, sequence] of [['1', '2'], ['9007199254740992', '9007199254740993']]) {
+      assert.throws(() => parseContactResult({ conversation: { ...header, lastMessageSeq }, receipt: { ...receipt, seq: sequence, outcome } }, 'peer'),
+        (error: unknown) => error instanceof MessagesError && error.kind === 'invalid');
+    }
+  }
+  const older = parseContactResult({ conversation: { ...header, lastMessageSeq: '10' }, receipt: { ...receipt, outcome: 'duplicate' } }, 'peer');
+  assert.equal(older.receipt.seq, '1'); assert.equal(older.conversation.lastMessageSeq, '10');
+  assert.equal(parseContactResult(result, 'peer').receipt.seq, '1');
+});
+
+test('actual NativeApi HTTP200 inconsistent receipt stays UNKNOWN until explicit valid same-packet reconciliation', async () => {
+  const s = setup(); await compose(s);
+  const inconsistent = { ...result, receipt: { ...receipt, seq: '2' } };
+  s.setHandler(async path => path === '/conversations/requests'
+    ? new Response(JSON.stringify(inconsistent), { status: 200 }) : path.startsWith('/players/') ? player : none);
+  await s.owner.send();
+  const packet = s.owner.getSnapshot().command!.packet;
+  assert.equal(s.owner.getSnapshot().command!.status, 'unknown');
+  assert.ok(Object.isFrozen(packet)); assert.ok(Object.isFrozen(packet.body)); assert.ok(Object.isFrozen(packet.actor));
+  assert.equal(s.owner.getSnapshot().drafts.peer, '  Привет!  '); assert.equal(s.owner.getSnapshot().conversation, null);
+  s.owner.blur(); await s.owner.open('peer');
+  assert.equal(s.writes().length, 1); assert.strictEqual(s.owner.getSnapshot().command!.packet, packet);
+  await s.owner.reconcile();
+  assert.equal(s.owner.getSnapshot().command!.status, 'unknown'); assert.strictEqual(s.owner.getSnapshot().command!.packet, packet);
+  // A real duplicate can predate subsequent messages in the authoritative header.
+  const duplicate = { conversation: { ...header, lastMessageSeq: '10' }, receipt: { ...receipt, outcome: 'duplicate' } };
+  s.setHandler(async path => path === '/conversations/requests'
+    ? new Response(JSON.stringify(duplicate), { status: 200 }) : path.startsWith('/players/') ? player : none);
+  assert.equal(s.writes().length, 2);
+  await s.owner.reconcile();
+  assert.equal(s.writes().length, 3);
+  for (const write of s.writes()) {
+    assert.equal(write.init.body, s.writes()[0]!.init.body);
+    assert.deepEqual(write.init.headers, s.writes()[0]!.init.headers);
+    assert.equal((write.init.headers as Record<string, string>)['Idempotency-Key'], packet.key);
+    assert.deepEqual(JSON.parse(write.init.body as string), packet.body);
+  }
+  assert.equal(s.owner.getSnapshot().command, undefined); assert.equal(s.owner.getSnapshot().drafts.peer, undefined);
+  assert.equal(s.owner.getSnapshot().conversation?.lastMessageSeq, '10');
+});
+
 test('actual HTTP 5xx with business codes, invalid receipts, COMMAND_IN_PROGRESS and network remain UNKNOWN with original form/packet', async () => {
   const failures = [new Response(JSON.stringify({ code: 'RESOURCE_UNAVAILABLE' }), { status: 503 }),
     new Response(JSON.stringify({ code: 'PRIVATE_TEXT_CONTENT_REJECTED' }), { status: 500 }),
@@ -205,4 +248,59 @@ test('stale rendered actor/target cannot edit, send or reconcile a newer screen/
   await s.owner.send(); const packet=s.owner.getSnapshot().command!.packet;
   await s.owner.reconcile('peer',oldActor); await s.owner.reconcile('other',s.owner.getSnapshot().actor);
   assert.equal(s.writes().length,1); assert.strictEqual(s.owner.getSnapshot().command!.packet,packet);
+});
+
+test('editor callbacks bind the rendered view; same-peer same-session return rejects old edit/send/reconcile but accepts rapid current actions', async () => {
+  const source = readFileSync(new URL('../src/components/contact-editor.tsx', import.meta.url), 'utf8');
+  assert.match(source, /onChangeText=\{value => owner\.draft\(target, value, state\.actor, state\.viewGeneration\)\}/);
+  for (const action of ['send', 'reconcile']) assert.ok(source.includes(`void owner.${action}(target, state.actor, state.viewGeneration)`));
+  const s = setup(); await compose(s);
+  const callbacks = () => {
+    const state = s.owner.getSnapshot(), target = state.target!;
+    return { state, edit: (text: string) => s.owner.draft(target, text, state.actor, state.viewGeneration),
+      send: () => s.owner.send(target, state.actor, state.viewGeneration),
+      reconcile: () => s.owner.reconcile(target, state.actor, state.viewGeneration) };
+  };
+  const old = callbacks();
+  const returnToPeer = async () => {
+    s.owner.blur();
+    s.setHandler(async path => path.startsWith('/players/') ? { ...player, publicPlayerId: 'other' } : { ...none, targetPublicPlayerId: 'other' });
+    await s.owner.open('other'); s.owner.blur();
+    s.setHandler(async path => path.startsWith('/players/') ? player : none); await s.owner.open('peer');
+  };
+  await returnToPeer(); const current = callbacks();
+  assert.strictEqual(current.state.actor, old.state.actor); // Identical actor, session and peer; only the view changed.
+  assert.equal(current.state.target, old.state.target); assert.notEqual(current.state.viewGeneration, old.state.viewGeneration);
+  current.edit('Н'); current.edit('Но'); current.edit('Новый текст');
+  assert.equal(s.owner.getSnapshot().drafts.peer, 'Новый текст');
+  assert.equal(s.owner.getSnapshot().viewGeneration, current.state.viewGeneration);
+  const before = s.owner.getSnapshot(), reads = s.calls.length;
+  old.edit('queued stale edit'); await old.send(); await old.reconcile();
+  assert.strictEqual(s.owner.getSnapshot(), before); assert.equal(s.calls.length, reads); assert.equal(s.writes().length, 0);
+  s.setHandler(async path => { if (path === '/conversations/requests') throw Error('unknown'); return path.startsWith('/players/') ? player : none; });
+  await current.send();
+  assert.equal(s.writes().length, 1); assert.equal(JSON.parse(s.writes()[0]!.init.body as string).text, 'Новый текст');
+  assert.equal(s.owner.getSnapshot().viewGeneration, current.state.viewGeneration);
+  const unknown = callbacks(), packet = unknown.state.command!.packet;
+  await returnToPeer();
+  const reopened = callbacks(), pending = s.owner.getSnapshot(), calls = s.calls.length;
+  unknown.edit('stale'); await unknown.send(); await unknown.reconcile(); await old.reconcile();
+  assert.strictEqual(s.owner.getSnapshot(), pending); assert.equal(s.calls.length, calls); assert.equal(s.writes().length, 1);
+  assert.strictEqual(pending.command!.packet, packet); assert.equal(pending.command!.status, 'unknown');
+  assert.equal(pending.drafts.peer, 'Новый текст');
+  s.setHandler(async path => path === '/conversations/requests' ? result : path.startsWith('/players/') ? player : none);
+  await reopened.reconcile();
+  assert.equal(s.writes().length, 2); assert.equal(s.writes()[1]!.init.body, s.writes()[0]!.init.body);
+  assert.deepEqual(s.writes()[1]!.init.headers, s.writes()[0]!.init.headers);
+  assert.equal(s.owner.getSnapshot().command, undefined); assert.equal(s.owner.getSnapshot().conversation?.id, header.id);
+});
+
+test('view generations change on open, blur, authoritative actor change and forget', async () => {
+  const s = setup(); await compose(s); let view = s.owner.getSnapshot().viewGeneration;
+  const changed = () => { assert.notEqual(s.owner.getSnapshot().viewGeneration, view); view = s.owner.getSnapshot().viewGeneration; };
+  await s.owner.open('peer'); changed();
+  s.owner.blur(); changed();
+  s.owner.setActor(null); changed();
+  s.owner.setActor(actor); changed();
+  s.owner.forget(); changed();
 });
