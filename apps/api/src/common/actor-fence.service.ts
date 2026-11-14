@@ -3,7 +3,7 @@ import type { AppEnv } from "../config/env";
 import { APP_ENV } from "../tokens";
 import { Inject, Injectable } from "@nestjs/common";
 import type { PoolClient } from "pg";
-import { CONSUMER_AUDIENCE } from "../auth/constants";
+import { CONSUMER_AUDIENCES } from "../auth/constants";
 import { unauthorized } from "../auth/problem";
 
 /**
@@ -58,7 +58,7 @@ export class ActorFenceService {
     }
     if (row.revoked_at) throw unauthorized();
     if (row.expires_at.getTime() <= Date.now()) throw unauthorized();
-    if (row.audience !== CONSUMER_AUDIENCE) throw unauthorized();
+    if (!(CONSUMER_AUDIENCES as readonly string[]).includes(row.audience)) throw unauthorized();
     await assertCapabilities(client,this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,input.actorId,["account.access"]);
   }
 }

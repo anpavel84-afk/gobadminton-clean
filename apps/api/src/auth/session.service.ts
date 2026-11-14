@@ -3,7 +3,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import type { AppEnv } from "../config/env";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
-import { CONSUMER_AUDIENCE } from "./constants";
+import { CONSUMER_AUDIENCE, CONSUMER_AUDIENCES } from "./constants";
 import {
   hashSecret,
   openSecret,
@@ -12,7 +12,7 @@ import {
   secretsEqual,
 } from "./crypto";
 import { PushService } from "../push/push.service";
-import { conflict, notFound } from "./problem";
+import { conflict, notFound, unauthorized } from "./problem";
 
 export type SessionRecord = {
   id: string;
@@ -176,11 +176,11 @@ export class SessionService {
       `SELECT id, created_at, last_seen_at, expires_at
        FROM app_sessions
        WHERE user_id = $1
-         AND audience = $2
+         AND audience = ANY($2::text[])
          AND revoked_at IS NULL
          AND expires_at > now()
        ORDER BY created_at DESC`,
-      [userId, CONSUMER_AUDIENCE],
+      [userId, CONSUMER_AUDIENCES],
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -213,9 +213,9 @@ export class SessionService {
     await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [input.userId]);
     const result = await client.query<{ id: string; revoked_at: Date | null }>(
       `SELECT id, revoked_at FROM app_sessions
-       WHERE id = $1 AND user_id = $2 AND audience = $3
+       WHERE id = $1 AND user_id = $2 AND audience = ANY($3::text[])
        FOR UPDATE`,
-      [input.sessionId, input.userId, CONSUMER_AUDIENCE],
+      [input.sessionId, input.userId, CONSUMER_AUDIENCES],
     );
     const row = result.rows[0];
     if (!row) throw notFound("SESSION_NOT_FOUND", "Сессия не найдена");
@@ -247,10 +247,17 @@ export class SessionService {
       await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [
         input.userId,
       ]);
+      // Fresh post-lock authority check: revocation/disable may have committed while waiting.
+      const current = await client.query(`SELECT s.id FROM app_sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.id=$1 AND s.user_id=$2 AND s.audience=ANY($3::text[]) AND s.revoked_at IS NULL
+        AND s.expires_at>clock_timestamp() AND u.status='active'`,
+        [input.currentSessionId,input.userId,CONSUMER_AUDIENCES]);
+      if (!current.rows[0]) throw unauthorized();
+      await assertCapabilities(client,this.env.USER_RESTRICTIONS_INTERNAL_ENABLED,input.userId,["account.access"]);
       const result = await client.query<{ id: string }>(
         `UPDATE app_sessions SET revoked_at=COALESCE(revoked_at,clock_timestamp())
-        WHERE user_id=$1 AND audience=$2 AND id<>$3 AND revoked_at IS NULL RETURNING id`,
-        [input.userId, CONSUMER_AUDIENCE, input.currentSessionId],
+        WHERE user_id=$1 AND audience=ANY($2::text[]) AND id<>$3 AND revoked_at IS NULL RETURNING id`,
+        [input.userId, CONSUMER_AUDIENCES, input.currentSessionId],
       );
       const ids = result.rows.map((row) => row.id);
       await client.query(

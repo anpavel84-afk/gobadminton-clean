@@ -319,6 +319,7 @@ export class AuthService {
   }
 
   private async requireSession(request: FastifyRequest) {
+    if (request.headers.authorization !== undefined) throw unauthorized("BEARER_NOT_ALLOWED");
     const sessionToken = readCookie(request, SESSION_COOKIE);
     if (!sessionToken) throw unauthorized();
     const session = await this.sessions.lookupActiveSession(sessionToken);
@@ -327,11 +328,15 @@ export class AuthService {
   }
 
   async getMe(request: FastifyRequest) {
-    const { session } = await this.requireSession(request);
-    const user = await this.identities.getUser(session.userId);
+    const principal = await this.consumerAuth.requirePrincipal(request);
+    const user = await this.identities.getUser(principal.userId);
     if (!user || user.status !== "active") throw unauthorized();
     const linkedProviders = await this.identities.listLinkedProviders(user.id);
-    const csrfToken = await this.sessions.readCsrfToken(session.id);
+    if (principal.transport === "bearer") return {
+      id: user.id, displayName: user.displayName, locale: user.locale, linkedProviders,
+      session: { id: principal.sessionId, audience: principal.audience, transport: principal.transport },
+    };
+    const csrfToken = await this.sessions.readCsrfToken(principal.sessionId);
     if (!csrfToken) throw unauthorized();
 
     return {
@@ -465,7 +470,7 @@ export class AuthService {
   }
 
   async listSessions(request: FastifyRequest) {
-    const consumer = await this.consumerAuth.requireSession(request);
+    const consumer = await this.consumerAuth.requirePrincipal(request);
     return this.sessionsSnapshot(consumer.userId, consumer.sessionId);
   }
 
@@ -483,7 +488,7 @@ export class AuthService {
   }
 
   async revokeSession(request: FastifyRequest, sessionId: string) {
-    const consumer = await this.consumerAuth.requireCookieMutation(request);
+    const consumer = await this.consumerAuth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const target = { userId: consumer.userId, sessionId, currentSessionId: consumer.sessionId };
     const result = await this.mutations.runIdempotent({
@@ -505,7 +510,7 @@ export class AuthService {
   }
 
   async revokeOtherSessions(request: FastifyRequest) {
-    const consumer = await this.consumerAuth.requireCookieMutation(request);
+    const consumer = await this.consumerAuth.requirePrincipalMutation(request);
     const result = await this.sessions.revokeOtherSessions({
       userId: consumer.userId,
       currentSessionId: consumer.sessionId,

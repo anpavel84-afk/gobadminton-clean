@@ -1,3 +1,6 @@
+import { NativeAuthController } from "./native-auth.controller";
+import { NativeAuthService } from "./native-auth.service";
+import { NativeSessionService } from "./native-session.service";
 import { AuthMethodService } from "./auth-method.service";
 import { EmailAuthController } from "./email-auth.controller";
 import { EmailAuthService } from "./email-auth.service";
@@ -13,8 +16,8 @@ import { AUTH_PROVIDER_OVERRIDES, ProviderRegistry } from "./providers/registry"
 import { SessionService } from "./session.service";
 
 @Module({
-  controllers: [AuthController, MeController, EmailAuthController],
-  providers: [
+  controllers: [NativeAuthController, AuthController, MeController, EmailAuthController],
+  providers: [NativeAuthService, NativeSessionService,
     AuthService,
     AuthMethodService,
     EmailAuthService,

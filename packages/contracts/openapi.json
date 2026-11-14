@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.43.0",
+    "version": "0.44.0",
     "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI. PG-2 (#372): manager dispute response/correction, party consent with dispute versions, help escalation, scoped admin case resolution; writes remain default-off. PG-3 (#372): private peer/organization/training reviews, recipient reply singleton, personal manager notes; writes remain default-off POST_GAME_INTERNAL_ENABLED; no public rating/skill mutation; typed review Safety extension remaining. #394 public entity comments (game+venue first slice): GET/POST /games/{id}/comments and /venues/{id}/comments; PUT/DELETE /comments/{id} with expectedVersion CAS; guest read of public parents; one reply depth; no player-profile comments in this slice. #394 role reputation (organizer/trainer pre-join public reviews): additive GET/POST role-reputations + me/role-reviews + admin pending intake; private peer game_review reports unchanged; API 0.28. #456 PWA Web Push (API 0.29): authenticated /me/push preference+device subscription APIs; WEB_PUSH_ENABLED default off; neutral DM/GameChat payloads; session-bound devices; no invitations in P0. #394 venue experience reviews (API 0.34): GET venues/{id}/experience-reviews; me/venue-reviews create/eligibility/consent; admin venue-review intake/source; publication gated by independent approve + 48h; legacy VENUE comments remain closed. #507 I2b API 0.42: atomic venue text-or-1–4 approved photos; exact current media and assigned historical case evidence; paginated community photos. Source candidate only; no UI/I3/release claim. #507 I3a API 0.43: private real-creator official-photo candidates, scoped Admin review with fresh step-up, exact stored image approval and venue credit text publication binding. Backend source only; I3b UI NOT_IMPLEMENTED; no DEV/whole507 readiness claim."
   },
   "x-document-status": "DESIGN_DRAFT",
@@ -510,7 +510,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Me"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Me"
+                    },
+                    {
+                      "$ref": "#/components/schemas/NativeMe"
+                    }
+                  ]
                 }
               }
             }
@@ -521,7 +528,13 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. All other consumer routes remain cookie-only."
       }
     },
     "/me/linked-providers": {
@@ -767,7 +780,13 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. All other consumer routes remain cookie-only."
       }
     },
     "/me/sessions/{sessionId}": {
@@ -842,8 +861,12 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
-        ]
+        ],
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. All other consumer routes remain cookie-only."
       }
     },
     "/me/sessions/revoke-others": {
@@ -891,7 +914,13 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " NativeBearer opt-in while enabled; mixed credentials rejected. All other consumer routes remain cookie-only."
       }
     },
     "/me/games": {
@@ -26043,6 +26072,526 @@
           }
         }
       }
+    },
+    "/auth/native/transactions": {
+      "post": {
+        "operationId": "nativeAuthCreate",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Create native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeTransactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeTransactionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/native/exchange": {
+      "post": {
+        "operationId": "nativeAuthExchange",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Exchange native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeCredentials"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeExchangeRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/native/refresh": {
+      "post": {
+        "operationId": "nativeAuthRefresh",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Refresh native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativeCredentials"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeRefreshRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/native/logout": {
+      "post": {
+        "operationId": "nativeAuthLogout",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Logout native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NativeLogoutRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/native/transactions/{transactionId}/bind": {
+      "post": {
+        "operationId": "nativeAuthBind",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Bind native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Native-Auth",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ]
+      }
+    },
+    "/auth/native/transactions/{transactionId}/complete": {
+      "post": {
+        "operationId": "nativeAuthComplete",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Complete native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "callbackUrl": {
+                      "type": "string",
+                      "format": "uri",
+                      "maxLength": 512
+                    }
+                  },
+                  "required": [
+                    "callbackUrl"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Native-Auth",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ]
+      }
+    },
+    "/auth/native/transactions/{transactionId}/cancel": {
+      "post": {
+        "operationId": "nativeAuthCancel",
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Cancel native authentication",
+        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bounded request or unregistered tuple"
+          },
+          "401": {
+            "description": "Invalid, expired, consumed credential or replay; refresh replay durably revokes family"
+          },
+          "403": {
+            "description": "Origin, CSRF, browser binding or credentials conflict"
+          },
+          "404": {
+            "description": "Native authentication disabled"
+          },
+          "409": {
+            "description": "Flow already completed"
+          },
+          "429": {
+            "description": "Persisted rate budget exceeded"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transactionId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Native-Auth",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -26069,6 +26618,11 @@
         "in": "cookie",
         "name": "__Host-gb_admin_mfa",
         "description": "Pending identity ticket; cannot authorize privileged requests."
+      },
+      "NativeBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Opaque hash-backed native access; 600 seconds. Only /me and owned session routes opt in; never combine with browser cookie."
       }
     },
     "parameters": {
@@ -42738,6 +43292,227 @@
             "const": 1
           }
         }
+      },
+      "NativeTransactionRequest": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,80}$"
+          },
+          "redirectUri": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 512
+          },
+          "codeChallenge": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "codeChallengeMethod": {
+            "const": "S256",
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{16,128}$"
+          },
+          "returnPath": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "clientId",
+          "redirectUri",
+          "codeChallenge",
+          "codeChallengeMethod",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "NativeTransactionResponse": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "browserStartUrl": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "transactionId",
+          "expiresAt",
+          "browserStartUrl"
+        ],
+        "additionalProperties": false
+      },
+      "NativeExchangeRequest": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,80}$"
+          },
+          "redirectUri": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 512
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "verifier": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+          }
+        },
+        "required": [
+          "clientId",
+          "redirectUri",
+          "code",
+          "verifier"
+        ],
+        "additionalProperties": false
+      },
+      "NativeRefreshRequest": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,80}$"
+          },
+          "refreshToken": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "clientId",
+          "refreshToken"
+        ],
+        "additionalProperties": false
+      },
+      "NativeLogoutRequest": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,80}$"
+          },
+          "refreshToken": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "clientId"
+        ],
+        "additionalProperties": false
+      },
+      "NativeCredentials": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "refreshToken": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "tokenType": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "const": 600
+          },
+          "refreshExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "refreshAbsoluteExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "refreshExpiresAt",
+          "refreshAbsoluteExpiresAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "NativeMe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "linkedProviders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "session": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "audience": {
+                "type": "string",
+                "const": "consumer_native"
+              },
+              "transport": {
+                "type": "string",
+                "const": "bearer"
+              }
+            },
+            "required": [
+              "id",
+              "audience",
+              "transport"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "locale",
+          "linkedProviders",
+          "session"
+        ],
+        "additionalProperties": false
       }
     }
   }

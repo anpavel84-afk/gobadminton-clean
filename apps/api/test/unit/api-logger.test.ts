@@ -13,6 +13,10 @@ describe("production API logger pipeline", () => {
     const secrets = ["CODE_CANARY", "STATE_CANARY", "COOKIE_CANARY", "BEARER_CANARY", "CSRF_CANARY", "ACTIVATION_CANARY", "TICKET_CANARY", "SESSION_CANARY", "QA_KEY_CANARY"];
     const query = new URLSearchParams({ code: secrets[0]!, state: secrets[1]!, activation: secrets[5]!, ticket: secrets[6]!, session: secrets[7]! }).toString();
     const headers = { cookie: `session=${secrets[2]}`, authorization: `Bearer ${secrets[3]}`, "x-csrf-token": secrets[4]! };
+    app.post("/v1/auth/native/exchange", async req => {
+      req.log.error({req,body:req.body,err:new Error("native credential")},"native credential");
+      return {ok:true};
+    });
     let callbacks = 0;
     for (const path of ["/v1/admin/auth/yandex/callback", "/v1/auth/yandex/callback"]) {
       app.get(path, async (req) => {
@@ -31,6 +35,7 @@ describe("production API logger pipeline", () => {
       return {ok:true};
     });
     try {
+      await app.inject({method:"POST",url:"/v1/auth/native/exchange?code="+secrets[0],headers,payload:{code:secrets[0],verifier:secrets[1],accessToken:secrets[3],refreshToken:secrets[7]}});
       await app.inject({method:"POST",url:"/v1/admin/auth/dev-qa-key?key="+secrets[8],headers,payload:{key:secrets[8],requestNonce:secrets[4]}});
       for (const path of ["/v1/admin/auth/yandex/callback", "/v1/auth/yandex/callback"]) {
         expect((await app.inject({ url: `${path}?${query}`, headers })).statusCode).toBe(200);
