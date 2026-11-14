@@ -1,3 +1,5 @@
+import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
+import type { InboxFilter, MessageResource, MessageAction, MessageBody } from './messages.ts';
 import { PlayersError, parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
 import type { PlayerFilters } from './players.ts';
 import { ParticipationError, parseCursorPage, parseAuthenticatedGame, parseManagedGame, parseParticipation } from './participation.ts';
@@ -6,7 +8,7 @@ import type { NativeExchangeRequest, NativeTransactionRequest } from '@gobadmint
 
 export function createNativeApi(fetcher: typeof fetch = fetch) {
   // Deliberately closed route surface: never forward caller URLs, cookies, Origin or browser bridge commands.
-  async function request(path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown, access?: string, key?: string, participation = false, players = false): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false): Promise<unknown> {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
@@ -15,6 +17,12 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
           ...(access ? { Authorization: `Bearer ${access}` } : {}), ...(key ? { 'Idempotency-Key': key } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
+      if (messages && !response.ok) {
+        let code = 'UNKNOWN';
+        try { const problem = await response.json(); if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code; } catch { /* no response text retained */ }
+        throw new MessagesError([401,403,404].includes(response.status) ? 'private'
+          : [400,409,422,429].includes(response.status) && code !== 'COMMAND_IN_PROGRESS' ? 'business' : 'network', response.status, code);
+      }
       if (participation && !response.ok) {
         let code = 'UNKNOWN';
         try {
@@ -31,13 +39,27 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       if (!response.ok) throw new NativeAuthError('invalid');
       return await response.json();
     } catch (error) {
-      if (error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError) throw error;
+      if (error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError || error instanceof MessagesError) throw error;
+      if (messages) throw new MessagesError(error instanceof SyntaxError ? 'invalid' : 'network');
       if (participation) throw new ParticipationError(error instanceof SyntaxError ? 'invalid' : 'network');
       // Never forward server errors, response text, fetch URLs or credentials.
       throw new NativeAuthError(error instanceof SyntaxError ? 'invalid' : 'network');
     } finally { clearTimeout(timeout); }
   }
+  const privateMessage = (path: string, access: string, body?: MessageBody, key?: string) => request(path, body === undefined ? 'GET' : 'POST', body, access, key, false, false, true);
   return {
+    inbox: async (access: string, filter: InboxFilter, cursor?: string) => parseInbox(await privateMessage(`/me/inbox?limit=50&filter=${filter}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, access)),
+    inboxCounts: async (access: string) => parseCounts(await privateMessage('/me/inbox/counts', access)),
+    messageIdentity: async (access: string) => parseOwnMessageIdentity(await privateMessage('/me/social-profile', access)),
+    conversation: async (access: string, id: string) => parseConversation(await privateMessage(resourcePath({ kind: 'direct', id }), access)),
+    gameChat: async (access: string, id: string) => parseChat(await privateMessage(resourcePath({ kind: 'game', id }), access)),
+    chatMembers: async (access: string, id: string) => parseMembers(await privateMessage(`/games/${messageId(id)}/chat/members`, access)),
+    invitation: async (access: string, id: string) => parseInvitation(await privateMessage(resourcePath({ kind: 'invitation', id }), access)),
+    messageHistory: async (access: string, r: MessageResource, before?: string, after?: string) => {
+      if (r.kind === 'invitation') throw new MessagesError('invalid');
+      return parseMessagePage(await privateMessage(`${resourcePath(r)}/messages?limit=50${before ? `&beforeSeq=${encodeURIComponent(before)}` : ''}${after ? `&afterSeq=${encodeURIComponent(after)}` : ''}`, access), parseMessage);
+    },
+    messageMutation: async (access: string, r: MessageResource, action: MessageAction, body: MessageBody, key: string) => parseMessageMutation(r,action,await privateMessage(mutationPath(r, action), access, body, key)),
     players: async (access: string, filters: PlayerFilters, cursor?: string) => parsePlayerPage(await request(`/players?${playerQuery(filters, cursor)}`, 'GET', undefined, access, undefined, false, true)),
     player: async (access: string, id: string) => parsePlayer(await request(`/players/${encodeURIComponent(id)}`, 'GET', undefined, access, undefined, false, true)),
     gameDetail: async (access: string, gameId: string) => parseAuthenticatedGame(await request(`/games/${encodeURIComponent(gameId)}`, 'GET', undefined, access, undefined, true)),

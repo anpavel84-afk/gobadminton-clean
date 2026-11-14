@@ -5,7 +5,7 @@ import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
 import { game as fixture } from './fixtures.ts';
-import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath,
+import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalReturnPath,
   parseCallback, parseNativeMe, parseSecureEnvelope } from '../src/native-auth-protocol.ts';
 import type { PendingLogin, SecureEnvelope } from '../src/native-auth-protocol.ts';
 
@@ -266,4 +266,33 @@ test('revoked player authority clears actor data without anonymous transport fal
   await s.auth.players.loadList({ cityId: null, name: '', looking: false, trainer: false });
   assert.equal(s.calls.length, before + 1); assert.equal(s.auth.getSnapshot().me, null);
   assert.equal(s.auth.players.getSnapshot().scope, null); assert.equal(s.auth.players.getSnapshot().list.data, null);
+});
+
+test('Messages private identity/UNKNOWN survives token refresh and cannot affect participation packets or cross logout', async () => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate();
+  const participation = s.auth.participation;
+  s.setHandler(async path => {
+    if (path === '/me') return me;
+    if (path === '/me/social-profile') return { publicPlayerId: 'public-a', email: 'discard' };
+    if (path === '/conversations/thread') return { id: 'thread',kind:'direct',requestState:'accepted',version:1,peer:{publicPlayerId:'public-b',displayName:'Peer'},role:'recipient',lastMessageSeq:'0',readThroughSeq:'0',unreadCount:0 };
+    if (path.startsWith('/conversations/thread/messages?')) return { items:[],nextCursor:null };
+    if (path === '/conversations/thread/messages') throw new Error('ambiguous transport');
+    return credentials;
+  });
+  const r = { kind:'direct',id:'thread' } as const;
+  s.auth.messages.focus(r); await new Promise(resolve => setImmediate(resolve)); s.auth.messages.draft(r,'private'); await s.auth.messages.act(r,'send');
+  const packet=s.auth.messages.getSnapshot().pending['direct:thread']?.packet; assert.ok(packet);
+  await s.auth.refresh(); assert.strictEqual(s.auth.participation,participation); assert.strictEqual(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,packet);
+  const before=s.calls.filter(c => c.path === '/conversations/thread/messages').length;
+  await s.auth.logout(); await s.auth.messages.retry(r);
+  assert.equal(s.calls.filter(c => c.path === '/conversations/thread/messages').length,before);
+  assert.equal(s.auth.messages.getSnapshot().detail,null); assert.deepEqual(s.auth.messages.getSnapshot().pending,{});
+});
+
+test('private Messages return whitelist is exact and storage compatible; rejects actions/query/encoded tricks', () => {
+  for (const path of ['/messages','/messages/direct/abc-1','/messages/game/abc_2','/messages/invitations/abc3','/games/same-game']) {
+    assert.equal(canonicalReturnPath(path),path);
+    assert.equal(parseSecureEnvelope(JSON.stringify({ ...envelope,returnPath:path,pending:{ ...pending,returnPath:path } }),now)?.returnPath,path);
+  }
+  for (const path of ['/messages?conversation=x','/messages/direct/a/accept','/messages/direct/%61','/messages/direct/a?send=yes','https://evil/messages','/messages//a','/messages/game/a#x','/messages/game/../a']) assert.equal(canonicalReturnPath(path),null);
 });

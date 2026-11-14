@@ -78,7 +78,7 @@ export class ConversationsController {
     @Req() request: FastifyRequest,
     @Param("conversationId") conversationId: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.messaging.getConversation(consumer.userId, conversationId);
   }
 
@@ -89,7 +89,7 @@ export class ConversationsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("conversationId") conversationId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { expectedVersion?: number };
     const expectedVersion = body.expectedVersion;
@@ -117,7 +117,7 @@ export class ConversationsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("conversationId") conversationId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { expectedVersion?: number };
     const expectedVersion = body.expectedVersion;
@@ -147,7 +147,7 @@ export class ConversationsController {
     @Query("afterSeq") afterSeq?: string,
     @Query("limit") limitRaw?: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     const limit =
       limitRaw === undefined || limitRaw === ""
         ? undefined
@@ -166,7 +166,7 @@ export class ConversationsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("conversationId") conversationId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       text?: string;
@@ -191,7 +191,7 @@ export class ConversationsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("conversationId") conversationId: string,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { throughSeq?: string | number };
     if (body.throughSeq === undefined || body.throughSeq === null) {

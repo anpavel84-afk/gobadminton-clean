@@ -10,7 +10,8 @@
     "./game-types": "./src/game.generated.ts",
     "./friendship-types": "./src/friendship.generated.ts",
     "./regional-cities": "./src/regional-cities.ts",
-    "./native-auth": "./src/native-auth.ts"
+    "./native-auth": "./src/native-auth.ts",
+    "./messages": "./src/messages.ts"
   },
   "scripts": {
     "check": "node ./scripts/check-openapi.mjs",
@@ -39,6 +40,9 @@
       ],
       "native-auth": [
         "src/native-auth.ts"
+      ],
+      "messages": [
+        "src/messages.ts"
       ]
     }
   }

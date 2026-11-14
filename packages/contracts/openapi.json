@@ -2393,7 +2393,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       },
       "patch": {
         "operationId": "patchMySocialProfile",
@@ -3926,7 +3935,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/conversations/{conversationId}/accept": {
@@ -3959,10 +3977,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -4004,7 +4023,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/conversations/{conversationId}/decline": {
@@ -4037,10 +4065,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -4082,7 +4111,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/conversations/{conversationId}/messages": {
@@ -4148,7 +4186,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       },
       "post": {
         "operationId": "sendConversationMessage",
@@ -4156,7 +4203,7 @@
           "Messaging"
         ],
         "summary": "Send text in accepted conversation",
-        "description": "#506 C1. Local private-text policy after membership/block/eligibility and before INSERT/sequence/preview/push. 422 PRIVATE_TEXT_CONTENT_REJECTED; 429 PRIVATE_TEXT_RATE_LIMITED. Reject leaves seq/preview/push unchanged. Exact live clientMessageId payload match + fresh send-scope auth for duplicates; purged → 409 CLIENT_MESSAGE_ID_UNAVAILABLE. No external private provider. No new request fields.",
+        "description": "#506 C1. Local private-text policy after membership/block/eligibility and before INSERT/sequence/preview/push. 422 PRIVATE_TEXT_CONTENT_REJECTED; 429 PRIVATE_TEXT_RATE_LIMITED. Reject leaves seq/preview/push unchanged. Exact live clientMessageId payload match + fresh send-scope auth for duplicates; purged → 409 CLIENT_MESSAGE_ID_UNAVAILABLE. No external private provider. No new request fields. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404.",
         "parameters": [
           {
             "name": "conversationId",
@@ -4180,10 +4227,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -4238,7 +4286,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/conversations/{conversationId}/read": {
@@ -4271,10 +4327,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -4326,7 +4383,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/conversations/{conversationId}/messages/{messageId}/hide": {
@@ -4648,7 +4714,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/invitations/{invitationId}/accept": {
@@ -4681,10 +4756,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -4726,7 +4802,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/invitations/{invitationId}/decline": {
@@ -4759,10 +4844,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -4804,7 +4890,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/invitations/{invitationId}/revoke": {
@@ -4920,7 +5015,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/games/{gameId}/chat/messages": {
@@ -4986,7 +5090,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       },
       "post": {
         "operationId": "sendGameChatMessage",
@@ -4994,7 +5107,7 @@
           "GameChat"
         ],
         "summary": "Send text in an active Game Chat",
-        "description": "#506 C1. Same local private-text policy as DM after game membership/lifecycle and before INSERT/sequence/preview/push. 422 PRIVATE_TEXT_CONTENT_REJECTED; 429 PRIVATE_TEXT_RATE_LIMITED. Exact live clientMessageId binding; cross-DM reuse conflicts. No external private provider. No new request fields.",
+        "description": "#506 C1. Same local private-text policy as DM after game membership/lifecycle and before INSERT/sequence/preview/push. 422 PRIVATE_TEXT_CONTENT_REJECTED; 429 PRIVATE_TEXT_RATE_LIMITED. Exact live clientMessageId binding; cross-DM reuse conflicts. No external private provider. No new request fields. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404.",
         "parameters": [
           {
             "name": "gameId",
@@ -5018,10 +5131,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -5076,7 +5190,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/games/{gameId}/chat/read": {
@@ -5109,10 +5231,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": " Required for cookie transport; not required for native bearer transport."
           }
         ],
         "requestBody": {
@@ -5145,7 +5268,16 @@
           "422": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/games/{gameId}/chat/members": {
@@ -5183,7 +5315,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/me/inbox": {
@@ -5193,7 +5334,7 @@
           "Inbox"
         ],
         "summary": "Composed Inbox page across DM, GameInvitation and Game Chat sources",
-        "description": "Read-time composition only. Does not create a second mutable truth. Ordering: lastActivityAt DESC, kind DESC, id DESC. Optional filter=all|unread|attention. Malformed opaque cursor or non-strict limit → 400 (CURSOR_INVALID / LIMIT_INVALID). Effective DM/Invitation expiry is projected read-only; Inbox GET does not UPDATE source tables.",
+        "description": "Read-time composition only. Does not create a second mutable truth. Ordering: lastActivityAt DESC, kind DESC, id DESC. Optional filter=all|unread|attention. Malformed opaque cursor or non-strict limit → 400 (CURSOR_INVALID / LIMIT_INVALID). Effective DM/Invitation expiry is projected read-only; Inbox GET does not UPDATE source tables. Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404.",
         "parameters": [
           {
             "name": "cursor",
@@ -5249,7 +5390,15 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/inbox/counts": {
@@ -5276,7 +5425,16 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
+        "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       }
     },
     "/me/inbox/items/{kind}/{id}/read": {
@@ -29764,6 +29922,125 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "acceptanceContext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Recipient-only current pending invitation read context on GET detail; null for expired or unavailable context. Existing accept locks revalidate current gameVersion, capacity and rights. Never a public game read grant.",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "startsAt": {
+                "type": "string"
+              },
+              "endsAt": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "applicationDeadlineAt": {
+                "type": "string"
+              },
+              "venueName": {
+                "type": "string"
+              },
+              "venueAddress": {
+                "type": "string"
+              },
+              "formatKey": {
+                "type": "string"
+              },
+              "activityKind": {
+                "type": "string"
+              },
+              "levelScaleId": {
+                "type": "string"
+              },
+              "settlementTerms": {
+                "type": "string"
+              },
+              "trainingDescription": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "settlementPurpose": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "priceStatus": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "priceMinor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "currency": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "gameVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "availablePlaces": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "allowedLevelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "levelScaleVersion": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "trainerDisplayName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "title",
+              "startsAt",
+              "endsAt",
+              "timezone",
+              "applicationDeadlineAt",
+              "venueName",
+              "venueAddress",
+              "formatKey",
+              "activityKind",
+              "levelScaleId",
+              "settlementTerms",
+              "trainingDescription",
+              "settlementPurpose",
+              "priceStatus",
+              "priceMinor",
+              "currency",
+              "gameVersion",
+              "availablePlaces",
+              "allowedLevelIds",
+              "levelScaleVersion",
+              "trainerDisplayName"
+            ]
           }
         }
       },

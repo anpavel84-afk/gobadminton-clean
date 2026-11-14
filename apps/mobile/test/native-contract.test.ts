@@ -103,18 +103,21 @@ test('conditions use server counts, timezone and external price terms without im
 });
 
 test('native navigation/version source binds canonical WEB order and paths while owners stay above Stack', () => {
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 2);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 3);
   const nav = read('../src/components/main-navigation.tsx');
   const paths = read('../../web/src/components/consumer/nav-icon-paths.tsx');
-  for (const section of ['games', 'players', 'mine']) {
+  for (const section of ['games', 'players', 'mine', 'messages']) {
     const block = paths.slice(paths.indexOf(`  ${section}: <>`)).split('</>')[0]!;
     for (const path of block.matchAll(/d="([^"]+)"/g)) assert.ok(nav.includes(`d="${path[1]}"`));
   }
   assert.ok(nav.indexOf("path: '/games'") < nav.indexOf("path: '/players'"));
   assert.ok(nav.indexOf("path: '/players'") < nav.indexOf("path: '/my-games'"));
-  assert.doesNotMatch(nav, /path: '\/(messages|profile)'|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
+  assert.doesNotMatch(nav, /path: '\/profile'|maxFontSizeMultiplier|allowFontScaling=\{false\}/);
+  assert.ok(nav.indexOf("path: '/my-games'") < nav.indexOf("path: '/messages'"));
+  assert.match(nav, /width: 30,height: 3/);
+  assert.match(nav, /selected \? colors.limeSoft/);
   const layout = read('../app/_layout.tsx');
-  assert.match(layout, /<AuthProvider><MainNavigation><Stack/);
+  assert.match(layout, /<AuthProvider><MessagesOwner><MainNavigation><Stack/);
   assert.doesNotMatch(layout, /key=/);
   assert.match(nav, /paddingBottom: insets.bottom/);
 });

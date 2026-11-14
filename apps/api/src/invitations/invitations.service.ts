@@ -1,5 +1,7 @@
+import { effectiveVenueCtes } from "../venues/effective-venue.query";
+import type { InvitationContext } from '@gobadminton/contracts/messages';
 import type { AppEnv } from "../config/env";
-import { assertNewGameInteraction } from "../game-moderation/projection";
+import { assertNewGameInteraction, readModeration } from "../game-moderation/projection";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -50,6 +52,8 @@ export type GameInvitationDto = {
   decidedAt: string | null;
   participationId: string | null;
   createdAt: string;
+  /** Only GET detail for a current pending recipient; never a public Game DTO. */
+  acceptanceContext?: InvitationContext | null;
 };
 
 export type AcceptInvitationResultDto = {
@@ -546,7 +550,11 @@ export class InvitationsService {
     });
   }
 
-  async getOne(actorId: string, invitationId: string): Promise<GameInvitationDto> {
+  async getOne(
+    actorId: string,
+    invitationId: string,
+    nativeContext = false,
+  ): Promise<GameInvitationDto> {
     this.feature.assertEnabled();
     if (!isUuid(invitationId)) {
       throw notFound("INVITATION_NOT_FOUND", "Приглашение не найдено");
@@ -562,7 +570,7 @@ export class InvitationsService {
       }
       await client.query("BEGIN");
       try {
-        const { invitation } = await this.lockGameThenInvitation(
+        const { game, invitation } = await this.lockGameThenInvitation(
           client,
           invitationId,
         );
@@ -573,6 +581,39 @@ export class InvitationsService {
         }
         const effective = await this.expireIfDue(client, invitation, new Date());
         const dto = await this.toDto(client, effective);
+        if (nativeContext) {
+          dto.acceptanceContext = null;
+          const moderation = this.env.GAME_MODERATION_INTERNAL_ENABLED ? await readModeration(client, game.id) : null;
+          // Same Game lock as accept. No GamesService read bypass or fabricated manager identity.
+          if (effective.status === "pending" && effective.invitee_user_id === actorId &&
+              (moderation === null || (moderation.state !== "taken_down" && !moderation.requestsLocked)) &&
+              game.status === "published" && game.starts_at > new Date() && game.application_deadline_at >= new Date()) {
+            await this.lockAccounts(client, [effective.inviter_user_id, actorId]);
+            await client.query("SELECT id FROM social_pairs WHERE id=$1 FOR SHARE", [effective.pair_id]);
+            await this.assertNoBilateralBlock(client, effective.inviter_user_id, actorId);
+            await this.assertSocialEligible(client, effective.inviter_user_id, actorId);
+            const terms = await client.query<{
+              title: string; ends_at: Date; timezone: string; venue_name: string; venue_address: string;
+              format_key: string; activity_kind: string; training_description: string | null; trainer_display_name_snapshot: string | null; level_scale_id: string; level_scale_version: number;
+              allowed_level_ids: string[]; settlement_purpose: string | null; price_status: string | null;
+              price_minor: string | null; currency: string | null; settlement_terms: string;
+            }>(`${effectiveVenueCtes("SELECT venue_id AS id FROM games WHERE id=$1")}
+               SELECT g.title, g.ends_at, g.timezone, v.name AS venue_name, v.address AS venue_address,
+                 g.format_key, g.activity_kind, g.training_description, g.trainer_display_name_snapshot, g.level_scale_id, g.level_scale_version, g.allowed_level_ids,
+                 g.settlement_purpose, g.price_status, g.price_minor::text, g.currency, g.settlement_terms
+               FROM games g JOIN effective_venues v ON v.source_id=g.venue_id WHERE g.id=$1`, [game.id]);
+            const t = terms.rows[0];
+            if (t) dto.acceptanceContext = {
+              gameVersion: game.version, title: t.title, startsAt: game.starts_at.toISOString(), endsAt: t.ends_at.toISOString(),
+              timezone: t.timezone, applicationDeadlineAt: game.application_deadline_at.toISOString(),
+              venueName: t.venue_name, venueAddress: t.venue_address, formatKey: t.format_key, activityKind: t.activity_kind,
+              trainingDescription: t.training_description, trainerDisplayName: t.trainer_display_name_snapshot, levelScaleId: t.level_scale_id, levelScaleVersion: t.level_scale_version, allowedLevelIds: t.allowed_level_ids,
+              availablePlaces: placesOrThrow(game, await this.countConfirmed(client, game.id)),
+              settlementPurpose: t.settlement_purpose, priceStatus: t.price_status, priceMinor: t.price_minor,
+              currency: t.currency, settlementTerms: t.settlement_terms,
+            };
+          }
+        }
         await client.query("COMMIT");
         return dto;
       } catch (error) {

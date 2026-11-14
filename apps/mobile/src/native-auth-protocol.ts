@@ -46,6 +46,12 @@ export function canonicalGamePath(value: unknown): string | null {
     return `/games/${encodeURIComponent(id)}` === value ? value : null;
   } catch { return null; }
 }
+/** Exact typed private destinations only; encoded segments, queries and actions are rejected. */
+export function canonicalMessagePath(value: unknown): string | null {
+  if (value === '/messages') return value;
+  return typeof value === 'string' && /^\/messages\/(direct|game|invitations)\/[A-Za-z0-9_-]{1,128}$/.test(value) ? value : null;
+}
+export function canonicalReturnPath(value: unknown): string | null { return canonicalGamePath(value) ?? canonicalMessagePath(value); }
 export function gamePath(id: string): string | null { return canonicalGamePath(`/games/${encodeURIComponent(id)}`); }
 export function publicGameUrl(id: string): string {
   const path = gamePath(id); if (!path) throw new NativeAuthError('invalid');
@@ -70,7 +76,7 @@ export function parseSecureEnvelope(raw: string | null, now: number): SecureEnve
   try {
     const row = record(JSON.parse(raw));
     if (row.version !== 1 || typeof row.generation !== 'string' || !opaque.test(row.generation) ||
-        !(row.returnPath === null || canonicalGamePath(row.returnPath))) throw new NativeAuthError('storage');
+        !(row.returnPath === null || canonicalReturnPath(row.returnPath))) throw new NativeAuthError('storage');
     const envelope: SecureEnvelope = { version: 1, generation: row.generation, returnPath: row.returnPath as string | null };
     if (row.session !== undefined && row.pending !== undefined) throw new NativeAuthError('storage');
     if (row.session !== undefined) {
@@ -87,7 +93,7 @@ export function parseSecureEnvelope(raw: string | null, now: number): SecureEnve
       if (pending.generation !== row.generation || pending.clientId !== NATIVE_CLIENT_ID || pending.redirectUri !== NATIVE_REDIRECT ||
           typeof pending.verifier !== 'string' || !opaque.test(pending.verifier) || typeof pending.state !== 'string' || !opaque.test(pending.state) ||
           typeof pending.transactionId !== 'string' || !opaque.test(pending.transactionId) || typeof pending.expiresAt !== 'number' ||
-          pending.expiresAt > now + 600_000 || !(pending.returnPath === null || canonicalGamePath(pending.returnPath)) ||
+          pending.expiresAt > now + 600_000 || !(pending.returnPath === null || canonicalReturnPath(pending.returnPath)) ||
           pending.returnPath !== envelope.returnPath) throw new NativeAuthError('storage');
       if (pending.expiresAt > now) envelope.pending = pending as PendingLogin;
     }

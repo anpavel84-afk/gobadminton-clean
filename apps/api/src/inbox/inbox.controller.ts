@@ -30,7 +30,7 @@ export class InboxController {
     @Query("limit") limitRaw?: string,
     @Query("filter") filter?: string,
   ) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     const limit = parseStrictLimit(limitRaw);
     return this.inbox.list(consumer.userId, { cursor, limit, filter });
   }
@@ -38,7 +38,7 @@ export class InboxController {
   @Get("counts")
   @Header("Cache-Control", "no-store")
   async counts(@Req() request: FastifyRequest) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.inbox.counts(consumer.userId);
   }
 
