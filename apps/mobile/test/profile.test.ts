@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { ProfileCoordinator, ProfileError, parseOwnProfile, moderationCodes } from '../src/profile.ts';
 import type { OwnProfile, ProfilePacket, ProfilePort } from '../src/profile.ts';
 import { createNativeApi } from '../src/native-api.ts';
