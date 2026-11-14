@@ -75,9 +75,33 @@ run("native Messages · self-migrating isolated database", () => {
     app = await build(true); disabledApp = await build(false);
   },120_000);
   afterAll(async () => {
-    await disabledApp?.close(); await app?.close(); await pool?.end();
-    if (admin && databaseName) await admin.query("DROP DATABASE " + databaseName + " WITH (FORCE)"); await admin?.end();
-  });
+    try {
+      const appClosures = await Promise.allSettled([disabledApp?.close(), app?.close()]);
+      const poolClosure = await Promise.allSettled([pool?.end()]);
+      const closeErrors = [...appClosures, ...poolClosure].flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (closeErrors.length) throw new AggregateError(closeErrors, "Native Messages fixture graceful cleanup failed");
+      if (admin && databaseName) {
+        if (!/^native_messages_[a-f0-9]{32}$/.test(databaseName)) throw Error("Refusing cleanup of an unowned fixture database");
+        // Pool shutdown can finish before PostgreSQL observes every socket disconnect.
+        const drainTimeoutMs = 5_000, deadline = Date.now() + drainTimeoutMs;
+        let remainingConnections: number | undefined;
+        while (true) {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) throw Error(`Native Messages fixture cleanup leak: ${remainingConnections} connections remain in ${databaseName} after ${drainTimeoutMs}ms; database was not dropped`);
+          const activity = await admin.query<{ count: number }>({
+            text: "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = $1",
+            values: [databaseName],
+            query_timeout: remainingMs,
+          });
+          remainingConnections = activity.rows[0]!.count;
+          if (remainingConnections === 0) break;
+          await new Promise(resolve => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
+        }
+        await admin.query("DROP DATABASE " + databaseName);
+        expect((await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [databaseName])).rowCount).toBe(0);
+      }
+    } finally { await admin?.end(); }
+  },45_000);
   const cookies = (header: string | string[] | undefined) => (Array.isArray(header) ? header : header ? [header] : []).map(v => v.split(";")[0]).join("; ");
   async function actor() {
     const start = await app.inject({ url: "/v1/auth/vk/start?returnPath=/messages" }); expect(start.statusCode).toBe(200);
