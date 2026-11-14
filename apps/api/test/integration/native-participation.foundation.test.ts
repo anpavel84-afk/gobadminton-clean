@@ -28,6 +28,8 @@ run("bounded native participation principal opt-in", () => {
   const env = loadEnv({ NODE_ENV: "test", APP_ENV: "local", DATABASE_URL: process.env.DATABASE_URL ?? "postgres://gobadminton:gobadminton@127.0.0.1:15432/gobadminton",
     PUBLIC_API_ORIGIN: "https://localhost:3000", PUBLIC_WEB_ORIGIN: origin, ALLOWED_WEB_ORIGINS: origin,
     COOKIE_SECURE: "true", VK_CLIENT_ID: "vk-fixture", VK_CLIENT_SECRET: "vk-fixture-secret", VK_REDIRECT_URI: "https://localhost:3000/v1/auth/vk/callback", AUTH_PEPPER: "native-participation-test-pepper-32chars", NATIVE_AUTH_ENABLED: "1",
+    CONTENT_MODERATION_PROVIDER: "fake",
+    CONTENT_MODERATION_FINGERPRINT_SECRET: "native-participation-synthetic-fingerprint-only",
     NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{ clientId: "native.fixture", redirectUris: ["https://app.example.test/auth/callback"] }]) });
   const fake: AuthProviderAdapter = {
     key: "vk", configured: true,
