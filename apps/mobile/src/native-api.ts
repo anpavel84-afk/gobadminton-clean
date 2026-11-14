@@ -25,7 +25,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         let code = 'UNKNOWN';
         try { const problem = await response.json(); if (typeof problem?.code === 'string' && /^[A-Z_]{1,80}$/.test(problem.code)) code = problem.code; } catch { /* No raw text retained. */ }
         const moderationStatus: Record<string, number> = { PUBLIC_TEXT_CONTENT_REJECTED: 422, MODERATION_TEMPORARILY_UNAVAILABLE: 503, MODERATION_POLICY_MISMATCH: 503, MODERATION_RATE_LIMITED: 429 };
-        throw new ProfileError(response.status === 401 ? 'authority'
+        throw new ProfileError(response.status >= 500 ? 'network' : response.status === 401 ? 'authority'
           : code !== 'COMMAND_IN_PROGRESS' && (moderationStatus[code] === response.status || [400,403,404,409,422,429].includes(response.status)) ? 'business' : 'network', response.status, code);
       }
       if (messages && !response.ok) {

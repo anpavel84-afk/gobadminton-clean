@@ -135,7 +135,7 @@ export class ProfileCoordinator {
       if (!this.state.cities.length) this.show({ status: 'idle' });
     } catch (error) {
       if (!valid()) return;
-      if (error instanceof ProfileError && error.kind === 'business' && error.code !== 'COMMAND_IN_PROGRESS') {
+      if (error instanceof ProfileError && error.kind === 'business' && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS') {
         const stale = error.status === 409;
         this.show({ command: undefined, status: stale ? 'stale' : 'ready', notice: stale
           ? 'Профиль изменился. Загрузите актуальный профиль и проверьте его перед новым редактированием. Прежние изменения не будут отправлены автоматически.'

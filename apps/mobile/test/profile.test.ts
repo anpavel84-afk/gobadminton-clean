@@ -21,7 +21,7 @@ function setup(overrides: Partial<ProfilePort> = {}) {
       : { ...emptyProfile, version: packet.body.expectedVersion + 1, displayName: packet.body.displayName, cityId: packet.body.cityId }; },
   }, () => `key-${++keys}`);
   owner.setActor(actor);
-  return { owner, sent };
+  return { owner, sent, get keyCount() { return keys; } };
 }
 async function edit(owner: ProfileCoordinator) { await owner.load(); owner.update({ displayName: '  Игрок  ', cityId: city.id }); }
 
@@ -138,7 +138,74 @@ test('controlled moderation errors retain editable form; 5xx, malformed receipt 
     }));
     const s = setup({ send: p => api.saveOwnProfile('private-access', p) }); await edit(s.owner); await s.owner.save();
     assert.deepEqual(s.owner.getSnapshot().draft, { displayName: '  Игрок  ', cityId: city.id });
-    assert.equal(s.owner.getSnapshot().command?.status, moderationCodes.includes(code) ? undefined : 'unknown');
+    const controlled = code === 'PUBLIC_TEXT_CONTENT_REJECTED' || code === 'MODERATION_RATE_LIMITED';
+    assert.equal(s.owner.getSnapshot().command?.status, controlled ? undefined : 'unknown');
+    if (controlled) {
+      assert.equal(s.owner.getSnapshot().status, 'ready');
+      assert.match(s.owner.getSnapshot().notice!, /Проверьте публичный текст/);
+      s.owner.update({ displayName: 'Исправленное' });
+      assert.equal(s.owner.getSnapshot().draft.displayName, 'Исправленное');
+    }
     assert.doesNotMatch(JSON.stringify(s.owner.getSnapshot()), /secret response|private-access/);
   }
+});
+
+for (const [status, code] of [[503, 'MODERATION_TEMPORARILY_UNAVAILABLE'], [503, 'MODERATION_POLICY_MISMATCH'], [502, 'PUBLIC_TEXT_CONTENT_REJECTED']] as const) {
+  test(`real native ${status} ${code} stays UNKNOWN with exact wire packet through navigation, retry and same-owner reauth`, async () => {
+    const calls: RequestInit[] = [], errors: unknown[] = [];
+    let recovered = false;
+    const api = createNativeApi(async (url, init) => {
+      assert.equal(String(url), 'https://dev.gobadminton.ru/v1/me/social-profile');
+      assert.equal(init?.method, 'PATCH'); calls.push(init!);
+      return recovered ? new Response(JSON.stringify({ ...emptyProfile, version: 8, displayName: 'Игрок', cityId: city.id }))
+        : new Response(JSON.stringify({ code }), { status });
+    });
+    const s = setup({ read: async () => ({ ...emptyProfile, version: 7 }), send: async (packet, authority) => {
+      try { return await api.saveOwnProfile(authority.sessionId, packet); }
+      catch (error) { errors.push(error); throw error; }
+    } });
+    await edit(s.owner); await s.owner.save();
+    const original = s.sent[0]!.packet, wire = calls[0]!.body;
+    assert.ok(errors[0] instanceof ProfileError);
+    assert.equal(errors[0].kind, 'network'); assert.equal(errors[0].status, status); assert.equal(errors[0].code, code);
+    assert.equal(wire, JSON.stringify({ expectedVersion: 7, displayName: 'Игрок', cityId: city.id }));
+    assert.deepEqual(original.actor, actor); assert.ok(Object.isFrozen(original));
+    assert.ok(Object.isFrozen(original.body)); assert.ok(Object.isFrozen(original.actor));
+    assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+    const draft = s.owner.getSnapshot().draft;
+    await s.owner.load(); s.owner.cancel(); s.owner.update({ displayName: 'Silent edit' }); await s.owner.save();
+    assert.deepEqual(s.owner.getSnapshot().draft, draft); assert.equal(calls.length, 1);
+    await s.owner.reconcile();
+    assert.equal(calls.length, 2); assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+    s.owner.setActor(null); await s.owner.reconcile();
+    assert.equal(s.owner.getSnapshot().command, undefined);
+    assert.deepEqual(s.owner.getSnapshot().draft, { displayName: '', cityId: '' });
+    const returned = { ...actor, sessionId: 'reauth-session', generation: 2 };
+    s.owner.setActor(returned);
+    assert.strictEqual(s.owner.getSnapshot().command?.packet, original);
+    assert.deepEqual(s.owner.getSnapshot().draft, { displayName: original.body.displayName, cityId: original.body.cityId });
+    await s.owner.load(); await s.owner.save();
+    assert.equal(calls.length, 2); assert.equal(s.keyCount, 1);
+    recovered = true; await s.owner.reconcile();
+    assert.equal(calls.length, 3); assert.equal(s.keyCount, 1);
+    for (const [i, call] of calls.entries()) {
+      assert.strictEqual(s.sent[i]!.packet, original); assert.equal(call.body, wire);
+      assert.equal((call.headers as Record<string, string>)['Idempotency-Key'], original.key);
+      assert.equal((call.headers as Record<string, string>).Authorization, `Bearer ${i === 2 ? returned.sessionId : actor.sessionId}`);
+    }
+    assert.deepEqual(s.sent[2]!.authority, returned);
+    assert.equal(s.owner.getSnapshot().command, undefined); assert.equal(s.owner.getSnapshot().profile?.version, 8);
+    await s.owner.load(); assert.equal(calls.length, 3);
+  });
+}
+
+test('defensive coordinator keeps a misclassified business503 UNKNOWN with its original packet', async () => {
+  const s = setup({ send: async () => { throw new ProfileError('business', 503, 'MODERATION_TEMPORARILY_UNAVAILABLE'); } });
+  await edit(s.owner); await s.owner.save(); const original = s.sent[0]!.packet;
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
+  s.owner.update({ displayName: 'Silent edit' }); await s.owner.save();
+  assert.equal(s.sent.length, 1); assert.deepEqual(s.owner.getSnapshot().draft, { displayName: '  Игрок  ', cityId: city.id });
+  await s.owner.reconcile();
+  assert.strictEqual(s.sent[1]!.packet, original); assert.equal(s.keyCount, 1);
+  assert.equal(s.owner.getSnapshot().command?.status, 'unknown');
 });
