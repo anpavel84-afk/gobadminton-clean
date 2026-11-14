@@ -53,6 +53,60 @@ test('missing profile city is controlled setup; trainer reads conditional and le
   active.owner.update({activity:'trainer_led'}); active.owner.preview(); assert.equal(active.owner.getSnapshot().preview?.settlement.purpose,'trainer_fee');
   assert.equal(active.owner.getSnapshot().preview?.settlement.priceMinor,null);
 });
+test('HTTP 200 empty own profile and blank required name enter setup before downstream reads or writes', async () => {
+  for (const dto of [
+    { displayName:'',cityId:null,trainer:false },
+    { displayName:'',cityId:null,trainer:true },
+    { ...profile,cityId:null },
+    { ...profile,displayName:'',trainer:true },
+    { ...profile,displayName:'   ',trainer:true },
+  ]) {
+    const reads: string[] = [];
+    const api = createNativeApi(async (url,init) => {
+      assert.equal(init?.method,'GET'); assert.ok(String(url).endsWith('/me/social-profile'));
+      reads.push('profile'); return new Response(JSON.stringify(dto),{status:200});
+    });
+    const s = setup({ profile: () => api.creatorProfile('private-access'),
+      preferences: async () => { reads.push('preferences'); return preferences; },
+      trainer: async () => { reads.push('trainer'); return {id:'trainer',displayName:'Тренер',status:'active'}; },
+      venues: async () => { reads.push('venues'); return {items:[venue],nextCursor:null}; } });
+    await s.owner.loadContext('city-1');
+    assert.equal(s.owner.getSnapshot().context,'setup'); assert.deepEqual(s.owner.getSnapshot().profile,dto);
+    assert.deepEqual(reads,['profile']); assert.equal(s.owner.getSnapshot().preferences,null);
+    assert.equal(s.owner.getSnapshot().trainer,null); assert.deepEqual(s.owner.getSnapshot().venues,[]);
+    assert.throws(() => creationInput(form,parseCreatorProfile(dto),preferences,null,[venue],'city-1',now),ParticipationError);
+    s.owner.update(form); s.owner.preview(); await s.owner.publishPreview(); await s.owner.publishDraft(g.id);
+    assert.equal(s.owner.getSnapshot().preview,null); assert.equal(s.sent.length,0);
+  }
+});
+test('creator transport and creation validation still reject malformed objects, missing fields and wrong types', async () => {
+  for (const dto of [null,[],{},
+    {cityId:null,trainer:false}, {displayName:'',trainer:false}, {displayName:'',cityId:null},
+    {...profile,displayName:null}, {...profile,displayName:4}, {...profile,trainer:'false'},
+    {...profile,cityId:4}, {...profile,cityId:''},
+  ]) {
+    assert.throws(() => parseCreatorProfile(dto),ParticipationError);
+    assert.throws(() => creationInput(form,dto as typeof profile,preferences,null,[venue],'city-1',now),ParticipationError);
+  }
+  const api = createNativeApi(async () => new Response(JSON.stringify({...profile,displayName:null}),{status:200}));
+  const s = setup({profile:() => api.creatorProfile('private-access')});
+  await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'error');
+  s.owner.update(form); s.owner.preview(); await s.owner.publishPreview(); assert.equal(s.sent.length,0);
+});
+test('populated HTTP profile permits preview; incomplete or malformed refresh cannot publish the old preview', async () => {
+  let dto: unknown = profile;
+  const api = createNativeApi(async () => new Response(JSON.stringify(dto),{status:200}));
+  const s = setup({profile:() => api.creatorProfile('private-access')});
+  await preview(s.owner); assert.equal(s.owner.getSnapshot().context,'ready');
+  assert.equal(s.owner.getSnapshot().preview?.hostDisplayName,profile.displayName);
+  dto = {...profile,displayName:null};
+  await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'error');
+  await s.owner.publishPreview(); assert.equal(s.sent.length,0);
+  dto = profile; await preview(s.owner);
+  dto = {...profile,displayName:''};
+  await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'setup');
+  assert.equal(s.owner.getSnapshot().preview,null); await s.owner.publishPreview(); assert.equal(s.sent.length,0);
+});
 test('explicit preview Publish owns create→publish with canonical ID/version; sync double tap never creates twice', async () => {
   const gate = deferred<Game>(), s = setup({ send: async p => p.kind === 'create' ? gate.promise : { ...g,status:'published',version:8 } });
   await preview(s.owner); assert.equal(s.sent.length,0);

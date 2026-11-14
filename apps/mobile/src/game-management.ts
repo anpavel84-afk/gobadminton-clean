@@ -14,7 +14,7 @@ export const emptyCreationForm = (): CreationForm => ({ title: '', venueId: '', 
   terms: 'Площадка и условия вне платформы', training: '', trainerTerms: 'Оплата тренеру по договорённости вне платформы' });
 export function parseCreatorProfile(value: unknown): CreatorProfile {
   const r = row(value);
-  if (!(r.cityId === null || typeof r.cityId === 'string' && r.cityId.length > 0) || typeof r.trainer !== 'boolean' || typeof r.displayName !== 'string' || !r.displayName.trim()) throw new ParticipationError('invalid');
+  if (!(r.cityId === null || typeof r.cityId === 'string' && r.cityId.length > 0) || typeof r.trainer !== 'boolean' || typeof r.displayName !== 'string') throw new ParticipationError('invalid');
   return { cityId: r.cityId as string | null, trainer: r.trainer, displayName: r.displayName };
 }
 const row = (v: unknown): Record<string, unknown> => {
@@ -32,10 +32,11 @@ export function parseOwnTrainer(value: unknown): OwnTrainer {
   return { id: r.id, displayName: r.displayName, status: r.status as OwnTrainer['status'] };
 }
 export function creationInput(form: CreationForm, profile: CreatorProfile, preferences: GamePreferences | null, trainer: OwnTrainer | null, venues: Venue[], cityId: string, now = Date.now()): CreateGame {
+  profile = parseCreatorProfile(profile);
   const venue = venues.find(v => v.id === form.venueId && v.cityId === cityId);
   const schedule = venue && gameSchedule(`${form.date}T${form.time}`, form.duration, venue.timezone);
   const capacity = /^\d+$/.test(form.capacity) ? Number(form.capacity) : 0;
-  if (!profile.cityId || !venue || !schedule || !gameStartIsFuture(schedule.startsAt, now) || !Number.isInteger(capacity) || capacity < 1 || capacity > 1000 || !form.contact.trim() || form.contact.trim().length > 320 || form.title.length > 160 ||
+  if (!profile.cityId || !profile.displayName.trim() || !venue || !schedule || !gameStartIsFuture(schedule.startsAt, now) || !Number.isInteger(capacity) || capacity < 1 || capacity > 1000 || !form.contact.trim() || form.contact.trim().length > 320 || form.title.length > 160 ||
       !['public','unlisted'].includes(form.visibility) || !['doubles','singles','mixed'].includes(form.format) ||
       ![form.lower,form.upper].every(n => Number.isFinite(n) && n >= 1 && n <= 7 && Number.isInteger(n * 2)) || form.lower > form.upper ||
       (form.activity !== 'regular' && form.activity !== 'trainer_led') ||
@@ -117,7 +118,7 @@ export class GameManagementCoordinator {
       try { profile = await this.port.profile(); }
       catch (e) { if (e instanceof ParticipationError && e.status === 404) { if (valid()) this.show({ context: 'setup' }); return; } throw e; }
       if (!valid()) return;
-      if (!profile.cityId || !cityId) { this.show({ profile, context: 'setup' }); return; }
+      if (!profile.cityId || !profile.displayName.trim() || !cityId) { this.show({ profile, context: 'setup', preview: null }); return; }
       const preferences = await this.port.preferences(); if (!valid()) return;
       let trainer: OwnTrainer | null = null;
       if (profile.trainer) {
@@ -153,7 +154,7 @@ export class GameManagementCoordinator {
   /** Explicit preview confirmation owns normal draft→publish. Reconciliation never chains. */
   publishPreview = async () => {
     const actor = this.state.actor, input = this.state.preview;
-    if (!actor || !input || this.locked() || this.state.creationReference) return;
+    if (!actor || !input || this.state.context !== 'ready' || this.locked() || this.state.creationReference) return;
     if (!gameStartIsFuture(input.startsAt,this.now())) {
       this.show({ preview: null, notice: 'Время начала уже прошло. Укажите будущие дату и время.' }); return;
     }
