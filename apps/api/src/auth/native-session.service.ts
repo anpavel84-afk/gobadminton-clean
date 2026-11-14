@@ -22,6 +22,29 @@ export class NativeSessionService {
     catch (error) { await client.query("ROLLBACK"); throw error; }
     finally { client.release(); }
   }
+  async cleanupExpired() {
+    // Never delete an unexpired access token, even on an expired/revoked family.
+    await this.pool.query(`DELETE FROM native_access_tokens WHERE token_hash IN (
+      SELECT token_hash FROM native_access_tokens WHERE expires_at<=now()
+      ORDER BY expires_at LIMIT 100 FOR UPDATE SKIP LOCKED)`);
+    await this.transaction(async client => {
+      // Lock families before their children, as refresh does. No User/Session locks
+      // or audit-row deletion here; SKIP LOCKED avoids blocking active refreshes.
+      const expired = await client.query<{session_id:string}>(`SELECT session_id FROM native_refresh_families
+        WHERE absolute_expires_at<=now() ORDER BY absolute_expires_at LIMIT 20 FOR UPDATE SKIP LOCKED`);
+      const ids = expired.rows.map(row=>row.session_id);
+      if (!ids.length) return;
+      // Idle expiry and revocation MUST NOT truncate consumed-token replay history.
+      // Bound child deletion too: a family may contain many rotated credentials.
+      await client.query(`DELETE FROM native_refresh_tokens WHERE token_hash IN (
+        SELECT token_hash FROM native_refresh_tokens WHERE session_id=ANY($1::uuid[])
+        LIMIT 100 FOR UPDATE SKIP LOCKED)`,[ids]);
+      await client.query(`DELETE FROM native_refresh_families f WHERE f.session_id=ANY($1::uuid[])
+        AND f.absolute_expires_at<=now()
+        AND NOT EXISTS (SELECT 1 FROM native_refresh_tokens t WHERE t.session_id=f.session_id)
+        AND NOT EXISTS (SELECT 1 FROM native_access_tokens a WHERE a.session_id=f.session_id)`,[ids]);
+    });
+  }
   async issue(client: PoolClient, userId: string, clientId: string) {
     // Caller has fenced the authorizing browser grant under User-before-Session.
     await assertCapabilities(client, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, userId, ["account.access"]);
@@ -64,8 +87,8 @@ export class NativeSessionService {
         `SELECT t.consumed_at,f.revoked_at,f.client_id,f.idle_expires_at,f.absolute_expires_at
          FROM native_refresh_tokens t JOIN native_refresh_families f ON f.session_id=t.session_id
          WHERE t.token_hash=$1 FOR UPDATE OF f,t`,[this.hash(token)]);
-      const row = selected.rows[0]!;
-      if (row.client_id!==clientId) throw unauthorized();
+      const row = selected.rows[0];
+      if (!row || row.client_id!==clientId) throw unauthorized();
       if (row.consumed_at) { await this.revoke(client,identity.session_id); return null; }
       if (row.revoked_at || row.idle_expires_at.getTime()<=Date.now() || row.absolute_expires_at.getTime()<=Date.now()) throw unauthorized();
       await this.fence.assertActiveConsumerInTransaction(client,{actorId:identity.user_id,sessionId:identity.session_id});

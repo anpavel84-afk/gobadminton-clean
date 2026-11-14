@@ -28,7 +28,12 @@ export class NativeAuthService {
   }
   async budget(request: FastifyRequest, operation: string) {
     this.native.enabled();
-    // Global cap also bounds table growth, even for rotating source IPs/transaction IDs.
+    // Lazy retention is bounded on every native credential request, including rejected ones.
+    await this.pool.query(`DELETE FROM native_auth_transactions WHERE id_hash IN (
+      SELECT id_hash FROM native_auth_transactions
+      WHERE GREATEST(expires_at,COALESCE(code_expires_at,expires_at))<=now()
+      ORDER BY GREATEST(expires_at,COALESCE(code_expires_at,expires_at)) LIMIT 100 FOR UPDATE SKIP LOCKED)`);
+    await this.native.cleanupExpired();
     await this.pool.query("DELETE FROM native_auth_budgets WHERE expires_at<=now()");
     for (const [key,limit] of [["global",1000],[request.ip,60]] as const) {
       const hash = this.native.hash(`native:${operation}:${key}`);
@@ -43,8 +48,10 @@ export class NativeAuthService {
       !/^application\/json(?:;|$)/i.test(request.headers["content-type"]??"")) throw forbidden("ORIGIN_REJECTED","Недопустимый browser запрос");
     if (request.headers.authorization !== undefined) throw forbidden("CREDENTIALS_CONFLICT","Требуется browser cookie");
   }
-  private live(row: Transaction | undefined): Transaction {
-    if (!row || row.expires_at.getTime()<=Date.now() || row.cancelled_at || row.consumed_at) throw unauthorized("NATIVE_FLOW_EXPIRED","Начните вход из приложения заново");
+  private live(row: Transaction | undefined, handoff = false): Transaction {
+    // A grant completed just before transaction expiry retains its full handoff lifetime.
+    if (!row || (row.expires_at.getTime()<=Date.now() && !(handoff && row.code_expires_at && row.code_expires_at.getTime()>Date.now())) ||
+      row.cancelled_at || row.consumed_at) throw unauthorized("NATIVE_FLOW_EXPIRED","Начните вход из приложения заново");
     return row;
   }
   private bound(row: Transaction, request: FastifyRequest) {
@@ -112,7 +119,7 @@ export class NativeAuthService {
       const initial=(await client.query<Transaction>("SELECT * FROM native_auth_transactions WHERE code_hash=$1",[this.native.hash(code)])).rows[0];
       if (!initial?.user_id || !initial.browser_session_id) throw unauthorized();
       await this.fence.assertActiveConsumerInTransaction(client,{actorId:initial.user_id,sessionId:initial.browser_session_id});
-      const row=this.live((await client.query<Transaction>("SELECT * FROM native_auth_transactions WHERE code_hash=$1 FOR UPDATE",[this.native.hash(code)])).rows[0]);
+      const row=this.live((await client.query<Transaction>("SELECT * FROM native_auth_transactions WHERE code_hash=$1 FOR UPDATE",[this.native.hash(code)])).rows[0],true);
       if (!row.completed_at || !row.code_expires_at || row.code_expires_at.getTime()<=Date.now() || row.client_id!==clientConfig.clientId ||
         row.redirect_uri!==redirectUri || row.challenge!==s256(verifier)) throw unauthorized("INVALID_NATIVE_GRANT");
       await client.query("UPDATE native_auth_transactions SET consumed_at=clock_timestamp() WHERE id_hash=$1",[row.id_hash]);

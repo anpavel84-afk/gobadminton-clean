@@ -3,9 +3,11 @@ import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fa
 import { Test } from "@nestjs/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
 import { AuthModule } from "../../src/auth/auth.module";
 import { SessionService } from "../../src/auth/session.service";
 import { NativeSessionService } from "../../src/auth/native-session.service";
+import { NativeAuthService } from "../../src/auth/native-auth.service";
 import { ConsumerAuthService } from "../../src/auth/consumer-auth.service";
 import { ActorFenceService } from "../../src/common/actor-fence.service";
 import { NATIVE_BINDING_COOKIE, SESSION_COOKIE } from "../../src/auth/constants";
@@ -142,5 +144,95 @@ run("native auth atomic handoff and refresh foundation",()=>{
     const disabled=new NativeSessionService(pool,{...env,NATIVE_AUTH_ENABLED:false},app.get(ActorFenceService));
     const consumer=new ConsumerAuthService({...env,NATIVE_AUTH_ENABLED:false},sessions,{} as never,disabled);
     await expect(consumer.requirePrincipal({headers:{authorization:`Bearer ${issued.accessToken}`},raw:{rawHeaders:[]}} as never)).rejects.toMatchObject({status:404});
+  });
+  it("bounds transaction retention and preserves a live transaction and handoff across transaction expiry",async()=>{
+    const actor=await browser(),grant=await handoff(actor),prefix=`retention-${randomUUID()}-`;
+    const created=await app.inject({method:"POST",url:"/v1/auth/native/transactions",payload:{
+      clientId,redirectUri,codeChallenge:s256("v".repeat(43)),codeChallengeMethod:"S256",state:"s".repeat(32)}});
+    expect(created.statusCode).toBe(200);
+    const liveHash=native.hash(created.json().transactionId);
+    // The completed grant is still valid for 60 seconds, although its transaction just expired.
+    await pool.query("UPDATE native_auth_transactions SET expires_at=now()-interval '1 second' WHERE code_hash=$1",[native.hash(grant.code)]);
+    await pool.query(`INSERT INTO native_auth_transactions(id_hash,client_id,redirect_uri,challenge,callback_state,return_path,expires_at)
+      SELECT $1||i,$2,$3,$4,$5,'/games',now()-interval '100 years' FROM generate_series(1,103) i`,
+      [prefix,clientId,redirectUri,s256("v".repeat(43)),"s".repeat(32)]);
+    const remaining=async()=>Number((await pool.query("SELECT count(*) FROM native_auth_transactions WHERE id_hash LIKE $1",[prefix+"%"])).rows[0].count);
+    await app.get(NativeAuthService).budget({ip:"retention-test"} as never,"retention-test");
+    expect(await remaining()).toBe(3);
+    expect((await pool.query("SELECT id_hash FROM native_auth_transactions WHERE id_hash=$1",[liveHash])).rowCount).toBe(1);
+    expect((await pool.query("SELECT id_hash FROM native_auth_transactions WHERE code_hash=$1",[native.hash(grant.code)])).rowCount).toBe(1);
+    const exchanged=await app.inject({method:"POST",url:"/v1/auth/native/exchange",payload:grant});
+    expect(exchanged.statusCode).toBe(200);
+    expect(await remaining()).toBe(0);
+    // A consumed grant never gains a replay window from the retention exception.
+    expect((await app.inject({method:"POST",url:"/v1/auth/native/exchange",payload:grant})).statusCode).toBe(401);
+  });
+  it("bounds expired access/history deletion, retains live and revoked family replay history and all session audit rows",async()=>{
+    const live=await login(await browser()),liveRotation=await native.refresh(live.refreshToken,clientId);
+    const revoked=await login(await browser()),revokedRotation=await native.refresh(revoked.refreshToken,clientId);
+    await native.logout({clientId,refreshToken:revokedRotation.refreshToken});
+    const actor=await browser(),expired=await login(actor),prefix=`retention-${randomUUID()}-`;
+    await pool.query("UPDATE native_refresh_families SET absolute_expires_at=now()-interval '1 second' WHERE session_id=$1",[expired.sessionId]);
+    await pool.query("UPDATE native_access_tokens SET expires_at=now()-interval '100 years' WHERE session_id=$1",[expired.sessionId]);
+    await pool.query(`INSERT INTO native_access_tokens(token_hash,session_id,expires_at)
+      SELECT $1||i,$2,now()-interval '100 years' FROM generate_series(1,102) i`,[prefix,expired.sessionId]);
+    await pool.query(`INSERT INTO native_refresh_tokens(token_hash,session_id,consumed_at)
+      SELECT $1||i,$2,now() FROM generate_series(1,102) i`,[prefix,expired.sessionId]);
+    const validAccess=prefix+"valid-access";
+    await pool.query("INSERT INTO native_access_tokens(token_hash,session_id,expires_at) VALUES($1,$2,now()+interval '10 minutes')",[validAccess,expired.sessionId]);
+    const counts=async()=>(await pool.query(`SELECT
+      (SELECT count(*)::int FROM native_access_tokens WHERE session_id=$1 AND expires_at<=now()) AS access,
+      (SELECT count(*)::int FROM native_refresh_tokens WHERE session_id=$1) AS refresh,
+      (SELECT count(*)::int FROM native_refresh_families WHERE session_id=$1) AS family`,[expired.sessionId])).rows[0];
+    await native.cleanupExpired();
+    expect(await counts()).toEqual({access:3,refresh:3,family:1});
+    await native.cleanupExpired();
+    expect(await counts()).toEqual({access:0,refresh:0,family:1});
+    expect((await pool.query("SELECT token_hash FROM native_access_tokens WHERE token_hash=$1",[validAccess])).rowCount).toBe(1);
+    // An idle-expired but not absolutely expired family must retain consumed history too.
+    await pool.query("UPDATE native_refresh_families SET idle_expires_at=now()-interval '1 second' WHERE session_id=$1",[revoked.sessionId]);
+    await Promise.all([native.cleanupExpired(),native.cleanupExpired()]);
+    expect(await counts()).toEqual({access:0,refresh:0,family:1});
+    await pool.query("UPDATE native_access_tokens SET expires_at=now()-interval '1 second' WHERE token_hash=$1",[validAccess]);
+    await native.cleanupExpired();
+    expect(await counts()).toEqual({access:0,refresh:0,family:0});
+    for (const issued of [live,revoked]) {
+      expect((await pool.query("SELECT consumed_at FROM native_refresh_tokens WHERE token_hash=$1",[native.hash(issued.refreshToken)])).rows[0]?.consumed_at).toBeInstanceOf(Date);
+      expect((await pool.query("SELECT session_id FROM native_refresh_families WHERE session_id=$1",[issued.sessionId])).rowCount).toBe(1);
+    }
+    expect((await pool.query("SELECT revoked_at FROM native_refresh_families WHERE session_id=$1",[revoked.sessionId])).rows[0].revoked_at).toBeInstanceOf(Date);
+    expect((await native.lookup(liveRotation.accessToken)).sessionId).toBe(live.sessionId);
+    // The browser and expired native audit records survive credential retention.
+    expect((await pool.query("SELECT id FROM app_sessions WHERE id=ANY($1::uuid[])",[[actor.session.id,expired.sessionId]])).rowCount).toBe(2);
+    expect(await sessions.lookupActiveSession(actor.sessionToken)).not.toBeNull();
+  });
+  it("returns 401 if expiry cleanup removes the family after refresh identity lookup while waiting for User",async()=>{
+    const actor=await browser(),issued=await login(actor),blocker=await pool.connect();
+    // One real DB connection gives a stable backend PID for deterministic lock-wait observation.
+    const refreshPool=new Pool({connectionString:env.DATABASE_URL,max:1});
+    const refreshing=new NativeSessionService(refreshPool,env,app.get(ActorFenceService));
+    let outcome:Promise<unknown>|undefined;
+    try {
+      const pid=(await refreshPool.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await pool.query("UPDATE native_refresh_families SET absolute_expires_at=now()-interval '1 second' WHERE session_id=$1",[issued.sessionId]);
+      await pool.query("UPDATE native_access_tokens SET expires_at=now()-interval '1 second' WHERE session_id=$1",[issued.sessionId]);
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE",[actor.id]);
+      outcome=refreshing.refresh(issued.refreshToken,clientId).then(value=>value,error=>error);
+      let waiting=false;
+      for(let i=0;i<100;i++) {
+        waiting=(await pool.query("SELECT wait_event_type='Lock' AS waiting FROM pg_stat_activity WHERE pid=$1",[pid])).rows[0]?.waiting===true;
+        if(waiting) break;
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      expect(waiting).toBe(true);
+      await native.cleanupExpired();
+      expect((await pool.query("SELECT session_id FROM native_refresh_families WHERE session_id=$1",[issued.sessionId])).rowCount).toBe(0);
+      await blocker.query("COMMIT");
+      expect(await outcome).toMatchObject({status:401});
+    } finally {
+      await blocker.query("ROLLBACK");blocker.release();
+      await outcome;await refreshPool.end();
+    }
   });
 });

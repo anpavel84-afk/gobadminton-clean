@@ -24,7 +24,9 @@ CREATE TABLE native_auth_transactions (
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX native_auth_transactions_expiry ON native_auth_transactions(expires_at);
+-- Keep an otherwise expired transaction while its handoff grant is still valid.
+CREATE INDEX native_auth_transactions_expiry ON native_auth_transactions
+  (GREATEST(expires_at,COALESCE(code_expires_at,expires_at)));
 CREATE TABLE native_refresh_families (
   session_id uuid PRIMARY KEY REFERENCES app_sessions(id),
   client_id text NOT NULL,
@@ -38,6 +40,7 @@ CREATE TABLE native_refresh_tokens (
   consumed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX native_refresh_families_expiry ON native_refresh_families(absolute_expires_at);
 CREATE INDEX native_refresh_tokens_session ON native_refresh_tokens(session_id);
 CREATE TABLE native_access_tokens (
   token_hash text PRIMARY KEY,
@@ -45,6 +48,7 @@ CREATE TABLE native_access_tokens (
   expires_at timestamptz NOT NULL
 );
 CREATE INDEX native_access_tokens_session ON native_access_tokens(session_id);
+CREATE INDEX native_access_tokens_expiry ON native_access_tokens(expires_at);
 -- Fixed-window counters: hashed IP/client/operation, expired buckets pruned on use.
 CREATE TABLE native_auth_budgets (
   key_hash text PRIMARY KEY,
