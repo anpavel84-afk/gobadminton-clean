@@ -925,7 +925,14 @@
     },
     "/me/games": {
       "get": {
-        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "listMyManagedGames",
         "tags": [
           "Games"
@@ -2045,7 +2052,14 @@
         }
       },
       "post": {
-        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "requestParticipation",
         "tags": [
           "Participation"
@@ -2105,7 +2119,14 @@
     },
     "/me/participations": {
       "get": {
-        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "listMyParticipations",
         "tags": [
           "Participation"
@@ -2243,7 +2264,14 @@
         }
       ],
       "post": {
-        "security": [{ "cookieSession": [] }, { "NativeBearer": [] }],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "operationId": "withdrawParticipation",
         "tags": [
           "Participation"
@@ -26090,7 +26118,7 @@
           "Identity"
         ],
         "summary": "Create native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "description": "Default disabled. Required JSON device proof; rejects ambient consumer session cookie. Rejects Authorization. Registered client/redirect tuple, S256 challenge and state create an expiring transaction. No durable Idempotency-Key receipt or browser CSRF/Origin requirement. Responses are no-store.",
         "security": [],
         "responses": {
           "200": {
@@ -26139,7 +26167,9 @@
               }
             }
           }
-        }
+        },
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-consumer-cookie; reject-authorization"
       }
     },
     "/auth/native/exchange": {
@@ -26149,7 +26179,7 @@
           "Identity"
         ],
         "summary": "Exchange native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "description": "Default disabled. Required JSON device proof; rejects ambient consumer session cookie. Rejects Authorization. One-use expiring grant bound to client, redirect and PKCE verifier; active source actor/session fence. No durable Idempotency-Key receipt or browser CSRF/Origin requirement. Responses are no-store.",
         "security": [],
         "responses": {
           "200": {
@@ -26198,7 +26228,9 @@
               }
             }
           }
-        }
+        },
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-consumer-cookie; reject-authorization"
       }
     },
     "/auth/native/refresh": {
@@ -26208,7 +26240,7 @@
           "Identity"
         ],
         "summary": "Refresh native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "description": "Default disabled. Required JSON device proof; rejects ambient consumer session cookie. Rejects Authorization. Client-bound refresh credential rotates once; replay revokes the family; lost response requires reauthentication. No durable Idempotency-Key receipt or browser CSRF/Origin requirement. Responses are no-store.",
         "security": [],
         "responses": {
           "200": {
@@ -26257,7 +26289,9 @@
               }
             }
           }
-        }
+        },
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-consumer-cookie; reject-authorization"
       }
     },
     "/auth/native/logout": {
@@ -26267,7 +26301,7 @@
           "Identity"
         ],
         "summary": "Logout native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "description": "Default disabled. Required JSON device proof; rejects ambient consumer session cookie. Explicit native bearer or body refreshToken required; refreshToken takes precedence when both are present. Never authenticates or revokes a browser session. No durable Idempotency-Key receipt or browser CSRF/Origin requirement. Responses are no-store.",
         "security": [],
         "responses": {
           "200": {
@@ -26325,7 +26359,21 @@
               }
             }
           }
-        }
+        },
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-consumer-cookie; native-bearer-or-body-refresh",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^Bearer [A-Za-z0-9_-]{43}$"
+            },
+            "description": "Optional explicit native access token; a body refreshToken may supply the credential instead."
+          }
+        ]
       }
     },
     "/auth/native/transactions/{transactionId}/bind": {
@@ -26335,7 +26383,7 @@
           "Identity"
         ],
         "summary": "Bind native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
+        "description": "Default disabled. Required application/json, permitted Origin and X-Native-Auth: 1; Authorization rejected. Live unconsumed transaction required. No consumer login required. First bind establishes an HttpOnly browser nonce; rebind must match the existing transaction binding. No durable Idempotency-Key replay. Responses are no-store.",
         "security": [],
         "responses": {
           "200": {
@@ -26415,8 +26463,30 @@
               "type": "string",
               "const": "1"
             }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by native browser bridge."
+          },
+          {
+            "in": "cookie",
+            "name": "__Host-gb_native_binding",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "description": "May be absent on first bind; rebind must match the stored transaction nonce. Set as HttpOnly, Secure, SameSite=Lax."
           }
-        ]
+        ],
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-authorization; no-consumer-login-required",
+        "x-native-browser-binding": "establish-or-match"
       }
     },
     "/auth/native/transactions/{transactionId}/complete": {
@@ -26426,8 +26496,13 @@
           "Identity"
         ],
         "summary": "Complete native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
-        "security": [],
+        "description": "Default disabled. Required application/json, permitted Origin and X-Native-Auth: 1; Authorization rejected. Live unconsumed transaction required. Requires both active consumer cookieSession and transaction-bound browser nonce, requireCookieMutation CSRF/Origin validation and active actor/session fence. Issues a one-use expiring grant bound to PKCE and the registered client/redirect. No durable Idempotency-Key replay. Responses are no-store.",
+        "security": [
+          {
+            "cookieSession": [],
+            "NativeBindingCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
@@ -26508,8 +26583,29 @@
               "type": "string",
               "const": "1"
             }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by native browser bridge."
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Consumer session CSRF token validated by requireCookieMutation."
           }
-        ]
+        ],
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-authorization; active-consumer-session-fence",
+        "x-native-browser-binding": "require-match"
       }
     },
     "/auth/native/transactions/{transactionId}/cancel": {
@@ -26519,8 +26615,12 @@
           "Identity"
         ],
         "summary": "Cancel native authentication",
-        "description": "Default disabled. HTTPS JSON, no-store. Native verifier is independent of provider PKCE. Refresh rotates once; lost response requires reauthentication, never retry. Browser complete requires bound nonce, active cookie, allowed Origin, X-Native-Auth: 1, CSRF and explicit account confirmation.",
-        "security": [],
+        "description": "Default disabled. Required application/json, permitted Origin and X-Native-Auth: 1; Authorization rejected. Live unconsumed transaction required. Requires the actual transaction-bound browser nonce cookie; consumer login is not required. Cancels this transaction. No durable Idempotency-Key replay. Responses are no-store.",
+        "security": [
+          {
+            "NativeBindingCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success; Cache-Control: no-store; Referrer-Policy: no-referrer",
@@ -26599,8 +26699,20 @@
               "type": "string",
               "const": "1"
             }
+          },
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by native browser bridge."
           }
-        ]
+        ],
+        "x-native-auth-protocol": "native-pkce-bound-single-use-v1",
+        "x-native-credentials": "reject-authorization; no-consumer-login-required",
+        "x-native-browser-binding": "require-match"
       }
     }
   },
@@ -26633,6 +26745,12 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Opaque hash-backed native access; 600 seconds. Only explicitly admitted routes opt in: /me, owned sessions, /me/games, /me/participations, participation request and own withdraw. Never combine with browser cookie."
+      },
+      "NativeBindingCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-gb_native_binding",
+        "description": "Transaction-bound browser nonce, not consumer login. Required to match the existing transaction binding."
       }
     },
     "parameters": {

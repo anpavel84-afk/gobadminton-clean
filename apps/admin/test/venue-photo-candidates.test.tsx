@@ -259,8 +259,10 @@ describe("AdminApp navigation with an unresolved candidate decision",()=>{
       h.state.session={...h.state.session,principalId:"replacement-admin",userId:"replacement-user",sessionId:"replacement-session",roles:["support"]};
       fireEvent.focus(window);
       await screen.findByText("replacement-admin");
-      expect((screen.getByRole("button",{name:"Обзор"}) as HTMLButtonElement).disabled).toBe(false);
-      expect((screen.getByRole("button",{name:"Обращения"}) as HTMLButtonElement).disabled).toBe(false);
+      await waitFor(()=>{
+        expect((screen.getByRole("button",{name:"Обзор"}) as HTMLButtonElement).disabled).toBe(false);
+        expect((screen.getByRole("button",{name:"Обращения"}) as HTMLButtonElement).disabled).toBe(false);
+      });
       expect(screen.queryByRole("button",{name:"Площадки"})).toBeNull();
     }
     expect(screen.queryByRole("button",{name:"Сверить исходное решение"})).toBeNull();
