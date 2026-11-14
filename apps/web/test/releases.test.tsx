@@ -603,7 +603,7 @@ describe("releases catalogue integrity", () => {
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.owner_uat).toBe("NOT_TESTED");
     expect(TRUSTED_HISTORICAL_SEED.at(-6)).toBe(row);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -650,7 +650,7 @@ describe("releases catalogue integrity", () => {
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.owner_uat).toBe("NOT_TESTED");
     expect(TRUSTED_HISTORICAL_SEED.at(-7)).toBe(row);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -699,7 +699,7 @@ describe("releases catalogue integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.78")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.known_limitations).toEqual(previous.known_limitations);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -740,7 +740,7 @@ describe("releases catalogue integrity", () => {
     expect(row.deployments[0]?.accepted_at).toBe("2026-11-10T12:28:54Z");
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.77")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
@@ -799,7 +799,7 @@ describe("releases catalogue integrity", () => {
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.76")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
     expect(row.known_limitations).toEqual(previous.known_limitations);
-    expect(CURRENT_NAMED_RELEASE.known_limitations).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.86")!.known_limitations).toEqual([
       "Это промежуточная версия. Полное равенство мобильного и веб-приложения обязательно и ещё не достигнуто: управление играми, приглашения, рекомендации, действия после игры, игроки, сообщения, карты, радар и остальные возможности требуют дальнейшей работы.",
       "Владелец отклонил гостевой прототип alpha.85 после проверки на Samsung S23: замечание в #522 от 14 ноября 2026 года. Историческая оценка alpha.85 исправлена на отказ по этому замечанию; исправленный вариант ещё не прошёл повторную проверку на физическом телефоне.",
       "Мобильный вход по умолчанию выключен. Реальный вход, перенос сессии, действия с закрытыми данными и открытие приложения по подтверждённым ссылкам ещё не проверены. Подготовленная основа не означает, что вход уже работает на тестовом стенде.",
