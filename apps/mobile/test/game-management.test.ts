@@ -169,7 +169,7 @@ test('UNKNOWN publish and manager rejection retain original game/version/reason 
     recover = true; await s.owner.reconcile();
     const replay = s.sent.at(-1)!;
     assert.equal(replay.kind,kind); assert.equal(replay.key,original.key); assert.strictEqual(replay.body,original.body);
-    assert.equal(replay.kind !== 'create' && replay.gameId,g.id);
+    assert.equal(replay.gameId,g.id);
     if (replay.kind === 'reject') { assert.equal(replay.participationId,part.id); assert.deepEqual(replay.body,{expectedVersion:3,reason:'Original reason'}); }
     else assert.deepEqual(replay.body,{expectedVersion:7});
     assert.equal(s.sent.length,before+1);
