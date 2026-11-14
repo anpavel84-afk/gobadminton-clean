@@ -1,3 +1,155 @@
+# #522 CONTACT ADDRESS3 · two P2 source repairs
+
+This bounded author delta addresses both P2 findings from the FIRST whole
+independent review of base `b5b7328ab55d5f6effec16fc4444d0681abc09e5`.
+Contact success receipts now reject `seq > conversation.lastMessageSeq` with
+`MessagesError('invalid')`; equal sequences and older duplicate receipts remain
+valid. HTTP 200 with an inconsistent receipt retains the original frozen UNKNOWN
+packet, draft, key and body until explicit same-packet reconciliation succeeds.
+
+The editor's draft/send/reconcile callbacks carry their rendered view generation.
+Open, blur, authoritative actor changes and forget invalidate that generation;
+typing and dispatch updates keep it stable so rapid current-screen input works.
+Authoritative actor/session/peer fences, same-owner private unsent-draft quarantine,
+immutable UNKNOWN packets and explicit reconciliation without auto-send remain.
+
+Author offline verification: all 15 owning contact unit tests passed, including
+real NativeApi HTTP 200 inconsistent-receipt/reconciliation and same-peer,
+same-actor, same-session stale edit/send/reconcile regressions. Fetch is mocked;
+no external network or device execution is claimed. Existing assertions remain.
+Only the five admitted paths changed. Source versionCode 6 and the native registry,
+API/contracts, DB/schema, dependencies and configuration are unchanged.
+
+Immutable history remains retained, not replaced by this repair:
+
+- Three prior normal source receipts: first contact
+  `2407a0867a65dca4b56d13e54d7f76ec4a460713907c0fb5d1f6998937cecc3e`,
+  ADDRESS1 `3dde4144a24103b2265c3ea2ca6bbb4b86da8d7a1a4e85a3badf074e7f51844a`,
+  ADDRESS2 `d44256ec6b989854993fb24c8f803c7dc19ed85674e34999774923c2cfe644f8`.
+- Manual Root precheck FAIL
+  `8fb77611a1168cb1c0ed83bb6f891caf76ea76cf03f93980e45a11224d502ea7`;
+  parent FAIL `44bca0364446541483d2e25c655b899d1265f00546fd548c0ff228315eae77fe`;
+  qualified prior parent composite
+  `c2d72c2f0a2c61c9158dc09fa56a678a0c4412219429aa2ba05ac82e60e1cd70`.
+- FIRST whole independent QA: FAIL with two P2 findings,
+  `8f44d703e99236c0325fc965cad31280bd49ce1f0e05381a6049a9c768f18d84`.
+
+Fresh parent gates and focused independent QA of both findings plus related delta
+are NOT_DONE. Parent must run fresh mobile TSC, affected lint, contact/auth/native-
+contract units and both Expo exports, retaining unchanged API/contracts/DB6 evidence.
+No new whole-source PASS is claimed. Build, signing, publication, device checks and
+DEV acceptance are NOT_DONE here. Owner FAIL_RECHECK_PENDING, native visual
+NOT_VERIFIED, unfinished mandatory full native parity and prior FAIL/UNKNOWN history
+remain. Every previous README byte is preserved verbatim below as history.
+
+---
+
+# #522 CONTACT ADDRESS2 · test expectation and README history correction
+
+The test-only anonymous case now follows the existing auth contract: without
+Authorization, GET returns exactly 401; POST without Origin takes the cookie
+mutation path and returns exactly 403 with code `ORIGIN_REJECTED`. All four
+explicit malformed Authorization cases still require 401 on both selected routes;
+mixed/disabled/revoked, cookie Origin/CSRF, message-count and other fixture checks
+are unchanged. Production auth behavior is unchanged.
+
+Current fixture SHA-256: `d46a6bf09f22b427460c44b385c65dc5a7c87d0f807356f1b410c1b3816a8cca`.
+The older `04329fc9e9a0c4c9956199168bee5dca33125b96ede44dc24a5ebf9dc4434182`
+and unchanged-fixture statement in ADDRESS1 below describe historical source only.
+All previous README bytes are preserved verbatim below as history.
+
+API typecheck and fixture lint are NOT_RUN here: project dependencies are absent;
+no dependency resolution was attempted. Earlier supplied compiled-mobile evidence
+remains earlier evidence. Root must fully read this fixture and README, bind the
+new fixture hash, then run fresh API typecheck, fixture lint and the single owning
+Messages DB fixture. The retained parent FAIL and manual Root findings remain
+history; independent QA has not been called. Fresh DB PASS, phone/visual, build,
+signing, native binary and DEV acceptance are not claimed. Source versionCode 6,
+API 0.44.0, schema72 and registry1 remain unchanged; cumulative scope remains 18.
+
+---
+
+# #522 CONTACT ADDRESS1 · bounded source correction
+
+FC-RETURN: both guest contact CTAs now retain `/messages/new/<peer>`. The native
+return whitelist adds only that exact typed local route; old game/direct/game-chat/
+invitation forms and malformed/encoded/query/hash/external path rejections remain.
+Actual AuthCoordinator begin/callback and secure pending-login restart tests return
+the selected peer only after verified identity, with zero automatic contact sends.
+
+FC-DRAFT: unsent draft dictionaries and selected context are quarantined privately
+under the original authoritative actorId, even without a command. Repeated null
+boundaries hide private state; verified same-owner reauth/new session restores a
+usable draft. Account B and explicit logout/forget erase it; stale reads/rendered
+actions remain fenced. Existing UNKNOWN packets keep their original actor, key,
+body and clientMessageId and require explicit same-packet reconciliation. Draft
+retention is in-memory only, with no process-death/private-draft persistence claim.
+
+Author offline checks: 35 named auth/contact units passed (24 auth, 11 contact),
+including retained 503/invalid-receipt/UNKNOWN cases; focused reruns of the strengthened
+real-login logout regression and four return/CTA checks also passed. Typecheck is NOT_RUN: this export
+has no project node_modules or installed tsc; no dependency resolution was attempted.
+Only the six admitted paths changed; cumulative source scope is 18, including
+native-auth-protocol.ts. Source versionCode remains 6, with no version bump.
+
+Root's retained two-finding precheck FAIL is not independent QA or a parent FAIL.
+Parent gates, owning Messages DB fixture, first cumulative independent QA and DEV
+acceptance remain pending with Root/trusted process. The owning fixture is unchanged
+at SHA-256 `04329fc9e9a0c4c9956199168bee5dca33125b96ede44dc24a5ebf9dc4434182`.
+Owner S23 FAIL_RECHECK_PENDING, native visual NOT_VERIFIED, mandatory unfinished full
+native parity, unfinished iOS/OTA and all previous FAIL/UNKNOWN history remain.
+All previous README bytes are preserved below as history.
+
+---
+
+# #522 CURRENT · native first-contact source candidate
+
+This bounded source slice adds **Написать** on an existing native player profile,
+a composer at `/messages/new/[publicPlayerId]`, explicit **Отправить**, and entry
+into the existing `/messages/direct/[id]` thread. It reuses the accepted WEB
+contact behavior and existing native inbox, conversation parser and thread UI.
+Opening/reopening performs reads only. Authoritative contact state and matching
+peer headers select existing accepted or legacy pending conversations. Ordinary
+directory contact needs no friendship, mutual play interest, Radar proof or game
+context; its exact body is `{targetPublicPlayerId,text,clientMessageId}`.
+
+The separate root ContactCoordinator rechecks contact/player eligibility before
+sending, prevents double taps, and keeps the frozen key/body/clientMessageId and
+original actor on network, timeout, any 5xx, invalid receipt or in-progress UNKNOWN.
+Explicit reconciliation uses that same packet under verified same-owner authority;
+navigation/auth never sends automatically. Existing-conversation 409 races use
+contact/header reads without a replacement message. Generation fences discard old
+responses; logout/account B erase private pending/context. Profile, Participation,
+GameManagement and Messages retain their own command owners and private states.
+
+Only GET `/me/contact-state` and POST `/conversations/requests` gain the existing
+native principal guards and explicit OpenAPI cookieSession/NativeBearer security.
+Cookie Origin/CSRF, service rules, privacy, response projections, API 0.44.0,
+contracts, dependencies and the existing native registry stay intact. The owning
+`native-messages.foundation.test.ts` is extended; its other five closed-neighbor
+tuples and assertions remain exact. Source Android versionCode and the existing
+contract-test literal change only from 5 to 6; versionName remains 0.1.0.
+
+Author source checks: 105 tests passed (8 contact, 21 auth, 17 Messages, 13 Profile,
+14 Participation, 24 GameManagement, 8 native-contract). Exact config/test-literal,
+OpenAPI full-document restoration, guard-only controller changes, unchanged
+closed-neighbor assertions, pinned readonly references and lock were checked.
+These are author checks, not independent QA. The DB fixture is **NOT_RUN** here:
+Root must fully read the actual candidate and run that owning isolated fixture.
+Typecheck/lint are **NOT_RUN**: this export has no installed TypeScript/ESLint or
+project node_modules; no dependency resolution was performed.
+
+This is a first-contact source handoff only. Independent QA, Product CI, DEV
+acceptance, actual build/sign/publication and Owner UAT remain pending. Phone
+keyboard, Back, compact layout, font scale and the device first-contact journey
+are **NOT_VERIFIED**. Full native parity remains **MANDATORY_NOT_COMPLETE**;
+swiper/deck, Давай сыграем, friendship/invitations and broader native parity remain
+mandatory later. Owner S23 **FAIL_RECHECK_PENDING** and all prior FAIL/UNKNOWN and
+cost history are preserved. Real OTA and iOS remain unfinished. No release,
+acceptance, device parity or APK delivery is claimed by this source candidate.
+
+---
+
 # #522 CURRENT · native own profile name/city source candidate
 
 Root-admitted base supplied with this task: `0104a264f0ae97b9639fd46ab0c10a91304d5a31`

@@ -297,6 +297,55 @@ test('private Messages return whitelist is exact and storage compatible; rejects
   for (const path of ['/messages?conversation=x','/messages/direct/a/accept','/messages/direct/%61','/messages/direct/a?send=yes','https://evil/messages','/messages//a','/messages/game/a#x','/messages/game/../a']) assert.equal(canonicalReturnPath(path),null);
 });
 
+test('selected new-contact return uses actual begin/callback and secure pending restart, waiting for verified identity and never sending', async () => {
+  const path = '/messages/new/peer_A-1';
+  for (const restart of [false, true]) {
+    const start = setup(); assert.ok(await start.auth.beginLogin(path));
+    const saved = parseSecureEnvelope(start.stored(), now)!;
+    assert.equal(saved.returnPath, path); assert.equal(saved.pending!.returnPath, path);
+    const request = start.calls.find(c => c.path === '/auth/native/transactions')!;
+    assert.equal(JSON.parse(request.init.body as string).returnPath, path);
+    const active = restart ? setup(saved) : start;
+    await active.auth.hydrate(); assert.equal(active.auth.getSnapshot().status, 'signing-in');
+    const verified = deferred<typeof me>();
+    active.setHandler(async p => p === '/me' ? verified.promise : credentials);
+    let completed = false;
+    const callbackUrl = `${NATIVE_REDIRECT}?code=${token('c')}&state=${saved.pending!.state}`;
+    const work = active.auth.callback(callbackUrl).then(value => { completed = true; return value; });
+    await new Promise(r => setImmediate(r));
+    assert.equal(completed, false); assert.equal(active.auth.getSnapshot().me, null);
+    assert.equal(active.auth.contact.getSnapshot().actor, null);
+    verified.resolve(me); assert.equal(await work, path);
+    assert.equal(active.auth.getSnapshot().status, 'authenticated');
+    assert.equal(active.auth.contact.getSnapshot().actor?.actorId, me.id);
+    assert.equal(await active.auth.callback(callbackUrl), null);
+    assert.equal(parseSecureEnvelope(active.stored(), now)?.returnPath, path);
+    assert.equal(parseSecureEnvelope(active.stored(), now)?.pending, undefined);
+    assert.equal(active.auth.contact.getSnapshot().command, undefined);
+    for (const call of [...start.calls, ...(restart ? active.calls : [])]) {
+      assert.ok(['/auth/methods', '/auth/native/transactions', '/auth/native/exchange', '/me'].includes(call.path));
+    }
+  }
+});
+
+test('new-contact intent admits only the exact local typed peer path, retaining old return forms and rejecting URL tricks in storage', () => {
+  for (const path of ['/messages/new/peer', '/messages/new/peer_A-1', '/games/create', '/games/manage/abc-1']) {
+    assert.equal(canonicalReturnPath(path), path);
+    assert.equal(parseSecureEnvelope(JSON.stringify({ ...envelope, returnPath: path, pending: { ...pending, returnPath: path } }), now)?.pending?.returnPath, path);
+  }
+  for (const path of ['/messages/new', '/messages/new/', '/messages/new/a/send', '/messages/new/a?send=1',
+    '/messages/new/a#draft', '/messages/new/%61', '/messages/new/%2Fa', '/messages/new/%252e%252e',
+    '/messages/new/../a', '/messages/new/..', '/messages/new/a\\b', '/messages/new/a\nb', '/messages/new/a\n', '/messages/new/a\r\n',
+    '/messages/new/a\u0000', '/messages/new/а', '/messages/new/' + 'a'.repeat(129),
+    '//dev.gobadminton.ru/messages/new/a', 'https://dev.gobadminton.ru/messages/new/a',
+    'https://evil.test/messages/new/a', 'gobadminton-dev:///messages/new/a',
+    '/messages/other/a', '/messages/new//a', '/messages/direct/a\\b', '/messages/game/%61',
+    '/messages/invitations/a?accept=1', '/games/%61', '/games/a#x', '/games/a?join=1']) {
+    assert.equal(canonicalReturnPath(path), null, path);
+    assert.throws(() => parseSecureEnvelope(JSON.stringify({ ...envelope, returnPath: path, pending: { ...pending, returnPath: path } }), now), NativeAuthError);
+  }
+});
+
 test('new root management owner shares secure actor fences, leaves Messages UNKNOWN untouched, never dispatches on callback', async t => {
   const s=setup({...envelope,returnPath:'/games/create',pending:{...pending,returnPath:'/games/create'}});
   assert.equal(await s.auth.callback(callback),'/games/create');
@@ -439,4 +488,86 @@ test('root profile owner never copies email-looking auth name; UNKNOWN reauth re
   assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
   await s.auth.logout(); assert.equal(s.auth.profile.getSnapshot().command,undefined); assert.equal(s.auth.profile.getSnapshot().profile,null);
   assert.equal(s.auth.profile.getSnapshot().draft.displayName,'');
+});
+
+test('root unsent contact draft survives unverifiable reauth only after authoritative same-owner new-session callback; logout erases quarantine', async () => {
+  const s = setup(sessionEnvelope()), path = '/messages/new/peer';
+  const player = { publicPlayerId: 'peer', displayName: 'Игрок', cityId: null, areaKey: null, bio: null, level: null,
+    trainer: false, lookingForGame: false, canRequestContact: true };
+  const contact = { targetPublicPlayerId: 'peer', state: 'none', canRequestContact: true };
+  const reads = async (p: string) => p === '/me' ? me : p.startsWith('/players/') ? player : p.startsWith('/me/contact-state?') ? contact : credentials;
+  s.setHandler(reads); await s.auth.hydrate(); await s.auth.contact.open('peer'); s.auth.contact.draft('peer', 'Привет');
+  const previous = s.auth.contact.getSnapshot().actor!;
+  assert.equal(s.auth.contact.getSnapshot().command, undefined);
+  s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+  assert.equal(s.auth.getSnapshot().status, 'unverifiable');
+  assert.equal(s.auth.contact.getSnapshot().target, null); assert.deepEqual(s.auth.contact.getSnapshot().drafts, {});
+  const loginResponses = async (p: string) => p === '/auth/methods' ? { items: [{ method: 'vk', type: 'oauth', available: true }] }
+    : { transactionId: token('t'), expiresAt: new Date(now + 600000).toISOString(), browserStartUrl: `https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}` };
+  s.setHandler(loginResponses);
+  assert.ok(await s.auth.beginLogin(path));
+  const login = parseSecureEnvelope(s.stored(), now)!.pending!, verified = deferred<typeof me>();
+  assert.deepEqual(s.auth.contact.getSnapshot().drafts, {});
+  s.setHandler(async p => p === '/me' ? verified.promise : { ...credentials, sessionId: 'returned-A' });
+  const work = s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  await new Promise(r => setImmediate(r));
+  assert.equal(s.auth.contact.getSnapshot().actor, null); assert.deepEqual(s.auth.contact.getSnapshot().drafts, {});
+  verified.resolve({ ...me, session: { ...me.session, id: 'returned-A' } }); assert.equal(await work, path);
+  const restored = s.auth.contact.getSnapshot();
+  assert.equal(restored.actor?.actorId, previous.actorId); assert.equal(restored.actor?.sessionId, 'returned-A');
+  assert.notEqual(restored.actor?.generation, previous.generation);
+  assert.equal(restored.target, 'peer'); assert.equal(restored.drafts.peer, 'Привет'); assert.equal(restored.command, undefined);
+  s.setHandler(reads); await s.auth.contact.open('peer'); s.auth.contact.draft('peer', 'Продолжение');
+  assert.equal(s.auth.contact.getSnapshot().drafts.peer, 'Продолжение');
+  assert.equal(s.calls.filter(c => c.path === '/conversations/requests').length, 0);
+  s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+  await s.auth.logout();
+  assert.deepEqual(s.auth.contact.getSnapshot().drafts, {});
+  // A subsequent verified same-owner login cannot recover explicitly forgotten private state.
+  s.setHandler(loginResponses); assert.ok(await s.auth.beginLogin(path));
+  const next = parseSecureEnvelope(s.stored(), now)!.pending!;
+  s.setHandler(reads); assert.equal(await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('d')}&state=${next.state}`), path);
+  assert.equal(s.auth.contact.getSnapshot().actor?.actorId, me.id);
+  assert.deepEqual(s.auth.contact.getSnapshot().drafts, {}); assert.equal(s.auth.contact.getSnapshot().target, null);
+  assert.equal(s.calls.filter(c => c.path === '/conversations/requests').length, 0);
+});
+
+test('root contact UNKNOWN stays hidden until authoritative same-actor reauth; callbacks never send and account B/logout erase private packets', async () => {
+  const s = setup(sessionEnvelope());
+  const player = {publicPlayerId:'peer',displayName:'Игрок',cityId:null,areaKey:null,bio:null,level:null,trainer:false,lookingForGame:false,canRequestContact:true};
+  const state = {targetPublicPlayerId:'peer',state:'none',canRequestContact:true};
+  const conversation = {id:'contact-thread',kind:'direct',requestState:'accepted',version:1,peer:{publicPlayerId:'peer',displayName:'Игрок'},
+    role:'initiator',lastMessageSeq:'1',readThroughSeq:'0',unreadCount:0};
+  const receipt = {messageId:'first-message',conversationId:conversation.id,seq:'1',createdAt:'2026-11-14T12:00:00.000Z',outcome:'duplicate'};
+  s.setHandler(async path => path === '/me' ? me : path.startsWith('/players/') ? player : path.startsWith('/me/contact-state?') ? state
+    : path === '/conversations/requests' ? new Response(JSON.stringify({code:'PRIVATE_TEXT_CONTENT_REJECTED'}),{status:503}) : credentials);
+  await s.auth.hydrate(); await s.auth.contact.open('peer'); s.auth.contact.draft('peer','  Привет  '); await s.auth.contact.send();
+  const packet = s.auth.contact.getSnapshot().command!.packet;
+  assert.equal(s.auth.contact.getSnapshot().command?.status,'unknown');
+  s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+  assert.equal(s.auth.contact.getSnapshot().actor,null); assert.equal(s.auth.contact.getSnapshot().command,undefined);
+  assert.deepEqual(s.auth.contact.getSnapshot().drafts,{});
+  s.setHandler(async path => path === '/auth/methods' ? {items:[{method:'vk',type:'oauth',available:true}]}
+    : {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`});
+  await s.auth.beginLogin('/messages'); const login = parseSecureEnvelope(s.stored(),now)!.pending!;
+  const verified = deferred<typeof me>();
+  s.setHandler(async path => path === '/me' ? verified.promise : {...credentials,sessionId:'contact-return'});
+  const work = s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  await new Promise(r => setImmediate(r)); assert.equal(s.auth.contact.getSnapshot().command,undefined);
+  verified.resolve({...me,session:{...me.session,id:'contact-return'}}); await work;
+  assert.strictEqual(s.auth.contact.getSnapshot().command!.packet,packet);
+  assert.equal(s.calls.filter(c => c.path === '/conversations/requests').length,1);
+  s.setHandler(async path => path.startsWith('/players/') ? player : path.startsWith('/me/contact-state?') ? state : {conversation,receipt});
+  await s.auth.contact.open('peer'); await s.auth.contact.reconcile();
+  const writes=s.calls.filter(c => c.path === '/conversations/requests'); assert.equal(writes.length,2);
+  assert.equal(writes[0]!.init.body,writes[1]!.init.body);
+  assert.equal((writes[1]!.init.headers as Record<string,string>)['Idempotency-Key'],packet.key);
+  assert.equal(s.auth.contact.getSnapshot().conversation?.id,conversation.id);
+  await s.auth.contact.open('peer'); s.auth.contact.draft('peer','Следующее');
+  s.setHandler(async path => { if(path === '/conversations/requests') throw Error('lost response'); return path.startsWith('/players/') ? player : state; });
+  await s.auth.contact.send(); assert.equal(s.auth.contact.getSnapshot().command?.status,'unknown');
+  // Refresh /me detects a changed principal and follows the existing account containment path.
+  s.setHandler(async path => path === '/me' ? {...me,id:'actor-b'} : credentials); await s.auth.validate();
+  assert.equal(s.auth.contact.getSnapshot().actor,null); assert.equal(s.auth.contact.getSnapshot().command,undefined);
+  await s.auth.logout(); assert.deepEqual(s.auth.contact.getSnapshot().drafts,{});
 });

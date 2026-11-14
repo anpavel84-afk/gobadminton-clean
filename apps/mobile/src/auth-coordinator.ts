@@ -1,3 +1,4 @@
+import { ContactCoordinator } from './contact-coordinator.ts';
 import { ProfileCoordinator, ProfileError } from './profile.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
@@ -40,8 +41,15 @@ export class AuthCoordinator {
   readonly messages: MessagesCoordinator;
   readonly gameManagement: GameManagementCoordinator;
   readonly profile: ProfileCoordinator;
+  readonly contact: ContactCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
+    this.contact = new ContactCoordinator({
+      state: (target, actor) => this.participationRead(access => deps.api.contactState(access, target), actor),
+      player: (target, actor) => this.participationRead(access => deps.api.player(access, target), actor),
+      conversation: (id, actor) => this.participationRead(access => deps.api.conversation(access, id), actor),
+      send: (packet, actor) => this.participationRead(access => deps.api.createContact(access, packet), actor),
+    }, deps.random);
     this.profile = new ProfileCoordinator({
       read: () => this.participationRead(access => deps.api.ownProfile(access)),
       cities: () => publicApi.cities(),
@@ -117,7 +125,7 @@ export class AuthCoordinator {
       this.participation.setActor(null);
     }
     const actor = this.participation.getSnapshot().actor;
-    if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor); }
+    if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor); this.contact.setActor(actor); }
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -352,6 +360,7 @@ export class AuthCoordinator {
     const envelope = this.empty(); this.envelope = envelope;
     if (forgetCreation) this.gameManagement.forgetCreation();
     if (forgetCreation) this.profile.forget();
+    if (forgetCreation) this.contact.forget();
     this.show({ status: 'guest', me: null, sessions: [], notice: null });
     // Queue the local clear immediately. Remote revocation is bounded by the API timeout and never persisted/retried.
     const clear = this.persist(envelope, epoch).catch(() => {

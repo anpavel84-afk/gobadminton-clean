@@ -10,7 +10,7 @@ export class ContactStateController {
   @Get()
   @Header("Cache-Control", "no-store")
   async get(@Req() request: FastifyRequest, @Query("targetPublicPlayerId") target?: string) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.messaging.getContactState(actor.userId, target);
   }
 }
