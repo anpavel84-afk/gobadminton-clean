@@ -5,7 +5,7 @@ import { futureItems } from './upcoming.ts';
 export type PublicGame = Pick<Game, 'id' | 'title' | 'status' | 'visibility' | 'venue' |
   'organizer' | 'startsAt' | 'endsAt' | 'timezone' | 'applicationDeadlineAt' |
   'capacity' | 'confirmedCount' | 'externalReservedCount' | 'availablePlaces' |
-  'formatKey' | 'levelRule' | 'settlement' | 'activityKind' | 'trainer' | 'trainingDescription'>;
+  'cover' | 'formatKey' | 'levelRule' | 'settlement' | 'activityKind' | 'trainer' | 'trainingDescription'>;
 export type City = { id: string; nameRu: string; nameEn: string; countryCode: string; defaultTimezone: string };
 export type GamePage = { items: PublicGame[]; nextCursor: string | null };
 export const API_ORIGIN = 'https://dev.gobadminton.ru';

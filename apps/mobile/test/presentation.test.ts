@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLabel, levelLabel } from '../src/presentation.ts';
+import { game } from './fixtures.ts';
+import { cardWhen, discoveryCityHeading, formatLabel, levelLabel } from '../src/presentation.ts';
 
 test('formats use accepted discovery labels; unknown keys are omitted', () => {
   assert.equal(formatLabel('doubles'), 'Парная игра');
@@ -23,4 +24,12 @@ test('levels respect exact accepted scale/version, numeric half-steps and pilot 
     { scaleId: 'gb-social-pilot', scaleVersion: 2, allowedLevelIds: ['beginner'] },
   ]) assert.equal(levelLabel(unsupported), 'Уточните у организатора');
   assert.equal(levelLabel({ ...rule, allowedLevelIds: [] }), 'Не указаны');
+});
+
+test('card date/time uses the actual game timezone and city heading never substitutes a default', () => {
+  const when = cardWhen({ ...game, startsAt: '2026-11-20T23:30:00Z', endsAt: '2026-11-21T01:30:00Z', timezone: 'Asia/Tokyo' });
+  assert.match(when.day, /21/);
+  assert.equal(when.time, '08:30 — 10:30');
+  assert.equal(discoveryCityHeading('Казань'), '· Казань');
+  assert.equal(discoveryCityHeading('Москва'), 'в Москве');
 });

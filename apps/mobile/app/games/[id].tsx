@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
+import { PublicGameMedia } from '../../src/components/game-card.tsx';
 import { deadline, formatLabel, gameTime, levelLabel, settlementLabel, statusLabel } from '../../src/presentation.ts';
 import { ErrorState, Header, Label, Loading, Page, PrimaryButton, styles } from '../../src/components/ui.tsx';
 
@@ -15,13 +16,13 @@ export default function PublicGameDetails() {
   const game = state.data;
   const format = game ? formatLabel(game.formatKey) : null;
   // This route never depends on story completion or city lookup.
-  return <Page>
-    <Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />
+  return <Page header={<Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />}>
     {state.status === 'loading' && <Loading title="Загружаем условия игры…" />}
     {state.status === 'error' && <ErrorState error={state.error} retry={retry} />}
     {game && <>
       <Label accessibilityRole="header" style={styles.title}>{game.title}</Label>
       <Label>{statusLabel(game)}</Label>
+      <PublicGameMedia key={game.id} game={game} />
       <View style={styles.card}>
         <Label accessibilityRole="header" style={styles.subtitle}>Когда и где</Label>
         <Label>{gameTime(game)}</Label>

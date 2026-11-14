@@ -66,6 +66,8 @@ test('native font/scaling/safe area/keyboard and static Reduce Motion wiring', (
   const ui = read('../src/components/ui.tsx');
   assert.match(ui, /paddingBottom: insets.bottom \+ 24/);
   assert.match(ui, /paddingTop: insets.top/);
+  assert.match(ui, /paddingLeft: insets.left, paddingRight: insets.right/);
+  assert.ok(ui.indexOf('{header &&') < ui.indexOf('export function Page('));
   assert.match(ui, /KeyboardAvoidingView/);
   assert.match(ui, /flexGrow: 1/);
   assert.doesNotMatch(ui, /maxFontSizeMultiplier|Animated\./);
@@ -84,8 +86,12 @@ test('story shortcuts on every step, direct details bypass entry, city selection
   assert.doesNotMatch(details, /usePreferences|Redirect|storyCompleted/);
   assert.match(details, /publicApi.game\(id, signal\)/);
   const catalog = read('../app/games/index.tsx');
-  const content = catalog.slice(catalog.indexOf('return <Page>'));
-  assert.ok(content.indexOf('title="Выбрать другой город"') < content.indexOf("state.status === 'loading'"));
+  const content = catalog.slice(catalog.indexOf('return <ScreenFrame'));
+  assert.ok(catalog.includes('<FlatList'));
+  assert.doesNotMatch(catalog, /<ScrollView|<Hero|TrajectoryArtwork/);
+  assert.doesNotMatch(read('../app/city.tsx'), /<Hero|TrajectoryArtwork/);
+  assert.ok(content.includes('accessibilityLabel="Выбрать другой город"'));
+  assert.ok(content.indexOf('accessibilityLabel="Выбрать другой город"') < content.indexOf("state.status === 'loading'"));
 });
 test('conditions use server counts, timezone and external price terms without implying a free game', () => {
   assert.equal(settlementLabel(game), 'Без тренерского сбора');

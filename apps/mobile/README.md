@@ -132,3 +132,95 @@ Address1 changed files (all relative to `apps/mobile/`): `package.json`, `app.js
 `src/upcoming.ts`, `test/native-contract.test.ts`, `test/public-api.test.ts`,
 `test/presentation.test.ts`, `test/upcoming.test.ts`, and this README. The private
 export has no `.git`; no new commit SHA or branch verification is claimed.
+
+## #522 bounded compact correction · 2026-11-14
+
+The Owner rejected M1 product scope and compact rendering on Samsung S23.
+Historical compiler/QA/CI/APK/server evidence above remains historical technical
+evidence; it is **not full native product acceptance**. This source repair follows
+the fully read Root compact specification
+`ab7f3dd8d50c216afaf1b65ed36317f8d7f203939b51cf3e8d899c0809baa529`.
+The exact S23 logical viewport, font scale, density and navigation mode are unknown.
+
+E is now **intro only**. Its approved assets, wordmark, purple surface and black
+labels on green primary buttons remain. Skip shares the persistent brand header;
+three progress marks, centered two-part title/lime emphasis and grouped actions
+replace the separate nine-child composition. Artwork consumes the space left
+by the measured text and actions below the measured header, with logical window
+width/height/fontScale and all four safe edges. Decoration may disappear on short
+windows; enlarged text and actions retain natural sizing and scroll in the purple
+surface. This sizing policy is not a rendered fit/device PASS.
+
+Existing guest screens use accepted mobile-web hierarchy and tokens directly
+read from these owning references (read-only):
+
+- `apps/web/src/components/consumer/{ConsumerShell,RootNav,NavIcon,Logo}.tsx`, `nav-items.ts`
+  and `styles/{consumer-tokens,foundation,mobile-controls}.css`: white persistent
+  header, 16dp product gutters, ink/secondary text, line colors and bordered controls.
+- `pages/GamesDiscoveryPage.tsx`, `discovery/{DiscoveryComposition,DiscoveryGameCard}.tsx`
+  and `styles/discovery.css`: compact copy without E art, city/current date scope,
+  210dp cover when published media exists, date/time/title/venue/terms/host hierarchy.
+- `games/GameCover.tsx` and `venues/VenueCover.tsx`: only server-projected
+  `/v1/media/game-covers/<64 lowercase hex>.png` and venue equivalents are accepted.
+  The detail CTA arrow ports the exact path from `apps/web/public/discovery/arrow.svg`
+  through native SVG primitives. Relative paths resolve only against the fixed DEV API origin. No arbitrary remote
+  URL, provider image or stock illustration is introduced. Missing media renders no
+  fabricated photo; failed images have a real retry, with game-to-venue fallback.
+
+The city input is near the top, below fixed chrome, and selection dismisses the
+keyboard. The catalog owns one FlatList with stable IDs, explicit pagination and
+existing request/expiry fences; Back keeps the existing mounted feed. Direct
+public detail remains independent of entry/city preferences. No private API,
+authentication, mutation, fake actions, tabs or new destinations were added.
+The “Когда / Все ближайшие” block is a static description of the real query,
+not a date-picker control. Full date/filter behavior is still missing parity.
+
+The original **22 named tests remain**, with assertions adapted for persistent
+chrome/FlatList and stronger presence checks. Four additional pure regressions
+cover compact layout allocation, short/enlarged layouts, the safe media policy
+through real DTO parsing, and card date/city presentation. Synthetic group sizes
+are function inputs, not recorded native measurements. Source assertions are not
+rendering proof. No tests/builds were run in this bounded author pass: the parent
+owns execution, and this private export has no node_modules or .git. No installation,
+network, SDK/Gradle, provider, GitHub, publication or deployment call was made.
+
+| Current compact handoff | Status |
+|---|---|
+| Source | BOUNDED_CANDIDATE; independent QA pending |
+| 22 existing + 4 added tests | NOT_TESTED by this author; parent execution required |
+| Typecheck / lint / Expo exports / native builds | NOT_TESTED; parent execution required |
+| Native compact 360×780, 393×~850 at 1.0/1.3/2.0; short landscape | NOT_TESTED |
+| Keyboard, Cyrillic font weights, gesture/3-button navigation contrast | NOT_TESTED |
+| Samsung S23 visual recheck / Owner product validation | NOT_TESTED / existing FAIL retained |
+| Full native parity / #522 | UNFINISHED / OPEN, InProgress |
+
+Next mandatory work remains real four-tab navigation and its destinations, native
+auth/profile, Players, My games, Messages, full game filters/date/map/create/share,
+join/participation/organizer flows, venues/Radar and accepted UGC behavior, with
+existing privacy/role boundaries. Profile is not a fifth bottom tab. This compact
+patch cannot establish full parity or close #522. Trusted parent still owns native
+captures (with actual logical dimensions, scale, density, safe edges and OS/nav-mode
+metadata), independent QA/CI, build/import/commit and any accepted DEV release.
+
+Exact changed paths for this compact source pass (no generated/release files):
+
+```text
+apps/mobile/app/+not-found.tsx
+apps/mobile/app/city.tsx
+apps/mobile/app/games/[id].tsx
+apps/mobile/app/games/index.tsx
+apps/mobile/app/story.tsx
+apps/mobile/src/components/discovery-icon.tsx
+apps/mobile/src/components/game-card.tsx
+apps/mobile/src/components/ui.tsx
+apps/mobile/src/layout.ts
+apps/mobile/src/media.ts
+apps/mobile/src/presentation.ts
+apps/mobile/src/public-api.ts
+apps/mobile/src/theme.ts
+apps/mobile/test/compact-layout.test.ts
+apps/mobile/test/media.test.ts
+apps/mobile/test/native-contract.test.ts
+apps/mobile/test/presentation.test.ts
+apps/mobile/README.md
+```
