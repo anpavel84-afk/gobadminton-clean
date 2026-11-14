@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { game } from './fixtures.ts';
-import { cardWhen, discoveryCityHeading, formatLabel, levelLabel } from '../src/presentation.ts';
+import { canShareGame, cardWhen, discoveryCityHeading, formatLabel, levelLabel } from '../src/presentation.ts';
+
+test('public-link sharing requires a published public game', () => {
+  assert.equal(canShareGame({ status: 'published', visibility: 'public' }), true);
+  for (const status of ['draft', 'cancelled', 'completed'] as const) {
+    assert.equal(canShareGame({ status, visibility: 'public' }), false);
+  }
+  assert.equal(canShareGame({ status: 'published', visibility: 'unlisted' }), false);
+  assert.equal(canShareGame({ status: 'draft', visibility: 'unlisted' }), false);
+});
 
 test('formats use accepted discovery labels; unknown keys are omitted', () => {
   assert.equal(formatLabel('doubles'), 'Парная игра');

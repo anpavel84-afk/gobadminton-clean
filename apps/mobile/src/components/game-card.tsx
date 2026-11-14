@@ -3,7 +3,7 @@ import { Image, Pressable, Share, StyleSheet, View } from 'react-native';
 import { gamePath, publicGameUrl } from '../native-auth-protocol.ts';
 import type { PublicGame } from '../public-api.ts';
 import { gameCoverSources } from '../media.ts';
-import { cardWhen, formatLabel, levelLabel, settlementLabel, statusLabel } from '../presentation.ts';
+import { canShareGame, cardWhen, formatLabel, levelLabel, settlementLabel, statusLabel } from '../presentation.ts';
 import { colors, interaction } from '../theme.ts';
 import { Label, TextButton } from './ui.tsx';
 import { DiscoveryArrow, ShareIcon } from './discovery-icon.tsx';
@@ -68,7 +68,7 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
         <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto' }}>
           <Pressable accessibilityRole="button" accessibilityLabel={`Подробнее: ${game.title}`} onPress={onOpen}
             style={({ pressed }) => [card.details, pressed && { backgroundColor: colors.paper }]}><DiscoveryArrow /></Pressable>
-          <GameShare gameId={game.id} />
+          {canShareGame(game) && <GameShare gameId={game.id} />}
         </View>
       </View>
     </View>

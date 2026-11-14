@@ -1,5 +1,9 @@
 import type { PublicGame } from './public-api.ts';
 
+export function canShareGame(game: Pick<PublicGame, 'status' | 'visibility'>): boolean {
+  return game.status === 'published' && game.visibility === 'public';
+}
+
 // Pure native subset of web discovery-presentation.ts/discoveryFormat.
 // Unsupported keys have no consumer label and are omitted.
 export function formatLabel(key: string): string | null {
