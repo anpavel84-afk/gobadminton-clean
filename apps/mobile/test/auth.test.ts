@@ -302,11 +302,15 @@ test('new root management owner shares secure actor fences, leaves Messages UNKN
   assert.equal(await s.auth.callback(callback),'/games/create');
   assert.equal(s.calls.filter(c=>c.path==='/games').length,0);
   t.mock.method(publicApi,'venues',async()=>({items:[fixture.venue],nextCursor:null}));
+  t.mock.method(publicApi,'cities',async()=>[{id:'city-1',nameRu:'Казань',nameEn:'Kazan',countryCode:'RU',defaultTimezone:'Europe/Moscow'}]);
+  const social = {publicPlayerId:'public-a',version:1,cityId:'city-1',trainer:false,displayName:'Creator',areaKey:null,level:null,bio:null,
+    directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,
+    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,lookingForGame:null};
   const owner=s.auth.gameManagement, participation=s.auth.participation;
-  s.setHandler(async path=>{
+  s.setHandler(async (path,init)=>{
     if(path==='/me')return me;
     if(path==='/auth/native/refresh')return credentials;
-    if(path==='/me/social-profile')return {publicPlayerId:'public-a',cityId:'city-1',trainer:false,displayName:'Creator'};
+    if(path==='/me/social-profile')return init.method === 'PATCH' ? {...social,...JSON.parse(init.body as string),version:2} : social;
     if(path==='/me/game-preferences')return {version:0,defaultPublicGameContact:null};
     if(path==='/conversations/thread')return {id:'thread',kind:'direct',requestState:'accepted',version:1,peer:{publicPlayerId:'public-b',displayName:'Peer'},role:'recipient',lastMessageSeq:'0',readThroughSeq:'0',unreadCount:0};
     if(path.startsWith('/conversations/thread/messages?'))return {items:[],nextCursor:null};
@@ -319,6 +323,12 @@ test('new root management owner shares secure actor fences, leaves Messages UNKN
   await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@creator'}); owner.preview(); await owner.publishPreview();
   const packet=owner.getSnapshot().command?.packet; assert.ok(packet); assert.equal(owner.getSnapshot().command?.status,'unknown');
   assert.equal(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
+  const participationBefore = participation.getSnapshot();
+  await s.auth.profile.load(); s.auth.profile.update({displayName:'Публичное имя'}); await s.auth.profile.save();
+  assert.equal(s.auth.profile.getSnapshot().profile?.version,2);
+  assert.strictEqual(owner.getSnapshot().command?.packet,packet);
+  assert.strictEqual(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
+  assert.strictEqual(participation.getSnapshot(),participationBefore);
   await s.auth.refresh(); assert.strictEqual(s.auth.gameManagement,owner); assert.strictEqual(s.auth.participation,participation);
   assert.strictEqual(owner.getSnapshot().command?.packet,packet); assert.strictEqual(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
   assert.equal(s.calls.filter(c=>c.path==='/games').length,1);
@@ -380,4 +390,53 @@ test('involuntary auth loss preserves UNKNOWN create until authoritative same-ow
   const next = JSON.parse(s.stored()!).pending as PendingLogin;
   phase = 'return'; await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('d')}&state=${next.state}`);
   assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().creationReference,null);
+});
+
+test('root profile owner never copies email-looking auth name; UNKNOWN reauth restores same actor only and explicit logout wipes it', async t => {
+  t.mock.method(publicApi,'cities',async () => [{id:'city',nameRu:'Казань',nameEn:'Kazan',countryCode:'RU',defaultTimezone:'Europe/Moscow'}]);
+  const dto = {publicPlayerId:null,version:0,displayName:'',cityId:null,areaKey:null,level:null,bio:null,directoryVisible:false,
+    contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,
+    radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null};
+  const s = setup(sessionEnvelope()); let lost = false;
+  s.setHandler(async (path,init) => {
+    if (path === '/me') return {...me,displayName:'private@example.test'};
+    if (path === '/me/social-profile') {
+      if (init.method === 'PATCH') { lost = true; throw new Error('lost private request'); }
+      return dto;
+    }
+    return path === '/auth/native/logout' ? {ok:true} : credentials;
+  });
+  await s.auth.hydrate(); await s.auth.profile.load();
+  assert.deepEqual(s.auth.profile.getSnapshot().draft,{displayName:'',cityId:''});
+  assert.doesNotMatch(JSON.stringify(s.auth.profile.getSnapshot()),/private@example/);
+  s.auth.profile.update({displayName:'Публичное имя',cityId:'city'}); await s.auth.profile.save(); assert.equal(lost,true);
+  const packet = s.auth.profile.getSnapshot().command!.packet;
+  // Loss of verified identity quarantines private state. Starting reauth is not explicit logout.
+  s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+  assert.equal(s.auth.profile.getSnapshot().actor,null); assert.equal(s.auth.profile.getSnapshot().command,undefined);
+  assert.equal(s.auth.profile.getSnapshot().draft.displayName,'');
+  const start = await (async () => {
+    s.setHandler(async path => path === '/auth/methods' ? {items:[{method:'vk',type:'oauth',available:true}]}
+      : {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`});
+    return s.auth.beginLogin('/games/create');
+  })(); assert.ok(start);
+  const saved = parseSecureEnvelope(s.stored(),now)!;
+  s.setHandler(async path => path === '/me' ? {...me,session:{...me.session,id:'profile-returned-session'}} : {...credentials,sessionId:'profile-returned-session'});
+  await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${saved.pending!.state}`);
+  assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
+  assert.strictEqual(s.auth.profile.getSnapshot().command?.packet,packet);
+  assert.equal(s.calls.filter(c => c.init.method === 'PATCH').length,1);
+  s.setHandler(async () => ({...dto,version:1,displayName:packet.body.displayName,cityId:packet.body.cityId}));
+  await s.auth.profile.reconcile();
+  const sent = s.calls.filter(c => c.init.method === 'PATCH');
+  assert.equal(sent.length,2); assert.equal(sent[0]?.init.body,sent[1]?.init.body);
+  assert.equal((sent[1]?.init.headers as Record<string,string>)['Idempotency-Key'],packet.key);
+  assert.equal(s.auth.profile.getSnapshot().actor?.sessionId,'profile-returned-session');
+  assert.equal(s.auth.profile.getSnapshot().profile?.version,1);
+  // A subsequent independent UNKNOWN is erased by explicit logout.
+  await s.auth.profile.load(); s.auth.profile.update({displayName:'Следующее имя'});
+  s.setHandler(async () => { throw new Error('unknown again'); }); await s.auth.profile.save();
+  assert.equal(s.auth.profile.getSnapshot().command?.status,'unknown');
+  await s.auth.logout(); assert.equal(s.auth.profile.getSnapshot().command,undefined); assert.equal(s.auth.profile.getSnapshot().profile,null);
+  assert.equal(s.auth.profile.getSnapshot().draft.displayName,'');
 });

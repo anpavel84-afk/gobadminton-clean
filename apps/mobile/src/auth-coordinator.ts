@@ -1,3 +1,4 @@
+import { ProfileCoordinator, ProfileError } from './profile.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
@@ -38,8 +39,14 @@ export class AuthCoordinator {
   readonly participation: ParticipationCoordinator;
   readonly messages: MessagesCoordinator;
   readonly gameManagement: GameManagementCoordinator;
+  readonly profile: ProfileCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
+    this.profile = new ProfileCoordinator({
+      read: () => this.participationRead(access => deps.api.ownProfile(access)),
+      cities: () => publicApi.cities(),
+      send: (packet, authority) => this.participationRead(access => deps.api.saveOwnProfile(access, packet), authority),
+    }, deps.random);
     this.messages = new MessagesCoordinator({
       inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
       counts: () => this.participationRead(access => deps.api.inboxCounts(access)),
@@ -89,7 +96,7 @@ export class AuthCoordinator {
       return result;
     } catch (error) {
       if (epoch !== this.epoch) throw new ParticipationError('stale');
-      if ((error instanceof MessagesError && error.status === 401) || (error instanceof ParticipationError && error.kind === 'authority') ||
+      if ((error instanceof ProfileError && error.kind === 'authority') || (error instanceof MessagesError && error.status === 401) || (error instanceof ParticipationError && error.kind === 'authority') ||
           (error instanceof NativeAuthError && ['authority', 'expired'].includes(error.kind))) await this.fail(epoch, new NativeAuthError('authority'));
       throw error;
     }
@@ -110,7 +117,7 @@ export class AuthCoordinator {
       this.participation.setActor(null);
     }
     const actor = this.participation.getSnapshot().actor;
-    if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); }
+    if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor); }
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -344,6 +351,7 @@ export class AuthCoordinator {
     this.rotation = null; this.exchange = null; this.validation = null; this.access = null;
     const envelope = this.empty(); this.envelope = envelope;
     if (forgetCreation) this.gameManagement.forgetCreation();
+    if (forgetCreation) this.profile.forget();
     this.show({ status: 'guest', me: null, sessions: [], notice: null });
     // Queue the local clear immediately. Remote revocation is bounded by the API timeout and never persisted/retried.
     const clear = this.persist(envelope, epoch).catch(() => {

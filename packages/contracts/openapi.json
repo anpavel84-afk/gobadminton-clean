@@ -2461,6 +2461,10 @@
         "description": " Native consumer bearer transport is explicitly supported on this operation. Cookie mutations still require an allowed Origin and X-CSRF-Token; bearer mutations use the existing session actor, Idempotency-Key and replay authorization without cookie fallback. Mixed cookie/bearer is rejected; invalid or revoked bearer is 401 and disabled native transport is 404."
       },
       "patch": {
+        "security": [
+          { "cookieSession": [] },
+          { "NativeBearer": [] }
+        ],
         "operationId": "patchMySocialProfile",
         "tags": [
           "Profiles"

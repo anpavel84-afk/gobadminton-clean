@@ -5,6 +5,8 @@ import { URL } from 'node:url';
 import { GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
 import type { ManagementPort, ManagementPacket, Venue } from '../src/game-management.ts';
 import { ParticipationError } from '../src/participation.ts';
+import { ProfileCoordinator } from '../src/profile.ts';
+import type { OwnProfile } from '../src/profile.ts';
 import { gameLocalToIso, gameSchedule } from '../src/game-form.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { canonicalReturnPath } from '../src/native-auth-protocol.ts';
@@ -289,7 +291,8 @@ test('setup guidance precedes created publish CTA while UNKNOWN reconciliation a
   const setupStart = ui.indexOf("state.context === 'setup' ?"), createdStart = ui.indexOf('state.created ?');
   assert.ok(setupStart > ui.indexOf('blocked && state.command ?') && setupStart < createdStart);
   const guidance = ui.slice(setupStart,createdStart);
-  assert.match(guidance,/заполните профиль в веб-приложении/);
+  assert.match(guidance,/заполнить имя и город в профиле/);
+  assert.match(guidance,/pathname: '\/profile', params: \{ returnTo: '\/games\/create' \}/);
   assert.match(guidance,/Обновить проверку профиля/);
   assert.match(guidance,/state.creationReference.*Открыть сводку созданной игры/);
   assert.doesNotMatch(guidance,/owner.publishDraft/);
@@ -356,4 +359,24 @@ test('UNKNOWN publish still reconciles original packet after invalid profile ref
   assert.equal(reads,beforeReads); assert.equal(replay.kind,'publish'); assert.equal(replay.key,original.key);
   assert.strictEqual(replay.body,original.body); assert.equal(replay.gameId,g.id);
   assert.deepEqual(replay.body,{expectedVersion:7}); assert.equal(s.sent.length,3);
+});
+
+test('explicit native profile save then read-only return refresh unblocks creation without create/publish or search-city replacement', async () => {
+  let dto: OwnProfile = { publicPlayerId:null,version:0,displayName:'',cityId:null,areaKey:null,level:null,bio:null,
+    directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,
+    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null };
+  let saves = 0;
+  const s = setup({profile:async () => parseCreatorProfile(dto)});
+  await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'setup');
+  const editor = new ProfileCoordinator({read:async () => dto,cities:async () => [{id:'profile-city',nameRu:'Казань',nameEn:'Kazan',countryCode:'RU',defaultTimezone:'Europe/Moscow'}],
+    send:async p => { saves++; dto = {...dto,...p.body,version:1}; return dto; }},() => 'profile-key');
+  editor.setActor(actor); await editor.load(); editor.update({displayName:'Хозяин',cityId:'profile-city'}); await editor.save();
+  assert.equal(saves,1); assert.equal(s.sent.length,0); assert.equal(s.owner.getSnapshot().context,'setup');
+  // Same operation as explicit local return: authoritative read only. Search city remains city-1.
+  await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'ready');
+  assert.equal(s.owner.getSnapshot().cityId,'city-1'); assert.equal(s.owner.getSnapshot().profile?.cityId,'profile-city'); assert.equal(s.sent.length,0);
+  s.owner.update(form); s.owner.preview(); assert.ok(s.owner.getSnapshot().preview); assert.equal(s.sent.length,0);
+  const route = readFileSync(new URL('../app/profile.tsx',import.meta.url),'utf8');
+  assert.match(route,/intent === '\/games\/create'.*loadContext\(preferences.cityId\)/);
+  assert.doesNotMatch(route,/publishDraft|publishPreview|requestParticipation|setPreferences/);
 });

@@ -2,15 +2,19 @@ import { useRef, useState } from 'react';
 import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../src/auth.tsx';
-import { canonicalGamePath } from '../src/native-auth-protocol.ts';
+import { usePreferences } from '../src/state.tsx';
+import { ProfileEditor } from '../src/components/profile-editor.tsx';
+import { canonicalReturnPath } from '../src/native-auth-protocol.ts';
 import { Header, Label, Loading, Page, TextButton, styles } from '../src/components/ui.tsx';
 
 const providerNames: Record<string, string> = { vk: 'VK', yandex: 'Яндекс', email: 'Email' };
 const providerLabel = (method: string) => providerNames[method] ?? method;
 export default function Profile() {
   const auth = useAuth(), router = useRouter();
+  const { preferences } = usePreferences();
   const params = useLocalSearchParams<{ returnTo?: string | string[] }>();
-  const intent = canonicalGamePath(params.returnTo) ?? auth.returnPath;
+  const requested = canonicalReturnPath(params.returnTo);
+  const intent = requested?.startsWith('/games/') ? requested : auth.returnPath;
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
   async function act(work: () => Promise<void>) {
@@ -24,7 +28,15 @@ export default function Profile() {
     : auth.notice === 'remote-unconfirmed' ? 'Изменение сессий на сервере не подтверждено. При выходе локальная сессия очищена; серверный отзыв мог не завершиться.'
     : auth.notice === 'cancelled' ? 'Вход отменён. Можно вернуться к игре.'
     : auth.notice === 'signin' ? 'Сессия истекла или больше не подтверждена. Начните новый вход.' : null;
-  return <Page header={<Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />}>
+  async function returnToGame() {
+    if (!intent) return;
+    if (auth.status === 'authenticated') {
+      if (intent === '/games/create') await auth.gameManagement.loadContext(preferences.cityId);
+      else if (intent.startsWith('/games/manage/')) await auth.gameManagement.loadDetail(intent.slice('/games/manage/'.length));
+    }
+    router.replace(intent as '/games');
+  }
+  return <Page keyboard header={<Header back={() => { if (router.canGoBack()) router.back(); else router.replace('/games'); }} />}>
     <Label accessibilityRole="header" style={styles.title}>Профиль</Label>
     {notice && <Label accessibilityLiveRegion="polite">{notice}</Label>}
     {auth.status === 'hydrating' && <Loading title="Проверяем сохранённую сессию…" />}
@@ -39,11 +51,11 @@ export default function Profile() {
       {auth.status === 'unverifiable' && !busy && <TextButton title="Проверить соединение и сессию" onPress={() => void act(auth.validate)} />}
     </View>}
     {auth.status === 'authenticated' && auth.me && <>
+      <ProfileEditor />
       <View style={styles.card}>
-        <Label accessibilityRole="header" style={styles.subtitle}>{auth.me.displayName}</Label>
+        <Label accessibilityRole="header" style={styles.subtitle}>Вход в аккаунт</Label>
         <Label>Язык: {auth.me.locale}</Label>
         <Label>Связанные провайдеры: {auth.me.linkedProviders.length ? auth.me.linkedProviders.map(providerLabel).join(', ') : 'Нет связанных провайдеров'}</Label>
-        <Label>Редактирование профиля и способов входа в native ещё недоступно.</Label>
       </View>
       <View style={styles.card}>
         <Label accessibilityRole="header" style={styles.subtitle}>Сессии</Label>
@@ -60,7 +72,7 @@ export default function Profile() {
       <TextButton title="Выйти" onPress={() => void auth.logout()} />
     </>}
     {busy && <Label accessibilityState={{ busy: true }} accessibilityLiveRegion="polite">Подождите…</Label>}
-    {intent && <TextButton title="Вернуться к игре" onPress={() => router.replace(intent as '/games')} />}
+    {intent && <TextButton title="Вернуться к игре" onPress={() => void act(returnToGame)} />}
     <Label>Вход не подаёт заявку и не создаёт игру. Игровые действия требуют отдельного native-допуска сервера.</Label>
   </Page>;
 }
