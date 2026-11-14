@@ -333,3 +333,41 @@ test('all-filter reconciliation coalesces reads, fences background results and f
   assert.equal(owner.getSnapshot().inbox,null); assert.equal(owner.getSnapshot().counts,null);
   assert.match(owner.getSnapshot().notice ?? '',/Доступ/);
 });
+
+test('verified safety fence holds only peer writes, retains original UNKNOWN/draft/history and rejects a late success', async () => {
+  const gate = deferred<unknown>(), sent: MessagePacket[] = [];
+  const { owner,port } = setup({ send: async p => { sent.push(p); return gate.promise; } });
+  owner.focus(resource); await tick(); const rendered = owner.getSnapshot(); owner.draft(resource,'retained');
+  const work = owner.act(resource,'send'); const packet = owner.getSnapshot().pending['direct:thread-a']!.packet;
+  owner.setPeerSafety('public-b',true); gate.resolve({}); await work;
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet,packet); assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown');
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'retained'); assert.equal(owner.getSnapshot().detail?.messages.length,3);
+  await owner.retry(resource); await owner.act(resource,'send',undefined,rendered.viewGeneration,rendered.actor); assert.equal(sent.length,1);
+  assert.equal(owner.mayDispatchSafety({...packet,resource:{kind:'game',id:'game'}}),true);
+  assert.equal(owner.mayDispatchSafety({...packet,action:'read'}),true);
+  owner.setPeerSafety('public-b',false); assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet,packet);
+  // A different direct peer still sends under current server headers.
+  port.direct = async () => ({...header,id:'other-thread',peer:{publicPlayerId:'other-peer',displayName:'Other'}});
+  owner.focus({kind:'direct',id:'other-thread'}); // existing UNKNOWN retains the accepted global read HOLD
+  assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown');
+});
+
+test('unblock rereads direct authority without fabricating deletion/history or accepting same-peer stale rendered send', async () => {
+  const { owner,sent } = setup(); owner.focus(resource); await tick(); const rendered = owner.getSnapshot();
+  owner.setPeerSafety('public-b',true); await tick(); assert.equal(owner.getSnapshot().detail?.messages.length,3);
+  await owner.act(resource,'send'); assert.equal(sent.length,0);
+  owner.setPeerSafety('public-b',false); await tick(); owner.draft(resource,'current');
+  await owner.act(resource,'send',undefined,rendered.viewGeneration,rendered.actor); assert.equal(sent.length,0);
+  await owner.act(resource,'send'); assert.equal(sent.length,1);
+});
+
+test('block then later unblock cannot revive a pre-block send callback or its pre-wire dispatch permit', async () => {
+  const gate=deferred<unknown>(); const {owner}=setup({send:async () => gate.promise});
+  owner.focus(resource); await tick(); owner.draft(resource,'Original'); const work=owner.act(resource,'send');
+  const packet=owner.getSnapshot().pending['direct:thread-a']!.packet, permit=owner.safetyPermit(packet);
+  owner.setPeerSafety('public-b',true); owner.setPeerSafety('public-b',false);
+  assert.equal(owner.mayDispatchSafety(packet,permit),false);
+  gate.resolve({}); await work;
+  assert.strictEqual(owner.getSnapshot().pending['direct:thread-a']?.packet,packet);
+  assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown'); assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'Original');
+});

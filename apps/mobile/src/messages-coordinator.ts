@@ -17,7 +17,7 @@ const clock: MessagesClock = { now: () => Date.now(), schedule: (callback, delay
 type Pending = { packet: MessagePacket; state: 'sending' | 'unknown' };
 type Detail = { resource: MessageResource; status: 'loading' | 'ready' | 'error'; header: Conversation | GameChat | GameInvitation | null;
   messages: DirectMessage[]; cursor: string | null; members: GameChatMember[]; ownId: string | null; error: string | null; loadingMore: boolean };
-export type MessagesSnapshot = { actor: Actor | null; counts: InboxCounts | null; countsLoading: boolean;
+export type MessagesSnapshot = { viewGeneration: number; actor: Actor | null; counts: InboxCounts | null; countsLoading: boolean;
   filter: InboxFilter; inbox: InboxPage | null; inboxStatus: 'idle' | 'loading' | 'ready' | 'error'; inboxError: boolean; loadingMore: boolean;
   detail: Detail | null; drafts: Readonly<Record<string,string>>; pending: Readonly<Record<string,Pending>>; notice: string | null };
 export const resourceKey = (r: MessageResource) => `${r.kind}:${r.id}`;
@@ -25,7 +25,7 @@ export const resourceKey = (r: MessageResource) => `${r.kind}:${r.id}`;
 const inboxKey = (item: InboxItem) => `${item.kind === 'dm_request' ? 'dm' : item.kind}:${item.id}`;
 const matchesFilter = (item: InboxItem, filter: InboxFilter) => filter === 'all' || (filter === 'unread' ? item.unreadCount > 0 : item.attention);
 const accessLossNotice = 'Доступ к сообщениям утрачен. Проверьте сеанс.';
-const initial = (actor: Actor | null): MessagesSnapshot => ({ actor, counts: null, countsLoading: false, filter: 'all', inbox: null,
+const initial = (actor: Actor | null): MessagesSnapshot => ({ viewGeneration: 0, actor, counts: null, countsLoading: false, filter: 'all', inbox: null,
   inboxStatus: 'idle', inboxError: false, loadingMore: false, detail: null, drafts: {}, pending: {}, notice: null });
 /** Root-owned, actor/session/generation fenced. Tab lifetimes never own mutation packets. */
 export class MessagesCoordinator {
@@ -35,6 +35,9 @@ export class MessagesCoordinator {
   private listRevision = 0;
   private detailRevision = 0;
   private countsRevision = 0;
+  private safetyPeers = new Set<string>();
+  private safetyAttempts = new WeakMap<MessagePacket, number>();
+  private directPeers = new Map<string, string>();
   private accessLoss: { revision: number; key: string } | null = null;
   private foreground = true;
   private focused: string | null = null;
@@ -118,7 +121,8 @@ export class MessagesCoordinator {
   setActor(actor: Actor | null) {
     if ((!actor && !this.snapshot.actor) || sameActor(actor, this.snapshot.actor)) return;
     ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision; this.focused = null; this.focusResource = null; ++this.focusLease; this.resetDue();
-    this.accessLoss = null; this.snapshot = initial(actor); this.show({});
+    this.safetyPeers.clear(); this.directPeers.clear();
+    this.accessLoss = null; this.snapshot = initial(actor); this.show({ viewGeneration: this.focusLease });
   }
   setForeground(active: boolean) {
     if (active === this.foreground) return;
@@ -138,7 +142,7 @@ export class MessagesCoordinator {
     ++this.detailRevision; ++this.listRevision; ++this.focusLease;
     this.focused = resource ? resourceKey(resource) : null; this.focusResource = resource;
     // Pending packets/drafts stay in the root owner on tab unmount.
-    this.show({ detail: null }); this.resetDue();
+    this.show({ detail: null, viewGeneration: this.snapshot.viewGeneration + 1 }); this.resetDue();
     if (resource && this.foreground) void this.loadDetail(resource);
     this.schedule();
   }
@@ -234,6 +238,7 @@ export class MessagesCoordinator {
       if (this.valid(revision) && request === this.detailRevision && this.focused === key) {
         const resolved = this.accessLoss?.revision === revision && this.accessLoss.key === key;
         if (resolved) this.accessLoss = null;
+        if (resource.kind === 'direct' && detail.header && 'peer' in detail.header) this.directPeers.set(resource.id, detail.header.peer.publicPlayerId);
         this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
       }
     } catch (error) {
@@ -264,13 +269,37 @@ export class MessagesCoordinator {
     } catch (error) { if (this.valid(revision) && request === this.detailRevision && !this.failed(error)) this.show({ notice: 'Не удалось обновить сообщения' }); }
     finally { this.endRead('detail'); }
   };
-  draft(resource: MessageResource, text: string) {
-    const key = resourceKey(resource); if (this.snapshot.pending[key]) return;
+  safetyPermit = (packet: MessagePacket) => this.safetyAttempts.get(packet) ?? 0;
+  mayDispatchSafety = (packet: MessagePacket, permit = this.safetyPermit(packet)) => permit === this.safetyPermit(packet) && !this.safetyHeld(packet.resource, packet.action);
+  private safetyHeld(resource: MessageResource, action: MessageAction) {
+    return resource.kind === 'direct' && action !== 'read' && this.safetyPeers.has(this.directPeers.get(resource.id) ?? '');
+  }
+  /** A peer fence affects writes only. Accepted direct history and unrelated command owners remain intact. */
+  setPeerSafety = (peer: string, blocked: boolean, conversationId?: string) => {
+    if (conversationId) this.directPeers.set(conversationId, peer);
+    if (blocked) this.safetyPeers.add(peer); else this.safetyPeers.delete(peer);
+    const pending = { ...this.snapshot.pending };
+    for (const [key, value] of Object.entries(pending)) if (this.safetyHeld(value.packet.resource, value.packet.action)) {
+      this.safetyAttempts.set(value.packet, this.safetyPermit(value.packet) + 1);
+      pending[key] = { ...value, state: 'unknown' };
+    }
+    const affected = this.snapshot.detail?.resource.kind === 'direct' && this.directPeers.get(this.snapshot.detail.resource.id) === peer;
+    if (affected) ++this.detailRevision;
+    ++this.listRevision; ++this.countsRevision;
+    const held = Object.values(pending).some(p => this.safetyHeld(p.packet.resource, p.packet.action));
+    this.show({ pending, ...(affected ? { viewGeneration: this.snapshot.viewGeneration + 1 } : {}),
+      ...(held ? { notice: 'Блокировка приостановила исходный запрос к этому игроку. Результат остаётся неизвестным; пакет сохранён.' } : {}) });
+    // Existing read lanes retain their HOLD while an original UNKNOWN is unresolved.
+    void this.loadInbox(); void this.loadCounts();
+    if (affected && this.snapshot.detail) void this.loadDetail(this.snapshot.detail.resource);
+  };
+  draft(resource: MessageResource, text: string, expectedView = this.snapshot.viewGeneration, expectedActor = this.snapshot.actor) {
+    const key = resourceKey(resource); if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, this.snapshot.actor) || this.safetyHeld(resource, 'send') || this.snapshot.pending[key]) return;
     this.show({ drafts: { ...this.snapshot.drafts, [key]: text } });
   }
-  act = async (resource: MessageResource, action: MessageAction, throughSeq?: string) => {
+  act = async (resource: MessageResource, action: MessageAction, throughSeq?: string, expectedView = this.snapshot.viewGeneration, expectedActor = this.snapshot.actor) => {
     const actor = this.snapshot.actor, detail = this.snapshot.detail, key = resourceKey(resource);
-    if (!actor || !this.foreground || this.focused !== key || !detail || detail.status !== 'ready' || !detail.header || this.snapshot.pending[key]) return;
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor, actor) || this.safetyHeld(resource, action) || !actor || !this.foreground || this.focused !== key || !detail || detail.status !== 'ready' || !detail.header || this.snapshot.pending[key]) return;
     const h = detail.header; let body: MessageBody, clientMessageId: string | undefined;
     if (action === 'send') {
       const text = (this.snapshot.drafts[key] ?? '').trim();
@@ -301,17 +330,18 @@ export class MessagesCoordinator {
     const last = mergeMessages([],incoming).at(-1);
     if (last && BigInt(last.seq) > BigInt(detail.header.readThroughSeq)) void this.act(resource,'read',last.seq);
   };
-  retry = async (resource: MessageResource) => {
+  retry = async (resource: MessageResource, expectedView = this.snapshot.viewGeneration, expectedActor = this.snapshot.actor) => {
     const pending = this.snapshot.pending[resourceKey(resource)];
-    if (!pending || pending.state !== 'unknown' || !this.foreground || !sameActor(pending.packet.actor,this.snapshot.actor)) return;
+    if (expectedView !== this.snapshot.viewGeneration || !sameActor(expectedActor,this.snapshot.actor) || !pending || this.safetyHeld(resource, pending.packet.action) || pending.state !== 'unknown' || !this.foreground || !sameActor(pending.packet.actor,this.snapshot.actor)) return;
     this.show({ pending: { ...this.snapshot.pending, [resourceKey(resource)]: { ...pending, state: 'sending' } } });
     await this.dispatch(pending.packet);
   };
   private async dispatch(packet: MessagePacket) {
-    const revision = this.revision, key = resourceKey(packet.resource);
+    const revision = this.revision, key = resourceKey(packet.resource), permit = this.safetyPermit(packet) + 1;
+    this.safetyAttempts.set(packet, permit);
     try {
       const result = await this.port.send(packet);
-      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor)) return;
+      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || !this.mayDispatchSafety(packet, permit)) return;
       const pending = { ...this.snapshot.pending }; delete pending[key];
       const drafts = { ...this.snapshot.drafts }; if (packet.action === 'send') delete drafts[key];
       let detail = this.snapshot.detail;
@@ -326,7 +356,7 @@ export class MessagesCoordinator {
       if (packet.action !== 'read' && this.focused === key && packet.resource.kind !== 'invitation') void this.catchUp(packet.resource);
       void this.loadCounts();
     } catch (error) {
-      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || this.failed(error)) return;
+      if (revision !== this.revision || !sameActor(packet.actor,this.snapshot.actor) || !this.mayDispatchSafety(packet, permit) || this.failed(error)) return;
       if (error instanceof MessagesError && error.kind === 'business' && !['IDEMPOTENCY_KEY_REUSED','KEY_REUSED','CLIENT_MESSAGE_ID_REUSED','CLIENT_MESSAGE_ID_UNAVAILABLE'].includes(error.code)) {
         const pending = { ...this.snapshot.pending }; delete pending[key];
         this.show({ pending, notice: error.status === 429 ? 'Слишком часто. Черновик сохранён.' : 'Действие отклонено. Черновик сохранён; обновите условия.' });

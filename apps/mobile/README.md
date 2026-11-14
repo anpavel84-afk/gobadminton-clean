@@ -1,3 +1,81 @@
+# #522 native communication safety · SOURCE_CANDIDATE
+
+Bounded private-export source candidate on actual accepted alpha91 base
+`53eafa4cd7013993a4be016c5bf87ee209cae4c3`, after the admitted owned APK6.
+This source delta is NOT a DEV release, APK7 publication, independent QA PASS,
+physical-phone acceptance or whole-native parity claim.
+
+Native player profile and direct conversation now expose explicit block/unblock
+confirmation naming the player, player reports, and reports of one explicitly
+selected already-loaded live incoming message from the displayed peer. Message
+sharing consent starts off and resets on selection/context changes. Exact reason
+labels, optional trimmed/null detail (max 1000), Cancel/Back, native scrollable
+modal/safe-area/keyboard controls and existing black-on-green CTAs are retained.
+Opening, authentication, restoration, selection and refreshing never send a safety
+command. Blocking does not cancel game participation or remove common game-chat
+rights; unblocking does not restore ended friendship or closed pending requests.
+
+The bounded Auth-owned safety coordinator freezes original actor/context/action,
+method/path/body/key and retains uncertain commands across navigation. Verified
+same-owner reauthentication restores quarantined state without replay; only an
+informed explicit reconciliation sends the identical packet under current
+verified authority. Logout/account B erase safety state and fence late callbacks.
+Invalid receipts, network/timeout/5xx and COMMAND_IN_PROGRESS stay UNKNOWN. A
+reconciliation denial also retains the original UNKNOWN. Block receipts bind
+both target and boolean; report receipts validate actual ID/status/date without
+inventing a target echo. No GET block state is invented: UI labels a retained
+receipt as the last confirmed action, not fresh state after another operation.
+
+Verified peer blocks fence stale contact/direct writes, including pending pre-wire
+work and late callbacks after a later unblock. Existing Contact/Messages UNKNOWN
+packets, drafts and accepted history survive that fence. Affected authorized
+views reread through existing endpoints; no inbox deletion or privilege restoration
+is fabricated. Target-profile safety 404 does not clear unrelated player rows.
+Profile, Participation and GameManagement owners remain independent.
+
+Only BlocksController PUT/DELETE and ReportsController POST opt into
+requirePrincipalMutation; only their OpenAPI operation security fields add
+cookieSession/NativeBearer. Existing cookie Origin/CSRF, services, idempotency and
+receipts remain unchanged. NativeApi adds closed PUT/safety projections only:
+no arbitrary URL/method, cookie/Origin, automatic private text or evidenceRefs.
+API contract remains 0.44.0; schema inventory remains 72. app.json changes only
+versionCode 6 -> 7, with only the matching expected literal changed in the native
+contract test. VersionName 0.1.0, package ru.gobadminton.mobile.dev, dependencies,
+assets, configuration flags and existing native registry remain unchanged.
+
+Author deterministic verification: safety 5, contact 16, messages 20 and auth 26
+unit cases passed with Node 24.21.0, mocked fetch and no network/device execution.
+The first author run exposed unsupported strip-only parameter properties; these
+were replaced with ordinary fields. The new root fixture initially missed the
+history query string and was corrected; final owning runs pass. All old tests,
+assertions and prior README bytes remain intact. Existing isolated self-migrating
+native Messages DB fixture gains two focused safety cases for the three routes,
+transport containment, cookie guards, idempotency, block/send/history privacy,
+player reports and authoritative consent-bound message reports. DB fixture
+execution is NOT_DONE by author; no new harness/environment was introduced.
+
+Parent-owned types/lint/contracts, owning DB, Expo exports, independent QA,
+Product CI7, DEV acceptance/readback, APK7 build/signing/publication and physical
+Android keyboard/Back/safe-area/font-scale/block/report recheck remain NOT_DONE.
+Owner_UAT=FAIL_RECHECK_PENDING; native_runtime_visual=NOT_VERIFIED;
+full_native_parity=MANDATORY_NOT_COMPLETE; iOS and real OTA remain NOT_DONE.
+Game-member safety, venue reports and remaining native parity are mandatory
+unfinished scope. No runtime, GitHub, DB, dependency resolution, build, signing,
+publishing or live actions were performed by this author.
+
+Retained qualification is the first whole contact FAIL plus focused two-P2 PASS,
+not a whole-source PASS. Four normal source receipt lineages remain:
+
+- First contact: 2407a0867a65dca4b56d13e54d7f76ec4a460713907c0fb5d1f6998937cecc3e.
+- ADDRESS1: 3dde4144a24103b2265c3ea2ca6bbb4b86da8d7a1a4e85a3badf074e7f51844a.
+- ADDRESS2: d44256ec6b989854993fb24c8f803c7dc19ed85674e34999774923c2cfe644f8.
+- ADDRESS3 P2: 88e17937d55ad1706b74e18fcd81782e10f46230e4e43b388aeb0570f020c66d.
+
+Raw Owner FAIL, costs, historical UNKNOWN and all earlier qualification/release
+limitations are preserved. Every previous README byte follows verbatim as history.
+
+---
+
 # #522 CONTACT ADDRESS3 · two P2 source repairs
 
 This bounded author delta addresses both P2 findings from the FIRST whole

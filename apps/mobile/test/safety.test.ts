@@ -1,0 +1,98 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { SafetyCoordinator } from '../src/safety-coordinator.ts';
+import { createNativeApi } from '../src/native-api.ts';
+import { parseSafetyReceipt, REPORT_REASONS, reportDetail, reportable, SafetyError } from '../src/safety.ts';
+import type { SafetyPacket } from '../src/safety.ts';
+import type { DirectMessage } from '../src/messages.ts';
+const actor = { actorId: 'A', sessionId: 'session-A', generation: 1 };
+const context = { peerId: 'peer', name: 'Игрок', conversationId: 'conversation' };
+const message: DirectMessage = { id: 'incoming', conversationId: 'conversation', authorPublicPlayerId: 'peer', kind: 'text', seq: '1', contentState: 'live', text: 'Private loaded message', createdAt: '2026-11-14T00:00:00Z' };
+const report = { reportId: 'ec05b131-750e-4b91-a1a1-425373c3fba0', status: 'submitted', createdAt: '2026-11-14T00:00:00.000Z' };
+const deferred = <T>() => { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { resolve, promise }; };
+function setup() {
+  const calls: { path: string; init: RequestInit }[] = [], effects: unknown[] = [];
+  let serial = 0, handler = async (packet: { path: string; init: RequestInit }): Promise<unknown> => packet.path === '/reports' ? report : { publicPlayerId: 'peer', blocked: packet.init.method === 'PUT' };
+  const api = createNativeApi(async (url, init) => {
+    const call = { path: String(url).replace('https://dev.gobadminton.ru/v1', ''), init: init! }; calls.push(call);
+    const result = await handler(call); return result instanceof Response ? result : new Response(JSON.stringify(result));
+  });
+  const owner = new SafetyCoordinator({ send: (p, a) => api.safetyMutation(a.actorId, p), verified: (...args) => { effects.push(args); } }, () => `key-${++serial}`);
+  owner.setActor(actor); owner.open(context);
+  const view = () => owner.getSnapshot().viewGeneration;
+  return { owner, api, calls, effects, view, handler: (fn: typeof handler) => { handler = fn; } };
+}
+test('exact reasons, blank detail, closed wire projection and strict receipts with no invented target echo', async () => {
+  assert.deepEqual(REPORT_REASONS.map(r => [r.code, r.label]), [['harassment','Оскорбления / давление'],['spam','Спам'],['fake_profile','Поддельный профиль'],['inappropriate','Неприемлемый контент'],['other','Другое']]);
+  assert.equal(reportDetail('  '), null); assert.equal(reportDetail(' text '), 'text'); assert.throws(() => reportDetail('a'.repeat(1001)));
+  const s = setup(); s.owner.choose('block', s.view(), actor); await s.owner.submit([], s.view(), actor);
+  s.owner.choose('unblock', s.view(), actor); await s.owner.submit([], s.view(), actor);
+  s.owner.choose('player', s.view(), actor); s.owner.edit('spam', '  ', s.view(), actor); await s.owner.submit([], s.view(), actor);
+  assert.deepEqual(s.calls.map(c => [c.path, c.init.method, JSON.parse(c.init.body as string)]), [
+    ['/me/blocks/peer','PUT',{}], ['/me/blocks/peer','DELETE',{}], ['/reports','POST',{ targetKind: 'player', targetPublicPlayerId: 'peer', reasonCode: 'spam', detail: null }],
+  ]);
+  for (const c of s.calls) {
+    assert.equal(c.init.credentials, 'omit'); assert.equal(c.init.redirect, 'error');
+    assert.deepEqual(Object.keys(c.init.headers!).sort(), ['Accept','Authorization','Content-Type','Idempotency-Key'].sort());
+  }
+  const p = { actor, context, key: 'key', action: 'report', method: 'POST', path: '/reports', body: { targetKind: 'player', targetPublicPlayerId: 'peer', reasonCode: 'other', detail: null } } as const;
+  assert.deepEqual(parseSafetyReceipt(p, report), report);
+  for (const bad of [{...report,reportId:''}, {...report,status:'done'}, {...report,createdAt:'2026-02-30T00:00:00Z'}, {...report,createdAt:'yesterday'}]) assert.throws(() => parseSafetyReceipt(p,bad));
+  // Even a caller object carrying forbidden extras cannot widen native request bodies or routes.
+  await s.api.safetyMutation('access', {...p,path:'https://evil.test',body:{...p.body,evidenceRefs:['no'],text:'no',authorPublicPlayerId:'no'}} as unknown as SafetyPacket);
+  assert.deepEqual(JSON.parse(s.calls.at(-1)!.init.body as string),p.body);
+});
+test('only explicitly selected loaded live incoming peer message plus initially-off sharing consent can submit', async () => {
+  const s = setup(), v = s.view(); s.owner.choose('message', v, actor);
+  const bad = [{...message,authorPublicPlayerId:'own'}, {...message,contentState:'purged' as const}, {...message,text:' '}, {...message,conversationId:'other'}];
+  for (const m of bad) { assert.equal(reportable(m,context), false); s.owner.select(m.id,[m],v,actor); assert.equal(s.owner.getSnapshot().selected,null); }
+  s.owner.select(message.id,[message],v,actor); await s.owner.submit([message],v,actor); assert.equal(s.calls.length,0);
+  s.owner.consent(true,v,actor); s.owner.select(message.id,[message],v,actor); assert.equal(s.owner.getSnapshot().consent,false);
+  s.owner.consent(true,v,actor); await s.owner.submit([],v,actor); assert.equal(s.calls.length,0);
+  s.owner.edit('inappropriate',' Detail ',v,actor); await s.owner.submit([message],v,actor);
+  assert.deepEqual(JSON.parse(s.calls[0]!.init.body as string), { targetKind:'message',messageId:message.id,conversationId:'conversation',reasonCode:'inappropriate',detail:'Detail',shareMessageWithSupport:true });
+  assert.doesNotMatch(s.calls[0]!.init.body as string,/Private loaded message|author|evidenceRefs/);
+  s.owner.choose('message',v,actor); s.owner.select(message.id,[message],v,actor); s.owner.consent(true,v,actor);
+  s.owner.open({...context,conversationId:'other'}); assert.equal(s.owner.getSnapshot().consent,false); assert.equal(s.owner.getSnapshot().selected,null);
+});
+test('open/select/cancel never write; rendered generation rejects same-actor same-peer stale edit/submit/reconcile', async () => {
+  const s = setup(), old = s.view(); s.owner.choose('player',old,actor); s.owner.edit('spam','draft',old,actor); s.owner.cancel(old,actor);
+  s.owner.blur(old); s.owner.open(context); const v = s.view(); s.owner.choose('player',v,actor);
+  s.owner.edit('spam','stale',old,actor); s.owner.select(message.id,[message],old,actor); await s.owner.submit([message],old,actor); await s.owner.reconcile(old,actor);
+  assert.equal(s.calls.length,0); assert.equal(s.owner.getSnapshot().detail,'');
+});
+test('double dispatch, network/5xx/in-progress/invalid receipts retain one frozen packet; explicit reconciliation uses identical key/body', async () => {
+  const s = setup(), gate = deferred<unknown>(), v = s.view(); s.handler(async () => gate.promise);
+  s.owner.choose('block',v,actor); const work = s.owner.submit([],v,actor); await s.owner.submit([],v,actor); assert.equal(s.calls.length,1);
+  const packet = s.owner.getSnapshot().command!.packet;
+  assert.ok(Object.isFrozen(packet)); assert.ok(Object.isFrozen(packet.actor)); assert.ok(Object.isFrozen(packet.context)); assert.ok(Object.isFrozen(packet.body));
+  gate.resolve({publicPlayerId:'someone-else',blocked:true}); await work;
+  for (const value of [new Response('{}',{status:503}), new Response(JSON.stringify({code:'COMMAND_IN_PROGRESS'}),{status:409}), new Response(JSON.stringify({code:'RESOURCE_UNAVAILABLE'}),{status:404}), {publicPlayerId:'peer',blocked:false}]) {
+    assert.equal(s.owner.getSnapshot().command?.status,'unknown'); assert.equal(s.effects.length,0);
+    s.handler(async () => value); await s.owner.reconcile(v,actor);
+    assert.strictEqual(s.owner.getSnapshot().command?.packet,packet);
+  }
+  s.handler(async () => { throw new Error('timeout'); }); await s.owner.reconcile(v,actor);
+  s.handler(async () => ({publicPlayerId:'peer',blocked:true})); await s.owner.reconcile(v,actor);
+  assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.effects.length,1);
+  for (const c of s.calls) { assert.equal(c.init.body,s.calls[0]!.init.body); assert.equal((c.init.headers as Record<string,string>)['Idempotency-Key'],packet.key); }
+  s.owner.choose('unblock',v,actor); await s.owner.submit([],v,actor); // wrong boolean is UNKNOWN, never stale block success
+  assert.equal(s.owner.getSnapshot().command?.status,'unknown'); assert.doesNotMatch(s.owner.getSnapshot().notice!,/^Игрок заблокирован/);
+});
+test('navigation quarantines late receipt as UNKNOWN; same-owner authority restores original actor packet, account B/logout erase', async () => {
+  const s = setup(), gate = deferred<unknown>(); s.handler(async () => gate.promise); s.owner.choose('player',s.view(),actor);
+  const work = s.owner.submit([],s.view(),actor), packet = s.owner.getSnapshot().command!.packet;
+  s.owner.blur(s.view()); s.owner.open(context); gate.resolve(report); await work;
+  assert.strictEqual(s.owner.getSnapshot().command?.packet,packet); assert.equal(s.owner.getSnapshot().command?.status,'unknown'); assert.equal(s.effects.length,0);
+  s.owner.setActor(null); s.owner.setActor(null); assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.owner.getSnapshot().detail,'');
+  const returned = {...actor,sessionId:'new-session',generation:2}; s.owner.setActor(returned);
+  assert.strictEqual(s.owner.getSnapshot().command?.packet,packet); assert.equal(packet.actor.sessionId,actor.sessionId); assert.equal(s.calls.length,1);
+  s.handler(async () => report); s.owner.open(context); await s.owner.reconcile(s.view(),returned);
+  assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.calls.length,2);
+  s.owner.choose('player',s.view(),returned); s.handler(async () => { throw new SafetyError('network'); }); await s.owner.submit([],s.view(),returned);
+  s.owner.setActor({...returned,actorId:'B',generation:3}); assert.equal(s.owner.getSnapshot().command,undefined); assert.equal(s.owner.getSnapshot().context,null);
+  s.owner.setActor(actor); assert.equal(s.owner.getSnapshot().command,undefined);
+  const late = deferred<unknown>(); s.handler(async () => late.promise); s.owner.open(context); s.owner.choose('block',s.view(),actor);
+  const old = s.owner.submit([],s.view(),actor); s.owner.forget(); late.resolve({publicPlayerId:'peer',blocked:true}); await old;
+  s.owner.setActor(actor); assert.equal(s.owner.getSnapshot().command,undefined); assert.deepEqual(s.owner.getSnapshot().lastBlocks,{}); assert.equal(s.effects.length,0);
+});

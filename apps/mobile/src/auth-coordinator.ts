@@ -1,3 +1,5 @@
+import { SafetyCoordinator } from './safety-coordinator.ts';
+import { SafetyError } from './safety.ts';
 import { ContactCoordinator } from './contact-coordinator.ts';
 import { ProfileCoordinator, ProfileError } from './profile.ts';
 import { GameManagementCoordinator } from './game-management.ts';
@@ -42,13 +44,20 @@ export class AuthCoordinator {
   readonly gameManagement: GameManagementCoordinator;
   readonly profile: ProfileCoordinator;
   readonly contact: ContactCoordinator;
+  readonly safety: SafetyCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
     this.contact = new ContactCoordinator({
       state: (target, actor) => this.participationRead(access => deps.api.contactState(access, target), actor),
       player: (target, actor) => this.participationRead(access => deps.api.player(access, target), actor),
       conversation: (id, actor) => this.participationRead(access => deps.api.conversation(access, id), actor),
-      send: (packet, actor) => this.participationRead(access => deps.api.createContact(access, packet), actor),
+      send: (packet, actor) => {
+        const permit = this.contact.safetyPermit();
+        return this.participationRead(access => {
+          if (!this.contact.mayDispatchSafety(packet.body.targetPublicPlayerId, permit)) throw new MessagesError('network');
+          return deps.api.createContact(access, packet);
+        }, actor);
+      },
     }, deps.random);
     this.profile = new ProfileCoordinator({
       read: () => this.participationRead(access => deps.api.ownProfile(access)),
@@ -64,8 +73,22 @@ export class AuthCoordinator {
       members: id => this.participationRead(access => deps.api.chatMembers(access,id)),
       invitation: id => this.participationRead(access => deps.api.invitation(access,id)),
       history: (r,before,after) => this.participationRead(access => deps.api.messageHistory(access,r,before,after)),
-      send: packet => this.participationRead(access => deps.api.messageMutation(access,packet.resource,packet.action,packet.body,packet.key),packet.actor),
+      send: packet => {
+        const permit = this.messages.safetyPermit(packet);
+        return this.participationRead(access => {
+          if (!this.messages.mayDispatchSafety(packet, permit)) throw new MessagesError('network');
+          return deps.api.messageMutation(access,packet.resource,packet.action,packet.body,packet.key);
+        },packet.actor);
+      },
     },deps.random);
+    this.safety = new SafetyCoordinator({
+      send: (packet, authority) => this.participationRead(access => deps.api.safetyMutation(access, packet), authority),
+      verified: (peer, blocked, context) => {
+        this.contact.setPeerSafety(peer, blocked);
+        this.messages.setPeerSafety(peer, blocked, context.conversationId);
+        this.players.rereadSafety(peer);
+      },
+    }, deps.random);
     this.gameManagement = new GameManagementCoordinator({
       profile: () => this.participationRead(access => deps.api.creatorProfile(access)),
       preferences: () => this.participationRead(access => deps.api.gamePreferences(access)),
@@ -104,7 +127,7 @@ export class AuthCoordinator {
       return result;
     } catch (error) {
       if (epoch !== this.epoch) throw new ParticipationError('stale');
-      if ((error instanceof ProfileError && error.kind === 'authority') || (error instanceof MessagesError && error.status === 401) || (error instanceof ParticipationError && error.kind === 'authority') ||
+      if ((error instanceof SafetyError && error.kind === 'authority') || (error instanceof ProfileError && error.kind === 'authority') || (error instanceof MessagesError && error.status === 401) || (error instanceof ParticipationError && error.kind === 'authority') ||
           (error instanceof NativeAuthError && ['authority', 'expired'].includes(error.kind))) await this.fail(epoch, new NativeAuthError('authority'));
       throw error;
     }
@@ -126,6 +149,7 @@ export class AuthCoordinator {
     }
     const actor = this.participation.getSnapshot().actor;
     if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor); this.contact.setActor(actor); }
+    this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -361,6 +385,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.gameManagement.forgetCreation();
     if (forgetCreation) this.profile.forget();
     if (forgetCreation) this.contact.forget();
+    if (forgetCreation) this.safety.forget();
     this.show({ status: 'guest', me: null, sessions: [], notice: null });
     // Queue the local clear immediately. Remote revocation is bounded by the API timeout and never persisted/retried.
     const clear = this.persist(envelope, epoch).catch(() => {

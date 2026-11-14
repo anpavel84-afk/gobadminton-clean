@@ -304,3 +304,18 @@ test('view generations change on open, blur, authoritative actor change and forg
   s.owner.setActor(actor); changed();
   s.owner.forget(); changed();
 });
+
+test('verified peer block fences stale send and reconciliation without losing the original UNKNOWN; other peers remain usable', async () => {
+  const s = setup(); await compose(s); const rendered = s.owner.getSnapshot();
+  const gate = deferred<unknown>(); s.setHandler(async path => path === '/conversations/requests' ? gate.promise : path.startsWith('/players/') ? player : none);
+  const work = s.owner.send('peer',rendered.actor,rendered.viewGeneration); await new Promise(r => setImmediate(r));
+  const packet = s.owner.getSnapshot().command!.packet, permit=s.owner.safetyPermit(); s.owner.setPeerSafety('peer',true);
+  gate.resolve(result); await work;
+  assert.strictEqual(s.owner.getSnapshot().command?.packet,packet); assert.equal(s.owner.getSnapshot().command?.status,'unknown');
+  const count = s.writes().length; await s.owner.send('peer',rendered.actor,rendered.viewGeneration); await s.owner.reconcile(); assert.equal(s.writes().length,count);
+  assert.equal(s.owner.getSnapshot().drafts.peer,'  Привет!  '); assert.equal(s.owner.mayDispatchSafety('other'),true);
+  // A current allowed state after unblock is authoritative; old success is never fabricated.
+  s.setHandler(async path => path.startsWith('/players/') ? player : none); s.owner.setPeerSafety('peer',false); await new Promise(r => setImmediate(r));
+  assert.strictEqual(s.owner.getSnapshot().command?.packet,packet); assert.equal(s.owner.getSnapshot().conversation,null);
+  assert.equal(s.owner.mayDispatchSafety('peer',permit),false);
+});

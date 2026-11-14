@@ -1,3 +1,4 @@
+import { NativeSafety } from './safety.tsx';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { PropsWithChildren } from 'react';
 import { AppState, FlatList, Image, TextInput, View } from 'react-native';
@@ -96,7 +97,7 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
   },[owner,key,auth.status]));
   const h = detail?.header, direct = h && 'requestState' in h ? h : null, chat = h && 'lifecycleState' in h ? h : null, invitation = h && 'status' in h ? h : null;
   const title = direct?.peer.displayName ?? (chat ? 'Чат игры' : 'Приглашение в игру');
-  const notice = <>{state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}{pending?.state === 'unknown' && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource); }} />}
+  const notice = <>{state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}{pending?.state === 'unknown' && <PrimaryButton title="Проверить тем же запросом" onPress={() => { void owner.retry(resource,state.viewGeneration,state.actor); }} />}
     {pending?.state === 'sending' && <Label accessibilityLiveRegion="polite">Отправляем…</Label>}</>;
   if (auth.status !== 'authenticated') return <Page header={<MessageHeader name="Сообщения" />}><PrivateEntry /></Page>;
   if (!detail || detail.status !== 'ready' || !h) return <Page header={<MessageHeader name={title} />}><Label>{detail?.status === 'error' ? detail.error : 'Загружаем…'}</Label><TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />{notice}</Page>;
@@ -116,8 +117,10 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
       </View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
     </Page>;
   }
-  const canSend = direct?.requestState === 'accepted' || chat?.lifecycleState === 'active';
+  const safety = auth.safety.getSnapshot();
+  const canSend = direct ? direct.requestState === 'accepted' && safety.lastBlocks[direct.peer.publicPlayerId] !== true : chat?.lifecycleState === 'active';
   return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} />}>
+    {direct && <NativeSafety peerId={direct.peer.publicPlayerId} name={direct.peer.displayName} conversationId={direct.id} messages={detail.messages} />}
     {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники (${detail.members.length})`} onPress={() => setShowMembers(v => !v)} />
       {showMembers && <FlatList data={detail.members} keyExtractor={m => m.publicPlayerId} style={{ flexGrow: 0 }} renderItem={({ item }) => <Label style={{ padding: 8 }}>{item.displayName} · {item.role === 'manager' ? 'Организатор' : 'Участник'}</Label>} />}</>}
     <FlatList ref={list} data={detail.messages} keyExtractor={m => m.id} contentContainerStyle={{ padding: 12, gap: 8, flexGrow: 1 }}
@@ -133,8 +136,8 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
     <View style={{ padding: 12, borderTopWidth: 1, borderColor: colors.line, gap: 8 }}>
       {direct && direct.requestState !== 'accepted' && <><Label>{direct.requestState === 'pending' && direct.role === 'recipient' ? 'Принять запрос на общение?' : direct.requestState === 'pending' ? 'Запрос отправлен. Дождитесь ответа.' : requestCopy[direct.requestState]}</Label>
         {direct.requestState === 'pending' && direct.role === 'recipient' && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}><PrimaryButton title="Принять" disabled={!!pending} onPress={() => { void owner.act(resource,'accept'); }} /><TextButton title="Отклонить" onPress={() => { if (!pending) void owner.act(resource,'decline'); }} /></View>}</>}
-      {canSend && <><TextInput accessibilityLabel="Текст сообщения" multiline editable={!pending} value={draft} onChangeText={text => owner.draft(resource,text)} placeholder="Сообщение" style={[styles.input,{ fontSize: 16, padding: 10 }]} />
-        <PrimaryButton title="Отправить" disabled={!!pending || !draft.trim()} onPress={() => { void owner.act(resource,'send'); }} /></>}
+      {canSend && <><TextInput accessibilityLabel="Текст сообщения" multiline editable={!pending} value={draft} onChangeText={text => owner.draft(resource,text,state.viewGeneration,state.actor)} placeholder="Сообщение" style={[styles.input,{ fontSize: 16, padding: 10 }]} />
+        <PrimaryButton title="Отправить" disabled={!!pending || !draft.trim()} onPress={() => { void owner.act(resource,'send',undefined,state.viewGeneration,state.actor); }} /></>}
       {notice}<View style={{ flexDirection: 'row',flexWrap: 'wrap' }}><TextButton title="Обновить" onPress={() => { initialScroll.current = true; void owner.loadDetail(resource); }} /><TextButton title="Новые сообщения" onPress={() => { void owner.catchUp(resource); }} /></View>
     </View>
   </ScreenFrame>;

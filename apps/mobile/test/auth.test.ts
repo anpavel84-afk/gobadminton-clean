@@ -571,3 +571,67 @@ test('root contact UNKNOWN stays hidden until authoritative same-actor reauth; c
   assert.equal(s.auth.contact.getSnapshot().actor,null); assert.equal(s.auth.contact.getSnapshot().command,undefined);
   await s.auth.logout(); assert.deepEqual(s.auth.contact.getSnapshot().drafts,{});
 });
+
+test('root safety UNKNOWN is hidden until verified same-owner reauth, then reconciles the original frozen packet; logout erases late work', async () => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate(); const safety = s.auth.safety;
+  const context = {peerId:'peer',name:'Игрок'}, originalActor = safety.getSnapshot().actor!;
+  safety.open(context); let v = safety.getSnapshot().viewGeneration; safety.choose('player',v,originalActor); safety.edit('other','Private draft',v,originalActor);
+  s.setHandler(async () => { throw new Error('uncertain network'); }); await safety.submit([],v,originalActor);
+  const packet = safety.getSnapshot().command!.packet;
+  s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+  assert.equal(safety.getSnapshot().command,undefined); assert.equal(safety.getSnapshot().detail,''); assert.equal(safety.getSnapshot().actor,null);
+  s.setHandler(async path => path === '/auth/methods' ? {items:[{method:'vk',type:'oauth',available:true}]}
+    : {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`});
+  await s.auth.beginLogin('/players/peer'); const login = parseSecureEnvelope(s.stored(),now)!.pending!, verified = deferred<typeof me>();
+  s.setHandler(async path => path === '/me' ? verified.promise : {...credentials,sessionId:'safety-return'});
+  const work = s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`); await new Promise(r => setImmediate(r));
+  assert.equal(safety.getSnapshot().command,undefined); verified.resolve({...me,session:{...me.session,id:'safety-return'}}); await work;
+  assert.strictEqual(safety.getSnapshot().command?.packet,packet); assert.equal(safety.getSnapshot().consent,false);
+  assert.equal(packet.actor.sessionId,originalActor.sessionId); assert.equal(s.calls.filter(c => c.path === '/reports').length,1);
+  s.setHandler(async () => ({reportId:'ec05b131-750e-4b91-a1a1-425373c3fba0',status:'submitted',createdAt:'2026-11-14T00:00:00Z'}));
+  safety.open(context); v=safety.getSnapshot().viewGeneration; await safety.reconcile(v,safety.getSnapshot().actor);
+  const writes=s.calls.filter(c => c.path === '/reports'); assert.equal(writes.length,2); assert.equal(writes[0]!.init.body,writes[1]!.init.body);
+  assert.equal((writes[1]!.init.headers as Record<string,string>)['Idempotency-Key'],packet.key);
+  const gate=deferred<unknown>(); s.setHandler(async path => path.startsWith('/me/blocks/') ? gate.promise : {ok:true});
+  safety.choose('block',v,safety.getSnapshot().actor); const late=safety.submit([],v,safety.getSnapshot().actor);
+  await new Promise(r => setImmediate(r)); await s.auth.logout(); gate.resolve({publicPlayerId:'peer',blocked:true}); await late;
+  assert.equal(safety.getSnapshot().command,undefined); assert.equal(safety.getSnapshot().context,null); assert.deepEqual(safety.getSnapshot().lastBlocks,{});
+});
+
+test('root verified block immediately fences contact/direct writes and retains both existing UNKNOWN owners and accepted history', async () => {
+  const s=setup(sessionEnvelope()); let blocked=false;
+  const player={publicPlayerId:'peer',displayName:'Игрок',cityId:null,areaKey:null,bio:null,level:null,trainer:false,lookingForGame:false,canRequestContact:true};
+  const header={id:'thread',kind:'direct',requestState:'accepted',version:1,peer:{publicPlayerId:'peer',displayName:'Игрок'},role:'initiator',lastMessageSeq:'1',readThroughSeq:'0',unreadCount:1};
+  const m={id:'message',conversationId:'thread',seq:'1',kind:'text',authorPublicPlayerId:'peer',createdAt:'2026-11-14T00:00:00Z',contentState:'live',text:'Accepted history'};
+  s.setHandler(async (path,init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path.startsWith('/me/contact-state?')) return {targetPublicPlayerId:'peer',state:'none',canRequestContact:true};
+    if (path.startsWith('/players/')) return blocked ? new Response('{}',{status:404}) : player;
+    if (path.startsWith('/players?')) return {items:blocked ? [{...player,publicPlayerId:'other'}] : [player,{...player,publicPlayerId:'other'}],nextCursor:null};
+    if (path === '/conversations/requests' || path === '/conversations/thread/messages' && init.method === 'POST') throw new Error('uncertain');
+    if (path === '/conversations/thread') return header;
+    if (path.startsWith('/conversations/thread/messages?')) return {items:[m],nextCursor:null};
+    if (path === '/me/social-profile') return {publicPlayerId:'own'};
+    if (path === '/me/blocks/peer') { blocked=true; return {publicPlayerId:'peer',blocked:true}; }
+    throw new Error('Unexpected isolated route');
+  });
+  await s.auth.hydrate(); await s.auth.players.loadList({cityId:null,name:'',looking:false,trainer:false}); await s.auth.players.loadDetail('peer');
+  await s.auth.contact.open('peer'); s.auth.contact.draft('peer','Keep contact'); await s.auth.contact.send();
+  const contact=s.auth.contact.getSnapshot().command!.packet, r={kind:'direct',id:'thread'} as const;
+  s.auth.messages.focus(r); await new Promise(done => setImmediate(done)); assert.equal(s.auth.messages.getSnapshot().detail?.status,'ready',JSON.stringify(s.auth.messages.getSnapshot())); s.auth.messages.draft(r,'Keep message'); await s.auth.messages.act(r,'send');
+  const message=s.auth.messages.getSnapshot().pending['direct:thread']!.packet;
+  const profile=s.auth.profile.getSnapshot(), participation=s.auth.participation.getSnapshot(), management=s.auth.gameManagement.getSnapshot();
+  const safety=s.auth.safety; safety.open({peerId:'peer',name:'Игрок',conversationId:'thread'}); const state=safety.getSnapshot();
+  safety.choose('block',state.viewGeneration,state.actor); await safety.submit([],state.viewGeneration,state.actor);
+  assert.equal(safety.getSnapshot().command,undefined); assert.equal(safety.getSnapshot().lastBlocks.peer,true);
+  assert.strictEqual(s.auth.contact.getSnapshot().command?.packet,contact); assert.strictEqual(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
+  assert.equal(s.auth.contact.getSnapshot().command?.status,'unknown'); assert.equal(s.auth.messages.getSnapshot().pending['direct:thread']?.state,'unknown');
+  assert.deepEqual(s.auth.messages.getSnapshot().detail?.messages.map(m => m.text),['Accepted history']);
+  const count=s.calls.filter(c => c.init.method === 'POST').length; await s.auth.contact.reconcile(); await s.auth.messages.retry(r);
+  assert.equal(s.calls.filter(c => c.init.method === 'POST').length,count);
+  await new Promise(done => setImmediate(done));
+  assert.deepEqual(s.auth.players.getSnapshot().list.data?.items.map(p => p.publicPlayerId),['other']);
+  assert.equal(s.auth.players.getSnapshot().detail.status,'error');
+  assert.strictEqual(s.auth.profile.getSnapshot(),profile); assert.strictEqual(s.auth.participation.getSnapshot(),participation); assert.strictEqual(s.auth.gameManagement.getSnapshot(),management);
+});
