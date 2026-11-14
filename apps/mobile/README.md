@@ -1,3 +1,122 @@
+# #522 CURRENT · address3 source maintenance
+
+Supplied actual address2 base: `b2af9342288449261b09d5d74993f78a70c3a451`.
+Address1 `e5a7ca9784a658a99a0c6302a5288b4d0619d8b7` fixed same-owner UNKNOWN
+quarantine while retaining the immutable command key/body. Type-only address2
+`b2af9342288449261b09d5d74993f78a70c3a451` has actual mobile TSC and exact-file
+lint **PASS**, per supplied receipt
+`ba3d544f636e5089f019af96fcd03e4bf931324f86d702ab19b135401d32cf65`.
+Retained evidence: **103/103 mobile units**, **2 Expo exports** (Android/iOS),
+**4/4 management DB cases** and **2/2 Players DB cases**; not rerun by this author.
+
+Positive native coverage for the selected **8** operations is retained, including
+authorized private roster/confirm in the actual management cases. This static
+legacy regression maintenance moves only two old negative sentinels to remaining
+cookie-only neighbors: GET `/v1/me/discovery-preference` keeps **401** and POST
+`/v1/games/:id/cancel` keeps **403**, bearer owner and `{ expectedVersion: 1 }`.
+This avoids premature positive-confirm mutation before the unchanged browser
+confirm, withdraw, capacity and version assertions. No earlier legacy runtime
+failure is claimed; fresh legacy-fixture lint/DB verification remains for Root.
+
+Independent whole-source QA (original B through address3, all four normal source
+attempts), Product/security CI, build/APK4 and a new DEV release remain **NOT_DONE**;
+delivery is **PARTIAL**, Owner UAT **FAIL_RECHECK_PENDING**, native visual
+**NOT_VERIFIED**, full native parity **MANDATORY_NOT_COMPLETE**. Earlier FAIL,
+UNKNOWN and attempt history remains preserved. Native 0.1.0/code4, API 0.44.0,
+schema72, owned5208 and the existing enabled native registry remain unchanged.
+
+## HISTORICAL original a366 source text — preserved verbatim below
+
+The old **Known CI blocker** and check/status statements below describe original
+`a366` source history; the CURRENT prefix above records subsequent evidence and
+this repair. They are not current blocker or release claims.
+
+---
+
+# #522 native create/publish and game management · source candidate on accepted alpha.88
+
+Bounded source work in the private export only, admitted base
+`d8dcb45607fa99c79ec983c511fc569cc5897449`. This export has no accessible Git history;
+base/strict release/APK3 evidence is supplied by Root, not locally reverified.
+Android source versionCode **4**, versionName **0.1.0**, same package. No binary,
+signing/certificate validation, registry, runtime configuration, OTA, deployment or
+new application release receipt is claimed. Existing code3/APK3/alpha.88 history below
+is frozen; Owner S23 UAT **FAIL_RECHECK_PENDING**, native visual **NOT_VERIFIED**.
+
+`/games/create` uses authoritative OwnSocialProfile city/trainer context, game
+preferences (including initial version 0), the manually selected city and paginated
+canonical public venues with each selected venue's timezone. Missing profile/city
+requires profile setup; native profile editing remains a mandatory follow-up, with
+no invented profile write or inert setup CTA. Trainer data is read only when the own
+profile says trainer; legitimate absent/inactive trainer permits ordinary games.
+Strict calendar/DST/duration/future helpers are copied from accepted WEB without
+web/DOM/server imports. External reservation is the accepted literal 0. The form
+uses accepted format, visibility, NTRP range, contact and settlement labels.
+
+Preview → explicit **Опубликовать** owns the normal draft-create → publish chain.
+The separate root GameManagement owner keeps immutable keys/bodies and canonical
+IDs/versions across navigation and UNKNOWN. Only explicit same-packet reconciliation
+retries an uncertain command; reconciliation never auto-publishes. Same-owner auth
+return retains only a known canonical game reference, clears form/contact/private
+DTOs, and requires fresh reads and explicit publication. Logout removes the reference;
+account/generation fences discard late responses. No new disk schema or auth-envelope
+migration. Existing Messages/Participation owners and their UNKNOWN packets remain
+independent. A published receipt allows an explicit new-game action.
+
+`/games/manage/:id`, reachable from My Games, checks actual paginated `/me/games`
+authority for creator owners or delegated noncreator managers before authorized
+game/roster reads. Participant pagination, loading/empty/error, draft publication and
+explicit confirm/reject/remove use current versions, reasons, rights and counts.
+Revoked access removes private game/roster projections. Capacity editing/cancel are
+unavailable, matching accepted WEB. Existing four-tab chrome and root owners remain.
+
+Exactly **8** existing operations gain NativeBearer security and principal guards;
+API remains **0.44.0**, 72 migrations unchanged. Browser Origin/CSRF, services, global
+auth, default flags, locks and idempotency stay unchanged. Only the old Players closed
+neighbor URL moves to `/me/discovery-preference`, retaining its exact 401 assertion.
+All eight supplied operation preimage hashes match when only the security additions
+are removed (game-preferences previously had explicit cookie-only security).
+
+New `native-game-management.foundation.test.ts` owns a random
+`native_game_management_*` loopback database through dedicated
+`NATIVE_GAME_MANAGEMENT_TEST_DATABASE_URL` ending in `/postgres`, self-migrates and
+gracefully drops only its owned DB. It uses synthetic OAuth/moderation and a distinct
+synthetic fingerprint secret. The existing db-ci per-suite environment case passes
+that variable only to this fixture and unsets it for every other fixture, preserving
+the existing Messages case, reports and no-skips gates.
+
+Author checks: earlier full mobile unit run **95/95 PASS**; after related repairs the
+named game-management/auth/native-contract suites **36/36 PASS** (10 new management,
+18 auth, 8 contract). Existing unchanged checks are reused. TypeScript strip-parser
+checks passed for the new coordinator/DB fixture and changed auth/API clients; an
+initial direct Node --check on the API CommonJS fixture could not parse its valid TS
+inline type import and was replaced with the explicit TypeScript parser. This is
+syntax checking, not typechecking. Contract structural rules: **276 operations PASS**;
+Game/Friendship/Unified generated types unchanged; Admin protocol **56 operations
+PASS**; `bash -n scripts/chatops/db-ci.sh` PASS. Author checks are not independent QA.
+
+**Known CI blocker outside this allowlist:**
+`apps/api/test/integration/native-participation.foundation.test.ts:104–105` still
+expects native manager roster GET 401 and confirm POST 403 for an actual owner.
+Those routes now intentionally opt in; their proper outcomes are authorized reads
+and confirm. The file is not authorized for this pass and remains untouched.
+Trusted Root must admit the exact stale-expectation repair before a full db-ci PASS
+can be claimed. No production guard/test gate was weakened to satisfy old assertions.
+
+**NOT_TESTED:** real DB fixture, API/contracts/mobile typecheck, changed-file lint,
+Swagger validator, Expo Android/iOS exports, independent QA, Product/security CI,
+DEV acceptance/smoke, device/auth lifecycle and visual QA. No dependencies are present
+in this export; no install, download, Corepack resolution or provider call was made.
+Full native parity remains **MANDATORY_NOT_COMPLETE**, with mandatory future work:
+new venue creation and optional candidate photo; game cover/media/private court
+booking; invitation create/revoke and contact initiation; full postgame/maps/Radar;
+UGC/social preferences/moderation; signed OTA; iOS, physical device and App Links
+acceptance. No stubs/inert controls or full-native/DONE claim.
+
+Prior source, release, FAIL/rollback, UNKNOWN and paid-attempt history follows unchanged.
+
+---
+
 # #522 native Messages source candidate on accepted alpha.87
 
 Source routes: `/messages`, `/messages/direct/:id`, `/messages/game/:id`,

@@ -38,6 +38,7 @@ export default function GuestGames() {
       keyboardShouldPersistTaps="handled" contentInsetAdjustmentBehavior="never"
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 20, paddingBottom: insets.bottom + 24, gap: 14 }}
       ListHeaderComponent={<View style={feed.header}>
+        <PrimaryButton title="Создать игру" onPress={() => router.push('/games/create')} />
         <View style={feed.copy}>
           <Label style={feed.eyebrow}>Игры рядом{city ? ` · ${city.nameRu}` : ''}</Label>
           <Label accessibilityRole="header" style={feed.title}>Игры{city ? ' ' : ''}<Label style={[feed.title, { color: colors.purple }]}>{city ? `${discoveryCityHeading(city.nameRu)}.` : ''}</Label></Label>

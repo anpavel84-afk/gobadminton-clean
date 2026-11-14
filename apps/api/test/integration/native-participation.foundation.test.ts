@@ -89,7 +89,7 @@ run("bounded native participation principal opt-in", () => {
     const published = await app.inject({ method: "POST", url: `/v1/games/${id}/publish`, headers: browser(owner), payload: { expectedVersion: draft.json().version + 1 } });
     expect(published.statusCode).toBe(200); return published.json() as { id: string; version: number };
   }
-  it("bearer reads/request/withdraw retain ownership, idempotency, version/capacity and cookie-only manager boundaries", async () => {
+  it("bearer reads/request/withdraw retain ownership, idempotency, version/capacity and remaining cookie-only neighbors", async () => {
     const owner = await actor(), player = await actor(), stranger = await actor(), g = await game(owner, 1);
     const managed = await app.inject({ url: "/v1/me/games", headers: bearer(owner) });
     expect(managed.statusCode).toBe(200); expect(managed.json().items).toEqual(expect.arrayContaining([expect.objectContaining({ id: g.id, management: { role: "owner", createdByMe: true } })]));
@@ -101,8 +101,8 @@ run("bounded native participation principal opt-in", () => {
     expect((await app.inject({ method: "POST", url, headers: bearer(player, key), payload })).json()).toEqual(part);
     expect((await app.inject({ method: "POST", url, headers: bearer(player, key), payload: { expectedGameVersion: g.version + 1 } })).statusCode).toBe(409);
     expect((await app.inject({ url: "/v1/me/participations?limit=1", headers: bearer(player) })).json().items).toContainEqual(part);
-    expect((await app.inject({ url: `/v1/games/${g.id}/participations`, headers: bearer(owner) })).statusCode).toBe(401);
-    expect((await app.inject({ method: "POST", url: `/v1/participations/${part.id}/confirm`, headers: bearer(owner), payload: { expectedVersion: 1 } })).statusCode).toBe(403);
+    expect((await app.inject({ url: "/v1/me/discovery-preference", headers: bearer(owner) })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: `/v1/games/${g.id}/cancel`, headers: bearer(owner), payload: { expectedVersion: 1 } })).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: `/v1/participations/${part.id}/withdraw`, headers: bearer(stranger), payload: { expectedVersion: 1 } })).statusCode).toBe(404);
     const confirmed = await app.inject({ method: "POST", url: `/v1/participations/${part.id}/confirm`, headers: browser(owner), payload: { expectedVersion: part.version } });
     expect(confirmed.statusCode).toBe(200);

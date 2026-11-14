@@ -18,7 +18,7 @@ export class TrainersController {
   @Get()
   @Header("Cache-Control", "no-store")
   async getOwn(@Req() request: FastifyRequest) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     return this.trainers.getOwn(consumer.userId);
   }
 

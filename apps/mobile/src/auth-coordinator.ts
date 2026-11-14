@@ -1,3 +1,4 @@
+import { GameManagementCoordinator } from './game-management.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
 import { PlayersCoordinator, PlayersError } from './players.ts';
@@ -36,6 +37,7 @@ export class AuthCoordinator {
   readonly players = new PlayersCoordinator();
   readonly participation: ParticipationCoordinator;
   readonly messages: MessagesCoordinator;
+  readonly gameManagement: GameManagementCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
     this.messages = new MessagesCoordinator({
@@ -49,6 +51,24 @@ export class AuthCoordinator {
       history: (r,before,after) => this.participationRead(access => deps.api.messageHistory(access,r,before,after)),
       send: packet => this.participationRead(access => deps.api.messageMutation(access,packet.resource,packet.action,packet.body,packet.key),packet.actor),
     },deps.random);
+    this.gameManagement = new GameManagementCoordinator({
+      profile: () => this.participationRead(access => deps.api.creatorProfile(access)),
+      preferences: () => this.participationRead(access => deps.api.gamePreferences(access)),
+      trainer: () => this.participationRead(access => deps.api.ownTrainer(access)),
+      venues: (cityId,cursor) => publicApi.venues(cityId,cursor),
+      managed: cursor => this.participationRead(access => deps.api.managedGames(access,cursor)),
+      game: id => this.participationRead(access => deps.api.gameDetail(access,id)),
+      participants: (id,cursor) => this.participationRead(access => deps.api.gameParticipants(access,id,cursor)),
+      send: async packet => {
+        const result = await this.participationRead(access => deps.api.managementMutation(access,packet),packet.actor);
+        if (packet.kind !== 'create') {
+          // Reconcile existing My Games rows after a known receipt, preserving its independent packets.
+          void this.participation.loadManaged();
+          void this.participation.loadGame(packet.gameId);
+        }
+        return result;
+      },
+    },deps.random,this.now);
     this.participation = new ParticipationCoordinator({
       own: cursor => this.participationRead(access => deps.api.ownParticipations(access, cursor)),
       managed: cursor => this.participationRead(access => deps.api.managedGames(access, cursor)),
@@ -90,7 +110,7 @@ export class AuthCoordinator {
       this.participation.setActor(null);
     }
     const actor = this.participation.getSnapshot().actor;
-    if (this.snapshot.status !== 'hydrating') this.messages.setActor(actor);
+    if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); }
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -203,7 +223,7 @@ export class AuthCoordinator {
     if (!this.writable) return null;
     // Account switch is explicit and fences all old requests before creating the new pending login.
     const before = this.epoch;
-    await this.logout(false);
+    await this.logout(false, false);
     if (this.epoch !== before + 1 || !this.writable) return null;
     const epoch = this.epoch;
     const intent = canonicalReturnPath(returnPath) ?? this.snapshot.returnPath;
@@ -318,11 +338,12 @@ export class AuthCoordinator {
       else this.show({ sessions: [], notice: 'remote-unconfirmed' });
     }
   };
-  logout = async (report = true) => {
+  logout = async (report = true, forgetCreation = true) => {
     const refresh = this.envelope?.session?.refreshToken, access = this.access?.token;
     const epoch = ++this.epoch;
     this.rotation = null; this.exchange = null; this.validation = null; this.access = null;
     const envelope = this.empty(); this.envelope = envelope;
+    if (forgetCreation) this.gameManagement.forgetCreation();
     this.show({ status: 'guest', me: null, sessions: [], notice: null });
     // Queue the local clear immediately. Remote revocation is bounded by the API timeout and never persisted/retried.
     const clear = this.persist(envelope, epoch).catch(() => {
