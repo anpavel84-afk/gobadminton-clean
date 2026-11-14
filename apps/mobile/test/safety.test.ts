@@ -61,6 +61,44 @@ test('open/select/cancel never write; rendered generation rejects same-actor sam
   s.owner.edit('spam','stale',old,actor); s.owner.select(message.id,[message],old,actor); await s.owner.submit([message],old,actor); await s.owner.reconcile(old,actor);
   assert.equal(s.calls.length,0); assert.equal(s.owner.getSnapshot().detail,'');
 });
+test('same-context focus preserves unsent message form, resets sharing, fences old views and permits rapid current edits', async () => {
+  const s = setup(), old = s.view(); s.owner.choose('message',old,actor);
+  s.owner.edit('spam','Unsent message report',old,actor);
+  s.owner.select(message.id,[message],old,actor); s.owner.consent(true,old,actor);
+  assert.equal(s.owner.getSnapshot().selected,message.id); assert.equal(s.owner.getSnapshot().consent,true);
+  s.owner.setActor(null);
+  const returned = {...actor,sessionId:'returned',generation:2}; s.owner.setActor(returned);
+  const restored = s.view();
+  s.owner.blur(old); // Cleanup of the pre-reauth focus effect must not erase the restored view.
+  s.owner.open({...context,name:'Обновлённое имя'}); const v = s.view();
+  assert.notEqual(v,old); assert.notEqual(v,restored);
+  assert.equal(s.owner.getSnapshot().dialog,'message'); assert.equal(s.owner.getSnapshot().reason,'spam');
+  assert.equal(s.owner.getSnapshot().detail,'Unsent message report');
+  assert.equal(s.owner.getSnapshot().context?.name,'Обновлённое имя');
+  assert.equal(s.owner.getSnapshot().selected,null); assert.equal(s.owner.getSnapshot().consent,false);
+  for (const stale of [old,restored]) {
+    s.owner.choose('block',stale,returned); s.owner.edit('other','stale',stale,returned);
+    s.owner.select(message.id,[message],stale,returned); s.owner.consent(true,stale,returned);
+    s.owner.cancel(stale,returned); s.owner.blur(stale);
+    await s.owner.submit([message],stale,returned); await s.owner.reconcile(stale,returned);
+  }
+  s.owner.edit('other','wrong actor',v,actor); await s.owner.submit([message],v,actor);
+  assert.equal(s.owner.getSnapshot().detail,'Unsent message report'); assert.equal(s.owner.getSnapshot().dialog,'message');
+  // Consecutive native text events share the current render's view/actor until rerender.
+  for (const text of ['Н','Но','Нов','Новый текст']) s.owner.edit('spam',text,v,returned);
+  assert.equal(s.owner.getSnapshot().detail,'Новый текст');
+  s.owner.select(message.id,[message],v,returned); s.owner.consent(true,v,returned);
+  s.owner.open(context); // Repeated focus under unchanged verified authority also resets sharing.
+  assert.equal(s.owner.getSnapshot().detail,'Новый текст'); assert.equal(s.owner.getSnapshot().reason,'spam');
+  assert.equal(s.owner.getSnapshot().selected,null); assert.equal(s.owner.getSnapshot().consent,false);
+  await s.owner.submit([message],s.view(),returned); assert.equal(s.calls.length,0);
+  for (const next of [{...context,conversationId:'other'}, {...context,peerId:'other-peer'}, context]) {
+    s.owner.open(next);
+    assert.equal(s.owner.getSnapshot().detail,''); assert.equal(s.owner.getSnapshot().reason,'harassment');
+    assert.equal(s.owner.getSnapshot().dialog,null); assert.equal(s.owner.getSnapshot().selected,null); assert.equal(s.owner.getSnapshot().consent,false);
+  }
+  assert.equal(s.calls.length,0); assert.equal(s.effects.length,0); assert.equal(s.owner.getSnapshot().command,undefined);
+});
 test('double dispatch, network/5xx/in-progress/invalid receipts retain one frozen packet; explicit reconciliation uses identical key/body', async () => {
   const s = setup(), gate = deferred<unknown>(), v = s.view(); s.handler(async () => gate.promise);
   s.owner.choose('block',v,actor); const work = s.owner.submit([],v,actor); await s.owner.submit([],v,actor); assert.equal(s.calls.length,1);

@@ -41,8 +41,11 @@ export class SafetyCoordinator {
   open = (context: SafetyContext) => {
     if (!this.snapshot.actor) return;
     messageId(context.peerId); if (context.conversationId) messageId(context.conversationId);
-    this.show({ context: Object.freeze({ ...context }), viewGeneration: ++this.generation, dialog: null,
-      reason: 'harassment', detail: '', selected: null, consent: false, notice: this.snapshot.command ? unknown : null,
+    // setActor restores context/form only for the verified same owner. Its focus reopen
+    // keeps that form, but always fences the prior view and requires fresh message sharing.
+    const retainForm = sameContext(this.snapshot.context, context);
+    this.show({ context: Object.freeze({ ...context }), viewGeneration: ++this.generation, dialog: retainForm ? this.snapshot.dialog : null,
+      reason: retainForm ? this.snapshot.reason : 'harassment', detail: retainForm ? this.snapshot.detail : '', selected: null, consent: false, notice: this.snapshot.command ? unknown : null,
       ...(this.snapshot.command ? { command: { ...this.snapshot.command, status: 'unknown' } } : {}) });
   };
   blur = (view: number) => {

@@ -1,3 +1,22 @@
+# #522 native safety ADDRESS1 · 2026-11-14 · SOURCE_CANDIDATE
+
+Addresses retained Root manual P2 SAFETY-UNSENT-REAUTH-FOCUS on supplied source
+`e3ee70846e00f24d07b1c4772712c826768707ee`: same-owner verified reauthentication
+followed by the same mounted screen's focus/open retains unsent detail/reason/dialog.
+Each open still advances the view fence and clears message selection/sharing consent;
+account B and explicit logout erase private form state. No automatic send, disk draft
+or process-death restoration is added; UNKNOWN packets/reconciliation remain unchanged.
+
+Two added regressions failed before the fix. Author-only Node 24 owning units then
+passed **33 tests (27 auth + 6 safety), 0 failures/skips**, using mocked transport:
+`node --experimental-strip-types --test --test-isolation=none apps/mobile/test/safety.test.ts apps/mobile/test/auth.test.ts`.
+This includes real AuthCoordinator validation/login plus the mounted screen's status-driven
+focus cleanup/open sequence; it is not React/native rendering or device evidence.
+No parent checks or independent QA have run. DB, CI, builds and DEV acceptance are
+NOT_TESTED here; supplied accepted DEV `53eafa4cd7013993a4be016c5bf87ee209cae4c3`
+is unchanged. Full native parity remains UNFINISHED, Owner FAIL / S23 FAIL remain,
+and native visual status remains NOT_VERIFIED. All earlier README bytes follow intact.
+
 # #522 native communication safety · SOURCE_CANDIDATE
 
 Bounded private-export source candidate on actual accepted alpha91 base

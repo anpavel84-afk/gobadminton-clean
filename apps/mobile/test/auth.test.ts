@@ -572,6 +572,63 @@ test('root contact UNKNOWN stays hidden until authoritative same-actor reauth; c
   await s.auth.logout(); assert.deepEqual(s.auth.contact.getSnapshot().drafts,{});
 });
 
+test('root validation and verified login resume the same focused safety form without sending; account B and explicit logout erase it', async () => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate(); const safety = s.auth.safety;
+  const context = {peerId:'peer',name:'Игрок'}, originalActor = safety.getSnapshot().actor!;
+  // Keep the same screen mounted: NativeSafety's useFocusEffect cleans up and opens on auth.status changes.
+  let status = s.auth.getSnapshot().status, cleanup: (() => void) | undefined;
+  const focus = () => {
+    cleanup?.(); cleanup = undefined;
+    if (s.auth.getSnapshot().status !== 'authenticated') return;
+    safety.open(context); const view = safety.getSnapshot().viewGeneration;
+    cleanup = () => safety.blur(view);
+  };
+  focus();
+  const unsubscribe = s.auth.subscribe(() => {
+    const next = s.auth.getSnapshot().status;
+    if (next !== status) { status = next; focus(); }
+  });
+  try {
+    const old = safety.getSnapshot().viewGeneration;
+    safety.choose('player',old,originalActor); safety.edit('spam','Synthetic unsent report draft',old,originalActor);
+    const loseAuthority = async () => {
+      s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+      assert.equal(s.auth.getSnapshot().status,'unverifiable'); assert.equal(safety.getSnapshot().actor,null);
+      assert.equal(safety.getSnapshot().context,null); assert.equal(safety.getSnapshot().detail,''); assert.equal(safety.getSnapshot().dialog,null);
+    };
+    const login = async (id: string, sessionId: string) => {
+      s.setHandler(async path => path === '/auth/methods' ? {items:[{method:'vk',type:'oauth',available:true}]}
+        : {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`});
+      assert.ok(await s.auth.beginLogin('/players/peer'));
+      const pending = parseSecureEnvelope(s.stored(),now)!.pending!, verified = deferred<typeof me>();
+      s.setHandler(async path => path === '/me' ? verified.promise : {...credentials,sessionId});
+      const work = s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`);
+      await new Promise(r => setImmediate(r));
+      assert.equal(safety.getSnapshot().actor,null); assert.equal(safety.getSnapshot().detail,'');
+      verified.resolve({...me,id,session:{...me.session,id:sessionId}}); await work;
+      assert.equal(s.auth.getSnapshot().status,'authenticated'); assert.equal(safety.getSnapshot().actor?.actorId,id);
+    };
+    await loseAuthority(); await login(me.id,'safety-resumed');
+    const resumed = safety.getSnapshot(), current = resumed.actor!;
+    assert.equal(current.sessionId,'safety-resumed'); assert.notEqual(current.generation,originalActor.generation);
+    assert.notEqual(resumed.viewGeneration,old); assert.deepEqual(resumed.context,context);
+    assert.equal(resumed.detail,'Synthetic unsent report draft'); assert.equal(resumed.reason,'spam'); assert.equal(resumed.dialog,'player');
+    assert.equal(resumed.selected,null); assert.equal(resumed.consent,false); assert.equal(resumed.command,undefined);
+    safety.edit('other','stale',old,originalActor); safety.cancel(old,originalActor);
+    await safety.submit([],old,originalActor); await safety.reconcile(old,originalActor);
+    assert.equal(safety.getSnapshot().detail,'Synthetic unsent report draft');
+    safety.edit('spam','Resumed typing',resumed.viewGeneration,current);
+    assert.equal(safety.getSnapshot().detail,'Resumed typing');
+    await loseAuthority(); await login('actor-b','safety-B');
+    assert.equal(safety.getSnapshot().detail,''); assert.equal(safety.getSnapshot().reason,'harassment'); assert.equal(safety.getSnapshot().dialog,null);
+    const b = safety.getSnapshot(); safety.choose('player',b.viewGeneration,b.actor); safety.edit('other','B private draft',b.viewGeneration,b.actor);
+    await loseAuthority(); await s.auth.logout(); await login('actor-b','safety-B-after-logout');
+    assert.equal(safety.getSnapshot().detail,''); assert.equal(safety.getSnapshot().reason,'harassment'); assert.equal(safety.getSnapshot().dialog,null);
+    assert.equal(safety.getSnapshot().selected,null); assert.equal(safety.getSnapshot().consent,false); assert.equal(safety.getSnapshot().command,undefined);
+    assert.equal(s.calls.filter(c => c.path === '/reports' || c.path.startsWith('/me/blocks/')).length,0);
+  } finally { unsubscribe(); cleanup?.(); }
+});
+
 test('root safety UNKNOWN is hidden until verified same-owner reauth, then reconciles the original frozen packet; logout erases late work', async () => {
   const s = setup(sessionEnvelope()); await s.auth.hydrate(); const safety = s.auth.safety;
   const context = {peerId:'peer',name:'Игрок'}, originalActor = safety.getSnapshot().actor!;
