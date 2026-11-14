@@ -71,7 +71,7 @@ function initial(): ManagementSnapshot { return { actor: null, form: emptyCreati
 function freeze<T>(v: T): T { if (v && typeof v === 'object') { Object.values(v).forEach(freeze); Object.freeze(v); } return v; }
 /** Persistent root domain: route changes do not reset packets. No disk/auth-envelope migration. */
 export class GameManagementCoordinator {
-  private state = initial(); private listeners = new Set<() => void>(); private contextRead = 0; private contactEdited = false; private resumeKnown: { actorId: string; id: string; version: number } | null = null; private detailReads = new Map<string, number>();
+  private state = initial(); private listeners = new Set<() => void>(); private contextRead = 0; private publishRead = 0; private contactEdited = false; private resumeKnown: { actorId: string; id: string; version: number } | null = null; private detailReads = new Map<string, number>();
   // Quarantined while identity is unavailable; never part of the guest snapshot.
   private resumePending: ManagementPacket | null = null;
   private port: ManagementPort; private random: () => string; private now: () => number;
@@ -165,7 +165,28 @@ export class GameManagementCoordinator {
   publishDraft = async (id: string) => {
     const actor = this.state.actor, d = this.state.details[id], game = this.state.created?.id === id ? this.state.created : d?.game;
     if (!actor || !game || game.status !== 'draft' || this.locked() || (this.state.created?.id !== id && (d?.status !== 'ready' || !d.management))) return;
-    await this.dispatch(freeze({ actor, kind: 'publish', gameId: id, key: this.random(), body: { expectedVersion: game.version } }));
+    // A new publish intent needs an authoritative profile, including direct managed-draft entry.
+    // UNKNOWN reconciliation bypasses this read and retains its immutable command packet.
+    const serial = ++this.publishRead, contextRead = this.contextRead, detailRead = this.detailReads.get(id);
+    const valid = () => this.current(actor) && serial === this.publishRead && contextRead === this.contextRead && detailRead === this.detailReads.get(id);
+    try {
+      const profile = parseCreatorProfile(await this.port.profile());
+      if (!valid()) return;
+      if (!profile.cityId || !profile.displayName.trim()) {
+        this.show({ profile, context: 'setup', preview: null,
+          notice: 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.' }); return;
+      }
+      const detail = this.state.details[id], currentGame = this.state.created?.id === id ? this.state.created : detail?.game;
+      if (this.locked() || currentGame !== game || (this.state.created?.id !== id && (detail?.status !== 'ready' || !detail.management))) return;
+      this.show({ profile, ...(this.state.context === 'setup' ? { context: 'idle' as const } : {}) });
+    } catch (e) {
+      if (valid()) this.show({ profile: null, ...(e instanceof ParticipationError && e.status === 404 ? { context: 'setup' as const, preview: null } : {}),
+        notice: e instanceof ParticipationError && e.status === 404
+          ? 'Для публикации заполните имя и город в профиле в веб-приложении, затем повторите публикацию. Черновик сохранён.'
+          : 'Не удалось проверить профиль. Повторите публикацию после проверки соединения. Черновик сохранён.' });
+      return;
+    }
+    if (valid() && !this.locked()) await this.dispatch(freeze({ actor, kind: 'publish', gameId: id, key: this.random(), body: { expectedVersion: game.version } }));
   };
   reconcile = async () => { const command = this.state.command; if (command?.status === 'unknown' && this.current(command.packet.actor)) await this.dispatch(command.packet); };
   private async dispatch(packet: ManagementPacket): Promise<boolean> {

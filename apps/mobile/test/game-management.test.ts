@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
 import type { ManagementPort, ManagementPacket, Venue } from '../src/game-management.ts';
 import { ParticipationError } from '../src/participation.ts';
@@ -256,4 +257,102 @@ test('reauth while create is sending quarantines UNKNOWN and fences the old resp
   gate.resolve({...g,id:'stale-draft',version:99}); await oldWork;
   assert.deepEqual(s.owner.getSnapshot().creationReference,{id:g.id,version:7});
   assert.equal(s.owner.getSnapshot().command?.status,'settled'); assert.equal(s.sent.length,2);
+});
+
+
+test('existing created draft refresh to genuine empty profile blocks new publish and retains recovery reference', async () => {
+  for (const incomplete of [{displayName:'',cityId:null,trainer:false}, {...profile,displayName:'   '}]) {
+    let dto: ReturnType<typeof parseCreatorProfile> = profile, createCalls = 0;
+    const api = createNativeApi(async () => new Response(JSON.stringify(dto),{status:200}));
+    const s = setup({profile:() => api.creatorProfile('private-access'), send:async p => {
+      if (p.kind === 'create' && ++createCalls === 1) throw new ParticipationError('network');
+      return p.kind === 'create' ? g : {...g,status:'published',version:8};
+    }});
+    await preview(s.owner); await s.owner.publishPreview(); await s.owner.reconcile();
+    assert.equal(s.owner.getSnapshot().created?.status,'draft');
+    const reference = {...s.owner.getSnapshot().creationReference!}, before = s.sent.length;
+    dto = incomplete; await s.owner.loadContext('city-1');
+    assert.equal(s.owner.getSnapshot().context,'setup');
+    await s.owner.publishDraft(g.id);
+    assert.equal(s.sent.length,before); assert.equal(s.owner.getSnapshot().created?.id,g.id);
+    assert.deepEqual(s.owner.getSnapshot().creationReference,reference);
+    assert.match(s.owner.getSnapshot().notice!,/заполните имя и город/);
+    dto = profile; await s.owner.loadContext('city-1'); await s.owner.publishDraft(g.id);
+    assert.equal(s.sent.length,before+1); assert.equal(s.sent.at(-1)?.kind,'publish');
+    assert.deepEqual(s.sent.at(-1)?.body,{expectedVersion:7}); assert.equal(createCalls,2);
+  }
+});
+
+test('setup guidance precedes created publish CTA while UNKNOWN reconciliation and draft recovery stay available', () => {
+  const ui = readFileSync(new URL('../src/components/create-game.tsx',import.meta.url),'utf8');
+  const setupStart = ui.indexOf("state.context === 'setup' ?"), createdStart = ui.indexOf('state.created ?');
+  assert.ok(setupStart > ui.indexOf('blocked && state.command ?') && setupStart < createdStart);
+  const guidance = ui.slice(setupStart,createdStart);
+  assert.match(guidance,/заполните профиль в веб-приложении/);
+  assert.match(guidance,/Обновить проверку профиля/);
+  assert.match(guidance,/state.creationReference.*Открыть сводку созданной игры/);
+  assert.doesNotMatch(guidance,/owner.publishDraft/);
+});
+
+test('direct owned or delegated draft entry validates profile without create context or catalog prerequisites', async () => {
+  for (const role of ['owner','manager'] as const) {
+    for (const dto of [profile,{displayName:'',cityId:null,trainer:false},{...profile,displayName:' '}]) {
+      let reads = 0;
+      const s = setup({profile:async () => { reads++; return dto; },
+        managed:async () => ({items:[{...g,management:{role,createdByMe:role === 'owner'}}],nextCursor:null}),
+        preferences:async () => { assert.fail('direct publish must not load create preferences'); },
+        venues:async () => { assert.fail('direct publish must not load create venues'); }});
+      await s.owner.loadDetail(g.id); assert.equal(s.owner.getSnapshot().context,'idle');
+      await s.owner.publishDraft(g.id); assert.equal(reads,1);
+      assert.equal(s.sent.length,dto === profile ? 1 : 0);
+      if (dto === profile) { assert.equal(s.sent[0]?.kind,'publish'); assert.deepEqual(s.sent[0]?.body,{expectedVersion:7}); }
+      else { assert.equal(s.owner.getSnapshot().context,'setup'); assert.match(s.owner.getSnapshot().notice!,/Черновик сохранён/); }
+    }
+  }
+});
+
+test('late publish profile reads cannot write after logout, account change, new generation, refresh or detail reload', async () => {
+  for (const change of ['logout','account','generation','context','detail'] as const) {
+    const gate = deferred<typeof profile>();
+    const s = setup({profile:() => gate.promise}); await s.owner.loadDetail(g.id);
+    const work = s.owner.publishDraft(g.id);
+    if (change === 'logout') s.owner.forgetCreation();
+    if (change === 'account') s.owner.setActor({...actor,actorId:'B',generation:2});
+    if (change === 'generation') { s.owner.setActor(null); s.owner.setActor({...actor,sessionId:'returned',generation:2}); }
+    const refresh = change === 'context' ? s.owner.loadContext('city-1') : Promise.resolve();
+    if (change === 'detail') await s.owner.loadDetail(g.id);
+    gate.resolve(profile); await Promise.all([work,refresh]);
+    assert.equal(s.sent.length,0); assert.equal(s.owner.getSnapshot().command,undefined);
+  }
+});
+
+test('new publish profile failures and concurrent taps send no unsafe or duplicate command', async () => {
+  for (const failure of [new ParticipationError('business',404),new ParticipationError('network')]) {
+    const s = setup({profile:async () => { throw failure; }}); await s.owner.loadDetail(g.id);
+    await s.owner.publishDraft(g.id); assert.equal(s.sent.length,0); assert.match(s.owner.getSnapshot().notice!,/Черновик сохранён/);
+  }
+  const gate = deferred<typeof profile>(), s = setup({profile:() => gate.promise});
+  await s.owner.loadDetail(g.id);
+  const first = s.owner.publishDraft(g.id), second = s.owner.publishDraft(g.id);
+  gate.resolve(profile); await Promise.all([first,second]); assert.equal(s.sent.length,1);
+});
+
+test('UNKNOWN publish still reconciles original packet after invalid profile refresh and same-owner reauth', async () => {
+  let dto: ReturnType<typeof parseCreatorProfile> = profile; let recover = false, reads = 0;
+  const s = setup({profile:async () => { reads++; return dto; },send:async p => {
+    if (p.kind === 'create') return g;
+    if (!recover) throw new ParticipationError('network');
+    return {...g,status:'published',version:8};
+  }});
+  await preview(s.owner); await s.owner.publishPreview(); const original = s.sent[1]!;
+  dto = {displayName:'',cityId:null,trainer:false};
+  await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'setup');
+  s.owner.setActor(null); s.owner.setActor({...actor,sessionId:'returned',generation:2});
+  await s.owner.loadContext('city-1'); const beforeReads = reads;
+  await s.owner.publishDraft(g.id); assert.equal(s.sent.length,2);
+  recover = true; await s.owner.reconcile();
+  const replay = s.sent[2]!;
+  assert.equal(reads,beforeReads); assert.equal(replay.kind,'publish'); assert.equal(replay.key,original.key);
+  assert.strictEqual(replay.body,original.body); assert.equal(replay.gameId,g.id);
+  assert.deepEqual(replay.body,{expectedVersion:7}); assert.equal(s.sent.length,3);
 });

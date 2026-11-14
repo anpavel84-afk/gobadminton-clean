@@ -36,6 +36,12 @@ export function CreateGame() {
         </>}
         <ManagementCommand />
         {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
+      </> : state.context === 'setup' ? <>
+        <Label>Для создания и публикации игры нужен заполненный профиль с именем и городом. Для создания также выберите вручную город поиска.</Label>
+        {(!state.profile?.cityId || !state.profile?.displayName.trim()) && <Label>Обязательный следующий шаг — заполнить имя и город в профиле. Редактирование профиля в native ещё не перенесено; заполните профиль в веб-приложении и обновите проверку здесь.</Label>}
+        <TextButton title="Выбрать город поиска" onPress={() => router.push('/city')} />
+        <TextButton title="Обновить проверку профиля" onPress={() => void owner.loadContext(preferences.cityId)} />
+        {state.creationReference && <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />}
       </> : state.created ? <>
         <Label style={styles.subtitle}>{state.created.status === 'published' ? 'Игра опубликована' : 'Черновик создан'}</Label>
         <ManagedTerms game={state.created} />
@@ -48,12 +54,7 @@ export function CreateGame() {
         <Label>Игра уже создана. Сначала проверьте её сводку; повторное создание недоступно.</Label>
         <TextButton title="Открыть сводку созданной игры" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: state.creationReference!.id } })} />
       </> : state.context === 'loading' || state.context === 'idle' ? <Loading title="Проверяем профиль и площадки…" />
-      : state.context === 'setup' ? <>
-        <Label>Для создания игры нужен заполненный профиль с именем и городом и выбранный вручную город поиска.</Label>
-        {(!state.profile?.cityId || !state.profile?.displayName.trim()) && <Label>Обязательный следующий шаг — заполнить имя и город в профиле. Редактирование профиля в native ещё не перенесено; заполните профиль в веб-приложении и обновите проверку здесь.</Label>}
-        <TextButton title="Выбрать город поиска" onPress={() => router.push('/city')} />
-        <TextButton title="Обновить проверку профиля" onPress={() => void owner.loadContext(preferences.cityId)} />
-      </> : state.context === 'error' ? <><Label>Не удалось проверить профиль, настройки или каталог площадок.</Label><TextButton title="Повторить" onPress={() => void owner.loadContext(preferences.cityId)} /></>
+      : state.context === 'error' ? <><Label>Не удалось проверить профиль, настройки или каталог площадок.</Label><TextButton title="Повторить" onPress={() => void owner.loadContext(preferences.cityId)} /></>
       : state.preview ? <>
         <Label style={styles.subtitle}>Предпросмотр игры</Label>
         <Label>{state.preview.title || (state.preview.activityKind === 'regular' ? 'Игра' : 'Игра с тренером')}</Label>
