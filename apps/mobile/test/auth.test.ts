@@ -296,3 +296,32 @@ test('private Messages return whitelist is exact and storage compatible; rejects
   }
   for (const path of ['/messages?conversation=x','/messages/direct/a/accept','/messages/direct/%61','/messages/direct/a?send=yes','https://evil/messages','/messages//a','/messages/game/a#x','/messages/game/../a']) assert.equal(canonicalReturnPath(path),null);
 });
+
+test('new root management owner shares secure actor fences, leaves Messages UNKNOWN untouched, never dispatches on callback', async t => {
+  const s=setup({...envelope,returnPath:'/games/create',pending:{...pending,returnPath:'/games/create'}});
+  assert.equal(await s.auth.callback(callback),'/games/create');
+  assert.equal(s.calls.filter(c=>c.path==='/games').length,0);
+  t.mock.method(publicApi,'venues',async()=>({items:[fixture.venue],nextCursor:null}));
+  const owner=s.auth.gameManagement, participation=s.auth.participation;
+  s.setHandler(async path=>{
+    if(path==='/me')return me;
+    if(path==='/auth/native/refresh')return credentials;
+    if(path==='/me/social-profile')return {publicPlayerId:'public-a',cityId:'city-1',trainer:false,displayName:'Creator'};
+    if(path==='/me/game-preferences')return {version:0,defaultPublicGameContact:null};
+    if(path==='/conversations/thread')return {id:'thread',kind:'direct',requestState:'accepted',version:1,peer:{publicPlayerId:'public-b',displayName:'Peer'},role:'recipient',lastMessageSeq:'0',readThroughSeq:'0',unreadCount:0};
+    if(path.startsWith('/conversations/thread/messages?'))return {items:[],nextCursor:null};
+    if(path==='/conversations/thread/messages'||path==='/games')throw new Error('ambiguous');
+    return {ok:true};
+  });
+  const resource={kind:'direct',id:'thread'} as const;
+  s.auth.messages.focus(resource); await new Promise(resolve=>setImmediate(resolve)); s.auth.messages.draft(resource,'private'); await s.auth.messages.act(resource,'send');
+  const message=s.auth.messages.getSnapshot().pending['direct:thread']?.packet; assert.ok(message);
+  await owner.loadContext('city-1'); owner.update({venueId:fixture.venue.id,date:'2026-11-20',time:'18:30',contact:'@creator'}); owner.preview(); await owner.publishPreview();
+  const packet=owner.getSnapshot().command?.packet; assert.ok(packet); assert.equal(owner.getSnapshot().command?.status,'unknown');
+  assert.equal(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
+  await s.auth.refresh(); assert.strictEqual(s.auth.gameManagement,owner); assert.strictEqual(s.auth.participation,participation);
+  assert.strictEqual(owner.getSnapshot().command?.packet,packet); assert.strictEqual(s.auth.messages.getSnapshot().pending['direct:thread']?.packet,message);
+  assert.equal(s.calls.filter(c=>c.path==='/games').length,1);
+  assert.doesNotMatch(JSON.stringify(owner.getSnapshot()),/accessToken|refreshToken|verifier/);
+  await s.auth.logout(); assert.equal(owner.getSnapshot().command,undefined); assert.equal(owner.getSnapshot().form.contact,'');
+});

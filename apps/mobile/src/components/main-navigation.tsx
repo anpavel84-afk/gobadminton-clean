@@ -46,7 +46,7 @@ export function MainNavigation({ children }: PropsWithChildren) {
       flexDirection: 'row', paddingLeft: insets.left + 4, paddingRight: insets.right + 4,
       paddingBottom: insets.bottom + 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.line,
     }}>{MAIN_NAV_ITEMS.map(item => {
-      const selected = path === item.path || path.startsWith(`${item.path}/`);
+      const selected = item.path === '/my-games' && path.startsWith('/games/manage/') || item.path === '/games' && !path.startsWith('/games/manage/') && (path === item.path || path.startsWith(`${item.path}/`)) || item.path !== '/games' && (path === item.path || path.startsWith(`${item.path}/`));
       return <Pressable key={item.path} accessibilityRole="tab" accessibilityState={{ selected }}
         onPress={() => { if (path !== item.path) router.navigate(item.path); }}
         style={({ pressed }) => ({ flex: 1, minWidth: 44, minHeight: 59, paddingHorizontal: 2, paddingVertical: 8, gap: 7,

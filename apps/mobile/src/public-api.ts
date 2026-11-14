@@ -1,3 +1,4 @@
+import type { Venue } from './game-management.ts';
 import { parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
 import type { PlayerFilters } from './players.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
@@ -106,6 +107,17 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
     },
     async player(id: string, signal?: AbortSignal) {
       return parsePlayer(await get(`/players/${encodeURIComponent(id)}`, signal));
+    },
+    async venues(cityId: string, cursor?: string) {
+      if (!cityId.trim()) throw new PublicApiError('invalid');
+      const r = object(await get(`/venues?cityId=${encodeURIComponent(cityId)}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`));
+      if (!Array.isArray(r.items) || !(r.nextCursor === null || text(r.nextCursor) && r.nextCursor.length > 0)) throw new PublicApiError('invalid');
+      const items = r.items.map(value => {
+        const v = object(value);
+        if (!strings(v, ['id','name','address','cityId','timezone']) || !v.id || v.cityId !== cityId || !zone(v.timezone)) throw new PublicApiError('invalid');
+        return { id: v.id, name: v.name, address: v.address, cityId: v.cityId, timezone: v.timezone } as Venue;
+      });
+      return { items, nextCursor: r.nextCursor as string | null };
     },
     async meta(signal?: AbortSignal) {
       const row = object(await get('/meta', signal));

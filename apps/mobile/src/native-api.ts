@@ -1,3 +1,5 @@
+import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
+import type { ManagementPacket } from './game-management.ts';
 import { MessagesError, messageId, parseMessageMutation, parseInbox, parseCounts, parseConversation, parseChat, parseMembers, parseMessage, parseMessagePage, parseInvitation, parseOwnMessageIdentity, resourcePath, mutationPath } from './messages.ts';
 import type { InboxFilter, MessageResource, MessageAction, MessageBody } from './messages.ts';
 import { PlayersError, parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
@@ -28,7 +30,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         try {
           const problem = await response.json();
           const candidate = problem?.code;
-          if (typeof candidate === 'string' && ['COMMAND_IN_PROGRESS', 'VERSION_CONFLICT', 'GAME_FULL', 'APPLICATION_CLOSED', 'GAME_ALREADY_STARTED', 'GAME_NOT_PUBLISHED', 'EXPECTED_GAME_VERSION_INVALID', 'EXPECTED_VERSION_INVALID', 'PARTICIPATION_NOT_FOUND', 'CAPABILITY_RESTRICTED', 'PARTICIPATION_STATUS_CONFLICT', 'KEY_REUSED'].includes(candidate)) code = candidate;
+          if (typeof candidate === 'string' && ['FORM_INVALID', 'TRAINER_PROFILE_INACTIVE', 'GAME_PREFERENCES_VERSION_CONFLICT', 'COMMAND_IN_PROGRESS', 'VERSION_CONFLICT', 'GAME_FULL', 'APPLICATION_CLOSED', 'GAME_ALREADY_STARTED', 'GAME_NOT_PUBLISHED', 'EXPECTED_GAME_VERSION_INVALID', 'EXPECTED_VERSION_INVALID', 'PARTICIPATION_NOT_FOUND', 'CAPABILITY_RESTRICTED', 'PARTICIPATION_STATUS_CONFLICT', 'KEY_REUSED'].includes(candidate)) code = candidate;
         } catch { /* Do not expose raw responses. */ }
         throw new ParticipationError(response.status === 401 ? 'authority'
           : [400, 403, 404, 409, 422].includes(response.status) ? 'business' : 'network', response.status, code);
@@ -48,6 +50,16 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
   }
   const privateMessage = (path: string, access: string, body?: MessageBody, key?: string) => request(path, body === undefined ? 'GET' : 'POST', body, access, key, false, false, true);
   return {
+    creatorProfile: async (access: string) => parseCreatorProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, true)),
+    gamePreferences: async (access: string) => parsePreferences(await request('/me/game-preferences', 'GET', undefined, access, undefined, true)),
+    ownTrainer: async (access: string) => parseOwnTrainer(await request('/me/trainer-profile', 'GET', undefined, access, undefined, true)),
+    gameParticipants: async (access: string, id: string, cursor?: string) => parseCursorPage(await request(`/games/${encodeURIComponent(id)}/participations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, access, undefined, true), parseParticipation),
+    managementMutation: async (access: string, packet: ManagementPacket) => {
+      const path = packet.kind === 'create' ? '/games' : packet.kind === 'publish' ? `/games/${encodeURIComponent(packet.gameId)}/publish`
+        : `/participations/${encodeURIComponent(packet.participationId)}/${packet.kind}`;
+      const value = await request(path, 'POST', packet.body, access, packet.key, true);
+      return packet.kind === 'create' || packet.kind === 'publish' ? parseAuthenticatedGame(value) : parseParticipation(value);
+    },
     inbox: async (access: string, filter: InboxFilter, cursor?: string) => parseInbox(await privateMessage(`/me/inbox?limit=50&filter=${filter}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, access)),
     inboxCounts: async (access: string) => parseCounts(await privateMessage('/me/inbox/counts', access)),
     messageIdentity: async (access: string) => parseOwnMessageIdentity(await privateMessage('/me/social-profile', access)),

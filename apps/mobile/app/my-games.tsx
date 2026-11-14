@@ -37,7 +37,7 @@ export default function MyGames() {
         {complete && rows.length === 0 && <Label>В выбранном списке игр нет.</Label>}
         {rows.map(row => <OwnGame key={`${actor}:${session}:${row.gameId}`} row={row} />)}
         <TextButton title="Обновить мои игры" onPress={() => { void coordinator.loadOwn(); void coordinator.loadManaged(); }} />
-        <Label>Управляемые игры доступны для просмотра. Действия организатора ещё не перенесены в приложение.</Label>
+        <TextButton title="Создать игру" onPress={() => router.push('/games/create')} />
         <Label>Приглашения, рекомендации и итоги игр ещё не перенесены. Этот список пока охватывает управление, заявки и участие.</Label>
       </>}
   </Page>;
@@ -59,7 +59,8 @@ function OwnGame({ row }: { row: MyGameRow }) {
   if (!current) return null;
   return <View style={{ gap: 8 }}>
     <View style={styles.card}>
-      {row.managed && <Label>{row.managed.management.role === 'owner' ? 'Создаю и управляю' : 'Управляю'} · только просмотр</Label>}
+      {row.managed && <Label>{row.managed.management.role === 'owner' ? 'Создаю и управляю' : 'Управляю'}</Label>}
+      {row.managed && <TextButton title="Управление игрой" onPress={() => router.push({ pathname: '/games/manage/[id]', params: { id: row.gameId } })} />}
       {row.parts.map(part => <Label key={part.id}>{participationLabels[part.status]}</Label>)}
     </View>
     {(!state || state.status === 'loading') && <Loading title="Загружаем условия игры…" />}

@@ -103,7 +103,7 @@ test('conditions use server counts, timezone and external price terms without im
 });
 
 test('native navigation/version source binds canonical WEB order and paths while owners stay above Stack', () => {
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 3);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 4);
   const nav = read('../src/components/main-navigation.tsx');
   const paths = read('../../web/src/components/consumer/nav-icon-paths.tsx');
   for (const section of ['games', 'players', 'mine', 'messages']) {
