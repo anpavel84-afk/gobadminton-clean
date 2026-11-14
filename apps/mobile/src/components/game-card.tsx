@@ -18,7 +18,7 @@ function CoverPhase({ sources, name }: { sources: string[]; name: string }) {
   const source = sources.find(uri => !failed.includes(uri));
   return <View style={card.media}>
     {source ? <Image key={source} source={{ uri: source }} resizeMode="cover" accessibilityLabel={`Обложка: ${name}`}
-      style={StyleSheet.absoluteFillObject} onError={() => setFailed(previous => [...previous, source])} />
+      style={StyleSheet.absoluteFill} onError={() => setFailed(previous => [...previous, source])} />
       : <View style={card.mediaError} accessibilityLiveRegion="polite">
         <Label>Фото не загрузилось</Label>
         <TextButton title="Повторить загрузку фото" onPress={() => setFailed([])} />

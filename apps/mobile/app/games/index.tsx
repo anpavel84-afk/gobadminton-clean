@@ -76,7 +76,7 @@ export default function GuestGames() {
       renderItem={({ item }) => <GameCard game={item} cityName={cities.state.data?.find(candidate => candidate.id === item.venue.cityId)?.nameRu}
         onOpen={() => router.push({ pathname: '/games/[id]', params: { id: item.id } })} />}
       ListFooterComponent={city && state.data?.nextCursor && state.status !== 'error'
-        ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : null} />
+        ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : undefined} />
   </ScreenFrame>;
 }
 const feed = StyleSheet.create({
