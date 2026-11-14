@@ -24,6 +24,7 @@ export const resourceKey = (r: MessageResource) => `${r.kind}:${r.id}`;
 // A direct request becomes a DM without changing its underlying inbox identity.
 const inboxKey = (item: InboxItem) => `${item.kind === 'dm_request' ? 'dm' : item.kind}:${item.id}`;
 const matchesFilter = (item: InboxItem, filter: InboxFilter) => filter === 'all' || (filter === 'unread' ? item.unreadCount > 0 : item.attention);
+const accessLossNotice = 'Доступ к сообщениям утрачен. Проверьте сеанс.';
 const initial = (actor: Actor | null): MessagesSnapshot => ({ actor, counts: null, countsLoading: false, filter: 'all', inbox: null,
   inboxStatus: 'idle', inboxError: false, loadingMore: false, detail: null, drafts: {}, pending: {}, notice: null });
 /** Root-owned, actor/session/generation fenced. Tab lifetimes never own mutation packets. */
@@ -34,6 +35,7 @@ export class MessagesCoordinator {
   private listRevision = 0;
   private detailRevision = 0;
   private countsRevision = 0;
+  private accessLoss: { revision: number; key: string } | null = null;
   private foreground = true;
   private focused: string | null = null;
   private focusResource: MessageResource | null = null;
@@ -116,7 +118,7 @@ export class MessagesCoordinator {
   setActor(actor: Actor | null) {
     if ((!actor && !this.snapshot.actor) || sameActor(actor, this.snapshot.actor)) return;
     ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision; this.focused = null; this.focusResource = null; ++this.focusLease; this.resetDue();
-    this.snapshot = initial(actor); this.show({});
+    this.accessLoss = null; this.snapshot = initial(actor); this.show({});
   }
   setForeground(active: boolean) {
     if (active === this.foreground) return;
@@ -146,7 +148,8 @@ export class MessagesCoordinator {
       ++this.revision; ++this.listRevision; ++this.detailRevision; ++this.countsRevision;
       // Keep only the mounted route intent/lease so its existing refresh and blur
       // handlers still work. All private DTOs, drafts and packets are discarded.
-      const resource = this.focusResource, notice = 'Доступ к сообщениям утрачен. Проверьте сеанс.';
+      const resource = this.focusResource, notice = accessLossNotice;
+      this.accessLoss = resource ? { revision: this.revision, key: resourceKey(resource) } : null;
       this.snapshot = initial(this.snapshot.actor);
       this.show({ notice, inboxStatus: this.focused === 'inbox' ? 'error' : 'idle',
         detail: resource ? { resource, status: 'error', header: null, messages: [], cursor: null, members: [], ownId: null, error: notice, loadingMore: false } : null });
@@ -175,11 +178,31 @@ export class MessagesCoordinator {
       let inbox = page;
       if (old && (cursor || quiet)) {
         const updates = new Map(page.items.map(item => [inboxKey(item),item]));
+        const missing = new Set<string>();
+        if (quiet && !cursor && filter !== 'all') {
+          // Filtered endpoints omit changed rows. Resolve loaded identities via
+          // authorized all-filter pages, stopping when found or coverage ends.
+          // Only a complete scan proves absence; never infer it from page one.
+          old.items.forEach(item => { if (!updates.has(inboxKey(item))) missing.add(inboxKey(item)); });
+          let scanCursor: string | undefined;
+          const visited = new Set<string>();
+          while (missing.size) {
+            const authoritative = await this.port.inbox('all',scanCursor);
+            if (!this.valid(revision) || request !== this.listRevision) return;
+            for (const item of authoritative.items) {
+              const key = inboxKey(item);
+              if (missing.delete(key)) updates.set(key,item);
+            }
+            if (!authoritative.nextCursor) break;
+            if (visited.has(authoritative.nextCursor)) throw new MessagesError('invalid');
+            visited.add(authoritative.nextCursor); scanCursor = authoritative.nextCursor;
+          }
+        }
         const items = cursor ? [...old.items,...page.items] : [...page.items,...old.items];
-        // First-page absence is not deletion. Keep the loaded boundary; only an
-        // authoritative replacement of the same entity can change its kind/filter.
+        // Keep the loaded pagination boundary. Absence removes a row only after
+        // all-filter exhaustion; replacements can update its kind/filter.
         const merged = new Map(items.map(item => [inboxKey(item),updates.get(inboxKey(item)) ?? item]));
-        inbox = { ...page, items: [...merged.values()].filter(item => matchesFilter(item,filter)), nextCursor: cursor ? page.nextCursor : old.nextCursor };
+        inbox = { ...page, items: [...merged.values()].filter(item => !missing.has(inboxKey(item)) && matchesFilter(item,filter)), nextCursor: cursor ? page.nextCursor : old.nextCursor };
       }
       this.show({ inbox, counts: page.counts, inboxStatus: 'ready', loadingMore: false });
     } catch (error) { if (this.valid(revision) && request === this.listRevision && !this.failed(error)) this.show({ inboxStatus: cursor || quiet && old ? 'ready' : 'error', inboxError: true, loadingMore: false }); }
@@ -208,7 +231,11 @@ export class MessagesCoordinator {
           detail = { ...fresh, ownId, status: 'ready', header, messages: mergeMessages([],page.items), cursor: page.nextCursor, members };
         }
       }
-      if (this.valid(revision) && request === this.detailRevision && this.focused === key) this.show({ detail });
+      if (this.valid(revision) && request === this.detailRevision && this.focused === key) {
+        const resolved = this.accessLoss?.revision === revision && this.accessLoss.key === key;
+        if (resolved) this.accessLoss = null;
+        this.show({ detail, ...(resolved && this.snapshot.notice === accessLossNotice ? { notice: null } : {}) });
+      }
     } catch (error) {
       if (this.valid(revision) && request === this.detailRevision && !this.failed(error)) this.show({ detail: older && previous ? { ...previous, loadingMore: false, error: 'Не удалось загрузить историю' } : { ...fresh, status: 'error', error: 'Переписка недоступна. Попробуйте обновить.' } });
     } finally { this.endRead('detail'); }

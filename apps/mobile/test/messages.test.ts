@@ -79,11 +79,13 @@ test('private access loss clears DTOs and pending ownership, while moderation/ra
   assert.deepEqual(owner.getSnapshot().drafts,{}); assert.deepEqual(owner.getSnapshot().pending,{});
   assert.equal(owner.getSnapshot().inbox,null); assert.equal(owner.getSnapshot().counts,null);
   assert.match(owner.getSnapshot().detail?.error ?? '',/Доступ/);
+  assert.match(owner.getSnapshot().notice ?? '',/Доступ/);
   // Same mounted route's existing refresh callback must make a new authorized read.
   let recovered=0;
   port.direct=async () => { recovered++; return {...header,version:8}; };
   await owner.loadDetail(resource);
   assert.equal(recovered,1); assert.equal(owner.getSnapshot().detail?.status,'ready');
+  assert.equal(owner.getSnapshot().notice,null);
   assert.equal(owner.getSnapshot().detail?.header?.version,8); assert.deepEqual(owner.getSnapshot().drafts,{});
   focus(); assert.equal(time.size(),0);
   const nextFocus=owner.leaseFocus(resource); await tick();
@@ -92,7 +94,12 @@ test('private access loss clears DTOs and pending ownership, while moderation/ra
   const stale=deferred<Conversation>(); port.direct=async () => stale.promise;
   const recovering=owner.loadDetail(resource); await tick();
   owner.setActor({...actor,actorId:'internal-b',sessionId:'new-session',generation:2});
+  // A fresh actor's denial must survive the previous actor's late success.
+  port.inbox=async () => { throw new MessagesError('private',404); };
+  await owner.loadInbox();
+  const newActorNotice=owner.getSnapshot().notice; assert.match(newActorNotice ?? '',/Доступ/);
   stale.resolve(header); await recovering;
+  assert.equal(owner.getSnapshot().notice,newActorNotice);
   assert.equal(owner.getSnapshot().detail,null); assert.equal(owner.getSnapshot().inbox,null);
   assert.deepEqual(owner.getSnapshot().drafts,{}); assert.deepEqual(owner.getSnapshot().pending,{});
   nextFocus(); root(); assert.equal(time.size(),0);
@@ -227,19 +234,102 @@ test('quiet first-page polling reconciles identities without dropping older page
   assert.equal(owner.getSnapshot().inbox?.nextCursor,null); assert.deepEqual(sent,[]);
   focus(); root(); assert.equal(time.size(),0);
 });
-for (const filter of ['unread','attention'] as const) test(`quiet ${filter} updates remove only known nonmatching identities; explicit refresh resets`, async () => {
-  const request={...page.items[0]!,kind:'dm_request' as const,id:'changed'};
-  const older={...page.items[3]!,id:'older'};
-  const updated={...request,kind:'dm' as const,attention:false,unreadCount:0};
-  let calls=0;
-  const {owner}=setup({inbox:async(_filter,cursor)=>{
-    if (cursor) return {...page,items:[older],nextCursor:'keep-boundary'};
-    calls++; return calls===1 ? {...page,items:[request],nextCursor:'older-page'} : {...page,items:[updated],nextCursor:'new-boundary'};
-  }});
-  await owner.loadInbox(filter); await owner.loadInbox(filter,'older-page');
-  await owner.loadInbox(filter,undefined,true);
-  assert.deepEqual(owner.getSnapshot().inbox?.items,[older]); assert.equal(owner.getSnapshot().filter,filter);
-  assert.equal(owner.getSnapshot().inbox?.nextCursor,'keep-boundary');
+for (const filter of ['unread','attention'] as const) test(`quiet ${filter} reconciles actual server omission across all pages and retains the loaded cursor`, async () => {
+  const time=fakeClock();
+  const changed={...page.items[1]!,id:'changed',conversationId:'changed'};
+  const older=[1,2,3,4].map(n=>({...changed,id:'older-'+n,conversationId:'older-'+n}));
+  const fresh={...changed,id:'fresh',conversationId:'fresh'};
+  const updated={...changed,kind:'dm' as const,attention:false,unreadCount:0};
+  let rows=[changed,...older];
+  const queries: [string,string|undefined][]=[];
+  const {owner,sent}=setup({inbox:async(selected,cursor)=>{
+    queries.push([selected,cursor]);
+    // Like the SQL endpoint: filter BEFORE pagination, never send a
+    // nonmatching row in an unread/attention response. Cursors mark coverage.
+    const matching=rows.filter(row=>selected==='all' || (selected==='unread' ? row.unreadCount>0 : row.attention));
+    const start=cursor ? matching.findIndex(row=>`${selected}:${row.id}`===cursor)+1 : 0;
+    assert.ok(!cursor || start>0,'cursor still denotes the loaded boundary');
+    const items=matching.slice(start,start+2);
+    return {...page,items,nextCursor:start+2<matching.length ? `${selected}:${items.at(-1)!.id}` : null};
+  }},time.clock);
+  const root=owner.mount();
+  await owner.loadInbox(filter);
+  const focus=owner.leaseFocus('inbox'); await tick();
+  await owner.loadInbox(filter,`${filter}:older-1`);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[changed,...older.slice(0,3)]);
+  const boundary=`${filter}:older-3`;
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,boundary);
+  owner.draft(resource,'unsent');
+  // The changed row is omitted from the filtered response and lies beyond
+  // four all-filter pages; still-current older rows are outside page one too.
+  const fillers=Array.from({length:9},(_,n)=>({...updated,id:'filler-'+n,conversationId:'filler-'+n}));
+  rows=[fresh,...fillers,updated,...older];
+  queries.length=0;
+  await time.advance(15000);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[fresh,...older.slice(0,3)]);
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,boundary);
+  assert.ok(queries.filter(([f])=>f==='all').length>4);
+  assert.deepEqual(queries[0],[filter,undefined]);
+  assert.equal(owner.getSnapshot().drafts['direct:thread-a'],'unsent');
+  await owner.loadInbox(filter,boundary);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[fresh,...older]);
+  assert.equal(new Set(owner.getSnapshot().inbox?.items.map(row=>row.id)).size,5);
+  assert.equal(owner.getSnapshot().inbox?.nextCursor,null);
+  // A genuinely revoked row can be removed only after all-filter exhaustion.
+  rows=rows.filter(row=>row.id!=='older-2');
+  await time.advance(15000);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[fresh,older[0],older[2],older[3]]);
   await owner.loadInbox('all');
-  assert.deepEqual(owner.getSnapshot().inbox?.items,[updated]); assert.equal(owner.getSnapshot().inbox?.nextCursor,'new-boundary');
+  assert.deepEqual(owner.getSnapshot().inbox?.items,rows.slice(0,2));
+  assert.deepEqual(sent,[]); focus(); root(); assert.equal(time.size(),0);
+});
+
+test('authorized detail recovery preserves unrelated and UNKNOWN notices', async () => {
+  const {owner,port}=setup({send:async()=>{throw new MessagesError('business',429);}});
+  owner.focus(resource); await tick();
+  port.direct=async()=>{throw new MessagesError('private',404);};
+  await owner.loadDetail(resource);
+  const denial=owner.getSnapshot().notice; assert.match(denial ?? '',/Доступ/);
+  port.direct=async()=>header;
+  const other={kind:'direct',id:'other-thread'} as const;
+  owner.focus(other); await tick();
+  assert.equal(owner.getSnapshot().notice,denial,'another route cannot resolve this access loss');
+  owner.draft(other,'keep'); await owner.act(other,'send');
+  const unrelated=owner.getSnapshot().notice; assert.match(unrelated ?? '',/Слишком часто/);
+  owner.focus(resource); await tick();
+  assert.equal(owner.getSnapshot().detail?.status,'ready'); assert.equal(owner.getSnapshot().notice,unrelated);
+  port.send=async()=>{throw new MessagesError('network');};
+  owner.draft(resource,'keep'); await owner.act(resource,'send');
+  const unknown=owner.getSnapshot().notice; assert.match(unknown ?? '',/неизвестен/);
+  await owner.loadDetail(resource);
+  assert.equal(owner.getSnapshot().notice,unknown); assert.equal(owner.getSnapshot().pending['direct:thread-a']?.state,'unknown');
+});
+
+test('all-filter reconciliation coalesces reads, fences background results and fails private without publishing DTOs', async () => {
+  const gate=deferred<InboxPage>(); let allCalls=0, changed=false;
+  const row=page.items[0]!;
+  const {owner,port}=setup({inbox:async(filter)=>{
+    if (filter==='all') { allCalls++; return gate.promise; }
+    return {...page,items:changed ? [] : [row]};
+  }});
+  await owner.loadInbox('unread'); changed=true;
+  const refresh=owner.loadInbox('unread',undefined,true); await tick();
+  await owner.loadInbox('unread',undefined,true); assert.equal(allCalls,1);
+  owner.setForeground(false);
+  gate.resolve({...page,items:[],nextCursor:'unscanned'}); await refresh;
+  assert.equal(allCalls,1); assert.deepEqual(owner.getSnapshot().inbox?.items,[row]);
+  owner.setForeground(true);
+  // An invalid cursor cycle is incomplete coverage, never proof of deletion.
+  let cyclePages=0;
+  port.inbox=async(filter)=>{
+    if (filter==='all') { cyclePages++; return {...page,items:[],nextCursor:'repeated'}; }
+    return {...page,items:[]};
+  };
+  await owner.loadInbox('unread',undefined,true);
+  assert.equal(cyclePages,2); assert.equal(owner.getSnapshot().inboxError,true);
+  assert.deepEqual(owner.getSnapshot().inbox?.items,[row]);
+  port.inbox=async(filter)=>{ if(filter==='all') throw new MessagesError('private',403); return {...page,items:[]}; };
+  await owner.loadInbox('unread',undefined,true);
+  assert.equal(owner.getSnapshot().inbox,null); assert.equal(owner.getSnapshot().counts,null);
+  assert.match(owner.getSnapshot().notice ?? '',/Доступ/);
 });
