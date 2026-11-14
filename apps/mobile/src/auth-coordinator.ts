@@ -1,3 +1,5 @@
+import { PlayersCoordinator, PlayersError } from './players.ts';
+import { publicApi, PublicApiError } from './public-api.ts';
 import { ParticipationCoordinator, ParticipationError, sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
 import type { NativeMe } from '@gobadminton/contracts/native-auth';
@@ -29,6 +31,7 @@ export class AuthCoordinator {
   private writable = true;
   private starting: Promise<{ url: string; generation: string } | null> | null = null;
   private snapshot: AuthSnapshot = { status: 'hydrating', me: null, sessions: [], returnPath: null, notice: null };
+  readonly players = new PlayersCoordinator();
   readonly participation: ParticipationCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
@@ -72,6 +75,21 @@ export class AuthCoordinator {
       if (this.participation.getSnapshot().actor?.generation === this.epoch) this.epoch++;
       this.participation.setActor(null);
     }
+    const actor = this.participation.getSnapshot().actor;
+    if (this.snapshot.status === 'authenticated' && actor) {
+      this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
+        list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
+        detail: id => this.participationRead(access => this.deps.api.player(access, id), actor),
+      });
+    } else if (this.snapshot.status === 'guest' && this.snapshot.notice === null) {
+      const publicRead = async <T>(work: Promise<T>): Promise<T> => {
+        try { return await work; } catch (error) {
+          if (error instanceof PublicApiError) throw new PlayersError(error.kind, error.status);
+          throw error;
+        }
+      };
+      this.players.setScope('guest', { list: (filters, cursor) => publicRead(publicApi.players(filters, cursor)), detail: id => publicRead(publicApi.player(id)) });
+    } else this.players.setScope(null, null);
     this.listeners.forEach(listener => listener());
   }
   private check(epoch: number) { if (epoch !== this.epoch) throw new NativeAuthError('stale'); }

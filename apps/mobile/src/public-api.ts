@@ -1,3 +1,5 @@
+import { parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
+import type { PlayerFilters } from './players.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
 import { futureItems } from './upcoming.ts';
 
@@ -99,6 +101,12 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
     }
   }
   return {
+    async players(filters: PlayerFilters, cursor?: string, signal?: AbortSignal) {
+      return parsePlayerPage(await get(`/players?${playerQuery(filters, cursor)}`, signal));
+    },
+    async player(id: string, signal?: AbortSignal) {
+      return parsePlayer(await get(`/players/${encodeURIComponent(id)}`, signal));
+    },
     async meta(signal?: AbortSignal) {
       const row = object(await get('/meta', signal));
       if (!text(row.apiVersion)) throw new PublicApiError('invalid');

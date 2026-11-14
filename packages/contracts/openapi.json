@@ -2695,7 +2695,15 @@
         "tags": [
           "Directory"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "summary": "Public directory page of currently visible eligible active projections; authenticated viewers apply self/block filters; no totals",
         "parameters": [
           {
@@ -2770,8 +2778,18 @@
           },
           "422": {
             "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Optional browser cookie or explicitly supplied native bearer principal. Explicit Authorization is validated fail closed: malformed, duplicate or revoked bearer returns 401; mixed cookie and bearer returns 403; disabled native client returns 404. No anonymous fallback. Existing active-account, visibility, bilateral block and contact projection rules apply unchanged. Responses are no-store."
       }
     },
     "/players/{publicPlayerId}": {
@@ -2780,7 +2798,15 @@
         "tags": [
           "Directory"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "summary": "Public approved directory projection or uniform 404 RESOURCE_UNAVAILABLE",
         "parameters": [
           {
@@ -2806,8 +2832,18 @@
           },
           "404": {
             "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Optional browser cookie or explicitly supplied native bearer principal. Explicit Authorization is validated fail closed: malformed, duplicate or revoked bearer returns 401; mixed cookie and bearer returns 403; disabled native client returns 404. No anonymous fallback. Existing active-account, visibility, bilateral block and contact projection rules apply unchanged. Responses are no-store."
       }
     },
     "/me/blocks/{publicPlayerId}": {

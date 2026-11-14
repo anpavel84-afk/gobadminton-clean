@@ -1,3 +1,4 @@
+import { canonicalGamePath } from './native-auth-protocol.ts';
 import type { City } from './public-api.ts';
 export type Preferences = { storyCompleted: boolean; cityId: string | null };
 export const emptyPreferences: Preferences = { storyCompleted: false, cityId: null };
@@ -23,4 +24,15 @@ export function filterCities(cities: City[], query: string): City[] {
 }
 export function selectedCity(cities: City[], id: string | null): City | null {
   return cities.find(city => city.id === id) ?? null;
+}
+
+/** Only the icon entry resolves onboarding. Deep routes and callback retain their own owners. */
+export function hydratedEntryRoute(preferences: Preferences, preferencesHydrated: boolean,
+  auth: { status: string; returnPath: string | null }, pathname = '/'): string | null {
+  if (pathname !== '/' || !preferencesHydrated || auth.status === 'hydrating') return null;
+  if (auth.status === 'signing-in') return '/profile';
+  const returnPath = canonicalGamePath(auth.returnPath);
+  if (returnPath) return returnPath;
+  if (auth.status === 'authenticated') return '/games';
+  return entryRoute(preferences);
 }

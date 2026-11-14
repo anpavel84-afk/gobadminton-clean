@@ -211,3 +211,29 @@ test('private detail fallback stays inside auth core; revoked bearer and late lo
   assert.deepEqual(other.auth.participation.getSnapshot().games, {});
   assert.deepEqual(other.auth.participation.getSnapshot().details, {}); assert.equal(other.auth.getSnapshot().me, null);
 });
+
+test('native player read stays within auth token boundary and logout fences late actor projection', async () => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate();
+  const gate = deferred<unknown>();
+  s.setHandler(async (path, init) => {
+    if (path.startsWith('/players?')) {
+      assert.equal(new Headers(init.headers).get('Authorization'), `Bearer ${credentials.accessToken}`);
+      return gate.promise;
+    }
+    return { ok: true };
+  });
+  const work = s.auth.players.loadList({ cityId: null, name: '', looking: false, trainer: false });
+  await new Promise(resolve => setImmediate(resolve));
+  await s.auth.logout();
+  gate.resolve({ items: [{ publicPlayerId: 'public-old', displayName: 'Old actor', cityId: null, areaKey: null, level: null, bio: null, trainer: false, lookingForGame: false, canRequestContact: true }], nextCursor: null });
+  await work;
+  assert.equal(s.auth.players.getSnapshot().scope, 'guest'); assert.equal(s.auth.players.getSnapshot().list.data, null);
+});
+test('revoked player authority clears actor data without anonymous transport fallback', async () => {
+  const s = setup(sessionEnvelope()); await s.auth.hydrate();
+  s.setHandler(async path => path.startsWith('/players?') ? new Response('{}', { status: 401 }) : { ok: true });
+  const before = s.calls.length;
+  await s.auth.players.loadList({ cityId: null, name: '', looking: false, trainer: false });
+  assert.equal(s.calls.length, before + 1); assert.equal(s.auth.getSnapshot().me, null);
+  assert.equal(s.auth.players.getSnapshot().scope, null); assert.equal(s.auth.players.getSnapshot().list.data, null);
+});

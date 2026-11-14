@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { loadAsync } from 'expo-font';
+import { MainNavigation } from '../src/components/main-navigation.tsx';
 import { AuthProvider } from '../src/auth.tsx';
 import { PreferencesProvider } from '../src/state.tsx';
 import { motionPolicy } from '../src/theme.ts';
@@ -22,7 +23,7 @@ export default function RootLayout() {
   }, [attempt]);
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
-      <AuthProvider><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }} /></AuthProvider>
+      <AuthProvider><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }} /></MainNavigation></AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />
       {font === 'error' && <><Label>Не удалось загрузить шрифт приложения.</Label>

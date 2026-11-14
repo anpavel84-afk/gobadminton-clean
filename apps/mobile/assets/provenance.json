@@ -17,5 +17,11 @@
       "height": 512,
       "limitation": "512px product asset; store and iOS readiness are not verified."
     }
+  },
+  "nativeNavigationPlayersPorts": {
+    "apps/web/src/components/consumer/nav-items.ts": "1b4e59c02a482ba4a9b4605f12ff26c4eb916ecea631668b0633e4630e405afc",
+    "apps/web/src/components/consumer/nav-icon-paths.tsx": "63c8cc2ffec746542a019b2750771111c3b41da02217701212a6f43eb6aa10ee",
+    "apps/web/src/components/consumer/RootNav.tsx": "3a957998a0e594decd72dec76b9fdc82eb4aeaa0b49d0266566ce7da912b8ed5",
+    "apps/web/public/canonical/ce252.svg": "eb8030b25277384d8ad4e6723fd103b3938cd4c642fd605bb4ac27ef606e336c"
   }
 }

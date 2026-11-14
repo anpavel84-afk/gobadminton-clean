@@ -77,3 +77,16 @@ export function cardWhen(game: PublicGame) {
 export function discoveryCityHeading(name: string) {
   return name === 'Москва' ? 'в Москве' : name === 'Санкт-Петербург' ? 'в Санкт-Петербурге' : `· ${name}`;
 }
+
+export function playerLevelLabel(level: { scaleId: string; scaleVersion: number; levelId: string } | null): string {
+  if (!level || level.scaleVersion !== 1) return 'Уровень не указан';
+  if (level.scaleId === 'gb-social-pilot') {
+    return ({ beginner: 'Начинающий', intermediate: 'Средний', advanced: 'Продвинутый' } as Record<string, string>)[level.levelId] ?? 'Уровень не указан';
+  }
+  if (level.scaleId === 'ntrp' && ['2.5', '3.0', '3.5', '4.0'].includes(level.levelId)) return `NTRP ${level.levelId}`;
+  return 'Уровень не указан';
+}
+export function playerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map(p => Array.from(p)[0]).join('').toLocaleUpperCase('ru') || '?';
+}
