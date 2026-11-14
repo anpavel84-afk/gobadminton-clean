@@ -81,7 +81,7 @@ export class AuthCoordinator {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
         detail: id => this.participationRead(access => this.deps.api.player(access, id), actor),
       });
-    } else if (this.snapshot.status === 'guest' && this.snapshot.notice === null) {
+    } else if (this.snapshot.status === 'guest' && (this.snapshot.notice === null || this.snapshot.notice === 'cancelled')) {
       const publicRead = async <T>(work: Promise<T>): Promise<T> => {
         try { return await work; } catch (error) {
           if (error instanceof PublicApiError) throw new PlayersError(error.kind, error.status);

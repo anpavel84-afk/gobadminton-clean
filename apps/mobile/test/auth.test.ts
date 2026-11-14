@@ -137,6 +137,36 @@ test('same-game safe intent survives default-off/unavailable start and cancel; m
   const cancel = setup(envelope); await cancel.auth.hydrate(); await cancel.auth.cancelLogin(); assert.equal(cancel.auth.getSnapshot().returnPath, '/games/same-game');
   assert.equal(await cancel.auth.callback(callback), null); assert.equal(cancel.calls.length, 0);
 });
+test('cancelled login restores usable guest Players list and detail without establishing credentials', async t => {
+  const filters = { cityId: null, name: '', looking: false, trainer: false };
+  const player = { publicPlayerId: 'public-guest', displayName: 'Гость', cityId: null, areaKey: null,
+    level: null, bio: null, trainer: false, lookingForGame: false };
+  const list = t.mock.method(publicApi, 'players', async () => ({ items: [player], nextCursor: null }));
+  const detail = t.mock.method(publicApi, 'player', async () => player);
+  const s = setup();
+  assert.equal(s.auth.players.getSnapshot().scope, null);
+  await s.auth.hydrate();
+  assert.equal(s.auth.players.getSnapshot().scope, 'guest');
+  const login = await s.auth.beginLogin('/games/same-game'); assert.ok(login);
+  const saved = parseSecureEnvelope(s.stored(), now)!;
+  assert.equal(s.auth.getSnapshot().status, 'signing-in'); assert.equal(s.auth.players.getSnapshot().scope, null);
+  await s.auth.cancelLogin(login.generation);
+  assert.equal(s.auth.getSnapshot().status, 'guest'); assert.equal(s.auth.getSnapshot().notice, 'cancelled');
+  assert.equal(s.auth.getSnapshot().returnPath, '/games/same-game');
+  assert.equal(s.auth.getSnapshot().me, null); assert.deepEqual(s.auth.getSnapshot().sessions, []);
+  assert.equal(s.auth.participation.getSnapshot().actor, null);
+  assert.equal(s.auth.players.getSnapshot().scope, 'guest');
+  await s.auth.players.loadList(filters); await s.auth.players.loadDetail(player.publicPlayerId);
+  assert.equal(s.auth.players.getSnapshot().list.status, 'ready');
+  assert.deepEqual(s.auth.players.getSnapshot().list.data, { items: [player], nextCursor: null });
+  assert.equal(s.auth.players.getSnapshot().detail.status, 'ready');
+  assert.deepEqual(s.auth.players.getSnapshot().detail.data, player);
+  assert.equal(list.mock.callCount(), 1); assert.equal(detail.mock.callCount(), 1);
+  assert.equal(await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${saved.pending!.state}`), null);
+  assert.deepEqual(s.calls.map(call => call.path), ['/auth/methods', '/auth/native/transactions']);
+  const secure = parseSecureEnvelope(s.stored(), now)!;
+  assert.equal(secure.pending, undefined); assert.equal(secure.session, undefined);
+});
 test('session authority loss clears identity and sessions; safe API never adds cookie/Origin or calls browser commands', async () => {
   const s = setup(sessionEnvelope()); await s.auth.hydrate(); await s.auth.loadSessions(); assert.equal(s.auth.getSnapshot().sessions.length, 1);
   s.setHandler(async () => new Response('{}', { status: 403 })); await s.auth.validate();

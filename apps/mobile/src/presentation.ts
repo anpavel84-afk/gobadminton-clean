@@ -83,7 +83,8 @@ export function playerLevelLabel(level: { scaleId: string; scaleVersion: number;
   if (level.scaleId === 'gb-social-pilot') {
     return ({ beginner: 'Начинающий', intermediate: 'Средний', advanced: 'Продвинутый' } as Record<string, string>)[level.levelId] ?? 'Уровень не указан';
   }
-  if (level.scaleId === 'ntrp' && ['2.5', '3.0', '3.5', '4.0'].includes(level.levelId)) return `NTRP ${level.levelId}`;
+  // Accepted web level-guide.ts catalog: all 13 canonical NTRP v1 half-steps.
+  if (level.scaleId === 'ntrp' && ['1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0', '5.5', '6.0', '6.5', '7.0'].includes(level.levelId)) return `NTRP ${level.levelId}`;
   return 'Уровень не указан';
 }
 export function playerInitials(name: string): string {

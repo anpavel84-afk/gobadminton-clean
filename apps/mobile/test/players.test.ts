@@ -24,6 +24,22 @@ test('player projection strips private fields, validates real shape and never la
   assert.equal(playerInitials(player.displayName), 'АИ');
   assert.deepEqual(parsePlayerPage({ items: [], nextCursor: null }), { items: [], nextCursor: null });
 });
+test('player level labels cover the full canonical NTRP v1 catalog and preserve pilot labels', () => {
+  for (const levelId of ['1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0', '5.5', '6.0', '6.5', '7.0']) {
+    const projected = parsePlayer({ ...player, level: { scaleId: 'ntrp', scaleVersion: 1, levelId, provenance: 'self_declared' } });
+    assert.equal(playerLevelLabel(projected.level), `NTRP ${levelId}`, levelId);
+    assert.equal(playerLevelLabel({ scaleId: 'other', scaleVersion: 1, levelId }), 'Уровень не указан');
+    assert.equal(playerLevelLabel({ scaleId: 'ntrp', scaleVersion: 2, levelId }), 'Уровень не указан');
+  }
+  for (const levelId of ['', '0.5', '7.5', '8.0', '-1.0', '3.2', '3.50', ' 3.5 ', '3,5', '3.5junk', 'NaN', 'Infinity', 'beginner']) {
+    assert.equal(playerLevelLabel({ scaleId: 'ntrp', scaleVersion: 1, levelId }), 'Уровень не указан', levelId);
+  }
+  for (const [levelId, label] of [['beginner', 'Начинающий'], ['intermediate', 'Средний'], ['advanced', 'Продвинутый']]) {
+    assert.equal(playerLevelLabel({ scaleId: 'gb-social-pilot', scaleVersion: 1, levelId: levelId! }), label);
+  }
+  assert.equal(playerLevelLabel({ scaleId: 'gb-social-pilot', scaleVersion: 1, levelId: 'unknown' }), 'Уровень не указан');
+  assert.equal(playerLevelLabel(null), 'Уровень не указан');
+});
 test('media permits only existing upload/provider authorities, rejects authority tricks and preserves initials fallback', () => {
   const hash = 'a'.repeat(64);
   assert.equal(playerMediaUrl(`/v1/media/avatars/${hash}.png`, 'avatar'), `https://dev.gobadminton.ru/v1/media/avatars/${hash}.png`);
@@ -34,6 +50,21 @@ test('media permits only existing upload/provider authorities, rejects authority
     'https://avatars.yandex.net/%0a', 'https://%61vatars.yandex.net/a', '//avatars.yandex.net/a', 'file:///photo', 'https://userapi.com/a']) assert.equal(playerMediaUrl(url, 'avatar'), null);
   assert.equal(playerMediaUrl('https://avatars.yandex.net/a', 'cover'), null);
   assert.equal(playerInitials('  '), '?');
+});
+test('provider media rejects exact raw and decoded control ranges without rejecting safe Unicode or encoded spaces', () => {
+  const base = 'https://avatars.yandex.net/';
+  for (let point = 0; point <= 0x9f; point++) {
+    if (point > 0x20 && point < 0x7f) continue;
+    assert.equal(playerMediaUrl(`${base}a${String.fromCodePoint(point)}b`, 'avatar'), null, `raw ${point}`);
+    const encoded = encodeURIComponent(String.fromCodePoint(point));
+    assert.equal(playerMediaUrl(`${base}a${encoded}b`, 'avatar'), point === 0x20 ? `${base}a%20b` : null, `encoded ${point}`);
+  }
+  for (const suffix of ['a\\b', 'a%5Cb', 'a\ud800b', 'a\udfffb', '%ED%A0%80', '%']) {
+    assert.equal(playerMediaUrl(base + suffix, 'avatar'), null);
+  }
+  for (const suffix of ['a!b', 'a~b', 'a\u00a0b', 'a😀b']) {
+    assert.equal(playerMediaUrl(base + suffix, 'avatar'), new URL(base + suffix).href);
+  }
 });
 test('cursor requests encode real filters without a fabricated city; append replaces duplicate projections', () => {
   const q = new URLSearchParams(playerQuery({ ...filters, name: '  Анна & И  ', trainer: true, looking: true }, 'cursor&next'));
