@@ -168,7 +168,8 @@ run("bounded native participation principal opt-in", () => {
       expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { authorization } })).statusCode).toBe(401);
     }
     expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { ...bearer(player), cookie: player.cookie } })).statusCode).toBe(403);
-    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { authorization: [`Bearer ${player.accessToken}`, `Bearer ${player.accessToken}`] } })).statusCode).toBe(401);
+    // The case-insensitive indexed header name supports an array representing repeated Authorization fields.
+    expect((await app.inject({ url: `/v1/games/${g.id}`, headers: { Authorization: [`Bearer ${player.accessToken}`, `Bearer ${player.accessToken}`] } })).statusCode).toBe(401);
     expect((await app.inject({ url: "/v1/games", headers: bearer(player) })).statusCode).toBe(401);
     expect((await app.inject({ url: `/v1/games/map?cityId=${MOSCOW_CITY_ID}`, headers: bearer(player) })).statusCode).toBe(401);
     expect((await disabledApp.inject({ url: `/v1/games/${g.id}`, headers: bearer(player) })).statusCode).toBe(404);
