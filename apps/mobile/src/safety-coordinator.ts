@@ -5,6 +5,11 @@ import type { DirectMessage } from './messages.ts';
 import { parseSafetyReceipt, reportable, reportDetail, REPORT_REASONS, SafetyError, safetyWire } from './safety.ts';
 import type { SafetyContext, SafetyPacket, ReportReason, ReportBody } from './safety.ts';
 
+// Route input is untrusted; invalid links must never throw from a focus effect.
+export function safetyPeerId(value: unknown): string | null {
+  try { return messageId(value); } catch { return null; }
+}
+
 type Dialog = 'block' | 'unblock' | 'player' | 'message' | null;
 type Command = { packet: SafetyPacket; status: 'sending' | 'unknown' };
 type Snapshot = { actor: Actor | null; context: SafetyContext | null; viewGeneration: number; dialog: Dialog;
@@ -35,12 +40,13 @@ export class SafetyCoordinator {
     if (saved) this.show({ context: saved.context, dialog: saved.dialog, reason: saved.reason, detail: saved.detail, selected: null, consent: false,
       lastBlocks: saved.lastBlocks, lastNames: saved.lastNames, ...(saved.command ? { command: { packet: saved.command.packet, status: 'unknown' }, notice: unknown } : {}) });
     else this.show({});
-    if (actor && saved) for (const [peer, blocked] of Object.entries(saved.lastBlocks)) if (blocked) this.port.verified(peer, true, { peerId: peer, name: '' });
+    // Receipts are history only. Current peer fences belong to verified actions in
+    // the current authority; reopening after reauth relies on existing server reads.
   }
   forget = () => { this.inFlight = null; this.quarantine = null; this.snapshot = empty(null, ++this.generation); this.show({}); };
   open = (context: SafetyContext) => {
     if (!this.snapshot.actor) return;
-    messageId(context.peerId); if (context.conversationId) messageId(context.conversationId);
+    if (!safetyPeerId(context.peerId) || context.conversationId !== undefined && !safetyPeerId(context.conversationId)) return;
     // setActor restores context/form only for the verified same owner. Its focus reopen
     // keeps that form, but always fences the prior view and requires fresh message sharing.
     const retainForm = sameContext(this.snapshot.context, context);

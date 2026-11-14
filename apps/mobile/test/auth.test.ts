@@ -667,7 +667,9 @@ test('root verified block immediately fences contact/direct writes and retains b
     if (path.startsWith('/players/')) return blocked ? new Response('{}',{status:404}) : player;
     if (path.startsWith('/players?')) return {items:blocked ? [{...player,publicPlayerId:'other'}] : [player,{...player,publicPlayerId:'other'}],nextCursor:null};
     if (path === '/conversations/requests' || path === '/conversations/thread/messages' && init.method === 'POST') throw new Error('uncertain');
-    if (path === '/conversations/thread') return header;
+    if (path === '/conversations/thread') return blocked ? { ...header, version: 2, requestState: 'closed', unreadCount: 0 } : header;
+    if (path === '/me/inbox/counts') return { pendingRequestCount: 0, pendingInvitationCount: 0, dmUnread: blocked ? 0 : 1, gameChatUnread: 0 };
+    if (path.startsWith('/me/inbox?')) return { items: [], nextCursor: null, counts: { pendingRequestCount: 0, pendingInvitationCount: 0, dmUnread: blocked ? 0 : 1, gameChatUnread: 0 } };
     if (path.startsWith('/conversations/thread/messages?')) return {items:[m],nextCursor:null};
     if (path === '/me/social-profile') return {publicPlayerId:'own'};
     if (path === '/me/blocks/peer') { blocked=true; return {publicPlayerId:'peer',blocked:true}; }
@@ -688,7 +690,85 @@ test('root verified block immediately fences contact/direct writes and retains b
   const count=s.calls.filter(c => c.init.method === 'POST').length; await s.auth.contact.reconcile(); await s.auth.messages.retry(r);
   assert.equal(s.calls.filter(c => c.init.method === 'POST').length,count);
   await new Promise(done => setImmediate(done));
+  assert.equal(s.auth.messages.getSnapshot().detail?.header?.version, 2);
+  assert.equal((s.auth.messages.getSnapshot().detail?.header as { requestState: string }).requestState, 'closed');
+  assert.equal(s.auth.messages.getSnapshot().counts?.dmUnread, 0);
+  assert.deepEqual(s.auth.messages.getSnapshot().inbox?.items, []);
+  assert.ok(s.calls.some(c => c.path.startsWith('/me/inbox?') && c.init.method === 'GET'));
+  assert.ok(s.calls.some(c => c.path === '/me/inbox/counts' && c.init.method === 'GET'));
+  assert.strictEqual(s.auth.messages.getSnapshot().pending['direct:thread']?.packet, message);
+  assert.equal(s.calls.filter(c => c.init.method === 'POST').length, count);
   assert.deepEqual(s.auth.players.getSnapshot().list.data?.items.map(p => p.publicPlayerId),['other']);
   assert.equal(s.auth.players.getSnapshot().detail.status,'error');
   assert.strictEqual(s.auth.profile.getSnapshot(),profile); assert.strictEqual(s.auth.participation.getSnapshot(),participation); assert.strictEqual(s.auth.gameManagement.getSnapshot(),management);
+});
+
+test('cold startup with no safety receipt or DM and profile 404 still permits an explicit idempotent unblock without inferring state', async () => {
+  const s = setup(sessionEnvelope());
+  const peer = 'ec05b131-750e-4b91-a1a1-425373c3fba0';
+  s.setHandler(async (path, init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === `/players/${peer}`) return new Response('{}', { status: 404 });
+    if (path === `/me/blocks/${peer}`) { assert.equal(init.method, 'DELETE'); return { publicPlayerId: peer, blocked: false }; }
+    throw new Error(`Unexpected route: ${path}`);
+  });
+  await s.auth.hydrate(); await s.auth.players.loadDetail(peer);
+  assert.equal(s.auth.players.getSnapshot().detail.status, 'error');
+  const owner = s.auth.safety;
+  assert.deepEqual(owner.getSnapshot().lastBlocks, {}); assert.equal(s.auth.messages.getSnapshot().detail, null);
+  // The validated profile route mounts this neutral context regardless of profile-read outcome.
+  owner.open({ peerId: peer, name: 'Игрок' });
+  const state = owner.getSnapshot();
+  assert.equal(s.calls.filter(c => c.init.method !== 'GET' && !c.path.startsWith('/auth/')).length, 0);
+  owner.choose('unblock', state.viewGeneration, state.actor);
+  assert.equal(s.calls.filter(c => c.path.startsWith('/me/blocks/')).length, 0);
+  await owner.submit([], state.viewGeneration, state.actor);
+  const writes = s.calls.filter(c => c.path.startsWith('/me/blocks/'));
+  assert.equal(writes.length, 1); assert.equal(writes[0]!.init.method, 'DELETE'); assert.equal(writes[0]!.init.body, '{}');
+  assert.ok((writes[0]!.init.headers as Record<string,string>)['Idempotency-Key']);
+  assert.equal(owner.getSnapshot().lastBlocks[peer], false);
+});
+
+test('prior block then external server unblock and same-owner reauth retains history but uses current server contact/direct authority', async () => {
+  const s = setup(sessionEnvelope()); let blocked = false;
+  const player = { publicPlayerId: 'peer', displayName: 'Игрок', cityId: null, areaKey: null, bio: null, level: null, trainer: false, lookingForGame: false, canRequestContact: true };
+  const header = { id: 'thread', kind: 'direct', requestState: 'accepted', version: 2, peer: { publicPlayerId: 'peer', displayName: 'Игрок' }, role: 'initiator', lastMessageSeq: '0', readThroughSeq: '0', unreadCount: 0 };
+  const server = async (path: string): Promise<unknown> => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === '/me/blocks/peer') { blocked = true; return { publicPlayerId: 'peer', blocked: true }; }
+    if (path === '/players/peer') return blocked ? new Response('{}', { status: 404 }) : player;
+    if (path.startsWith('/me/contact-state?')) return { targetPublicPlayerId: 'peer', state: 'none', canRequestContact: !blocked };
+    if (path === '/me/social-profile') return { publicPlayerId: 'own' };
+    if (path === '/conversations/thread') return header;
+    if (path.startsWith('/conversations/thread/messages?')) return { items: [], nextCursor: null };
+    if (path === '/conversations/thread/messages') throw new Error('deliberate UNKNOWN');
+    throw new Error(`Unexpected route: ${path}`);
+  };
+  s.setHandler(server); await s.auth.hydrate();
+  const safety = s.auth.safety; safety.open({ peerId: 'peer', name: 'Игрок' }); let state = safety.getSnapshot();
+  safety.choose('block', state.viewGeneration, state.actor); await safety.submit([], state.viewGeneration, state.actor);
+  assert.equal(s.auth.messages.isPeerSafetyHeld('peer'), true); assert.equal(s.auth.contact.mayDispatchSafety('peer'), false);
+  assert.equal(safety.getSnapshot().lastBlocks.peer, true);
+  blocked = false; // A later authorized server action; never inferred from local receipt history.
+  s.setHandler(async () => { throw new NativeAuthError('network'); }); await s.auth.validate();
+  assert.equal(safety.getSnapshot().actor, null);
+  s.setHandler(async path => path === '/auth/methods' ? { items: [{ method: 'vk', type: 'oauth', available: true }] }
+    : { transactionId: token('t'), expiresAt: new Date(now + 600000).toISOString(), browserStartUrl: `https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}` });
+  await s.auth.beginLogin('/players/peer'); const login = parseSecureEnvelope(s.stored(), now)!.pending!;
+  s.setHandler(async path => path === '/me' ? { ...me, session: { ...me.session, id: 'returned' } } : { ...credentials, sessionId: 'returned' });
+  await s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${login.state}`);
+  assert.equal(safety.getSnapshot().lastBlocks.peer, true);
+  assert.equal(s.auth.messages.isPeerSafetyHeld('peer'), false); assert.equal(s.auth.contact.mayDispatchSafety('peer'), true);
+  s.setHandler(server);
+  await s.auth.contact.open('peer'); assert.equal(s.auth.contact.getSnapshot().status, 'ready');
+  const r = { kind: 'direct', id: 'thread' } as const;
+  s.auth.messages.focus(r); await new Promise(done => setImmediate(done));
+  assert.equal(s.auth.messages.getSnapshot().detail?.status, 'ready');
+  s.auth.messages.draft(r, 'Current authority'); await s.auth.messages.act(r, 'send');
+  assert.equal(s.calls.filter(c => c.path === '/conversations/thread/messages' && c.init.method === 'POST').length, 1);
+  assert.equal(s.calls.filter(c => c.path === '/me/blocks/peer').length, 1);
+  assert.equal(safety.getSnapshot().lastBlocks.peer, true); state = safety.getSnapshot();
+  assert.equal(state.command, undefined);
 });

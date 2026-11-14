@@ -117,8 +117,7 @@ export function NativeMessageThread({ resource }: { resource: MessageResource })
       </View>{notice}<TextButton title="Обновить" onPress={() => { void owner.loadDetail(resource); }} />
     </Page>;
   }
-  const safety = auth.safety.getSnapshot();
-  const canSend = direct ? direct.requestState === 'accepted' && safety.lastBlocks[direct.peer.publicPlayerId] !== true : chat?.lifecycleState === 'active';
+  const canSend = direct ? direct.requestState === 'accepted' && !owner.isPeerSafetyHeld(direct.peer.publicPlayerId) : chat?.lifecycleState === 'active';
   return <ScreenFrame keyboard header={<MessageHeader name={title} subtitle={direct ? requestCopy[direct.requestState] : chat?.lifecycleState === 'active' ? 'Участники игры' : 'Чат закрыт'} peer={direct?.peer} />}>
     {direct && <NativeSafety peerId={direct.peer.publicPlayerId} name={direct.peer.displayName} conversationId={direct.id} messages={detail.messages} />}
     {chat && <><TextButton title={showMembers ? 'Скрыть участников' : `Участники (${detail.members.length})`} onPress={() => setShowMembers(v => !v)} />

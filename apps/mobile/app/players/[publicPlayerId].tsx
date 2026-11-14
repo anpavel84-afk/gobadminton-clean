@@ -1,3 +1,4 @@
+import { safetyPeerId } from '../../src/safety-coordinator.ts';
 import { NativeSafety } from '../../src/components/safety.tsx';
 import { NativeContactAction } from '../../src/components/contact-editor.tsx';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
@@ -10,10 +11,9 @@ import { ErrorState, Header, Label, Loading, Page, TextButton } from '../../src/
 
 export default function PlayerDetail() {
   const params = useLocalSearchParams<{ publicPlayerId: string }>(), router = useRouter();
-  const id = typeof params.publicPlayerId === 'string' ? params.publicPlayerId : '';
+  const id = safetyPeerId(params.publicPlayerId);
   const auth = useAuth(), coordinator = auth.players;
   const snapshot = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
-  const safety = useSyncExternalStore(auth.safety.subscribe, auth.safety.getSnapshot, auth.safety.getSnapshot);
   const citiesTask = useCallback((signal: AbortSignal) => publicApi.cities(signal), []);
   const cities = useResource('cities', citiesTask);
   useEffect(() => { if (id && snapshot.scope) void coordinator.loadDetail(id); }, [coordinator, id, snapshot.scope]);
@@ -25,7 +25,7 @@ export default function PlayerDetail() {
       ? <><Label>Профиль для текущей сессии недоступен. Проверьте вход.</Label><TextButton title="Профиль" onPress={() => router.push('/profile')} /></>
       : detail?.status === 'error' ? <ErrorState error={detail.error} retry={() => { void coordinator.loadDetail(id); }} />
       : detail?.data ? <><PlayerProfile key={`${snapshot.scope}:${id}:${detail.data.cover?.uploadedUrl}`} player={detail.data} city={cities.state.data?.find(c => c.id === detail.data?.cityId)?.nameRu} /><NativeContactAction target={id} /></> : null}
-    {id && auth.status === 'authenticated' && (detail?.data || safety.lastBlocks[id] !== undefined || safety.command?.packet.context.peerId === id) &&
-      <NativeSafety peerId={id} name={detail?.data?.displayName ?? safety.lastNames[id] ?? (safety.context?.peerId === id ? safety.context.name : safety.command?.packet.context.peerId === id ? safety.command.packet.context.name : `Игрок ${id}`)} />}
+    {id && auth.status === 'authenticated' &&
+      <NativeSafety peerId={id} name={detail?.data?.displayName ?? 'Игрок'} />}
   </Page>;
 }

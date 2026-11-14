@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SafetyCoordinator } from '../src/safety-coordinator.ts';
+import { readFileSync } from 'node:fs';
+import { SafetyCoordinator, safetyPeerId } from '../src/safety-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { parseSafetyReceipt, REPORT_REASONS, reportDetail, reportable, SafetyError } from '../src/safety.ts';
 import type { SafetyPacket } from '../src/safety.ts';
@@ -133,4 +134,39 @@ test('navigation quarantines late receipt as UNKNOWN; same-owner authority resto
   const late = deferred<unknown>(); s.handler(async () => late.promise); s.owner.open(context); s.owner.choose('block',s.view(),actor);
   const old = s.owner.submit([],s.view(),actor); s.owner.forget(); late.resolve({publicPlayerId:'peer',blocked:true}); await old;
   s.owner.setActor(actor); assert.equal(s.owner.getSnapshot().command,undefined); assert.deepEqual(s.owner.getSnapshot().lastBlocks,{}); assert.equal(s.effects.length,0);
+});
+
+test('profile safety has receipt-independent explicit unblock and invalid route focus is inert', async () => {
+  // Source wiring complements the transport regression: Node does not render React Native.
+  const route = readFileSync(new URL('../app/players/[publicPlayerId].tsx', import.meta.url), 'utf8');
+  const controls = readFileSync(new URL('../src/components/safety.tsx', import.meta.url), 'utf8');
+  const thread = readFileSync(new URL('../src/components/messages.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(thread, /lastBlocks/);
+  assert.match(thread, /owner.isPeerSafetyHeld\(direct.peer.publicPlayerId\)/);
+  assert.match(route, /safetyPeerId\(params.publicPlayerId\)/);
+  assert.match(route, /id && auth.status === 'authenticated' &&\s*<NativeSafety/);
+  assert.doesNotMatch(route, /lastBlocks|lastNames|Игрок \$\{id\}/);
+  assert.match(controls, /title="Снять мою блокировку" onPress=\{\(\) => owner.choose\('unblock'/);
+  const s = setup(), before = s.owner.getSnapshot();
+  for (const id of ['', '../peer', 'peer/other', 'x'.repeat(129), ['peer'], undefined]) {
+    assert.equal(safetyPeerId(id), null);
+    assert.doesNotThrow(() => s.owner.open({ peerId: id as string, name: 'Игрок' }));
+    assert.strictEqual(s.owner.getSnapshot(), before);
+  }
+  assert.doesNotThrow(() => s.owner.open({ ...context, conversationId: '../thread' }));
+  assert.strictEqual(s.owner.getSnapshot(), before);
+  assert.equal(safetyPeerId('ec05b131-750e-4b91-a1a1-425373c3fba0'), 'ec05b131-750e-4b91-a1a1-425373c3fba0');
+  assert.equal(s.calls.length, 0);
+});
+
+test('historical block receipt survives same-owner reauth as history without replaying a peer fence', async () => {
+  const s = setup(); s.owner.choose('block', s.view(), actor); await s.owner.submit([], s.view(), actor);
+  assert.equal(s.effects.length, 1); assert.equal(s.owner.getSnapshot().lastBlocks.peer, true);
+  s.owner.setActor(null);
+  const returned = { ...actor, sessionId: 'returned', generation: 2 };
+  s.owner.setActor(returned); s.owner.open(context);
+  assert.equal(s.owner.getSnapshot().lastBlocks.peer, true);
+  assert.equal(s.effects.length, 1); assert.equal(s.calls.length, 1);
+  s.owner.choose('unblock', s.view(), returned); await s.owner.submit([], s.view(), returned);
+  assert.equal(s.effects.length, 2); assert.deepEqual(s.effects[1], ['peer', false, context]);
 });

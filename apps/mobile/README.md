@@ -1,3 +1,57 @@
+# #522 native safety ADDRESS2 · SOURCE_CANDIDATE · PARTIAL
+
+Bounded author repair on supplied C2 `210537db62fad94455ac8b84bd60a778d8aa8d5f`.
+The first independent whole safety QA remains **FAIL** (one P1, two P2), evidence
+SHA-256 `6821f5f535d89ab13d015b3de0af0c622ad113ee7bd2bb79ad672cb3600adea6`.
+This note records an author candidate for focused three-finding/related-delta review,
+not a second whole review, independent QA PASS or release acceptance.
+
+- A validated player URL exposes explicit «Снять мою блокировку» even after cold
+  startup with no local receipt, profile 404 and no DM. The fallback person label is
+  neutral «Игрок»; 404 never proves existence or block state. Opening/confirmation
+  selection does not write; only explicit submission uses the existing DELETE and
+  server rights/idempotency. Invalid route/focus identifiers are rejected safely.
+- Same-owner reauthentication retains lastBlocks only as action history. It never
+  reapplies those receipts as peer fences or current UI send gates. Current verified
+  action fences still apply; reopened profile/contact/direct views use existing
+  authoritative reads. No block-state endpoint or inferred state is introduced.
+  Original UNKNOWN packets and the unsent form/focus restoration fix are retained.
+- Verified safety events grant one bounded GET-only reread of inbox/counts and the
+  exact affected direct detail even while any original message packet is UNKNOWN.
+  Occupied lanes coalesce and then issue a fresh followup; actor/session, view,
+  foreground, peer and request fences reject stale results. Ordinary polling/read
+  HOLD remains. Packets/key/body, drafts and loaded history survive; no automatic
+  resend, inbox deletion, friendship or pending-request restoration is fabricated.
+
+Author-only deterministic owning units: **61 passed, 0 failed/skipped/cancelled**
+(29 auth, 24 messages, 8 safety), including the existing 53 tests and eight added
+regressions. Run with Node 24.21.0:
+`node --experimental-strip-types --test --test-isolation=none apps/mobile/test/safety.test.ts apps/mobile/test/messages.test.ts apps/mobile/test/auth.test.ts`.
+Mock transport exercises actual NativeApi/AuthCoordinator GET/DELETE handling and
+changed message views during UNKNOWN; coordinator tests cover occupied-lane
+followups and stale responses. UI source wiring is checked without React/native
+rendering. These units do not constitute TypeScript, independent QA, device, build,
+CI, DB, smoke or runtime evidence. Dependencies were not resolved or installed.
+
+Both completed normal safety source runs remain retained, including ADDRESS1
+receipt `bb2896f89b7aead0dbf9b0f90d6731400ac2d057f43dc8219f08556972559d15`.
+Prior parent PASS `cc0f8c81b4b0b52713bfa7d320ac23c07423be7a02a6b54a151abde18087dec5`
+(77 native / 8 DB source evidence) is retained, not rerun or relabelled.
+Root manual precheck `be5237f9c37aa51e62a0891c4fd1a6a6f2a356b61e7ab4282f542e02b9bd15a8`
+and protection `ef0b41cb2b41b23500de6592e0f1efc2f36cb45966866ad982de5c15e975c38d`
+remain distinct from independent QA FAIL. Historical contact qualification and
+FAIL/UNKNOWN/cost history remain. Root's fresh mobile-only checks and focused
+independent three-finding/related-delta review are still pending.
+
+Source wrapper remains PARTIAL; full native parity is MANDATORY_NOT_COMPLETE,
+Owner FAIL / S23 FAIL remain, native visual is NOT_VERIFIED, iOS/real OTA unfinished.
+Accepted DEV `53eafa4cd7013993a4be016c5bf87ee209cae4c3` is unchanged. Existing
+code-7 build preparations remain ineligible; no new APK/device/build/source-whole
+PASS is claimed. No GitHub/CI/deploy/PROD/runtime operations were performed.
+Only the nine admitted mobile paths change; API/contracts, fixture, app version,
+dependencies/assets and all other supplied export bytes remain untouched.
+Every earlier README byte follows as an unchanged suffix.
+
 # #522 native safety ADDRESS1 · 2026-11-14 · SOURCE_CANDIDATE
 
 Addresses retained Root manual P2 SAFETY-UNSENT-REAUTH-FOCUS on supplied source
