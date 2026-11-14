@@ -1,3 +1,5 @@
+import { parseContactState, parseContactResult } from './contact.ts';
+import type { ContactPacket } from './contact.ts';
 import { ProfileError, parseOwnProfile } from './profile.ts';
 import type { ProfilePacket } from './profile.ts';
 import { parseCreatorProfile, parsePreferences, parseOwnTrainer } from './game-management.ts';
@@ -60,6 +62,10 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
   }
   const privateMessage = (path: string, access: string, body?: MessageBody, key?: string) => request(path, body === undefined ? 'GET' : 'POST', body, access, key, false, false, true);
   return {
+    contactState: async (access: string, target: string) => parseContactState(await privateMessage(`/me/contact-state?targetPublicPlayerId=${encodeURIComponent(messageId(target))}`, access), target),
+    createContact: async (access: string, packet: ContactPacket) => parseContactResult(await request('/conversations/requests', 'POST', {
+      targetPublicPlayerId: packet.body.targetPublicPlayerId, text: packet.body.text, clientMessageId: packet.body.clientMessageId,
+    }, access, packet.key, false, false, true), packet.body.targetPublicPlayerId),
     ownProfile: async (access: string) => parseOwnProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, false, false, false, true)),
     saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH', {
       expectedVersion: packet.body.expectedVersion, displayName: packet.body.displayName, cityId: packet.body.cityId,

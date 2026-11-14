@@ -3828,6 +3828,14 @@
     "/conversations/requests": {
       "post": {
         "operationId": "createConversationRequest",
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "tags": [
           "Messaging"
         ],
@@ -6432,6 +6440,14 @@
     "/me/contact-state": {
       "get": {
         "operationId": "getContactState",
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ],
         "tags": [
           "Messaging"
         ],

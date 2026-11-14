@@ -252,6 +252,79 @@ run("native Messages · self-migrating isolated database", () => {
     const replay=await app.inject({method:'POST',url:dmUrl+'/messages',headers:bearer(owner,replayKey),payload:replayPayload});
     expect(replay.statusCode).toBe(404); expect(replay.json().code).toBe('RESOURCE_UNAVAILABLE');
   });
+  it('native first contact uses authoritative target, exact replay and global client-message destination/body binding', async () => {
+    const owner=await actor(), player=await actor(), other=await actor();
+    const own=await profile(owner), p=await profile(player), q=await profile(other);
+    const lookup='/v1/me/contact-state?targetPublicPlayerId='+p.publicPlayerId;
+    const state=await app.inject({url:lookup,headers:bearer(owner)});
+    expect(state.statusCode).toBe(200); expect(state.json()).toEqual({state:'none',targetPublicPlayerId:p.publicPlayerId,canRequestContact:true});
+    expect((await app.inject({url:lookup,headers:{cookie:owner.cookie}})).json()).toEqual(state.json());
+    expect((await pool.query('SELECT 1 FROM conversations WHERE initiator_user_id=$1',[owner.id])).rowCount).toBe(0);
+    const url='/v1/conversations/requests', key=randomUUID(), payload={targetPublicPlayerId:p.publicPlayerId,text:'First native contact',clientMessageId:randomUUID()};
+    const created=await app.inject({method:'POST',url,headers:bearer(owner,key),payload}); expect(created.statusCode).toBe(201);
+    const body=created.json();
+    expect(body.conversation).toMatchObject({requestState:'accepted',peer:{publicPlayerId:p.publicPlayerId}});
+    expect(body.receipt).toMatchObject({conversationId:body.conversation.id,seq:'1',outcome:'created'});
+    expect(body.receipt.messageId).toBeTruthy(); expect(Number.isFinite(Date.parse(body.receipt.createdAt))).toBe(true);
+    const replay=await app.inject({method:'POST',url,headers:bearer(owner,key),payload}); expect(replay.statusCode).toBe(201); expect(replay.json()).toEqual(body);
+    const duplicate=await app.inject({method:'POST',url,headers:bearer(owner),payload}); expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json().receipt).toEqual({...body.receipt,outcome:'duplicate'});
+    for (const changed of [{...payload,text:'Changed body'},{...payload,targetPublicPlayerId:q.publicPlayerId},{...payload,clientMessageId:randomUUID()}]) {
+      expect((await app.inject({method:'POST',url,headers:bearer(owner,key),payload:changed})).statusCode).toBe(409);
+    }
+    for (const changed of [{...payload,text:'Changed body'},{...payload,targetPublicPlayerId:q.publicPlayerId}]) {
+      const mismatch=await app.inject({method:'POST',url,headers:bearer(owner),payload:changed});
+      expect(mismatch.statusCode).toBe(409); expect(mismatch.json().code).toBe('CLIENT_MESSAGE_ID_REUSED');
+    }
+    const race=await app.inject({method:'POST',url,headers:bearer(owner),payload:{...payload,clientMessageId:randomUUID()}});
+    expect(race.statusCode).toBe(409); expect(race.json().code).toBe('CONVERSATION_ALREADY_OPEN');
+    expect((await pool.query('SELECT 1 FROM conversations WHERE initiator_user_id=$1',[owner.id])).rowCount).toBe(1);
+    expect((await pool.query('SELECT 1 FROM messages WHERE author_user_id=$1',[owner.id])).rowCount).toBe(1);
+    expect((await app.inject({url:lookup,headers:bearer(owner)})).json()).toMatchObject({state:'accepted',targetPublicPlayerId:p.publicPlayerId,conversationId:body.conversation.id});
+    const reverse=await app.inject({url:'/v1/me/contact-state?targetPublicPlayerId='+own.publicPlayerId,headers:bearer(player)});
+    expect(reverse.json()).toMatchObject({state:'accepted',targetPublicPlayerId:own.publicPlayerId,conversationId:body.conversation.id});
+    expect((await app.inject({url:'/v1/conversations/'+body.conversation.id,headers:bearer(player)})).json().peer.publicPlayerId).toBe(own.publicPlayerId);
+    expect((await app.inject({url:'/v1/conversations/'+body.conversation.id,headers:bearer(other)})).statusCode).toBe(404);
+  });
+  it('native first-contact blocked, ineligible, private and local moderation denials INSERT no conversation/message', async () => {
+    const owner=await actor(), blocked=await actor(), ineligible=await actor(), privatePlayer=await actor(), moderated=await actor();
+    await profile(owner); const b=await profile(blocked), i=await profile(ineligible), hidden=await profile(privatePlayer), m=await profile(moderated);
+    expect((await app.inject({method:'PUT',url:'/v1/me/blocks/'+b.publicPlayerId,headers:browser(owner),payload:{}})).statusCode).toBe(200);
+    expect((await app.inject({method:'PATCH',url:'/v1/me/social-profile',headers:browser(ineligible),payload:{expectedVersion:i.version,socialEligible:false}})).statusCode).toBe(200);
+    expect((await app.inject({method:'PUT',url:'/v1/me/social-profile/visibility',headers:browser(privatePlayer),payload:{directoryVisible:false,consentPolicyVersion:'directory-mvp-v1',expectedVersion:hidden.version}})).statusCode).toBe(200);
+    for (const target of [b.publicPlayerId,i.publicPlayerId,hidden.publicPlayerId]) {
+      expect((await app.inject({url:'/v1/me/contact-state?targetPublicPlayerId='+target,headers:bearer(owner)})).json()).toEqual({state:'unavailable',targetPublicPlayerId:target});
+      const denied=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:bearer(owner),payload:{targetPublicPlayerId:target,text:'Safe fixture',clientMessageId:randomUUID()}});
+      expect(denied.statusCode).toBe(404); expect(denied.json().code).toBe('RESOURCE_UNAVAILABLE');
+    }
+    const rejected=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:bearer(owner),payload:{targetPublicPlayerId:m.publicPlayerId,text:'open javascript:alert(1)',clientMessageId:randomUUID()}});
+    expect(rejected.statusCode).toBe(422); expect(rejected.json().code).toBe('PRIVATE_TEXT_CONTENT_REJECTED');
+    expect((await pool.query('SELECT 1 FROM conversations WHERE initiator_user_id=$1',[owner.id])).rowCount).toBe(0);
+    expect((await pool.query('SELECT 1 FROM messages WHERE author_user_id=$1',[owner.id])).rowCount).toBe(0);
+  });
+  it('both selected contact routes retain invalid/mixed/revoked/disabled transport and cookie mutation Origin/CSRF', async () => {
+    const owner=await actor(), player=await actor(); await profile(owner); const p=await profile(player);
+    const lookup='/v1/me/contact-state?targetPublicPlayerId='+p.publicPlayerId;
+    const payload={targetPublicPlayerId:p.publicPlayerId,text:'Secure first contact',clientMessageId:randomUUID()};
+    const routes=[{method:'GET' as const,url:lookup},{method:'POST' as const,url:'/v1/conversations/requests',payload}];
+    for (const route of routes) {
+      for (const headers of [{}, {authorization:'Basic invalid'}, {authorization:'Bearer invalid'}, {authorization:`Bearer ${'x'.repeat(43)}`},
+        {Authorization:[`Bearer ${owner.accessToken}`,`Bearer ${owner.accessToken}`]}]) {
+        expect((await app.inject({...route,headers})).statusCode).toBe(401);
+      }
+      expect((await app.inject({...route,headers:{...bearer(owner),cookie:owner.cookie}})).statusCode).toBe(403);
+      expect((await disabledApp.inject({...route,headers:bearer(owner)})).statusCode).toBe(404);
+    }
+    const url='/v1/conversations/requests';
+    expect((await app.inject({method:'POST',url,headers:{cookie:owner.cookie,origin,'idempotency-key':randomUUID()},payload})).json().code).toBe('CSRF_REQUIRED');
+    expect((await app.inject({method:'POST',url,headers:{...browser(owner),origin:'https://evil.test'},payload})).json().code).toBe('ORIGIN_REJECTED');
+    expect((await pool.query('SELECT 1 FROM messages WHERE author_user_id=$1',[owner.id])).rowCount).toBe(0);
+    const cookieCreate=await app.inject({method:'POST',url,headers:browser(owner),payload}); expect(cookieCreate.statusCode).toBe(201);
+    expect(cookieCreate.json().conversation.peer.publicPlayerId).toBe(p.publicPlayerId);
+    await app.get(SessionService).revokeSession(owner.sessionId);
+    for (const route of routes) expect((await app.inject({...route,headers:bearer(owner)})).statusCode).toBe(401);
+    expect((await pool.query('SELECT 1 FROM messages WHERE author_user_id=$1',[owner.id])).rowCount).toBe(1);
+  });
   it('malformed/duplicate/mixed/revoked/disabled bearer, cookie Origin/CSRF and neighboring closed routes', async () => {
     const owner=await actor(), player=await actor(); await profile(owner); const p=await profile(player); const dm=await direct(owner,p.publicPlayerId);
     const url=`/v1/conversations/${dm.id}`, payload={kind:'text',text:'Cookie fixture',clientMessageId:randomUUID()};
@@ -262,7 +335,7 @@ run("native Messages · self-migrating isolated database", () => {
     expect((await app.inject({method:'POST',url:url+'/messages',headers:{cookie:owner.cookie,origin,'idempotency-key':randomUUID()},payload})).json().code).toBe('CSRF_REQUIRED');
     expect((await app.inject({method:'POST',url:url+'/messages',headers:{...browser(owner),origin:'https://evil.test'},payload})).json().code).toBe('ORIGIN_REJECTED');
     expect((await app.inject({method:'POST',url:url+'/messages',headers:browser(owner),payload})).statusCode).toBe(201);
-    for(const [method,closed] of [['POST','/v1/conversations/requests'],['POST',url+'/messages/'+randomUUID()+'/hide'],['POST',`/v1/me/inbox/items/dm/${dm.id}/read`],['PATCH','/v1/me/game-preferences'],['POST','/v1/games/'+randomUUID()+'/invitations'],['POST','/v1/invitations/'+randomUUID()+'/revoke']] as const) {
+    for(const [method,closed] of [['POST',url+'/messages/'+randomUUID()+'/hide'],['POST',`/v1/me/inbox/items/dm/${dm.id}/read`],['PATCH','/v1/me/game-preferences'],['POST','/v1/games/'+randomUUID()+'/invitations'],['POST','/v1/invitations/'+randomUUID()+'/revoke']] as const) {
       expect([401,403]).toContain((await app.inject({method,url:closed,headers:bearer(player),payload:{}})).statusCode);
     }
     await app.get(SessionService).revokeSession(player.sessionId);

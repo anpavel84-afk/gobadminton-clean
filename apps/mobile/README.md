@@ -1,3 +1,51 @@
+# #522 CURRENT · native first-contact source candidate
+
+This bounded source slice adds **Написать** on an existing native player profile,
+a composer at `/messages/new/[publicPlayerId]`, explicit **Отправить**, and entry
+into the existing `/messages/direct/[id]` thread. It reuses the accepted WEB
+contact behavior and existing native inbox, conversation parser and thread UI.
+Opening/reopening performs reads only. Authoritative contact state and matching
+peer headers select existing accepted or legacy pending conversations. Ordinary
+directory contact needs no friendship, mutual play interest, Radar proof or game
+context; its exact body is `{targetPublicPlayerId,text,clientMessageId}`.
+
+The separate root ContactCoordinator rechecks contact/player eligibility before
+sending, prevents double taps, and keeps the frozen key/body/clientMessageId and
+original actor on network, timeout, any 5xx, invalid receipt or in-progress UNKNOWN.
+Explicit reconciliation uses that same packet under verified same-owner authority;
+navigation/auth never sends automatically. Existing-conversation 409 races use
+contact/header reads without a replacement message. Generation fences discard old
+responses; logout/account B erase private pending/context. Profile, Participation,
+GameManagement and Messages retain their own command owners and private states.
+
+Only GET `/me/contact-state` and POST `/conversations/requests` gain the existing
+native principal guards and explicit OpenAPI cookieSession/NativeBearer security.
+Cookie Origin/CSRF, service rules, privacy, response projections, API 0.44.0,
+contracts, dependencies and the existing native registry stay intact. The owning
+`native-messages.foundation.test.ts` is extended; its other five closed-neighbor
+tuples and assertions remain exact. Source Android versionCode and the existing
+contract-test literal change only from 5 to 6; versionName remains 0.1.0.
+
+Author source checks: 105 tests passed (8 contact, 21 auth, 17 Messages, 13 Profile,
+14 Participation, 24 GameManagement, 8 native-contract). Exact config/test-literal,
+OpenAPI full-document restoration, guard-only controller changes, unchanged
+closed-neighbor assertions, pinned readonly references and lock were checked.
+These are author checks, not independent QA. The DB fixture is **NOT_RUN** here:
+Root must fully read the actual candidate and run that owning isolated fixture.
+Typecheck/lint are **NOT_RUN**: this export has no installed TypeScript/ESLint or
+project node_modules; no dependency resolution was performed.
+
+This is a first-contact source handoff only. Independent QA, Product CI, DEV
+acceptance, actual build/sign/publication and Owner UAT remain pending. Phone
+keyboard, Back, compact layout, font scale and the device first-contact journey
+are **NOT_VERIFIED**. Full native parity remains **MANDATORY_NOT_COMPLETE**;
+swiper/deck, Давай сыграем, friendship/invitations and broader native parity remain
+mandatory later. Owner S23 **FAIL_RECHECK_PENDING** and all prior FAIL/UNKNOWN and
+cost history are preserved. Real OTA and iOS remain unfinished. No release,
+acceptance, device parity or APK delivery is claimed by this source candidate.
+
+---
+
 # #522 CURRENT · native own profile name/city source candidate
 
 Root-admitted base supplied with this task: `0104a264f0ae97b9639fd46ab0c10a91304d5a31`

@@ -1,3 +1,4 @@
+import { NativeContactAction } from '../../src/components/contact-editor.tsx';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../src/auth.tsx';
@@ -21,6 +22,6 @@ export default function PlayerDetail() {
       ? <Loading title="Загружаем профиль…" /> : !snapshot.scope
       ? <><Label>Профиль для текущей сессии недоступен. Проверьте вход.</Label><TextButton title="Профиль" onPress={() => router.push('/profile')} /></>
       : detail?.status === 'error' ? <ErrorState error={detail.error} retry={() => { void coordinator.loadDetail(id); }} />
-      : detail?.data ? <PlayerProfile key={`${snapshot.scope}:${id}:${detail.data.cover?.uploadedUrl}`} player={detail.data} city={cities.state.data?.find(c => c.id === detail.data?.cityId)?.nameRu} /> : null}
+      : detail?.data ? <><PlayerProfile key={`${snapshot.scope}:${id}:${detail.data.cover?.uploadedUrl}`} player={detail.data} city={cities.state.data?.find(c => c.id === detail.data?.cityId)?.nameRu} /><NativeContactAction target={id} /></> : null}
   </Page>;
 }
