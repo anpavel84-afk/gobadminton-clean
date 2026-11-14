@@ -308,7 +308,13 @@ run("native Messages · self-migrating isolated database", () => {
     const payload={targetPublicPlayerId:p.publicPlayerId,text:'Secure first contact',clientMessageId:randomUUID()};
     const routes=[{method:'GET' as const,url:lookup},{method:'POST' as const,url:'/v1/conversations/requests',payload}];
     for (const route of routes) {
-      for (const headers of [{}, {authorization:'Basic invalid'}, {authorization:'Bearer invalid'}, {authorization:`Bearer ${'x'.repeat(43)}`},
+      const anonymous=await app.inject({...route,headers:{}});
+      if (route.method==='GET') expect(anonymous.statusCode).toBe(401);
+      else {
+        expect(anonymous.statusCode).toBe(403);
+        expect(anonymous.json().code).toBe('ORIGIN_REJECTED');
+      }
+      for (const headers of [{authorization:'Basic invalid'}, {authorization:'Bearer invalid'}, {authorization:`Bearer ${'x'.repeat(43)}`},
         {Authorization:[`Bearer ${owner.accessToken}`,`Bearer ${owner.accessToken}`]}]) {
         expect((await app.inject({...route,headers})).statusCode).toBe(401);
       }

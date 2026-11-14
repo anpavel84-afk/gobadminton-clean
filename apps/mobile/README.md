@@ -1,3 +1,28 @@
+# #522 CONTACT ADDRESS2 · test expectation and README history correction
+
+The test-only anonymous case now follows the existing auth contract: without
+Authorization, GET returns exactly 401; POST without Origin takes the cookie
+mutation path and returns exactly 403 with code `ORIGIN_REJECTED`. All four
+explicit malformed Authorization cases still require 401 on both selected routes;
+mixed/disabled/revoked, cookie Origin/CSRF, message-count and other fixture checks
+are unchanged. Production auth behavior is unchanged.
+
+Current fixture SHA-256: `d46a6bf09f22b427460c44b385c65dc5a7c87d0f807356f1b410c1b3816a8cca`.
+The older `04329fc9e9a0c4c9956199168bee5dca33125b96ede44dc24a5ebf9dc4434182`
+and unchanged-fixture statement in ADDRESS1 below describe historical source only.
+All previous README bytes are preserved verbatim below as history.
+
+API typecheck and fixture lint are NOT_RUN here: project dependencies are absent;
+no dependency resolution was attempted. Earlier supplied compiled-mobile evidence
+remains earlier evidence. Root must fully read this fixture and README, bind the
+new fixture hash, then run fresh API typecheck, fixture lint and the single owning
+Messages DB fixture. The retained parent FAIL and manual Root findings remain
+history; independent QA has not been called. Fresh DB PASS, phone/visual, build,
+signing, native binary and DEV acceptance are not claimed. Source versionCode 6,
+API 0.44.0, schema72 and registry1 remain unchanged; cumulative scope remains 18.
+
+---
+
 # #522 CONTACT ADDRESS1 · bounded source correction
 
 FC-RETURN: both guest contact CTAs now retain `/messages/new/<peer>`. The native
