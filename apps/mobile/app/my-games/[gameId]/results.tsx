@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../../src/auth.tsx';
 import { canonicalPostgamePath } from '../../../src/native-auth-protocol.ts';
-import { AttendancePanel, CommandReview, OutcomePanel, Roster, SourceNotice, ReminderActions } from '../../../src/components/postgame.tsx';
+import { AttendancePanel, PostgameSurface, CommandReview, OutcomePanel, Roster, SourceNotice, ReminderActions } from '../../../src/components/postgame.tsx';
 import { Header, Label, Loading, Page, TextButton, styles } from '../../../src/components/ui.tsx';
 export default function GameResults() {
   const params=useLocalSearchParams<{gameId?:string|string[]}>(), router=useRouter(), auth=useAuth(), owner=auth.postgame;
@@ -15,10 +15,11 @@ export default function GameResults() {
   useEffect(()=>{if(!current || !gameId) return; void owner.loadResults(gameId);void owner.loadReminders();void auth.participation.loadGame(gameId);},[current,gameId,owner,auth.participation,actor,session]);
   const state=current && gameId ? s.games[gameId] : undefined, data=state?.data, game=gameId ? p.games[gameId]?.game : undefined;
   const back=()=>router.replace('/my-games');
-  return <Page header={<Header back={back} />}><TextButton title="Мои игры" onPress={back} /><Label accessibilityRole="header" style={styles.title}>Участники / Итоги</Label>
+  return <PostgameSurface><Page keyboard header={<Header back={back} />}><TextButton title="Мои игры" onPress={back} /><Label accessibilityRole="header" style={styles.title}>Участники / Итоги</Label>
     {!gameId ? <Label>Игра недоступна.</Label> : auth.status === 'hydrating' ? <Loading title="Проверяем сессию…" /> : !current ? <>
       <Label>Войдите, чтобы увидеть итоги игры.</Label><TextButton title="Войти" onPress={()=>void auth.signIn(`/my-games/${gameId}/results`)} />
     </> : <>
+      <CommandReview gameId={gameId} />
       <View style={styles.card}><Label style={{fontWeight:'700'}}>{game?.title ?? 'Игра'}</Label><Label>{game ? new Date(game.startsAt).toLocaleString('ru',{timeZone:game.timezone}) : 'Условия игры сейчас недоступны'}</Label>
         <TextButton title="К игре" onPress={()=>router.push({pathname:'/games/[id]',params:{id:gameId}})} /></View>
       <SourceNotice title="Итоги игры" status={state?.status ?? 'loading'} retry={()=>void owner.loadResults(gameId)} />
@@ -32,8 +33,7 @@ export default function GameResults() {
       </>}
       <SourceNotice title="Напоминания" status={s.reminders.status} retry={()=>void owner.loadReminders()} />
       {s.reminders.data?.items.filter(r=>r.gameId === gameId).map(r=><ReminderActions key={r.id} item={r} />)}
-      <CommandReview gameId={gameId} />
       <TextButton title="Обновить итоги" onPress={()=>void owner.loadResults(gameId)} />
     </>}
-  </Page>;
+  </Page></PostgameSurface>;
 }

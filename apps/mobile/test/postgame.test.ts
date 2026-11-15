@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createNativeApi } from '../src/native-api.ts';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
-import { PostgameError, parseResults, parseAttendance, parseOwnResults, parseReminders, mayAcknowledge, needsAttention, wire, validateReceipt } from '../src/postgame.ts';
+import { PostgameError, parseResults, parseAttendance, parseOwnResults, parseReminders, mayAcknowledge, needsAttention, cursor, wire, validateReceipt } from '../src/postgame.ts';
 import type { Attendance, Results, OwnResult, Reminder, Intent, Packet } from '../src/postgame.ts';
-import { hubRows, hubBucket, matchesFilter } from '../src/my-games.ts';
+import { hubRows, hubBucket, matchesFilter, hubView, sortHubRows } from '../src/my-games.ts';
 import type { Actor } from '../src/participation.ts';
-import { game } from './fixtures.ts';
+import { game as publicGame } from './fixtures.ts';
+import type { Game } from '@gobadminton/contracts/game-types';
+const game = {...publicGame,version:1} satisfies Game;
 const actor: Actor={actorId:'actor-a',sessionId:'session-a',generation:1};
 const date='2026-11-14T10:00:00Z';
 const row: Attendance={contextId:'context-a',value:'unknown',version:0,late:false,assertion:{actorDisplay:null,source:null,at:null},acknowledgedVersion:null,dispute:null,displayName:'Игрок',allowedActions:{canSetAttendance:true,canAcknowledge:false,canDispute:true,canWithdrawDispute:false,canRespondDispute:false,canRequestHelp:false}};
@@ -125,4 +128,105 @@ test('refresh never overwrites a reviewed draft; stale version/rights require ne
   s.port.results=async()=>({...result,attendance:{...result.attendance!,roster:[marked]}});
   await s.coordinator.loadResults(game.id);assert.equal(s.coordinator.getSnapshot().review,draft);
   await s.coordinator.confirm();assert.equal(s.sent.length,0);assert.equal(s.coordinator.getSnapshot().review,null);assert.ok(s.coordinator.getSnapshot().notice?.includes('Данные изменились'));
+});
+
+test('append roster: same actor loses manager role but retains seat; fresh HTTP200 projection drops private pages', {timeout:1000}, async()=>{
+  const s=setup(), page=deferred<Results>();
+  const revision={version:1,before:null,after:{value:'held' as const,reason:null},reason:null,source:'manager_explicit' as const,recordedAt:date};
+  s.port.results=async()=>parseResults({...result,revisions:[revision],revisionsNextCursor:'private-revisions',attendance:{...result.attendance!,myAttendance:marked,rosterNextCursor:'private-roster'}});
+  await s.coordinator.loadResults(game.id);
+  s.port.results=async()=>page.promise;
+  const append=s.coordinator.loadResults(game.id,{rosterCursor:'private-roster'},'roster');
+  const participant=parseResults({gameId:game.id,outcome:result.outcome,allowedActions:{canRecordOutcome:false},attendance:{...result.attendance!,myAttendance:marked,roster:null,rosterNextCursor:null,summary:null,allowedActions:{canRecordAttendance:false,canBulkPresent:false}}});
+  page.resolve(participant);await append;
+  const fresh=s.coordinator.getSnapshot().games[game.id]?.data;
+  assert.deepEqual(s.coordinator.getSnapshot().actor,actor);assert.equal(fresh?.attendance?.myAttendance?.contextId,row.contextId);
+  assert.equal(fresh?.attendance?.roster,null);assert.equal(fresh?.attendance?.rosterNextCursor,null);
+  assert.equal(fresh?.revisions,undefined);assert.equal(fresh?.revisionsNextCursor,undefined);assert.equal(fresh?.allowedActions.canRecordOutcome,false);
+  assert.equal(s.sent.length,0);
+});
+test('append revisions: fresh omitted history never reconstructs old revisions/cursor or former-manager roster', {timeout:1000}, async()=>{
+  const s=setup(), page=deferred<Results>();
+  s.port.results=async()=>parseResults({...result,revisions:[{version:1,before:null,after:{value:'held',reason:null},reason:null,source:'manager_explicit',recordedAt:date}],revisionsNextCursor:'private-revisions',attendance:{...result.attendance!,myAttendance:marked,rosterNextCursor:'private-roster'}});
+  await s.coordinator.loadResults(game.id);s.port.results=async()=>page.promise;
+  const append=s.coordinator.loadResults(game.id,{revisionsCursor:'private-revisions'},'revisions');
+  page.resolve(parseResults({gameId:game.id,outcome:result.outcome,allowedActions:{canRecordOutcome:false},attendance:{...result.attendance!,myAttendance:marked,roster:null,rosterNextCursor:null,summary:null,allowedActions:{canRecordAttendance:false,canBulkPresent:false}}}));
+  await append;
+  const fresh=s.coordinator.getSnapshot().games[game.id]?.data;
+  assert.deepEqual(s.coordinator.getSnapshot().actor,actor);assert.equal(fresh?.attendance?.myAttendance?.version,marked.version);
+  assert.equal(fresh?.revisions,undefined);assert.equal(fresh?.revisionsNextCursor,undefined);assert.equal(fresh?.attendance?.roster,null);assert.equal(fresh?.attendance?.rosterNextCursor,null);
+  s.coordinator.review({kind:'outcome',gameId:game.id,body:{expectedVersion:0,outcome:'held'}});await s.coordinator.confirm();assert.equal(s.sent.length,0);
+});
+const pendingOwn:OwnResult={...own,attendance:marked,notice:{id:'notice-current',attendanceVersion:1,value:'present',late:false,source:'manager_explicit',actorDisplay:'Организатор',createdAt:date,acknowledgedAt:null}};
+test('own same-page newest external + older self-suppressed null preserves attention and fresh attendance truth', {timeout:1000}, async()=>{
+  const s=setup();
+  s.port.own=async()=>({items:[pendingOwn,{...pendingOwn,notice:null,attendance:{...marked,displayName:'Текущее имя',allowedActions:{...marked.allowedActions,canAcknowledge:false,canSetAttendance:false}}}],nextCursor:null});
+  await s.coordinator.loadOwn();const loaded=s.coordinator.getSnapshot().own.data?.items;
+  assert.equal(loaded?.length,1);assert.equal(loaded?.[0]?.notice?.id,'notice-current');assert.equal(loaded?.[0]?.attendance.displayName,'Текущее имя');assert.equal(loaded?.[0]?.attendance.allowedActions.canAcknowledge,false);assert.equal(loaded?.[0]?.attendance.allowedActions.canSetAttendance,false);assert.ok(loaded?.[0] && needsAttention(loaded[0]));assert.equal(s.sent.length,0);
+});
+test('own next-page null cannot hide current notice; fresh ACK or new version clears/replaces obsolete notice', {timeout:1000}, async()=>{
+  const s=setup();
+  s.port.own=async(_actor,cursor)=>({items:[cursor ? {...pendingOwn,notice:null} : pendingOwn],nextCursor:cursor ? null : 'older'});
+  await s.coordinator.loadOwn();await s.coordinator.loadOwn(true);
+  assert.ok(needsAttention(s.coordinator.getSnapshot().own.data!.items[0]!));
+  // Current ACK in a historical row wins even while appending.
+  s.port.own=async()=>({items:[pendingOwn],nextCursor:'acked-page'});await s.coordinator.loadOwn();
+  s.port.own=async()=>({items:[{...pendingOwn,notice:null,attendance:{...marked,acknowledgedVersion:1,allowedActions:{...marked.allowedActions,canAcknowledge:false}}}],nextCursor:null});
+  await s.coordinator.loadOwn(true);const acked=s.coordinator.getSnapshot().own.data!.items[0]!;
+  assert.equal(acked.notice,null);assert.equal(acked.attendance.acknowledgedVersion,1);assert.equal(needsAttention(acked),false);
+  s.port.own=async()=>({items:[pendingOwn],nextCursor:'version-page'});await s.coordinator.loadOwn();
+  s.port.own=async()=>({items:[{...pendingOwn,notice:null,attendance:{...marked,version:2}}],nextCursor:null});
+  await s.coordinator.loadOwn(true);assert.equal(s.coordinator.getSnapshot().own.data?.items[0]?.notice,null);
+  const replacement:OwnResult={...pendingOwn,attendance:{...marked,version:2},notice:{...pendingOwn.notice!,id:'notice-v2',attendanceVersion:2}};
+  s.port.own=async()=>({items:[replacement,{...replacement,notice:null}],nextCursor:null});await s.coordinator.loadOwn();
+  assert.equal(s.coordinator.getSnapshot().own.data?.items[0]?.notice?.id,'notice-v2');assert.equal(s.sent.length,0);
+});
+test('hub filter-empty and attention use full loaded union, include reminder-only games once, and keep real targets',()=>{
+  const union=hubRows([],[],[pendingOwn],[{...reminder,gameId:'reminder-only'},{...reminder,id:'second-reminder',gameId:'reminder-only'}]);
+  const view=hubView(union,'manage');assert.equal(view.rows.length,1);assert.deepEqual(view.attention.map(r=>r.gameId),[game.id,'reminder-only']);
+  const filtered=hubView(hubRows([],[],[own],[]),'manage');assert.equal(filtered.empty,'filter');assert.equal(filtered.rows.length,0);
+  assert.equal(hubView(hubRows([],[],[own],[]),'all').empty,null);assert.equal(hubView([],'all').empty,'loaded');
+  assert.equal(hubView(hubRows([],[],[{...pendingOwn,attendance:{...marked,version:2}}],[]),'all').attention.length,0);
+});
+test('hub orders upcoming starts ASC and past ends DESC with own/reminder fallback and stable unknown bucket',()=>{
+  const later={...game,id:'later',startsAt:'2099-02-01T10:00:00Z',endsAt:'2099-02-01T12:00:00Z',management:{role:'manager' as const,createdByMe:false}};
+  const sooner={...later,id:'sooner',startsAt:'2099-01-01T10:00:00Z',endsAt:'2099-01-01T12:00:00Z'};
+  const upcoming=hubRows([later,sooner],[],[],[]);
+  assert.deepEqual(sortHubRows(upcoming,'upcoming',r=>r.managed).map(r=>r.gameId),['sooner','later']);assert.equal(upcoming[0]?.gameId,'later');
+  const history=hubRows([],[],[{...own,gameId:'older',endsAt:'2026-01-01T00:00:00Z'},{...own,gameId:'unknown',endsAt:null}],[{...reminder,gameId:'newer',endsAt:'2026-02-01T00:00:00Z'}]);
+  const past=history.filter(r=>hubBucket(r,undefined,Date.parse('2027-01-01')) === 'past');
+  assert.deepEqual(sortHubRows(past,'past',()=>undefined).map(r=>r.gameId),['newer','older']);
+  const unknown=history.filter(r=>hubBucket(r,undefined) === 'unknown');assert.deepEqual(sortHubRows(unknown,'unknown',()=>undefined).map(r=>r.gameId),['unknown']);
+});
+test('typed wire validation still rejects every C0/DEL control and cursor whitespace',()=>{
+  for(const code of [...Array.from({length:32},(_,i)=>i),127]) {
+    assert.throws(()=>cursor(`page${String.fromCharCode(code)}two`),PostgameError);
+    assert.throws(()=>wire({kind:'outcome',gameId:game.id,body:{expectedVersion:1,outcome:'held',reason:`a${String.fromCharCode(code)}b`}}),PostgameError);
+  }
+  assert.throws(()=>cursor('page two'),PostgameError);assert.equal(cursor('opaque-page_2'),'opaque-page_2');
+});
+
+test('busy/UNKNOWN dismiss and rejected new intent never alter or resend the original coordinator command', {timeout:1000}, async()=>{
+  const s=setup(), reply=deferred<Attendance>();
+  s.port.send=async p=>{s.sent.push(p);return reply.promise;};await s.coordinator.loadResults(game.id);
+  s.coordinator.review(intent);const sending=s.coordinator.confirm(), original=s.sent[0]!;
+  s.coordinator.cancelReview();s.coordinator.review({kind:'outcome',gameId:game.id,body:{expectedVersion:0,outcome:'held'}});
+  assert.equal(s.coordinator.getSnapshot().review,null);assert.equal(s.coordinator.getSnapshot().command?.packet,original);assert.equal(s.sent.length,1);
+  reply.resolve({...marked,contextId:'bad-receipt'});await sending;
+  s.coordinator.cancelReview();s.coordinator.review(intent);await s.coordinator.confirm();
+  assert.equal(s.coordinator.getSnapshot().command?.status,'unknown');assert.equal(s.coordinator.getSnapshot().command?.packet,original);assert.equal(s.sent.length,1);
+});
+test('native review source wiring: modal Back/dismiss only closes UI, busy buttons gate intents, confirm/reconcile use owner',()=>{
+  // Source contract only: this does not certify rendered focus/Back/keyboard or device layout.
+  const ui=readFileSync(new URL('../src/components/postgame.tsx',import.meta.url),'utf8');
+  const button=ui.slice(ui.indexOf('function ReviewButton'),ui.indexOf('function Choice'));
+  assert.match(button,/disabled=useBlocked\(\)/);assert.match(button,/disabled=\{disabled\}/);assert.match(button,/trigger\.current=ref\.current/);
+  const modal=ui.slice(ui.indexOf('export function CommandReview'),ui.indexOf('export function OutcomePanel'));
+  assert.match(modal,/<Modal[\s\S]*onRequestClose=\{close\}/);assert.match(modal,/owner\.cancelReview\(\)/);
+  assert.match(modal,/owner\.confirm\(\)/);assert.match(modal,/owner\.reconcile\(command\.packet\.gameId\)/);
+  assert.match(modal,/AccessibilityInfo\.setAccessibilityFocus/);assert.match(modal,/trigger\?\.current\?\.focus\(\)/);
+  assert.doesNotMatch(modal,/owner\.(forget|send|setActor)\(/);
+  for(const route of ['../app/my-games.tsx','../app/my-games/[gameId]/results.tsx']) {
+    const source=readFileSync(new URL(route,import.meta.url),'utf8');assert.match(source,/<PostgameSurface>/);assert.match(source,/<CommandReview/);
+  }
 });

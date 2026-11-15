@@ -24,7 +24,7 @@ import { buildTestCoreModule } from "./test-core.module";
  * Dedicated DB name or strict hosted Actions ephemeral recipe — never live.
  */
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 const DB_NAME = "gobadminton_reminders_disposable";
 
 function disposableUrl() {
@@ -88,9 +88,9 @@ run("#457 postgame reminders — disposable", () => {
       APP_ENV: "local",
       HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "reminders-synthetic-fixture-pepper!!!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "reminders-synthetic-fingerprint!!!!",

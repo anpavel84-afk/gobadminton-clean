@@ -49,7 +49,8 @@ function choice<T extends string>(v: unknown, values: readonly T[]): T { for (co
 function array<T>(v: unknown, parse: (v: unknown) => T): T[] { return Array.isArray(v) ? v.map(parse) : invalid(); }
 function time(v: unknown): string { const value = str(v); return Number.isFinite(Date.parse(value)) ? value : invalid(); }
 export function postgameId(v: unknown): string { const id = str(v); return /^[A-Za-z0-9_-]{1,128}$/.exec(id)?.[0] === id ? id : invalid(); }
-export function cursor(v: unknown): string { const value = str(v); return value.length > 0 && value.length <= 2048 && !/[\s\x00-\x1f\x7f]/.test(value) ? value : invalid(); }
+function hasControl(value: string): boolean { return Array.from(value).some(char => { const code = char.charCodeAt(0); return code <= 31 || code === 127; }); }
+export function cursor(v: unknown): string { const value = str(v); return value.length > 0 && value.length <= 2048 && !/\s/.test(value) && !hasControl(value) ? value : invalid(); }
 const sources = ['manager_explicit', 'self_attested', 'case_reviewer'] as const;
 const values = ['present', 'absent', 'unknown'] as const;
 export function parseAttendance(v: unknown): Attendance {
@@ -100,7 +101,7 @@ export function parseReminders(v: unknown): Reminders {
   }) };
 }
 function exact(r: Record<string,unknown>, keys: string[]) { if (Object.keys(r).some(k => !keys.includes(k))) invalid(); }
-function reason(v: unknown): string { const s = str(v); return s === s.trim() && s.length > 0 && s.length <= 500 && !/[\x00-\x1f\x7f]/.test(s) ? s : invalid(); }
+function reason(v: unknown): string { const s = str(v); return s === s.trim() && s.length > 0 && s.length <= 500 && !hasControl(s) ? s : invalid(); }
 export function wire(packet: Intent): { method: 'PUT' | 'POST'; path: string; body: Intent['body'] } {
   const gameId = postgameId(packet.gameId), body = object(packet.body);
   if (packet.kind === 'outcome') {
@@ -115,8 +116,9 @@ export function wire(packet: Intent): { method: 'PUT' | 'POST'; path: string; bo
     return { method:'PUT', path:`/games/${gameId}/attendance/${postgameId(packet.contextId)}`, body:packet.body };
   }
   if (packet.kind === 'bulk') {
-    exact(body,['items','confirmedExactSelection']); if (body.confirmedExactSelection !== true || !Array.isArray(body.items) || body.items.length < 1 || body.items.length > 100) invalid();
-    const seen = new Set<string>(); for (const item of body.items) { const r = object(item); exact(r,['contextId','expectedVersion']); const id = postgameId(r.contextId); num(r.expectedVersion); if (seen.has(id)) invalid(); seen.add(id); }
+    exact(body,['items','confirmedExactSelection']); const items = body.items;
+    if (body.confirmedExactSelection !== true || !Array.isArray(items) || items.length < 1 || items.length > 100) return invalid();
+    const seen = new Set<string>(); for (const item of items) { const r = object(item); exact(r,['contextId','expectedVersion']); const id = postgameId(r.contextId); num(r.expectedVersion); if (seen.has(id)) invalid(); seen.add(id); }
     return { method:'POST',path:`/games/${gameId}/attendance/bulk-present`,body:packet.body };
   }
   if (packet.kind === 'ack') { exact(body,['attendanceVersion']); num(body.attendanceVersion,1); return { method:'POST',path:`/games/${gameId}/attendance/${postgameId(packet.contextId)}/acknowledgements`,body:packet.body }; }

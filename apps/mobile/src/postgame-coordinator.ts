@@ -1,7 +1,7 @@
 import { sameActor } from './participation.ts';
 import type { Actor } from './participation.ts';
-import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge } from './postgame.ts';
-import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery } from './postgame.ts';
+import { PostgameError, postgameId, wire, validateReceipt, mayAcknowledge, needsAttention } from './postgame.ts';
+import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnResult } from './postgame.ts';
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate';
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
@@ -71,7 +71,18 @@ export class PostgameCoordinator {
       const page=await this.port.own(actor,cursor ?? undefined); if (!valid()) return;
       if (page.nextCursor && (page.nextCursor === cursor || more && this.seenOwn.has(page.nextCursor))) throw new PostgameError('invalid');
       if (!more) this.seenOwn.clear(); if (page.nextCursor) this.seenOwn.add(page.nextCursor);
-      const items=[...new Map([...(more ? old.data?.items ?? [] : []),...page.items].map(r=>[`${r.gameId}:${r.contextId}`,r])).values()];
+      const rows=new Map<string,OwnResult>();
+      for (const fresh of [...(more ? old.data?.items ?? [] : []),...page.items]) {
+        const key=`${fresh.gameId}:${fresh.contextId}`, prior=rows.get(key);
+        // Historical notice rows carry CURRENT attendance. Keep only a matching pending
+        // notice; fresh ACK/version/rights always win, including across page boundaries.
+        if (prior?.notice && needsAttention(prior) && fresh.attendance.acknowledgedVersion !== fresh.attendance.version &&
+            prior.notice.attendanceVersion === fresh.attendance.version &&
+            (fresh.notice === null || needsAttention(fresh) && Date.parse(prior.notice.createdAt) >= Date.parse(fresh.notice.createdAt))) {
+          rows.set(key,{...fresh,notice:prior.notice});
+        } else rows.set(key,fresh);
+      }
+      const items=[...rows.values()];
       this.show({own:{status:'ready',data:{items,nextCursor:page.nextCursor}}});
     } catch(error) { if (valid()) this.show({own:this.failure(error,old)}); }
   };
@@ -95,17 +106,20 @@ export class PostgameCoordinator {
       const data=await this.port.results(actor,gameId,query); if(!valid()) return;
       if(data.gameId !== gameId) throw new PostgameError('invalid');
       for (const kind of ['roster','revisions'] as const) {
+        const key=`${gameId}:${kind}`;
+        const exposed=kind === 'roster' ? data.attendance?.roster : data.revisions;
+        if (!exposed) { this.resultCursors.delete(key); continue; }
         if (append && append !== kind) continue;
-        const key=`${gameId}:${kind}`, seen=append ? this.resultCursors.get(key) ?? new Set<string>() : new Set<string>();
+        const seen=append ? this.resultCursors.get(key) ?? new Set<string>() : new Set<string>();
         const next=kind === 'roster' ? data.attendance?.rosterNextCursor : data.revisionsNextCursor;
         if(next && seen.has(next)) throw new PostgameError('invalid');
         if(next) seen.add(next); this.resultCursors.set(key,seen);
       }
-      if(append === 'roster' && data.attendance && old.data?.attendance) {
+      if(append === 'roster' && data.attendance?.roster && old.data?.attendance) {
         if(data.attendance.rosterNextCursor && data.attendance.rosterNextCursor === query.rosterCursor) throw new PostgameError('invalid');
         data.attendance.roster=[...new Map([...(old.data.attendance.roster ?? []),...(data.attendance.roster ?? [])].map(r=>[r.contextId,r])).values()];
       }
-      if(append === 'revisions') {
+      if(append === 'revisions' && data.revisions) {
         if(data.revisionsNextCursor && data.revisionsNextCursor === query.revisionsCursor) throw new PostgameError('invalid');
         data.revisions=[...new Map([...(old.data?.revisions ?? []),...(data.revisions ?? [])].map(r=>[r.version,r])).values()];
       }
