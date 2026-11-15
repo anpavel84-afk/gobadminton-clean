@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { PlayersCoordinator, PlayersError } from '../src/players.ts';
 import type { PlayersSnapshot } from '../src/players.ts';
 import { RadarCoordinator } from '../src/radar-coordinator.ts';
+import { ContactCoordinator } from '../src/contact-coordinator.ts';
 import { RADAR_WIRE, RADAR_POLICY, DISCLOSURE_HASH, DISCLOSURE_ID, freshRadarFix, parseRadarConfig, parseRadarStatus, parseRadarSnapshot, mergeRadarPlayers, RadarError } from '../src/radar.ts';
 import type { RadarSnapshot } from '../src/radar-coordinator.ts';
 import type { RadarContactContext } from '../src/contact.ts';
@@ -30,16 +31,17 @@ function fixture() {
   const snapshot=()=>({contractVersion:RADAR_WIRE,policyVersion:RADAR_POLICY,exposureMode:'authenticated_live',cityId:city,regionId:'moscow',generatedAt:instant(now),validUntil:instant(now+60000),refreshAfterSeconds:30,
     query:{queryRef:'query-one',asOf:instant(now),ordering:'radar_distance_then_directory',originState:'authorized',originRef:'origin-ref'},totals:{matchingTotal:1,radarTotal:1,ordinaryOnlyTotal:0,completeness:'exact_at_asOf'},map:config.cities[0]!.map,
     items:[row()],page:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextCursor:null}});
-  const reads:RadarRead[]=[], commands:RadarCommand[]=[], phases:string[]=[];
+  const reads:RadarRead[]=[], commands:RadarCommand[]=[], phases:string[]=[], permits:(()=>boolean)[]=[], readActors:typeof actor[]=[];
+  let beforeDispatch = async (_packet:RadarCommand) => {};
   let permission:()=>Promise<ForegroundPermission> = async()=>({granted:true,canAskAgain:true,android:{accuracy:'coarse'}});
   let services=async()=>true, fix=async()=>({timestamp:now,coords:{latitude:55.75,longitude:37.62,accuracy:800}}), prompts=0;
   let current:unknown={state:'off',ownerHere:true};
   let read=async(operation:RadarRead):Promise<unknown>=>operation.kind==='config'?config:operation.kind==='status'?current:operation.kind==='query'?snapshot():operation.kind==='map'?{...snapshot(),page:undefined,mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextMapCursor:null}}:{};
   let send=async(packet:RadarCommand):Promise<unknown>=>{current=packet.kind==='stop'?{state:'off',ownerHere:true}:activation();return current;};
-  const owner=new RadarCoordinator({read:async op=>{reads.push(op);return read(op);},command:async(p,permit)=>{if(!permit())throw new RadarError('stale');commands.push(p);return send(p);},permission:()=>permission(),requestPermission:async()=>{prompts++;return permission();},services:()=>services(),fix:()=>fix(),random:()=>`key-${++serial}`,now:()=>now});
+  const owner=new RadarCoordinator({read:async(op,a)=>{reads.push(op);readActors.push(a);return read(op);},command:async(p,permit)=>{permits.push(permit);await beforeDispatch(p);if(!permit())throw new RadarError('stale');commands.push(p);return send(p);},permission:()=>permission(),requestPermission:async()=>{prompts++;return permission();},services:()=>services(),fix:()=>fix(),random:()=>`key-${++serial}`,now:()=>now});
   owner.subscribe(()=>phases.push(owner.getSnapshot().phase));
   const start=async()=>{owner.setActor(actor);await flush();await owner.consent();await owner.enable(DISCLOSURE_HASH);};
-  return {owner,reads,commands,phases,start,activation,snapshot,row,now:()=>now,advance:(ms:number)=>{now+=ms;},prompts:()=>prompts,
+  return {owner,reads,commands,phases,permits,readActors,start,activation,snapshot,row,now:()=>now,advance:(ms:number)=>{now+=ms;},prompts:()=>prompts,beforeDispatch:(p:typeof beforeDispatch)=>{beforeDispatch=p;},
     permission:(p:typeof permission)=>{permission=p;},services:(p:typeof services)=>{services=p;},fix:(p:typeof fix)=>{fix=p;},read:(p:typeof read)=>{read=p;},send:(p:typeof send)=>{send=p;},current:(s:unknown)=>{current=s;}};
 }
 
@@ -272,4 +274,197 @@ test('expanded detail rejects selection retirement, scope generation changes and
   const expired=helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now);
   f.advance(60001);gate.resolve(profile);await assert.rejects(expired,/Retired/);
   assert.equal(f.commands.filter(command=>command.kind==='start').length,1);
+});
+
+// FIRST CodeQA cd791: real owner, controllable transport boundaries.
+for (const kind of ['start','update','heartbeat'] as const) test(`late accepted ${kind} after background gets a separate owning safety stop, never a replay`,async t=>{
+  const f=fixture();t.after(f.owner.dispose);
+  if(kind!=='start'){await f.start();await f.owner.map();assert.equal(f.owner.getSnapshot().pins.length,1);}
+  const gate=deferred<unknown>();
+  f.send(async packet=>packet.kind===kind?gate.promise:{state:'off',ownerHere:false});
+  const work=kind==='start'?f.start():kind==='update'?f.owner.change('update',10):(()=>{f.advance(45001);return f.owner.tick();})();
+  await flush();const original=f.owner.getSnapshot().command!;assert.equal(original.kind,kind);
+  const bytes=JSON.stringify(original),queries=f.reads.filter(op=>op.kind==='query').length;
+  f.owner.setForeground(false);
+  assert.equal(f.owner.getSnapshot().pins.length,0);assert.equal(f.owner.getSnapshot().rows.length,0);
+  assert.equal(f.owner.getSnapshot().enabling,false);assert.strictEqual(f.owner.getSnapshot().command,original);
+  gate.resolve(f.activation());await work;await flush();
+  assert.equal(f.commands.filter(p=>p.kind===kind).length,1);
+  const stops=f.commands.filter(p=>p.kind==='stop');assert.equal(stops.length,1);
+  assert.deepEqual(stops[0],{kind:'stop',actor,key:kind==='start'?'key-2':'key-3',activationId:'activation'});
+  assert.ok(Object.isFrozen(stops[0]));assert.ok(Object.isFrozen(stops[0]!.actor));
+  assert.notEqual(stops[0]!.key,original.key);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(JSON.stringify(original),bytes);assert.equal(f.owner.getSnapshot().activation?.state,'off');
+  assert.equal(f.reads.filter(op=>op.kind==='query').length,queries);
+  assert.equal(f.owner.getSnapshot().phase,'unknown');assert.equal(f.commands.length,kind==='start'?2:3);
+  assert.ok(f.readActors.every(a=>JSON.stringify(a)===JSON.stringify(actor)));
+});
+
+test('lost start response is discovered by bounded current status; GET and cleanup never acknowledge or replay original UNKNOWN',async t=>{
+  const f=fixture();t.after(f.owner.dispose);
+  f.send(async packet=>{if(packet.kind==='start'){f.current(f.activation());throw Error('response lost');}return {state:'off',ownerHere:false};});
+  await f.start();const original=f.owner.getSnapshot().command!,bytes=JSON.stringify(original);
+  const statusReads=f.reads.filter(op=>op.kind==='status').length;
+  f.owner.setForeground(false);await flush();
+  assert.equal(f.reads.filter(op=>op.kind==='status').length,statusReads+1);
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop']);
+  assert.strictEqual(f.owner.getSnapshot().command,original);assert.equal(f.owner.getSnapshot().phase,'unknown');
+  f.owner.setForeground(true);await flush();await f.owner.restore();
+  await f.owner.query();await f.owner.change('update',10);await f.owner.consent();await f.owner.enable(DISCLOSURE_HASH);await f.owner.tick();
+  assert.equal(f.commands.length,2);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(JSON.stringify(original),bytes);assert.equal(f.owner.getSnapshot().pins.length,0);
+  assert.equal(f.reads.filter(op=>op.kind==='query').length,0);
+});
+
+test('foreground restore honors undiscovered cleanup debt; late acceptance after UI retirement is only cleanup authority',async t=>{
+  const f=fixture();t.after(f.owner.dispose);const gate=deferred<unknown>();
+  f.send(async packet=>packet.kind==='start'?gate.promise:{state:'off',ownerHere:false});
+  const work=f.start();await flush();const original=f.owner.getSnapshot().command!;
+  f.owner.setForeground(false);await flush();assert.equal(f.commands.length,1); // current status still off
+  f.owner.setForeground(true);await flush();await f.owner.restore();
+  assert.equal(f.commands.length,1);assert.strictEqual(f.owner.getSnapshot().command,original);
+  gate.resolve(f.activation());await work;await flush();
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop']);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(f.reads.filter(op=>op.kind==='query').length,0);assert.equal(f.owner.getSnapshot().activation?.state,'off');
+});
+
+test('failed separate cleanup retains original bytes and honest pending; restore retries only the frozen cleanup packet',async t=>{
+  const f=fixture();t.after(f.owner.dispose);let failStop=true;
+  f.send(async packet=>{
+    if(packet.kind==='start'){f.current(f.activation());throw Error('lost original response');}
+    if(failStop)throw Error('stop response unknown');return {state:'off',ownerHere:false};
+  });
+  await f.start();const original=f.owner.getSnapshot().command!,bytes=JSON.stringify(original);
+  f.owner.setForeground(false);await flush();const stop=f.commands[1]!;
+  assert.equal(stop.kind,'stop');assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.match(f.owner.getSnapshot().notice!,/ожидает подтверждения/);assert.notEqual(f.owner.getSnapshot().activation?.state,'off');
+  failStop=false;f.owner.setForeground(true);await flush();
+  assert.equal(f.commands.length,3);assert.strictEqual(f.commands[2],stop);
+  assert.equal(JSON.stringify(f.commands[2]),JSON.stringify(stop));assert.equal(JSON.stringify(original),bytes);
+  assert.strictEqual(f.owner.getSnapshot().command,original);assert.equal(f.owner.getSnapshot().activation?.state,'off');
+  assert.equal(f.reads.filter(op=>op.kind==='query').length,0);
+});
+
+test('a lost response still unknown at background is discovered on foreground restore without resending start',async t=>{
+  const f=fixture();t.after(f.owner.dispose);const gate=deferred<void>();
+  f.send(async packet=>{if(packet.kind==='start'){await gate.promise;throw Error('lost');}return {state:'off',ownerHere:false};});
+  const work=f.start();await flush();const original=f.owner.getSnapshot().command!;
+  f.owner.setForeground(false);await flush();gate.resolve();await work;
+  assert.equal(f.commands.length,1);assert.strictEqual(f.owner.getSnapshot().command,original);
+  f.current(f.activation());f.owner.setForeground(true);await flush();
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop']);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(f.reads.filter(op=>op.kind==='query').length,0);assert.equal(f.owner.getSnapshot().pins.length,0);
+});
+
+for (const replacement of [{...actor,sessionId:'rotated',generation:2},{actorId:'other-account',sessionId:'other',generation:2}]) test(`late activation/status and safety permit cannot cross ${replacement.actorId===actor.actorId?'session':'account'} rotation`,async t=>{
+  const f=fixture();t.after(f.owner.dispose);const accepted=deferred<unknown>(),status=deferred<unknown>();
+  f.send(async()=>accepted.promise);const work=f.start();await flush();
+  f.read(async op=>op.kind==='config'?config:status.promise);
+  f.owner.setForeground(false);await flush();
+  f.owner.setActor(replacement);const after=f.owner.getSnapshot();
+  accepted.resolve(f.activation());status.resolve(f.activation());await work;await flush();
+  assert.strictEqual(f.owner.getSnapshot(),after);assert.equal(f.commands.length,1);
+  assert.equal(f.owner.getSnapshot().command,null);assert.equal(f.owner.getSnapshot().pins.length,0);
+  assert.ok(f.permits.every(permit=>!permit()));
+});
+
+test('cleanup queued in auth transport is denied after authority rotates, without dispatch using captured previous principal',async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();const gate=deferred<void>();
+  f.beforeDispatch(async p=>{if(p.kind==='stop')await gate.promise;});
+  f.owner.setForeground(false);await flush();const stopPermit=f.permits.at(-1)!;assert.equal(stopPermit(),true);
+  f.owner.setActor(null);const after=f.owner.getSnapshot();assert.equal(stopPermit(),false);
+  gate.resolve();await flush();assert.equal(f.commands.length,1);assert.strictEqual(f.owner.getSnapshot(),after);
+});
+
+test('original stop UNKNOWN is never replaced or automatically replayed; explicit cleanup retry keeps the exact original stop',async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();
+  f.send(async()=>{throw Error('stop unknown');});await f.owner.stop();
+  const original=f.owner.getSnapshot().command!,bytes=JSON.stringify(original);assert.equal(original.kind,'stop');
+  f.owner.setForeground(false);await flush();f.owner.setForeground(true);await flush();await f.owner.restore();
+  assert.equal(f.commands.length,2);assert.strictEqual(f.owner.getSnapshot().command,original);
+  await f.owner.stop();assert.equal(f.commands.length,3);assert.strictEqual(f.commands[2],original);
+  assert.equal(JSON.stringify(original),bytes);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(f.owner.getSnapshot().phase,'unknown');
+  f.send(async()=>({state:'off',ownerHere:false}));await f.owner.stop();
+  assert.equal(f.commands.length,4);assert.strictEqual(f.commands[3],original);
+  assert.equal(f.owner.getSnapshot().command,null);assert.equal(f.owner.getSnapshot().phase,'off');
+});
+
+function mapSnapshot(f:ReturnType<typeof fixture>,peer='peer',next:string|null=null) {
+  const base=f.snapshot();return {...base,items:base.items.map(row=>({...row,publicPlayerId:peer,player:{...row.player,publicPlayerId:peer},radar:{...row.radar,resultRef:`u1.${peer}`}})),
+    page:undefined,mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:next!==null,nextMapCursor:next}};
+}
+function composer(f:ReturnType<typeof fixture>) {
+  let writes=0;
+  const contact=new ContactCoordinator({preview:context=>f.owner.preview(context),
+    state:async target=>({targetPublicPlayerId:target,state:'none',canRequestContact:true}),
+    player:async()=>{throw Error('directory fallback forbidden');},conversation:async()=>{throw Error('unexpected conversation');},
+    send:async()=>{writes++;throw Error('stale composer dispatched');}},()=>`contact-key`);
+  contact.setActor(actor);return {contact,writes:()=>writes};
+}
+for (const operation of ['refresh','next','error'] as const) test(`map ${operation} retires actual map composer before late preview; list context survives and replacement pins acquire new authority`,async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();
+  f.read(async op=>op.kind==='map'?mapSnapshot(f,'peer','cursor-two'):f.snapshot());
+  await f.owner.map();const listRow=f.owner.getSnapshot().rows[0]!,pin=f.owner.getSnapshot().pins[0]!;
+  assert.notStrictEqual(listRow,pin);const list=f.owner.contactContext(listRow)!,context=f.owner.contactContext(pin)!;
+  const ready=composer(f),late=composer(f);
+  const preview={player:pin.player,proximityBand:null,radar:pin.radar,upcomingGames:[]};
+  const previewGate=deferred<unknown>(),mapGate=deferred<unknown>();let waitPreview=false;
+  f.read(async op=>op.kind==='preview'?(waitPreview?previewGate.promise:preview):op.kind==='map'?mapGate.promise:f.snapshot());
+  assert.equal(ready.contact.stageRadar(context),true);await ready.contact.openComposer('peer');
+  assert.equal(ready.contact.getSnapshot().status,'ready');ready.contact.draft('peer','hello');
+  waitPreview=true;const opening=late.contact.open('peer',context);await flush();
+  const rows=f.owner.getSnapshot().rows,query=f.owner.getSnapshot().query,generation=f.owner.getSnapshot().generation;
+  const refresh=f.owner.map(operation==='next');
+  assert.equal(context.valid(),false);assert.equal(f.owner.getSnapshot().pins.length,0);
+  assert.equal(f.owner.getSnapshot().mapValidUntil,null);assert.equal(list.valid(),true);
+  assert.equal(f.owner.contactContext(pin),null);assert.equal(late.contact.stageRadar(context),false);
+  await ready.contact.send();assert.equal(ready.writes(),0);
+  previewGate.resolve(preview);await opening;await late.contact.send();assert.equal(late.writes(),0);
+  assert.notEqual(late.contact.getSnapshot().status,'ready');
+  if(operation==='error')mapGate.resolve({invalid:true});else mapGate.resolve(mapSnapshot(f,'replacement'));
+  await refresh;
+  assert.strictEqual(f.owner.getSnapshot().rows,rows);assert.strictEqual(f.owner.getSnapshot().query,query);
+  assert.equal(f.owner.getSnapshot().generation,generation);assert.equal(list.valid(),true);assert.equal(context.valid(),false);
+  const calls=f.reads.filter(op=>op.kind==='map');assert.equal(calls.length,2);
+  assert.deepEqual(calls[1],{kind:'map',body:{contractVersion:RADAR_WIRE,queryRef:'query-one',...(operation==='next'?{mapCursor:'cursor-two'}:{}),limit:100}});
+  if(operation==='error'){
+    assert.equal(f.owner.getSnapshot().pins.length,0);assert.equal(f.owner.getSnapshot().mapPage,null);
+    f.read(async op=>op.kind==='map'?mapSnapshot(f,'replacement'):f.snapshot());await f.owner.map();
+  }
+  const fresh=f.owner.contactContext(f.owner.getSnapshot().pins[0]!)!;assert.equal(fresh.target,'replacement');assert.equal(fresh.valid(),true);
+  assert.equal(f.commands.length,1);assert.equal(ready.writes()+late.writes(),0);
+});
+
+test('map-window expiry rejects map proof; failed map with expired query retains mandatory private clearing',async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();
+  f.read(async()=>({...mapSnapshot(f),validUntil:instant(f.now()+1000)}));await f.owner.map();
+  const context=f.owner.contactContext(f.owner.getSnapshot().pins[0]!)!,list=f.owner.contactContext(f.owner.getSnapshot().rows[0]!)!;
+  f.advance(1001);assert.equal(context.valid(),false);assert.equal(list.valid(),true);
+  const gate=deferred<unknown>();f.read(async()=>gate.promise);const work=f.owner.map();f.advance(60000);gate.resolve({invalid:true});await work;
+  assert.equal(f.owner.getSnapshot().rows.length,0);assert.equal(f.owner.getSnapshot().query,null);assert.equal(list.valid(),false);
+});
+
+test('confirmed cleanup on foreground return requires a fresh explicit enable intent before another publication/query',async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();await f.owner.map();
+  f.owner.setForeground(false);await flush();f.owner.setForeground(true);await flush();
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop']);
+  assert.equal(f.owner.getSnapshot().phase,'off');assert.equal(f.owner.getSnapshot().pins.length,0);
+  await f.owner.query();await f.owner.change('update',10);await f.owner.tick();await f.owner.enable(DISCLOSURE_HASH);
+  assert.equal(f.commands.length,2);assert.equal(f.reads.filter(op=>op.kind==='query').length,1);
+  await f.owner.consent();await f.owner.enable(DISCLOSURE_HASH);
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop','start']);assert.equal(f.owner.getSnapshot().phase,'ready');
+});
+
+test('late update receipt never automatically retries an already UNKNOWN cleanup stop; restore reconciles that same packet',async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();const gate=deferred<unknown>();let fail=true;
+  f.send(async p=>{if(p.kind==='update')return gate.promise;if(fail)throw Error('cleanup unknown');return {state:'off',ownerHere:false};});
+  const work=f.owner.change('update',10);await flush();const original=f.owner.getSnapshot().command!,bytes=JSON.stringify(original);
+  f.owner.setForeground(false);await flush();const cleanup=f.commands[2]!;assert.equal(cleanup.kind,'stop');
+  gate.resolve({...f.activation(),version:2});await work;await flush();
+  assert.equal(f.commands.length,3);assert.strictEqual(f.owner.getSnapshot().command,original);assert.equal(JSON.stringify(original),bytes);
+  assert.match(f.owner.getSnapshot().notice!,/ожидает подтверждения/);assert.equal(f.owner.getSnapshot().pins.length,0);
+  fail=false;f.owner.setForeground(true);await flush();
+  assert.equal(f.commands.length,4);assert.strictEqual(f.commands[3],cleanup);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(f.owner.getSnapshot().activation?.state,'off');assert.equal(f.reads.filter(op=>op.kind==='query').length,1);
 });
