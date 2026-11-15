@@ -15056,7 +15056,7 @@
             "cookieSession": []
           },
           {
-            "bearerSession": []
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -15164,7 +15164,7 @@
             "cookieSession": []
           },
           {
-            "bearerSession": []
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -15351,7 +15351,7 @@
             "cookieSession": []
           },
           {
-            "bearerSession": []
+            "NativeBearer": []
           }
         ],
         "parameters": [
