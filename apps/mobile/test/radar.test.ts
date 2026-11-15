@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL as NodeURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { PlayersCoordinator, PlayersError } from '../src/players.ts';
+import type { PlayersSnapshot } from '../src/players.ts';
 import { RadarCoordinator } from '../src/radar-coordinator.ts';
-import { RADAR_WIRE, RADAR_POLICY, DISCLOSURE_HASH, DISCLOSURE_ID, freshRadarFix, parseRadarConfig, parseRadarSnapshot, mergeRadarPlayers, RadarError } from '../src/radar.ts';
+import { RADAR_WIRE, RADAR_POLICY, DISCLOSURE_HASH, DISCLOSURE_ID, freshRadarFix, parseRadarConfig, parseRadarStatus, parseRadarSnapshot, mergeRadarPlayers, RadarError } from '../src/radar.ts';
 import type { RadarSnapshot } from '../src/radar-coordinator.ts';
 import type { RadarContactContext } from '../src/contact.ts';
-import type { UnifiedRow, UnifiedPreview } from '../src/radar.ts';
+import type { UnifiedRow, UnifiedPreview, UnifiedActivation } from '../src/radar.ts';
 import type { RadarRead, RadarCommand, ForegroundPermission } from '../src/radar.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { mapPackForCity, nativeRadarMapAllowed, nativeRadarPeople, playersMapContext } from '../src/maps.ts';
@@ -21,7 +23,7 @@ const deferred = <T>() => { let resolve!: (value:T)=>void; const promise = new P
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 function fixture() {
   let now=Date.now(), serial=0;
-  const activation=()=>({state:'active',ownerHere:true,contractVersion:RADAR_WIRE,policyVersion:RADAR_POLICY,activationId:'activation',version:1,regionId:'moscow',model:'regional_grid_1000m_v1',gridSizeMeters:1000,degradedReason:'source_accuracy',radiusBucketKm:5,
+  const activation=(): UnifiedActivation=>({state:'active',ownerHere:true,contractVersion:RADAR_WIRE,policyVersion:RADAR_POLICY,activationId:'activation',version:1,regionId:'moscow',model:'regional_grid_1000m_v1',gridSizeMeters:1000,degradedReason:'source_accuracy',radiusBucketKm:5,
     startedAt:instant(now),expiresAt:instant(now+900000),hardExpiresAt:instant(now+3600000),foregroundUntil:instant(now+90000),locationValidUntil:instant(now+300000),nextLocationUpdateAt:instant(now+300000),nextRadiusChangeAt:instant(now+60000),exposureMode:'live'});
   const row=()=>({publicPlayerId:'peer',projection:'radar_public',player:{publicPlayerId:'peer',displayName:'Игрок',cityId:city,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:null,avatar:{uploadedUrl:null,providerUrl:null},canRequestContact:true},
     radar:{resultId:'result',resultRef:'u1.original',consentPolicyVersion:RADAR_POLICY,validUntil:instant(now+60000),distance:null,geo:{latitude:55.75,longitude:37.62,crs:'EPSG:4326',model:'regional_grid_1000m_v1',gridSizeMeters:1000,uncertaintyMeters:1000,quality:'degraded',sourceTimestampBucket:instant(now),sourceAgeSeconds:1}}});
@@ -70,6 +72,9 @@ test('disclosure hash and strict snapshot expiry/type are checked; server order 
   assert.equal(createHash('sha256').update(disclosure).digest('hex'),DISCLOSURE_HASH);
   assert.throws(()=>parseRadarConfig({...config,unifiedDirectory:{...config.unifiedDirectory,disclosure:{...config.unifiedDirectory.disclosure,sha256:'wrong'}}}));
   const f=fixture();const raw=f.snapshot(),snapshot=parseRadarSnapshot(raw,city,f.now());
+  const invalidState:unknown={...f.activation(),state:'invalid'};
+  const invalidModel:unknown={...f.activation(),model:'raw_gps'};
+  assert.throws(()=>parseRadarStatus(invalidState));assert.throws(()=>parseRadarStatus(invalidModel));
   assert.throws(()=>parseRadarSnapshot({...raw,validUntil:instant(f.now()-1)},city,f.now()));
   assert.throws(()=>parseRadarSnapshot({...raw,items:[{...raw.items[0],radar:{...raw.items[0]!.radar,geo:{latitude:55,longitude:37,crs:'EPSG:4326',model:'raw_gps'}}}]},city,f.now()));
   const ordinary={publicPlayerId:'ordinary',displayName:'Каталог',cityId:null,areaKey:null,bio:null,level:null,trainer:false,lookingForGame:false};
@@ -128,8 +133,9 @@ async function uiFunctions() {
   return {controls,players,stripTypeScriptTypes,runInNewContext,
     presentation: runInNewContext(stripTypeScriptTypes(`${source}\nradarControlPresentation;`),{activationDeadline}) as
       (state: RadarSnapshot,now:number)=>{active:boolean;running:boolean;tone:string;progress:number;remaining:string},
-    helpers: runInNewContext(stripTypeScriptTypes(`${helpers}\n({loadPlayerInspection,radarContactAvailable,playerDistance});`),{parseRadarPreview}) as {
+    helpers: runInNewContext(stripTypeScriptTypes(`${helpers}\n({loadPlayerInspection,loadExpandedPlayerInspection,radarContactAvailable,playerDistance});`),{parseRadarPreview}) as {
       loadPlayerInspection:(context: RadarContactContext,read:(operation:RadarRead,scope:typeof actor)=>Promise<unknown>,now:()=>number)=>Promise<UnifiedPreview>;
+      loadExpandedPlayerInspection:(coordinator:PlayersCoordinator,context:RadarContactContext,preview:UnifiedPreview,current:()=>boolean,now?:()=>number)=>Promise<PlayersSnapshot['detail']>;
       radarContactAvailable:(row:UnifiedRow,preview:UnifiedPreview|null,now?:number)=>boolean;
       playerDistance:(preview:UnifiedPreview)=>string;
     }};
@@ -163,8 +169,8 @@ test('inspection redeems exact proof for a contact-denied peer and validates ide
   const calls:RadarRead[]=[];
   const preview=await helpers.loadPlayerInspection(context,async operation=>{calls.push(operation);return raw;},f.now);
   assert.equal(preview.player.canRequestContact,false);assert.equal(helpers.radarContactAvailable(row,preview,f.now()),false);
-  assert.equal(calls.length,1);assert.equal(calls[0]!.kind,'preview');
-  if(calls[0]!.kind==='preview'){assert.equal(calls[0].resultRef,context.resultRef);assert.equal(calls[0].target,row.publicPlayerId);}
+  assert.equal(calls.length,1);const call=calls[0];assert.ok(call);assert.equal(call.kind,'preview');
+  if(call.kind==='preview'){assert.equal(call.resultRef,context.resultRef);assert.equal(call.target,row.publicPlayerId);}
   assert.equal(helpers.radarContactAvailable({...row,player:{...row.player,canRequestContact:false}},null,f.now()),false);
   const positive={...preview,player:{...preview.player,canRequestContact:true}};
   assert.equal(helpers.radarContactAvailable(row,positive,f.now()),true);
@@ -194,5 +200,76 @@ test('actual contact handler gates row and fresh preview and opens explicit comp
   assert.match(players,/onPress=\{\(\) => selectPerson\(row\)\}/);
   assert.match(players,/people=\{people\} selectedPerson=\{person\?\.publicPlayerId \?\? null\} onPerson=\{selectPerson\}/);
   assert.equal((players.match(/radarContactAvailable\((row|person),/g) ?? []).length,3);
-  assert.doesNotMatch(players,/publicApi\.player|coordinator\.loadDetail/);
+  assert.doesNotMatch(players,/publicApi\.player|coordinator\.rereadSafety/);
+  assert.match(players,/coordinator\.loadDetail\(target,true\)/);
+});
+
+
+test('compact Radar remains a 48 by 48 glyph with accessible status; only expanded inspection composes profile and contact',async()=>{
+  const {controls,players}=await uiFunctions();
+  const compact=controls.slice(controls.indexOf('{compact ?'),controls.indexOf('</Pressable> : <View'));
+  assert.match(compact,/width:48,height:48/);assert.match(compact,/accessibilityLabel=.*presentation.caption/);
+  assert.match(compact,/\{glyph\}/);assert.doesNotMatch(compact,/<Label|maxWidth:110|fontSize:10/);
+  const content=players.slice(players.indexOf('  const personContent ='),players.indexOf('  return <ScreenFrame'));
+  const expansion=content.indexOf('{expanded && <>');
+  assert.ok(expansion>0);assert.match(content.slice(0,expansion),/PlayerAvatar/);
+  assert.doesNotMatch(content.slice(0,expansion),/PrimaryButton|TextButton|PlayerProfile/);
+  assert.match(content.slice(expansion),/<PlayerProfile/);assert.match(content.slice(expansion),/radarContactAvailable\(person,preview\)/);
+  assert.doesNotMatch(content,/Закрыть игрока|Здесь показана доступная информация/);
+  assert.match(players,/expanded && person && preview && safeInspection/);
+  assert.match(players,/snapshot.detail === profileResult.detail/);
+});
+
+test('fresh expanded inspection uses genuine scoped detail reader; hidden 404 isolates detail and preserves exact ordinary catalog',async t=>{
+  const {helpers}=await uiFunctions();const f=fixture();t.after(f.owner.dispose);await f.start();
+  const row=f.owner.getSnapshot().rows[0]!,context=f.owner.contactContext(row)!;
+  const preview=await helpers.loadPlayerInspection(context,async()=>({player:{...row.player,canRequestContact:false},proximityBand:null,radar:row.radar,upcomingGames:[]}),f.now);
+  const players=new PlayersCoordinator(),ordinary={...row.player,publicPlayerId:'ordinary',bio:'Каталог',lookingForGame:false};
+  const filters={cityId:city,name:'',looking:false,trainer:false};
+  let unavailable=false;const calls:string[]=[];
+  const profile={...row.player,bio:'Авторизованная биография',areaKey:'sokol',lookingForGame:false};
+  players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`,{
+    list:async()=>({items:[ordinary],nextCursor:null}),
+    detail:async id=>{calls.push(id);if(unavailable)throw new PlayersError('unavailable',404);return profile;},
+  });
+  await players.loadList(filters);const list=players.getSnapshot().list;
+  const detail=await helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now);
+  assert.equal(detail.status,'ready');assert.strictEqual(detail.data,profile);assert.strictEqual(players.getSnapshot().list,list);
+  // The real loadDetail(peer,true) keeps all auth/target fences and only isolates 404's catalog clearing.
+  unavailable=true;const hidden=await helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now);
+  assert.equal(hidden.status,'error');assert.equal(hidden.data,null);assert.equal(players.getSnapshot().detail.data,null);
+  assert.ok(hidden.error instanceof PlayersError);assert.equal(hidden.error.status,404);
+  assert.strictEqual(players.getSnapshot().list,list);assert.strictEqual(players.getSnapshot().list.data?.items[0],ordinary);
+  assert.deepEqual(calls,['peer','peer']);assert.equal(helpers.radarContactAvailable(row,preview,f.now()),false);
+  assert.equal(f.commands.length,1);assert.equal(f.commands[0]?.kind,'start');
+  await players.loadList(filters);assert.equal(players.getSnapshot().list.status,'ready');assert.deepEqual(players.getSnapshot().list.data?.items,[ordinary]);
+});
+
+test('expanded detail rejects selection retirement, scope generation changes and competing detail ownership without cached fallback',async t=>{
+  const {helpers}=await uiFunctions();const f=fixture();t.after(f.owner.dispose);await f.start();
+  const row=f.owner.getSnapshot().rows[0]!,context=f.owner.contactContext(row)!;
+  const preview=await helpers.loadPlayerInspection(context,async()=>({player:row.player,proximityBand:null,radar:row.radar,upcomingGames:[]}),f.now);
+  const scope=`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`;
+  const players=new PlayersCoordinator();const profile={...row.player,bio:'Authorized',lookingForGame:false};
+  let gate=deferred<typeof profile>(),current=true;
+  const reader={list:async()=>({items:[profile],nextCursor:null}),detail:()=>gate.promise};players.setScope(scope,reader);
+  const retired=helpers.loadExpandedPlayerInspection(players,context,preview,()=>current,f.now);
+  current=false;gate.resolve(profile);await assert.rejects(retired,/Retired/);
+  current=true;gate=deferred<typeof profile>();
+  const actorChanged=helpers.loadExpandedPlayerInspection(players,context,preview,()=>current,f.now);
+  players.setScope(`${scope}-next-generation`,reader);gate.resolve(profile);await assert.rejects(actorChanged,/Retired/);
+  assert.equal(players.getSnapshot().detail.data,null);
+  await assert.rejects(helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now),/Retired/);
+  players.setScope(scope,reader);gate=deferred<typeof profile>();
+  const competing=helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now);
+  const other=players.loadDetail('other',true);gate.resolve({...profile,publicPlayerId:'other'});await other;
+  await assert.rejects(competing,/Retired/);assert.equal(players.getSnapshot().detail.id,'other');
+  gate=deferred<typeof profile>();
+  const wrongTarget=helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now);
+  gate.resolve({...profile,publicPlayerId:'wrong-target'});const wrong=await wrongTarget;
+  assert.equal(wrong.status,'error');assert.equal(wrong.data,null);assert.equal(players.getSnapshot().detail.data,null);
+  gate=deferred<typeof profile>();
+  const expired=helpers.loadExpandedPlayerInspection(players,context,preview,()=>true,f.now);
+  f.advance(60001);gate.resolve(profile);await assert.rejects(expired,/Retired/);
+  assert.equal(f.commands.filter(command=>command.kind==='start').length,1);
 });

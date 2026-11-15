@@ -1,3 +1,19 @@
+# #522 Radar — focused R2/R3 + actual test typing correction
+
+Admitted base: `fd392ea892babcb0810504531d78526de4c6902d`; Root capsule `7614552b203bbad6891dd1a30cfa8e8f11a1c79ff5ce3d4cb664dd068ea3231d`. Actual owning parent `4adb94f25e4e1b07f95b14c5c691e5370a47a1afbef37acb8d8fe44ac1e693b7` remains FAIL (test TypeScript). Final Astra review `dc6dda91309abaa2c24a6e12662fc7786635014e0d5b907c856900b98188ac44` closed R1/R4/R5 and retained these two P2; this correction awaits independent acceptance. Private export has no usable Git metadata; no new source SHA is claimed.
+
+R2 source: compact Header/map Radar is glyph/progress/attention only with an exact 48x48 touch area. Status caption remains in the accessible label and existing management dialog; the accepted noncompact Players text/switch and enable-only feedback remain.
+
+R3 source: collapsed person inspection contains only the fresh preview avatar/name/level/trainer/approximate-distance row and expand arrow. Expansion reads authorized detail through the existing scoped `auth.players.loadDetail(peer,true)` and renders the existing read-only PlayerProfile. The boolean isolates expected 404 from ordinary catalog clearing; it does not skip auth, privacy, generation, sequence or target validation. Unavailable/error detail shows the honest preview-only state. No guest fallback, cached private fallback or inferred public visibility. Owner/route/filter/query/selection/session/expiry checks reject retired responses, including replacement of the shared detail request. Contact/unavailable actions appear only expanded with fresh Radar capability; the existing explicit contact handler/proof fences remain unchanged and opening never sends a message. Existing sheet measurements and attribution clearance are unchanged; maps.test.ts is unchanged.
+
+Actual test typing: fixture activation returns UnifiedActivation; invalid state/model are explicit unknown parser inputs. The preview-read assertion checks count, asserts the retrieved call exists and narrows its kind before payload assertions. Original 91 tests retain their assertions/meaning, with the public-detail prohibition updated to the explicitly admitted scoped read.
+
+Author validation in this export: **94/94 PASS**, zero skips/cancellations, across radar/contact/auth/maps/native-contract. Added checks cover compact/expanded composition, genuine PlayersCoordinator hidden-404 catalog isolation, authorized detail, wrong target, selection/scope retirement, competing detail and expiry. Full TypeScript/lint/Expo exports are NOT_RUN here: dependencies/compiler are absent; no installation/resolution. Prior parent 91 units/lint/two exports/archive PASS and unchanged API/DB80 are retained supplied evidence, not fresh checks. First cumulative Code QA remains pending the actual normal parent PASS and must review 907de013 through the new cumulative candidate, including Location lock and UI5.
+
+**SOURCE ONLY / PUBLIC DELIVERY HOLD.** Native visual/device fit and Owner UAT remain NOT_TESTED; Owner APK7 FAIL is retained. Radar upcomingGames projection still drops games to []: populated upcoming-game parity remains mandatory OPEN. Real swipe/mutual flow, UGC and full native parity remain unfinished. No build, signing, install, merge, deploy, APK/OTA or PROD publication. All previous README bytes/FAIL/UNKNOWN history follow unchanged as historical records.
+
+---
+
 # #522 Radar / Players — bounded UI5 source correction
 
 Source base supplied for this export: `365ab6435dbd357f219b0a4a8591f8f6b48aef2d` (trusted generated Location lock child of model candidate `b4f1ed8b489f44d92bb735132fd801e9de66bf39`). Root capsule `36d43b5e` admits only the nine paths; actual static parent `d7099b37` FAIL and Astra UI5 `b7a728ea` remain historical evidence. This export has no usable Git metadata; no new candidate SHA is claimed here.

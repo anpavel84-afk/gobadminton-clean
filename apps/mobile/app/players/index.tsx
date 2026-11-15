@@ -19,10 +19,11 @@ import { useAuth } from '../../src/auth.tsx';
 import { usePreferences } from '../../src/state.tsx';
 import { useResource } from '../../src/hooks.ts';
 import { publicApi } from '../../src/public-api.ts';
+import type { PlayersCoordinator, PlayersSnapshot } from '../../src/players.ts';
 import { playerFilterKey, resetPlayerFilters } from '../../src/players.ts';
 import { filterCities } from '../../src/entry.ts';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
-import { PlayerAvatar, PlayerCard } from '../../src/components/player-card.tsx';
+import { PlayerAvatar, PlayerCard, PlayerProfile } from '../../src/components/player-card.tsx';
 import { colors } from '../../src/theme.ts';
 import { DiscoveryChip, DiscoverySheet, ErrorState, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
 
@@ -42,6 +43,33 @@ export function playerDistance(preview: UnifiedPreview): string {
 }
 export function radarContactAvailable(row: UnifiedRow, preview: UnifiedPreview | null, now = Date.now()): boolean {
   return row.player.canRequestContact === true && (!preview || preview.player.publicPlayerId === row.publicPlayerId && preview.player.canRequestContact === true && Date.parse(preview.radar.validUntil) > now);
+}
+/** Fresh authorized detail only; the Radar proof remains the inspection/contact authority. */
+export async function loadExpandedPlayerInspection(coordinator: PlayersCoordinator, context: RadarContactContext, preview: UnifiedPreview,
+  current: () => boolean, now = Date.now): Promise<PlayersSnapshot['detail']> {
+  const {actor,target} = context, scope = `native:${actor.actorId}:${actor.sessionId}:${actor.generation}`;
+  const valid = () => current() && context.valid() && coordinator.getSnapshot().scope === scope &&
+    preview.player.publicPlayerId === target && Date.parse(preview.radar.validUntil) > now();
+  if (!valid()) throw new Error('Retired player detail inspection');
+  // safetyReread bypasses ONLY clearUnavailable on 404. The same scoped reader, auth,
+  // generation, detail sequence and target checks still apply; the ordinary list survives.
+  const work = coordinator.loadDetail(target,true), pending = coordinator.getSnapshot().detail;
+  let retired = false;
+  let completed: PlayersSnapshot['detail'] | null = null;
+  const unsubscribe = coordinator.subscribe(() => {
+    const detail = coordinator.getSnapshot().detail;
+    if (!valid() || detail.id !== target || detail !== pending && detail.status === 'loading' || completed && detail !== completed) retired = true;
+    if (!retired && detail !== pending && detail.status !== 'loading') completed = detail;
+  });
+  try {
+    await work;
+    const detail = coordinator.getSnapshot().detail;
+    if (retired || !valid() || !completed || detail !== completed || detail.id !== target ||
+      !['ready','error'].includes(detail.status) || detail.status === 'ready' && detail.data?.publicPlayerId !== target) {
+      throw new Error('Retired player detail response');
+    }
+    return detail;
+  } finally { unsubscribe(); }
 }
 export default function Players() {
   const auth = useAuth(), coordinator = auth.players, router = useRouter(), params = useLocalSearchParams(), insets = useSafeAreaInsets();
@@ -113,6 +141,26 @@ export default function Players() {
     }).catch(() => {if (current && context.valid()) setInspection({row:person,context,preview:null,failed:true});});
     return () => {current=false;};
   },[person,radar,radarState.generation,inspectionAttempt]);
+  const profileRoute = JSON.stringify([params,key,mapCityId,mapOpen,focused,mapFilter,venueMode,showPeople,radarState.generation]);
+  const profileOwner = useMemo(() => expanded && person && preview && safeInspection ?
+    {person,preview,context:safeInspection.context,scope:snapshot.scope,route:profileRoute} : null,
+    [expanded,person,preview,safeInspection?.context,snapshot.scope,profileRoute]);
+  const activeProfile = useRef(profileOwner);activeProfile.current=profileOwner;
+  const [profileInspection,setProfileInspection] = useState<{owner:NonNullable<typeof profileOwner>;detail:PlayersSnapshot['detail'] | null;failed:boolean} | null>(null);
+  useEffect(() => {
+    setProfileInspection(null);
+    if (!profileOwner) return;
+    const owner = profileOwner;
+    let current = true;
+    const valid = () => current && activeProfile.current === owner && focusedRef.current;
+    setProfileInspection({owner,detail:null,failed:false});
+    void loadExpandedPlayerInspection(coordinator,owner.context,owner.preview,valid).then(detail => {
+      if (valid()) setProfileInspection({owner,detail,failed:false});
+    }).catch(() => {if (valid()) setProfileInspection({owner,detail:null,failed:true});});
+    return () => {current=false;};
+  },[coordinator,profileOwner]);
+  const profileResult = profileOwner && profileOwner.context.valid() && profileInspection?.owner === profileOwner ? profileInspection : null;
+  const profileDetail = profileResult?.detail && snapshot.scope === profileOwner?.scope && snapshot.detail === profileResult.detail ? profileResult.detail : null;
   const sheetContext = mapOpen && (selection || person) ? JSON.stringify([
     params,key,mapCityId,venueMode,showPeople,radarState.generation,
     person ? 'person' : 'venue',person?.publicPlayerId ?? selection?.id,expanded,
@@ -174,13 +222,20 @@ export default function Players() {
           <Label style={{fontSize:12,lineHeight:18}}>{playerDistance(preview)}</Label></View>
         <Label accessible={false}>{expanded ? '↓' : '↑'}</Label>
       </Pressable>
-      {expanded && <Label>Местоположение и расстояние приблизительные. Здесь показана доступная информация об игроке.</Label>}
-      {radarContactAvailable(person,preview) ? <PrimaryButton title="Написать" onPress={() => {void contact(person);}} /> : <Label>Написать сейчас нельзя.</Label>}
+      {expanded && <>
+        {profileDetail?.status === 'ready' && profileDetail.data ? <PlayerProfile
+          key={`${profileOwner?.scope}:${person.publicPlayerId}:${profileDetail.data.cover?.uploadedUrl}`}
+          player={profileDetail.data} city={cities.state.data?.find(c => c.id === profileDetail.data?.cityId)?.nameRu} />
+          : <Label accessible accessibilityLiveRegion="polite">{profileResult && !profileResult.failed && !profileResult.detail
+            ? 'Загружаем профиль…' : 'Полный профиль недоступен. Доступная информация показана выше.'}</Label>}
+        <Label>Местоположение и расстояние приблизительные.</Label>
+        {radarContactAvailable(person,preview) ? <PrimaryButton title="Написать" onPress={() => {void contact(person);}} /> : <Label>Написать сейчас нельзя.</Label>}
+      </>}
     </> : <>
       <Label accessible accessibilityLiveRegion="polite">{safeInspection && !safeInspection.failed && !safeInspection.preview ? 'Проверяем доступность игрока…' : 'Карточка игрока временно недоступна.'}</Label>
       {(!safeInspection || safeInspection.failed || safeInspection.preview && !preview) && <TextButton title="Повторить" onPress={() => setInspectionAttempt(value => value+1)} />}
     </>}
-    <TextButton title={expanded ? 'Свернуть карточку игрока' : 'Закрыть игрока'} onPress={() => {if(expanded)setExpanded(false);else setSelectedPerson(null);}} />
+    {expanded && <TextButton title="Свернуть карточку игрока" onPress={() => setExpanded(false)} />}
   </View>;
   return <ScreenFrame keyboard header={<Header />}>
     <Modal visible={mapOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={closeMap}>

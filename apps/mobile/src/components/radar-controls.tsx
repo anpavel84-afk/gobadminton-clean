@@ -56,8 +56,8 @@ export function RadarControls({ compact = false }: { compact?: boolean }) {
   const close = () => { setOpen(false); setAccepted(false); if (state.enabling || state.phase === 'consent') owner.cancel(); };
   return <>
     {compact ? <Pressable accessibilityRole="button" accessibilityLabel={`Radar. ${presentation.caption}. Открыть управление Radar`}
-      accessibilityState={{expanded:open}} onPress={enter} style={{minWidth:48,maxWidth:110,alignItems:'center',gap:2}}>
-      {glyph}<Label style={{fontSize:10,lineHeight:14,textAlign:'center'}}>{presentation.caption}</Label>
+      accessibilityState={{expanded:open}} onPress={enter} style={{width:48,height:48,alignItems:'center',justifyContent:'center',flexShrink:0}}>
+      {glyph}
     </Pressable> : <View style={{flexDirection:'row',alignItems:'center',gap:10}}>
       <Pressable accessibilityRole="button" accessibilityLabel="Открыть управление Radar" onPress={enter} style={{minHeight:48,minWidth:48}}>{glyph}</Pressable>
       <Pressable accessibilityRole="button" onPress={enter} accessibilityLabel={`Radar. ${presentation.caption}`} style={{flex:1,minHeight:48,justifyContent:'center'}}>
