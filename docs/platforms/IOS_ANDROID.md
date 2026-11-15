@@ -7,30 +7,42 @@
 Onest, black-on-green, safe edges и масштабирование текста сохранены. Это factual reconciliation текущих
 исходников, а не новая архитектура и не доказательство физической приёмки.
 
-Текущее состояние по предоставленным qualified inputs для alpha.94 и позднейшему sanitized Root summary
-`ACTUAL-ROOT-OWNED-CODE9-SIGN-SUMMARY.json` (SHA256 `8994db8668ecd7dedf4953c72a45a0e091a463000e1928130f7887bb719a7cbf`): owned-sign code9 подтверждена.
-Новый DEV alpha.94 **NOT_ACCEPTED_YET**, APK9 **NOT_PUBLISHED**; подпись не доказывает публикацию, Owner UAT,
-device/login/verified links или продуктовую приёмку. Native runtime source остаётся
-`a44cd7b22259f61ed1dd31ddeb07224f60fb609d`; будущий metadata source/merge и принятый серверный SHA — отдельные факты.
-Приложение `0.1.0-alpha.94` подготовлено как описание функций, API-контракт остаётся `0.44.0`.
+Текущее состояние по предоставленным qualified inputs для alpha.95 и sanitized summary
+`ACTUAL-QUALIFIED-SOURCE-BUILD-SIGN-SUMMARY.json` (SHA256 `96283527474fc798faaa39afe3afbdc190add9cfbba02a9c12e6d62249bc37c8`):
+owned-sign code10 подтверждена. Новый DEV alpha.95 **NOT_ACCEPTED_YET**, публичный APK URL **pending**
+(`APK_URL: null`); подпись не доказывает публикацию, Owner UAT, device/login/verified links или продуктовую
+приёмку. Qualified native source `8cd08ec8631ea8af89b6190482fcb35caaffca9c` (code10 / versionName `0.1.0`);
+будущий metadata merge и принятый серверный SHA этого номера — отдельные факты. Приложение
+`0.1.0-alpha.95` описывает ограниченное исправление открытия метки на карте; API-контракт остаётся `0.44.0`.
+Venue/community candidate (**224**) **HELD_NOT_INCLUDED** и не входит в этот product release.
 
 | Стадия | Текущий подтверждённый факт / обязательная открытая граница |
 |---|---|
-| Принятый сервер / rollback | DEV `0.1.0-alpha.93`, source `12b5024ae2fb47f5bc8ef3bd755aba24d9bbc8a6`, release `r43712227701-a1`, принято `2026-11-15T12:21:01Z`; это текущий принятый rollback target, не будущий native source |
-| Два развёртывания alpha.93 | Сначала `f145863cdd098b016bdd1ae2fbbb8520fd71d83b` / `r43707786262-a1` / `2026-11-15T11:26:35Z`, затем `12b5024ae2fb47f5bc8ef3bd755aba24d9bbc8a6` / `r43712227701-a1` / `2026-11-15T12:21:01Z`. Первый STRICT39461 завершился FAIL из-за DOC alias; исправление и второе развёртывание сохранены в истории, первый FAIL не переименован в PASS |
-| Native normal23 source / static | `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionName `0.1.0`, versionCode **9**. Supplied static parent PASS: typecheck, changed-mobile lint, meaningful units, оба exports, неизменность source/archive; parent SHA256 `79810e52e583d557dc8dee53d18c3a9a0a1d0fb042cdf174c6e44283505615f6` |
-| Независимая source QA | Normal23 focused P2/all-delta PASS без findings, receipt SHA256 `fcf173047e7990f7d717764721c88f22c5c9327d45847ecbd874a1d47edb1c8c`. Предыдущий normal22 full review на `859afdc176f08d81c3540ceae77d956bfac537d5` сохраняет raw CHANGES_REQUIRED / protocol-invalid verdict, не PASS; Root disposition SHA256 `235a899f29b9ebed51abe16ad609b82b2aabfe879f22f41deac7a12e1b0b171f` |
-| Android code9 build / owned-sign | Предоставлен actual standalone build PASS receipt `NATIVE522-NORMAL23-CODE9-ANDROID-STANDALONE-BUILD.json`, SHA256 `803d1709e4c55ee8d44cf9ffdddb95dc75cfb6a04614058d834cbd366c4b7c66`. Это digest квитанции, не APK. Позднейший actual trusted Root signed receipt SHA256 `6e6eda5571fe7cad4d4ca1d5ba0684a4e6378d8b019699be59466dc70f3d6874` подтверждает owned certificate SHA256 `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`, signature v2 и payload byte-equal qualified build для native source `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionName `0.1.0`, versionCode **9**. Подписанный непубличный APK: SHA256 `68d4fbbddb3004e51eca05c617e0600623bf36e07fba79f7272faa93dae8b155`, **44751369 bytes**, package `ru.gobadminton.mobile.dev`, `arm64-v8a`; APK9 **NOT_PUBLISHED**. Историческое `owned_sign_sha256: null` в initial qualified inputs остаётся неизменным |
-| Публичный APK сейчас | **APK8** остаётся фактически опубликованным. Build code9 не заменяет APK8; нового публичного URL, digest артефакта или даты публикации code9 не заявлено. APK7 ниже сохранён как историческое evidence |
-| Backend native opt-ins | В source адресно подготовлены ещё **8** bearer API routes для MyGames/Postgame. Общий установленный inventory **22** допустимо фиксировать только после фактического нового DEV acceptance; сейчас это не факт установки. Права, версии, idempotency и WEB cookie-поведение сохраняются |
-| Устройства / приёмка | Physical Android / Samsung S23 **NOT_TESTED**, native visual **NOT_VERIFIED**; исторический S23 FAIL и Owner UAT **FAIL_RECHECK_PENDING** сохранены. Source QA и build не доказывают taps, вход, verified links или установленный authenticated journey |
-| Полный объём | Full web-to-native parity **MANDATORY_NOT_COMPLETE**, оставшиеся сценарии обязательны; real signed OTA A→B **NOT_DONE**, Android device/S23 и iOS acceptance обязательны и открыты. Новый Product CI/STRICT DEV, independent metadata QA и release acceptance выполняет trusted route; PROD, production OTA и stores требуют отдельного Owner GO |
+| Принятый сервер / rollback | DEV `0.1.0-alpha.94`, source `b703fad0107a4888808b542dcb7cd49f2c269603`, release `r43736231808-a1`, принято `2026-11-15T16:48:11Z`; это текущий принятый rollback target, не future alpha.95 native source |
+| Два развёртывания alpha.93 (история) | Сначала `f145863cdd098b016bdd1ae2fbbb8520fd71d83b` / `r43707786262-a1` / `2026-11-15T11:26:35Z`, затем `12b5024ae2fb47f5bc8ef3bd755aba24d9bbc8a6` / `r43712227701-a1` / `2026-11-15T12:21:01Z`. Первый STRICT39461 завершился FAIL из-за DOC alias; исправление и второе развёртывание сохранены в истории, первый FAIL не переименован в PASS |
+| Принятый alpha.94 | MyGames/Postgame metadata+native lineage на `b703fad0107a4888808b542dcb7cd49f2c269603` / normal23 `a44cd7b22259f61ed1dd31ddeb07224f60fb609d` + qualified metadata; Owner UAT **FAIL_RECHECK_PENDING** сохранён |
+| Native marker-hotfix source / static | `8cd08ec8631ea8af89b6190482fcb35caaffca9c`, versionName `0.1.0`, versionCode **10**. Parent PASS SHA256 `25076dd00837e82e90f982f345b982c8e1696aff91ec208d7e8e96b69cd187a4`. Global native author normal execution counter **27** (normal26 first-marker source + normal27 P1 ownership repair); это не число авторов и не proof whole-app |
+| Независимая source QA | Focused P1 PASS receipt SHA256 `7f645a96ce663827e766e1269f491174f1fceb7049b561961ecbf85f12cda16b`. FIRST full-6 QA FAIL SHA256 `4193f2d862f0d351cd966fde91c3960b29c0f3e6de7d1258cee1ec89c5c7b5d6` сохранён как история, не переименован в PASS |
+| Android code10 build / owned-sign | Actual private build+sign: build receipt SHA256 `87d796f99e5855dfb11b25d0fc4a10e306296cdd86903c5c3e11fdf2d16ab3a2`; owned-sign receipt SHA256 `79f59a3f12ac7800a42f799b8a7645407f1ac622f7105f2dc20f4e9f56d46dea`. Owned certificate SHA256 `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051` (тот же, что у owned APK9). Подписанный непубличный APK: SHA256 `9eb049a6874cf9c9bb4b984f37cf7e30f33ab10e94146d65d4cd95638381ae77`, **44751369 bytes**, package `ru.gobadminton.mobile.dev`, `arm64-v8a`, embedded bundle **3187108** bytes; публичный URL **не опубликован**. Ожидаемая установка поверх owned APK9 тем же package/certificate — не device-verified |
+| Публичный APK сейчас | Публичный URL code10 **pending**. Исторические APK8/APK7 ниже сохранены как evidence; private APK path не выдаётся за публичную ссылку |
+| Backend native inventory | API-контракт `0.44.0`, whole OpenAPI NativeBearer **64**, selected installed inventory **22** — **UNCHANGED** в этом metadata release. Новые venue opt-ins **не** входят. Восемь MyGames/Postgame bearer routes остаются source-prepared относительно принятого alpha.94; этот выпуск их не расширяет |
+| Устройства / приёмка | Physical Android / Samsung S23 **NOT_TESTED** (`device: NOT_TESTED`), native visual **NOT_VERIFIED**. Исторические Owner замечания (карта: много меток, ни одна не открывается; PlayerSwipe two-gesture load error) и UAT **FAIL_RECHECK_PENDING** сохранены; code10 требует Owner retest. Причина Swipe **UNCONFIRMED**, swipe code fix в этот выпуск не входит. Source QA и build не доказывают taps на устройстве, вход, verified links или authenticated journey |
+| Полный объём | Full #522 **PARTIAL**; full web-to-native parity **MANDATORY_NOT_COMPLETE**; real signed OTA A→B / recovery **NOT_READY**/**NOT_DONE**; Android device/S23 и iOS acceptance обязательны и открыты. Product CI → merge → DEV strict/read smoke → owned HTTPS publication выполняет trusted route после metadata; PROD, production OTA и stores требуют отдельного Owner GO |
 
-Восемь source opt-ins: `GET /me/game-results`, `GET /games/:gameId/results`,
+Восемь source opt-ins (история alpha.94, не новые в alpha.95): `GET /me/game-results`, `GET /games/:gameId/results`,
 `PUT /games/:gameId/outcome`, `PUT /games/:gameId/attendance/:contextId`,
 `POST /games/:gameId/attendance/bulk-present`, `POST /games/:gameId/attendance/:contextId/acknowledgements`,
 `GET /me/postgame-reminders`, `POST /me/postgame-reminders/:reminderId`.
 Disputes/history/help и остальные закрытые сценарии этим списком не объявляются перенесёнными.
+
+### Исторические факты alpha.94 code9 (не текущее состояние alpha.95)
+
+| Стадия | Подтверждённый факт / отдельная граница |
+|---|---|
+| Native normal23 / code9 | `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionCode **9**; parent PASS SHA256 `79810e52e583d557dc8dee53d18c3a9a0a1d0fb042cdf174c6e44283505615f6` |
+| Независимая source QA | Normal23 focused P2/all-delta PASS `fcf173047e7990f7d717764721c88f22c5c9327d45847ecbd874a1d47edb1c8c`; prior normal22 CHANGES_REQUIRED retained |
+| Android code9 owned-sign | Signed APK SHA256 `68d4fbbddb3004e51eca05c617e0600623bf36e07fba79f7272faa93dae8b155`, certificate `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`; APK9 был **NOT_PUBLISHED** на момент metadata alpha.94 |
+| DEV ACCEPTED | `0.1.0-alpha.94`, source `b703fad0107a4888808b542dcb7cd49f2c269603`, release `r43736231808-a1`, принято `2026-11-15T16:48:11Z` |
 
 ### Исторические факты alpha.92 и venue candidate (не текущее состояние)
 
@@ -64,7 +76,7 @@ Disputes/history/help и остальные закрытые сценарии э
 | Свой профиль / contact | Ручные публичное имя/город и редактор публичного контакта игры, явное versioned/idempotent save, conflict/UNKNOWN/actor fences и возврат к форме без auto-create | Level/photo/privacy settings, методы/link/email/reauth и полный профиль |
 | Safety | Явные block/unblock/report, scoped authority reads/fences, сохранение исходных UNKNOWN и черновиков; historical replay не доказывает текущий block state | Повторная пользовательская проверка и физические native interruption flows |
 | Площадка: реализовано в source | Game → native public venue facts/gallery/credits/contacts → public upcoming schedule → game; typed venue-create → явный выбор в существующей форме → preview/publish | Полная venue parity и device taps обязательны; source, build/sign и публикация разделены выше |
-| Maps/Radar/Swipe | Native public games/venues map, venue sheet и переход к create; Radar origin/conditions/results/явное управление поиском; просмотр игроков по одному, явный play interest и переход при mutual interest. Смена условий/остановка убирает устаревшие результаты; privacy/consent fences сохранены | Это ограниченный core, не полные карты/Radar/matching; все remaining WEB contracts/consents/privacy, permissions и device visual/taps обязательны |
+| Maps/Radar/Swipe | Native public games/venues map, venue sheet и переход к create; в `8cd08ec8631ea8af89b6190482fcb35caaffca9c` нажатие на метку привязано к одной согласованной обработке с учётом текущей закрытой площадки (source fix; device taps **NOT_TESTED**). Radar origin/conditions/results/явное управление поиском; просмотр игроков по одному, явный play interest и переход при mutual interest. Смена условий/остановка убирает устаревшие результаты; privacy/consent fences сохранены. Swipe load-error cause **UNCONFIRMED**, swipe code fix не входит в alpha.95 | Это ограниченный core, не полные карты/Radar/matching; Owner retest code10 и все remaining WEB contracts/consents/privacy, permissions и device visual/taps обязательны |
 | UGC/остальное | Неперенесённые native сценарии не заявлены завершёнными | Ratings/comments/reviews/uploads/новые площадки, оставшиеся сообщения/социальные сценарии и весь обязательный parity |
 
 Pure type-only `@gobadminton/contracts/native-auth` исключает `node:fs` root из Metro. DOM, cookies и CSRF
@@ -136,9 +148,10 @@ Apple 2.5.2/2.5.19 и Google Play interpreted-code exception не дают об�
 
 Auth/profile, games/application/My Games и Players/Messages уже имеют source ports в указанных выше границах.
 Native venue/map/Radar/Swipe/contact/safety и MyGames/Postgame core реализованы в source в описанных границах;
-remaining parity и все оставшиеся сценарии обязательны и не завершены. Source static/focused QA, standalone build,
-owned signing, Product CI/STRICT DEV, публикация и Android device acceptance разделены. Accepted E introduction
-с чёрным текстом на зелёном сохранён. Реальный signed OTA A→B, S23 и iOS acceptance остаются обязательными открытыми gates.
+marker-tap source fix входит в alpha.95 metadata, venue/community **224** остаётся HELD. Remaining parity и все
+оставшиеся сценарии обязательны и не завершены. Source static/focused QA, standalone build, owned signing,
+Product CI/STRICT DEV, публикация и Android device acceptance разделены. Accepted E introduction с чёрным текстом
+на зелёном сохранён. Реальный signed OTA A→B, S23 и iOS acceptance остаются обязательными открытыми gates.
 
 ## Историческая архитектурная основа (сохранена)
 
