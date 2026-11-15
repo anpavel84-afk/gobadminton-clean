@@ -5,6 +5,14 @@ import type { Intent, Packet, Results, OwnResults, Reminders, ResultsQuery, OwnR
 export type Source<T> = { status: 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'; data?: T };
 export type Filter = 'all' | 'manage' | 'participate';
 type Command = { packet: Packet; status: 'sending' | 'unknown' };
+type OwnAck = { gameId: string; contextId: string; version: number };
+function applyOwnAck(row: OwnResult, ack: OwnAck): OwnResult {
+  if (row.gameId !== ack.gameId || row.contextId !== ack.contextId || row.attendance.version !== ack.version) return row;
+  // The validated receipt proves ACK, but carries neither a notice timestamp nor
+  // current hub rights. Retain those rights and remove only its pending notice.
+  return {...row,attendance:{...row.attendance,acknowledgedVersion:ack.version},
+    notice:row.notice?.attendanceVersion === ack.version && !row.notice.acknowledgedAt ? null : row.notice};
+}
 type Snapshot = { actor: Actor | null; filter: Filter; own: Source<OwnResults>; reminders: Source<Reminders>; games: Record<string,Source<Results>>; review: Intent | null; command: Command | null; notice: string | null };
 type Port = {
   own: (actor: Actor, cursor?: string) => Promise<OwnResults>;
@@ -34,6 +42,9 @@ export class PostgameCoordinator {
   private serial = 0;
   private reads = new Map<string,number>();
   private seenOwn = new Set<string>();
+  // Evidence belongs only to the currently pending own GET. Later GETs establish
+  // current truth themselves; a historical receipt must not override them.
+  private ownReadAcks: OwnAck[] = [];
   private resultCursors = new Map<string,Set<string>>();
   private inFlight: Packet | null = null;
   private port: Port;
@@ -48,13 +59,13 @@ export class PostgameCoordinator {
     const saved=actor && this.quarantine?.actorId === actor.actorId ? this.quarantine.snapshot : null;
     if (actor && this.quarantine?.actorId !== actor.actorId) this.inFlight=null;
     if (actor) this.quarantine=null;
-    this.reads.clear(); this.seenOwn.clear(); this.resultCursors.clear(); this.serial++;
+    this.reads.clear(); this.seenOwn.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++;
     this.snapshot=empty(actor ? Object.freeze({...actor}) : null);
     // Reads must reestablish authority. Only the original packet is restored, never sent on login.
     if (saved) this.show({filter:saved.filter,command:saved.command ? {packet:saved.command.packet,status:'unknown'} : null,notice:saved.command ? unknownNotice : null});
     else this.show({});
   }
-  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.resultCursors.clear(); this.serial++; this.snapshot=empty(null); this.show({}); };
+  forget = () => { this.quarantine=null; this.inFlight=null; this.reads.clear(); this.seenOwn.clear(); this.ownReadAcks=[]; this.resultCursors.clear(); this.serial++; this.snapshot=empty(null); this.show({}); };
   filter = (filter: Filter) => { if (this.snapshot.actor && ['all','manage','participate'].includes(filter)) this.show({filter}); };
   private start(key: string) { const n=++this.serial; this.reads.set(key,n); const actor=this.snapshot.actor; return {actor,valid:()=>!!actor && sameActor(actor,this.snapshot.actor) && this.reads.get(key)===n}; }
   private failure<T>(error: unknown, prior: Source<T>): Source<T> {
@@ -66,13 +77,15 @@ export class PostgameCoordinator {
     const old=this.snapshot.own, cursor=more ? old.data?.nextCursor : undefined;
     if (more && !cursor) return;
     const {actor,valid}=this.start('own'); if (!actor) return;
+    this.ownReadAcks=[];
     this.show({own:{...old,status:'loading'}});
     try {
       const page=await this.port.own(actor,cursor ?? undefined); if (!valid()) return;
       if (page.nextCursor && (page.nextCursor === cursor || more && this.seenOwn.has(page.nextCursor))) throw new PostgameError('invalid');
       if (!more) this.seenOwn.clear(); if (page.nextCursor) this.seenOwn.add(page.nextCursor);
       const rows=new Map<string,OwnResult>();
-      for (const fresh of [...(more ? old.data?.items ?? [] : []),...page.items]) {
+      for (const item of [...(more ? this.snapshot.own.data?.items ?? [] : []),...page.items]) {
+        const fresh=this.ownReadAcks.reduce(applyOwnAck,item);
         const key=`${fresh.gameId}:${fresh.contextId}`, prior=rows.get(key);
         // Historical notice rows carry CURRENT attendance. Keep only a matching pending
         // notice; fresh ACK/version/rights always win, including across page boundaries.
@@ -84,7 +97,8 @@ export class PostgameCoordinator {
       }
       const items=[...rows.values()];
       this.show({own:{status:'ready',data:{items,nextCursor:page.nextCursor}}});
-    } catch(error) { if (valid()) this.show({own:this.failure(error,old)}); }
+    } catch(error) { if (valid()) this.show({own:this.failure(error,this.snapshot.own)}); }
+    finally { if (valid()) this.ownReadAcks=[]; }
   };
   loadReminders = async () => {
     const {actor,valid}=this.start('reminders'); if (!actor) return; const old=this.snapshot.reminders;
@@ -166,11 +180,19 @@ export class PostgameCoordinator {
   };
   private async dispatch(packet: Packet, authority: Actor, reconciling: boolean) {
     this.inFlight=packet; this.show({command:{packet,status:'sending'},review:null,notice:null});
-    const valid=()=>sameActor(authority,this.snapshot.actor) && this.snapshot.command?.packet === packet;
+    // Actor object identity also fences a switch away and back to identical
+    // credentials. Explicit reconcile captures the new authority separately.
+    const valid=()=>authority === this.snapshot.actor && this.snapshot.command?.packet === packet;
     try {
-      validateReceipt(await this.port.send(packet,authority),packet);
+      const receipt=validateReceipt(await this.port.send(packet,authority),packet);
       if(!valid()) return;
-      this.show({command:null,notice:reconciling ? 'Исходное действие подтверждено. Обновляем текущие данные.' : 'Изменения сохранены.'});
+      let own=this.snapshot.own;
+      if (packet.kind === 'ack' && 'acknowledgedVersion' in receipt) {
+        const ack: OwnAck={gameId:packet.gameId,contextId:receipt.contextId,version:receipt.version};
+        if (own.status === 'loading') this.ownReadAcks.push(ack);
+        if (own.data) own={...own,data:{...own.data,items:own.data.items.map(row=>applyOwnAck(row,ack))}};
+      }
+      this.show({own,command:null,notice:reconciling ? 'Исходное действие подтверждено. Обновляем текущие данные.' : 'Изменения сохранены.'});
       // Receipt replay is history; always read current rights/version separately.
       void this.loadResults(packet.gameId); void this.loadReminders();
     } catch(error) {

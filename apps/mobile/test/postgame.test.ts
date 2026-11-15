@@ -157,6 +157,116 @@ test('append revisions: fresh omitted history never reconstructs old revisions/c
   s.coordinator.review({kind:'outcome',gameId:game.id,body:{expectedVersion:0,outcome:'held'}});await s.coordinator.confirm();assert.equal(s.sent.length,0);
 });
 const pendingOwn:OwnResult={...own,attendance:marked,notice:{id:'notice-current',attendanceVersion:1,value:'present',late:false,source:'manager_explicit',actorDisplay:'Организатор',createdAt:date,acknowledgedAt:null}};
+const ackIntent:Intent={kind:'ack',gameId:game.id,contextId:row.contextId,body:{attendanceVersion:1}};
+const ackReceipt:Attendance={...marked,acknowledgedVersion:1,allowedActions:{...marked.allowedActions,canAcknowledge:false}};
+async function readyAck() {
+  const s=setup();
+  s.port.results=async(_actor,id)=>({...structuredClone(result),gameId:id,attendance:{...result.attendance!,myAttendance:marked,roster:null}});
+  await s.coordinator.loadResults(game.id);
+  return s;
+}
+test('exact ACK closes only matching loaded hub attention, retaining every page, cursor, filter and other game',async()=>{
+  const s=await readyAck(), reply=deferred<Attendance>();
+  const otherGame={...pendingOwn,gameId:'other-game'}, otherContext={...pendingOwn,contextId:'other-context',attendance:{...marked,contextId:'other-context'}};
+  s.port.own=async(_actor,cursor)=>{s.cursors.push(cursor);return {items:cursor ? [pendingOwn] : [otherGame,otherContext],nextCursor:cursor ? 'page-3' : 'page-2'};};
+  await s.coordinator.loadOwn();await s.coordinator.loadOwn(true);s.coordinator.filter('participate');
+  await s.coordinator.loadResults('other-game');const otherProjection=s.coordinator.getSnapshot().games['other-game'];
+  s.port.send=async p=>{s.sent.push(p);return reply.promise;};
+  s.coordinator.review(ackIntent);const work=s.coordinator.confirm();
+  assert.ok(needsAttention(s.coordinator.getSnapshot().own.data!.items[2]!));
+  reply.resolve(ackReceipt);await work;
+  const snapshot=s.coordinator.getSnapshot(), items=snapshot.own.data!.items;
+  assert.equal(snapshot.own.status,'ready');assert.equal(snapshot.own.data?.nextCursor,'page-3');assert.equal(snapshot.filter,'participate');
+  assert.equal(items.length,3);assert.equal(items[0],otherGame);assert.equal(items[1],otherContext);assert.equal(snapshot.games['other-game'],otherProjection);
+  assert.equal(items[2]?.notice,null);assert.equal(items[2]?.attendance.acknowledgedVersion,1);
+  assert.equal(items[2]?.attendance.allowedActions,pendingOwn.attendance.allowedActions);
+  assert.deepEqual(hubView(hubRows([],[],items,[]),'all').attention.map(r=>r.gameId),['other-game',game.id]);
+  assert.deepEqual(s.cursors,[undefined,'page-2']);assert.equal(s.sent.length,1);
+  // The retained cursor remains usable, including historical duplicates of the ACKed row.
+  s.port.own=async(_actor,cursor)=>{s.cursors.push(cursor);return {items:[{...pendingOwn,notice:null,attendance:ackReceipt}],nextCursor:null};};
+  await s.coordinator.loadOwn(true);assert.equal(s.cursors.at(-1),'page-3');
+  assert.equal(s.coordinator.getSnapshot().own.data?.items.length,3);assert.equal(s.coordinator.getSnapshot().filter,'participate');
+});
+test('pre-ACK pending own append cannot resurrect attention and retains fresh page rights, rows and next cursor',async()=>{
+  const s=await readyAck(), page=deferred<{items:OwnResult[];nextCursor:string|null}>(), reply=deferred<Attendance>();
+  s.port.own=async()=>({items:[pendingOwn],nextCursor:'page-2'});await s.coordinator.loadOwn();
+  s.port.own=async()=>page.promise;const read=s.coordinator.loadOwn(true);
+  s.port.send=async p=>{s.sent.push(p);return reply.promise;};s.coordinator.review(ackIntent);const work=s.coordinator.confirm();
+  reply.resolve(ackReceipt);await work;
+  assert.equal(s.coordinator.getSnapshot().own.status,'loading');assert.equal(s.coordinator.getSnapshot().own.data?.items[0]?.notice,null);
+  const other={...pendingOwn,gameId:'new-page-game'};
+  const freshRights={...marked.allowedActions,canSetAttendance:false,canAcknowledge:false};
+  page.resolve({items:[{...pendingOwn,attendance:{...marked,displayName:'Актуальное имя',allowedActions:freshRights}},other],nextCursor:'page-3'});await read;
+  const snapshot=s.coordinator.getSnapshot(), target=snapshot.own.data!.items[0]!;
+  assert.equal(target.notice,null);assert.equal(target.attendance.acknowledgedVersion,1);assert.equal(needsAttention(target),false);
+  assert.equal(target.attendance.displayName,'Актуальное имя');assert.equal(target.attendance.allowedActions,freshRights);
+  assert.equal(snapshot.own.data?.items[1],other);assert.equal(snapshot.own.data?.nextCursor,'page-3');assert.equal(s.sent.length,1);
+  // A later authoritative refresh is unrestricted: a new version needs a new ACK.
+  const replacement={...pendingOwn,attendance:{...marked,version:2},notice:{...pendingOwn.notice!,id:'notice-v2',attendanceVersion:2}};
+  s.port.own=async()=>({items:[replacement],nextCursor:null});await s.coordinator.loadOwn();
+  assert.equal(s.coordinator.getSnapshot().own.data?.items[0],replacement);assert.ok(needsAttention(replacement));
+});
+test('overlapping own refresh failure retains the real ACK; a private failure still strips the projection',async()=>{
+  for (const error of [new PostgameError('network'),new PostgameError('private',404)]) {
+    const s=await readyAck(), gate=deferred<void>();
+    s.port.own=async()=>({items:[pendingOwn],nextCursor:'page-2'});await s.coordinator.loadOwn();
+    s.port.own=async()=>{await gate.promise;throw error;};const read=s.coordinator.loadOwn();
+    s.port.send=async p=>{s.sent.push(p);return ackReceipt;};s.coordinator.review(ackIntent);await s.coordinator.confirm();
+    gate.resolve();await read;
+    const source=s.coordinator.getSnapshot().own;
+    if(error.kind === 'private') {assert.equal(source.status,'unavailable');assert.equal(source.data,undefined);}
+    else {assert.equal(source.status,'error');assert.equal(source.data?.items[0]?.notice,null);assert.equal(source.data?.items[0]?.attendance.acknowledgedVersion,1);assert.equal(source.data?.nextCursor,'page-2');}
+  }
+});
+test('late historical ACK receipt never replaces a newer current own version or its attention',async()=>{
+  const s=await readyAck(), reply=deferred<Attendance>();
+  s.port.own=async()=>({items:[pendingOwn],nextCursor:'page-2'});await s.coordinator.loadOwn();
+  s.port.send=async p=>{s.sent.push(p);return reply.promise;};s.coordinator.review(ackIntent);const work=s.coordinator.confirm();
+  const current={...pendingOwn,attendance:{...marked,version:2},notice:{...pendingOwn.notice!,id:'notice-v2',attendanceVersion:2}};
+  s.port.own=async()=>({items:[current],nextCursor:'current-cursor'});await s.coordinator.loadOwn();
+  reply.resolve(ackReceipt);await work;
+  assert.equal(s.coordinator.getSnapshot().own.data?.items[0],current);assert.ok(needsAttention(current));assert.equal(s.coordinator.getSnapshot().own.data?.nextCursor,'current-cursor');assert.equal(s.sent.length,1);
+});
+test('actor/session switch fences pending own GET and ACK, even after returning to identical actor credentials',async()=>{
+  for (const next of [{...actor,actorId:'actor-b',generation:2},{...actor,sessionId:'session-new',generation:2},actor]) {
+    const s=await readyAck(), page=deferred<{items:OwnResult[];nextCursor:string|null}>(), reply=deferred<Attendance>();
+    s.port.own=async()=>({items:[pendingOwn],nextCursor:'page-2'});await s.coordinator.loadOwn();
+    s.port.own=async()=>page.promise;const read=s.coordinator.loadOwn(true);
+    s.port.send=async p=>{s.sent.push(p);return reply.promise;};s.coordinator.review(ackIntent);const work=s.coordinator.confirm();
+    s.coordinator.setActor(null);s.coordinator.setActor(next);
+    const current={...pendingOwn,gameTitle:'Только новая сессия'};
+    s.port.own=async()=>({items:[current],nextCursor:'new-session-cursor'});await s.coordinator.loadOwn();
+    const before=s.coordinator.getSnapshot();reply.resolve(ackReceipt);page.resolve({items:[pendingOwn],nextCursor:null});await work;await read;
+    assert.equal(s.coordinator.getSnapshot(),before);assert.equal(before.own.data?.items[0],current);assert.ok(needsAttention(current));assert.deepEqual(before.games,{});assert.equal(s.sent.length,1);
+  }
+});
+test('rejected ACK retains hub attention and never starts a follow-up write',async()=>{
+  const s=await readyAck(), response=deferred<Response>();
+  s.port.own=async()=>({items:[pendingOwn],nextCursor:'page-2'});await s.coordinator.loadOwn();
+  const api=createNativeApi(async()=>response.promise);
+  s.port.send=async p=>{s.sent.push(p);return api.postgameMutation('secret',p);};
+  s.coordinator.review(ackIntent);const work=s.coordinator.confirm();
+  response.resolve(new Response(JSON.stringify({code:'VERSION_CONFLICT'}),{status:409}));await work;
+  assert.equal(s.coordinator.getSnapshot().own.data?.items[0],pendingOwn);assert.ok(needsAttention(pendingOwn));assert.equal(s.coordinator.getSnapshot().command,null);
+  await s.coordinator.reconcile(game.id);assert.equal(s.sent.length,1);assert.equal(s.coordinator.getSnapshot().own.data?.nextCursor,'page-2');
+});
+test('actual ACK transport timeout retains attention and frozen original packet; only explicit reconcile settles it',async(t)=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const s=await readyAck();s.port.own=async()=>({items:[pendingOwn],nextCursor:'page-2'});await s.coordinator.loadOwn();
+  const api=createNativeApi(async(_url,init)=>new Promise<Response>((_resolve,reject)=>{init?.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')),{once:true});}));
+  s.port.send=async p=>{s.sent.push(p);return api.postgameMutation('secret',p);};
+  s.coordinator.review(ackIntent);const work=s.coordinator.confirm(), original=s.sent[0]!;
+  t.mock.timers.tick(15_000);await work;t.mock.timers.reset();
+  assert.equal(s.coordinator.getSnapshot().command?.status,'unknown');assert.equal(s.coordinator.getSnapshot().command?.packet,original);
+  assert.ok(Object.isFrozen(original));assert.ok(Object.isFrozen(original.body));assert.deepEqual(original.body,{attendanceVersion:1});assert.equal(original.method,'POST');assert.equal(original.path,`/games/${game.id}/attendance/${row.contextId}/acknowledgements`);
+  assert.equal(s.coordinator.getSnapshot().own.data?.items[0],pendingOwn);
+  await s.coordinator.loadOwn();await s.coordinator.loadResults(game.id);s.coordinator.review(ackIntent);await s.coordinator.confirm();
+  assert.equal(s.sent.length,1);assert.ok(needsAttention(s.coordinator.getSnapshot().own.data!.items[0]!));assert.equal(s.coordinator.getSnapshot().command?.packet,original);
+  const reply=deferred<Attendance>();s.port.send=async p=>{s.sent.push(p);return reply.promise;};const reconcile=s.coordinator.reconcile(game.id);
+  assert.equal(s.sent[1],original);assert.equal(s.sent[1]?.key,original.key);assert.equal(s.coordinator.getSnapshot().own.data?.items[0],pendingOwn);
+  reply.resolve(ackReceipt);await reconcile;
+  assert.equal(s.coordinator.getSnapshot().command,null);assert.equal(s.coordinator.getSnapshot().own.data?.items[0]?.notice,null);assert.equal(s.sent.length,2);
+});
 test('own same-page newest external + older self-suppressed null preserves attention and fresh attendance truth', {timeout:1000}, async()=>{
   const s=setup();
   s.port.own=async()=>({items:[pendingOwn,{...pendingOwn,notice:null,attendance:{...marked,displayName:'Текущее имя',allowedActions:{...marked.allowedActions,canAcknowledge:false,canSetAttendance:false}}}],nextCursor:null});
