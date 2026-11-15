@@ -7,6 +7,31 @@
 Onest, black-on-green, safe edges и масштабирование текста сохранены. Это factual reconciliation текущих
 исходников, а не новая архитектура и не доказательство физической приёмки.
 
+Текущее состояние по предоставленным qualified inputs для alpha.94; новый DEV release, подпись и
+публикация native code9 этим metadata-изменением не подтверждаются. Native runtime source остаётся
+`a44cd7b22259f61ed1dd31ddeb07224f60fb609d`; будущий metadata source/merge и принятый серверный SHA — отдельные факты.
+Приложение `0.1.0-alpha.94` подготовлено как описание функций, API-контракт остаётся `0.44.0`.
+
+| Стадия | Текущий подтверждённый факт / обязательная открытая граница |
+|---|---|
+| Принятый сервер / rollback | DEV `0.1.0-alpha.93`, source `12b5024ae2fb47f5bc8ef3bd755aba24d9bbc8a6`, release `r43712227701-a1`, принято `2026-11-15T12:21:01Z`; это текущий принятый rollback target, не будущий native source |
+| Два развёртывания alpha.93 | Сначала `f145863cdd098b016bdd1ae2fbbb8520fd71d83b` / `r43707786262-a1` / `2026-11-15T11:26:35Z`, затем `12b5024ae2fb47f5bc8ef3bd755aba24d9bbc8a6` / `r43712227701-a1` / `2026-11-15T12:21:01Z`. Первый STRICT39461 завершился FAIL из-за DOC alias; исправление и второе развёртывание сохранены в истории, первый FAIL не переименован в PASS |
+| Native normal23 source / static | `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionName `0.1.0`, versionCode **9**. Supplied static parent PASS: typecheck, changed-mobile lint, meaningful units, оба exports, неизменность source/archive; parent SHA256 `79810e52e583d557dc8dee53d18c3a9a0a1d0fb042cdf174c6e44283505615f6` |
+| Независимая source QA | Normal23 focused P2/all-delta PASS без findings, receipt SHA256 `fcf173047e7990f7d717764721c88f22c5c9327d45847ecbd874a1d47edb1c8c`. Предыдущий normal22 full review на `859afdc176f08d81c3540ceae77d956bfac537d5` сохраняет raw CHANGES_REQUIRED / protocol-invalid verdict, не PASS; Root disposition SHA256 `235a899f29b9ebed51abe16ad609b82b2aabfe879f22f41deac7a12e1b0b171f` |
+| Android code9 build | Предоставлен actual standalone build PASS receipt `NATIVE522-NORMAL23-CODE9-ANDROID-STANDALONE-BUILD.json`, SHA256 `803d1709e4c55ee8d44cf9ffdddb95dc75cfb6a04614058d834cbd366c4b7c66`. Это digest квитанции, не APK; owned-sign proof отсутствует (`owned_sign_sha256: null`), подписанная публикация code9 не подтверждена |
+| Публичный APK сейчас | **APK8** остаётся фактически опубликованным. Build code9 не заменяет APK8; нового публичного URL, digest артефакта или даты публикации code9 не заявлено. APK7 ниже сохранён как историческое evidence |
+| Backend native opt-ins | В source адресно подготовлены ещё **8** bearer API routes для MyGames/Postgame. Общий установленный inventory **22** допустимо фиксировать только после фактического нового DEV acceptance; сейчас это не факт установки. Права, версии, idempotency и WEB cookie-поведение сохраняются |
+| Устройства / приёмка | Physical Android / Samsung S23 **NOT_TESTED**, native visual **NOT_VERIFIED**; исторический S23 FAIL и Owner UAT **FAIL_RECHECK_PENDING** сохранены. Source QA и build не доказывают taps, вход, verified links или установленный authenticated journey |
+| Полный объём | Full web-to-native parity **MANDATORY_NOT_COMPLETE**, оставшиеся сценарии обязательны; real signed OTA A→B **NOT_DONE**, Android device/S23 и iOS acceptance обязательны и открыты. Новый Product CI/STRICT DEV, independent metadata QA и release acceptance выполняет trusted route; PROD, production OTA и stores требуют отдельного Owner GO |
+
+Восемь source opt-ins: `GET /me/game-results`, `GET /games/:gameId/results`,
+`PUT /games/:gameId/outcome`, `PUT /games/:gameId/attendance/:contextId`,
+`POST /games/:gameId/attendance/bulk-present`, `POST /games/:gameId/attendance/:contextId/acknowledgements`,
+`GET /me/postgame-reminders`, `POST /me/postgame-reminders/:reminderId`.
+Disputes/history/help и остальные закрытые сценарии этим списком не объявляются перенесёнными.
+
+### Исторические факты alpha.92 и venue candidate (не текущее состояние)
+
 Фактические границы из Root `NATIVE522-VENUE-ACTUAL-ACCEPTED-SUMMARY.json`
 (SHA256 `05648644db9c5431d7af0c7bdf08f1957748576f943fcc20e14b16dc48069776`):
 
@@ -22,19 +47,23 @@ Onest, black-on-green, safe edges и масштабирование текста
 | Устройство / UAT | Physical device NOT_TESTED, прежний Samsung S23 FAIL сохранён; Owner UAT **FAIL_RECHECK_PENDING**, native visual **NOT_VERIFIED** |
 | Полная parity / OTA / iOS | Full native parity **MANDATORY_NOT_COMPLETE**; real signed OTA **NOT_DONE**, iOS **NOT_DONE**, PROD не разрешён |
 
-APK7: https://files.anpavel.ru/projects/gobadminton/mobile/dev/alpha92-safety-8cb33c634cb0-7c0865de47af/GoBadminton-DEV-native-0.1.0-7-arm64.apk
+Исторический APK7: https://files.anpavel.ru/projects/gobadminton/mobile/dev/alpha92-safety-8cb33c634cb0-7c0865de47af/GoBadminton-DEV-native-0.1.0-7-arm64.apk
+
+### Реализовано в текущем native source и обязательные ограничения
 
 | Пользовательский сценарий | Исходная реализация сейчас | Ещё требуется |
 |---|---|---|
 | Intro/city, public games/detail/share | Ручной город, public GET, пагинация/ошибки/retry, upcoming expiry, нативные карточки и Share | S23 visual/taps, keyboard/safe edges/large text/offline и полная card parity |
 | Вход/restore/logout/свои сессии | Root AuthProvider, system browser, SecureStore PKCE/refresh, actor/session fences, адресные bearer ports; существующий DEV native registry включён | Реальный provider/login/restart/logout и verified links на установленном телефоне |
-| Мои игры/участие/организатор | Свои участия и управляемые игры, явные apply/withdraw, create/preview/publish, roster и confirm/reject/remove с серверными правами/версиями; UNKNOWN сохраняет пакет | Полное редактирование/отмена и остальные WEB flows; роли/гонки/сеть на устройстве |
+| Мои игры/участие/организатор | Hub объединяет загруженные managed/participations/own results/reminders без потери связей; фильтры «Все», «Создаю и управляю», «Заявки и участие», upcoming/drafts/history/terminal/unknown, сортировка и отдельные ошибки источников. Apply/withdraw, create/preview/publish, roster и confirm/reject/remove сохранены | Только загруженный union, не полный inventory аккаунта; приглашения/советы и remaining WEB hub flows, полное редактирование/отмена, роли/гонки/сеть на устройстве |
+| Итоги / посещение / напоминания | Исход held/not-held, посещение и self-attestation, provenance/late/open-dispute display, точное versioned acknowledgement; выбор отдельных участников для bulk-present. Reminders: к итогам и «Позже». Review → явное подтверждение; UNKNOWN сохраняет исходный пакет, actor/session fences очищают private view | Полный разбор споров/help/history посещения и остальные Postgame flows не перенесены; внимание считается по загруженным источникам независимо от фильтра. История заявки не доказывает посещение/оплату; device acceptance обязательна |
 | Игроки | Каталог/фильтры/пагинация/карточка через существующие права/privacy | Остальная социальная функциональность и visual parity; без новых rating/level правил |
 | Сообщения/приглашения/game chat | Inbox/counts, личная и игровая история/чтение, ответы на полученные приглашения, первое явное текстовое обращение, same-packet UNKNOWN reconciliation | Создание/отзыв приглашений, остальные messages flows и установленный authenticated journey |
-| Свой профиль | Ручные публичное имя/город, явное versioned/idempotent save, conflict/UNKNOWN/actor fences и возврат к форме без auto-create | Level/photo/privacy settings, методы/link/email/reauth и полный профиль |
+| Свой профиль / contact | Ручные публичное имя/город и редактор публичного контакта игры, явное versioned/idempotent save, conflict/UNKNOWN/actor fences и возврат к форме без auto-create | Level/photo/privacy settings, методы/link/email/reauth и полный профиль |
 | Safety | Явные block/unblock/report, scoped authority reads/fences, сохранение исходных UNKNOWN и черновиков; historical replay не доказывает текущий block state | Повторная пользовательская проверка и физические native interruption flows |
-| Площадка: новый SOURCE_CANDIDATE | Game → native public venue facts/gallery/credits/contacts → public upcoming schedule → game; typed venue-create → явный выбор в существующей форме → preview/publish | Независимая QA/CI/DEV/APK и device taps; не полная venue parity |
-| Maps/Radar/UGC/остальное | Неперенесённые native сценарии не заявлены завершёнными | Принятые WEB contracts/consents/privacy, renderer/permissions/media, ratings/comments/reviews/uploads/venue creation и весь обязательный parity |
+| Площадка: реализовано в source | Game → native public venue facts/gallery/credits/contacts → public upcoming schedule → game; typed venue-create → явный выбор в существующей форме → preview/publish | Полная venue parity и device taps обязательны; source, build/sign и публикация разделены выше |
+| Maps/Radar/Swipe | Native public games/venues map, venue sheet и переход к create; Radar origin/conditions/results/явное управление поиском; просмотр игроков по одному, явный play interest и переход при mutual interest. Смена условий/остановка убирает устаревшие результаты; privacy/consent fences сохранены | Это ограниченный core, не полные карты/Radar/matching; все remaining WEB contracts/consents/privacy, permissions и device visual/taps обязательны |
+| UGC/остальное | Неперенесённые native сценарии не заявлены завершёнными | Ratings/comments/reviews/uploads/новые площадки, оставшиеся сообщения/социальные сценарии и весь обязательный parity |
 
 Pure type-only `@gobadminton/contracts/native-auth` исключает `node:fs` root из Metro. DOM, cookies и CSRF
 не переносятся как native transport. Сервер авторитетен для identity, прав, участия и вместимости;
@@ -104,9 +133,10 @@ Apple 2.5.2/2.5.19 и Google Play interpreted-code exception не дают об�
 [Google](https://support.google.com/googleplay/android-developer/answer/16559646). Это не проверка entitlement аккаунта.
 
 Auth/profile, games/application/My Games и Players/Messages уже имеют source ports в указанных выше границах.
-Текущий разрешённый product slice — native public venue detail/schedule и явное создание на площадке;
-Maps/Radar/UGC и remaining parity обязательны и не завершены. Независимая QA/CI/DEV/APK и Android device
-acceptance разделены; update foundation не блокирует разрешённые ports. Owner signed OTA A/B proof остаётся NOT_DONE.
+Native venue/map/Radar/Swipe/contact/safety и MyGames/Postgame core реализованы в source в описанных границах;
+remaining parity и все оставшиеся сценарии обязательны и не завершены. Source static/focused QA, standalone build,
+owned signing, Product CI/STRICT DEV, публикация и Android device acceptance разделены. Accepted E introduction
+с чёрным текстом на зелёном сохранён. Реальный signed OTA A→B, S23 и iOS acceptance остаются обязательными открытыми gates.
 
 ## Историческая архитектурная основа (сохранена)
 
