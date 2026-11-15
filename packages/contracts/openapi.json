@@ -1782,6 +1782,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -1907,6 +1910,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -18149,6 +18155,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -18300,6 +18309,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -18441,6 +18453,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -19044,6 +19059,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -19116,6 +19134,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [
@@ -19179,6 +19200,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "parameters": [

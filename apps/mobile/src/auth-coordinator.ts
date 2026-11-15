@@ -1,3 +1,4 @@
+import { PostgameCoordinator } from './postgame-coordinator.ts';
 import type { RadarCommand, RadarRead } from './radar.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
 import { SafetyCoordinator } from './safety-coordinator.ts';
@@ -47,8 +48,15 @@ export class AuthCoordinator {
   readonly profile: ProfileCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
+  readonly postgame: PostgameCoordinator;
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
+    this.postgame = new PostgameCoordinator({
+      own: (actor,cursor) => this.participationRead(access => deps.api.postgameOwn(access,cursor),actor),
+      reminders: actor => this.participationRead(access => deps.api.postgameReminders(access),actor),
+      results: (actor,id,query) => this.participationRead(access => deps.api.postgameResults(access,id,query),actor),
+      send: (packet,authority) => this.participationRead(access => deps.api.postgameMutation(access,packet),authority),
+    },deps.random);
     this.contact = new ContactCoordinator({
       preview: context => this.participationRead(access => { if (!context.valid()) throw new MessagesError('private'); return deps.api.radarRead(access, { kind: 'preview', resultRef: context.resultRef, target: context.target }, deps.random()); }, context.actor),
       state: (target, actor) => this.participationRead(access => deps.api.contactState(access, target), actor),
@@ -178,6 +186,7 @@ export class AuthCoordinator {
     const actor = this.participation.getSnapshot().actor;
     if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor); this.contact.setActor(actor); }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
+    this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     if (this.snapshot.status === 'authenticated' && actor) {
       this.players.setScope(`native:${actor.actorId}:${actor.sessionId}:${actor.generation}`, {
         list: (filters, cursor) => this.participationRead(access => this.deps.api.players(access, filters, cursor), actor),
@@ -414,6 +423,7 @@ export class AuthCoordinator {
     if (forgetCreation) this.profile.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
+    if (forgetCreation) this.postgame.forget();
     this.show({ status: 'guest', me: null, sessions: [], notice: null });
     // Queue the local clear immediately. Remote revocation is bounded by the API timeout and never persisted/retried.
     const clear = this.persist(envelope, epoch).catch(() => {

@@ -1277,3 +1277,55 @@ test('browse own hidden profile public-avatar 404 stays isolated from the authen
   assert.equal(s.auth.getSnapshot().status,'authenticated');
   assert.deepEqual(s.calls.filter(c=>c.path==='/players/own-hidden').map(c=>c.init.method),['GET']);
 });
+
+test('R3 guest hub/results login and pending restart retain exact Entry return and never auto-write postgame',async()=>{
+  const {hydratedEntryRoute,emptyPreferences}=await import('../src/entry.ts');
+  for(const path of ['/my-games','/my-games/selected-game_A/results']) {
+    const normal=setup();await normal.auth.hydrate();assert.ok(await normal.auth.beginLogin(path));
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,normal.auth.getSnapshot()),'/profile');
+    const pending=parseSecureEnvelope(normal.stored(),now)!.pending!;
+    assert.equal(pending.returnPath,path);
+    assert.equal(await normal.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${pending.state}`),path);
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,normal.auth.getSnapshot()),path);
+    assert.equal(normal.auth.postgame.getSnapshot().actor?.actorId,me.id);
+    assert.equal(normal.calls.filter(c=>/outcome|attendance|postgame-reminders/.test(c.path)).length,0);
+    const first=setup();await first.auth.hydrate();await first.auth.beginLogin(path);
+    const cold=setup(JSON.parse(first.stored()!));await cold.auth.hydrate();
+    assert.equal(cold.auth.getSnapshot().status,'signing-in');assert.equal(hydratedEntryRoute(emptyPreferences,true,cold.auth.getSnapshot()),'/profile');
+    const recovered=parseSecureEnvelope(cold.stored(),now)!.pending!;
+    assert.equal(await cold.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${recovered.state}`),path);
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,cold.auth.getSnapshot()),path);
+    assert.equal(cold.calls.filter(c=>c.init.method !== 'GET' && !c.path.startsWith('/auth/')).length,0);
+    assert.equal(cold.auth.postgame.getSnapshot().command,null);
+  }
+  for(const path of ['/my-games?x=1','/my-games#x','/my-games\n','/my-games/a/results\n','/my-games/a/results?x=1','/my-games/%61/results','/my-games/a%2fb/results','/my-games/a/results/ack','//evil/my-games','https://dev.gobadminton.ru/my-games']) assert.equal(canonicalReturnPath(path),null,path);
+});
+
+test('real root postgame ports fence actor/game/context receipts and quarantine UNKNOWN until explicit sameactor reconcile',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();let writes=0;
+  const base={gameId:'selected-game',outcome:{value:'unknown',version:0,reason:null,provenance:null},allowedActions:{canRecordOutcome:true}};
+  s.setHandler(async(path,init)=>{
+    if(path === '/me') return me;
+    if(path === '/games/selected-game/results') return base;
+    if(path === '/games/selected-game/outcome') {writes++;assert.equal(init.method,'PUT');return new Response(JSON.stringify({code:'VERSION_CONFLICT'}),{status:503});}
+    if(path.startsWith('/me/postgame-reminders'))return {items:[],installed:true,writesEnabled:true};
+    return credentials;
+  });
+  await s.auth.postgame.loadResults('selected-game');s.auth.postgame.review({kind:'outcome',gameId:'selected-game',body:{expectedVersion:0,outcome:'held'}});await s.auth.postgame.confirm();
+  const original=s.auth.postgame.getSnapshot().command!.packet;assert.equal(writes,1);
+  await s.auth.postgame.loadResults('selected-game');assert.equal(s.auth.postgame.getSnapshot().command?.packet,original);
+  s.setHandler(async()=>{throw new NativeAuthError('network');});await s.auth.validate();assert.equal(s.auth.postgame.getSnapshot().actor,null);assert.equal(s.auth.postgame.getSnapshot().command,null);
+  s.setHandler(async path=>path === '/auth/methods' ? {items:[{method:'vk',type:'oauth',available:true}]} : {transactionId:token('t'),expiresAt:new Date(now+600000).toISOString(),browserStartUrl:`https://dev.gobadminton.ru/auth/native?transactionId=${token('t')}`});
+  await s.auth.beginLogin('/my-games/selected-game/results');const resumedPending=parseSecureEnvelope(s.stored(),now)!.pending!;
+  const verification=deferred<typeof me>();s.setHandler(async path=>path === '/me' ? verification.promise : credentials);
+  const verifying=s.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${resumedPending.state}`);await new Promise(r=>setImmediate(r));assert.equal(s.auth.postgame.getSnapshot().actor,null);
+  verification.resolve(me);await verifying;assert.equal(s.auth.postgame.getSnapshot().command?.packet,original);assert.equal(writes,1);
+  s.setHandler(async(path,init)=>{
+    if(path === '/games/selected-game/outcome') {writes++;assert.equal((init.headers as Record<string,string>)['Idempotency-Key'],original.key);assert.deepEqual(JSON.parse(String(init.body)),original.body);
+      return {...base,outcome:{value:'held',version:1,reason:null,provenance:{source:'manager_explicit',recordedAt:new Date(now).toISOString(),createdAt:new Date(now).toISOString()}}};}
+    if(path === '/games/selected-game/results')return base;
+    return {items:[],installed:true,writesEnabled:true};
+  });
+  await s.auth.postgame.reconcile('selected-game');assert.equal(writes,2);assert.equal(s.auth.postgame.getSnapshot().command,null);
+  await s.auth.logout();assert.equal(s.auth.postgame.getSnapshot().actor,null);assert.equal(s.auth.postgame.getSnapshot().command,null);
+});

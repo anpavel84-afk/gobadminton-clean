@@ -52,3 +52,19 @@ test('interrupted icon entry recovers only exact bare browse after hydration, re
     assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,returnPath:path}),'/games');
   }
 });
+
+test('R3 exact My Games hub/results Entry recovery retains hydration, signing-in and route precedence',async()=>{
+  const {hydratedEntryRoute}=await import('../src/entry.ts');
+  for(const path of ['/my-games','/my-games/game_A-1/results']) {
+    const auth={status:'authenticated',returnPath:path};
+    assert.equal(hydratedEntryRoute(emptyPreferences,false,auth),null);
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,status:'hydrating'}),null);
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,status:'signing-in'}),'/profile');
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,status:'guest'}),path);
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,auth),path);
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,auth,'/city'),null);
+  }
+  for(const path of ['/my-games/','/my-games?x=1','/my-games#history','/my-games\n','/my-games/a/results\n','/my-games/a/results?section=attendance','/my-games/a/results#x','/my-games/%61/results','/my-games/a%2Fb/results','/my-games/a/results/acknowledgements','/my-games//results','https://dev.gobadminton.ru/my-games','//evil/my-games','/messages']) {
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,{status:'authenticated',returnPath:path}),'/games',path);
+  }
+});

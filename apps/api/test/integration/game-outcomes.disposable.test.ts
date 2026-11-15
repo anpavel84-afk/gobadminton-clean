@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -78,6 +79,8 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "pg1a-synthetic-fingerprint-fixture!!",
       POST_GAME_INTERNAL_ENABLED: "1",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:"postgame-fixture",redirectUris:["https://app.example.test/auth/callback"]}]),
     });
     const ref = await Test.createTestingModule({
       imports: [buildTestCoreModule(env, pool), GamesModule, VenuesModule, ProfilesModule],
@@ -117,6 +120,7 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       await client.query("ROLLBACK");
       client.release();
     }
+    await migrate("0072_native_auth_sessions.sql");
   }, 120000);
 
   async function migrate(file: string) {
@@ -141,6 +145,7 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
 
   beforeEach(async () => {
     env.POST_GAME_INTERNAL_ENABLED = true;
+    env.NATIVE_AUTH_ENABLED = true;
     manager = await actor("PG1a manager");
     coManager = await actor("PG1a co-manager");
     participant = await actor("PG1a participant");
@@ -157,6 +162,30 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       csrfToken: issued.csrfToken,
       cookie: `${SESSION_COOKIE}=${encodeURIComponent(issued.sessionToken)}`,
     };
+  }
+
+  async function nativeHeaders(who: Actor) {
+    const native = app.get(NativeSessionService);
+    const issued = await native.transaction(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, "postgame-fixture");
+    });
+    return { credentials: issued, headers: { authorization: `Bearer ${issued.accessToken}`, "idempotency-key": `native-pg-${randomUUID()}` } };
+  }
+  async function nativeGuards(who: Actor, url: string, method: "GET" | "PUT" | "POST", payload?: object) {
+    const n = await nativeHeaders(who);
+    const request = { method, url, ...(payload ? {payload} : {}) };
+    expect((await app.inject({...request,headers:{authorization:"Bearer malformed"}})).statusCode).toBe(401);
+    expect((await app.inject({...request,headers:{...n.headers,cookie:who.cookie}})).statusCode).toBe(403);
+    env.NATIVE_AUTH_ENABLED = false;
+    try { expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(404); }
+    finally { env.NATIVE_AUTH_ENABLED = true; }
+    await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [who.userId]);
+    try { expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(401); }
+    finally { await pool.query("UPDATE users SET status='active' WHERE id=$1", [who.userId]); }
+    if (method !== "GET") expect((await app.inject({...request,headers:{cookie:who.cookie}})).statusCode).toBe(403);
+    await sessions.revokeSession(n.credentials.sessionId);
+    expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(401);
   }
 
   const key = () => `pg1a-synthetic-${randomUUID()}`;
@@ -254,6 +283,22 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     );
     return r.rows[0] as { seats: number; outcomes: number; revisions: number; status: string };
   }
+
+  it("native results/outcome: exact bearer positives, replay, rights and unchanged credential guards", async () => {
+    const g = await createEndedGame(manager), n = await nativeHeaders(manager);
+    const readUrl = `/v1/games/${g.id}/results`, writeUrl = `/v1/games/${g.id}/outcome`;
+    const read = await app.inject({url:readUrl,headers:n.headers});
+    expect(read.statusCode).toBe(200); expect(read.json().gameId).toBe(g.id);
+    const command = {method:"PUT" as const,url:writeUrl,headers:n.headers,payload:{expectedVersion:0,outcome:"held"}};
+    const first = await app.inject(command); expect(first.statusCode).toBe(200);
+    expect(first.json().outcome).toMatchObject({value:"held",version:1});
+    const replay = await app.inject(command); expect(replay.statusCode).toBe(200); expect(replay.json()).toEqual(first.json());
+    const foreign = await nativeHeaders(outsider);
+    expect((await app.inject({url:readUrl,headers:foreign.headers})).statusCode).toBe(404);
+    expect((await app.inject({...command,headers:foreign.headers})).statusCode).toBe(404);
+    await nativeGuards(manager,readUrl,"GET"); await nativeGuards(manager,writeUrl,"PUT",command.payload);
+    expect(await effects(g.id)).toMatchObject({outcomes:1,revisions:1});
+  });
 
   it("absence projects unknown; elapsed time creates no row; held/not_held + correction persist", async () => {
     const g = await createEndedGame(manager);

@@ -19,7 +19,7 @@ export class GameAttendanceController {
     @Query("limit") limit?: string,
     @Query("cursor") cursor?: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.attendance.listMeGameResults(actor.userId, { limit, cursor });
   }
 
@@ -31,7 +31,7 @@ export class GameAttendanceController {
     @Param("gameId") gameId: string,
     @Param("contextId") contextId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.putAttendance(
       actor.userId,
       actor.sessionId,
@@ -51,7 +51,7 @@ export class GameAttendanceController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("gameId") gameId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.bulkPresent(
       actor.userId,
       actor.sessionId,
@@ -71,7 +71,7 @@ export class GameAttendanceController {
     @Param("gameId") gameId: string,
     @Param("contextId") contextId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.attendance.acknowledge(
       actor.userId,
       actor.sessionId,

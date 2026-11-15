@@ -1,3 +1,17 @@
+## #522 R3 — My Games / postgame core (source only)
+
+This source slice adds the native My Games hub and `/my-games/[gameId]/results` using the existing shell, GameCard and visual tokens. Management, participation, own results and reminders remain independent sources; rows preserve their relation/context facts, buckets, selected filter and loaded own-result pages. Invitations are omitted from this bounded core; no invented invitation data or empty-coverage claim.
+
+The results surface reads actual outcome/revisions, own attendance and the authorized manager roster. Explicit reviewed actions cover outcome, individual attendance/correction/late, an exact selected bulk-present set, acknowledgement of a known external undisputed mark, and reminder Later. Creator without a seat has no own attendance panel. Self-authored marks retain self_attested provenance and never fabricate acknowledgement. Open disputes remain read-only here.
+
+Eight selected API operations opt into existing cookie OR native-bearer authentication. Other endpoints and cookie Origin/CSRF guards remain unchanged. A bounded root PostgameCoordinator owns immutable pending commands across navigation; uncertain writes retain method/path/key/body/actor/game/context/version and require explicit original-packet reconciliation. Reads/login never resend or settle them. Unverified identity hides private state; authoritative same-actor recovery restores pending identity, while account B/explicit logout forgets it. Exact hub/results cold auth returns retain Entry ordering and reject query/hash/encoded/external/action variants.
+
+Source self-checks are recorded separately from independent QA. No DB harness, native build/signing, publication or DEV delivery was performed for this slice. API 0.44 / schema inventory 72 / native code 8 and application metadata are unchanged.
+
+Mandatory remainder: full invitations, recommendations, reviews/notes, court booking and dispute create/respond/withdraw/help/history/resolution; remaining photo/profile parity, device/visual acceptance, OTA and iOS. This source slice does not complete #522, establish full native parity, supersede prior FAIL/UNKNOWN/timeout receipts, or authorize a public binary. Owner UAT / native visual / physical device: NOT_TESTED for this slice.
+
+---
+
 # #522 Native swipe — same-author source continuation from 491b9e9
 
 Authorized base: `491b9e9b820659e66eae8e1230e48b11129293f3`; scope is the original 22 paths plus only `src/auth-coordinator.ts`. The previous partial work and its history are retained below. This private export has no usable Git metadata, so no new candidate SHA, commit or source acceptance is asserted.

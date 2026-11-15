@@ -1,4 +1,4 @@
-import { canonicalGamePath } from './native-auth-protocol.ts';
+import { canonicalGamePath, canonicalPostgamePath } from './native-auth-protocol.ts';
 import type { City } from './public-api.ts';
 export type Preferences = { storyCompleted: boolean; cityId: string | null };
 export const emptyPreferences: Preferences = { storyCompleted: false, cityId: null };
@@ -31,7 +31,7 @@ export function hydratedEntryRoute(preferences: Preferences, preferencesHydrated
   auth: { status: string; returnPath: string | null }, pathname = '/'): string | null {
   if (pathname !== '/' || !preferencesHydrated || auth.status === 'hydrating') return null;
   if (auth.status === 'signing-in') return '/profile';
-  const returnPath = auth.returnPath === '/players/browse' ? auth.returnPath : canonicalGamePath(auth.returnPath);
+  const returnPath = canonicalPostgamePath(auth.returnPath) ?? (auth.returnPath === '/players/browse' ? auth.returnPath : canonicalGamePath(auth.returnPath));
   if (returnPath) return returnPath;
   if (auth.status === 'authenticated') return '/games';
   return entryRoute(preferences);
