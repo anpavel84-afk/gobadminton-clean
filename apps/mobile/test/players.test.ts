@@ -228,7 +228,7 @@ test('A404 then fresh page then B404 recovers updatedA and excludes staleB witho
       }
       return fresh.promise;
     },
-    detail: async id => { throw new PlayersError('unavailable', 404); },
+    detail: async _id => { throw new PlayersError('unavailable', 404); },
   });
   await c.loadList(filters);
   assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-a', 'peer-b', 'peer-c']);
