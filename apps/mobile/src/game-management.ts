@@ -106,19 +106,19 @@ export class GameManagementCoordinator {
     if (Object.hasOwn(patch,'contact')) this.contactEdited = true;
     this.show({ form: { ...this.state.form,...patch }, preview: null, notice: undefined });
   };
-  loadContext = async (cityId: string | null) => {
+  loadContext = async (cityId: string | null, options?: { preserveForm?: boolean; current?: () => boolean }) => {
     const actor = this.state.actor, serial = ++this.contextRead;
     if (!actor) return;
-    const valid = () => this.current(actor) && serial === this.contextRead;
+    const valid = () => this.current(actor) && serial === this.contextRead && (options?.current?.() ?? true);
     const changed = cityId !== this.state.cityId;
     this.show({ context: 'loading', profile: null, trainer: null, preferences: null, venues: [], cityId,
-      ...(changed && !this.locked() && !this.state.creationReference ? { form: { ...this.state.form, venueId: '' }, preview: null } : {}) });
+      ...(changed && !options?.preserveForm && !this.locked() && !this.state.creationReference ? { form: { ...this.state.form, venueId: '' }, preview: null } : {}) });
     try {
       let profile: CreatorProfile;
       try { profile = await this.port.profile(); }
       catch (e) { if (e instanceof ParticipationError && e.status === 404) { if (valid()) this.show({ context: 'setup' }); return; } throw e; }
       if (!valid()) return;
-      if (!profile.cityId || !profile.displayName.trim() || !cityId) { this.show({ profile, context: 'setup', preview: null }); return; }
+      if (!profile.cityId || !profile.displayName.trim() || !cityId) { this.show({ profile, context: 'setup', ...(!options?.preserveForm ? { preview: null } : {}) }); return; }
       const preferences = await this.port.preferences(); if (!valid()) return;
       let trainer: OwnTrainer | null = null;
       if (profile.trainer) {
@@ -134,10 +134,23 @@ export class GameManagementCoordinator {
       } while (cursor);
       this.show({ context: 'ready', profile, preferences, trainer, venues,
         form: { ...this.state.form,
-          ...(!this.contactEdited ? { contact: preferences.defaultPublicGameContact ?? '' } : {}),
-          ...(!trainer && !this.locked() && !this.state.creationReference ? { activity: 'regular' as const } : {}) },
-        ...(!this.locked() && !this.state.creationReference ? { preview: null } : {}) });
+          ...(!options?.preserveForm && !this.contactEdited && !this.locked() && !this.state.creationReference ? { contact: preferences.defaultPublicGameContact ?? '' } : {}),
+          ...(!options?.preserveForm && !trainer && !this.locked() && !this.state.creationReference ? { activity: 'regular' as const } : {}) },
+        ...(!options?.preserveForm && !this.locked() && !this.state.creationReference ? { preview: null } : {}) });
     } catch { if (valid()) this.show({ context: 'error', venues: [], profile: null, preferences: null, trainer: null }); }
+  };
+  /** Only an explicit press may switch local creation city/venue. Catalog remains authoritative. */
+  selectVenue = async (venue: Venue, current: () => boolean = () => true) => {
+    const actor = this.state.actor;
+    if (!actor || this.locked() || this.state.creationReference || !current()) return false;
+    const read = this.contextRead + 1;
+    await this.loadContext(venue.cityId, { preserveForm: true, current });
+    if (read !== this.contextRead || !this.current(actor) || !current() || this.locked() || this.state.creationReference || this.state.context !== 'ready' || this.state.cityId !== venue.cityId) return false;
+    const actual = this.state.venues.find(v => v.id === venue.id && v.cityId === venue.cityId && v.timezone === venue.timezone);
+    if (!actual) { this.show({ context: 'error', notice: 'Площадка или её часовой пояс не подтверждены текущим каталогом. Выбор не изменён.' }); return false; }
+    this.update({ venueId: actual.id });
+    this.show({ notice: `Выбрана площадка: ${actual.name} · ${actual.timezone}. Проверьте дату, время и условия заново.` });
+    return true;
   };
   preview = () => {
     if (this.locked() || this.state.creationReference || this.state.context !== 'ready' || !this.state.profile || !this.state.cityId) return;

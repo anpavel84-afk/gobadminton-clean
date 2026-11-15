@@ -85,3 +85,38 @@ test('upcoming requests advance startsFrom; delayed pages discard elapsed items 
   assert.equal(nextQuery.get('cursor'), 'next/+');
   assert.deepEqual(await api.game(game.id), completed);
 });
+
+test('venue public URLs use canonical scope and prove distinct older aliases once; no extra read for canonical DTOs', async () => {
+  const id = '11111111-1111-4111-8111-111111111111', alias = '22222222-2222-4222-8222-222222222222', cityId = '33333333-3333-4333-8333-333333333333';
+  const dto = {id,cityId,name:'Зал',address:'Адрес',timezone:game.timezone,latitude:52,longitude:13};
+  const urls: string[] = [], options: RequestInit[] = [];
+  let older = false;
+  const api = createPublicApi(async (url,init) => {
+    urls.push(String(url)); options.push(init!);
+    if (String(url).includes('/games?')) return response({items:[{...game,venue:{...dto,id:older ? alias : id}}],nextCursor:'next/+'});
+    return response({...dto,...(String(url).endsWith(alias) ? {resolvedFromVenueId:alias} : {})});
+  },() => fixedNow);
+  const controller = new AbortController(), venue = await api.venue(id,controller.signal), bindings = new Map();
+  await api.venueGames(venue,new Date(fixedNow).toISOString(),undefined,controller.signal,bindings);
+  assert.equal(urls.length,2);
+  assert.equal(urls[1],`${API_ORIGIN}/v1/games?cityId=${cityId}&venueId=${id}&startsFrom=2026-11-13T12%3A00%3A00.000Z&limit=20`);
+  older = true;
+  await api.venueGames(venue,new Date(fixedNow).toISOString(),'next/+',controller.signal,bindings);
+  await api.venueGames(venue,new Date(fixedNow).toISOString(),'next2',controller.signal,bindings);
+  assert.equal(urls.filter(url => url.endsWith(`/venues/${alias}`)).length,1);
+  for (const init of options) { assert.equal(init.credentials,'omit'); assert.equal(init.method,'GET'); assert.deepEqual(init.headers,{Accept:'application/json'}); }
+});
+
+test('unrelated venue/city/timezone schedule results fail and detail cancellation reaches public transport', async () => {
+  const id = '11111111-1111-4111-8111-111111111111', wrong = '22222222-2222-4222-8222-222222222222', cityId = '33333333-3333-4333-8333-333333333333';
+  const dto = {id,cityId,name:'Зал',address:'Адрес',timezone:game.timezone,latitude:52,longitude:13};
+  for (const target of [{...dto,id:wrong},{...dto,cityId:wrong},{...dto,timezone:'Pacific/Auckland'}]) {
+    const api = createPublicApi(async url => String(url).includes('/games?') ? response({items:[{...game,venue:target}],nextCursor:null}) : response(String(url).endsWith(wrong) ? {...dto,id:wrong} : dto),() => fixedNow);
+    const venue = await api.venue(id);
+    await assert.rejects(api.venueGames(venue,new Date(fixedNow).toISOString()),PublicApiError);
+  }
+  let signal: AbortSignal | undefined;
+  const api = createPublicApi(async (_url,init) => { signal = init?.signal as AbortSignal; return response(dto); });
+  const controller = new AbortController(); controller.abort(); await api.venue(id,controller.signal);
+  assert.equal(signal?.aborted,true);
+});

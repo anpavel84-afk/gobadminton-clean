@@ -3,6 +3,8 @@ import { parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
 import type { PlayerFilters } from './players.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
 import { futureItems } from './upcoming.ts';
+import { isVenueId, parseVenue, venueScheduleQuery } from './venues.ts';
+import type { PublicVenue } from './venues.ts';
 
 // Type-only subpath: contracts' root index uses node:fs and must never enter Metro.
 export type PublicGame = Pick<Game, 'id' | 'title' | 'status' | 'visibility' | 'venue' |
@@ -102,6 +104,28 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
     }
   }
   return {
+    async venue(id: string, signal?: AbortSignal) {
+      if (!isVenueId(id)) throw new PublicApiError('invalid');
+      return parseVenue(await get(`/venues/${id}`, signal), id);
+    },
+    async venueGames(venue: PublicVenue, startsFrom: string, cursor?: string, signal?: AbortSignal, bindings = new Map<string, PublicVenue>()) {
+      const page = parsePage(await get(`/games?${venueScheduleQuery(venue, startsFrom, cursor)}`, signal));
+      if (page.items.length > 20 || page.nextCursor !== null && (!page.nextCursor || page.nextCursor.length > 4096)) throw new PublicApiError('invalid');
+      for (const item of page.items) {
+        const target = item.venue;
+        if (!isVenueId(target.id) || target.cityId !== venue.cityId || target.timezone !== venue.timezone || item.timezone !== venue.timezone) throw new PublicApiError('invalid');
+        if (target.id === venue.id) continue;
+        // Older projections may retain an alias. Only a real public binding proves it.
+        let bound = bindings.get(target.id);
+        if (!bound) {
+          bound = parseVenue(await get(`/venues/${target.id}`, signal), target.id);
+          if (bound.id !== venue.id || bound.cityId !== venue.cityId || bound.timezone !== venue.timezone) throw new PublicApiError('invalid');
+          bindings.set(target.id, bound);
+        }
+        if (bound.id !== venue.id || bound.cityId !== venue.cityId || bound.timezone !== venue.timezone) throw new PublicApiError('invalid');
+      }
+      return { ...page, items: futureItems(page.items, now()) };
+    },
     async players(filters: PlayerFilters, cursor?: string, signal?: AbortSignal) {
       return parsePlayerPage(await get(`/players?${playerQuery(filters, cursor)}`, signal));
     },

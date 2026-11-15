@@ -881,3 +881,24 @@ test('root controlled direct private404 after safety hides private DTOs while pr
   assert.equal((sends[1]!.init.headers as Record<string,string>)['Idempotency-Key'], packet.key);
   assert.equal(s.auth.messages.getSnapshot().pending['direct:thread'], undefined);
 });
+
+test('venue-create auth intent accepts only exact typed UUID route and survives secure return parsing', async () => {
+  const route = '/games/create/venue/11111111-1111-4111-8111-111111111111';
+  assert.equal(canonicalReturnPath(route),route);
+  for (const invalid of [route+'?cityId=other',route+'#publish',route+'\n',route+'/publish',route.replace('11111111-','%31'+'1111111-'),'/games/create/venue/not-a-uuid','https://dev.gobadminton.ru'+route]) assert.equal(canonicalReturnPath(invalid),null);
+  const start = setup(); assert.ok(await start.auth.beginLogin(route));
+  const saved = parseSecureEnvelope(start.stored(),now)!;
+  assert.equal(saved.returnPath,route); assert.equal(saved.pending?.returnPath,route);
+  const resumed = setup(saved); await resumed.auth.hydrate();
+  resumed.setHandler(async path => path === '/me' ? me : credentials);
+  assert.equal(await resumed.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${saved.pending!.state}`),route);
+  assert.equal(resumed.auth.getSnapshot().status,'authenticated');
+  assert.equal(resumed.auth.gameManagement.getSnapshot().command,undefined);
+  assert.equal(resumed.auth.gameManagement.getSnapshot().preview,null);
+  assert.ok(![...start.calls,...resumed.calls].some(c => c.path === '/games' || c.path.endsWith('/publish')));
+  const cancelled = setup(); await cancelled.auth.beginLogin(route); await cancelled.auth.cancelLogin();
+  assert.equal(cancelled.auth.getSnapshot().status,'guest');
+  assert.equal(parseSecureEnvelope(cancelled.stored(),now)?.returnPath,route);
+  assert.equal(cancelled.auth.gameManagement.getSnapshot().command,undefined);
+
+});

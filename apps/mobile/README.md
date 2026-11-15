@@ -1,3 +1,50 @@
+# #522 native venue detail/schedule · SOURCE_CANDIDATE · PARTIAL
+
+Based on actual accepted alpha.92 source `2a0b8207b8cc28d0e56a1ec5abecc604e934faed`.
+Native versionName/package/owned signing identity remain unchanged; versionCode
+7 → 8 is the exact admitted literal-only source bump, not a built or accepted APK8.
+
+- Native game → public venue facts/gallery/public contacts/credited sources →
+  upcoming public schedule → native game. The fixed create footer uses the exact
+  local `/games/create/venue/<UUID>` intent; no additional tab or browser screen.
+- Venue identity/city/timezone and allowlisted projections are validated. Optional
+  older fields remain absent honestly. Media uses only accepted venue-cover PNGs;
+  ordered max8 and attributed legacy covers retain photo/logo/illustration labels.
+  Pure accepted WEB authority/contact/credit rules precede explicit native linking.
+- Schedule freezes refresh scope/time, proves distinct older aliases through real
+  public venue reads, preserves cursors through filtered/expired-empty pages,
+  deduplicates, rejects loops and fences stale reads. Existing foreground expiry
+  removes started cards; schedule failure leaves venue facts usable.
+- Selection requires an explicit press and authoritative catalog/timezone match in
+  the venue's local city. Existing fields survive switching and stale preview is
+  invalidated only on validated selection. Existing created references and UNKNOWN
+  packets remain in their reconciliation UI. Auth/profile returns preserve the
+  exact typed intent; no mount/login/return creates, publishes or reconciles.
+
+Author offline owning checks: **71 passed, 0 failed/skipped/cancelled** across
+venues/public-api/game-management/auth. The first run retained a FAIL from the
+old static profile-return expectation; it was adapted to check the new typed
+return and existing generic fallback. Verified begin/callback/restart/cancel return
+and zero auto-writes, catalog selection, UNKNOWN preservation, aliases, paging,
+expiry, stale responses, contacts/media/credits. Node 24 used
+`--experimental-strip-types --test --test-isolation=none` with these four files.
+No dependencies were installed. Types/lint/Expo2, independent QA, Product CI7,
+DEV/readback, APK build/sign/publication and device checks remain Root-owned and
+have not run for this candidate. No network/GitHub/provider/DB/runtime action.
+
+Actual safety facts remain separate: source `8cb33c634cb0f840ae3f2dc9f7ad330cda9057dc`,
+four completed author runs (not four different authors), retained whole FAIL plus
+focused closure PASS; Product CI `43654442331`; DEV `0.1.0-alpha.92` accepted
+`2026-11-15T00:10:09Z`, release `r43655345631-a1`; public owned binary `0.1.0`/7.
+The platform SOURCE-now matrix reconciles only the supplied actual summary.
+
+PARTIAL; Owner FAIL_RECHECK_PENDING and prior Samsung S23 FAIL retained;
+native visual NOT_VERIFIED; physical venue journey NOT_TESTED;
+full native parity MANDATORY_NOT_COMPLETE; real signed OTA and iOS NOT_DONE.
+Maps/Radar/friendly matches/friends/ratings/comments/reviews/uploads/venue creation
+and remaining #522 parity are unfinished. PROD is not authorized.
+All previous README bytes/history are preserved verbatim below.
+
 # #522 native safety ADDRESS3 · SOURCE_CANDIDATE · PARTIAL
 
 Bounded repair on C3 `c78caf422480483e8674d18f0c1e967b748eaa88`.

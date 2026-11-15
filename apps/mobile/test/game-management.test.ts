@@ -292,7 +292,8 @@ test('setup guidance precedes created publish CTA while UNKNOWN reconciliation a
   assert.ok(setupStart > ui.indexOf('blocked && state.command ?') && setupStart < createdStart);
   const guidance = ui.slice(setupStart,createdStart);
   assert.match(guidance,/заполнить имя и город в профиле/);
-  assert.match(guidance,/pathname: '\/profile', params: \{ returnTo: '\/games\/create' \}/);
+  assert.match(guidance,/pathname: '\/profile', params: \{ returnTo \}/);
+  assert.match(ui, /const returnTo = venueId \? venueCreatePath\(venueId\) \?\? '\/games\/create' : '\/games\/create'/);
   assert.match(guidance,/Обновить проверку профиля/);
   assert.match(guidance,/state.creationReference.*Открыть сводку созданной игры/);
   assert.doesNotMatch(guidance,/owner.publishDraft/);
@@ -379,4 +380,37 @@ test('explicit native profile save then read-only return refresh unblocks creati
   const route = readFileSync(new URL('../app/profile.tsx',import.meta.url),'utf8');
   assert.match(route,/intent === '\/games\/create'.*loadContext\(preferences.cityId\)/);
   assert.doesNotMatch(route,/publishDraft|publishPreview|requestParticipation|setPreferences/);
+});
+
+test('explicit catalog-backed venue selection changes only local form venue, preserves all other fields and requires fresh preview', async () => {
+  const next = {...venue,id:'another-venue',cityId:'another-city',timezone:'Pacific/Auckland'};
+  const s = setup({venues:async city => ({items:city === next.cityId ? [next] : [venue],nextCursor:null})});
+  await preview(s.owner); const old = s.owner.getSnapshot();
+  assert.equal(await s.owner.selectVenue(next),true);
+  const selected = s.owner.getSnapshot();
+  assert.equal(selected.cityId,next.cityId); assert.deepEqual(selected.form,{...old.form,venueId:next.id});
+  assert.equal(selected.profile?.cityId,profile.cityId); assert.equal(selected.preview,null); assert.equal(s.sent.length,0);
+  s.owner.preview(); assert.equal(s.owner.getSnapshot().preview?.timezone,next.timezone); assert.equal(s.sent.length,0);
+  const wrong = setup(); await preview(wrong.owner); const before = wrong.owner.getSnapshot();
+  assert.equal(await wrong.owner.selectVenue({...venue,timezone:'Pacific/Auckland'}),false);
+  assert.deepEqual(wrong.owner.getSnapshot().form,before.form); assert.equal(wrong.owner.getSnapshot().preview,before.preview);
+  await wrong.owner.publishPreview(); assert.equal(wrong.sent.length,0);
+});
+
+test('venue entry/selection cannot replace UNKNOWN or created reference and late view/session/catalog reads cannot select', async () => {
+  const unknown = setup({send:async () => {throw new Error('lost');}}); await preview(unknown.owner); await unknown.owner.publishPreview();
+  const old = unknown.owner.getSnapshot(); assert.equal(await unknown.owner.selectVenue({...venue,id:'another'}),false);
+  assert.equal(unknown.owner.getSnapshot().command?.packet,old.command?.packet); assert.deepEqual(unknown.owner.getSnapshot().form,old.form); assert.equal(unknown.sent.length,1);
+  const created = setup(); await preview(created.owner); await created.owner.publishPreview(); const reference = created.owner.getSnapshot().creationReference;
+  assert.equal(await created.owner.selectVenue({...venue,id:'another'}),false); assert.equal(created.owner.getSnapshot().creationReference,reference);
+  for (const interruption of ['view','session','new-read']) {
+    const pending = deferred<{items:Venue[];nextCursor:null}>(); let delay = false, visible = true;
+    const s = setup({venues:async () => delay ? pending.promise : {items:[venue],nextCursor:null}}); await preview(s.owner); const before = s.owner.getSnapshot().form;
+    delay = true; const selected = s.owner.selectVenue(venue,() => visible);
+    if (interruption === 'view') visible = false;
+    if (interruption === 'session') s.owner.setActor({...actor,generation:2});
+    if (interruption === 'new-read') { delay = false; await s.owner.loadContext('city-1'); }
+    pending.resolve({items:[venue],nextCursor:null}); assert.equal(await selected,false); assert.equal(s.sent.length,0);
+    if (interruption === 'view') assert.deepEqual(s.owner.getSnapshot().form,before);
+  }
 });
