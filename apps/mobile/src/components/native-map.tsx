@@ -4,7 +4,7 @@ import { Map as MapLibreMap, Camera, Marker } from '@maplibre/maplibre-react-nat
 import * as Crypto from 'expo-crypto';
 import type { CityMapPack, MapCamera } from '../maps.ts';
 import type { MapVenue } from '../venues.ts';
-import { loadNativeStyle, markerActivation, validMapCamera, venueMarkerLabel } from '../maps.ts';
+import { loadNativeStyle, markerActivation, nativeMapCamera, validMapCamera, venueMarkerLabel } from '../maps.ts';
 import { useResource } from '../hooks.ts';
 import { colors } from '../theme.ts';
 import { Label, Loading, TextButton } from './ui.tsx';
@@ -13,7 +13,7 @@ const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await Cryp
 function VenueMarker({ venue, counts, selected, onSelect }: { venue: MapVenue; counts: ReadonlyMap<string,number> | null; selected: boolean; onSelect: (id:string) => void }) {
   const activation = useRef(markerActivation()).current;
   const count = counts?.get(venue.id);
-  return <Marker id={venue.id} coordinate={[venue.longitude,venue.latitude]}>
+  return <Marker id={venue.id} lngLat={[venue.longitude,venue.latitude]}>
     <Pressable accessibilityRole="button" accessibilityLabel={venueMarkerLabel(venue,counts)} accessibilityState={{selected}}
       onTouchStart={e => activation.start(e.nativeEvent.pageX,e.nativeEvent.pageY)}
       onTouchMove={e => activation.move(e.nativeEvent.pageX,e.nativeEvent.pageY)} onTouchCancel={() => activation.cancel()}
@@ -47,14 +47,16 @@ export function NativeMap({ pack, venues, counts, selected, camera, onCamera, on
   const restart = () => {setPhase('loading');setNativeError('');setAttempt(n => n+1);};
   return <View style={{flex:1}}>
     {state.data && !failed && <MapLibreMap key={generation} style={StyleSheet.absoluteFill} mapStyle={state.data}
-      attribution attributionPosition="bottom-left"
+      attribution attributionPosition={{bottom:8,left:8}}
       onDidFinishLoadingMap={() => {if (active.current === generation) {loaded.current=true;setPhase('loaded');}}}
       onDidFailLoadingMap={() => {if (active.current === generation) {setPhase('error');setNativeError('Не удалось загрузить ресурсы карты.');}}}
       onRegionDidChange={event => {
-        const center = event.geometry.coordinates, zoom = event.properties.zoomLevel;
-        if (center.length >= 2 && typeof center[0] === 'number' && typeof center[1] === 'number' && typeof zoom === 'number') onCamera(validMapCamera({center:[center[0],center[1]],zoom},pack));
+        if (active.current !== generation) return;
+        const next = nativeMapCamera(event,pack);
+        if (next) onCamera(next);
       }}>
-      <Camera defaultSettings={{centerCoordinate:initial.center,zoomLevel:initial.zoom}} maxBounds={{ne:pack.bounds[1],sw:pack.bounds[0]}} maxZoomLevel={16} />
+      <Camera initialViewState={{center:initial.center,zoom:initial.zoom}}
+        maxBounds={[pack.bounds[0][0],pack.bounds[0][1],pack.bounds[1][0],pack.bounds[1][1]]} maxZoom={16} />
       {phase === 'loaded' && venues.map(venue => <VenueMarker key={venue.id} venue={venue} counts={counts} selected={selected === venue.id} onSelect={onSelect} />)}
     </MapLibreMap>}
     {!failed && (state.status !== 'ready' || phase !== 'loaded') && <View style={mapStyles.status}><Loading title="Загружаем карту…" /></View>}

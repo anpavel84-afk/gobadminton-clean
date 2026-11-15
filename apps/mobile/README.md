@@ -1,3 +1,50 @@
+# #522 R1b address1 · recovered source correction · delivery HOLD
+
+This bounded source continuation starts from recovered `e1892d8747e8778f98e7cb35b381f0e1fccd1104`,
+not an original normal completion. The original 19-file author operation completed
+its CLI turn but ended in operator `HOLD_NO_AUTOMATIC_REPLAY`; Root recovered those
+bytes unchanged, with zero new model calls for that recovery. Its reviewed 5797-byte
+README exception and all e189 README bytes remain the exact suffix below. This
+address operation does not replay the original map implementation or erase history.
+
+Addressed the supplied manual findings using the embedded exact package 11.5.1
+declarations: Marker `lngLat`, Camera `initialViewState` center/zoom, `maxZoom`, flat
+`[west,south,east,north]` maxBounds, NativeSyntheticEvent nativeEvent center/zoom,
+and attribution corner offsets. Invalid camera updates are ignored, preserving the
+last camera; selected-pack bounds, initial-camera validation, style/resource/hash/
+absolute-PMTiles/attribution guards, marker drag and load-generation fences remain.
+
+Games now uses the accepted WEB white bordered/shadowed capsule, lime 36px inset
+and purple existing DiscoveryIcon map path. Shared icon geometry/defaults remain.
+The compact sheet has a handle, close icon, 64px cover, identity/schedule and open
+arrow, without generic text bars or expanded credits/gallery/conditions. Expanded
+VenueContent retains real gallery/source credits and contacts; create stays in its
+expanded-only safe-bottom footer. Existing query/route/scroll/Back, city/day/activity,
+schedule-unavailable/UNKNOWN and actor rules are retained. Local WEB map/preview/
+sheet components and styles were inspected; no final Astra gallery artifact was
+available in this export. This is source composition, not visual/device acceptance.
+
+Actual author self-check: Node 24.21.0 ran the five historical owning suites listed
+below with `--test-isolation=none`: 66 tests, 66 passed, zero failed/skipped/cancelled.
+All previous 65 tests/assertions remain; one pure native camera-event regression was
+added for actual event shape, invalid/nonfinite/out-of-pack values and zoom limits.
+This does not qualify source independently or prove native rendering.
+
+FIRST WHOLE independent R1b QA is still required for cumulative e29 -> address-final
+plus the trusted Root lock. No R1b QA/typecheck/native build has run here. Root owns
+genuine dependency/lock/types/owning checks after this source cut; old 7d36 evidence
+cannot qualify the new module. SDK 13.6.1 capability is documentary, not native
+linkage/device proof. Hardware/emulator gate: NOT_TESTED. No deps/install/network,
+lock/config/versionCode8/auth/native-intent/backend/permission changes, build/sign,
+merge, deploy or publication were performed in this address scope.
+
+Retained FIRST whole C1a FAIL: e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825.
+REAL Radar Header/Players P1 remains OPEN for mandatory C1c; Owner APK7 UAT remains
+FAIL and full parity is unfinished. This is neither focused-P2 closure nor full
+C1a PASS. Public delivery/APK remains HOLD; PROD is not authorized.
+
+All recovered e189 README bytes follow unchanged as historical evidence.
+
 # #522 R1b · public native Games/venue map source candidate · delivery HOLD
 
 Bounded source continuation from the supplied C1a working-source capsule:

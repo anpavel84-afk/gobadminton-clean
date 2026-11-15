@@ -128,8 +128,11 @@ export default function GuestGames() {
       ListFooterComponent={city && list.canLoadMore && state.status !== 'error'
         ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : undefined} />
     {city && <Pressable accessibilityRole="button" accessibilityLabel="Показать площадки на карте" onPress={openMap}
-      style={{position:'absolute',bottom:16,left:64,right:64,minHeight:48,borderRadius:999,padding:12,backgroundColor:colors.lime,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8}}>
-      <DiscoveryIcon name="map" /><Label style={{fontWeight:'600'}}>На карте</Label>
+      style={{position:'absolute',bottom:16,alignSelf:'center',minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
+        backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
+        flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
+      <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
+      <Label style={{fontWeight:'600'}}>На карте</Label>
     </Pressable>}
     <DiscoverySheet visible={sheet === 'day'} title="Когда играем" onClose={closeSheet} returnFocusRef={dayTrigger}>
       <DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => { setSelectedDay(''); closeSheet(); }} />

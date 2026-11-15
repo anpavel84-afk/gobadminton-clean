@@ -15,7 +15,7 @@ export function ShareIcon() {
 }
 
 // Exact canonical WEB discovery SVG paths, rendered by existing native SVG runtime.
-export function DiscoveryIcon({ name }: { name: 'filter' | 'pin' | 'chevron' | 'refresh' | 'close' | 'search' | 'map' | 'list' }) {
+export function DiscoveryIcon({ name, color = '#192820' }: { name: 'filter' | 'pin' | 'chevron' | 'refresh' | 'close' | 'search' | 'map' | 'list'; color?: string }) {
   const paths = {
     map: 'm3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2V5Zm6-2v16m6-14v16',
     list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
@@ -28,7 +28,7 @@ export function DiscoveryIcon({ name }: { name: 'filter' | 'pin' | 'chevron' | '
   };
   const compact = name === 'filter' || name === 'pin' || name === 'search';
   return <Svg viewBox={compact ? '0 0 11.6 11.6' : '0 0 24 24'} width={name === 'chevron' ? 12 : 24} height={name === 'chevron' ? 12 : 24} fill="none" accessible={false}>
-    <Path d={paths[name]} stroke="#192820" strokeWidth={compact ? 0.87 : 1.8} strokeLinecap="round" strokeLinejoin="round" />
+    <Path d={paths[name]} stroke={color} strokeWidth={compact ? 0.87 : 1.8} strokeLinecap="round" strokeLinejoin="round" />
   </Svg>;
 }
 

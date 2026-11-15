@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { publicApi } from '../public-api.ts';
@@ -10,6 +10,7 @@ import { useResource } from '../hooks.ts';
 import { colors } from '../theme.ts';
 import { VenueContent, VenueFailure, VenuePreview } from './venue-detail.tsx';
 import { GameCard } from './game-card.tsx';
+import { DiscoveryIcon } from './discovery-icon.tsx';
 import { Label, Loading, PrimaryButton, TextButton, styles } from './ui.tsx';
 
 export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRetrySchedule }: {
@@ -26,11 +27,15 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
   const create = expandedVenueCreate(expanded,venue);
   return <View accessibilityLabel="Площадка" style={{position:'absolute',bottom:0,left:0,right:0,
     maxHeight:expanded ? '88%' : '52%',backgroundColor:colors.card,borderTopLeftRadius:20,borderTopRightRadius:20,borderWidth:1,borderColor:colors.line}}>
-    <View style={{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',paddingHorizontal:12}}>
-      <TextButton title={expanded ? 'Свернуть площадку' : 'Подробнее о площадке'} onPress={() => onExpand(!expanded)} />
-      <TextButton title="Закрыть площадку" onPress={onClose} />
+    <View style={{minHeight:48,paddingHorizontal:60,alignItems:'center'}}>
+      <Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Свернуть площадку' : 'Развернуть площадку'} accessibilityState={{expanded}}
+        onPress={() => onExpand(!expanded)} style={{minHeight:48,width:'100%',alignItems:'center',justifyContent:'center'}}>
+        <View style={{width:40,height:4,borderRadius:4,backgroundColor:colors.lineDark}} />
+      </Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Закрыть площадку" onPress={onClose}
+        style={{position:'absolute',right:8,top:0,width:48,height:48,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="close" /></Pressable>
     </View>
-    <ScrollView style={{flexShrink:1}} contentInsetAdjustmentBehavior="never" contentContainerStyle={{padding:16,paddingBottom:expanded ? spacing.bodyBottom : insets.bottom+16,gap:16}}>
+    <ScrollView style={{flexShrink:1}} contentInsetAdjustmentBehavior="never" contentContainerStyle={{paddingHorizontal:16,paddingTop:expanded ? 16 : 0,paddingBottom:expanded ? spacing.bodyBottom : insets.bottom+16,gap:16}}>
       {(state.status === 'idle' || state.status === 'loading') && <Loading title="Загружаем площадку…" />}
       {state.status === 'error' && <VenueFailure error={state.error} retry={retry} />}
       {venue && (expanded ? <VenueContent venue={venue} schedule={<View style={{gap:16}}>

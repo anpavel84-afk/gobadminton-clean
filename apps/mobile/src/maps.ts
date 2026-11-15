@@ -276,6 +276,16 @@ export type MapCamera = { center: [number,number]; zoom: number };
 export function validMapCamera(camera: MapCamera | null, pack: CityMapPack): MapCamera {
   return camera && pointInPack(...camera.center,pack) && Number.isFinite(camera.zoom) && camera.zoom >= 0 && camera.zoom <= 16 ? camera : { center: [...pack.center], zoom: pack.defaultZoom };
 }
+/** MapLibre 11.5.1 NativeSyntheticEvent envelope; invalid updates retain the last camera. */
+export function nativeMapCamera(event: unknown, pack: CityMapPack): MapCamera | null {
+  if (!event || typeof event !== 'object' || !('nativeEvent' in event)) return null;
+  const state = event.nativeEvent;
+  if (!state || typeof state !== 'object' || !('center' in state) || !('zoom' in state)) return null;
+  const {center,zoom} = state;
+  if (!Array.isArray(center) || center.length !== 2 || typeof center[0] !== 'number' || typeof center[1] !== 'number' ||
+    !pointInPack(center[0],center[1],pack) || typeof zoom !== 'number' || !Number.isFinite(zoom) || zoom < 0 || zoom > 16) return null;
+  return {center:[center[0],center[1]],zoom};
+}
 export function markerActivation() {
   let origin: [number,number] | null = null, dragged = false;
   return { start(x: number,y: number) {origin=[x,y];dragged=false;}, move(x: number,y: number) {if (origin && Math.hypot(x-origin[0],y-origin[1])>5) dragged=true;}, cancel() {dragged=true;}, allow() {return !dragged;} };

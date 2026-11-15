@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { adaptNativeStyle, expandedVenueCreate, gamesContext, gamesRoute, loadMapSnapshot, loadNativeStyle, mapBack, mapDataKey, mapPackForCity, markerActivation, nativeResource, publicGamesIntent, resolveMapSelection, validMapCamera, venueMarkerLabel, venueSchedules, verifiedNativeStyle, visibleMapVenues } from '../src/maps.ts';
+import { adaptNativeStyle, expandedVenueCreate, gamesContext, gamesRoute, loadMapSnapshot, loadNativeStyle, mapBack, mapDataKey, mapPackForCity, markerActivation, nativeMapCamera, nativeResource, publicGamesIntent, resolveMapSelection, validMapCamera, venueMarkerLabel, venueSchedules, verifiedNativeStyle, visibleMapVenues } from '../src/maps.ts';
 import { createPublicApi } from '../src/public-api.ts';
 import type { MapSnapshot, MapOverlay } from '../src/maps.ts';
 import { LatestResource } from '../src/resource.ts';
@@ -14,6 +14,20 @@ const now = Date.parse('2026-11-15T00:00:00Z');
 const upcoming = {...game,venue,timezone:venue.timezone};
 const hash = async (bytes:Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const style = () => ({version:8,glyphs:'fonts/{fontstack}/{range}.pbf',sprite:'sprites/v4/light',sources:{protomaps:{type:'vector',url:'pmtiles://moscow.pmtiles',bounds:[36,54.5,39.5,56.5],minzoom:0,maxzoom:15,attribution:'© OpenStreetMap contributors · Protomaps'},metro:{type:'geojson',data:{type:'FeatureCollection',features:[]}}},layers:[{id:'water',type:'fill',source:'protomaps','source-layer':'water'}]});
+
+test('11.5.1 camera events read nativeEvent center/zoom and reject invalid updates without inventing a fallback', () => {
+  const center = [venue.longitude,venue.latitude], expected = {center,zoom:12};
+  const event = {nativeEvent:{...expected,bearing:0,pitch:0,bounds:[36,54.5,39.5,56.5],animated:false,userInteraction:true},
+    geometry:{coordinates:[0,0]},properties:{zoomLevel:99}};
+  assert.deepEqual(nativeMapCamera(event,pack),expected);
+  assert.notStrictEqual(nativeMapCamera(event,pack)?.center,center);
+  for (const zoom of [0,16]) assert.equal(nativeMapCamera({nativeEvent:{center,zoom}},pack)?.zoom,zoom);
+  for (const invalid of [null,{},expected,{nativeEvent:null},{geometry:{coordinates:center},properties:{zoomLevel:12}},
+    ...[undefined,[],[venue.longitude],[...center,0],['37.61',55.75],[NaN,55.75],[Infinity,55.75],[0,0]].map(center => ({nativeEvent:{center,zoom:12}})),
+    ...[undefined,'12',NaN,Infinity,-1,16.01].map(zoom => ({nativeEvent:{center,zoom}}))]) {
+    assert.equal(nativeMapCamera(invalid,pack),null);
+  }
+});
 
 test('closed city packs have no unknown-city substitution and camera/markers stay within their selected bounds', () => {
   assert.equal(mapPackForCity('unknown'),null);assert.equal(mapPackForCity(null),null);

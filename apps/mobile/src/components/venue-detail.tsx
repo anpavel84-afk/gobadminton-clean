@@ -89,7 +89,7 @@ export function VenueContent({ venue, schedule }: { venue: PublicVenue; schedule
     {schedule ?? <Schedule venue={venue} />}
   </>;
 }
-/** Original compact preview: attributed cover, venue identity and schedule hints only. */
+/** Compact identity/schedule row; full gallery and source credits stay in VenueContent. */
 export function VenuePreview({ venue, games, onOpen }: { venue: PublicVenue; games: readonly PublicGame[] | null; onOpen: () => void }) {
   const item = venue.gallery.find(item => item.url === venue.mainImage) ?? venue.gallery[0];
   const [failed,setFailed] = useState(false);
@@ -101,13 +101,11 @@ export function VenuePreview({ venue, games, onOpen }: { venue: PublicVenue; gam
           : <Label style={{fontSize:11}}>{failed ? 'Фото не загрузилось' : 'Нет изображения'}</Label>}
       </View>
       <View style={{flex:1,minWidth:0,gap:4}}>
-        <Label accessibilityRole="header" style={styles.subtitle}>{venue.name}</Label><Label>{venue.address}</Label>
+        <Label accessibilityRole="header" numberOfLines={1} style={styles.subtitle}>{venue.name}</Label><Label numberOfLines={1}>{venue.address}</Label>
         <Label>{games === null ? 'Расписание временно недоступно' : games[0] ? new Date(games[0].startsAt).toLocaleString('ru-RU',{timeZone:venue.timezone}) : 'Пока нет игр'}</Label>
         {games !== null && games.length > 0 && <Label>{games.length} доступных игр</Label>}
-      </View><Label accessible={false} style={{width:32,textAlign:'center'}}>↑</Label>
+      </View><View style={{width:44,height:44,borderRadius:22,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><Label accessible={false}>↑</Label></View>
     </Pressable>
-    {item && (item.credit.url ? <PublicLink label={item.credit.text} url={item.credit.url} /> : <Label>{item.credit.text}</Label>)}
-    {venue.catalogSource && <><Label>Источник: badminton4u.ru</Label>{venue.catalogSource.clubs.map(club => <PublicLink key={club.id} label={club.name} url={club.url} />)}</>}
   </View>;
 }
 export function VenueDetail({ id }: { id: string }) {
