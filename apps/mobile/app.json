@@ -43,7 +43,7 @@
           ]
         }
       ],
-      "versionCode": 9
+      "versionCode": 10
     },
     "plugins": [
       "expo-router",

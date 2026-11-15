@@ -351,7 +351,118 @@ test('shared person marker uses safe PlayerAvatar projection, selected identity 
   assert.match(personSource,/selectedPerson === row.publicPlayerId && mapStyles.markerSelected/);
   assert.doesNotMatch(personSource,/displayName.slice|<Image|uri:/);
   const row={publicPlayerId:'peer',player:{displayName:'Игрок'}},selected:unknown[]=[];
-  const callback=personSource.match(/onPress=\{(\(\) => onPerson\?\.\(row\))\}/)![1]!;
-  const press=runInNewContext(stripTypeScriptTypes(`(${callback})`),{row,onPerson:(value:unknown)=>selected.push(value)}) as ()=>void;
+  const callback=personSource.match(/onPress=\{(\(\) => selectPerson\(row\))\}/)![1]!;
+  const press=runInNewContext(stripTypeScriptTypes(`(${callback})`),{row,selectPerson:(value:unknown)=>selected.push(value)}) as ()=>void;
   press();assert.strictEqual(selected[0],row);
+});
+
+// Execute the component's actual declarations and bound event expressions without React/SDK imports.
+// Native hit delivery and pan discrimination still require the code10 device check.
+async function nativeMarkerEvents() {
+  const {readFileSync}=await import('node:fs'),{stripTypeScriptTypes}=await import('node:module'),{runInNewContext}=await import('node:vm');
+  const source=readFileSync(new URL('../src/components/native-map.tsx',import.meta.url),'utf8');
+  const evaluate=(code:string,scope:Record<string,unknown>)=>runInNewContext(stripTypeScriptTypes(code),scope);
+  const binding=(tag:string,name:string,scope:Record<string,unknown>)=>{
+    const start=tag.indexOf(`${name}={`);
+    if(start<0) return undefined;
+    const begin=start+name.length+2;
+    let end=begin,depth=1;
+    for(;end<tag.length && depth;end++){
+      if(tag[end]==='{') depth++;
+      else if(tag[end]==='}') depth--;
+    }
+    assert.equal(depth,0,`Unclosed ${name} binding`);
+    const expression=tag.slice(begin,end-1);
+    return evaluate(`(${expression})`,scope) as (event?:unknown)=>void;
+  };
+  const venueSource=source.slice(source.indexOf('  const activate ='),source.indexOf('/** Shared native basemap'));
+  const personSource=source.slice(source.indexOf("{phase === 'loaded' && people"),source.indexOf("{phase === 'loaded' && venues"));
+  const venueTag=source.split('\n').find(line=>line.includes('<VenueMarker key='))!;
+  const ownerSource=source.slice(source.indexOf('  const markerOwner ='),source.indexOf('  const restart ='));
+  const activeMarkers={current:null as object|null};
+  let cleanup:(()=>void)|undefined, clock=now;
+  const render=(input:{venues:readonly typeof venue[];people:readonly unknown[];onSelect:(id:string)=>void;onPerson:(row:unknown)=>void;phase?:string;failed?:boolean})=>{
+    const callbacks=evaluate(`${ownerSource}\n({selectVenue,selectPerson});`,{
+      ...input,phase:input.phase ?? 'loaded',failed:input.failed ?? false,state:{data:{}},Date:{now:()=>clock,parse:Date.parse},
+      useRef:()=>activeMarkers,useEffect:(effect:()=>()=>void)=>{cleanup?.();cleanup=effect();},
+    }) as {selectVenue:(id:string)=>void;selectPerson:(row:unknown)=>void};
+    return {
+      venue(value:typeof venue,counts:ReadonlyMap<string,number>|null){
+        const scope={venue:value,counts,onSelect:binding(venueTag,'onSelect',callbacks)};
+        const declarations=venueSource.slice(0,venueSource.indexOf('  return <Marker'));
+        const locals=evaluate(`${declarations}\n({activate,counted});`,scope) as {activate:()=>void;counted:boolean};
+        const marker=venueSource.split('\n').find(line=>line.includes('return <Marker'))!;
+        const child=venueSource.slice(venueSource.indexOf('<View accessible'),venueSource.indexOf('style={[mapStyles.marker,'));
+        const accessibleAction=binding(child,'onAccessibilityAction',locals)!;
+        return {native:binding(marker,'onPress',locals)!,accessible:()=>accessibleAction({nativeEvent:{actionName:'activate'}}),accessibleAction,
+          childPress:binding(child,'onPress',locals),childMove:binding(child,'onTouchMove',locals),childCancel:binding(child,'onTouchCancel',locals),counted:locals.counted};
+      },
+      person(row:unknown){
+        const scope={row,...callbacks};
+        const marker=personSource.split('\n')[0]!;
+        const child=personSource.slice(personSource.indexOf('<View accessible'),personSource.indexOf('style={{minWidth:52'));
+        const accessibleAction=binding(child,'onAccessibilityAction',scope)!;
+        return {native:binding(marker,'onPress',scope)!,accessible:()=>accessibleAction({nativeEvent:{actionName:'activate'}}),accessibleAction,childPress:binding(child,'onPress',scope)};
+      },
+    };
+  };
+  return {render,unmount:()=>cleanup?.(),advance:(time:number)=>{clock=time;}};
+}
+
+test('actual plain/counted Marker bindings select the closed venue once per native tap and keep explicit accessibility activation',async()=>{
+  const harness=await nativeMarkerEvents(), selected:string[]=[];
+  const owner=harness.render({venues:[venue,{...venue,id:alias}],people:[],onSelect:id=>selected.push(id),onPerson:()=>assert.fail('venue selected a person')});
+  const plain=owner.venue(venue,null), counted=owner.venue({...venue,id:alias},new Map([[alias,3]]));
+  assert.equal(plain.counted,false);assert.equal(counted.counted,true);
+  for(const marker of [plain,counted]){
+    assert.equal(marker.childPress,undefined); // physical tap has just the native Marker path
+    const before=selected.length;
+    marker.native({nativeEvent:{id:'untrusted-event-id',lngLat:[0,0],point:[5,5]}});
+    assert.equal(selected.length,before+1);
+  }
+  assert.deepEqual(selected,[id,alias]);
+  plain.native();plain.native();counted.native(); // repeated taps and nearby distinct pins have no debounce
+  assert.deepEqual(selected,[id,alias,id,id,alias]);
+  plain.accessible();counted.accessible();assert.deepEqual(selected.slice(-2),[id,alias]);
+  const beforeOtherAction=selected.length;
+  plain.accessibleAction({nativeEvent:{actionName:'longpress'}});assert.equal(selected.length,beforeOtherAction);
+  const beforePan=selected.length;
+  const childGuard=markerActivation();childGuard.start(0,0);childGuard.move(20,0);childGuard.cancel();
+  plain.childMove?.({nativeEvent:{pageX:20,pageY:0}});plain.childCancel?.();plain.childPress?.();
+  assert.equal(childGuard.allow(),false);assert.equal(selected.length,beforePan);
+  plain.native();assert.equal(selected.length,beforePan+1); // a native click does not consume child-only cancel state
+});
+
+test('actual queued marker callbacks cannot select an old marker, city, renderer, failed map or unmounted owner',async()=>{
+  const harness=await nativeMarkerEvents(),selected:string[]=[];
+  const input={venues:[venue],people:[],onSelect:(id:string)=>selected.push(id),onPerson:()=>{}};
+  const old=harness.render(input).venue(venue,null);
+  const next=harness.render({...input,venues:[{...venue,id:alias,cityId:'another-city'}]}).venue({...venue,id:alias,cityId:'another-city'},null);
+  old.native();old.accessible();assert.deepEqual(selected,[]);
+  next.native({nativeEvent:{id}});assert.deepEqual(selected,[alias]);
+  const retry=harness.render({...input,phase:'loading'}).venue(venue,null);
+  next.native();retry.native();assert.deepEqual(selected,[alias]);
+  const recovered=harness.render(input).venue(venue,null);
+  retry.native();recovered.native();assert.deepEqual(selected,[alias,id]);
+  const failed=harness.render({...input,failed:true}).venue(venue,null);
+  recovered.native();failed.native();assert.deepEqual(selected,[alias,id]);
+  const removed=harness.render({...input,venues:[]}).venue(venue,null);
+  removed.native();assert.deepEqual(selected,[alias,id]);
+  const mounted=harness.render(input).venue(venue,null);harness.unmount();mounted.native();mounted.accessible();
+  assert.deepEqual(selected,[alias,id]);
+});
+
+test('actual native/accessible people bindings reuse onPerson only for the current eligible row and unexpired window',async()=>{
+  const harness=await nativeMarkerEvents(),selected:unknown[]=[];
+  const row={publicPlayerId:'peer',radar:{validUntil:new Date(now+1000).toISOString()}},fresh={...row,radar:{validUntil:new Date(now+2000).toISOString()}};
+  const input={venues:[],people:[row],onSelect:()=>assert.fail('person selected a venue'),onPerson:(value:unknown)=>selected.push(value)};
+  const marker=harness.render(input).person(row);assert.equal(marker.childPress,undefined);
+  marker.native({nativeEvent:{id:'other-player'}});assert.equal(selected.length,1);assert.strictEqual(selected[0],row);
+  marker.accessible();assert.equal(selected.length,2);
+  harness.advance(now+1000);marker.native();marker.accessible();assert.equal(selected.length,2);
+  const current=harness.render({...input,people:[fresh]}).person(fresh);
+  marker.native();current.native();assert.equal(selected.length,3);assert.strictEqual(selected[2],fresh);
+  // The parent supplies this collection after its existing city/renderer/authority gates.
+  const hidden=harness.render({...input,people:[]}).person(fresh);
+  current.native();hidden.native();hidden.accessible();assert.equal(selected.length,3);
 });
