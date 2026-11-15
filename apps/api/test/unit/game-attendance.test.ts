@@ -268,7 +268,7 @@ describe("PG-1b attendance policy", () => {
   it("controller preserves actor/session/idempotency on PUT attendance", async () => {
     const a = "10000000-0000-4000-8000-000000000001";
     const s = "10000000-0000-4000-8000-000000000002";
-    const auth = { requireCookieMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }) };
+    const auth = { requirePrincipalMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }) };
     const putAttendance = vi.fn().mockResolvedValue({
       statusCode: 200,
       body: unknownAttendanceRecord(context, "Анна", {
@@ -287,12 +287,16 @@ describe("PG-1b attendance policy", () => {
     );
     const body = { expectedVersion: 0, value: "present" };
     const reply = { status: vi.fn() };
+    const request = { headers: { "idempotency-key": "pg1b-synthetic-key-12345" }, body };
     await controller.putAttendance(
-      { headers: { "idempotency-key": "pg1b-synthetic-key-12345" }, body } as never,
+      request as never,
       reply as never,
       context,
       context,
     );
+    expect(auth.requirePrincipalMutation).toHaveBeenCalledTimes(1);
+    expect(auth.requirePrincipalMutation).toHaveBeenCalledWith(request);
+    expect(auth.requirePrincipalMutation.mock.calls[0]![0]).toBe(request);
     expect(putAttendance).toHaveBeenCalledWith(a, s, "pg1b-synthetic-key-12345", context, context, body);
     expect(reply.status).toHaveBeenCalledWith(200);
   });

@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -17,7 +18,7 @@ import { VenuesModule } from "../../src/venues/venues.module";
 import { buildTestCoreModule } from "./test-core.module";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 
 function disposableUrl() {
   const raw = process.env.DATABASE_URL;
@@ -67,13 +68,15 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
       NODE_ENV: "test",
       APP_ENV: "local",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "pg1b-synthetic-fixture-pepper-only!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "pg1b-synthetic-fingerprint-fixture!!",
       POST_GAME_INTERNAL_ENABLED: "1",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:"postgame-fixture",redirectUris:["https://app.example.test/auth/callback"]}]),
     });
     const ref = await Test.createTestingModule({
       imports: [buildTestCoreModule(env, pool), GamesModule, VenuesModule, ProfilesModule],
@@ -95,6 +98,7 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
       await client.query("ROLLBACK");
       client.release();
     }
+    await migrate("0072_native_auth_sessions.sql");
   }, 120000);
 
   async function migrate(file: string) {
@@ -119,6 +123,7 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
 
   beforeEach(async () => {
     env.POST_GAME_INTERNAL_ENABLED = true;
+    env.NATIVE_AUTH_ENABLED = true;
     manager = await actor("PG1b manager");
     participant = await actor("PG1b participant");
     withdrawn = await actor("PG1b withdrawn");
@@ -135,6 +140,30 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
       csrfToken: issued.csrfToken,
       cookie: `${SESSION_COOKIE}=${encodeURIComponent(issued.sessionToken)}`,
     };
+  }
+
+  async function nativeHeaders(who: Actor) {
+    const native = app.get(NativeSessionService);
+    const issued = await native.transaction(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, "postgame-fixture");
+    });
+    return { credentials: issued, headers: { authorization: `Bearer ${issued.accessToken}`, "idempotency-key": `native-pg-${randomUUID()}` } };
+  }
+  async function nativeGuards(who: Actor, url: string, method: "GET" | "PUT" | "POST", payload?: object) {
+    const n = await nativeHeaders(who);
+    const request = { method, url, ...(payload ? {payload} : {}) };
+    expect((await app.inject({...request,headers:{authorization:"Bearer malformed"}})).statusCode).toBe(401);
+    expect((await app.inject({...request,headers:{...n.headers,cookie:who.cookie}})).statusCode).toBe(403);
+    env.NATIVE_AUTH_ENABLED = false;
+    try { expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(404); }
+    finally { env.NATIVE_AUTH_ENABLED = true; }
+    await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [who.userId]);
+    try { expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(401); }
+    finally { await pool.query("UPDATE users SET status='active' WHERE id=$1", [who.userId]); }
+    if (method !== "GET") expect((await app.inject({...request,headers:{cookie:who.cookie}})).statusCode).toBe(403);
+    await sessions.revokeSession(n.credentials.sessionId);
+    expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(401);
   }
 
   const key = () => `pg1b-synthetic-${randomUUID()}`;
@@ -250,6 +279,37 @@ run("PG-1b GameAttendance — disposable synthetic PostGIS", () => {
     }
     return id;
   }
+
+  it("native own-results, attendance, bulk and ACK preserve exact contexts, self provenance, replay and cookie-only disputes", async () => {
+    const g = await createEndedGame(manager);
+    const contextId = await confirmWithTransition(g.id,participant.userId);
+    const ownContext = await confirmWithTransition(g.id,manager.userId);
+    const m = await nativeHeaders(manager), p = await nativeHeaders(participant), stranger = await nativeHeaders(outsider);
+    const markUrl = `/v1/games/${g.id}/attendance/${contextId}`;
+    const command = {method:"PUT" as const,url:markUrl,headers:m.headers,payload:{expectedVersion:0,value:"present"}};
+    const marked = await app.inject(command); expect(marked.statusCode).toBe(200);
+    expect(marked.json()).toMatchObject({contextId,version:1,assertion:{source:"manager_explicit"}});
+    expect((await app.inject(command)).json()).toEqual(marked.json());
+    const ownResults = await app.inject({url:"/v1/me/game-results?limit=20",headers:p.headers});
+    expect(ownResults.statusCode).toBe(200); expect(ownResults.json().items[0]).toMatchObject({gameId:g.id,contextId,notice:{attendanceVersion:1}});
+    const ackUrl = `${markUrl}/acknowledgements`;
+    const ack = {method:"POST" as const,url:ackUrl,headers:p.headers,payload:{attendanceVersion:1}};
+    const receipt = await app.inject(ack); expect(receipt.statusCode).toBe(200); expect(receipt.json().acknowledgedVersion).toBe(1);
+    const ackReplay = await app.inject(ack); expect(ackReplay.statusCode).toBe(200);expect(ackReplay.json()).toEqual(receipt.json());
+    const bulkUrl = `/v1/games/${g.id}/attendance/bulk-present`;
+    const bulk = {method:"POST" as const,url:bulkUrl,headers:{...m.headers,"idempotency-key":key()},payload:{items:[{contextId:ownContext,expectedVersion:0}],confirmedExactSelection:true}};
+    const bulkReceipt = await app.inject(bulk);expect(bulkReceipt.statusCode).toBe(200);
+    expect(bulkReceipt.json().items[0]).toMatchObject({contextId:ownContext,version:1,assertion:{source:"self_attested"},acknowledgedVersion:null,allowedActions:{canAcknowledge:false}});
+    const bulkReplay=await app.inject(bulk);expect(bulkReplay.statusCode).toBe(200);expect(bulkReplay.json()).toEqual(bulkReceipt.json());
+    const redundant=await app.inject({method:"POST",url:`/v1/games/${g.id}/attendance/${ownContext}/acknowledgements`,headers:{...m.headers,"idempotency-key":key()},payload:{attendanceVersion:1}});
+    expect(redundant.statusCode).toBe(409);expect(redundant.json().code).toBe("ATTENDANCE_SELF_ACK_REDUNDANT");
+    expect((await app.inject({...command,headers:stranger.headers})).statusCode).toBe(404);
+    expect((await app.inject({...ack,headers:stranger.headers})).statusCode).toBe(404);
+    expect((await app.inject({url:`${markUrl}/history`,headers:p.headers})).statusCode).toBe(401);
+    expect((await app.inject({method:"POST",url:`${markUrl}/disputes`,headers:p.headers,payload:{attendanceVersion:1,explanation:"Уточнение"}})).statusCode).toBe(403);
+    await nativeGuards(participant,"/v1/me/game-results","GET");
+    await nativeGuards(manager,markUrl,"PUT",command.payload);await nativeGuards(manager,bulkUrl,"POST",bulk.payload);await nativeGuards(participant,ackUrl,"POST",ack.payload);
+  });
 
   it("no time inference; manager marks; notice+ack+dispute; withdrawn-before-start excluded; outsider 404", async () => {
     const g = await createEndedGame(manager);

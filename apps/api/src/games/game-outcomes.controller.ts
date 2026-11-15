@@ -22,7 +22,7 @@ export class GameOutcomesController {
     @Query("rosterLimit") rosterLimit?: string,
     @Query("rosterCursor") rosterCursor?: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.outcomes.getResults(gameId, actor.userId, {
       revisionsLimit,
       revisionsCursor,
@@ -38,7 +38,7 @@ export class GameOutcomesController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("gameId") gameId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.outcomes.putOutcome(
       actor.userId,
       actor.sessionId,

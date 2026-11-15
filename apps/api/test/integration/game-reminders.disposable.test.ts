@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -23,7 +24,7 @@ import { buildTestCoreModule } from "./test-core.module";
  * Dedicated DB name or strict hosted Actions ephemeral recipe — never live.
  */
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 const DB_NAME = "gobadminton_reminders_disposable";
 
 function disposableUrl() {
@@ -87,13 +88,15 @@ run("#457 postgame reminders — disposable", () => {
       APP_ENV: "local",
       HOST: "127.0.0.1",
       DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
       PUBLIC_WEB_ORIGIN: origin,
-      COOKIE_SECURE: "false",
+      COOKIE_SECURE: "true",
       AUTH_PEPPER: "reminders-synthetic-fixture-pepper!!!!",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "reminders-synthetic-fingerprint!!!!",
       POST_GAME_INTERNAL_ENABLED: "1",
+      NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:"postgame-fixture",redirectUris:["https://app.example.test/auth/callback"]}]),
     });
     // Test-only overlay (preserve public rollout guard in loadEnv).
     env.USER_RESTRICTIONS_INTERNAL_ENABLED = true;
@@ -133,6 +136,7 @@ run("#457 postgame reminders — disposable", () => {
 
   beforeEach(async () => {
     env.POST_GAME_INTERNAL_ENABLED = true;
+    env.NATIVE_AUTH_ENABLED = true;
     organizer = await actor("Reminders organizer");
     coOrganizer = await actor("Reminders co-organizer");
     outsider = await actor("Reminders outsider");
@@ -149,6 +153,30 @@ run("#457 postgame reminders — disposable", () => {
       csrfToken: issued.csrfToken,
       cookie: `${SESSION_COOKIE}=${encodeURIComponent(issued.sessionToken)}`,
     };
+  }
+
+  async function nativeHeaders(who: Actor) {
+    const native = app.get(NativeSessionService);
+    const issued = await native.transaction(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [who.userId]);
+      return native.issue(client, who.userId, "postgame-fixture");
+    });
+    return { credentials: issued, headers: { authorization: `Bearer ${issued.accessToken}`, "idempotency-key": `native-pg-${randomUUID()}` } };
+  }
+  async function nativeGuards(who: Actor, url: string, method: "GET" | "PUT" | "POST", payload?: object) {
+    const n = await nativeHeaders(who);
+    const request = { method, url, ...(payload ? {payload} : {}) };
+    expect((await app.inject({...request,headers:{authorization:"Bearer malformed"}})).statusCode).toBe(401);
+    expect((await app.inject({...request,headers:{...n.headers,cookie:who.cookie}})).statusCode).toBe(403);
+    env.NATIVE_AUTH_ENABLED = false;
+    try { expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(404); }
+    finally { env.NATIVE_AUTH_ENABLED = true; }
+    await pool.query("UPDATE users SET status='disabled' WHERE id=$1", [who.userId]);
+    try { expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(401); }
+    finally { await pool.query("UPDATE users SET status='active' WHERE id=$1", [who.userId]); }
+    if (method !== "GET") expect((await app.inject({...request,headers:{cookie:who.cookie}})).statusCode).toBe(403);
+    await sessions.revokeSession(n.credentials.sessionId);
+    expect((await app.inject({...request,headers:n.headers})).statusCode).toBe(401);
   }
 
   const key = () => `reminders-synthetic-${randomUUID()}`;
@@ -246,6 +274,26 @@ run("#457 postgame reminders — disposable", () => {
     const command = new GameRemindersCommand(env);
     return command.execute(pool, { kind: "sweep" }, { now, manageTransactions: true });
   }
+
+  it("native reminder list/Later: real actor-bound snooze receipt, idempotent replay and credential/rights guards", async () => {
+    const g = await createEndedGame(organizer);await sweep(new Date(g.endsAt.getTime()+2*3600_000));
+    const n=await nativeHeaders(organizer), foreign=await nativeHeaders(outsider);
+    const list=await app.inject({url:"/v1/me/postgame-reminders?limit=20",headers:n.headers});expect(list.statusCode).toBe(200);
+    const item=list.json().items.find((r:{gameId:string})=>r.gameId === g.id);expect(item).toBeTruthy();
+    const url=`/v1/me/postgame-reminders/${item.id}`, payload={command:"later",expectedVersion:item.version};
+    expect((await app.inject({method:"POST",url,payload,headers:foreign.headers})).statusCode).toBe(404);
+    const command={method:"POST" as const,url,payload,headers:n.headers};
+    const first=await app.inject(command);expect(first.statusCode).toBe(200);expect(first.json().items.some((r:{id:string})=>r.id === item.id)).toBe(false);
+    const replay=await app.inject(command);expect(replay.statusCode).toBe(200);expect(replay.json()).toEqual(first.json());
+    const durable=await pool.query("SELECT state,version FROM game_outcome_reminders WHERE id=$1",[item.id]);
+    expect(durable.rows[0]).toMatchObject({state:"snoozed",version:item.version+1});
+    await nativeGuards(organizer,"/v1/me/postgame-reminders","GET");await nativeGuards(organizer,url,"POST",payload);
+    const outcome = await put(organizer, `/v1/games/${g.id}/outcome`, {
+      expectedVersion: 0,
+      outcome: "held",
+    });
+    expect(outcome.statusCode).toBe(200);
+  });
 
   it("repeated job ensures max 3 durable ordinals; overdue catch-up activates one card", async () => {
     const game = await createEndedGame(organizer);

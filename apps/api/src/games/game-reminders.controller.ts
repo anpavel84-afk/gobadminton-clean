@@ -18,7 +18,7 @@ export class GameRemindersController {
     @Req() request: FastifyRequest,
     @Query("limit") limit?: string,
   ) {
-    const actor = await this.auth.requireSession(request);
+    const actor = await this.auth.requirePrincipal(request);
     return this.reminders.listMine(actor.userId, limit);
   }
 
@@ -29,7 +29,7 @@ export class GameRemindersController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("reminderId") reminderId: string,
   ) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const result = await this.reminders.later(
       actor.userId,
       actor.sessionId,

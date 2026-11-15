@@ -1,3 +1,5 @@
+import { PostgameError, postgameId, cursor as postgameCursor, resultsQuery, wire as postgameWire, parseResults, parseOwnResults, parseReminders } from './postgame.ts';
+import type { Packet as PostgamePacket, ResultsQuery } from './postgame.ts';
 import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
 import type { PlayInterestPacket } from './play-interests.ts';
 import { RadarError, RADAR_WIRE, resultProof } from './radar.ts';
@@ -104,7 +106,36 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       throw new PlayInterestError(error instanceof SyntaxError ? 'invalid' : 'network');
     } finally { clearTimeout(timeout); }
   }
+  async function postgameRequest(path: string, access: string, packet?: PostgamePacket): Promise<unknown> {
+    const operation = packet ? postgameWire(packet) : null;
+    if (operation && (operation.path !== path || packet?.path !== path || packet.method !== operation.method || !packet.key)) throw new PostgameError('invalid');
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
+        method: operation?.method ?? 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'application/json', Authorization: `Bearer ${access}`,
+          ...(packet ? { 'Content-Type': 'application/json', 'Idempotency-Key': packet.key } : {}) },
+        ...(operation ? {body: JSON.stringify(operation.body)} : {}),
+      });
+      if (response.status === 401) throw new NativeAuthError('authority');
+      if (!response.ok) {
+        let code = '';
+        try { const row = await response.json(); if (typeof row?.code === 'string' && /^[A-Z_]{1,80}$/.test(row.code)) code=row.code; } catch { /* No private response text retained. */ }
+        throw new PostgameError(response.status >= 500 || code === 'COMMAND_IN_PROGRESS' ? 'network'
+          : [403,404].includes(response.status) ? 'private' : [400,409,422,429].includes(response.status) ? 'business' : 'network',response.status,code);
+      }
+      if (response.status !== 200) throw new PostgameError('invalid');
+      return await response.json();
+    } catch(error) {
+      if(error instanceof NativeAuthError || error instanceof PostgameError) throw error;
+      throw new PostgameError(error instanceof SyntaxError ? 'invalid' : 'network');
+    } finally { clearTimeout(timer); }
+  }
   return {
+    postgameOwn: async (access: string, cursor?: string) => parseOwnResults(await postgameRequest(`/me/game-results?limit=20${cursor ? `&cursor=${encodeURIComponent(postgameCursor(cursor))}` : ''}`,access)),
+    postgameResults: async (access: string, gameId: string, query?: ResultsQuery) => parseResults(await postgameRequest(`/games/${postgameId(gameId)}/results${resultsQuery(query)}`,access)),
+    postgameReminders: async (access: string) => parseReminders(await postgameRequest('/me/postgame-reminders?limit=20',access)),
+    postgameMutation: (access: string, packet: PostgamePacket) => postgameRequest(postgameWire(packet).path,access,packet),
     playInterestStates: (access: string, ids: readonly string[]) => interestRequest(statesPath([...ids]), access),
     playInterestMutation: async (access: string, packet: PlayInterestPacket) => {
       const wire = interestWire(packet);
