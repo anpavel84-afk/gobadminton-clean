@@ -9,12 +9,16 @@ Onest, black-on-green, safe edges и масштабирование текста
 
 Текущее состояние по предоставленным qualified inputs для alpha.95 и sanitized summary
 `ACTUAL-QUALIFIED-SOURCE-BUILD-SIGN-SUMMARY.json` (SHA256 `96283527474fc798faaa39afe3afbdc190add9cfbba02a9c12e6d62249bc37c8`):
-owned-sign code10 подтверждена. Новый DEV alpha.95 **NOT_ACCEPTED_YET**, публичный APK URL **pending**
-(`APK_URL: null`); подпись не доказывает публикацию, Owner UAT, device/login/verified links или продуктовую
-приёмку. Qualified native source `8cd08ec8631ea8af89b6190482fcb35caaffca9c` (code10 / versionName `0.1.0`);
-будущий metadata merge и принятый серверный SHA этого номера — отдельные факты. Приложение
-`0.1.0-alpha.95` описывает ограниченное исправление открытия метки на карте; API-контракт остаётся `0.44.0`.
-Venue/community candidate (**224**) **HELD_NOT_INCLUDED** и не входит в этот product release.
+owned-sign code10 подтверждена. Новый DEV alpha.95 **NOT_ACCEPTED_YET**. **Checkpoint facts** (не постоянный
+`NOT_PUBLISHED` claim): selected installed inventory **22** и восемь MyGames/Postgame bearer routes уже
+приняты на сервере `b703fad0107a4888808b542dcb7cd49f2c269603`; публикация APK9 реальна (историческое
+evidence `receipt8a22`); APK10 остаётся private signed на этом metadata-preparation checkpoint
+(`APK10_public: false`, `APK_URL: null` — URL не выдумывается). Подпись code10 не доказывает Owner UAT,
+device/login/verified links или продуктовую приёмку. Qualified native source
+`8cd08ec8631ea8af89b6190482fcb35caaffca9c` (code10 / versionName `0.1.0`); будущий metadata merge и
+принятый серверный SHA этого номера — отдельные факты. Приложение `0.1.0-alpha.95` описывает
+ограниченное исправление открытия метки на карте; API-контракт остаётся `0.44.0`. Venue/community
+candidate (**224**) **HELD_NOT_INCLUDED** и не входит в этот product release.
 
 | Стадия | Текущий подтверждённый факт / обязательная открытая граница |
 |---|---|
@@ -23,9 +27,9 @@ Venue/community candidate (**224**) **HELD_NOT_INCLUDED** и не входит �
 | Принятый alpha.94 | MyGames/Postgame metadata+native lineage на `b703fad0107a4888808b542dcb7cd49f2c269603` / normal23 `a44cd7b22259f61ed1dd31ddeb07224f60fb609d` + qualified metadata; Owner UAT **FAIL_RECHECK_PENDING** сохранён |
 | Native marker-hotfix source / static | `8cd08ec8631ea8af89b6190482fcb35caaffca9c`, versionName `0.1.0`, versionCode **10**. Parent PASS SHA256 `25076dd00837e82e90f982f345b982c8e1696aff91ec208d7e8e96b69cd187a4`. Global native author normal execution counter **27** (normal26 first-marker source + normal27 P1 ownership repair); это не число авторов и не proof whole-app |
 | Независимая source QA | Focused P1 PASS receipt SHA256 `7f645a96ce663827e766e1269f491174f1fceb7049b561961ecbf85f12cda16b`. FIRST full-6 QA FAIL SHA256 `4193f2d862f0d351cd966fde91c3960b29c0f3e6de7d1258cee1ec89c5c7b5d6` сохранён как история, не переименован в PASS |
-| Android code10 build / owned-sign | Actual private build+sign: build receipt SHA256 `87d796f99e5855dfb11b25d0fc4a10e306296cdd86903c5c3e11fdf2d16ab3a2`; owned-sign receipt SHA256 `79f59a3f12ac7800a42f799b8a7645407f1ac622f7105f2dc20f4e9f56d46dea`. Owned certificate SHA256 `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051` (тот же, что у owned APK9). Подписанный непубличный APK: SHA256 `9eb049a6874cf9c9bb4b984f37cf7e30f33ab10e94146d65d4cd95638381ae77`, **44751369 bytes**, package `ru.gobadminton.mobile.dev`, `arm64-v8a`, embedded bundle **3187108** bytes; публичный URL **не опубликован**. Ожидаемая установка поверх owned APK9 тем же package/certificate — не device-verified |
-| Публичный APK сейчас | Публичный URL code10 **pending**. Исторические APK8/APK7 ниже сохранены как evidence; private APK path не выдаётся за публичную ссылку |
-| Backend native inventory | API-контракт `0.44.0`, whole OpenAPI NativeBearer **64**, selected installed inventory **22** — **UNCHANGED** в этом metadata release. Новые venue opt-ins **не** входят. Восемь MyGames/Postgame bearer routes остаются source-prepared относительно принятого alpha.94; этот выпуск их не расширяет |
+| Android code10 build / owned-sign | Actual private build+sign: build receipt SHA256 `87d796f99e5855dfb11b25d0fc4a10e306296cdd86903c5c3e11fdf2d16ab3a2`; owned-sign receipt SHA256 `79f59a3f12ac7800a42f799b8a7645407f1ac622f7105f2dc20f4e9f56d46dea`. Owned certificate SHA256 `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051` (тот же, что у owned APK9). Подписанный APK10: SHA256 `9eb049a6874cf9c9bb4b984f37cf7e30f33ab10e94146d65d4cd95638381ae77`, **44751369 bytes**, package `ru.gobadminton.mobile.dev`, `arm64-v8a`, embedded bundle **3187108** bytes. **Checkpoint fact:** APK10 остаётся private signed (`APK_URL: null`); это не постоянный `NOT_PUBLISHED` claim. Ожидаемая установка поверх owned APK9 тем же package/certificate — не device-verified |
+| Публичный APK сейчас | **Checkpoint facts:** публикация APK9 реальна (историческое evidence `receipt8a22`); APK10 private signed на этом metadata-preparation checkpoint (`APK_URL: null`, URL не выдуман). Исторические APK8/APK7 ниже сохранены как evidence; private APK path не выдаётся за публичную ссылку |
+| Backend native inventory | API-контракт `0.44.0`, whole OpenAPI NativeBearer **64**. **Checkpoint fact:** selected installed inventory **22** и восемь MyGames/Postgame bearer routes уже приняты на `b703fad0107a4888808b542dcb7cd49f2c269603` — **UNCHANGED** в этом metadata release. Новые venue opt-ins **не** входят; этот выпуск их не расширяет |
 | Устройства / приёмка | Physical Android / Samsung S23 **NOT_TESTED** (`device: NOT_TESTED`), native visual **NOT_VERIFIED**. Исторические Owner замечания (карта: много меток, ни одна не открывается; PlayerSwipe two-gesture load error) и UAT **FAIL_RECHECK_PENDING** сохранены; code10 требует Owner retest. Причина Swipe **UNCONFIRMED**, swipe code fix в этот выпуск не входит. Source QA и build не доказывают taps на устройстве, вход, verified links или authenticated journey |
 | Полный объём | Full #522 **PARTIAL**; full web-to-native parity **MANDATORY_NOT_COMPLETE**; real signed OTA A→B / recovery **NOT_READY**/**NOT_DONE**; Android device/S23 и iOS acceptance обязательны и открыты. Product CI → merge → DEV strict/read smoke → owned HTTPS publication выполняет trusted route после metadata; PROD, production OTA и stores требуют отдельного Owner GO |
 
@@ -41,7 +45,7 @@ Disputes/history/help и остальные закрытые сценарии э
 |---|---|
 | Native normal23 / code9 | `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionCode **9**; parent PASS SHA256 `79810e52e583d557dc8dee53d18c3a9a0a1d0fb042cdf174c6e44283505615f6` |
 | Независимая source QA | Normal23 focused P2/all-delta PASS `fcf173047e7990f7d717764721c88f22c5c9327d45847ecbd874a1d47edb1c8c`; prior normal22 CHANGES_REQUIRED retained |
-| Android code9 owned-sign | Signed APK SHA256 `68d4fbbddb3004e51eca05c617e0600623bf36e07fba79f7272faa93dae8b155`, certificate `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`; APK9 был **NOT_PUBLISHED** на момент metadata alpha.94 |
+| Android code9 owned-sign | Signed APK SHA256 `68d4fbbddb3004e51eca05c617e0600623bf36e07fba79f7272faa93dae8b155`, certificate `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`. **Checkpoint fact:** публикация APK9 реальна (историческое evidence `receipt8a22`); это не постоянный `NOT_PUBLISHED` claim. URL только из фактического supplied publication evidence — не выдумывается |
 | DEV ACCEPTED | `0.1.0-alpha.94`, source `b703fad0107a4888808b542dcb7cd49f2c269603`, release `r43736231808-a1`, принято `2026-11-15T16:48:11Z` |
 
 ### Исторические факты alpha.92 и venue candidate (не текущее состояние)
