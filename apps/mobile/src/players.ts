@@ -101,7 +101,7 @@ export class PlayersCoordinator {
     this.clearPeerInvalidation();
     this.generation++; this.reader = reader; this.show(empty(scope));
   }
-  /** Drop unavailable peers from responses captured at/before invalidation; fresh sequences may recover by authority. */
+  /** Drop unavailable peers from responses at/before invalidation; only fresher catalog sequences may recover by authority. Detail success does not clear tombstones. */
   private applyPeerInvalidation(page: PlayerPage, sequence: number): PlayerPage {
     if (this.unavailablePeerIds.size === 0) return page;
     if (sequence > this.unavailableBeforeListSequence) {
@@ -120,13 +120,15 @@ export class PlayersCoordinator {
     try {
       const page = await reader.list({ ...filters }, cursor);
       if (generation !== this.generation || sequence !== this.listSequence) return;
-      const merged = cursor && old.data ? appendPlayers(old.data, page) : page;
+      // Prefer the live accepted catalog so detail-404 removals are not resurrected from a pre-request capture.
+      const baseline = cursor ? this.snapshot.list.data : null;
+      const merged = cursor && baseline ? appendPlayers(baseline, page) : page;
       const data = this.applyPeerInvalidation(merged, sequence);
       this.show({ ...this.snapshot, list: { key, status: 'ready', data, error: null, moreError: null, loadingMore: false } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.listSequence) return;
       if (error instanceof PlayersError && error.status === 404) { this.clearUnavailable(error); return; }
-      this.show({ ...this.snapshot, list: cursor ? { ...old, moreError: error, loadingMore: false }
+      this.show({ ...this.snapshot, list: cursor ? { ...this.snapshot.list, moreError: error, loadingMore: false }
         : { key, status: 'error', data: null, error, moreError: null, loadingMore: false } });
     }
   };
@@ -138,7 +140,7 @@ export class PlayersCoordinator {
       const data = await reader.detail(id);
       if (generation !== this.generation || sequence !== this.detailSequence) return;
       if (data.publicPlayerId !== id) throw new PlayersError('invalid');
-      this.unavailablePeerIds.delete(id);
+      // Fresh detail must not authorize an older captured catalog projection; only a newer list sequence may recover the peer.
       this.show({ ...this.snapshot, detail: { id, status: 'ready', data, error: null } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.detailSequence) return;
