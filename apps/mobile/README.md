@@ -1,3 +1,51 @@
+# #522 R1b address2 · TSC/marker source correction · delivery HOLD
+
+Bounded author continuation from Root-bound candidate
+`15f0796228fd5ef02a668988686f10a1f641ef33`. This private export has no
+usable Git metadata. Only Games map, native-map, maps.test and this README
+were edited. All prior 15f README bytes, including the historical 3214/5797-byte
+prefixes, follow unchanged; historical qualifications below are not new results.
+
+The actual ADDRESS1 parent `344aaa498e310b4a5105e9fd93bf928b2949aaf3149f20a07f710525c49dd9b3`
+remains FAIL (mobile TSC). Its 132/132 units, lint, two Expo exports and archive
+PASS remain historical. The original 17-minute author HOLD `2202ab79`, unchanged
+Root recovery `14b63504`/README exception `34cce018`, normal ADDRESS1
+`f56bdafe`/receipt `70ec9d75`, generated-lock receipt `0220bd25`, candidate 15f
+and genuine lock `d69f0e8f` are retained, not replayed or reclassified.
+
+GamesMap now owns a ComponentRef<typeof Pressable> ref attached to its real map
+filter trigger and passes that same ref to DiscoverySheet for close-focus return.
+The shared sheet contract is unchanged. Expo SHA-256 now receives an owned
+ArrayBuffer copy of exactly the input view's bytes, including offset/shared views;
+style hash-before-parse and resource rejection guards are unchanged. maps.test
+uses the supported any-throw/message overload with the original URL diagnostic
+and node:url URL for Node PathLike; all existing cases/assertions remain.
+
+Manual SOURCE parity correction follows WEB2a venueMarkerPresentation,
+GamesVenueMap, radar-geographic.css and NavIcon.shuttlecockElement: zero/unknown
+use a white 44px circle with the exact purple 28px shuttlecock SVG path; unknown
+keeps the honest unavailable label. Positive counts remain actual counts with
+WEB Games lime/ink, white border and purple selection outline. No fake count or
+new dependency/icon system; press/drag, coordinates, camera and generation owners
+remain intact. This does not close a QA finding or prove native appearance.
+
+Actual author self-check: Node 24.21.0 maps.test, 12/12 PASS, zero failed/skipped;
+extracted owning digest checked against real Node SHA-256 for offset/shared and
+empty inputs, owned buffer and mutation independence, PASS. These are author
+checks only. No cached node_modules are available here; fresh full TSC/lint,
+Expo checks, native build and independent QA were NOT_RUN. No install/resolution,
+package/lock/config/versionCode8 change, build/sign/publication or DB operation.
+
+Root must strictly reuse the genuine 11.5.1 package+lock+graph, create the new
+archive and run fresh owning checks, then FIRST WHOLE independent R1b QA over
+e29 -> final + Root lock, ALL19+lock (not focused QA). No independent R1b QA has
+been called. Native basemap/tiles/glyphs/attribution/gesture/device gate:
+NOT_TESTED. REAL Radar P1 stays OPEN; first whole C1a FAIL e5e892a1, Owner APK7
+FAIL, unfinished full parity and source-continuation/publication HOLD remain.
+No delivery/full C1a PASS, DEV acceptance or PROD authorization is claimed.
+
+All prior 15f README bytes follow unchanged as historical evidence.
+
 # #522 R1b address1 · recovered source correction · delivery HOLD
 
 This bounded source continuation starts from recovered `e1892d8747e8778f98e7cb35b381f0e1fccd1104`,

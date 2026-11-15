@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentRef } from 'react';
 import { AppState, BackHandler, FlatList, Pressable, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,6 +26,7 @@ export default function GamesMap() {
   const [day,setDay] = useState(context?.day ?? ''), [activity,setActivity] = useState(context?.activity ?? 'all');
   const [mode,setMode] = useState<'all'|'with_games'>('all'), [catalog,setCatalog] = useState(false);
   const [overlay,setOverlay] = useState<MapOverlay>({filter:false,expanded:false,selected:null});
+  const filterTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [selectionError,setSelectionError] = useState(false), [camera,setCamera] = useState<MapCamera | null>(null);
   const [now,setNow] = useState(Date.now());
   const filters = useMemo(() => ({day,activityKind:activity,timezone}),[day,activity,timezone]);
@@ -96,7 +98,7 @@ export default function GamesMap() {
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
           <TextButton title="К списку игр" onPress={returnToList} />
           <Label style={{flex:1,textAlign:'center'}}>{city?.nameRu ?? 'Игры'}</Label>
-          <Pressable accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:overlay.filter}} onPress={() => setOverlay(v => ({...v,filter:true}))} style={{minHeight:48,minWidth:48,padding:12}}><DiscoveryIcon name="filter" /></Pressable>
+          <Pressable ref={filterTrigger} accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:overlay.filter}} onPress={() => setOverlay(v => ({...v,filter:true}))} style={{minHeight:48,minWidth:48,padding:12}}><DiscoveryIcon name="filter" /></Pressable>
         </View>
         <Label style={{textAlign:'center'}}>{day ? discoveryDateLabel(day) : 'Все ближайшие'} · {activity === 'all' ? 'Все' : activity === 'regular' ? 'Обычные' : 'С тренером'}</Label>
       </View>
@@ -110,7 +112,7 @@ export default function GamesMap() {
       {!selection && <View style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',backgroundColor:colors.card,borderRadius:999}}><TextButton title="Обновить площадки" onPress={retry} /></View>}
       {selection && <VenueSheet key={selection.id} selection={selection} expanded={overlay.expanded} games={schedules?.get(selection.id) ?? null}
         onExpand={expanded => setOverlay(v => ({...v,expanded}))} onClose={() => setOverlay(v => ({...v,selected:null,expanded:false}))} onRetrySchedule={retry} />}
-      <DiscoverySheet visible={overlay.filter} title="Фильтры карты" onClose={() => setOverlay(v => ({...v,filter:false}))}>
+      <DiscoverySheet visible={overlay.filter} title="Фильтры карты" onClose={() => setOverlay(v => ({...v,filter:false}))} returnFocusRef={filterTrigger}>
         <Label>Когда играем</Label><DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => setDay('')} />
         {today && Array.from({length:7},(_,i) => nextCalendarDay(today,i)).map(value => <DiscoveryChip key={value} title={discoveryDateLabel(value)} selected={day === value} onPress={() => setDay(value)} />)}
         <Label>Игры</Label>{(['all','regular','trainer_led'] as const).map(value => <DiscoveryChip key={value} title={value === 'all' ? 'Все' : value === 'regular' ? 'Обычные' : 'С тренером'} selected={activity === value} onPress={() => setActivity(value)} />)}

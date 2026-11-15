@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { URL } from 'node:url';
 import { adaptNativeStyle, expandedVenueCreate, gamesContext, gamesRoute, loadMapSnapshot, loadNativeStyle, mapBack, mapDataKey, mapPackForCity, markerActivation, nativeMapCamera, nativeResource, publicGamesIntent, resolveMapSelection, validMapCamera, venueMarkerLabel, venueSchedules, verifiedNativeStyle, visibleMapVenues } from '../src/maps.ts';
 import { createPublicApi } from '../src/public-api.ts';
 import type { MapSnapshot, MapOverlay } from '../src/maps.ts';
@@ -56,7 +57,7 @@ test('raw-byte SHA precedes parsing; absolute native PMTiles and glyph/sprite ex
   assert.deepEqual(sprites.sprite,[{id:'default',url:`${pack.prefix}sprites/v4/light`}]);
 });
 test('all network-bearing style resource types reject escape, userinfo, query and unsupported nested sources', () => {
-  for (const url of ['../outside.pmtiles','https://evil.example/a','https://@dev.gobadminton.ru/map-assets/a','moscow.pmtiles?token=x','moscow.pmtiles#x','%2e%2e/a','pmtiles://http://dev.gobadminton.ru/a','\\evil/a']) assert.throws(() => nativeResource(url,pack),undefined,url);
+  for (const url of ['../outside.pmtiles','https://evil.example/a','https://@dev.gobadminton.ru/map-assets/a','moscow.pmtiles?token=x','moscow.pmtiles#x','%2e%2e/a','pmtiles://http://dev.gobadminton.ru/a','\\evil/a']) assert.throws(() => nativeResource(url,pack),url);
   for (const change of [
     {glyphs:'https://evil.example/{fontstack}/{range}.pbf'},
     {sprite:'../sprites/light'},
