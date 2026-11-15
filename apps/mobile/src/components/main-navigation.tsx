@@ -1,3 +1,4 @@
+import { fullscreenGamesMap } from '../maps.ts';
 import type { PropsWithChildren } from 'react';
 import { Pressable, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
@@ -39,7 +40,7 @@ export function MainNavigation({ children }: PropsWithChildren) {
   const { state } = useMessages();
   const count = state.counts ? state.counts.pendingRequestCount + state.counts.pendingInvitationCount + state.counts.dmUnread + state.counts.gameChatUnread : null;
   const path = usePathname(), router = useRouter(), insets = useSafeAreaInsets();
-  const visible = /^\/(games|players|my-games|messages|profile)(\/|$)/.test(path);
+  const visible = !fullscreenGamesMap(path) && /^\/(games|players|my-games|messages|profile)(\/|$)/.test(path);
   return <View style={{ flex: 1, backgroundColor: colors.card }}>
     <View style={{ flex: 1 }}>{children}</View>
     {visible && <View accessibilityRole="tablist" accessibilityLabel="Основная навигация" style={{

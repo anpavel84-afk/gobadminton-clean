@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { gamesContext, gamesRoute } from '../../src/maps.ts';
 import { selectedCity } from '../../src/entry.ts';
 import { useResource, useUpcomingItems } from '../../src/hooks.ts';
 import { gamesResourceKey, publicApi } from '../../src/public-api.ts';
@@ -18,18 +19,28 @@ const noGames: PublicGame[] = [];
 const activities = [{ kind: 'all', label: 'Все' }, { kind: 'regular', label: 'Обычные' }, { kind: 'trainer_led', label: 'С тренером' }] as const;
 export default function GuestGames() {
   const { preferences, hydrated, storageError } = usePreferences();
-  const router = useRouter();
-  const [selectedDay, setSelectedDay] = useState('');
-  const [activityKind, setActivityKind] = useState<NonNullable<GameFilters['activityKind']>>('all');
-  const [level, setLevel] = useState('');
+  const router = useRouter(), params = useLocalSearchParams(), context = gamesContext(params);
+  const routeKey = JSON.stringify(params);
+  const listRef = useRef<FlatList<PublicGame>>(null), listOffset = useRef(context?.listOffset ?? 0);
+  const restoreOffset = useRef<number | null>(context?.listOffset ?? null);
+  const [selectedDay, setSelectedDay] = useState(context?.day ?? '');
+  const [activityKind, setActivityKind] = useState<NonNullable<GameFilters['activityKind']>>(context?.activity ?? 'all');
+  const [level, setLevel] = useState(context?.level ?? '');
   const [sheet, setSheet] = useState<'day' | 'level' | null>(null);
   const [levelChoices, setLevelChoices] = useState(false), [help, setHelp] = useState(false);
   const filterTrigger = useRef<ComponentRef<typeof Pressable>>(null), dayTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [, tick] = useState(0);
   const citiesTask = useCallback((signal: AbortSignal) => publicApi.cities(signal), []);
   const cities = useResource('cities', citiesTask);
-  const city = selectedCity(cities.state.data ?? [], preferences.cityId);
+  const city = selectedCity(cities.state.data ?? [], context?.cityId ?? preferences.cityId);
   const cityId = city?.id ?? null, timezone = city?.defaultTimezone;
+  useEffect(() => {
+    const next = gamesContext(params);
+    if (!next) {router.replace('/games');return;}
+    if (params.view === 'map') {router.replace(gamesRoute({...next,origin:'external'},'map'));return;}
+    setSelectedDay(next.day);setActivityKind(next.activity);setLevel(next.level);
+    restoreOffset.current=next.listOffset;
+  },[routeKey]);
   const today = timezone ? cityDate(new Date(), timezone) : '';
   const day = selectedDay && today && selectedDay < today ? today : selectedDay;
   useEffect(() => {
@@ -51,14 +62,17 @@ export default function GuestGames() {
     if (!cityId || !cursor || state.status === 'loading') return;
     void resource.load(key, signal => publicApi.games(cityId, cursor, signal, { day, activityKind, timezone }), appendUpcomingPage);
   };
-  const selectCity = () => router.push('/city');
+  const selectCity = () => {router.setParams({cityId:undefined});router.push('/city');};
+  const openMap = () => {if (cityId) router.push(gamesRoute({cityId,day,activity:activityKind,level,listOffset:listOffset.current,origin:'list'},'map'));};
   const dayLabel = day ? discoveryDateLabel(day) : 'Все ближайшие';
   const skill = levelGuideSkillFor(level);
   const closeSheet = () => setSheet(null);
   return <ScreenFrame header={<Header />}>
-    <FlatList data={city ? list.visible : noGames} keyExtractor={game => game.id}
+    <FlatList ref={listRef} onScroll={event => {listOffset.current=event.nativeEvent.contentOffset.y;}} scrollEventThrottle={100}
+      onContentSizeChange={(_width,height) => {const offset=restoreOffset.current;if (offset !== null && state.data && height >= offset) {listRef.current?.scrollToOffset({offset,animated:false});restoreOffset.current=null;}}}
+      data={city ? list.visible : noGames} keyExtractor={game => game.id}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: 24, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: 96, gap: 16 }}
       ListHeaderComponent={<View style={feed.header}>
         <View style={feed.copy}>
           <Label style={feed.eyebrow}>Игры рядом{city ? ` · ${city.nameRu}` : ''}</Label>
@@ -113,6 +127,10 @@ export default function GuestGames() {
         onOpen={() => router.push({ pathname: '/games/[id]', params: { id: item.id } })} />}
       ListFooterComponent={city && list.canLoadMore && state.status !== 'error'
         ? <PrimaryButton title="Показать ещё" disabled={state.status === 'loading'} onPress={more} /> : undefined} />
+    {city && <Pressable accessibilityRole="button" accessibilityLabel="Показать площадки на карте" onPress={openMap}
+      style={{position:'absolute',bottom:16,left:64,right:64,minHeight:48,borderRadius:999,padding:12,backgroundColor:colors.lime,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8}}>
+      <DiscoveryIcon name="map" /><Label style={{fontWeight:'600'}}>На карте</Label>
+    </Pressable>}
     <DiscoverySheet visible={sheet === 'day'} title="Когда играем" onClose={closeSheet} returnFocusRef={dayTrigger}>
       <DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => { setSelectedDay(''); closeSheet(); }} />
       {today && Array.from({ length: 7 }, (_, i) => nextCalendarDay(today, i)).map(value => <DiscoveryChip key={value} title={discoveryDateLabel(value)} selected={day === value} onPress={() => { setSelectedDay(value); closeSheet(); }} />)}

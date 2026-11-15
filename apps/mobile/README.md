@@ -1,3 +1,91 @@
+# #522 R1b · public native Games/venue map source candidate · delivery HOLD
+
+Bounded source continuation from the supplied C1a working-source capsule:
+base `e29cb616d7b73819e36c62fd74e27d65a56a5eb3`, capsule SHA-256
+`1db023c43ed6fef86d2a89e5091a7735893527558fc57aab04ed16185408df55`.
+This private export has no usable Git metadata; the base binding comes from the
+Root-supplied immutable task, not a locally reconstructed receipt. The retained
+FIRST whole C1a verdict is FAIL (`e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825`).
+The supplied parent and focused two-P2 PASS permit this source continuation only.
+REAL Header/Players Radar P1 remains OPEN for C1c. Owner APK7 UAT remains FAIL;
+C1d swipe and remaining full parity remain mandatory. No full C1a PASS, delivery,
+DEV acceptance, binary readiness or new Owner acceptance is claimed.
+
+Source now declares only `@maplibre/maplibre-react-native` **11.5.1** and its Expo
+config plugin. Map uses the actual named `Map` export, Camera and Marker; no
+WebView, browser PMTiles protocol, canvas, image substitute, GPS request or Radar
+activation is introduced. Closed Moscow/SPb/regional pack descriptors match the
+accepted WEB catalog. The loader hashes the original response bytes before UTF-8
+JSON parsing, then copies/adapts only approved in-pack resources. PMTiles remains
+absolute `pmtiles://https://...`; glyph placeholders, sprite suffix bases, source
+layers, attribution, bounds and zoom data survive adaptation. Load/error/timeout,
+retry and a real venue-catalog fallback are wired; markers attach only following
+the native load event. These are source paths, not evidence of tiles rendered.
+
+A separate public-coordinate projection preserves the existing create catalog
+`venues()` shape. Map data consumes all real venue/game cursor pages under one
+abort/generation owner and frozen query time, deduplicates immutable IDs, proves
+older aliases through the existing public venue endpoint, and applies WEB public/
+published/availability/deadline/venue-local-day/activity eligibility. Partial or
+failed schedules stay unavailable, never a verified zero. All/with-games layers
+keep unknown schedules visible. Public venue coordinates must be finite EPSG4326
+and bound to the selected city; out-of-pack pins are not plotted.
+
+Games now accepts its bounded public query context, exposes the map pill, retains
+list cursor/scroll ownership on push, and restores current city/day/activity/level
+and offset on map-to-list return. Only exact `/games/map` hides global tabs. Exact
+public Games map intents are adapted without changing verified callback ownership;
+unsupported protocols, malformed contexts and arbitrary return destinations fail
+back to Games. Back closes filters, expanded sheet, selection, then the origin
+list. The shared renderer/helpers are reusable for future Players work.
+
+The sheet reuses the existing safe venue gallery/body/contacts and filtered real
+schedule. Its collapsed 64px-cover preview has no create/rate/discussion actions;
+only expanded verified venue detail exposes explicit sticky typed venue-create
+navigation, with a separately reserved safe bottom and scroll-body padding. No
+automatic writes or global preference mutation were added. Venue ratings,
+comments/discussion and other unfinished UGC are **absent and still mandatory**.
+The standalone venue screen and existing auth/profile/create ownership remain.
+
+Author deterministic self-check (Node 24.21.0, not independent QA): **65 tests
+PASS**, zero failures/skips/cancellations in the final run:
+
+```sh
+node --experimental-strip-types --test --test-isolation=none \
+  apps/mobile/test/maps.test.ts apps/mobile/test/public-api.test.ts \
+  apps/mobile/test/venues.test.ts apps/mobile/test/compact-layout.test.ts \
+  apps/mobile/test/auth.test.ts
+```
+
+The initial focused run found and repaired URL-encoded glyph placeholders; an
+incorrect dedup expectation and the owning-callback test wrapper were also fixed.
+All prior assertions in the owning suites remain. These tests cover resource
+transforms/refusal/hash ordering, coordinates, cursor/abort/race behavior, unavailable
+versus zero schedules, alias binding, query/list/scroll/Back callbacks, expanded-only
+create intent and old auth/UNKNOWN fences. They do not render native components.
+
+**Pending trusted checks:** there are no cached project dependencies in this
+export. Typecheck, lint, Expo exports, the actual 11.5.1 Camera/Marker prop contract,
+genuine generated lock/package graph, native linking, new standalone Android
+binary, manifest inspection and independent source QA are NOT_TESTED here. A
+read-only official documentation lookup failed DNS; no package installation,
+network dependency resolution or handwritten lock was attempted. The verified
+package export summary is not a substitute for checking the installed declarations.
+Root must run the existing trusted lock/deps and binary route on this actual source
+and address any reported binding/type errors before source qualification.
+
+Device/emulator basemap tiles/glyphs/sprites/attribution, gestures, marker→sheet→game
+return, compact safe areas/font scale, resource failure/retry and offline behavior
+are **NOT_TESTED**. No hardware was accessed and no screenshot is offered as native
+proof. iOS linking/device proof remains separate NOT_TESTED. No offline pack-download
+promise is made. No DB/backend/schema/service, build/sign/DEV/publication/model call,
+public APK or metadata release was performed. VersionCode **8**, app version/package,
+permissions/intents/deep links and assets remain as supplied, apart from the exact
+required plugin entry. Root owns genuine lock generation after this author cut;
+`pnpm-lock.yaml` is untouched.
+
+All previous README bytes follow unchanged as historical context.
+
 # #522 C1a ADDRESS2 · PARTIAL source correction · public APK HOLD
 
 The two P2 findings from the retained FIRST whole C1a QA are addressed in

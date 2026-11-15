@@ -17,6 +17,18 @@ export type PublicVenue = { id: string; name: string; address: string; cityId: s
   resolvedFromVenueId?: string; description: string | null; courtCount: number | null; parking: boolean | null; showers: boolean | null;
   updatedAt: string | null; gallery: GalleryItem[]; mainImage: string | null; contacts: PublicContact[]; catalogSource: CatalogSource | null };
 
+/** Public map projection is distinct from the create-venue catalog contract. */
+export type MapVenue = Pick<PublicVenue,'id'|'name'|'address'|'cityId'|'timezone'|'latitude'|'longitude'>;
+export function parseMapVenue(value: unknown, cityId: string): MapVenue {
+  const r = record(value);
+  let validZone = false;
+  try { if (typeof r.timezone === 'string' && r.timezone) { new Intl.DateTimeFormat('ru',{timeZone:r.timezone}); validZone=true; } } catch { /* invalid */ }
+  if (!isVenueId(r.id) || !isVenueId(cityId) || r.cityId !== cityId || !validZone || !publicText(r.name,300) || !publicText(r.address,1000) ||
+    typeof r.latitude !== 'number' || !Number.isFinite(r.latitude) || Math.abs(r.latitude)>90 ||
+    typeof r.longitude !== 'number' || !Number.isFinite(r.longitude) || Math.abs(r.longitude)>180) throw new PublicApiError('invalid');
+  return {id:r.id,name:publicText(r.name,300)!,address:publicText(r.address,1000)!,cityId,timezone:r.timezone as string,latitude:r.latitude,longitude:r.longitude};
+}
+
 // Pure port of accepted WEB original-http-authority; no DOM/server dependencies.
 /** Same authority grammar as apps/api/src/lib/original-http-authority.ts.
  * Original HTTP(S) authority, recovered before WHATWG can discard empty userinfo.

@@ -4,7 +4,7 @@ import type { PlayerFilters } from './players.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
 import { futureDiscoveryBounds } from './presentation.ts';
 import { futureItems } from './upcoming.ts';
-import { isVenueId, parseVenue, venueScheduleQuery } from './venues.ts';
+import { isVenueId, parseVenue, parseMapVenue, venueScheduleQuery } from './venues.ts';
 import type { PublicVenue } from './venues.ts';
 
 // Type-only subpath: contracts' root index uses node:fs and must never enter Metro.
@@ -148,19 +148,25 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
       });
       return { items, nextCursor: r.nextCursor as string | null };
     },
+    async mapVenues(cityId: string, cursor?: string, signal?: AbortSignal) {
+      if (!isVenueId(cityId) || cursor !== undefined && (!cursor || cursor.length > 4096)) throw new PublicApiError('invalid');
+      const r = object(await get(`/venues?cityId=${encodeURIComponent(cityId)}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,signal));
+      if (!Array.isArray(r.items) || r.items.length > 100 || !(r.nextCursor === null || text(r.nextCursor) && r.nextCursor.length > 0 && r.nextCursor.length <= 4096)) throw new PublicApiError('invalid');
+      return {items:r.items.map(value => parseMapVenue(value,cityId)),nextCursor:r.nextCursor as string | null};
+    },
     async meta(signal?: AbortSignal) {
       const row = object(await get('/meta', signal));
       if (!text(row.apiVersion)) throw new PublicApiError('invalid');
       return { apiVersion: row.apiVersion };
     },
     async cities(signal?: AbortSignal) { return parseCities(await get('/cities', signal)); },
-    async games(cityId: string, cursor?: string, signal?: AbortSignal, filters: GameFilters = {}) {
+    async games(cityId: string, cursor?: string, signal?: AbortSignal, filters: GameFilters = {}, queryTime = now()) {
       if (!cityId.trim()) throw new PublicApiError('invalid');
       const day = filters.day ?? '';
       if (day && (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(Date.parse(`${day}T00:00:00Z`))
         || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day || !zone(filters.timezone))) throw new PublicApiError('invalid');
       if (filters.activityKind && !['all', 'regular', 'trainer_led'].includes(filters.activityKind)) throw new PublicApiError('invalid');
-      const { startsFrom, startsBefore } = futureDiscoveryBounds(day, filters.timezone ?? 'UTC', now());
+      const { startsFrom, startsBefore } = futureDiscoveryBounds(day, filters.timezone ?? 'UTC', queryTime);
       const query = `cityId=${encodeURIComponent(cityId)}&limit=20&startsFrom=${encodeURIComponent(startsFrom)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}${startsBefore ? `&startsBefore=${encodeURIComponent(startsBefore)}` : ''}${filters.activityKind && filters.activityKind !== 'all' ? `&activityKind=${filters.activityKind}` : ''}`;
       const page = parsePage(await get(`/games?${query}`, signal));
       // Receipt time is authoritative: a delayed response can already be past.

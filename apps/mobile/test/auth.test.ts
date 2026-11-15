@@ -963,3 +963,30 @@ test('permanent Header profile action preserves only typed venue intent through 
   assert.equal(s.auth.gameManagement.getSnapshot().form.venueId,'');
   assert.equal(s.calls.filter(c => c.path === '/games' || c.path.endsWith('/publish')).length,0);
 });
+
+test('owning public native intent adapts exact Games map context while verified auth and rejected callbacks retain their authority', async () => {
+  const {publicGamesIntent}=await import('../src/maps.ts');
+  const protocol=await import('../src/native-auth-protocol.ts');
+  const source=readFileSync(new URL('../app/+native-intent.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('export async function redirectSystemPath')).replace('export async function','async function');
+  let callbacks=0;
+  const redirect=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    URL,publicGamesIntent,...protocol,nativeAuth:{callback:async()=>{callbacks++;return '/profile';},getSnapshot:()=>({returnPath:null})},
+  }) as (input:{path:string;initial:boolean})=>Promise<string>;
+  const cityId='a0000000-0000-4000-8000-000000000001';
+  const accepted=await redirect({path:`https://dev.gobadminton.ru/games?view=map&cityId=${cityId}&day=2026-11-20&activity=trainer_led`,initial:true});
+  const url=new URL(accepted,'https://dev.gobadminton.ru');assert.equal(url.pathname,'/games/map');
+  assert.equal(url.searchParams.get('cityId'),cityId);assert.equal(url.searchParams.get('activity'),'trainer_led');assert.equal(url.searchParams.get('day'),'2026-11-20');
+  assert.equal(url.searchParams.get('origin'),'external');assert.equal(callbacks,0);
+  for (const invalid of [
+    `https://evil.example/games?view=map`,`gobadminton-dev://host/games?view=map`,`gobadminton-dev://games/map`,`gobadminton-dev://games?view=map`,
+    `/games?view=map&returnTo=https://evil.example`,`/games?view=map&cityId=${cityId}&cityId=${cityId}`,
+    `/games?view=map&day=2026-02-30`,`/games?view=map#publish`,`/games?view=map\n`,
+  ]) assert.equal(await redirect({path:invalid,initial:false}),'/games',invalid);
+  assert.equal(await redirect({path:`${NATIVE_REDIRECT}?code=${token('c')}&state=${token('s')}`,initial:true}),'/profile');assert.equal(callbacks,1);
+  assert.equal(await redirect({path:`gobadminton-dev://host/auth/native/callback?code=${token('c')}&state=${token('s')}`,initial:true}),'/profile');assert.equal(callbacks,1);
+  assert.equal(await redirect({path:'/messages/direct/thread',initial:false}),'/messages/direct/thread');
+  const venue='/games/create/venue/11111111-1111-4111-8111-111111111111';
+  assert.equal(await redirect({path:venue,initial:false}),venue);assert.equal(protocol.canonicalReturnPath(venue),venue);
+  assert.equal(protocol.canonicalReturnPath('/games/map?returnTo=https://evil.example'),null);
+});

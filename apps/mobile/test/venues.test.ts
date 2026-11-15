@@ -84,3 +84,11 @@ test('refresh/cancel fences late pagination even when transport ignores AbortSig
   const read = other.refresh(); other.cancel(); routeRead.resolve({items:[upcoming],nextCursor:null}); await read;
   assert.equal(other.state.status,'loading'); assert.equal(other.state.data,undefined);
 });
+
+test('map projection accepts finite EPSG4326 only, with exact city binding and no invented address geocoding', async () => {
+  const {parseMapVenue}=await import('../src/venues.ts');
+  assert.deepEqual(parseMapVenue(dto,cityId),dto);
+  for (const invalid of [{...dto,latitude:Infinity},{...dto,longitude:NaN},{...dto,latitude:91},{...dto,longitude:-181},{...dto,id:'not-uuid'},{...dto,timezone:'bad/zone'},{...dto,latitude:undefined}]) assert.throws(()=>parseMapVenue(invalid,cityId),PublicApiError);
+  assert.throws(()=>parseMapVenue(dto,alias),PublicApiError);
+  assert.equal(parseMapVenue({...dto,latitude:0,longitude:0},cityId).longitude,0); // valid coordinates, filtered by selected pack bounds later
+});

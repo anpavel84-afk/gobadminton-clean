@@ -1,8 +1,10 @@
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Image, Linking, ScrollView, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useResource, useUpcomingItems } from '../hooks.ts';
+import type { PublicGame } from '../public-api.ts';
 import { API_ORIGIN, PublicApiError, publicApi } from '../public-api.ts';
 import { VenueSchedule, venueCreatePath } from '../venues.ts';
 import type { GalleryItem, PublicVenue } from '../venues.ts';
@@ -10,7 +12,7 @@ import { GameCard } from './game-card.tsx';
 import { Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from './ui.tsx';
 import { colors } from '../theme.ts';
 
-function VenueFailure({ error, retry }: { error: unknown; retry: () => void }) {
+export function VenueFailure({ error, retry }: { error: unknown; retry: () => void }) {
   const kind = error instanceof PublicApiError ? error.kind : 'network';
   const message = kind === 'unavailable' ? 'Площадка или данные не найдены либо больше недоступны.'
     : kind === 'invalid' ? 'Не удалось подтвердить данные сервера. Повторите загрузку.'
@@ -71,7 +73,7 @@ function Schedule({ venue }: { venue: PublicVenue }) {
   </View>;
 }
 const amenity = (value: boolean | null) => value === null ? 'Нет данных' : value ? 'Есть' : 'Нет';
-function VenueContent({ venue }: { venue: PublicVenue }) {
+export function VenueContent({ venue, schedule }: { venue: PublicVenue; schedule?: ReactNode }) {
   return <>
     <Label accessibilityRole="header" style={styles.title}>{venue.name}</Label><Label>{venue.address}</Label>
     <VenueGallery venue={venue} />
@@ -84,8 +86,29 @@ function VenueContent({ venue }: { venue: PublicVenue }) {
     <View style={styles.card}><Label accessibilityRole="header" style={styles.subtitle}>Контакты площадки</Label>
       {venue.contacts.length ? venue.contacts.map(link => <PublicLink key={link.url} {...link} />) : <Label>Контакты пока не добавлены</Label>}
     </View>
-    <Schedule venue={venue} />
+    {schedule ?? <Schedule venue={venue} />}
   </>;
+}
+/** Original compact preview: attributed cover, venue identity and schedule hints only. */
+export function VenuePreview({ venue, games, onOpen }: { venue: PublicVenue; games: readonly PublicGame[] | null; onOpen: () => void }) {
+  const item = venue.gallery.find(item => item.url === venue.mainImage) ?? venue.gallery[0];
+  const [failed,setFailed] = useState(false);
+  return <View style={{gap:8}}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Открыть площадку ${venue.name}`} onPress={onOpen}
+      style={{flexDirection:'row',alignItems:'center',gap:12,minHeight:104}}>
+      <View style={{width:64,height:64,backgroundColor:colors.paper,borderRadius:12,overflow:'hidden'}}>
+        {item && !failed ? <Image source={{uri:`${API_ORIGIN}${item.url}`}} resizeMode="cover" accessibilityLabel={item.credit.kind === 'illustration' ? 'Иллюстрация' : item.credit.kind === 'logo' ? 'Логотип площадки' : 'Фото площадки'} onError={() => setFailed(true)} style={{width:64,height:64}} />
+          : <Label style={{fontSize:11}}>{failed ? 'Фото не загрузилось' : 'Нет изображения'}</Label>}
+      </View>
+      <View style={{flex:1,minWidth:0,gap:4}}>
+        <Label accessibilityRole="header" style={styles.subtitle}>{venue.name}</Label><Label>{venue.address}</Label>
+        <Label>{games === null ? 'Расписание временно недоступно' : games[0] ? new Date(games[0].startsAt).toLocaleString('ru-RU',{timeZone:venue.timezone}) : 'Пока нет игр'}</Label>
+        {games !== null && games.length > 0 && <Label>{games.length} доступных игр</Label>}
+      </View><Label accessible={false} style={{width:32,textAlign:'center'}}>↑</Label>
+    </Pressable>
+    {item && (item.credit.url ? <PublicLink label={item.credit.text} url={item.credit.url} /> : <Label>{item.credit.text}</Label>)}
+    {venue.catalogSource && <><Label>Источник: badminton4u.ru</Label>{venue.catalogSource.clubs.map(club => <PublicLink key={club.id} label={club.name} url={club.url} />)}</>}
+  </View>;
 }
 export function VenueDetail({ id }: { id: string }) {
   const router = useRouter(), insets = useSafeAreaInsets();

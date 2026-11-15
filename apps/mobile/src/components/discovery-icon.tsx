@@ -15,8 +15,10 @@ export function ShareIcon() {
 }
 
 // Exact canonical WEB discovery SVG paths, rendered by existing native SVG runtime.
-export function DiscoveryIcon({ name }: { name: 'filter' | 'pin' | 'chevron' | 'refresh' | 'close' | 'search' }) {
+export function DiscoveryIcon({ name }: { name: 'filter' | 'pin' | 'chevron' | 'refresh' | 'close' | 'search' | 'map' | 'list' }) {
   const paths = {
+    map: 'm3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2V5Zm6-2v16m6-14v16',
+    list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
     filter: 'M1.93333 3.38333H9.66667M1.93333 8.21667H9.66667M3.86667 1.93333V4.83333M7.73333 6.76667V9.66667',
     pin: 'M5.8 10.15C5.8 10.15 9.18333 7.25 9.18333 4.83333C9.18333 4.38903 9.09582 3.94907 8.92579 3.53859C8.75576 3.1281 8.50655 2.75513 8.19238 2.44096C7.87821 2.12678 7.50523 1.87757 7.09475 1.70754C6.68426 1.53751 6.24431 1.45 5.8 1.45C5.35569 1.45 4.91574 1.53751 4.50525 1.70754C4.09477 1.87757 3.72179 2.12678 3.40762 2.44096C3.09345 2.75513 2.84424 3.1281 2.67421 3.53859C2.50418 3.94907 2.41667 4.38903 2.41667 4.83333C2.41667 7.25 5.8 10.15 5.8 10.15Z',
     chevron: 'm7 10 5 5 5-5',

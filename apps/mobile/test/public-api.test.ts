@@ -163,3 +163,20 @@ test('day/activity changes reset loaded cursor and fence stale A→B→A pages; 
   const afterRefresh = resource.getSnapshot();
   assert.deepEqual(afterRefresh.data?.items.map(item => item.id), ['refreshed']); assert.equal(afterRefresh.data?.nextCursor, 'fresh-cursor');
 });
+
+test('map coordinate reader is abortable and separate from unchanged create catalog projection', async () => {
+  const cityId='a0000000-0000-4000-8000-000000000001', id='11111111-1111-4111-8111-111111111111';
+  const venue={id,cityId,name:'Зал',address:'Улица',timezone:'Europe/Moscow',latitude:55.75,longitude:37.61,bookingPhone:'private'};
+  const calls:{url:string;init:RequestInit}[]=[];
+  const api=createPublicApi(async (url,init)=>{calls.push({url:String(url),init:init!});return Response.json({items:[venue],nextCursor:'next/+'});});
+  const controller=new AbortController();controller.abort();
+  const mapped=await api.mapVenues(cityId,'next/+',controller.signal);
+  assert.equal(mapped.items[0]?.latitude,55.75);assert.equal(mapped.items[0]?.longitude,37.61);
+  assert.ok(!('bookingPhone' in mapped.items[0]!));assert.equal(calls[0]?.init.signal?.aborted,true);
+  assert.equal(calls[0]?.url,`${API_ORIGIN}/v1/venues?cityId=${cityId}&limit=100&cursor=next%2F%2B`);
+  const catalog=await api.venues(cityId);assert.ok(!('latitude' in catalog.items[0]!) && !('longitude' in catalog.items[0]!));
+  for (const invalid of [{...venue,latitude:null},{...venue,longitude:181},{...venue,latitude:'55.75'},{...venue,cityId:id}]) {
+    const bad=createPublicApi(async()=>Response.json({items:[invalid],nextCursor:null}));
+    await assert.rejects(bad.mapVenues(cityId),PublicApiError);
+  }
+});
