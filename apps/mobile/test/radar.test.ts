@@ -1,9 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL as NodeURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { RadarCoordinator } from '../src/radar-coordinator.ts';
 import { RADAR_WIRE, RADAR_POLICY, DISCLOSURE_HASH, DISCLOSURE_ID, freshRadarFix, parseRadarConfig, parseRadarSnapshot, mergeRadarPlayers, RadarError } from '../src/radar.ts';
+import type { RadarSnapshot } from '../src/radar-coordinator.ts';
+import type { RadarContactContext } from '../src/contact.ts';
+import type { UnifiedRow, UnifiedPreview } from '../src/radar.ts';
 import type { RadarRead, RadarCommand, ForegroundPermission } from '../src/radar.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { mapPackForCity, nativeRadarMapAllowed, nativeRadarPeople, playersMapContext } from '../src/maps.ts';
@@ -105,9 +109,90 @@ test('NativeApi closes selected transports: preview key, owning DELETE header an
   await api.radarCommand('token',{kind:'stop',actor,key:'stop-key',activationId:'owned-id'});
   assert.deepEqual(JSON.parse(requests[0]!.init.body as string),{resultRef:'u1.original'});
   const headers=requests[1]!.init.headers as Record<string,string>;assert.equal(headers['X-Radar-Activation-Id'],'owned-id');assert.equal(headers['Idempotency-Key'],'stop-key');assert.equal(headers.Cookie,undefined);assert.equal(headers.Origin,undefined);
-  const app=JSON.parse(readFileSync(new URL('../app.json',import.meta.url),'utf8')).expo;
+  const app=JSON.parse(readFileSync(new NodeURL('../app.json',import.meta.url),'utf8')).expo;
   const plugin=app.plugins.find((p:unknown)=>Array.isArray(p)&&p[0]==='expo-location')[1];
   for(const key of ['locationAlwaysPermission','locationAlwaysAndWhenInUsePermission','motionUsagePermission','locationFullAccuracyPermission','isIosBackgroundLocationEnabled','isAndroidBackgroundLocationEnabled','isAndroidForegroundServiceEnabled','isAndroidMotionActivityEnabled'])assert.equal(plugin[key],false);
   assert.equal(app.android.versionCode,8);
-  assert.equal(JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).dependencies['expo-location'],'58.0.22');
+  assert.equal(JSON.parse(readFileSync(new NodeURL('../package.json',import.meta.url),'utf8')).dependencies['expo-location'],'58.0.22');
+});
+
+// Execute the owning UI projections/callbacks. This is not native mount/fit evidence.
+async function uiFunctions() {
+  const {stripTypeScriptTypes} = await import('node:module');
+  const {runInNewContext} = await import('node:vm');
+  const controls = readFileSync(new NodeURL('../src/components/radar-controls.tsx',import.meta.url),'utf8');
+  const players = readFileSync(new NodeURL('../app/players/index.tsx',import.meta.url),'utf8');
+  const {activationDeadline,parseRadarPreview} = await import('../src/radar.ts');
+  const source = controls.slice(controls.indexOf('export function radarControlPresentation'),controls.indexOf('export function RadarControls')).replace('export function','function');
+  const helpers = players.slice(players.indexOf('export async function loadPlayerInspection'),players.indexOf('export default function Players')).replaceAll('export ','');
+  return {controls,players,stripTypeScriptTypes,runInNewContext,
+    presentation: runInNewContext(stripTypeScriptTypes(`${source}\nradarControlPresentation;`),{activationDeadline}) as
+      (state: RadarSnapshot,now:number)=>{active:boolean;running:boolean;tone:string;progress:number;remaining:string},
+    helpers: runInNewContext(stripTypeScriptTypes(`${helpers}\n({loadPlayerInspection,radarContactAvailable,playerDistance});`),{parseRadarPreview}) as {
+      loadPlayerInspection:(context: RadarContactContext,read:(operation:RadarRead,scope:typeof actor)=>Promise<unknown>,now:()=>number)=>Promise<UnifiedPreview>;
+      radarContactAvailable:(row:UnifiedRow,preview:UnifiedPreview|null,now?:number)=>boolean;
+      playerDistance:(preview:UnifiedPreview)=>string;
+    }};
+}
+
+test('actual control shows finite confirmed session progress/ownership and attention; UI timer cannot enable or renew',async t=>{
+  const {presentation,controls,players}=await uiFunctions();const f=fixture();t.after(f.owner.dispose);await f.start();
+  const state=f.owner.getSnapshot(), full=presentation(state,f.now());
+  assert.equal(full.active,true);assert.equal(full.progress,1);assert.equal(full.remaining,'15:00');
+  const halfway=presentation({...state,activation:{...f.activation(),foregroundUntil:instant(f.now()+600000),locationValidUntil:instant(f.now()+600000)}},f.now()+450000);
+  assert.equal(halfway.progress,0.5);assert.equal(halfway.remaining,'7:30');assert.equal(halfway.tone,'attention');
+  for(const activation of [{...f.activation(),ownerHere:false},{...f.activation(),expiresAt:'invalid'},{...f.activation(),startedAt:'invalid'},
+    {...f.activation(),startedAt:instant(f.now()+1)},{...f.activation(),expiresAt:instant(f.now())}]){
+    const result=presentation({...state,activation},f.now());assert.equal(result.active,false);assert.equal(result.progress,0);assert.ok(Number.isFinite(result.progress));
+  }
+  assert.equal(presentation({...state,actor:null},f.now()).active,false);
+  assert.equal(presentation({...state,phase:'restoring'},f.now()).progress,0);
+  assert.equal(presentation({...state,phase:'unknown'},f.now()).tone,'attention');
+  assert.equal(presentation({...state,phase:'owned_elsewhere',activation:{...f.activation(),state:'owned_elsewhere',ownerHere:false}},f.now()).active,false);
+  assert.match(controls,/strokeDashoffset=\{2\*Math.PI\*21\*\(1-presentation.progress\)\}/);
+  assert.match(controls,/presentation.tone === 'active' \? colors.limeSoft/);assert.doesNotMatch(controls,/\bLoading\b/);
+  assert.match(players,/radarState.enabling && <Label accessible accessibilityLiveRegion="polite">Сейчас ищем ближайших игроков…/);
+  const timer=controls.slice(controls.indexOf('  useEffect('),controls.indexOf('  const presentation ='));
+  assert.match(timer,/setInterval\(\(\) => setNow\(Date.now\(\)\),1000\)/);assert.doesNotMatch(timer,/owner\.|Location\.|enable\(|renew\(/);
+});
+
+test('inspection redeems exact proof for a contact-denied peer and validates identity/expiry/retired context',async t=>{
+  const {helpers}=await uiFunctions();const f=fixture();t.after(f.owner.dispose);await f.start();
+  const row=f.owner.getSnapshot().rows[0]!, context=f.owner.contactContext(row)!;
+  const raw={player:{...row.player,canRequestContact:false},proximityBand:null,radar:row.radar,upcomingGames:[]};
+  const calls:RadarRead[]=[];
+  const preview=await helpers.loadPlayerInspection(context,async operation=>{calls.push(operation);return raw;},f.now);
+  assert.equal(preview.player.canRequestContact,false);assert.equal(helpers.radarContactAvailable(row,preview,f.now()),false);
+  assert.equal(calls.length,1);assert.equal(calls[0]!.kind,'preview');
+  if(calls[0]!.kind==='preview'){assert.equal(calls[0].resultRef,context.resultRef);assert.equal(calls[0].target,row.publicPlayerId);}
+  assert.equal(helpers.radarContactAvailable({...row,player:{...row.player,canRequestContact:false}},null,f.now()),false);
+  const positive={...preview,player:{...preview.player,canRequestContact:true}};
+  assert.equal(helpers.radarContactAvailable(row,positive,f.now()),true);
+  assert.equal(helpers.radarContactAvailable(row,{...positive,radar:{...positive.radar,validUntil:instant(f.now())}},f.now()),false);
+  assert.equal(helpers.radarContactAvailable(row,{...positive,player:{...positive.player,publicPlayerId:'other'}},f.now()),false);
+  assert.match(helpers.playerDistance(preview),/примерное местоположение/);
+  await assert.rejects(helpers.loadPlayerInspection(context,async()=>({...raw,player:{...raw.player,publicPlayerId:'other'}}),f.now));
+  await assert.rejects(helpers.loadPlayerInspection(context,async()=>({...raw,radar:{...row.radar,validUntil:instant(f.now()-1)}}),f.now));
+  const pending=deferred<unknown>(),work=helpers.loadPlayerInspection(context,()=>pending.promise,f.now);
+  f.owner.setForeground(false);pending.resolve(raw);await assert.rejects(work);
+});
+
+test('actual contact handler gates row and fresh preview and opens explicit composer only for a current view',async()=>{
+  const {helpers,players,stripTypeScriptTypes,runInNewContext}=await uiFunctions();const f=fixture();
+  const row=parseRadarSnapshot(f.snapshot(),city,f.now()).items[0]!;
+  let valid=true,allowed=true,staged=0,pushed=0,previewed=0,wait=false;
+  const focusedRef={current:true},contactView={current:1},context={valid:()=>valid},gate=deferred<void>();
+  const source=players.slice(players.indexOf('  const contact ='),players.indexOf('  const list ='))+'\ncontact;';
+  const contact=runInNewContext(stripTypeScriptTypes(source),{focusedRef,contactView,radarContactAvailable:helpers.radarContactAvailable,inspection:null,
+    radar:{contactContext:()=>context,preview:async()=>{previewed++;if(wait)await gate.promise;if(!allowed)throw Error('denied');}},
+    auth:{contact:{stageRadar:()=>{staged++;return true;}}},router:{push:()=>pushed++},selectPerson:()=>{}}) as (value:typeof row)=>Promise<void>;
+  await contact({...row,player:{...row.player,canRequestContact:false}});assert.equal(previewed,0);
+  allowed=false;await contact(row);assert.equal(staged,0);assert.equal(pushed,0);
+  allowed=true;await contact(row);assert.equal(staged,1);assert.equal(pushed,1);
+  wait=true;const work=contact(row);contactView.current++;gate.resolve();await work;assert.equal(staged,1);
+  valid=false;await contact(row);assert.equal(staged,1);focusedRef.current=false;await contact(row);assert.equal(staged,1);
+  assert.match(players,/onPress=\{\(\) => selectPerson\(row\)\}/);
+  assert.match(players,/people=\{people\} selectedPerson=\{person\?\.publicPlayerId \?\? null\} onPerson=\{selectPerson\}/);
+  assert.equal((players.match(/radarContactAvailable\((row|person),/g) ?? []).length,3);
+  assert.doesNotMatch(players,/publicApi\.player|coordinator\.loadDetail/);
 });

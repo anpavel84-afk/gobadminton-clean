@@ -2,13 +2,19 @@ import { useRadar } from '../../src/radar-runtime.tsx';
 import { RadarControls } from '../../src/components/radar-controls.tsx';
 import { NativeMap } from '../../src/components/native-map.tsx';
 import { VenueSheet } from '../../src/components/venue-sheet.tsx';
-import { loadMapSnapshot, mapDataKey, mapPackForCity, nativeRadarMapAllowed, nativeRadarPeople, playersMapContext, venueSchedules, visibleMapVenues } from '../../src/maps.ts';
-import type { MapCamera, MapSnapshot } from '../../src/maps.ts';
-import { mergeRadarPlayers, radarPlayer } from '../../src/radar.ts';
-import type { UnifiedRow } from '../../src/radar.ts';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { FlatList, Modal, Pressable, TextInput, View } from 'react-native';
+import { loadMapSnapshot, mapControlBottom, mapDataKey, mapPackForCity, nativeRadarMapAllowed, nativeRadarPeople, playersMapContext, venueSchedules, visibleMapVenues } from '../../src/maps.ts';
+import type { MapCamera, MapSnapshot, SheetMeasurement } from '../../src/maps.ts';
+import { mergeRadarPlayers, parseRadarPreview, radarPlayer } from '../../src/radar.ts';
+import type { UnifiedRow, UnifiedPreview, RadarRead } from '../../src/radar.ts';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { ComponentRef } from 'react';
+import { FlatList, Modal, Pressable, ScrollView, TextInput, View, useWindowDimensions } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { nativeAuth } from '../../src/auth-runtime.ts';
+import type { RadarContactContext } from '../../src/contact.ts';
+import type { Actor } from '../../src/participation.ts';
+import { playerLevelLabel } from '../../src/presentation.ts';
 import { useAuth } from '../../src/auth.tsx';
 import { usePreferences } from '../../src/state.tsx';
 import { useResource } from '../../src/hooks.ts';
@@ -16,22 +22,50 @@ import { publicApi } from '../../src/public-api.ts';
 import { playerFilterKey, resetPlayerFilters } from '../../src/players.ts';
 import { filterCities } from '../../src/entry.ts';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
-import { PlayerCard } from '../../src/components/player-card.tsx';
+import { PlayerAvatar, PlayerCard } from '../../src/components/player-card.tsx';
 import { colors } from '../../src/theme.ts';
-import { DiscoveryChip, ErrorState, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
+import { DiscoveryChip, DiscoverySheet, ErrorState, Header, Label, Loading, PrimaryButton, ScreenFrame, TextButton, styles } from '../../src/components/ui.tsx';
 
+/** An inspection redeems only the selected Radar proof; it never looks up a public profile. */
+export async function loadPlayerInspection(context: RadarContactContext, read: (operation: RadarRead, actor: Actor) => Promise<unknown>, now = Date.now): Promise<UnifiedPreview> {
+  if (!context.valid()) throw new Error('Retired Radar selection');
+  const preview = parseRadarPreview(await read({kind:'preview',resultRef:context.resultRef,target:context.target},context.actor),context.target,now());
+  if (!context.valid()) throw new Error('Retired Radar selection');
+  return preview;
+}
+export function playerDistance(preview: UnifiedPreview): string {
+  const d = preview.radar.distance;
+  if (!d) return 'Расстояние неизвестно · примерное местоположение';
+  const meters = d.kind === 'range' ? d.upperMeters : d.roundedMeters;
+  const value = meters >= 1000 ? `${Math.round(meters/100)/10} км` : `${meters} м`;
+  return d.kind === 'range' ? `Примерно в пределах ${value}` : `Примерно ${value}`;
+}
+export function radarContactAvailable(row: UnifiedRow, preview: UnifiedPreview | null, now = Date.now()): boolean {
+  return row.player.canRequestContact === true && (!preview || preview.player.publicPlayerId === row.publicPlayerId && preview.player.canRequestContact === true && Date.parse(preview.radar.validUntil) > now);
+}
 export default function Players() {
-  const auth = useAuth(), coordinator = auth.players, router = useRouter(), params = useLocalSearchParams();
+  const auth = useAuth(), coordinator = auth.players, router = useRouter(), params = useLocalSearchParams(), insets = useSafeAreaInsets();
+  const window = useWindowDimensions();
   const routeContext = playersMapContext(params);
   const { owner: radar, state: radarState } = useRadar();
-  const [focused,setFocused] = useState(false);
-  useFocusEffect(useCallback(() => { setFocused(true); return () => setFocused(false); }, []));
+  const [focused,setFocused] = useState(false), focusedRef = useRef(false);
+  useFocusEffect(useCallback(() => {focusedRef.current=true;setFocused(true);return () => {focusedRef.current=false;setFocused(false);};}, []));
   const mapOpen = routeContext?.view === 'map' && focused;
   const [camera,setCamera] = useState<MapCamera | null>(null), [selectedVenue,setSelectedVenue] = useState<string | null>(null);
   const [selectedPerson,setSelectedPerson] = useState<UnifiedRow | null>(null), [expanded,setExpanded] = useState(false);
   const [showPeople,setShowPeople] = useState(true), [venueMode,setVenueMode] = useState<'all'|'with_games'>('all');
-  const [sheetHeight,setSheetHeight] = useState(0);
-  const measureSheet = useCallback((height: number) => setSheetHeight(height), []);
+  const [mapFilter,setMapFilter] = useState(false), filterTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const personTrigger = useRef<ComponentRef<typeof Pressable>>(null);
+  const [sheetMeasurement,setSheetMeasurement] = useState<SheetMeasurement | null>(null);
+  const [controlsBottom,setControlsBottom] = useState<number | null>(null), [mapEntryHeight,setMapEntryHeight] = useState(48);
+  const [now,setNow] = useState(Date.now());
+  const [inspectionAttempt,setInspectionAttempt] = useState(0);
+  const [inspection,setInspection] = useState<{row:UnifiedRow;context:RadarContactContext;preview:UnifiedPreview | null;failed:boolean} | null>(null);
+  useEffect(() => {
+    if (!focused) return;
+    const timer = setInterval(() => setNow(Date.now()),1000);
+    return () => clearInterval(timer);
+  },[focused]);
   const { preferences, hydrated } = usePreferences();
   const [citySelection, setCitySelection] = useState<string | null | undefined>(routeContext?.filters.cityId);
   const [cityPicker, setCityPicker] = useState(false), [citySearch, setCitySearch] = useState('');
@@ -59,18 +93,65 @@ export default function Players() {
   const schedules = mapData ? venueSchedules(mapData,mapFilters,Date.now()) : null;
   const counts = schedules ? new Map([...schedules].map(([id,games]) => [id,games.length])) : null;
   const mapVenues = pack && mapData ? visibleMapVenues(mapData.venues,counts,venueMode,pack) : [];
-  const selection = mapData?.venues.find(v => v.id === selectedVenue);
+  const selection = mapVenues.find(v => v.id === selectedVenue);
   const peopleAllowed = nativeRadarMapAllowed(radarState.config,radarState.query,mapCityId);
   const people = peopleAllowed && pack && showPeople ? nativeRadarPeople(radarState.pins,pack) : [];
   useEffect(() => { if (mapOpen && radarState.query && !radarState.busy) void radar.map(); }, [mapOpen,radarState.query?.query.queryRef,radar]);
+  const currentRows = mapOpen ? people : radarState.filterKey === key ? radarState.rows : [];
+  const person = focused && selectedPerson && currentRows.includes(selectedPerson) && selectedPerson.radar && Date.parse(selectedPerson.radar.validUntil) > now ? selectedPerson : null;
+  const safeInspection = person && inspection?.row === person && inspection.context.valid() ? inspection : null;
+  const preview = safeInspection?.preview && Date.parse(safeInspection.preview.radar.validUntil) > now ? safeInspection.preview : null;
+  useEffect(() => {
+    setInspection(null);
+    if (!person) return;
+    const context = radar.contactContext(person);
+    if (!context) return;
+    let current = true;
+    setInspection({row:person,context,preview:null,failed:false});
+    void loadPlayerInspection(context,nativeAuth.radarRead).then(preview => {
+      if (current && context.valid()) setInspection({row:person,context,preview,failed:false});
+    }).catch(() => {if (current && context.valid()) setInspection({row:person,context,preview:null,failed:true});});
+    return () => {current=false;};
+  },[person,radar,radarState.generation,inspectionAttempt]);
+  const sheetContext = mapOpen && (selection || person) ? JSON.stringify([
+    params,key,mapCityId,venueMode,showPeople,radarState.generation,
+    person ? 'person' : 'venue',person?.publicPlayerId ?? selection?.id,expanded,
+    window.width,window.height,window.fontScale,insets.top,insets.bottom,insets.left,insets.right,
+  ]) : null;
+  const sheetGeneration = useRef({context:sheetContext,revision:0});
+  if (sheetGeneration.current.context !== sheetContext) sheetGeneration.current={context:sheetContext,revision:sheetGeneration.current.revision+1};
+  const sheetOwner = sheetContext ? `${sheetGeneration.current.revision}:${sheetContext}` : null;
+  const activeSheet = useRef(sheetOwner);activeSheet.current=sheetOwner;
+  useLayoutEffect(() => {
+    activeSheet.current=sheetOwner;
+    setSheetMeasurement(null);
+    return () => {activeSheet.current=null;};
+  },[sheetOwner]);
+  const measureSheet = useCallback((height:number) => {
+    if (!sheetOwner || activeSheet.current !== sheetOwner) return;
+    setSheetMeasurement(Number.isFinite(height) && height > 0 ? {owner:sheetOwner,height} : null);
+  },[sheetOwner]);
+  const controlBottom = mapControlBottom(sheetMeasurement,sheetOwner,expanded,insets.bottom);
+  const statusTop = controlsBottom === null ? undefined : controlsBottom+12;
   const closeMap = () => {
-    if (selectedPerson) setSelectedPerson(null);
+    if (mapFilter) setMapFilter(false);
+    else if (person) {if (expanded) setExpanded(false);else setSelectedPerson(null);}
     else if (selection) { if (expanded) setExpanded(false); else setSelectedVenue(null); }
-    else router.setParams({view:'list'});
+    else {setSelectedPerson(null);setSelectedVenue(null);router.setParams({view:'list'});}
   };
-  const contact = (row: UnifiedRow) => {
+  const contactView = useRef(0), contactViewKey = JSON.stringify([focused,mapOpen,key,selectedPerson?.publicPlayerId,selectedVenue,mapFilter]);
+  useLayoutEffect(() => {contactView.current++;return () => {contactView.current++;};},[contactViewKey]);
+  const selectPerson = (row: UnifiedRow) => {setSelectedVenue(null);setExpanded(false);setSelectedPerson(row);};
+  const contact = async (row: UnifiedRow) => {
+    const view = contactView.current;
+    if (!focusedRef.current || !radarContactAvailable(row,inspection?.row === row ? inspection.preview : null)) return;
     const context = radar.contactContext(row);
-    if (context && auth.contact.stageRadar(context)) router.push(`/messages/new/${row.publicPlayerId}`);
+    if (!context) return;
+    try {
+      // Same fresh capability check as the existing explicit proof composer. Opening never sends.
+      await radar.preview(context);
+      if (focusedRef.current && view === contactView.current && context.valid() && auth.contact.stageRadar(context)) router.push(`/messages/new/${row.publicPlayerId}`);
+    } catch { if (focusedRef.current && view === contactView.current && context.valid()) selectPerson(row); }
   };
   const list = snapshot.list.key === key && snapshot.scope && validName ? snapshot.list : null;
   const retry = () => { void coordinator.loadList(filters); };
@@ -80,41 +161,76 @@ export default function Players() {
     setCitySelection(cleared.cityId); setName(cleared.name); setAreaKey(cleared.areaKey ?? '');
     setLooking(cleared.looking); setTrainer(cleared.trainer); setCityPicker(false); setCitySearch('');
   };
-  const visibleRows = radarState.filterKey === key ? radarState.rows.filter(row => row.radar && Date.parse(row.radar.validUntil) > Date.now()) : [];
+  const visibleRows = radarState.filterKey === key ? radarState.rows.filter(row => row.radar && Date.parse(row.radar.validUntil) > now) : [];
   const merged = mergeRadarPlayers(list?.data?.items ?? [],visibleRows);
+  const personContent = person && <View style={{gap:12}}>
+    {preview ? <>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Открыть игрока ${preview.player.displayName}`} accessibilityState={{expanded}}
+        onPress={() => setExpanded(v => !v)} style={{minHeight:64,flexDirection:'row',alignItems:'center',gap:12}}>
+        <PlayerAvatar key={`${preview.player.publicPlayerId}:${preview.player.avatar?.uploadedUrl}:${preview.player.avatar?.providerUrl}`}
+          player={{...preview.player,cityId:null,areaKey:null,bio:null,lookingForGame:false}} />
+        <View style={{flex:1,minWidth:0,gap:4}}><Label style={{fontWeight:'700',fontSize:18,lineHeight:24}}>{preview.player.displayName}</Label>
+          <Label>{playerLevelLabel(preview.player.level)}{preview.player.trainer ? ' · Тренер' : ''}</Label>
+          <Label style={{fontSize:12,lineHeight:18}}>{playerDistance(preview)}</Label></View>
+        <Label accessible={false}>{expanded ? '↓' : '↑'}</Label>
+      </Pressable>
+      {expanded && <Label>Местоположение и расстояние приблизительные. Здесь показана доступная информация об игроке.</Label>}
+      {radarContactAvailable(person,preview) ? <PrimaryButton title="Написать" onPress={() => {void contact(person);}} /> : <Label>Написать сейчас нельзя.</Label>}
+    </> : <>
+      <Label accessible accessibilityLiveRegion="polite">{safeInspection && !safeInspection.failed && !safeInspection.preview ? 'Проверяем доступность игрока…' : 'Карточка игрока временно недоступна.'}</Label>
+      {(!safeInspection || safeInspection.failed || safeInspection.preview && !preview) && <TextButton title="Повторить" onPress={() => setInspectionAttempt(value => value+1)} />}
+    </>}
+    <TextButton title={expanded ? 'Свернуть карточку игрока' : 'Закрыть игрока'} onPress={() => {if(expanded)setExpanded(false);else setSelectedPerson(null);}} />
+  </View>;
   return <ScreenFrame keyboard header={<Header />}>
     <Modal visible={mapOpen} animationType="none" presentationStyle="fullScreen" onRequestClose={closeMap}>
       <ScreenFrame>
-        {pack ? <NativeMap key={pack.version} pack={pack} venues={mapVenues} counts={counts} selected={selectedVenue} camera={camera}
-          controlBottom={selection ? sheetHeight+24 : 24} statusTop={140} onCamera={setCamera} onSelect={id => {setSelectedPerson(null);setSelectedVenue(id);}} onCatalog={() => router.setParams({view:'list'})}
-          people={people} onPerson={row => {setSelectedVenue(null);setSelectedPerson(row);}} /> : <Label>Карта этого города пока недоступна.</Label>}
-        <View style={{position:'absolute',top:16,left:16,right:16,gap:8,backgroundColor:colors.card,borderRadius:12,padding:8}}>
-          <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center'}}><TextButton title="К списку" onPress={closeMap} /><RadarControls compact /></View>
-          <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>
-            <DiscoveryChip title="Все площадки" selected={venueMode==='all'} onPress={() => setVenueMode('all')} />
-            <DiscoveryChip title="С играми" selected={venueMode==='with_games'} onPress={() => setVenueMode('with_games')} />
-            <DiscoveryChip title="Игроки рядом" selected={showPeople} onPress={() => setShowPeople(v => !v)} />
+        {pack ? <NativeMap key={pack.version} pack={pack} venues={mapVenues} counts={counts} selected={selection?.id ?? null} camera={camera}
+          controlBottom={controlBottom} statusTop={statusTop} onCamera={setCamera}
+          onSelect={id => {setSelectedPerson(null);setExpanded(false);setSelectedVenue(id);}} onCatalog={() => router.setParams({view:'list'})}
+          people={people} selectedPerson={person?.publicPlayerId ?? null} onPerson={selectPerson} /> : <Label>Карта этого города пока недоступна.</Label>}
+        <View pointerEvents="box-none" onLayout={event => setControlsBottom(event.nativeEvent.layout.y+event.nativeEvent.layout.height)}
+          style={{position:'absolute',top:12,left:16,right:16,gap:8}}>
+          <View pointerEvents="box-none" style={{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start',gap:12}}>
+            <View pointerEvents="box-none" style={{flex:1,minWidth:0,alignItems:'flex-start',gap:8}}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Назад к списку игроков" onPress={closeMap}
+                style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,padding:6,paddingRight:14,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
+                <View style={{minWidth:30,minHeight:30,borderRadius:999,backgroundColor:colors.purple,alignItems:'center',justifyContent:'center'}}><Label accessible={false} style={{color:colors.onPurple}}>←</Label></View>
+                <Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>К списку</Label>
+              </Pressable>
+              <Pressable ref={filterTrigger} accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:mapFilter}} onPress={() => setMapFilter(true)}
+                style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
+                <DiscoveryIcon name="filter" /><Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>Фильтры</Label>
+              </Pressable>
+            </View>
+            <RadarControls compact />
           </View>
-          {!peopleAllowed && <Label>Площадки доступны. Для игроков рядом включите Radar и обновите список.</Label>}
-          {mapResource.state.status==='error' && <TextButton title="Обновить площадки" onPress={mapResource.retry} />}
-          {radarState.mapPage?.nextMapCursor && <TextButton title="Следующее окно игроков" onPress={() => {setSelectedPerson(null);void radar.map(true);}} />}
+          {mapResource.state.status==='error' && <View style={styles.card}><Label>Не удалось загрузить площадки.</Label><TextButton title="Обновить площадки" onPress={mapResource.retry} /></View>}
         </View>
-        {selectedPerson && people.includes(selectedPerson) && <View style={[styles.card,{position:'absolute',bottom:24,left:16,right:16}]}>
-          <Label>{selectedPerson.player.displayName}</Label><Label>Примерное местоположение</Label>
-          <PrimaryButton title="Написать" onPress={() => contact(selectedPerson)} /><TextButton title="Закрыть игрока" onPress={() => setSelectedPerson(null)} />
+        {personContent && <View key={sheetOwner} onLayout={event => measureSheet(event.nativeEvent.layout.height)}
+          style={[styles.card,{position:'absolute',bottom:expanded ? 0 : insets.bottom+12,left:expanded ? 0 : 12,right:expanded ? 0 : 12,maxHeight:expanded ? '88%' : '60%',paddingBottom:expanded ? insets.bottom+16 : 16}]}>
+          <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={{gap:12}}>{personContent}</ScrollView>
         </View>}
-        {selection && <VenueSheet key={selection.id} selection={selection} expanded={expanded} games={schedules?.get(selection.id) ?? (schedules ? [] : null)}
+        {selection && <VenueSheet key={sheetOwner} selection={selection} expanded={expanded} games={schedules?.get(selection.id) ?? (schedules ? [] : null)}
           onExpand={setExpanded} onClose={() => setSelectedVenue(null)} onRetrySchedule={mapResource.retry} onMeasure={measureSheet} />}
+        <DiscoverySheet visible={mapFilter} title="Фильтры карты" onClose={() => setMapFilter(false)} returnFocusRef={filterTrigger}>
+          <DiscoveryChip title="Все площадки" selected={venueMode==='all'} onPress={() => setVenueMode('all')} />
+          <DiscoveryChip title="С играми" selected={venueMode==='with_games'} onPress={() => setVenueMode('with_games')} />
+          <DiscoveryChip title="Игроки рядом" selected={showPeople} onPress={() => setShowPeople(v => !v)} />
+          {!peopleAllowed && <Label>Площадки доступны. Для игроков рядом включите Radar и обновите список.</Label>}
+          {radarState.notice && <Label accessibilityLiveRegion="polite">{radarState.notice}</Label>}
+          {radarState.mapPage?.nextMapCursor && <TextButton title="Следующее окно игроков" onPress={() => {setSelectedPerson(null);void radar.map(true);}} />}
+        </DiscoverySheet>
       </ScreenFrame>
     </Modal>
+    <DiscoverySheet visible={!mapOpen && !!person} title="Игрок Radar" onClose={() => setSelectedPerson(null)} returnFocusRef={personTrigger}>{personContent}</DiscoverySheet>
     <FlatList data={merged.ordinary} keyExtractor={p => p.publicPlayerId}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: 24, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: mapEntryHeight+insets.bottom+48, gap: 16 }}
       ListHeaderComponent={<View style={{ gap: 16 }}>
         <Label accessibilityRole="header" style={[styles.title, { fontSize: 32, lineHeight: 35 }]}>Игроки</Label>
         <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 19 }}>Найдите партнёров для хорошей игры.</Label>
         <RadarControls />
-        <TextButton title="На карте" onPress={() => router.setParams({view:'map',cityId:cityId ?? '',name:filters.name,areaKey:filters.areaKey ?? '',looking:looking?'1':'0',trainer:trainer?'1':'0'})} />
         <Pressable accessibilityRole="button" accessibilityLabel={`Город: ${city?.nameRu ?? (cityId ? 'Выбор недоступен' : 'Все города')}`} accessibilityState={{ expanded: cityPicker }} onPress={() => setCityPicker(v => !v)}
           style={{ minHeight: 66, borderWidth: 1, borderColor: colors.line, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ flex: 1, minWidth: 0 }}><Label style={{ fontSize: 11, lineHeight: 16, color: colors.secondary }}>Город</Label>
@@ -143,10 +259,16 @@ export default function Players() {
             <Label accessibilityRole="header" style={[styles.subtitle, { fontSize: 24, lineHeight: 30 }]}>Все игроки</Label></View>
           <TextButton title="Сбросить фильтры" onPress={reset} />
         </View>
+        {radarState.enabling && <Label accessible accessibilityLiveRegion="polite">Сейчас ищем ближайших игроков…</Label>}
         {merged.nearby.map(row => <View key={`radar:${row.publicPlayerId}`} style={{gap:8}}>
           <Label>Рядом · примерное местоположение</Label>
-          <PlayerCard player={radarPlayer(row)} city={cities.state.data?.find(c => c.id===row.player.cityId)?.nameRu} onOpen={() => contact(row)} />
-          <TextButton title="Написать" onPress={() => contact(row)} />
+          <Pressable ref={selectedPerson === row ? personTrigger : undefined} accessibilityRole="button" accessibilityLabel={`Открыть игрока ${row.player.displayName}`}
+            onPress={() => selectPerson(row)} style={[styles.card,{minHeight:64,flexDirection:'row',alignItems:'center',gap:12}]}>
+            <PlayerAvatar key={`${row.publicPlayerId}:${row.player.avatar.uploadedUrl}:${row.player.avatar.providerUrl}`} player={radarPlayer(row)} />
+            <View style={{flex:1,minWidth:0,gap:4}}><Label style={{fontWeight:'700'}}>{row.player.displayName}</Label>
+              <Label>{playerLevelLabel(row.player.level)}{row.player.trainer ? ' · Тренер' : ''}</Label></View><DiscoveryIcon name="chevron" />
+          </Pressable>
+          {radarContactAvailable(row,inspection?.row === row ? inspection.preview : null) ? <TextButton title="Написать" onPress={() => {void contact(row);}} /> : <Label>Написать сейчас нельзя.</Label>}
         </View>)}
         {radarState.query?.page.nextCursor && <TextButton title="Ещё участников Radar" onPress={() => {void radar.query(false,true);}} />}
         {radarState.activation?.state==='active' && <TextButton title="Обновить Radar" onPress={() => {void radar.query();}} />}
@@ -170,5 +292,14 @@ export default function Players() {
         {list?.moreError != null && <><Label>Не удалось загрузить следующую страницу. Загруженные игроки сохранены.</Label><ErrorState error={list.moreError} retry={more} /></>}
         {list?.data?.nextCursor && !list.moreError && <PrimaryButton title={list.loadingMore ? 'Загружаем…' : 'Показать ещё'} disabled={list.loadingMore} onPress={more} />}
       </View>} />
+    <Pressable accessibilityRole="button" accessibilityLabel="Показать игроков и площадки на карте"
+      onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
+      onPress={() => {setSelectedPerson(null);setExpanded(false);router.setParams({view:'map',cityId:cityId ?? '',name:filters.name,areaKey:filters.areaKey ?? '',looking:looking?'1':'0',trainer:trainer?'1':'0'});}}
+      style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',maxWidth:'92%',minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
+        backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
+        flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
+      <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
+      <Label style={{flexShrink:1,fontWeight:'600'}}>На карте</Label>
+    </Pressable>
   </ScreenFrame>;
 }

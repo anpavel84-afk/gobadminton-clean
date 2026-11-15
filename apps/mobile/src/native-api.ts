@@ -81,7 +81,9 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
   };
   return {
     radarRead: async (access: string, operation: RadarRead, previewKey: string) => {
-      if (operation.kind === 'config' || operation.kind === 'status') return radarRequest(operation.kind === 'config' ? '/radar/config' : '/me/radar/activations/current', 'GET', access);
+      if (operation.kind === 'config') return radarRequest('/radar/config', 'GET', access);
+      if (operation.kind === 'status') return radarRequest('/me/radar/activations/current', 'GET', access);
+      if (operation.kind !== 'preview' && operation.kind !== 'map' && operation.kind !== 'query') throw new RadarError('invalid');
       if (operation.kind === 'preview') return radarRequest('/radar/results/preview', 'POST', access, { resultRef: resultProof(operation.resultRef) }, previewKey);
       const input = operation.body;
       if (input.contractVersion !== RADAR_WIRE) throw new RadarError('invalid');

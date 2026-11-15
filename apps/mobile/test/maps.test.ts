@@ -6,7 +6,7 @@ import { adaptNativeStyle, closeVenueSheet, expandedVenueCreate, gamesContext, g
 import { appendUpcomingPage } from '../src/upcoming.ts';
 import type { GamePage } from '../src/public-api.ts';
 import { createPublicApi, gamesResourceKey } from '../src/public-api.ts';
-import type { MapSnapshot, MapOverlay } from '../src/maps.ts';
+import type { MapSnapshot, MapOverlay, SheetMeasurement } from '../src/maps.ts';
 import { LatestResource } from '../src/resource.ts';
 import { parseVenue } from '../src/venues.ts';
 import { game } from './fixtures.ts';
@@ -306,4 +306,52 @@ test('map schedule groups only the real eligible snapshot by venue-local date, p
   ]);
   assert.deepEqual(venueScheduleDays([],venue.timezone),[]);
   assert.equal(venueSchedules({...snapshot,games:null,scheduleError:true},{},now),null);
+});
+
+test('Players venue/person measured owners reserve actual safe clearance and reject retired layout callbacks across transitions',async()=>{
+  const {readFileSync}=await import('node:fs'),{stripTypeScriptTypes}=await import('node:module'),{runInNewContext}=await import('node:vm');
+  const source=readFileSync(new URL('../app/players/index.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('  const sheetContext ='),source.indexOf('  const statusTop ='))+'\n({sheetOwner,measureSheet,controlBottom});';
+  const refs:{current:unknown}[]=[],lifecycle:{deps?:unknown[];cleanup?:()=>void}={};
+  let measurement:SheetMeasurement|null=null;
+  const input={mapOpen:true,selection:venue,person:null as {publicPlayerId:string}|null,params:{view:'map'},key:'filters',mapCityId:pack.cityId,
+    venueMode:'all',showPeople:true,radarState:{generation:1},expanded:false,window:{width:390,height:844,fontScale:1},insets:{top:44,bottom:34,left:0,right:0}};
+  const render=()=>{
+    let ref=0;
+    return runInNewContext(stripTypeScriptTypes(body),{...input,sheetMeasurement:measurement,mapControlBottom,
+      useRef:(initial:unknown)=>{const i=ref++;return refs[i] ?? (refs[i]={current:initial});},
+      useCallback:(fn:unknown)=>fn,setSheetMeasurement:(value:typeof measurement)=>{measurement=value;},
+      useLayoutEffect:(effect:()=>()=>void,deps:unknown[])=>{
+        if(!lifecycle.deps || deps.some((v,i)=>v!==lifecycle.deps![i])){lifecycle.cleanup?.();lifecycle.deps=deps;lifecycle.cleanup=effect();}
+      }}) as {sheetOwner:string|null;measureSheet:(height:number)=>void;controlBottom:number};
+  };
+  const compact=render();compact.measureSheet(208);assert.equal(render().controlBottom,262);
+  compact.measureSheet(340);assert.equal(render().controlBottom,394); // text/content growth
+  input.person={publicPlayerId:'peer'};const person=render();assert.notEqual(person.sheetOwner,compact.sheetOwner);
+  compact.measureSheet(900);assert.equal(measurement,null);person.measureSheet(180);assert.equal(render().controlBottom,234);
+  input.expanded=true;const expanded=render();person.measureSheet(900);assert.equal(measurement,null);
+  expanded.measureSheet(680);assert.equal(render().controlBottom,688);
+  input.expanded=false;const back=render();assert.notEqual(back.sheetOwner,person.sheetOwner);person.measureSheet(900);assert.equal(measurement,null);
+  input.window={width:844,height:390,fontScale:1.5};input.insets={top:0,bottom:21,left:44,right:44};
+  const rotated=render();back.measureSheet(900);assert.equal(measurement,null);rotated.measureSheet(200);assert.equal(render().controlBottom,241);
+  input.key='changed filters';const filtered=render();rotated.measureSheet(900);assert.equal(measurement,null);assert.notEqual(filtered.sheetOwner,rotated.sheetOwner);
+  input.mapOpen=false;const closed=render();filtered.measureSheet(900);assert.equal(measurement,null);assert.equal(closed.sheetOwner,null);
+  assert.match(source,/key=\{sheetOwner\} onLayout=\{event => measureSheet\(event.nativeEvent.layout.height\)\}/);
+  assert.match(source,/<VenueSheet key=\{sheetOwner\}[\s\S]*onMeasure=\{measureSheet\}/);
+  assert.match(source,/setControlsBottom\(event.nativeEvent.layout.y\+event.nativeEvent.layout.height\)/);
+  assert.doesNotMatch(source,/sheetHeight\+24|statusTop=\{140\}/);
+});
+
+test('shared person marker uses safe PlayerAvatar projection, selected identity and the exact selected-row callback',async()=>{
+  const {readFileSync}=await import('node:fs'),{stripTypeScriptTypes}=await import('node:module'),{runInNewContext}=await import('node:vm');
+  const source=readFileSync(new URL('../src/components/native-map.tsx',import.meta.url),'utf8');
+  const personSource=source.slice(source.indexOf("{phase === 'loaded' && people"),source.indexOf("{phase === 'loaded' && venues"));
+  assert.match(source,/import \{ PlayerAvatar \} from '.\/player-card.tsx'/);
+  assert.match(personSource,/<PlayerAvatar[\s\S]*player=\{radarPlayer\(row\)\}/);
+  assert.match(personSource,/selectedPerson === row.publicPlayerId && mapStyles.markerSelected/);
+  assert.doesNotMatch(personSource,/displayName.slice|<Image|uri:/);
+  const row={publicPlayerId:'peer',player:{displayName:'Игрок'}},selected:unknown[]=[];
+  const callback=personSource.match(/onPress=\{(\(\) => onPerson\?\.\(row\))\}/)![1]!;
+  const press=runInNewContext(stripTypeScriptTypes(`(${callback})`),{row,onPerson:(value:unknown)=>selected.push(value)}) as ()=>void;
+  press();assert.strictEqual(selected[0],row);
 });
