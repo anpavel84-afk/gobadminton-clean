@@ -1,3 +1,5 @@
+import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
+import type { PlayInterestPacket } from './play-interests.ts';
 import { RadarError, RADAR_WIRE, resultProof } from './radar.ts';
 import type { RadarRead, RadarCommand } from './radar.ts';
 import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
@@ -79,7 +81,35 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       throw error;
     }
   };
+  async function interestRequest(path: string, access: string, packet?: PlayInterestPacket) {
+    const wire = packet ? interestWire(packet) : null;
+    if (wire && wire.path !== path) throw new PlayInterestError('invalid');
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
+        method: packet ? 'POST' : 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'application/json', Authorization: `Bearer ${access}`,
+          ...(packet ? {'Content-Type':'application/json','Idempotency-Key':packet.key} : {}) },
+        ...(wire ? {body:JSON.stringify(wire.body)} : {}),
+      });
+      if (response.status === 401) throw new NativeAuthError('authority');
+      if (!response.ok) {
+        let code = '';
+        try { const row = await response.json(); if (typeof row?.code === 'string' && /^[A-Z_]{1,80}$/.test(row.code)) code=row.code; } catch { /* No raw response retained. */ }
+        throw new PlayInterestError([400,403,404,409,422,429].includes(response.status) && code !== 'COMMAND_IN_PROGRESS' ? 'refused' : 'network',response.status,code);
+      }
+      return await response.json();
+    } catch (error) {
+      if(error instanceof NativeAuthError || error instanceof PlayInterestError) throw error;
+      throw new PlayInterestError(error instanceof SyntaxError ? 'invalid' : 'network');
+    } finally { clearTimeout(timeout); }
+  }
   return {
+    playInterestStates: (access: string, ids: readonly string[]) => interestRequest(statesPath([...ids]), access),
+    playInterestMutation: async (access: string, packet: PlayInterestPacket) => {
+      const wire = interestWire(packet);
+      return parsePlayInterestReceipt(await interestRequest(wire.path,access,packet),packet.kind);
+    },
     radarRead: async (access: string, operation: RadarRead, previewKey: string) => {
       if (operation.kind === 'config') return radarRequest('/radar/config', 'GET', access);
       if (operation.kind === 'status') return radarRequest('/me/radar/activations/current', 'GET', access);

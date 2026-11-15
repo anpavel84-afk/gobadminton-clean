@@ -15054,6 +15054,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "bearerSession": []
           }
         ],
         "parameters": [
@@ -15159,6 +15162,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "bearerSession": []
           }
         ],
         "parameters": [
@@ -15343,6 +15349,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "bearerSession": []
           }
         ],
         "parameters": [

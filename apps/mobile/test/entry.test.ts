@@ -39,3 +39,16 @@ test('icon entry waits both hydration owners, skips intro for restored auth, and
   for (const path of ['/games/selected-game', '/auth/native/callback', '/players/public-a']) assert.equal(hydratedEntryRoute(emptyPreferences, true, auth, path), null);
   assert.equal(hydratedEntryRoute(emptyPreferences, true, { status: 'guest', returnPath: null }), '/story');
 });
+
+test('interrupted icon entry recovers only exact bare browse after hydration, retaining existing ordering',async()=>{
+  const {hydratedEntryRoute}=await import('../src/entry.ts');
+  const auth={status:'authenticated',returnPath:'/players/browse'};
+  assert.equal(hydratedEntryRoute(emptyPreferences,false,auth),null);
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,status:'hydrating'}),null);
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,status:'signing-in'}),'/profile');
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,auth),'/players/browse');
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,status:'guest'}),'/players/browse');
+  for(const path of ['/players','/players/browse/','/players/browse?cityId=x','/players/browse#x','/players/%62rowse','/players/browse\n','//evil/players/browse','https://dev.gobadminton.ru/players/browse']){
+    assert.equal(hydratedEntryRoute(emptyPreferences,true,{...auth,returnPath:path}),'/games');
+  }
+});

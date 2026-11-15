@@ -1044,3 +1044,18 @@ test('real AuthCoordinator preview port and ContactEditor composer wire keep Rad
   assert.equal(s.calls.some(c=>c.path.startsWith('/players/')),false);
   await s.auth.logout();assert.equal(s.auth.contact.getSnapshot().actor,null);
 });
+
+test('bare browse real login → durable pending → hydrate/callback → entry; cancel never writes interest or message',async()=>{
+  const {hydratedEntryRoute,emptyPreferences}=await import('../src/entry.ts');
+  assert.equal(canonicalReturnPath('/players/browse'),'/players/browse');
+  const s=setup();await s.auth.hydrate();const login=await s.auth.beginLogin('/players/browse');assert.ok(login);
+  const secure=parseSecureEnvelope(s.stored(),now)!;assert.equal(secure.pending?.returnPath,'/players/browse');
+  const restart=setup(secure);await restart.auth.hydrate();
+  const returned=await restart.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${secure.pending!.state}`);
+  assert.equal(returned,'/players/browse');
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,restart.auth.getSnapshot()),'/players/browse');
+  const cancelled=setup();await cancelled.auth.hydrate();await cancelled.auth.beginLogin('/players/browse');await cancelled.auth.cancelLogin();
+  assert.equal(cancelled.auth.getSnapshot().status,'guest');
+  for(const session of [s,restart,cancelled])assert.equal(session.calls.filter(c=>c.path.includes('play-interests')||c.path.includes('conversations')||c.path.includes('/messages')).length,0);
+  for(const path of ['/players','/players/browse/','/players/browse?name=a','/players/browse#x','/players/%62rowse','/players/browse\n','/players/browse/send','https://user:pass@dev.gobadminton.ru/players/browse','//dev.gobadminton.ru/players/browse'])assert.equal(canonicalReturnPath(path),null);
+});
