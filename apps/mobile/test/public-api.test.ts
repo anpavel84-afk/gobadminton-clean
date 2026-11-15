@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { API_ORIGIN, createPublicApi, PublicApiError } from '../src/public-api.ts';
+import { API_ORIGIN, createPublicApi, gamesResourceKey, PublicApiError } from '../src/public-api.ts';
+import { LatestResource } from '../src/resource.ts';
+import { appendUpcomingPage } from '../src/upcoming.ts';
+import type { GamePage } from '../src/public-api.ts';
 import { game, cities } from './fixtures.ts';
 function response(data: unknown, status = 200) { return new Response(JSON.stringify(data), { status }); }
 const fixedNow = Date.parse('2026-11-13T12:00:00Z');
@@ -119,4 +122,42 @@ test('unrelated venue/city/timezone schedule results fail and detail cancellatio
   const api = createPublicApi(async (_url,init) => { signal = init?.signal as AbortSignal; return response(dto); });
   const controller = new AbortController(); controller.abort(); await api.venue(id,controller.signal);
   assert.equal(signal?.aborted,true);
+});
+
+test('real games query sends catalog-city selected-day bounds and activity while legacy call remains upcoming', async () => {
+  const calls: URL[] = [];
+  const api = createPublicApi(async url => { calls.push(new URL(String(url))); return Response.json({ items: [], nextCursor: 'next' }); }, () => fixedNow);
+  await api.games('city', undefined, undefined, { day: '2026-11-16', timezone: 'Asia/Tokyo', activityKind: 'trainer_led' });
+  const query = calls[0]!.searchParams;
+  assert.equal(query.get('cityId'), 'city'); assert.equal(query.get('startsFrom'), '2026-11-15T15:00:00.000Z');
+  assert.equal(query.get('startsBefore'), '2026-11-16T15:00:00.000Z'); assert.equal(query.get('activityKind'), 'trainer_led');
+  assert.equal(query.has('levelScaleId') || query.has('levelId'), false);
+  await api.games('city', 'next', undefined, { day: '2026-11-16', timezone: 'Asia/Tokyo', activityKind: 'regular' });
+  assert.equal(calls[1]!.searchParams.get('cursor'), 'next'); assert.equal(calls[1]!.searchParams.get('activityKind'), 'regular');
+  await api.games('city');
+  assert.equal(calls[2]!.searchParams.get('startsFrom'), new Date(fixedNow).toISOString());
+  assert.equal(calls[2]!.searchParams.has('startsBefore'), false); assert.equal(calls[2]!.searchParams.has('activityKind'), false);
+  for (const bad of [{ day: '2026-02-30', timezone: 'Asia/Tokyo' }, { day: '2026-11-16' }, { day: '2026-11-16', timezone: 'bad-zone' }]) await assert.rejects(api.games('city', undefined, undefined, bad), PublicApiError);
+  assert.equal(calls.length, 3);
+});
+test('day/activity changes reset loaded cursor and fence stale A→B→A pages; populated refresh replaces', async () => {
+  const resource = new LatestResource<GamePage>();
+  const a = { day: '2026-11-16', timezone: 'Europe/Moscow', activityKind: 'all' } as const;
+  const b = { ...a, day: '2026-11-17', activityKind: 'trainer_led' } as const;
+  const keyA = gamesResourceKey('city', a), keyB = gamesResourceKey('city', b);
+  assert.notEqual(keyA, keyB);
+  assert.notEqual(keyA, gamesResourceKey('other-city', a));
+  assert.notEqual(keyA, gamesResourceKey('city', { ...a, activityKind: 'regular' }));
+  assert.notEqual(keyA, gamesResourceKey('city', { ...a, day: '2026-11-17' }));
+  const page = (id: string, cursor: string | null): GamePage => ({ items: [{ ...game, id, startsAt: '2099-11-16T00:00:00Z' }], nextCursor: cursor });
+  await resource.load(keyA, async () => page('a', 'old-cursor'));
+  let finish!: (page: GamePage) => void;
+  const late = resource.load(keyA, () => new Promise(resolve => { finish = resolve; }), appendUpcomingPage);
+  const change = resource.load(keyB, async () => page('b', 'b-cursor'));
+  assert.equal(resource.state.data, undefined); await change;
+  await resource.load(keyA, async () => page('new-a', null));
+  finish(page('stale-a', 'stale-cursor')); await late;
+  assert.deepEqual(resource.state.data?.items.map(item => item.id), ['new-a']); assert.equal(resource.state.data?.nextCursor, null);
+  await resource.load(keyA, async () => page('refreshed', 'fresh-cursor'));
+  assert.deepEqual(resource.state.data?.items.map(item => item.id), ['refreshed']); assert.equal(resource.state.data?.nextCursor, 'fresh-cursor');
 });

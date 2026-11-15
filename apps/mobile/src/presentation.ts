@@ -96,3 +96,107 @@ export function playerInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return parts.slice(0, 2).map(p => Array.from(p)[0]).join('').toLocaleUpperCase('ru') || '?';
 }
+
+// Discovery-only pure subset of accepted WEB level-guide.ts. No profile writes.
+export function ntrpHalfstepIds(): string[] {
+  return Array.from({ length: 13 }, (_, i) => (1 + i / 2).toFixed(1));
+}
+export function normalizeNtrpLevelId(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim().replace(',', '.');
+  if (!trimmed) return null;
+  const value = Number(trimmed), snapped = Math.round(value * 2) / 2;
+  return Number.isFinite(value) && value >= 1 && value <= 7 && Math.abs(value - snapped) <= 1e-9 ? snapped.toFixed(1) : null;
+}
+export function gameAllowsSelectedNtrpLevel(rule: PublicGame['levelRule'] | null | undefined, selected: string | null | undefined): boolean {
+  if (!selected) return true;
+  const want = normalizeNtrpLevelId(selected);
+  return Boolean(want && rule?.scaleId === 'ntrp' && Number(rule.scaleVersion) === 1 && Array.isArray(rule.allowedLevelIds)
+    && rule.allowedLevelIds.some(id => normalizeNtrpLevelId(id) === want));
+}
+export function filterGamesBySelectedNtrpLevel<T extends { levelRule: PublicGame['levelRule'] }>(games: readonly T[], selected: string | null | undefined): T[] {
+  return selected ? games.filter(game => gameAllowsSelectedNtrpLevel(game.levelRule, selected)) : [...games];
+}
+const SKILL_BLURBS: Record<string, string> = {
+  "1.0": "Только начинаю: держу ракетку, учусь попадать по волану.",
+  "1.5": "Знаком с подачей и базовыми ударами, играю очень спокойно.",
+  "2.0": "Могу коротко отбить обмен, ещё много ошибок и пауз.",
+  "2.5": "Играю короткие партии в спокойном темпе, учусь держать площадку.",
+  "3.0": "Регулярно играю: базовые удары стабильнее, темп любительский.",
+  "3.5": "Уверенный любитель: меняю направление и темп, чувствую партнёра.",
+  "4.0": "Сильная любительская игра, тактика и вариативность ударов.",
+  "4.5": "Очень сильный любитель / уверенный клубный уровень.",
+  "5.0": "Соревновательный любительский ориентир, высокая интенсивность.",
+  "5.5": "Высокий соревновательный любительский ориентир.",
+  "6.0": "Ориентир полупрофессиональной игры — без гарантии квалификации.",
+  "6.5": "Ориентир близко к профессиональному — самооценка, не аттестат.",
+  "7.0": "Профессиональный ориентир по самооценке, не сертификат федерации.",
+};
+
+
+export function levelGuideSkills() {
+  return ntrpHalfstepIds().map(levelId => ({ levelId, label: levelId.replace('.', ','), summary: SKILL_BLURBS[levelId]! }));
+}
+export function levelGuideSkillFor(levelId: string) {
+  return levelGuideSkills().find(skill => skill.levelId === normalizeNtrpLevelId(levelId)) ?? null;
+}
+export const LEVEL_GUIDE_DISCLAIMER = 'Уровень указываете вы сами — это ориентир для выбора игры, а не официальная квалификация и не гарантия совместимости.';
+export const LEVEL_GUIDE_DISCOVERY_SCOPE_NOTE = 'Фильтр применяется только к уже загруженным играм списка (шкала ntrp v1). Другие шкалы не считаются совместимыми.';
+export const LEVEL_GUIDE_MAP_HONESTY = 'Карта показывает все игры выбранного города. Фильтр уровня действует в списке; при возврате к списку он сохранится.';
+export function discoveryListPresentation<T extends { levelRule: PublicGame['levelRule'] }>(raw: readonly T[], level: string, nextCursor: string | null) {
+  const visible = filterGamesBySelectedNtrpLevel(raw, level);
+  return { visible, count: `Найдено: ${visible.length}${nextCursor ? '+' : ''}${level ? ` · из ${raw.length} загруженных` : ''}`,
+    levelEmpty: Boolean(level && raw.length && !visible.length), canLoadMore: Boolean(nextCursor) };
+}
+
+/** Calendar days belong to the selected city, not the browser's timezone. */
+export function cityDate(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+export function nextCalendarDay(day: string, offset = 1): string {
+  const date = new Date(`${day}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+export function discoveryDayBounds(day: string, timeZone: string) {
+  function midnight(value: string) {
+    const target = Date.parse(`${value}T00:00:00Z`);
+    let instant = target;
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    });
+    for (let n = 0; n < 4; n++) {
+      const parts = Object.fromEntries(formatter.formatToParts(instant).map(p => [p.type, p.value]));
+      const displayed = Date.parse(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`);
+      const correction = target - displayed;
+      instant += correction;
+      if (!correction) break;
+    }
+    return new Date(instant).toISOString();
+  }
+  return { startsFrom: midnight(day), startsBefore: midnight(nextCalendarDay(day)) };
+}
+
+export function discoveryDateLabel(day: string) {
+  return new Date(`${day}T12:00:00Z`).toLocaleDateString("ru-RU", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" });
+}
+
+
+/** Each request advances the lower bound; an unset day has no upper bound. */
+export function futureDiscoveryBounds(day: string, timeZone: string, now = Date.now()) {
+  if (!day) return { startsFrom: new Date(now).toISOString() };
+  const bounds = discoveryDayBounds(day, timeZone);
+  return { ...bounds, startsFrom: new Date(Math.max(Date.parse(bounds.startsFrom), now)).toISOString() };
+}
+
+
+/** Role bands use only the game's public facts; trainer identity never substitutes for organizer. */
+export function gamePeople(game: PublicGame) {
+  return [
+    ...(game.activityKind === 'trainer_led' ? [{ role: 'Тренер', name: game.trainer?.displayName ?? 'Профиль недоступен', avatar: undefined, trainer: true }] : []),
+    { role: 'Организатор', name: game.organizer.displayName, avatar: game.organizer.avatar, trainer: false },
+  ];
+}

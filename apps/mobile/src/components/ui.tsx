@@ -1,6 +1,7 @@
-import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, findNodeHandle, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
-import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
+import type { ComponentProps, PropsWithChildren, ReactNode, RefObject } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { usePathname, useRouter } from 'expo-router';
@@ -9,6 +10,9 @@ import { SvgXml } from 'react-native-svg';
 import { brandMarkXml } from '../../assets/brand-mark.ts';
 import { colors, interaction, primaryLabelStyle, primarySurface, typography } from '../theme.ts';
 import { PlayersError } from '../players.ts';
+import { useAuth } from '../auth.tsx';
+import { playerInitials } from '../presentation.ts';
+import { CreateShape, DiscoveryArrow, DiscoveryIcon } from './discovery-icon.tsx';
 import { PublicApiError } from '../public-api.ts';
 
 // Metro needs a literal require to bundle the native image asset.
@@ -67,15 +71,70 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
   const router = useRouter();
   const pathname = usePathname();
   const returnTo = canonicalVenueCreatePath(pathname) ?? canonicalGamePath(pathname);
+  const auth = useAuth();
+  const initials = auth.status === 'authenticated' && auth.me ? playerInitials(auth.me.displayName) : '?';
   return <View style={styles.header}>
+    <View style={styles.headerRow}>
+      {light ? <BrandLockup light /> : <Pressable accessibilityRole="button" accessibilityLabel="GoBadminton — Игры" onPress={() => router.navigate('/games')} style={{ minWidth: 112, minHeight: 64 }}><BrandLockup /></Pressable>}
+      {!light && pathname !== '/profile' && <Pressable accessibilityRole="button" accessibilityLabel="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })}
+        style={styles.profileAction}>
+        <View style={styles.headerAvatar}><Label style={{ fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{initials}</Label></View>
+      </Pressable>}
+      {action}
+    </View>
     {back && <TextButton title="Назад" onPress={back} light={light} />}
-    <BrandLockup light={light} />
-    {!light && <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
-      {pathname !== '/city' && <TextButton title="Город" onPress={() => router.push('/city')} />}
-      {pathname !== '/profile' && <TextButton title="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })} />}
-    </View>}
-    {action}
   </View>;
+}
+/** Real create route; auth/typed return stays owned by the existing create screen. */
+export function DiscoveryCreateBanner({ onPress }: { onPress: () => void }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel="Создать игру. Соберите своих на площадке" onPress={onPress}
+    style={({ pressed }) => [styles.createBanner, pressed && { backgroundColor: colors.pressed }]}>
+    <View pointerEvents="none" style={{ position: 'absolute', right: -55, top: -65, opacity: 0.22 }}><CreateShape /></View>
+    <View accessible={false} style={styles.createPlus}><Label style={{ color: colors.onPurple, fontSize: 24, lineHeight: 32 }}>+</Label></View>
+    <View style={{ flex: 1, minWidth: 0 }}><Label style={{ fontSize: 18, lineHeight: 24, fontWeight: '700', color: colors.primaryLabel }}>Создать игру</Label>
+      <Label style={{ fontSize: 12, lineHeight: 17, color: '#426B2D' }}>Соберите своих на площадке</Label></View>
+    <DiscoveryArrow />
+  </Pressable>;
+}
+export function DiscoveryChip({ title, selected, onPress }: { title: string; selected: boolean; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress}
+    style={({ pressed }) => [styles.chip, { backgroundColor: selected ? colors.ink : pressed ? colors.paper : colors.card }]}>
+    <Label style={{ fontSize: 14, lineHeight: 20, color: selected ? colors.onPurple : colors.secondary }}>{title}</Label>
+  </Pressable>;
+}
+/** Native Modal consumes hardware Back before the route and isolates accessibility focus. */
+export function DiscoverySheet({ visible, title, onClose, returnFocusRef, children }: PropsWithChildren<{
+  visible: boolean; title: string; onClose: () => void; returnFocusRef: RefObject<View | null>;
+}>) {
+  const insets = useSafeAreaInsets();
+  const heading = useRef<Text>(null), wasOpen = useRef(false);
+  useEffect(() => {
+    if (!visible && wasOpen.current) {
+      const frame = requestAnimationFrame(() => {
+        returnFocusRef.current?.focus();
+        const node = findNodeHandle(returnFocusRef.current);
+        if (node) AccessibilityInfo.setAccessibilityFocus(node);
+      });
+      wasOpen.current = false;
+      return () => cancelAnimationFrame(frame);
+    }
+    wasOpen.current = visible;
+  }, [visible, returnFocusRef]);
+  if (!visible) return null;
+  return <Modal transparent visible animationType="none" onRequestClose={onClose}
+    onShow={() => { const node = findNodeHandle(heading.current); if (node) AccessibilityInfo.setAccessibilityFocus(node); }}>
+    <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: '#13221A8C', paddingTop: insets.top + 24, paddingLeft: insets.left, paddingRight: insets.right }}>
+      <View accessibilityViewIsModal onAccessibilityEscape={onClose} style={{ maxHeight: '100%', backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: insets.bottom }}>
+        <View style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: colors.line, gap: 8 }}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Закрыть: ${title}`} onPress={onClose} style={[styles.profileAction, { alignSelf: 'flex-end' }]}><DiscoveryIcon name="close" /></Pressable>
+          <Text ref={heading} accessibilityRole="header" allowFontScaling style={[styles.text, styles.subtitle]}>{title}</Text>
+        </View>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 16 }} style={{ flexShrink: 1 }}>
+          {children}
+        </ScrollView>
+      </View>
+    </View>
+  </Modal>;
 }
 export function TrajectoryArtwork({ diameter }: { diameter: number }) {
   if (diameter <= 0) return null;
@@ -115,9 +174,15 @@ export const styles = StyleSheet.create({
   brand: { flexDirection: 'row', alignItems: 'center', gap: 9, flexShrink: 1 },
   mark: { width: 47, height: 32, borderRadius: 6, overflow: 'hidden', backgroundColor: '#FFFFFF' },
   brandName: { fontFamily: 'Onest', fontSize: 17, lineHeight: 21, letterSpacing: -0.45, color: colors.ink },
-  header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  header: { gap: 4 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 64 },
+  profileAction: { ...interaction, alignItems: 'center', justifyContent: 'center' },
+  headerAvatar: { width: 40, height: 40, borderRadius: 20, borderWidth: 3, borderColor: colors.card, backgroundColor: colors.lime, alignItems: 'center', justifyContent: 'center' },
+  createBanner: { minHeight: 70, borderRadius: 12, paddingHorizontal: 18, paddingVertical: 9, backgroundColor: colors.lime, flexDirection: 'row', alignItems: 'center', gap: 14, overflow: 'hidden' },
+  createPlus: { width: 52, height: 52, borderRadius: 11, backgroundColor: colors.ink, justifyContent: 'center', alignItems: 'center' },
+  chip: { ...interaction, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: colors.line, justifyContent: 'center', alignItems: 'center' },
   textButton: { ...interaction, paddingHorizontal: 10, paddingVertical: 12, justifyContent: 'center', borderRadius: 12 },
-  chrome: { paddingHorizontal: 16, paddingVertical: 8, minHeight: 72, justifyContent: 'center', backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.line },
+  chrome: { paddingHorizontal: 16, paddingVertical: 4, minHeight: 72, justifyContent: 'center', backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.line },
   orbit: { position: 'absolute', borderWidth: 2, borderColor: '#E1D1FF' },
   card: { borderRadius: 18, padding: 18, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, gap: 12 },
   placeholder: { minHeight: 48, backgroundColor: colors.lavender, borderRadius: 12 },

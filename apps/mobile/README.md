@@ -1,3 +1,80 @@
+# #522 C1a · source candidate only · public APK HOLD
+
+Private export of the supplied venue ADDRESS2 base
+`3233531b96e5a410744b448acf41643d810042aa`; there is no accessible Git history
+here, so the export's base/new source SHA and current DEV receipt cannot be
+independently verified or minted by this author. The embedded Root admission
+and final design handoff PASS are supplied evidence, not a new source QA PASS.
+Final audit `1df25ab5…`, implementation cuts `4757b22b…`, independent design
+handoff `1264051c…` are the supplied design references; original receipt paths,
+RootACK and remaining null admission bindings must be verified by trusted parent.
+Actual WEB PNGs were not exported here; their embedded receipt and the final
+HTML/CSS specifications were available, with no new visual evidence claimed.
+
+C1a implements white Onest shell, real own-name initials/profile action, four-tab
+geometry, Games hero → equal city/When selectors → actual create banner →
+activity chips/compact filters → count/refresh/cards, and compact 46dp Players
+avatars/cards with real profile navigation. Games selected day/activity use the
+existing public query in the catalog city's timezone; filter changes get a fresh
+resource/cursor and existing generation fences. Refresh replaces populated data.
+Players areaKey reaches both existing public and native query ports; explicit
+reset clears city/name/area/looking/trainer, preserving separate identity scopes.
+
+The native filter Modal has explicit level choice, WEB skill copy/disclaimer,
+Back dismissal and trigger focus restoration wiring. Level filters only the loaded
+upcoming list using exact ntrp v1 membership, never profile prefill/write or a
+server level query. Raw pagination stays intact; counts show `+` for nextCursor
+and loaded totals when level is active, including zero-match paging/reset.
+Game roles remain separate factual trainer/organizer bands; available organizer
+media uses the existing URL policy. Reviews/history are explicitly unavailable,
+with no clickable placeholder, invented score or stock cover.
+
+Author checks: 128 named tests PASS, zero failures/skips/cancellations with Node
+24.21.0 `--experimental-strip-types --test --test-isolation=none` over
+`public-api`, `players`, `presentation`, `compact-layout`, `auth`, `contact`,
+`messages`, `safety`, `native-contract`, `upcoming` and `resource` test files.
+Eight focused additions cover normalization/membership, local zero/count/reset,
+city/DST boundaries, actual query mapping, cursor/generation/refresh, area mapping/
+reset/fencing and role facts. The required Header test still invokes the actual
+avatar handler and profile save/return; all original refusal/zero-write assertions
+remain. Earlier 56-test and final affected/readonly 72-test author runs also passed.
+Mobile/API typecheck and affected lint are BLOCKED: no node_modules/tsc/eslint;
+pnpm's Corepack shim attempted an unavailable pnpm download (EAI_AGAIN). No package
+was installed; no further download attempted. These are NOT typecheck/lint passes.
+
+VersionCode remains **8**, with app.json and native-contract.test.ts unchanged.
+C1b real shared maps/venue map, C1c unified Radar and C1d actual swipe/receipt-backed
+mutual match remain mandatory before a public repaired binary. No map/Radar/swipe
+placeholder control is exposed. Full profile/media, role reviews/history and all
+remaining accepted parity, native 360/390 ordinary/trainer/Players + long-text/
+fontScale/keyboard/Back/TalkBack evidence, independent QA, Product/security CI,
+DEV acceptance/smoke, signed OTA and iOS gates remain pending. APK7 Owner UAT
+**FAIL** is retained; this source candidate's native/UAT checks are **NOT_TESTED**.
+No provider, build, DB, push, merge, install, deploy or public APK action performed.
+
+Exact changed paths (16, within the 17-path allowlist):
+
+```text
+apps/mobile/src/theme.ts
+apps/mobile/src/components/ui.tsx
+apps/mobile/src/components/main-navigation.tsx
+apps/mobile/src/components/game-card.tsx
+apps/mobile/src/components/player-card.tsx
+apps/mobile/src/components/discovery-icon.tsx
+apps/mobile/app/games/index.tsx
+apps/mobile/app/players/index.tsx
+apps/mobile/src/public-api.ts
+apps/mobile/src/players.ts
+apps/mobile/src/presentation.ts
+apps/mobile/test/public-api.test.ts
+apps/mobile/test/players.test.ts
+apps/mobile/test/presentation.test.ts
+apps/mobile/test/auth.test.ts
+apps/mobile/README.md
+```
+
+All prior README content/history follows unchanged.
+
 # #522 native venue ADDRESS2 · SOURCE_CANDIDATE · PARTIAL
 
 Three-finding source repair on `7ca526e29678d36af09cbe88f73939d0914d3159`:

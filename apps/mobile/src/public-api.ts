@@ -2,6 +2,7 @@ import type { Venue } from './game-management.ts';
 import { parsePlayer, parsePlayerPage, playerQuery } from './players.ts';
 import type { PlayerFilters } from './players.ts';
 import type { Game } from '@gobadminton/contracts/game-types';
+import { futureDiscoveryBounds } from './presentation.ts';
 import { futureItems } from './upcoming.ts';
 import { isVenueId, parseVenue, venueScheduleQuery } from './venues.ts';
 import type { PublicVenue } from './venues.ts';
@@ -12,6 +13,10 @@ export type PublicGame = Pick<Game, 'id' | 'title' | 'status' | 'visibility' | '
   'capacity' | 'confirmedCount' | 'externalReservedCount' | 'availablePlaces' |
   'cover' | 'formatKey' | 'levelRule' | 'settlement' | 'activityKind' | 'trainer' | 'trainingDescription'>;
 export type City = { id: string; nameRu: string; nameEn: string; countryCode: string; defaultTimezone: string };
+export type GameFilters = { day?: string; timezone?: string; activityKind?: 'all' | 'regular' | 'trainer_led' };
+export function gamesResourceKey(cityId: string | null, filters: GameFilters = {}): string {
+  return JSON.stringify(['games', cityId, filters.day ?? '', filters.activityKind ?? 'all', filters.timezone ?? '']);
+}
 export type GamePage = { items: PublicGame[]; nextCursor: string | null };
 export const API_ORIGIN = 'https://dev.gobadminton.ru';
 export type FailureKind = 'network' | 'unavailable' | 'server' | 'invalid';
@@ -67,7 +72,7 @@ export function parseCities(value: unknown): City[] {
   if (!Array.isArray(items)) throw new PublicApiError('invalid');
   return items.map(item => {
     const row = object(item);
-    if (!strings(row, ['id', 'nameRu', 'nameEn', 'countryCode', 'defaultTimezone']) || !row.id) throw new PublicApiError('invalid');
+    if (!strings(row, ['id', 'nameRu', 'nameEn', 'countryCode', 'defaultTimezone']) || !row.id || !zone(row.defaultTimezone)) throw new PublicApiError('invalid');
     return row as City;
   });
 }
@@ -149,10 +154,14 @@ export function createPublicApi(fetcher: typeof fetch = fetch, now: () => number
       return { apiVersion: row.apiVersion };
     },
     async cities(signal?: AbortSignal) { return parseCities(await get('/cities', signal)); },
-    async games(cityId: string, cursor?: string, signal?: AbortSignal) {
+    async games(cityId: string, cursor?: string, signal?: AbortSignal, filters: GameFilters = {}) {
       if (!cityId.trim()) throw new PublicApiError('invalid');
-      const startsFrom = new Date(now()).toISOString();
-      const query = `cityId=${encodeURIComponent(cityId)}&limit=20&startsFrom=${encodeURIComponent(startsFrom)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      const day = filters.day ?? '';
+      if (day && (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(Date.parse(`${day}T00:00:00Z`))
+        || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day || !zone(filters.timezone))) throw new PublicApiError('invalid');
+      if (filters.activityKind && !['all', 'regular', 'trainer_led'].includes(filters.activityKind)) throw new PublicApiError('invalid');
+      const { startsFrom, startsBefore } = futureDiscoveryBounds(day, filters.timezone ?? 'UTC', now());
+      const query = `cityId=${encodeURIComponent(cityId)}&limit=20&startsFrom=${encodeURIComponent(startsFrom)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}${startsBefore ? `&startsBefore=${encodeURIComponent(startsBefore)}` : ''}${filters.activityKind && filters.activityKind !== 'all' ? `&activityKind=${filters.activityKind}` : ''}`;
       const page = parsePage(await get(`/games?${query}`, signal));
       // Receipt time is authoritative: a delayed response can already be past.
       return { ...page, items: futureItems(page.items, now()) };

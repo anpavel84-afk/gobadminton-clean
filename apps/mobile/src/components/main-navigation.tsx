@@ -44,19 +44,19 @@ export function MainNavigation({ children }: PropsWithChildren) {
     <View style={{ flex: 1 }}>{children}</View>
     {visible && <View accessibilityRole="tablist" accessibilityLabel="Основная навигация" style={{
       flexDirection: 'row', paddingLeft: insets.left + 4, paddingRight: insets.right + 4,
-      paddingBottom: insets.bottom + 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.line,
+      paddingBottom: insets.bottom + 5, paddingTop: 7, borderTopWidth: 1, borderTopColor: colors.line,
     }}>{MAIN_NAV_ITEMS.map(item => {
       const selected = item.path === '/my-games' && path.startsWith('/games/manage/') || item.path === '/games' && !path.startsWith('/games/manage/') && (path === item.path || path.startsWith(`${item.path}/`)) || item.path !== '/games' && (path === item.path || path.startsWith(`${item.path}/`));
       return <Pressable key={item.path} accessibilityRole="tab" accessibilityState={{ selected }}
         onPress={() => { if (path !== item.path) router.navigate(item.path); }}
-        style={({ pressed }) => ({ flex: 1, minWidth: 44, minHeight: 59, paddingHorizontal: 2, paddingVertical: 8, gap: 7,
+        style={({ pressed }) => ({ flex: 1, minWidth: 48, minHeight: 64, paddingHorizontal: 2, paddingVertical: 2, gap: 2,
           alignItems: 'center', justifyContent: 'center', borderRadius: 12,
           backgroundColor: pressed ? colors.paper : colors.card })}>
         <View style={{ padding: 4, borderRadius: 24, backgroundColor: selected ? colors.limeSoft : colors.card }}><Svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke={selected ? colors.ink : colors.secondary} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" accessible={false}>{icons[item.icon]}</Svg></View>
         {item.icon === 'messages' && state.actor && <View accessibilityLabel={count === null ? 'Количество сообщений загружается или недоступно' : `${count} требуют внимания`}
           style={{ position: 'absolute', top: 0, right: 6, minWidth: 20, minHeight: 20, borderRadius: 10, backgroundColor: count === null ? colors.paper : count > 0 ? colors.limeSoft : 'transparent' }}>
           <Label style={{ textAlign: 'center', fontSize: 12 }}>{count === null ? '…' : count > 99 ? '99+' : count > 0 ? count : ''}</Label></View>}
-        {selected && <View style={{ position: 'absolute',bottom: -3,width: 30,height: 3,borderRadius: 3,backgroundColor: '#74CE14' }} />}
+        {selected && <View style={{ position: 'absolute',bottom: 0,width: 30,height: 3,borderRadius: 3,backgroundColor: colors.limeDeep }} />}
         <Label style={{ fontSize: 12, lineHeight: 18, color: selected ? colors.ink : colors.secondary, textAlign: 'center', fontWeight: '500' }}>{item.label}</Label>
       </Pressable>;
     })}</View>}

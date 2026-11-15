@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
 import { runInNewContext } from 'node:vm';
+import { playerInitials } from '../src/presentation.ts';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
@@ -910,7 +911,7 @@ test('venue-create auth intent accepts only exact typed UUID route and survives 
 
 test('permanent Header profile action preserves only typed venue intent through real profile save and profile return handler', async t => {
   const header = readFileSync(new URL('../src/components/ui.tsx',import.meta.url),'utf8');
-  const handler = header.match(/title="Профиль" onPress=\{(.+)\} \/>/)![1];
+  const handler = header.match(/accessibilityLabel="Профиль" onPress=\{(.+)\}/)![1];
   const headerBody = header.slice(header.indexOf('export function Header('),header.indexOf('  return <View style={styles.header}>'))
     .replace('export function','function') + `  return (${handler});\n}`;
   const route = '/games/create/venue/11111111-1111-4111-8111-111111111111';
@@ -918,7 +919,7 @@ test('permanent Header profile action preserves only typed venue intent through 
     let destination: {pathname:string;params:{returnTo?:string}} | undefined;
     const render = runInNewContext(`(${stripTypeScriptTypes(headerBody)})`, {
       useRouter:() => ({push:(path: typeof destination) => { destination = path; }}),usePathname:() => pathname,
-      canonicalGamePath,canonicalVenueCreatePath,
+      canonicalGamePath,canonicalVenueCreatePath, useAuth: () => ({ status: 'authenticated', me }), playerInitials,
     }) as (props: object) => () => void;
     render({})(); return destination!;
   }
