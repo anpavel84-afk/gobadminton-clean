@@ -23,6 +23,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
   const actor = state.actor;
   const view = useRef(0);
   const [selecting, setSelecting] = useState(false);
+  // Blur/refocus fences local reads; returning to a mounted form must not reload or replace its draft.
   useFocusEffect(useCallback(() => { view.current++; setSelecting(false); return () => { view.current++; }; }, []));
   const [selectedIntent, setSelected] = useState<string | null>(null), [attemptedIntent, setAttempted] = useState<string | null>(null);
   const selectionKey = `${venueId}:${actor?.actorId}:${actor?.sessionId}:${actor?.generation}`;

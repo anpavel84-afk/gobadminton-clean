@@ -1,3 +1,23 @@
+# #522 native venue ADDRESS1 · SOURCE_CANDIDATE · PARTIAL
+
+Bounded cancellation repair on `e18d7dec9afba0a9687ce42890ce90dcef868216`.
+Venue context is read locally and committed only for the current actor/session/view,
+unchanged form/preview and latest selection. Leaving a pending selection preserves
+the mounted ordinary form's usable context, draft and preview without focus reload.
+Later edits, created references and immutable UNKNOWN packets remain protected;
+no automatic create/publish/reconcile or global city/preferences writes.
+
+Author offline: 30 owning unit checks completed; the final four focused regressions
+have zero failures/skips/cancellations and execute actual component hook wiring.
+A focused added check first failed on an incorrect published-state fixture expectation;
+its existing authoritative detail refresh returns draft v7. That assertion is corrected.
+Original normal source receipt `17617a1d…` / RootOBS `656cc0a6…` and manual P2 FAIL
+`a352e4e5…` are retained; that manual check is not independent QA. Original first
+parent and independent QA remain unrun; final cumulative review remains pending.
+Accepted DEV alpha.92 is unchanged. Source PARTIAL; S23 Owner FAIL retained;
+native visual NOT_VERIFIED; full parity, signed OTA and iOS remain unfinished.
+All prior README bytes/history follow unchanged.
+
 # #522 native venue detail/schedule · SOURCE_CANDIDATE · PARTIAL
 
 Based on actual accepted alpha.92 source `2a0b8207b8cc28d0e56a1ec5abecc604e934faed`.

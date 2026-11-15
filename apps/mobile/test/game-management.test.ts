@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
+import { stripTypeScriptTypes } from 'node:module';
+import { runInNewContext } from 'node:vm';
 import { GameManagementCoordinator, creationInput, emptyCreationForm, parseCreatorProfile, parsePreferences } from '../src/game-management.ts';
 import type { ManagementPort, ManagementPacket, Venue } from '../src/game-management.ts';
 import { ParticipationError } from '../src/participation.ts';
@@ -413,4 +415,129 @@ test('venue entry/selection cannot replace UNKNOWN or created reference and late
     pending.resolve({items:[venue],nextCursor:null}); assert.equal(await selected,false); assert.equal(s.sent.length,0);
     if (interruption === 'view') assert.deepEqual(s.owner.getSnapshot().form,before);
   }
+});
+
+
+// Execute the component's real pre-JSX hooks/handlers with retained hook slots and focus cleanup.
+// No React Native renderer is needed for this controlled lifecycle; UI rendering remains native QA.
+function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue) {
+  const source = readFileSync(new URL('../src/components/create-game.tsx',import.meta.url),'utf8');
+  const body = source.slice(source.indexOf('export function CreateGame('),source.indexOf('  const f = state.form;'))
+    .replace('export function','function') + '  return { selectVenue, selecting, selected };\n}';
+  type Slot = { value?: unknown; deps?: unknown[]; cleanup?: () => void };
+  const slots: Slot[] = []; let index = 0, focused = true;
+  let focusCallback: (() => () => void) | undefined, focusCleanup: (() => void) | undefined;
+  let effects: (() => void)[] = [];
+  const slot = () => slots[index++] ?? (slots[index - 1] = {});
+  const same = (a: unknown[] | undefined,b: unknown[]) => !!a && a.length === b.length && a.every((v,i) => Object.is(v,b[i]));
+  const component = runInNewContext(`(${stripTypeScriptTypes(body)})`, {
+    useAuth: () => ({gameManagement:owner,status:'authenticated',me:{id:actor.actorId}}),
+    useRouter: () => ({}), usePreferences: () => ({preferences:{cityId:'city-1'},hydrated:true}),
+    useSyncExternalStore: (_subscribe: unknown,getSnapshot: () => unknown) => getSnapshot(),
+    useRef: (value: unknown) => { const s = slot(); return s.value ?? (s.value = {current:value}); },
+    useState: (value: unknown) => { const s = slot(); if (!Object.hasOwn(s,'value')) s.value = value;
+      return [s.value,(next: unknown) => { s.value = next; }]; },
+    useCallback: (callback: unknown,deps: unknown[]) => { const s = slot();
+      if (!same(s.deps,deps)) { s.value = callback; s.deps = deps; } return s.value; },
+    useEffect: (callback: () => void | (() => void),deps: unknown[]) => { const s = slot();
+      if (!same(s.deps,deps)) { s.deps = deps; effects.push(() => { s.cleanup?.(); s.cleanup = callback() || undefined; }); } },
+    useFocusEffect: (callback: () => () => void) => {
+      if (focusCallback !== callback) { focusCallback = callback;
+        effects.push(() => { focusCleanup?.(); if (focused) focusCleanup = callback(); }); }
+    },
+    useResource: () => ({state:{status:'ready',data:target},retry:() => {}}),
+    publicApi: {}, venueCreatePath: (id: string) => `/games/create/venue/${id}`,
+  }) as (props: {venueId?: string}) => {selectVenue: () => Promise<void>; selecting: boolean; selected: boolean};
+  return {
+    render: () => { index = 0; const result = component({venueId:target?.id});
+      const pending = effects; effects = []; pending.forEach(effect => effect()); return result; },
+    blur: () => { focused = false; focusCleanup?.(); focusCleanup = undefined; },
+    focus: () => { focused = true; focusCleanup = focusCallback?.(); },
+  };
+}
+
+test('mounted ordinary ready form survives venue press, blur before catalog settles and return without a focus reload', async () => {
+  const next = {...venue,id:'another-venue',cityId:'another-city'};
+  const pending = deferred<{items:Venue[];nextCursor:null}>(), reached = deferred<boolean>();
+  let loads = 0; const loadsDone: Promise<void>[] = [];
+  const s = setup({venues:async city => {
+    if (city === next.cityId) { reached.resolve(true); return pending.promise; }
+    return {items:[venue],nextCursor:null};
+  }});
+  const load = s.owner.loadContext;
+  s.owner.loadContext = (...args) => { loads++; const work = load(...args); loadsDone.push(work); return work; };
+  const ordinary = mountedCreateGame(s.owner); ordinary.render(); await Promise.all(loadsDone);
+  s.owner.update(form); s.owner.preview(); const before = s.owner.getSnapshot();
+  assert.equal(before.context,'ready'); assert.ok(before.preview); ordinary.blur();
+  const contextual = mountedCreateGame(s.owner,next); const intent = contextual.render();
+  const work = intent.selectVenue(); await reached.promise;
+  // No shared loading/clearing even while the catalog read is genuinely pending.
+  assert.strictEqual(s.owner.getSnapshot(),before);
+  contextual.blur(); ordinary.focus(); ordinary.render();
+  assert.equal(loads,1); assert.strictEqual(s.owner.getSnapshot(),before);
+  pending.resolve({items:[next],nextCursor:null}); await work; ordinary.render();
+  assert.strictEqual(s.owner.getSnapshot(),before);
+  assert.equal(s.owner.getSnapshot().context,'ready'); assert.strictEqual(s.owner.getSnapshot().profile,before.profile);
+  assert.strictEqual(s.owner.getSnapshot().venues,before.venues); assert.strictEqual(s.owner.getSnapshot().form,before.form);
+  assert.strictEqual(s.owner.getSnapshot().preview,before.preview); assert.equal(s.owner.getSnapshot().creationReference,null);
+  assert.equal(loads,1); assert.equal(s.sent.length,0);
+  contextual.focus(); assert.equal(contextual.render().selected,false); assert.equal(s.sent.length,0);
+});
+
+test('cancelled contextual reads and failures at profile, preferences and catalog preserve the ready snapshot', async () => {
+  for (const stage of ['profile','preferences','venues'] as const) {
+    for (const fails of [false,true]) {
+      const pending = deferred<boolean>(), reached = deferred<boolean>(); let delay = false, visible = true;
+      const wait = async () => { if (delay) { reached.resolve(true); await pending.promise;
+        if (fails) throw new ParticipationError('network'); } };
+      const s = setup({profile:async () => { if (stage === 'profile') await wait(); return profile; },
+        preferences:async () => { if (stage === 'preferences') await wait(); return preferences; },
+        venues:async () => { if (stage === 'venues') await wait(); return {items:[venue],nextCursor:null}; }});
+      await preview(s.owner); const before = s.owner.getSnapshot(); delay = true;
+      const work = s.owner.selectVenue(venue,() => visible); await reached.promise;
+      visible = false; pending.resolve(true); assert.equal(await work,false);
+      assert.strictEqual(s.owner.getSnapshot(),before); assert.equal(s.sent.length,0);
+    }
+  }
+});
+
+test('pending venue selection cannot overwrite later edits, newer selection or another actor/session', async () => {
+  const next = {...venue,id:'next-venue',cityId:'next-city'}, newer = {...venue,id:'newer-venue',cityId:'newer-city'};
+  for (const change of ['edit','selection','logout','account','session','created'] as const) {
+    const pending = deferred<{items:Venue[];nextCursor:null}>(), reached = deferred<boolean>();
+    const s = setup({venues:async city => {
+      if (city === next.cityId) { reached.resolve(true); return pending.promise; }
+      return {items:city === newer.cityId ? [newer] : [venue],nextCursor:null};
+    }});
+    await preview(s.owner); const work = s.owner.selectVenue(next); await reached.promise;
+    if (change === 'edit') { s.owner.update({title:'Later title',contact:'@later',terms:'Later terms'}); s.owner.preview(); }
+    if (change === 'selection') assert.equal(await s.owner.selectVenue(newer),true);
+    if (change === 'logout') s.owner.forgetCreation();
+    if (change === 'account') s.owner.setActor({...actor,actorId:'other',generation:2});
+    if (change === 'session') s.owner.setActor({...actor,sessionId:'new-session',generation:2});
+    if (change === 'created') await s.owner.publishPreview();
+    const after = s.owner.getSnapshot(); pending.resolve({items:[next],nextCursor:null});
+    assert.equal(await work,false); assert.strictEqual(s.owner.getSnapshot(),after); assert.equal(s.sent.length,change === 'created' ? 2 : 0);
+    // The existing authoritative detail fixture returns draft v7 after the publish receipt.
+    if (change === 'created') { assert.equal(after.created?.status,'draft'); assert.deepEqual(after.creationReference,{id:g.id,version:7}); }
+    if (change === 'edit') { assert.equal(after.form.title,'Later title'); assert.equal(after.preview?.hostPublicContact,'@later'); }
+    if (change === 'selection') { assert.equal(after.cityId,newer.cityId); assert.equal(after.form.venueId,newer.id); }
+  }
+});
+
+test('UNKNOWN arising during local selection retains the strict same packet, key and body without resend', async () => {
+  const next = {...venue,id:'next-venue',cityId:'next-city'};
+  const pending = deferred<{items:Venue[];nextCursor:null}>(), reached = deferred<boolean>();
+  const s = setup({send:async () => { throw new ParticipationError('network'); },venues:async city => {
+    if (city === next.cityId) { reached.resolve(true); return pending.promise; }
+    return {items:[venue],nextCursor:null};
+  }});
+  await preview(s.owner); const work = s.owner.selectVenue(next); await reached.promise;
+  await s.owner.publishPreview(); const unknown = s.owner.getSnapshot(), packet = unknown.command!.packet;
+  assert.equal(unknown.command?.status,'unknown'); assert.strictEqual(packet,s.sent[0]);
+  pending.resolve({items:[next],nextCursor:null}); assert.equal(await work,false);
+  assert.strictEqual(s.owner.getSnapshot(),unknown); assert.strictEqual(s.owner.getSnapshot().command?.packet,packet);
+  assert.strictEqual(s.owner.getSnapshot().command?.packet.body,packet.body);
+  assert.equal(s.owner.getSnapshot().command?.packet.key,packet.key); assert.equal(s.sent.length,1);
+  assert.equal(await s.owner.selectVenue(next),false); assert.equal(s.sent.length,1);
 });

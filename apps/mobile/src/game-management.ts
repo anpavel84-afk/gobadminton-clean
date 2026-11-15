@@ -106,6 +106,30 @@ export class GameManagementCoordinator {
     if (Object.hasOwn(patch,'contact')) this.contactEdited = true;
     this.show({ form: { ...this.state.form,...patch }, preview: null, notice: undefined });
   };
+  /** Read locally: a contextual route must not clear the mounted ordinary form while awaiting I/O. */
+  private async readContext(cityId: string | null, valid: () => boolean) {
+    const setup = { context: 'setup' as const, cityId, profile: null as CreatorProfile | null,
+      preferences: null, trainer: null, venues: [] as Venue[] };
+    let profile: CreatorProfile;
+    try { profile = await this.port.profile(); }
+    catch (e) { if (e instanceof ParticipationError && e.status === 404) return valid() ? setup : null; throw e; }
+    if (!valid()) return null;
+    if (!profile.cityId || !profile.displayName.trim() || !cityId) return { ...setup, profile };
+    const preferences = await this.port.preferences(); if (!valid()) return null;
+    let trainer: OwnTrainer | null = null;
+    if (profile.trainer) {
+      try { trainer = await this.port.trainer(); } catch (e) { if (!(e instanceof ParticipationError && e.status === 404)) throw e; }
+      if (!valid()) return null;
+      if (trainer?.status !== 'active') trainer = null;
+    }
+    const venues: Venue[] = [], seen = new Set<string>(); let cursor: string | undefined;
+    do { const page = await this.port.venues(cityId,cursor); if (!valid()) return null;
+      if (page.items.some(v => v.cityId !== cityId)) throw new ParticipationError('invalid');
+      venues.push(...page.items); if (page.nextCursor && seen.has(page.nextCursor)) throw new ParticipationError('invalid');
+      if (page.nextCursor) seen.add(page.nextCursor); cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return { context: 'ready' as const, cityId, profile, preferences, trainer, venues };
+  }
   loadContext = async (cityId: string | null, options?: { preserveForm?: boolean; current?: () => boolean }) => {
     const actor = this.state.actor, serial = ++this.contextRead;
     if (!actor) return;
@@ -114,43 +138,36 @@ export class GameManagementCoordinator {
     this.show({ context: 'loading', profile: null, trainer: null, preferences: null, venues: [], cityId,
       ...(changed && !options?.preserveForm && !this.locked() && !this.state.creationReference ? { form: { ...this.state.form, venueId: '' }, preview: null } : {}) });
     try {
-      let profile: CreatorProfile;
-      try { profile = await this.port.profile(); }
-      catch (e) { if (e instanceof ParticipationError && e.status === 404) { if (valid()) this.show({ context: 'setup' }); return; } throw e; }
-      if (!valid()) return;
-      if (!profile.cityId || !profile.displayName.trim() || !cityId) { this.show({ profile, context: 'setup', ...(!options?.preserveForm ? { preview: null } : {}) }); return; }
-      const preferences = await this.port.preferences(); if (!valid()) return;
-      let trainer: OwnTrainer | null = null;
-      if (profile.trainer) {
-        try { trainer = await this.port.trainer(); } catch (e) { if (!(e instanceof ParticipationError && e.status === 404)) throw e; }
-        if (!valid()) return;
-        if (trainer?.status !== 'active') trainer = null;
-      }
-      const venues: Venue[] = [], seen = new Set<string>(); let cursor: string | undefined;
-      do { const page = await this.port.venues(cityId,cursor); if (!valid()) return;
-        if (page.items.some(v => v.cityId !== cityId)) throw new ParticipationError('invalid');
-        venues.push(...page.items); if (page.nextCursor && seen.has(page.nextCursor)) throw new ParticipationError('invalid');
-        if (page.nextCursor) seen.add(page.nextCursor); cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-      this.show({ context: 'ready', profile, preferences, trainer, venues,
+      const context = await this.readContext(cityId, valid);
+      if (!context || !valid()) return;
+      if (context.context === 'setup') { this.show({ ...context, ...(!options?.preserveForm ? { preview: null } : {}) }); return; }
+      this.show({ ...context,
         form: { ...this.state.form,
-          ...(!options?.preserveForm && !this.contactEdited && !this.locked() && !this.state.creationReference ? { contact: preferences.defaultPublicGameContact ?? '' } : {}),
-          ...(!options?.preserveForm && !trainer && !this.locked() && !this.state.creationReference ? { activity: 'regular' as const } : {}) },
+          ...(!options?.preserveForm && !this.contactEdited && !this.locked() && !this.state.creationReference ? { contact: context.preferences.defaultPublicGameContact ?? '' } : {}),
+          ...(!options?.preserveForm && !context.trainer && !this.locked() && !this.state.creationReference ? { activity: 'regular' as const } : {}) },
         ...(!options?.preserveForm && !this.locked() && !this.state.creationReference ? { preview: null } : {}) });
     } catch { if (valid()) this.show({ context: 'error', venues: [], profile: null, preferences: null, trainer: null }); }
   };
   /** Only an explicit press may switch local creation city/venue. Catalog remains authoritative. */
   selectVenue = async (venue: Venue, current: () => boolean = () => true) => {
-    const actor = this.state.actor;
+    const actor = this.state.actor, form = this.state.form, preview = this.state.preview;
     if (!actor || this.locked() || this.state.creationReference || !current()) return false;
-    const read = this.contextRead + 1;
-    await this.loadContext(venue.cityId, { preserveForm: true, current });
-    if (read !== this.contextRead || !this.current(actor) || !current() || this.locked() || this.state.creationReference || this.state.context !== 'ready' || this.state.cityId !== venue.cityId) return false;
-    const actual = this.state.venues.find(v => v.id === venue.id && v.cityId === venue.cityId && v.timezone === venue.timezone);
-    if (!actual) { this.show({ context: 'error', notice: 'Площадка или её часовой пояс не подтверждены текущим каталогом. Выбор не изменён.' }); return false; }
-    this.update({ venueId: actual.id });
-    this.show({ notice: `Выбрана площадка: ${actual.name} · ${actual.timezone}. Проверьте дату, время и условия заново.` });
-    return true;
+    const serial = ++this.contextRead;
+    const valid = () => serial === this.contextRead && this.current(actor) && current() && !this.locked() &&
+      !this.state.creationReference && this.state.form === form && this.state.preview === preview;
+    try {
+      const context = await this.readContext(venue.cityId, valid);
+      if (!context || !valid()) return false;
+      if (context.context === 'setup') { this.show(context); return false; }
+      const actual = context.venues.find(v => v.id === venue.id && v.cityId === venue.cityId && v.timezone === venue.timezone);
+      if (!actual) { this.show({ context: 'error', notice: 'Площадка или её часовой пояс не подтверждены текущим каталогом. Выбор не изменён.' }); return false; }
+      this.show({ ...context, form: { ...form, venueId: actual.id }, preview: null,
+        notice: `Выбрана площадка: ${actual.name} · ${actual.timezone}. Проверьте дату, время и условия заново.` });
+      return true;
+    } catch {
+      if (valid()) this.show({ context: 'error', notice: 'Не удалось проверить профиль, настройки или каталог площадок. Прежняя форма сохранена.' });
+      return false;
+    }
   };
   preview = () => {
     if (this.locked() || this.state.creationReference || this.state.context !== 'ready' || !this.state.profile || !this.state.cityId) return;
