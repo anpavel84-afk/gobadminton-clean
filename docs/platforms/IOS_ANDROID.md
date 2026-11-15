@@ -7,8 +7,10 @@
 Onest, black-on-green, safe edges и масштабирование текста сохранены. Это factual reconciliation текущих
 исходников, а не новая архитектура и не доказательство физической приёмки.
 
-Текущее состояние по предоставленным qualified inputs для alpha.94; новый DEV release, подпись и
-публикация native code9 этим metadata-изменением не подтверждаются. Native runtime source остаётся
+Текущее состояние по предоставленным qualified inputs для alpha.94 и позднейшему sanitized Root summary
+`ACTUAL-ROOT-OWNED-CODE9-SIGN-SUMMARY.json` (SHA256 `8994db8668ecd7dedf4953c72a45a0e091a463000e1928130f7887bb719a7cbf`): owned-sign code9 подтверждена.
+Новый DEV alpha.94 **NOT_ACCEPTED_YET**, APK9 **NOT_PUBLISHED**; подпись не доказывает публикацию, Owner UAT,
+device/login/verified links или продуктовую приёмку. Native runtime source остаётся
 `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`; будущий metadata source/merge и принятый серверный SHA — отдельные факты.
 Приложение `0.1.0-alpha.94` подготовлено как описание функций, API-контракт остаётся `0.44.0`.
 
@@ -18,7 +20,7 @@ Onest, black-on-green, safe edges и масштабирование текста
 | Два развёртывания alpha.93 | Сначала `f145863cdd098b016bdd1ae2fbbb8520fd71d83b` / `r43707786262-a1` / `2026-11-15T11:26:35Z`, затем `12b5024ae2fb47f5bc8ef3bd755aba24d9bbc8a6` / `r43712227701-a1` / `2026-11-15T12:21:01Z`. Первый STRICT39461 завершился FAIL из-за DOC alias; исправление и второе развёртывание сохранены в истории, первый FAIL не переименован в PASS |
 | Native normal23 source / static | `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionName `0.1.0`, versionCode **9**. Supplied static parent PASS: typecheck, changed-mobile lint, meaningful units, оба exports, неизменность source/archive; parent SHA256 `79810e52e583d557dc8dee53d18c3a9a0a1d0fb042cdf174c6e44283505615f6` |
 | Независимая source QA | Normal23 focused P2/all-delta PASS без findings, receipt SHA256 `fcf173047e7990f7d717764721c88f22c5c9327d45847ecbd874a1d47edb1c8c`. Предыдущий normal22 full review на `859afdc176f08d81c3540ceae77d956bfac537d5` сохраняет raw CHANGES_REQUIRED / protocol-invalid verdict, не PASS; Root disposition SHA256 `235a899f29b9ebed51abe16ad609b82b2aabfe879f22f41deac7a12e1b0b171f` |
-| Android code9 build | Предоставлен actual standalone build PASS receipt `NATIVE522-NORMAL23-CODE9-ANDROID-STANDALONE-BUILD.json`, SHA256 `803d1709e4c55ee8d44cf9ffdddb95dc75cfb6a04614058d834cbd366c4b7c66`. Это digest квитанции, не APK; owned-sign proof отсутствует (`owned_sign_sha256: null`), подписанная публикация code9 не подтверждена |
+| Android code9 build / owned-sign | Предоставлен actual standalone build PASS receipt `NATIVE522-NORMAL23-CODE9-ANDROID-STANDALONE-BUILD.json`, SHA256 `803d1709e4c55ee8d44cf9ffdddb95dc75cfb6a04614058d834cbd366c4b7c66`. Это digest квитанции, не APK. Позднейший actual trusted Root signed receipt SHA256 `6e6eda5571fe7cad4d4ca1d5ba0684a4e6378d8b019699be59466dc70f3d6874` подтверждает owned certificate SHA256 `5208faba0b474c6c94e4c237cbc345a10c7d3d0f5b3eb285ac8e271f9bd8c051`, signature v2 и payload byte-equal qualified build для native source `a44cd7b22259f61ed1dd31ddeb07224f60fb609d`, versionName `0.1.0`, versionCode **9**. Подписанный непубличный APK: SHA256 `68d4fbbddb3004e51eca05c617e0600623bf36e07fba79f7272faa93dae8b155`, **44751369 bytes**, package `ru.gobadminton.mobile.dev`, `arm64-v8a`; APK9 **NOT_PUBLISHED**. Историческое `owned_sign_sha256: null` в initial qualified inputs остаётся неизменным |
 | Публичный APK сейчас | **APK8** остаётся фактически опубликованным. Build code9 не заменяет APK8; нового публичного URL, digest артефакта или даты публикации code9 не заявлено. APK7 ниже сохранён как историческое evidence |
 | Backend native opt-ins | В source адресно подготовлены ещё **8** bearer API routes для MyGames/Postgame. Общий установленный inventory **22** допустимо фиксировать только после фактического нового DEV acceptance; сейчас это не факт установки. Права, версии, idempotency и WEB cookie-поведение сохраняются |
 | Устройства / приёмка | Physical Android / Samsung S23 **NOT_TESTED**, native visual **NOT_VERIFIED**; исторический S23 FAIL и Owner UAT **FAIL_RECHECK_PENDING** сохранены. Source QA и build не доказывают taps, вход, verified links или установленный authenticated journey |
