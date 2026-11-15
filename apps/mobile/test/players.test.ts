@@ -209,6 +209,56 @@ test('fresh detail after 404 does not authorize pre-404 catalog projection; B/C 
   assert.equal(recovered.find(p => p.publicPlayerId === 'peer-a')?.canRequestContact, false);
 });
 
+test('A404 then fresh page then B404 recovers updatedA and excludes staleB without conflating peer cutoffs', async () => {
+  const c = new PlayersCoordinator(), fresh = deferred<PlayerPage>();
+  let listCalls = 0;
+  const key = playerFilterKey(filters);
+  c.setScope('guest', {
+    list: async () => {
+      listCalls++;
+      if (listCalls === 1) {
+        return {
+          items: [
+            { ...player, publicPlayerId: 'peer-a', canRequestContact: true },
+            { ...player, publicPlayerId: 'peer-b', canRequestContact: true },
+            { ...player, publicPlayerId: 'peer-c' },
+          ],
+          nextCursor: 'cursor-initial',
+        };
+      }
+      return fresh.promise;
+    },
+    detail: async id => { throw new PlayersError('unavailable', 404); },
+  });
+  await c.loadList(filters);
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-a', 'peer-b', 'peer-c']);
+  await c.loadDetail('peer-a');
+  assert.deepEqual(c.getSnapshot().list.data?.items.map(p => p.publicPlayerId), ['peer-b', 'peer-c']);
+  const pendingFresh = c.loadList(filters);
+  await c.loadDetail('peer-b');
+  assert.equal(c.getSnapshot().list.status, 'loading');
+  assert.equal(c.getSnapshot().list.key, key);
+  fresh.resolve({
+    items: [
+      { ...player, publicPlayerId: 'peer-a', canRequestContact: false },
+      { ...player, publicPlayerId: 'peer-b', canRequestContact: true },
+      { ...player, publicPlayerId: 'peer-c' },
+      { ...player, publicPlayerId: 'peer-d' },
+    ],
+    nextCursor: 'cursor-fresh',
+  });
+  await pendingFresh;
+  const rows = c.getSnapshot().list.data?.items ?? [];
+  assert.deepEqual(rows.map(p => p.publicPlayerId), ['peer-a', 'peer-c', 'peer-d']);
+  assert.equal(rows.find(p => p.publicPlayerId === 'peer-a')?.canRequestContact, false);
+  assert.equal(rows.find(p => p.publicPlayerId === 'peer-b'), undefined);
+  assert.equal(c.getSnapshot().list.key, key);
+  assert.equal(c.getSnapshot().list.data?.nextCursor, 'cursor-fresh');
+  assert.equal(c.getSnapshot().list.status, 'ready');
+  assert.equal(c.getSnapshot().list.loadingMore, false);
+  assert.equal(c.getSnapshot().list.error, null);
+});
+
 test('multi-peer pre-404 pages keep unrelated rows; late 404 and actor success stay fenced after fresh detail', async () => {
   const c = new PlayersCoordinator(), more = deferred<PlayerPage>(), late404 = deferred<PublicPlayer>();
   let detailCalls = 0;

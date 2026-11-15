@@ -83,17 +83,14 @@ export class PlayersCoordinator {
   private generation = 0;
   private listSequence = 0;
   private detailSequence = 0;
-  /** Peer IDs removed by authoritative detail 404; cleared on scope change and list-endpoint 404. */
-  private unavailablePeerIds = new Set<string>();
-  /** In-flight list/page sequences at or below this must drop unavailable peers; newer fresh reads may recover. */
-  private unavailableBeforeListSequence = 0;
+  /** Peer ID → listSequence at authoritative detail 404; cleared on scope change and list-endpoint 404. */
+  private unavailablePeers = new Map<string, number>();
   private listeners = new Set<() => void>();
   getSnapshot = () => this.snapshot;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   private show(snapshot: PlayersSnapshot) { this.snapshot = snapshot; this.listeners.forEach(fn => fn()); }
   private clearPeerInvalidation() {
-    this.unavailablePeerIds = new Set();
-    this.unavailableBeforeListSequence = 0;
+    this.unavailablePeers = new Map();
   }
   setScope(scope: string | null, reader: Reader | null) {
     if (scope === this.snapshot.scope) return;
@@ -101,14 +98,17 @@ export class PlayersCoordinator {
     this.clearPeerInvalidation();
     this.generation++; this.reader = reader; this.show(empty(scope));
   }
-  /** Drop unavailable peers from responses at/before invalidation; only fresher catalog sequences may recover by authority. Detail success does not clear tombstones. */
+  /** Drop peers whose invalidation sequence is at/after this request; only a newer sequence may recover that peer. Detail success does not clear tombstones. */
   private applyPeerInvalidation(page: PlayerPage, sequence: number): PlayerPage {
-    if (this.unavailablePeerIds.size === 0) return page;
-    if (sequence > this.unavailableBeforeListSequence) {
-      for (const row of page.items) this.unavailablePeerIds.delete(row.publicPlayerId);
-      return page;
+    if (this.unavailablePeers.size === 0) return page;
+    const items: PublicPlayer[] = [];
+    for (const row of page.items) {
+      const invalidatedAt = this.unavailablePeers.get(row.publicPlayerId);
+      if (invalidatedAt !== undefined && sequence <= invalidatedAt) continue;
+      if (invalidatedAt !== undefined) this.unavailablePeers.delete(row.publicPlayerId);
+      items.push(row);
     }
-    return { items: page.items.filter(row => !this.unavailablePeerIds.has(row.publicPlayerId)), nextCursor: page.nextCursor };
+    return { items, nextCursor: page.nextCursor };
   }
   loadList = async (filters: PlayerFilters, cursor?: string) => {
     const reader = this.reader, generation = this.generation, key = playerFilterKey(filters), old = this.snapshot.list;
@@ -155,8 +155,7 @@ export class PlayersCoordinator {
   };
   /** Narrow detail-404: drop only that peer from accepted catalog; keep key/rows/cursor/paging and in-flight list sequences. */
   private invalidatePeer(id: string, error: unknown) {
-    this.unavailablePeerIds.add(id);
-    this.unavailableBeforeListSequence = Math.max(this.unavailableBeforeListSequence, this.listSequence);
+    this.unavailablePeers.set(id, this.listSequence);
     const list = this.snapshot.list;
     const data = list.data
       ? { items: list.data.items.filter(row => row.publicPlayerId !== id), nextCursor: list.data.nextCursor }
