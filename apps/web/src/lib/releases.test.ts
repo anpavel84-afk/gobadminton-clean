@@ -63,11 +63,11 @@ describe("releases current descriptor literals", () => {
     expect(CURRENT_NAMED_RELEASE.title).toBe("Мобильное приложение: открытие метки на карте");
     expect(CURRENT_NAMED_RELEASE.additions).toEqual([]);
     expect(CURRENT_NAMED_RELEASE.fixes).toEqual([
-      "На карте нажатие на метку публичной игры или площадки открывает карточку выбранного объекта. Используется одна согласованная обработка нажатия с учётом текущей закрытой площадки.",
+      "Исправлена обработка нажатий на метки площадок на карте.",
     ]);
     const delta = [...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes].join(" ");
-    expect(delta).toMatch(/нажатие на метку.*открывает карточку.*одна согласованная обработка.*текущей закрытой площадки/);
-    expect(delta).not.toMatch(/venue.?community|сообществ[ао] площадк|opt-?in|DB4|224/i);
+    expect(delta).toBe("Исправлена обработка нажатий на метки площадок на карте.");
+    expect(delta).not.toMatch(/текущей закрытой площадки|метку публичной игры|venue.?community|сообществ[ао] площадк|opt-?in|DB4|224/i);
     const limits = CURRENT_NAMED_RELEASE.known_limitations.join(" ");
     expect(limits).toMatch(/Исправление открытия метки на карте подготовлено в исходном коде.*повторная проверка на физическом телефоне.*ещё не выполнена/);
     expect(limits).toMatch(/Причина сбоя просмотра игроков двумя жестами не подтверждена.*исправление не входит/);
@@ -519,7 +519,7 @@ describe("releases current descriptor literals", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-26).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-27).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
       "0.1.0-alpha.86",
@@ -530,6 +530,7 @@ describe("releases current descriptor literals", () => {
       "0.1.0-alpha.91",
       "0.1.0-alpha.92",
       "0.1.0-alpha.93",
+      "0.1.0-alpha.94",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -574,7 +575,7 @@ describe("releases current descriptor literals", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-25).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-26).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
       "0.1.0-alpha.86",
@@ -585,6 +586,7 @@ describe("releases current descriptor literals", () => {
       "0.1.0-alpha.91",
       "0.1.0-alpha.92",
       "0.1.0-alpha.93",
+      "0.1.0-alpha.94",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
@@ -622,7 +624,7 @@ describe("releases current descriptor literals", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-25).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-26).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
       "0.1.0-alpha.86",
@@ -633,6 +635,7 @@ describe("releases current descriptor literals", () => {
       "0.1.0-alpha.91",
       "0.1.0-alpha.92",
       "0.1.0-alpha.93",
+      "0.1.0-alpha.94",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
     expect(row.additions).toHaveLength(0);

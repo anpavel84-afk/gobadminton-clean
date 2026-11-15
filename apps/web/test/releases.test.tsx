@@ -222,7 +222,7 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.68")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-26).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-27).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.68", "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
       "0.1.0-alpha.86",
@@ -233,6 +233,7 @@ describe("releases catalogue integrity", () => {
       "0.1.0-alpha.91",
       "0.1.0-alpha.92",
       "0.1.0-alpha.93",
+      "0.1.0-alpha.94",
     ]);
     expect(row.title).toBe("Компактные фильтры на экране «Игры»");
     expect(row.additions).toHaveLength(0);
@@ -277,7 +278,7 @@ describe("releases catalogue integrity", () => {
     });
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.69")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-25).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-26).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
       "0.1.0-alpha.86",
@@ -288,6 +289,7 @@ describe("releases catalogue integrity", () => {
       "0.1.0-alpha.91",
       "0.1.0-alpha.92",
       "0.1.0-alpha.93",
+      "0.1.0-alpha.94",
     ]);
     expect(row.title).toBe("Оценки, обсуждение и отзывы в карточке площадки на карте");
     expect(row.additions).toHaveLength(0);
@@ -325,7 +327,7 @@ describe("releases catalogue integrity", () => {
     }]);
     const previous = TRUSTED_HISTORICAL_SEED.find((item) => item.application_version === "0.1.0-alpha.70")!;
     expect(Date.parse(row.deployments[0]!.accepted_at)).toBeGreaterThan(Date.parse(previous.deployments[0]!.accepted_at));
-    expect(TRUSTED_HISTORICAL_SEED.slice(-25).map((item) => item.application_version)).toEqual([
+    expect(TRUSTED_HISTORICAL_SEED.slice(-26).map((item) => item.application_version)).toEqual([
       "0.1.0-alpha.69", "0.1.0-alpha.70", "0.1.0-alpha.71", "0.1.0-alpha.72", "0.1.0-alpha.73", "0.1.0-alpha.74", "0.1.0-alpha.75", "0.1.0-alpha.76", "0.1.0-alpha.77", "0.1.0-alpha.78", "0.1.0-alpha.79", "0.1.0-alpha.80", "0.1.0-alpha.81", "0.1.0-alpha.82", "0.1.0-alpha.83", "0.1.0-alpha.84",
       "0.1.0-alpha.85",
       "0.1.0-alpha.86",
@@ -336,6 +338,7 @@ describe("releases catalogue integrity", () => {
       "0.1.0-alpha.91",
       "0.1.0-alpha.92",
       "0.1.0-alpha.93",
+      "0.1.0-alpha.94",
     ]);
     expect(row.title).toBe("Поиск участников Radar и отображение фильтров игр");
     expect(row.additions).toHaveLength(0);
@@ -2176,9 +2179,10 @@ describe("releases page current known limitations SSR (#473)", () => {
     expect(html).toContain("реальным аккаунтом");
     expect(html).toContain("390 и 1280");
     expect(html).toContain("ещё не выполнена");
-    expect(html).not.toContain("На карте");
+    expect(html).not.toContain("Единая кнопка «На карте»");
     expect(html).not.toContain("сложенной карты");
     expect(html).not.toContain("унифицированы кнопки действий");
+    expect(CURRENT_NAMED_RELEASE.fixes.join(" ")).not.toMatch(/Единая кнопка «На карте»|сложенной карты|унифицированы кнопки действий/);
     expect(html).not.toContain("не компоновка целиком");
     expect(html).not.toContain("не требует подтверждать её самому себе");
     expect(html).not.toContain("не разрывается внутри слова");
@@ -2194,6 +2198,13 @@ describe("releases page current known limitations SSR (#473)", () => {
   });
 
   it("keeps accepted alpha.94 history distinct from current alpha.95 marker-tap notes", async () => {
+    const { buildHistoryRows } = await import("../src/lib/releases-server");
+    const history = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
+    loadReleasesPageModelMock.mockResolvedValue({
+      build: { applicationVersion: CURRENT_APPLICATION_VERSION, gitSha: "unknown" },
+      named: { ...CURRENT_NAMED_RELEASE, source_sha: null },
+      environments: [], history, checkedAt: "2026-11-15T16:48:11Z",
+    });
     const ReleasesPage = (await import("../src/app/releases/page")).default;
     const html = renderToStaticMarkup(await ReleasesPage());
     const document = new DOMParser().parseFromString(html, "text/html");
@@ -2202,12 +2213,14 @@ describe("releases page current known limitations SSR (#473)", () => {
     expect(CURRENT_APPLICATION_VERSION).toBe("0.1.0-alpha.95");
     expect(current.textContent).toContain("0.1.0-alpha.95");
     expect(current.textContent).toContain("открытие метки на карте");
+    expect(current.textContent).toContain("Исправлена обработка нажатий на метки площадок на карте.");
     expect(current.textContent).not.toContain(alpha94.title);
     for (const note of [...alpha94.additions, ...alpha94.fixes]) {
       expect(current.textContent).not.toContain(note);
     }
-    const rows = [...document.querySelectorAll(".gb-releases-history > li")];
-    const alpha94Rows = rows.filter(item => item.querySelector("strong")?.textContent === "0.1.0-alpha.94");
+    const historySection = document.querySelector("[aria-labelledby='releases-history']")!;
+    const rows = [...historySection.querySelectorAll(".gb-releases-history > li")];
+    const alpha94Rows = rows.filter(item => item.querySelector(".gb-releases-history-head strong")?.textContent === "0.1.0-alpha.94");
     expect(alpha94Rows).toHaveLength(1);
     expect(alpha94Rows[0]?.querySelector("details")?.textContent).toContain("r43736231808-a1");
     expect(alpha94Rows[0]?.textContent).toContain(alpha94.title);
