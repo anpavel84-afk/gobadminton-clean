@@ -276,6 +276,117 @@ test('expanded detail rejects selection retirement, scope generation changes and
   assert.equal(f.commands.filter(command=>command.kind==='start').length,1);
 });
 
+// Execute the actual native close handler against the real coordinator; no native render claim.
+async function nativeClose(owner: RadarCoordinator) {
+  const {controls,stripTypeScriptTypes,runInNewContext}=await uiFunctions();
+  const start=controls.indexOf('  const close ='),end=controls.indexOf('  return <>',start);
+  assert.ok(start>=0 && end>start);
+  assert.match(controls,/<Modal visible=\{open\} onRequestClose=\{close\}/);
+  assert.match(controls,/<TextButton title="Закрыть" onPress=\{close\}/);
+  let open=true,accepted=true;
+  const close=runInNewContext(stripTypeScriptTypes(controls.slice(start,end)+'\nclose;'),{
+    owner,state:owner.getSnapshot(),setOpen:(value:boolean)=>{open=value;},setAccepted:(value:boolean)=>{accepted=value;},
+  }) as ()=>void;
+  close();assert.equal(open,false);assert.equal(accepted,false);
+}
+
+test('actual native close cancels deferred start into safety DELETE; only cleanup ACK confirms off and fresh consent permits enable',async t=>{
+  const f=fixture();t.after(f.owner.dispose);
+  const startAck=deferred<unknown>(),stopAck=deferred<unknown>();
+  f.send(p=>p.kind==='start'?startAck.promise:stopAck.promise);
+  const work=f.start();await flush();
+  const original=f.owner.getSnapshot().command!,bytes=JSON.stringify(original);
+  assert.equal(original.kind,'start');assert.equal(f.owner.getSnapshot().enabling,true);
+  assert.ok(Object.isFrozen(original));assert.ok(Object.isFrozen(original.actor));
+  if(original.kind==='start'){assert.ok(Object.isFrozen(original.body));assert.ok(Object.isFrozen(original.body.consent));}
+  const phaseIndex=f.phases.length;
+  await nativeClose(f.owner);await flush();
+  assert.strictEqual(f.owner.getSnapshot().command,original);assert.equal(f.owner.getSnapshot().phase,'unknown');
+  assert.match(f.owner.getSnapshot().notice!,/ожидает подтверждения/);
+  assert.equal(f.owner.getSnapshot().enabling,false);assert.equal(f.commands.length,1);
+  startAck.resolve(f.activation());await flush();
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop']);
+  const cleanup=f.commands[1]!;
+  assert.deepEqual(cleanup,{kind:'stop',actor,key:'key-2',activationId:'activation'});
+  assert.ok(Object.isFrozen(cleanup));assert.ok(Object.isFrozen(cleanup.actor));
+  assert.equal(f.owner.getSnapshot().command,null);assert.equal(f.owner.getSnapshot().activation?.state,'active');
+  assert.equal(f.owner.getSnapshot().phase,'unknown');assert.match(f.owner.getSnapshot().notice!,/ожидает подтверждения/);
+  assert.equal(f.phases.slice(phaseIndex).includes('off'),false);
+  assert.equal(f.owner.getSnapshot().pins.length,0);assert.equal(f.owner.getSnapshot().rows.length,0);assert.equal(f.owner.getSnapshot().query,null);
+  await f.owner.enable(DISCLOSURE_HASH);await f.owner.query();await f.owner.map();await f.owner.tick();
+  assert.equal(f.commands.length,2);assert.equal(f.reads.filter(op=>op.kind==='query'||op.kind==='map').length,0);
+  f.current({state:'off',ownerHere:false});stopAck.resolve({state:'off',ownerHere:false});await work;
+  assert.equal(f.owner.getSnapshot().phase,'off');assert.equal(f.owner.getSnapshot().activation?.state,'off');
+  assert.equal(f.owner.getSnapshot().command,null);assert.equal(f.owner.getSnapshot().notice,null);
+  await f.owner.restore();await f.owner.enable(DISCLOSURE_HASH);assert.equal(f.commands.length,2);
+  await f.owner.consent();assert.equal(f.owner.getSnapshot().phase,'consent');
+  f.send(async()=>f.activation());await f.owner.enable(DISCLOSURE_HASH);
+  assert.equal(f.owner.getSnapshot().phase,'ready');assert.equal(f.commands.length,3);
+  assert.equal(f.commands[2]!.kind,'start');assert.notEqual(f.commands[2]!.key,original.key);
+  assert.equal(f.commands.filter(p=>p===original).length,1);assert.equal(JSON.stringify(original),bytes);
+  assert.ok(f.readActors.every(a=>JSON.stringify(a)===JSON.stringify(actor)));
+});
+
+test('cancel of owned publication clears real private context immediately; failed cleanup retries the exact frozen DELETE',async t=>{
+  const f=fixture();t.after(f.owner.dispose);await f.start();await f.owner.map();
+  const context=f.owner.contactContext(f.owner.getSnapshot().pins[0]!)!;
+  const ordinary=[{...f.row().player,publicPlayerId:'ordinary',lookingForGame:false}],merged=mergeRadarPlayers(ordinary,f.owner.getSnapshot().rows);
+  const gate=deferred<unknown>();let fail=true;
+  f.send(async()=>{if(fail)throw Error('cleanup response lost');return gate.promise;});
+  f.owner.cancel();
+  assert.equal(f.owner.getSnapshot().pins.length,0);assert.equal(f.owner.getSnapshot().rows.length,0);
+  assert.equal(f.owner.getSnapshot().query,null);assert.equal(context.valid(),false);
+  assert.strictEqual(mergeRadarPlayers(ordinary,[]).ordinary[0],ordinary[0]);assert.strictEqual(merged.ordinary[0],ordinary[0]);
+  await flush();const cleanup=f.commands[1]!,bytes=JSON.stringify(cleanup);
+  assert.equal(cleanup.kind,'stop');assert.equal(f.owner.getSnapshot().command,null);
+  assert.equal(f.owner.getSnapshot().phase,'unknown');assert.match(f.owner.getSnapshot().notice!,/ожидает подтверждения/);
+  assert.equal(f.owner.getSnapshot().activation?.state,'active');
+  fail=false;const retry=f.owner.stop();await flush();
+  assert.equal(f.commands.length,3);assert.strictEqual(f.commands[2],cleanup);
+  assert.equal(JSON.stringify(cleanup),bytes);assert.equal(f.owner.getSnapshot().phase,'unknown');
+  gate.resolve({state:'off',ownerHere:false});await retry;
+  assert.equal(f.owner.getSnapshot().phase,'off');assert.equal(f.owner.getSnapshot().activation?.state,'off');
+  assert.equal(context.valid(),false);assert.equal(f.reads.filter(op=>op.kind==='query').length,1);
+});
+
+test('native close with lost start response retains original UNKNOWN through status discovery and cleanup ACK without replay',async t=>{
+  const f=fixture();t.after(f.owner.dispose);const lost=deferred<void>();
+  f.send(async p=>{if(p.kind==='start'){await lost.promise;throw Error('lost response');}return {state:'off',ownerHere:false};});
+  const work=f.start();await flush();const original=f.owner.getSnapshot().command!,bytes=JSON.stringify(original);
+  await nativeClose(f.owner);await flush();assert.equal(f.commands.length,1);
+  lost.resolve();await work;assert.strictEqual(f.owner.getSnapshot().command,original);
+  f.current(f.activation());await f.owner.restore();
+  assert.deepEqual(f.commands.map(p=>p.kind),['start','stop']);
+  assert.equal(f.owner.getSnapshot().activation?.state,'off');assert.equal(f.owner.getSnapshot().phase,'unknown');
+  assert.strictEqual(f.owner.getSnapshot().command,original);
+  await f.owner.restore();await f.owner.consent();await f.owner.enable(DISCLOSURE_HASH);await f.owner.query();await f.owner.tick();
+  assert.equal(f.commands.length,2);assert.strictEqual(f.owner.getSnapshot().command,original);
+  assert.equal(JSON.stringify(original),bytes);assert.equal(f.reads.filter(op=>op.kind==='query').length,0);
+  assert.equal(f.owner.getSnapshot().pins.length,0);assert.equal(f.owner.getSnapshot().query,null);
+});
+
+test('native cancel cleanup discovery and old start ACK cannot cross actor/session rotation or consume the new command',async t=>{
+  for(const replacement of [{...actor,sessionId:'rotated',generation:2},{actorId:'other-account',sessionId:'other',generation:2}]){
+    const f=fixture();t.after(f.owner.dispose);
+    const oldAck=deferred<unknown>(),oldStatus=deferred<unknown>(),newAck=deferred<unknown>();
+    f.send(p=>p.actor.sessionId===actor.sessionId?oldAck.promise:newAck.promise);
+    const work=f.start();await flush();const original=f.owner.getSnapshot().command!;
+    f.read(async op=>op.kind==='config'?config:oldStatus.promise);
+    await nativeClose(f.owner);await flush();
+    f.read(async op=>op.kind==='config'?config:op.kind==='query'?f.snapshot():{state:'off',ownerHere:false});
+    f.owner.setActor(replacement);await flush();await f.owner.consent();
+    const next=f.owner.enable(DISCLOSURE_HASH);await flush();const current=f.owner.getSnapshot();
+    assert.ok(current.command);assert.notStrictEqual(current.command,original);assert.deepEqual(current.command.actor,replacement);
+    oldAck.resolve(f.activation());oldStatus.resolve(f.activation());await work;await flush();
+    assert.strictEqual(f.owner.getSnapshot(),current);assert.equal(f.commands.length,2);
+    assert.equal(f.permits[0]!(),false);assert.equal(f.commands.some(p=>p.kind==='stop'),false);
+    assert.equal(current.pins.length,0);assert.equal(current.query,null);
+    newAck.resolve(f.activation());await next;
+    assert.equal(f.owner.getSnapshot().command,null);assert.equal(f.owner.getSnapshot().phase,'ready');
+    assert.deepEqual(f.owner.getSnapshot().actor,replacement);
+  }
+});
+
 // FIRST CodeQA cd791: real owner, controllable transport boundaries.
 for (const kind of ['start','update','heartbeat','stop'] as const) test(`actual late ${kind} ACK settles its exact command; confirmed cleanup permits only fresh explicit reentry`,async t=>{
   const f=fixture();t.after(f.owner.dispose);

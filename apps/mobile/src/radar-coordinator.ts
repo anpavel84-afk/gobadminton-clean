@@ -219,7 +219,17 @@ export class RadarCoordinator {
       return false;
     } finally { if (this.writing === packet) this.writing = null; }
   }
-  cancel = () => { ++this.serial; this.clearPrivate(); this.show({ enabling: false, busy: false, phase: this.state.command ? 'unknown' : this.own() ? 'ready' : 'off', notice: this.state.command ? unknownNotice : null }); };
+  cancel = () => {
+    const actor = this.state.actor, owned = this.own(), pending = this.state.command;
+    // Retire publication authority through the same safety path as backgrounding,
+    // before retiring the UI serial that may still receive an accepted start ACK.
+    if (actor && (owned || pending)) this.deferCleanup(actor, owned);
+    ++this.serial; this.clearPrivate();
+    const cleanupPending = this.cleanup && !this.cleanup.settled;
+    this.show({ enabling: false, busy: false, phase: pending || cleanupPending ? 'unknown' : 'off',
+      notice: cleanupPending ? `${pending ? unknownNotice + ' ' : ''}${cleanupNotice}` : pending ? unknownNotice : null });
+    if (cleanupPending) void this.finishCleanup();
+  };
   stop = async () => {
     if (this.cleanup) { await this.finishCleanup(true); return; }
     const actor = this.state.actor, activation = this.own(); if (!actor || !activation || this.state.busy) { this.cancel(); return; }
