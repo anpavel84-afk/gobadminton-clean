@@ -111,8 +111,7 @@ describe("PG-1a outcome policy and transport", () => {
     { headers: { origin: env.PUBLIC_WEB_ORIGIN, "x-csrf-token": "bad" }, cookies: { [SESSION_COOKIE]: "s" } },
   ])("auth rejects PUT before service: %j", async (request) => {
     const auth = {
-      requireCookieMutation: vi.fn().mockRejectedValue(new Error("auth")),
-      requireSession: vi.fn(),
+      requirePrincipalMutation: vi.fn().mockRejectedValue(new Error("auth")),
     };
     const put = vi.fn();
     const controller = new GameOutcomesController(
@@ -120,14 +119,17 @@ describe("PG-1a outcome policy and transport", () => {
       new IdempotencyService({} as never, env),
       { putOutcome: put } as never,
     );
-    await expect(controller.putOutcome(request as never, { status: vi.fn() } as never, past.id)).rejects.toThrow();
+    await expect(controller.putOutcome(request as never, { status: vi.fn() } as never, past.id)).rejects.toThrow("auth");
+    expect(auth.requirePrincipalMutation).toHaveBeenCalledTimes(1);
+    expect(auth.requirePrincipalMutation).toHaveBeenCalledWith(request);
+    expect(auth.requirePrincipalMutation.mock.calls[0]![0]).toBe(request);
     expect(put).not.toHaveBeenCalled();
   });
 
   it("preserves actor/session/idempotency key on PUT", async () => {
     const a = "10000000-0000-4000-8000-000000000001";
     const s = "10000000-0000-4000-8000-000000000002";
-    const auth = { requireCookieMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }) };
+    const auth = { requirePrincipalMutation: vi.fn().mockResolvedValue({ userId: a, sessionId: s }) };
     const put = vi.fn().mockResolvedValue({
       statusCode: 200,
       body: { gameId: past.id, outcome: { value: "held", version: 1, reason: null, provenance: null }, allowedActions: { canRecordOutcome: true } },
@@ -139,24 +141,32 @@ describe("PG-1a outcome policy and transport", () => {
     );
     const body = { expectedVersion: 0, outcome: "held" };
     const reply = { status: vi.fn() };
+    const request = { headers: { "idempotency-key": "pg1a-synthetic-key-12345" }, body };
     await controller.putOutcome(
-      { headers: { "idempotency-key": "pg1a-synthetic-key-12345" }, body } as never,
+      request as never,
       reply as never,
       past.id,
     );
+    expect(auth.requirePrincipalMutation).toHaveBeenCalledTimes(1);
+    expect(auth.requirePrincipalMutation).toHaveBeenCalledWith(request);
+    expect(auth.requirePrincipalMutation.mock.calls[0]![0]).toBe(request);
     expect(put).toHaveBeenCalledWith(a, s, "pg1a-synthetic-key-12345", past.id, body);
     expect(reply.status).toHaveBeenCalledWith(200);
   });
 
   it("forwards revisionsLimit/revisionsCursor on GET", async () => {
-    const auth = { requireSession: vi.fn().mockResolvedValue({ userId: past.id }) };
+    const auth = { requirePrincipal: vi.fn().mockResolvedValue({ userId: past.id }) };
     const getResults = vi.fn().mockResolvedValue({ gameId: past.id });
     const controller = new GameOutcomesController(
       auth as never,
       new IdempotencyService({} as never, env),
       { getResults } as never,
     );
-    await controller.getResults({} as never, past.id, "5", "cursor-token", "10", "roster-cursor");
+    const request = {};
+    await controller.getResults(request as never, past.id, "5", "cursor-token", "10", "roster-cursor");
+    expect(auth.requirePrincipal).toHaveBeenCalledTimes(1);
+    expect(auth.requirePrincipal).toHaveBeenCalledWith(request);
+    expect(auth.requirePrincipal.mock.calls[0]![0]).toBe(request);
     expect(getResults).toHaveBeenCalledWith(past.id, past.id, {
       revisionsLimit: "5",
       revisionsCursor: "cursor-token",
