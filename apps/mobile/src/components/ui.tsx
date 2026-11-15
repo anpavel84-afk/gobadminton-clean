@@ -1,3 +1,4 @@
+import { RadarControls } from './radar-controls.tsx';
 import { AccessibilityInfo, findNodeHandle, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 import { useEffect, useRef } from 'react';
@@ -76,6 +77,7 @@ export function Header({ back, light = false, action }: { back?: () => void; lig
   return <View style={styles.header}>
     <View style={styles.headerRow}>
       {light ? <BrandLockup light /> : <Pressable accessibilityRole="button" accessibilityLabel="GoBadminton — Игры" onPress={() => router.navigate('/games')} style={{ minWidth: 112, minHeight: 64 }}><BrandLockup /></Pressable>}
+      {!light && <RadarControls compact />}
       {!light && pathname !== '/profile' && <Pressable accessibilityRole="button" accessibilityLabel="Профиль" onPress={() => router.push({ pathname: '/profile', params: returnTo ? { returnTo } : {} })}
         style={styles.profileAction}>
         <View style={styles.headerAvatar}><Label style={{ fontSize: 12, lineHeight: 18, fontWeight: '700' }}>{initials}</Label></View>

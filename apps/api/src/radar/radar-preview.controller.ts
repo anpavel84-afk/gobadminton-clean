@@ -19,7 +19,7 @@ export class RadarPreviewController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     // Transport key required by foundation cookie-mutation rules; preview is
     // revalidated against current state and does not mint a durable receipt.
     this.idempotency.requireKey(request.headers["idempotency-key"]);

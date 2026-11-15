@@ -2462,8 +2462,12 @@
       },
       "patch": {
         "security": [
-          { "cookieSession": [] },
-          { "NativeBearer": [] }
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "operationId": "patchMySocialProfile",
         "tags": [
@@ -2919,8 +2923,12 @@
       "put": {
         "operationId": "putMyBlock",
         "security": [
-          { "cookieSession": [] },
-          { "NativeBearer": [] }
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "tags": [
           "Safety"
@@ -2998,8 +3006,12 @@
       "delete": {
         "operationId": "deleteMyBlock",
         "security": [
-          { "cookieSession": [] },
-          { "NativeBearer": [] }
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "tags": [
           "Safety"
@@ -3079,8 +3091,12 @@
       "post": {
         "operationId": "createAbuseReport",
         "security": [
-          { "cookieSession": [] },
-          { "NativeBearer": [] }
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
         ],
         "tags": [
           "Safety"
@@ -3192,7 +3208,15 @@
           "404": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateRadarActivation",
@@ -3276,7 +3300,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       },
       "delete": {
         "operationId": "stopRadarActivation",
@@ -3344,7 +3376,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/radar/activations": {
@@ -3433,7 +3473,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/radar/activations/current/renew": {
@@ -3522,7 +3570,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/radar/activations/current/heartbeat": {
@@ -3611,7 +3667,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/radar/activations/current/takeover": {
@@ -3700,7 +3764,15 @@
           "429": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/radar/nearby": {
@@ -3834,7 +3906,15 @@
             "$ref": "#/components/responses/Problem"
           }
         },
-        "description": "Legacy v1 before cutover; strict signed v2 after cutover. Geographic OFF viewer requires no own presence/consent. Current target, receipt, generation, owner-session, block and scope revalidated; no current top20 recheck. No geographic idempotency response cache."
+        "description": "Legacy v1 before cutover; strict signed v2 after cutover. Geographic OFF viewer requires no own presence/consent. Current target, receipt, generation, owner-session, block and scope revalidated; no current top20 recheck. No geographic idempotency response cache.",
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/conversations/requests": {
@@ -5969,6 +6049,9 @@
         "security": [
           {
             "cookieSession": []
+          },
+          {
+            "NativeBearer": []
           }
         ],
         "responses": {
@@ -6214,7 +6297,15 @@
             }
           }
         },
-        "x-operation-kind": "authenticated-read"
+        "x-operation-kind": "authenticated-read",
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/players/query/map": {
@@ -6328,7 +6419,15 @@
             }
           }
         },
-        "x-operation-kind": "authenticated-read"
+        "x-operation-kind": "authenticated-read",
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "NativeBearer": []
+          }
+        ]
       }
     },
     "/me/game-preferences": {

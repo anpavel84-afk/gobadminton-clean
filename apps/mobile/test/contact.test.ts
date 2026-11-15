@@ -23,7 +23,7 @@ function setup() {
     const path = String(url).replace('https://dev.gobadminton.ru/v1', ''); calls.push({ path, init: init! });
     const value = await handler(path, init!); return value instanceof Response ? value : new Response(JSON.stringify(value));
   });
-  const owner = new ContactCoordinator({ state: (id, a) => api.contactState(a.actorId, id), player: (id, a) => api.player(a.actorId, id),
+  const owner = new ContactCoordinator({ preview: context => api.radarRead(context.actor.actorId, {kind:'preview',resultRef:context.resultRef,target:context.target}, 'preview-key'), state: (id, a) => api.contactState(a.actorId, id), player: (id, a) => api.player(a.actorId, id),
     conversation: (id, a) => api.conversation(a.actorId, id), send: (p, a) => api.createContact(a.actorId, p) }, () => `key-${++keys}`);
   owner.setActor(actor);
   return { owner, calls, api, setHandler: (h: typeof handler) => { handler = h; }, writes: () => calls.filter(c => c.init.method === 'POST') };
@@ -318,4 +318,62 @@ test('verified peer block fences stale send and reconciliation without losing th
   s.setHandler(async path => path.startsWith('/players/') ? player : none); s.owner.setPeerSafety('peer',false); await new Promise(r => setImmediate(r));
   assert.strictEqual(s.owner.getSnapshot().command?.packet,packet); assert.equal(s.owner.getSnapshot().conversation,null);
   assert.equal(s.owner.mayDispatchSafety('peer',permit),false);
+});
+
+
+function radarContactFixture(s: ReturnType<typeof setup>) {
+  let valid = true;
+  const expiresAt = Date.now()+60000;
+  const context = Object.freeze({kind:'radar' as const,actor,target:'peer',resultRef:'u1.original',queryRef:'query',activationId:'activation',generation:1,expiresAt,valid:()=>valid && Date.now()<expiresAt});
+  const preview = {player:{publicPlayerId:'peer',displayName:'Radar peer',level:null,trainer:false,canRequestContact:true},proximityBand:null,
+    radar:{consentPolicyVersion:'radar-geographic-sharing-v2',validUntil:new Date(expiresAt).toISOString(),distance:null,geo:{latitude:55.75,longitude:37.62,crs:'EPSG:4326',model:'regional_grid_1000m_v1',gridSizeMeters:1000,uncertaintyMeters:1000,quality:'degraded',sourceTimestampBucket:new Date().toISOString(),sourceAgeSeconds:1}},upcomingGames:[]};
+  let lost=false;
+  s.setHandler(async path=>path==='/radar/results/preview'?preview:path.startsWith('/me/contact-state?')?none:path==='/conversations/requests'?lost?Promise.reject(Error('timeout')):result:new Response('{}',{status:404}));
+  return {context,preview,invalidate:()=>{valid=false;},timeout:()=>{lost=true;},success:()=>{lost=false;}};
+}
+test('explicit Radar composer re-previews original proof and sends it through actual NativeApi, without ordinary player read or implicit proof',async()=>{
+  const s=setup(), r=radarContactFixture(s);assert.equal(s.owner.stageRadar(r.context),true);await s.owner.openComposer('peer');
+  assert.equal(s.owner.getSnapshot().status,'ready');assert.equal(s.owner.getSnapshot().player?.displayName,'Radar peer');
+  s.owner.draft('peer','Radar hello');await s.owner.send();
+  const sends=s.calls.filter(c=>c.path==='/conversations/requests');assert.equal(sends.length,1);
+  assert.equal(JSON.parse(sends[0]!.init.body as string).discoveryProof,'u1.original');assert.equal(s.calls.filter(c=>c.path==='/radar/results/preview').length,2);
+  assert.equal(s.calls.some(c=>c.path.startsWith('/players/')),false);
+  const ordinary=setup();await compose(ordinary);await ordinary.owner.send();assert.equal(JSON.parse(ordinary.calls.find(c=>c.path==='/conversations/requests')!.init.body as string).discoveryProof,undefined);
+  const editor=readFileSync(new URL('../src/components/contact-editor.tsx',import.meta.url),'utf8');assert.match(editor,/useContact\(target, true\)/);assert.match(editor,/owner\.openComposer\(target\)/);
+});
+test('Radar denial, mismatched peer, stale expiry, background/block and new app-session prevent writes without directory fallback',async()=>{
+  for(const reason of ['denied','mismatch','expired','background','blocked','new-session'] as const){
+    const s=setup(),r=radarContactFixture(s);s.owner.stageRadar(r.context);await s.owner.openComposer('peer');s.owner.draft('peer','Hello');
+    if(reason==='denied'||reason==='mismatch'||reason==='expired')s.setHandler(async path=>path==='/radar/results/preview'?{...r.preview,player:{...r.preview.player,canRequestContact:reason!=='denied',publicPlayerId:reason==='mismatch'?'other':'peer'},radar:{...r.preview.radar,validUntil:reason==='expired'?new Date(Date.now()-1).toISOString():r.preview.radar.validUntil}}:none);
+    if(reason==='background'){r.invalidate();s.owner.invalidateRadar();}
+    if(reason==='blocked')s.owner.setPeerSafety('peer',true);
+    if(reason==='new-session'){s.owner.setActor({...actor,sessionId:'new',generation:2});await s.owner.openComposer('peer');}
+    await s.owner.send();await new Promise(resolve=>setImmediate(resolve));assert.equal(s.calls.filter(c=>c.path==='/conversations/requests').length,0,reason);
+    // A new app session must not inherit Radar authority. Ordinary reads may occur only after an explicit ordinary entry.
+    assert.equal(s.calls.some(c=>c.path.startsWith('/players/')),false,reason);
+  }
+});
+test('Radar UNKNOWN retains immutable text/key/proof through intended navigation; explicit reconcile alone retries same packet; stale context keeps UNKNOWN',async()=>{
+  const s=setup(),r=radarContactFixture(s);s.owner.stageRadar(r.context);await s.owner.openComposer('peer');s.owner.draft('peer','Original text');r.timeout();await s.owner.send();
+  const packet=s.owner.getSnapshot().command!.packet;assert.equal(packet.kind,'radar');s.owner.blur();await s.owner.openComposer('peer');assert.strictEqual(s.owner.getSnapshot().command!.packet,packet);
+  const sends=()=>s.calls.filter(c=>c.path==='/conversations/requests');assert.equal(sends().length,1);await s.owner.reconcile();assert.equal(sends().length,2);
+  assert.equal(sends()[0]!.init.body,sends()[1]!.init.body);assert.deepEqual(sends()[0]!.init.headers,sends()[1]!.init.headers);
+  r.invalidate();s.owner.invalidateRadar();await s.owner.reconcile();assert.equal(sends().length,2);assert.strictEqual(s.owner.getSnapshot().command!.packet,packet);assert.equal(s.owner.getSnapshot().command!.status,'unknown');
+  r.success();await s.owner.openComposer('peer');assert.equal(sends().length,2);assert.equal(s.owner.getSnapshot().conversation,null);
+  s.owner.setActor({...actor,sessionId:'new',generation:2});await s.owner.openComposer('peer');await s.owner.reconcile();assert.equal(sends().length,2);assert.strictEqual(s.owner.getSnapshot().command!.packet,packet);
+});
+
+
+test('Radar preview can deny new contact while the validated existing DM opens without sending',async()=>{
+  for (const state of ['accepted','pending_incoming','pending_outgoing'] as const) {
+    const s=setup(),r=radarContactFixture(s);
+    s.setHandler(async path=>path==='/radar/results/preview'?{...r.preview,player:{...r.preview.player,canRequestContact:false}}
+      :path.startsWith('/me/contact-state?')?{...existing,state}
+      :path==='/conversations/conversation'?{...header,requestState:state==='accepted'?'accepted':'pending'}
+      :new Response('{}',{status:404}));
+    assert.equal(s.owner.stageRadar(r.context),true);await s.owner.openComposer('peer');
+    assert.equal(s.owner.getSnapshot().status,'existing');assert.equal(s.owner.getSnapshot().conversation?.id,header.id);
+    await s.owner.send();assert.equal(s.calls.filter(c=>c.path==='/conversations/requests').length,0);
+    assert.equal(s.calls.some(c=>c.path.startsWith('/players/')),false);
+  }
 });

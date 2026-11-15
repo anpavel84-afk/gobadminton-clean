@@ -12,14 +12,14 @@ export class UnifiedPlayersController {
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
   async query(@Req() request: FastifyRequest) {
-    const v = await this.auth.requireCookieMutation(request);
+    const v = await this.auth.requirePrincipalMutation(request);
     return this.players.query(v.userId, v.sessionId, request.body);
   }
   @Post("map")
   @HttpCode(200)
   @Header("Cache-Control", "no-store")
   async map(@Req() request: FastifyRequest) {
-    const v = await this.auth.requireCookieMutation(request);
+    const v = await this.auth.requirePrincipalMutation(request);
     return this.players.query(v.userId, v.sessionId, request.body, true);
   }
 }

@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import { DEV_MOSCOW_PEER_IDS, DEV_MOSCOW_FIXTURE_IDENTITY_SQL } from "../../src/radar/dev-moscow-test";
 import { assertFixtureActor } from "../../src/database/dev-radar-fixture-enrichment";
 import { redeemUnifiedProof } from "../../src/radar/unified-proof";
@@ -95,18 +96,22 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     viewer: Person;
   const dbName = `unified_test_${randomUUID().replaceAll("-", "")}`;
   beforeAll(async () => {
-    admin = new Pool({ connectionString: process.env.DATABASE_URL });
+    const raw = process.env.NATIVE_RADAR_TEST_DATABASE_URL;
+    if (!raw) throw Error('Set NATIVE_RADAR_TEST_DATABASE_URL to dedicated loopback disposable admin /postgres');
+    const u = new URL(raw);
+    if (!['127.0.0.1','localhost','[::1]'].includes(u.hostname) || u.pathname !== '/postgres') throw Error('Isolated Radar fixture requires loopback admin /postgres');
+    admin = new Pool({ connectionString: u.href });
     await admin.query(`CREATE DATABASE ${dbName}`);
-    const u = new URL(process.env.DATABASE_URL!);
     u.pathname = "/" + dbName;
     env = loadEnv({
       ...process.env,
       NODE_ENV: "test",
       APP_ENV: "local",
       DATABASE_URL: u.href,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000",
-      PUBLIC_WEB_ORIGIN: "http://127.0.0.1:3001",
-      COOKIE_SECURE: "false",
+      PUBLIC_API_ORIGIN: "https://localhost:3000",
+      PUBLIC_WEB_ORIGIN: "https://localhost:3001", ALLOWED_WEB_ORIGINS: "https://localhost:3001",
+      COOKIE_SECURE: "true", NATIVE_AUTH_ENABLED: "1",
+      NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:'native.radar.fixture',redirectUris:['https://app.example.test/auth/callback']}]),
       SOCIAL_DIRECTORY_ENABLED: "1",
       SOCIAL_DM_ENABLED: "1",
       SOCIAL_RADAR_ENABLED: "1",
@@ -1778,6 +1783,51 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     expect(replay.statusCode, replay.body).toBe(201);
     expect(replay.json().activationId).toBe(started.json().activationId);
     expect(fake.textCalls).toBe(afterStart);
+  });
+
+  it('real native app_session start/query/map/preview/stop and session revoke/expiry fence proofs', async () => {
+    const native = app.get(NativeSessionService);
+    const issue = (p: Person) => native.transaction(client => native.issue(client,p.id,'native.radar.fixture'));
+    const own = await issue(viewer), otherSession = await issue(viewer), peer = await person('Native Radar peer',false);
+    const peerSession = await issue(peer);
+    const bearer = (token: string, key = randomUUID()) => ({authorization:`Bearer ${token}`,'idempotency-key':key});
+    const startNative = async (token: string) => {
+      const r = await app.inject({method:'POST',url:'/v1/me/radar/activations',headers:bearer(token),payload:startBody()});
+      expect(r.statusCode,r.body).toBe(201); return r.json();
+    };
+    const viewerActivation = await startNative(own.accessToken); await startNative(peerSession.accessToken);
+    const browserPeer=await person('Browser Radar peer',false), browserActivation=await start(browserPeer);
+    expect((await pool.query('SELECT owner_session_id FROM radar_presences WHERE user_id=$1',[viewer.id])).rows[0].owner_session_id).toBe(own.sessionId);
+    expect((await app.inject({url:'/v1/radar/config',headers:bearer(own.accessToken)})).statusCode).toBe(200);
+    const queried = await app.inject({method:'POST',url:'/v1/players/query',headers:bearer(own.accessToken),payload:initial(50,{kind:'current_activation',activationId:viewerActivation.activationId})});
+    expect(queried.statusCode,queried.body).toBe(200); const snapshot = queried.json<Snapshot>();
+    const row = snapshot.items.find(r=>r.publicPlayerId===peer.publicId)!; expect(row.radar).not.toBeNull();
+    const ref = row.radar!.resultRef;
+    const map = await app.inject({method:'POST',url:'/v1/players/query/map',headers:bearer(own.accessToken),payload:{contractVersion:UNIFIED_WIRE,queryRef:snapshot.query.queryRef,limit:100}});
+    expect(map.statusCode,map.body).toBe(200); expect(map.json().query.queryRef).toBe(snapshot.query.queryRef);
+    const previewNative = (token: string, resultRef=ref) => app.inject({method:'POST',url:'/v1/radar/results/preview',headers:bearer(token),payload:{resultRef}});
+    expect((await previewNative(own.accessToken)).statusCode).toBe(200);
+    expect((await previewNative(otherSession.accessToken)).statusCode).toBe(404);
+    // Both transports consume the same server union/proof path, including each other's publishers.
+    const browserRow=snapshot.items.find(r=>r.publicPlayerId===browserPeer.publicId)!;expect(browserRow.radar).not.toBeNull();
+    expect((await previewNative(own.accessToken,browserRow.radar!.resultRef)).statusCode).toBe(200);
+    await clearBudget(browserPeer);
+    const browserSnapshot=await query(initial(50,{kind:'current_activation',activationId:browserActivation.activationId}),browserPeer);
+    const nativeRow=browserSnapshot.items.find(r=>r.publicPlayerId===peer.publicId)!;expect(nativeRow.radar).not.toBeNull();
+    expect((await preview(nativeRow.radar!.resultRef,browserPeer)).statusCode).toBe(200);
+    expect((await app.inject({method:'POST',url:'/v1/players/query/map',headers:bearer(otherSession.accessToken),payload:{contractVersion:UNIFIED_WIRE,queryRef:snapshot.query.queryRef,limit:100}})).statusCode).toBe(400);
+    expect((await app.inject({method:'POST',url:'/v1/players/query',headers:{cookie:headers().cookie,origin:env.PUBLIC_WEB_ORIGIN},payload:initial()})).statusCode).toBe(403);
+    const stopped = await app.inject({method:'DELETE',url:'/v1/me/radar/activations/current',headers:{...bearer(peerSession.accessToken),'x-radar-activation-id':(await app.inject({url:'/v1/me/radar/activations/current',headers:bearer(peerSession.accessToken)})).json().activationId}});
+    expect(stopped.statusCode).toBe(204); expect((await previewNative(own.accessToken)).statusCode).toBe(404);
+    await clearBudget(peer); await startNative(peerSession.accessToken); await clearBudget();
+    const fresh=(await app.inject({method:'POST',url:'/v1/players/query',headers:bearer(own.accessToken),payload:initial()})).json<Snapshot>();
+    const freshPeer=fresh.items.find(r=>r.publicPlayerId===peer.publicId)!;expect(freshPeer.radar).not.toBeNull();
+    await pool.query("UPDATE app_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[peerSession.sessionId]);
+    expect((await previewNative(own.accessToken,freshPeer.radar!.resultRef)).statusCode).toBe(404);
+    await native.logout({accessToken:peerSession.accessToken,clientId:'native.radar.fixture'});
+    expect((await pool.query('SELECT 1 FROM radar_presences WHERE owner_session_id=$1',[peerSession.sessionId])).rowCount).toBe(0);
+    await pool.query("UPDATE app_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[own.sessionId]);
+    expect((await app.inject({url:'/v1/me/radar/activations/current',headers:bearer(own.accessToken)})).statusCode).toBe(401);
   });
 
 });

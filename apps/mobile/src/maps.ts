@@ -1,3 +1,4 @@
+import { NATIVE_ORIGIN } from './native-auth-protocol.ts';
 import type { StyleSpecification } from '@maplibre/maplibre-react-native';
 import { PublicApiError, gamesResourceKey } from './public-api.ts';
 import type { PublicApi, PublicGame, GameFilters } from './public-api.ts';
@@ -391,4 +392,32 @@ export async function resolveMapSelection(id: string, venues: readonly MapVenue[
   const bound = await api.venue(id,signal), canonical = venues.find(v => v.id === bound.id);
   if (signal.aborted || !canonical || canonical.cityId !== bound.cityId || canonical.timezone !== bound.timezone) throw new PublicApiError('invalid');
   return canonical;
+}
+
+/** Native environment + fixed server map registration. Browser Origin predicate stays WEB-only. */
+export function nativeRadarMapAllowed(config: import('./radar.ts').RadarConfig | null,
+  snapshot: import('../../../packages/contracts/src/unified.generated.ts').UnifiedSnapshot | null, cityId: string, now = Date.now()): boolean {
+  const pack = mapPackForCity(cityId);
+  if (!pack || !config?.enabled || !snapshot || snapshot.cityId !== cityId || Date.parse(snapshot.validUntil) <= now) return false;
+  const map = config.cities.find(c => c.cityId === cityId)?.map;
+  return NATIVE_ORIGIN === 'https://dev.gobadminton.ru' && new URL(pack.prefix).origin === NATIVE_ORIGIN && pack.prefix.startsWith(`${NATIVE_ORIGIN}/map-assets/releases/`) &&
+    map?.availability === 'dev_preview' && map.mapId === pack.mapId && map.version === pack.version &&
+    snapshot.map.availability === 'dev_preview' && snapshot.map.mapId === pack.mapId && snapshot.map.version === pack.version &&
+    (config.exposureMode === 'live' && snapshot.exposureMode === 'authenticated_live' || config.exposureMode === 'synthetic_demo' && snapshot.exposureMode === 'synthetic_demo');
+}
+export function nativeRadarPeople(rows: readonly import('./radar.ts').UnifiedRow[], pack: CityMapPack, now = Date.now()) {
+  return rows.filter(row => {
+    const r = row.radar;
+    return !!r && Date.parse(r.validUntil) > now && pointInPack(r.geo.longitude, r.geo.latitude, pack);
+  });
+}
+/** Public-only Players list/map intent. Private query/proof refs never enter navigation. */
+export function playersMapContext(params: Record<string, unknown>): { view: 'map' | 'list'; filters: import('./players.ts').PlayerFilters } | null {
+  const allowed = ['view','cityId','name','areaKey','looking','trainer'];
+  if (Object.keys(params).some(k => !allowed.includes(k)) || Object.values(params).some(v => typeof v !== 'string')) return null;
+  if (params.view !== 'map' && params.view !== 'list') return null;
+  const cityId = params.cityId ?? '', name = params.name ?? '', areaKey = params.areaKey ?? '';
+  if (typeof cityId !== 'string' || typeof name !== 'string' || typeof areaKey !== 'string' || cityId && !isVenueId(cityId) ||
+    name.length > 80 || areaKey.length > 64 || [params.looking,params.trainer].some(v => v !== undefined && v !== '0' && v !== '1')) return null;
+  return { view: params.view, filters: { cityId: cityId || null, name, areaKey, looking: params.looking === '1', trainer: params.trainer === '1' } };
 }

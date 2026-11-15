@@ -1,3 +1,6 @@
+import { RadarModule } from "../../src/radar/radar.module";
+import { NativeSessionService } from "../../src/auth/native-session.service";
+import { UNIFIED_WIRE, UNIFIED_POLICY, UNIFIED_DISCLOSURE_ID, UNIFIED_DISCLOSURE_HASH } from "../../src/radar/unified-contract";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -38,6 +41,7 @@ run("native Messages · self-migrating isolated database", () => {
     PUBLIC_API_ORIGIN: "https://localhost:3000", PUBLIC_WEB_ORIGIN: origin, ALLOWED_WEB_ORIGINS: origin,
     COOKIE_SECURE: "true", VK_CLIENT_ID: "vk-fixture", VK_CLIENT_SECRET: "vk-fixture-secret", VK_REDIRECT_URI: "https://localhost:3000/v1/auth/vk/callback",
     AUTH_PEPPER: "native-messages-dedicated-synthetic-pepper-32chars", NATIVE_AUTH_ENABLED: "1",
+    SOCIAL_RADAR_ENABLED:"1", SOCIAL_RADAR_GEOGRAPHIC_ENABLED:"1", SOCIAL_RADAR_UNIFIED_ENABLED:"1", SOCIAL_RADAR_PUBLISHING_V2_ENABLED:"1",
     SOCIAL_DIRECTORY_ENABLED: "1", SOCIAL_DM_ENABLED: "1", SOCIAL_INVITATIONS_ENABLED: "1", SOCIAL_GAME_CHAT_ENABLED: "1", SOCIAL_INBOX_ENABLED: "1",
     CONTENT_MODERATION_PROVIDER: "fake", CONTENT_MODERATION_FINGERPRINT_SECRET: "native-messages-dedicated-synthetic-fingerprint-only",
     NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{ clientId, redirectUris: [redirectUri] }]) });
@@ -49,7 +53,7 @@ run("native Messages · self-migrating isolated database", () => {
   async function build(enabled: boolean) {
     const module = await Test.createTestingModule({ imports: [buildTestCoreModule({ ...env, NATIVE_AUTH_ENABLED: enabled }, pool), AuthModule,
       OrganizersModule, VenuesModule, TrainersModule, GamesModule, ParticipationsModule, ProfilesModule, SafetyModule,
-      MessagingModule, GameChatModule, InvitationsModule, InboxModule] }).overrideProvider(AUTH_PROVIDER_OVERRIDES).useValue([fake]).compile();
+      MessagingModule, GameChatModule, InvitationsModule, InboxModule, RadarModule] }).overrideProvider(AUTH_PROVIDER_OVERRIDES).useValue([fake]).compile();
     const instance = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter({ logger: false }));
     await instance.register(cookie); instance.setGlobalPrefix("v1"); instance.useGlobalFilters(new ProblemExceptionFilter());
     await instance.init(); await instance.getHttpAdapter().getInstance().ready(); return instance;
@@ -410,6 +414,64 @@ run("native Messages · self-migrating isolated database", () => {
     // No fabricated restoration: permissions are read again from the existing endpoint.
     expect((await app.inject({url,headers:bearer(player)})).json().requestState).toBe('accepted');
     const fresh=await app.inject({method:'POST',url:url+'/messages',headers:bearer(player),payload:{kind:'text',text:'After authoritative unblock',clientMessageId:randomUUID()}}); expect(fresh.statusCode).toBe(201);
+  });
+
+  it('native unified proof reaches explicit first contact; wrong app-session/account, expired/revoked/blocked proof writes zero', async () => {
+    const viewer=await actor(), peer=await actor(), outsider=await actor(); await profile(viewer); const target=await profile(peer); await profile(outsider);
+    // A Radar-only peer stays discoverable, but the current server contact policy denies first contact.
+    await pool.query('UPDATE player_social_profiles SET directory_visible=false WHERE user_id=$1',[peer.id]);
+    expect((await app.inject({url:`/v1/players/${target.publicPlayerId}`,headers:bearer(viewer)})).statusCode).toBe(404);
+    const start = async (who: Actor) => {
+      const r=await app.inject({method:'POST',url:'/v1/me/radar/activations',headers:bearer(who),payload:{contractVersion:UNIFIED_WIRE,consentPolicyVersion:UNIFIED_POLICY,
+        consent:{disclosureId:UNIFIED_DISCLOSURE_ID,disclosureHash:UNIFIED_DISCLOSURE_HASH,accepted:true},location:{latitude:55.7558,longitude:37.6173,accuracyMeters:100,capturedAt:new Date().toISOString()}}});
+      expect(r.statusCode,r.body).toBe(201); return r.json();
+    };
+    await start(viewer); await start(peer);
+    const query=await app.inject({method:'POST',url:'/v1/players/query',headers:bearer(viewer),payload:{contractVersion:UNIFIED_WIRE,filters:{cityId:MOSCOW_CITY_ID},origin:{kind:'none'},limit:50}});
+    expect(query.statusCode,query.body).toBe(200);
+    const hiddenRow=query.json().items.find((r:{publicPlayerId:string})=>r.publicPlayerId===target.publicPlayerId);
+    expect(hiddenRow.player.canRequestContact).toBe(false);
+    const hiddenProof=hiddenRow.radar.resultRef as string;
+    const counts=async()=>({messages:(await pool.query('SELECT count(*)::int AS n FROM messages')).rows[0].n,conversations:(await pool.query('SELECT count(*)::int AS n FROM conversations')).rows[0].n});
+    const before=await counts();
+    const hiddenPreview=await app.inject({method:'POST',url:'/v1/radar/results/preview',headers:bearer(viewer),payload:{resultRef:hiddenProof}});
+    expect(hiddenPreview.statusCode,hiddenPreview.body).toBe(200);expect(hiddenPreview.json().player.canRequestContact).toBe(false);
+    const hiddenRequest=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:bearer(viewer),payload:{targetPublicPlayerId:target.publicPlayerId,text:'Must remain private',clientMessageId:randomUUID(),discoveryProof:hiddenProof}});
+    expect(hiddenRequest.statusCode).toBe(404);expect(await counts()).toEqual(before);
+    // Proof is additional authority, not a privacy bypass. Test valid proof on an eligible target.
+    await pool.query('UPDATE player_social_profiles SET directory_visible=true WHERE user_id=$1',[peer.id]);
+    const freshProof=async()=>{
+      await pool.query('DELETE FROM radar_rate_budgets WHERE user_id=$1',[viewer.id]);
+      const r=await app.inject({method:'POST',url:'/v1/players/query',headers:bearer(viewer),payload:{contractVersion:UNIFIED_WIRE,filters:{cityId:MOSCOW_CITY_ID},origin:{kind:'none'}}});
+      expect(r.statusCode,r.body).toBe(200); const row=r.json().items.find((r:{publicPlayerId:string})=>r.publicPlayerId===target.publicPlayerId); expect(row?.radar).toBeTruthy(); return row.radar.resultRef as string;
+    };
+    const proof=await freshProof();
+    const native=app.get(NativeSessionService), sameUser=await native.transaction(c=>native.issue(c,viewer.id,clientId));
+    const payload={targetPublicPlayerId:target.publicPlayerId,text:'Explicit Radar hello',clientMessageId:randomUUID(),discoveryProof:proof};
+    for (const headers of [bearer(outsider),{authorization:`Bearer ${sameUser.accessToken}`,'idempotency-key':randomUUID()}]) {
+      const failed=await app.inject({method:'POST',url:'/v1/conversations/requests',headers,payload}); expect(failed.statusCode).toBe(404); expect(await counts()).toEqual(before);
+    }
+    const rejectNew=async(ref:string)=>{
+      const prior=await counts(), denied=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:bearer(viewer),payload:{...payload,clientMessageId:randomUUID(),discoveryProof:ref}});
+      expect(denied.statusCode,denied.body).toBe(404); expect(await counts()).toEqual(prior);
+    };
+    // Refusal is exercised before a conversation exists, so it cannot pass on an unrelated existing-DM conflict.
+    await pool.query("UPDATE radar_presences SET location_valid_until=clock_timestamp()-interval '1 second' WHERE user_id=$1",[peer.id]); await rejectNew(proof);
+    await pool.query('DELETE FROM radar_rate_budgets WHERE user_id=$1',[peer.id]); await start(peer);
+    const fresh=await freshProof();
+    expect((await app.inject({method:'PUT',url:`/v1/me/blocks/${target.publicPlayerId}`,headers:bearer(viewer),payload:{}})).statusCode).toBe(200); await rejectNew(fresh);
+    expect((await app.inject({method:'DELETE',url:`/v1/me/blocks/${target.publicPlayerId}`,headers:bearer(viewer),payload:{}})).statusCode).toBe(200);
+    const afterBlock=await freshProof();
+    await native.logout({accessToken:peer.accessToken,clientId}); await rejectNew(afterBlock);
+    expect((await pool.query('SELECT 1 FROM radar_presences WHERE owner_session_id=$1',[peer.sessionId])).rowCount).toBe(0);
+    const peerAgain={...peer,...await native.transaction(c=>native.issue(c,peer.id,clientId))};
+    await pool.query('DELETE FROM radar_rate_budgets WHERE user_id=$1',[peer.id]); await start(peerAgain);
+    const finalProof=await freshProof(), finalPayload={...payload,discoveryProof:finalProof}, key=randomUUID();
+    const sent=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:bearer(viewer,key),payload:finalPayload}); expect(sent.statusCode,sent.body).toBe(201);
+    // Existing durable same-key replay returns its original receipt; it does not re-mint geographic proof.
+    const replay=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:bearer(viewer,key),payload:finalPayload}); expect(replay.statusCode).toBe(201); expect(replay.json()).toEqual(sent.json());
+    expect((await counts()).messages).toBe(before.messages+1); expect((await counts()).conversations).toBe(before.conversations+1);
+    const csrf=await app.inject({method:'POST',url:'/v1/conversations/requests',headers:{cookie:viewer.cookie,origin,'idempotency-key':randomUUID()},payload}); expect(csrf.statusCode).toBe(403);
   });
 
 });

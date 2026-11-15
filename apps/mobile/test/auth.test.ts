@@ -1,3 +1,4 @@
+import { RadarCoordinator } from '../src/radar-coordinator.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -989,4 +990,57 @@ test('owning public native intent adapts exact Games map context while verified 
   const venue='/games/create/venue/11111111-1111-4111-8111-111111111111';
   assert.equal(await redirect({path:venue,initial:false}),venue);assert.equal(protocol.canonicalReturnPath(venue),venue);
   assert.equal(protocol.canonicalReturnPath('/games/map?returnTo=https://evil.example'),null);
+});
+
+
+test('mounted Radar runtime uses existing root actor/session and foreground lifecycle, without auto-enable or replacing Header typed returns',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();
+  const runtime=readFileSync(new URL('../src/radar-runtime.tsx',import.meta.url),'utf8');
+  const body=runtime.slice(runtime.indexOf('export function RadarProvider('),runtime.indexOf('  return <Context.Provider')).replace('export function','function')+'  return owner;\n}';
+  let lifecycle:((state:string)=>void)|undefined,cleanup:(()=>void)|undefined;
+  const render=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    useState:(factory:()=>unknown)=>[factory()],useLayoutEffect:(effect:()=>()=>void)=>{cleanup=effect();},
+    RadarCoordinator,nativeAuth:s.auth,
+    Location:{getForegroundPermissionsAsync:async()=>{throw Error('No automatic location permission');},requestForegroundPermissionsAsync:async()=>{throw Error('No automatic permission prompt');},hasServicesEnabledAsync:async()=>true,getCurrentPositionAsync:async()=>{throw Error('No automatic GPS');},Accuracy:{Balanced:3}},
+    Crypto:{randomUUID:()=> 'fixture-radar-key'},AppState:{currentState:'active',addEventListener:(_event:string,fn:typeof lifecycle)=>{lifecycle=fn;return {remove:()=>{lifecycle=undefined;}};}},
+  }) as (props:object)=>RadarCoordinator;
+  const owner=render({});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(owner.getSnapshot().actor?.sessionId,me.session.id);assert.equal(owner.getSnapshot().enabling,false);
+  assert.equal(s.calls.some(c=>c.path==='/me/radar/activations'&&c.init.method==='POST'),false);
+  lifecycle!('background');assert.equal(owner.getSnapshot().rows.length,0);assert.equal(owner.getSnapshot().pins.length,0);
+  await s.auth.logout();assert.equal(owner.getSnapshot().actor,null);cleanup!();
+  const layout=readFileSync(new URL('../app/_layout.tsx',import.meta.url),'utf8');assert.equal((layout.match(/<RadarProvider>/g)??[]).length,1);
+  assert.match(layout,/<AuthProvider><RadarProvider>/);
+  const header=readFileSync(new URL('../src/components/ui.tsx',import.meta.url),'utf8');assert.match(header,/<RadarControls compact/);
+});
+
+test('real AuthCoordinator preview port and ContactEditor composer wire keep Radar proof session-bound, without ordinary player authority',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const a=s.auth.participation.getSnapshot().actor!;
+  let valid=true, blockAttempts=0;const expires=Date.now()+60000;
+  const context=Object.freeze({kind:'radar' as const,actor:a,target:'radar-peer',resultRef:'u1.original',queryRef:'query',activationId:'activation',generation:1,expiresAt:expires,valid:()=>valid});
+  const preview={player:{publicPlayerId:'radar-peer',displayName:'Radar peer',level:null,trainer:false,canRequestContact:true},proximityBand:null,upcomingGames:[],
+    radar:{consentPolicyVersion:'radar-geographic-sharing-v2',validUntil:new Date(expires).toISOString(),distance:null,geo:{latitude:55.75,longitude:37.62,crs:'EPSG:4326',model:'regional_grid_1000m_v1',gridSizeMeters:1000,uncertaintyMeters:1000,quality:'degraded',sourceTimestampBucket:new Date().toISOString(),sourceAgeSeconds:1}}};
+  s.setHandler(async path=>{
+    if(path==='/radar/results/preview')return preview;
+    if(path.startsWith('/me/contact-state?'))return {targetPublicPlayerId:'radar-peer',state:'none',canRequestContact:true};
+    if(path==='/conversations/requests')throw Error('timeout');
+    if(path==='/me/blocks/radar-peer'){if(++blockAttempts===1)throw Error('lost block receipt');return {publicPlayerId:'radar-peer',blocked:true};}
+    if(path==='/auth/native/logout')return {ok:true};
+    throw Error('Unexpected Radar-only fallback '+path);
+  });
+  assert.equal(s.auth.contact.stageRadar(context),true);await s.auth.contact.openComposer('radar-peer');assert.equal(s.auth.contact.getSnapshot().status,'ready');
+  s.auth.contact.draft('radar-peer','Proof message');await s.auth.contact.send();
+  const write=s.calls.find(c=>c.path==='/conversations/requests')!;assert.equal(JSON.parse(write.init.body as string).discoveryProof,'u1.original');
+  const packet=s.auth.contact.getSnapshot().command!.packet;valid=false;s.auth.contact.invalidateRadar();await s.auth.contact.reconcile();
+  assert.strictEqual(s.auth.contact.getSnapshot().command!.packet,packet);assert.equal(s.calls.filter(c=>c.path==='/conversations/requests').length,1);
+  // A replayed safety receipt rereads this same Radar context, even after it expired.
+  const safety=s.auth.safety;safety.open({peerId:'radar-peer',name:'Radar peer'});
+  const view=safety.getSnapshot();safety.choose('block',view.viewGeneration,view.actor);
+  await safety.submit([],view.viewGeneration,view.actor);assert.equal(safety.getSnapshot().command?.status,'unknown');
+  await safety.reconcile(view.viewGeneration,view.actor);await new Promise(done=>setImmediate(done));
+  assert.equal(s.auth.contact.getSnapshot().status,'unavailable');
+  assert.strictEqual(s.auth.contact.getSnapshot().command!.packet,packet);
+  assert.equal(s.calls.filter(c=>c.path==='/conversations/requests').length,1);
+  assert.equal(s.calls.some(c=>c.path.startsWith('/players/')),false);
+  await s.auth.logout();assert.equal(s.auth.contact.getSnapshot().actor,null);
 });

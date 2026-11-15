@@ -1,3 +1,4 @@
+import type { UnifiedRow } from '../radar.ts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Map as MapLibreMap, Camera, Marker } from '@maplibre/maplibre-react-native';
@@ -36,7 +37,8 @@ function VenueMarker({ venue, counts, selected, onSelect }: { venue: MapVenue; c
   </Marker>;
 }
 /** Shared native basemap/marker renderer. Public browsing never asks for GPS/Radar consent. */
-export function NativeMap({ pack, venues, counts, selected, camera, controlBottom, statusTop, onCamera, onSelect, onCatalog }: {
+export function NativeMap({ pack, venues, counts, selected, camera, controlBottom, statusTop, onCamera, onSelect, onCatalog, people = [], onPerson }: {
+  people?: readonly UnifiedRow[]; onPerson?: (row: UnifiedRow) => void;
   pack: CityMapPack; venues: readonly MapVenue[]; counts: ReadonlyMap<string,number> | null; selected: string | null;
   controlBottom:number; statusTop:number | undefined; camera: MapCamera | null; onCamera: (camera:MapCamera) => void; onSelect:(id:string) => void; onCatalog:() => void;
 }) {
@@ -69,6 +71,12 @@ export function NativeMap({ pack, venues, counts, selected, camera, controlBotto
       }}>
       <Camera initialViewState={{center:initial.center,zoom:initial.zoom}}
         maxBounds={[pack.bounds[0][0],pack.bounds[0][1],pack.bounds[1][0],pack.bounds[1][1]]} maxZoom={16} />
+      {phase === 'loaded' && people.filter(row => row.radar && Date.parse(row.radar.validUntil) > Date.now()).map(row => <Marker key={`person:${row.publicPlayerId}`} id={`person:${row.publicPlayerId}`} lngLat={[row.radar!.geo.longitude,row.radar!.geo.latitude]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${row.player.displayName}. Примерное местоположение`} onPress={() => onPerson?.(row)}
+          style={{width:48,height:48,borderRadius:24,borderWidth:3,borderColor:colors.card,backgroundColor:colors.purple,alignItems:'center',justifyContent:'center'}}>
+          <Label style={{color:colors.onPurple,fontWeight:'700'}}>{row.player.displayName.slice(0,1)}</Label>
+        </Pressable>
+      </Marker>)}
       {phase === 'loaded' && venues.map(venue => <VenueMarker key={venue.id} venue={venue} counts={counts} selected={selected === venue.id} onSelect={onSelect} />)}
     </MapLibreMap>}
     {statusTop !== undefined && !failed && (state.status !== 'ready' || phase !== 'loaded') && <View style={[mapStyles.status,{top:statusTop}]}><Loading title="Загружаем карту…" /></View>}

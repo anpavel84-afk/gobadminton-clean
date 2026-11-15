@@ -63,7 +63,7 @@ export async function selectUnified(
   WHERE ${unrestrictedSql(restrictionsEnabled,"r.user_id",["account.access","profile.public","social.radar"])} AND r.policy_version=$5 AND r.region_id=$3 AND r.location_model IS NOT NULL
    AND e.policy_version=$5 AND e.event_type='accepted' AND p.radar_consented AND p.radar_consent_policy_version=$5
    AND NOT EXISTS(SELECT 1 FROM radar_consent_events w WHERE w.reverses_event_id=e.id)
-   AND s.revoked_at IS NULL AND s.audience='consumer_browser' AND s.expires_at>to_timestamp($8::float8/1000)
+   AND s.revoked_at IS NULL AND s.audience IN ('consumer_browser','consumer_native') AND s.expires_at>to_timestamp($8::float8/1000)
    AND r.expires_at>to_timestamp($8::float8/1000) AND r.hard_expires_at>to_timestamp($8::float8/1000)
    AND r.foreground_until>to_timestamp($8::float8/1000) AND r.location_valid_until>to_timestamp($8::float8/1000)
  ), projected AS MATERIALIZED (

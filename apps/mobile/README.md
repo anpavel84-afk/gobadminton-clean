@@ -1,3 +1,21 @@
+# #522 C1c / RadarR2 — continuation source, PARTIAL / HOLD
+
+Supplied source base: `907de013bca31775e7a2a28a5ff62a737edc000e`. This private export has no usable Git object history. The retained prior source delta was continued, not restarted; the previous timeout/HOLD receipt remains `b0cf2e7b81868c7af1f0a1cb38ef8b3a4c2a2c3e03186599cf3f6c3530f84c31`. No prior author PASS, candidate SHA or usage is inferred. VersionCode remains **8**. APK7 Owner UAT remains **FAIL**; full native parity/public delivery remain **HOLD**.
+
+Prepared: one foreground Radar owner shared by Header/Players; explicit current disclosure consent; fresh/coarse location; unified list/map windows; lifecycle/expiry fences; immutable UNKNOWN; proof-bearing contact composer re-previewing the original reference. Ordinary contact retains its three-field body. People use server coarse positions on the existing MapLibre renderer/citypacks/venue layer.
+
+Continuation fixes the four audience predicates in `unified-selection.ts`, `unified-origin.ts`, `unified-proof.ts` to accept exactly consumer_browser + consumer_native, preserving all other SQL fences. Safety receipt rereads retain explicit Radar context. Fresh preview may deny a new request while a validated existing conversation opens without sending. Owning integration fixtures include native/native and browser/native discovery, session/proof refusals, and zero conversation/message writes on denied proofs; these DB tests were NOT_RUN here.
+
+**Confirmed contract limitation, outside the 31-file scope:** `ProfilesService.contactableTargets` and `MessagingService.assertContactEligible` require directory visibility for first contact, even with discoveryProof. Radar-only peers therefore return canRequestContact=false and remain unavailable for first contact. No permission bypass/service change was made. The native-messages fixture now preserves that refusal and tests successful proof contact with a directory-visible, eligible peer. Any requirement to contact Radar-only/private peers needs separate bounded server-policy review. This source is not end-to-end acceptance of that requirement.
+
+Author checks: **78 passing tests** across direct Node mobile Radar (6), contact (20), auth/Header/runtime (36), and existing shared-map (16) suites. API security unit, disposable-DB integration, full typecheck/lint and contract tooling are NOT_RUN: this export has no node_modules/compiler. Independent QA, Product CI, generated native manifest inspection, signed Android binary/device evidence, and iOS signing/device checks remain NOT_TESTED. No network, install/resolution, DB, provider/model, build, signing, deploy or publication was performed.
+
+expo-location is pinned exactly **58.0.22** using supplied SDK58.0.25 evidence. Only foreground permission is configured; Always/background/motion/foreground-service/full-accuracy options are explicitly false. Existing map plugin/assets/lock remain unchanged. Trusted resolver generates the lock after author terminal; app.json is not native manifest proof.
+
+Swipe/play-interest/mutual and remaining #522 parity are separate mandatory unfinished slices. No APK/OTA/full-product/PROD completion is claimed.
+
+---
+
 # #522 R1b address4 — type-only ScrollView ref correction
 
 Base: 4666b3e491f7f4656d055ccec8f72e9de2294103. Import React ComponentRef as a type and use useRef<ComponentRef<typeof ScrollView>>(null) for the instance; scrollTo/ref wiring is unchanged. Root TSC and changed-file lint are PENDING; no fresh TSC/lint, tests, exports, build or native PASS is claimed here.
