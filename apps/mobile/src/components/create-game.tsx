@@ -42,8 +42,13 @@ export function CreateGame({ venueId }: { venueId?: string }) {
     if (await owner.selectVenue(venue, current) && current()) setSelected(selectionKey);
     if (view.current === viewAtPress) setSelecting(false);
   };
+  const continueOrdinaryForm = () => {
+    view.current++; setSelecting(false);
+    owner.continueOrdinaryForm(preferences.cityId);
+    router.push('/games/create');
+  };
   const reloadContext = () => venueId ? void selectVenue() : void owner.loadContext(preferences.cityId);
-  useEffect(() => { if (!venueId && auth.status === 'authenticated' && hydrated) void owner.loadContext(preferences.cityId); }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation, hydrated, preferences.cityId, venueId]);
+  useEffect(() => { if (!venueId && auth.status === 'authenticated' && hydrated) void owner.mountOrdinaryForm(preferences.cityId); }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation, hydrated, preferences.cityId, venueId]);
   const f = state.form;
   const field = (key: 'title' | 'date' | 'time' | 'duration' | 'capacity' | 'contact' | 'terms' | 'training' | 'trainerTerms', label: string, props = {}) => <GameField key={key} label={label} value={f[key]} onChange={value => owner.update({ [key]: value })} {...props} />;
   const choice = <K extends keyof CreationForm,>(key: K, value: CreationForm[K], label: string) => <TextButton key={String(value)} title={`${f[key] === value ? '✓ ' : ''}${label}`} onPress={() => owner.update({ [key]: value })} />;
@@ -70,7 +75,7 @@ export function CreateGame({ venueId }: { venueId?: string }) {
           {!!f.venueId && <Label>В форме уже выбрана площадка: {state.venues.find(v => v.id === f.venueId)?.name ?? f.venueId}. Подтвердите переключение или вернитесь к прежней форме.</Label>}
           {state.notice && <Label accessibilityRole="alert">{state.notice}</Label>}
           <PrimaryButton title="Выбрать эту площадку для формы" disabled={selecting} onPress={() => void selectVenue()} />
-          <TextButton title="Продолжить прежнюю форму" onPress={() => router.push('/games/create')} />
+          <TextButton title="Продолжить прежнюю форму" onPress={continueOrdinaryForm} />
         </>}
       </> : state.context === 'setup' ? <>
         <Label>Для создания и публикации игры нужен заполненный профиль с именем и городом. Город формы выбирается вручную или по явно выбранной площадке.</Label>

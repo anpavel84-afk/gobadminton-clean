@@ -4,7 +4,7 @@ import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { usePathname, useRouter } from 'expo-router';
-import { canonicalGamePath } from '../native-auth-protocol.ts';
+import { canonicalGamePath, canonicalVenueCreatePath } from '../native-auth-protocol.ts';
 import { SvgXml } from 'react-native-svg';
 import { brandMarkXml } from '../../assets/brand-mark.ts';
 import { colors, interaction, primaryLabelStyle, primarySurface, typography } from '../theme.ts';
@@ -66,7 +66,7 @@ export function Page({ children, purple = false, keyboard = false, header }: Pro
 export function Header({ back, light = false, action }: { back?: () => void; light?: boolean; action?: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const returnTo = canonicalGamePath(pathname);
+  const returnTo = canonicalVenueCreatePath(pathname) ?? canonicalGamePath(pathname);
   return <View style={styles.header}>
     {back && <TextButton title="Назад" onPress={back} light={light} />}
     <BrandLockup light={light} />

@@ -1,11 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
+import { stripTypeScriptTypes } from 'node:module';
+import { runInNewContext } from 'node:vm';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
 import { game as fixture } from './fixtures.ts';
-import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalReturnPath,
+import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalReturnPath, canonicalVenueCreatePath,
   parseCallback, parseNativeMe, parseSecureEnvelope } from '../src/native-auth-protocol.ts';
 import type { PendingLogin, SecureEnvelope } from '../src/native-auth-protocol.ts';
 
@@ -901,4 +905,60 @@ test('venue-create auth intent accepts only exact typed UUID route and survives 
   assert.equal(parseSecureEnvelope(cancelled.stored(),now)?.returnPath,route);
   assert.equal(cancelled.auth.gameManagement.getSnapshot().command,undefined);
 
+});
+
+
+test('permanent Header profile action preserves only typed venue intent through real profile save and profile return handler', async t => {
+  const header = readFileSync(new URL('../src/components/ui.tsx',import.meta.url),'utf8');
+  const handler = header.match(/title="Профиль" onPress=\{(.+)\} \/>/)![1];
+  const headerBody = header.slice(header.indexOf('export function Header('),header.indexOf('  return <View style={styles.header}>'))
+    .replace('export function','function') + `  return (${handler});\n}`;
+  const route = '/games/create/venue/11111111-1111-4111-8111-111111111111';
+  function pressHeader(pathname: string) {
+    let destination: {pathname:string;params:{returnTo?:string}} | undefined;
+    const render = runInNewContext(`(${stripTypeScriptTypes(headerBody)})`, {
+      useRouter:() => ({push:(path: typeof destination) => { destination = path; }}),usePathname:() => pathname,
+      canonicalGamePath,canonicalVenueCreatePath,
+    }) as (props: object) => () => void;
+    render({})(); return destination!;
+  }
+  assert.deepEqual({...pressHeader('/games/existing').params},{returnTo:'/games/existing'});
+  assert.deepEqual({...pressHeader('/games/create').params},{returnTo:'/games/create'});
+  for (const invalid of [route+'?cityId=x',route+'#publish',route+'\n',route+'/publish',route.replace('11111111-','%31'+'1111111-'),
+    '/games/create/venue/not-a-uuid','https://dev.gobadminton.ru'+route,'//evil'+route,'/messages','/games/manage/x','/venues/11111111-1111-4111-8111-111111111111']) {
+    assert.deepEqual({...pressHeader(invalid).params},{},invalid);
+  }
+  const destination = pressHeader(route); assert.equal(destination.pathname,'/profile'); assert.equal(destination.params.returnTo,route);
+  t.mock.method(publicApi,'cities',async () => [{id:'city',nameRu:'Казань',nameEn:'Kazan',countryCode:'RU',defaultTimezone:'Europe/Moscow'}]);
+  const s = setup(sessionEnvelope()); let dto = {publicPlayerId:'own',displayName:'',cityId:null as string | null,version:0,
+    trainer:false,areaKey:null,level:null,bio:null,directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,
+    optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,lookingForGame:null};
+  s.setHandler(async (path,init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === '/me/social-profile') {
+      if (init.method === 'PATCH') dto = {...dto,...JSON.parse(init.body as string),version:1};
+      return dto;
+    }
+    throw new Error(`Unexpected route: ${path}`);
+  });
+  await s.auth.hydrate(); await s.auth.profile.load();
+  s.auth.profile.update({displayName:'Хозяин',cityId:'city'}); await s.auth.profile.save();
+  assert.equal(s.auth.profile.getSnapshot().profile?.displayName,'Хозяин');
+  const profile = readFileSync(new URL('../app/profile.tsx',import.meta.url),'utf8');
+  const returnHandler = profile.match(/title="Вернуться к игре" onPress=\{(.+)\} \/>/)![1];
+  const profileBody = profile.slice(profile.indexOf('export default function Profile()'),profile.indexOf('  return <Page'))
+    .replace('export default function','function') + `  return (${returnHandler});\n}`;
+  const returned: string[] = [];
+  const render = runInNewContext(`(${stripTypeScriptTypes(profileBody)})`, {
+    useAuth:() => ({...s.auth.getSnapshot(),gameManagement:s.auth.gameManagement}),
+    useRouter:() => ({replace:(path: string) => returned.push(path)}),
+    usePreferences:() => ({preferences:{cityId:'search-city'}}),useLocalSearchParams:() => destination.params,
+    useState:() => [false,() => {}],useRef:() => ({current:false}),canonicalReturnPath,
+  }) as () => () => void;
+  const start = s.calls.length; render()(); await new Promise(done => setImmediate(done));
+  assert.deepEqual(returned,[route]); assert.equal(s.calls.length,start);
+  assert.equal(s.auth.gameManagement.getSnapshot().preview,null); assert.equal(s.auth.gameManagement.getSnapshot().command,undefined);
+  assert.equal(s.auth.gameManagement.getSnapshot().form.venueId,'');
+  assert.equal(s.calls.filter(c => c.path === '/games' || c.path.endsWith('/publish')).length,0);
 });

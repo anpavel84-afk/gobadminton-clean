@@ -1,3 +1,33 @@
+# #522 native venue ADDRESS2 · SOURCE_CANDIDATE · PARTIAL
+
+Three-finding source repair on `7ca526e29678d36af09cbe88f73939d0914d3159`:
+Continue now resumes the ordinary mount without reload/reset using actor/session,
+context-generation and observed search-city fences; explicit city changes reload.
+Failed catalog/network selection retains prior ready form/preview and reports a
+retry notice; authoritative invalid/setup still blocks writes. Header preserves
+only the exact typed venue-create return alongside its previous game returns.
+No automatic selection/create/publish/reconcile or global city/preferences writes.
+
+Author offline owning units: 66 passed, zero failures/skips/cancellations in the
+final game-management/auth runs, including actual CTA + ordinary mount/effect and
+Header → profile save → typed return handlers. Initial new regressions exposed
+two fixture errors (catalog city and incomplete own-profile DTO/cities mock),
+corrected before these final runs. This is author verification, not independent QA.
+No dependencies installed; fresh parent checks and focused independent closure of
+three findings/related delta remain pending; no second whole-review claim.
+
+First whole venue QA FAIL `d142c4a31a85c981da3293d60e51f160efa34be61b032c54faed892d23adecae`,
+parent PASS `00927510229e3a7ecefb0c523b8bcc5ee45e6036bbec3fbb88d322907c132b10`
+(85 units), two completed venue source runs, V1 e18/address1 cancellation closure,
+manual FAIL `a352e4e586281723d73088bca2b47cd6949611d2deeb2c1cbfc29cf4be84493d`
+and all prior backend/safety/FAIL/UNKNOWN history remain retained below/in supplied
+evidence. Accepted DEV alpha.92 `2a0b8207b8cc28d0e56a1ec5abecc604e934faed`
+is unchanged. Owner APK7 visual/function FAIL (different UI, maps/swipe missing)
+and S23 FAIL remain; Astra alignment is pending. No redesign, APK8 build,
+metadata93, publication or deploy. Native visual NOT_VERIFIED; full native parity,
+signed OTA and iOS remain mandatory and unfinished. UAT NOT_TESTED for this repair.
+All prior README bytes/history follow unchanged.
+
 # #522 native venue ADDRESS1 · SOURCE_CANDIDATE · PARTIAL
 
 Bounded cancellation repair on `e18d7dec9afba0a9687ce42890ce90dcef868216`.

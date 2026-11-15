@@ -396,7 +396,10 @@ test('explicit catalog-backed venue selection changes only local form venue, pre
   const wrong = setup(); await preview(wrong.owner); const before = wrong.owner.getSnapshot();
   assert.equal(await wrong.owner.selectVenue({...venue,timezone:'Pacific/Auckland'}),false);
   assert.deepEqual(wrong.owner.getSnapshot().form,before.form); assert.equal(wrong.owner.getSnapshot().preview,before.preview);
-  await wrong.owner.publishPreview(); assert.equal(wrong.sent.length,0);
+  assert.equal(wrong.owner.getSnapshot().context,'ready'); assert.equal(wrong.sent.length,0);
+  await wrong.owner.publishPreview(); assert.equal(wrong.sent.length,2);
+  assert.equal(wrong.sent[0]?.kind,'create');
+  if (wrong.sent[0]?.kind === 'create') assert.equal(wrong.sent[0].body.venueId,venue.id);
 });
 
 test('venue entry/selection cannot replace UNKNOWN or created reference and late view/session/catalog reads cannot select', async () => {
@@ -420,10 +423,13 @@ test('venue entry/selection cannot replace UNKNOWN or created reference and late
 
 // Execute the component's real pre-JSX hooks/handlers with retained hook slots and focus cleanup.
 // No React Native renderer is needed for this controlled lifecycle; UI rendering remains native QA.
-function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue) {
+function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue, options: { cityId?: string; push?: (path: string) => void } = {}) {
   const source = readFileSync(new URL('../src/components/create-game.tsx',import.meta.url),'utf8');
+  // Resolve the actual CTA binding, so reverting it to router.push alone breaks the lifecycle test.
+  const continueHandler = source.match(/title="Продолжить прежнюю форму" onPress=\{(.+)\} \/>/)![1];
+  let cityId = options.cityId ?? 'city-1';
   const body = source.slice(source.indexOf('export function CreateGame('),source.indexOf('  const f = state.form;'))
-    .replace('export function','function') + '  return { selectVenue, selecting, selected };\n}';
+    .replace('export function','function') + `  return { selectVenue, selecting, selected, continuePress: (${continueHandler}) };\n}`;
   type Slot = { value?: unknown; deps?: unknown[]; cleanup?: () => void };
   const slots: Slot[] = []; let index = 0, focused = true;
   let focusCallback: (() => () => void) | undefined, focusCleanup: (() => void) | undefined;
@@ -432,7 +438,7 @@ function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue) {
   const same = (a: unknown[] | undefined,b: unknown[]) => !!a && a.length === b.length && a.every((v,i) => Object.is(v,b[i]));
   const component = runInNewContext(`(${stripTypeScriptTypes(body)})`, {
     useAuth: () => ({gameManagement:owner,status:'authenticated',me:{id:actor.actorId}}),
-    useRouter: () => ({}), usePreferences: () => ({preferences:{cityId:'city-1'},hydrated:true}),
+    useRouter: () => ({push:options.push ?? (() => {})}), usePreferences: () => ({preferences:{cityId},hydrated:true}),
     useSyncExternalStore: (_subscribe: unknown,getSnapshot: () => unknown) => getSnapshot(),
     useRef: (value: unknown) => { const s = slot(); return s.value ?? (s.value = {current:value}); },
     useState: (value: unknown) => { const s = slot(); if (!Object.hasOwn(s,'value')) s.value = value;
@@ -447,8 +453,9 @@ function mountedCreateGame(owner: GameManagementCoordinator, target?: Venue) {
     },
     useResource: () => ({state:{status:'ready',data:target},retry:() => {}}),
     publicApi: {}, venueCreatePath: (id: string) => `/games/create/venue/${id}`,
-  }) as (props: {venueId?: string}) => {selectVenue: () => Promise<void>; selecting: boolean; selected: boolean};
+  }) as (props: {venueId?: string}) => {selectVenue: () => Promise<void>; selecting: boolean; selected: boolean; continuePress: () => void};
   return {
+    setCity: (value: string) => { cityId = value; },
     render: () => { index = 0; const result = component({venueId:target?.id});
       const pending = effects; effects = []; pending.forEach(effect => effect()); return result; },
     blur: () => { focused = false; focusCleanup?.(); focusCleanup = undefined; },
@@ -540,4 +547,76 @@ test('UNKNOWN arising during local selection retains the strict same packet, key
   assert.strictEqual(s.owner.getSnapshot().command?.packet.body,packet.body);
   assert.equal(s.owner.getSnapshot().command?.packet.key,packet.key); assert.equal(s.sent.length,1);
   assert.equal(await s.owner.selectVenue(next),false); assert.equal(s.sent.length,1);
+});
+
+
+test('actual Continue CTA resumes new ordinary mounts and backstack without reads even when local city differs; explicit city and actor changes still reload', async () => {
+  const local = {...venue,id:'local',cityId:'local-city'}, target = {...venue,id:'target',cityId:'target-city'};
+  let reads = 0; const loads: Promise<void>[] = [];
+  const s = setup({venues:async city => { reads++; return {items:city === local.cityId ? [local] : [{...venue,cityId:city}],nextCursor:null}; }});
+  const load = s.owner.loadContext;
+  s.owner.loadContext = (...args) => { const work = load(...args); loads.push(work); return work; };
+  const original = mountedCreateGame(s.owner); original.render(); await Promise.all(loads);
+  s.owner.update(form); assert.equal(await s.owner.selectVenue(local),true); s.owner.preview();
+  const before = s.owner.getSnapshot(); assert.ok(before.preview); original.blur();
+  const routes: string[] = [], contextual = mountedCreateGame(s.owner,target,{push:path => routes.push(path)});
+  contextual.render().continuePress(); assert.deepEqual(routes,['/games/create']); contextual.blur();
+  const start = reads, remounted = mountedCreateGame(s.owner); remounted.render(); await Promise.all(loads);
+  assert.strictEqual(s.owner.getSnapshot(),before); assert.equal(reads,start); assert.equal(before.cityId,local.cityId);
+  original.focus(); original.render(); assert.strictEqual(s.owner.getSnapshot(),before);
+  // A second new mount also retains the same current domain continuation.
+  mountedCreateGame(s.owner).render(); await Promise.all(loads); assert.strictEqual(s.owner.getSnapshot(),before);
+  remounted.setCity('changed-search-city'); remounted.render(); await Promise.all(loads);
+  assert.equal(s.owner.getSnapshot().cityId,'changed-search-city'); assert.equal(s.owner.getSnapshot().form.venueId,'');
+  assert.equal(s.owner.getSnapshot().preview,null); assert.ok(reads > start); assert.equal(s.sent.length,0);
+  s.owner.continueOrdinaryForm('changed-search-city'); s.owner.setActor({...actor,sessionId:'new',generation:2});
+  mountedCreateGame(s.owner,undefined,{cityId:'changed-search-city'}).render(); await Promise.all(loads);
+  assert.equal(s.owner.getSnapshot().context,'ready'); assert.equal(s.owner.getSnapshot().form.contact,''); assert.equal(s.sent.length,0);
+});
+
+test('failed live selection keeps usable prior context through actual Continue and ordinary mount; setup/invalid authority still blocks', async () => {
+  for (const failure of ['mismatch','network','setup','invalid'] as const) {
+    let fail = false, loads = 0;
+    const target = {...venue,id:'target',cityId:'target-city'};
+    const s = setup({profile:async () => {
+      if (fail && failure === 'setup') return {...profile,cityId:null};
+      if (fail && failure === 'invalid') throw new ParticipationError('invalid');
+      return profile;
+    },venues:async city => {
+      loads++;
+      if (fail && failure === 'network') throw new ParticipationError('network');
+      return {items:city === target.cityId ? [] : [venue],nextCursor:null};
+    }});
+    await preview(s.owner); const before = s.owner.getSnapshot(); fail = true;
+    const contextual = mountedCreateGame(s.owner,target); await contextual.render().selectVenue();
+    const failed = s.owner.getSnapshot();
+    assert.strictEqual(failed.form,before.form); assert.strictEqual(failed.preview,before.preview); assert.equal(s.sent.length,0);
+    if (failure === 'setup' || failure === 'invalid') {
+      assert.equal(failed.context,failure === 'setup' ? 'setup' : 'error');
+      await s.owner.publishPreview(); assert.equal(s.sent.length,0); continue;
+    }
+    assert.equal(failed.context,'ready'); assert.strictEqual(failed.venues,before.venues); assert.strictEqual(failed.profile,before.profile);
+    assert.match(failed.notice ?? '',/Выбор не изменён/);
+    const count = loads; contextual.render().continuePress(); contextual.blur();
+    mountedCreateGame(s.owner).render(); await new Promise(done => setImmediate(done));
+    assert.strictEqual(s.owner.getSnapshot(),failed); assert.equal(loads,count); assert.equal(s.sent.length,0);
+    s.owner.edit(); s.owner.update({title:'Still editable'}); assert.equal(s.owner.getSnapshot().form.title,'Still editable');
+  }
+});
+
+test('late failed selection cannot replace later edits, newer valid selection or session state', async () => {
+  for (const interruption of ['edit','selection','session'] as const) {
+    const gate = deferred<boolean>(), reached = deferred<boolean>();
+    const target = {...venue,id:'target',cityId:'target-city'}, newer = {...venue,id:'newer',cityId:'newer-city'};
+    const s = setup({venues:async city => {
+      if (city === target.cityId) { reached.resolve(true); await gate.promise; throw new ParticipationError('network'); }
+      return {items:city === newer.cityId ? [newer] : [venue],nextCursor:null};
+    }});
+    await preview(s.owner); const work = s.owner.selectVenue(target); await reached.promise;
+    if (interruption === 'edit') { s.owner.update({title:'Later'}); s.owner.preview(); }
+    if (interruption === 'selection') assert.equal(await s.owner.selectVenue(newer),true);
+    if (interruption === 'session') s.owner.setActor({...actor,sessionId:'changed',generation:2});
+    const current = s.owner.getSnapshot(); gate.resolve(true); assert.equal(await work,false);
+    assert.strictEqual(s.owner.getSnapshot(),current); assert.equal(s.sent.length,0);
+  }
 });
