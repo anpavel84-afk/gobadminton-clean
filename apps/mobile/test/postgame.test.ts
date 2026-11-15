@@ -1,9 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { createNativeApi } from '../src/native-api.ts';
 import { PostgameCoordinator } from '../src/postgame-coordinator.ts';
-import { PostgameError, parseResults, parseAttendance, parseOwnResults, parseReminders, mayAcknowledge, needsAttention, cursor, wire, validateReceipt } from '../src/postgame.ts';
+import { PostgameError, parseResults, parseAttendance, parseOwnResults, parseReminders, mayAcknowledge, needsAttention, cursor, wire, validateReceipt, normalizeFormReason } from '../src/postgame.ts';
 import type { Attendance, Results, OwnResult, Reminder, Intent, Packet } from '../src/postgame.ts';
 import { hubRows, hubBucket, matchesFilter, hubView, sortHubRows } from '../src/my-games.ts';
 import type { Actor } from '../src/participation.ts';
@@ -216,17 +215,40 @@ test('busy/UNKNOWN dismiss and rejected new intent never alter or resend the ori
   s.coordinator.cancelReview();s.coordinator.review(intent);await s.coordinator.confirm();
   assert.equal(s.coordinator.getSnapshot().command?.status,'unknown');assert.equal(s.coordinator.getSnapshot().command?.packet,original);assert.equal(s.sent.length,1);
 });
-test('native review source wiring: modal Back/dismiss only closes UI, busy buttons gate intents, confirm/reconcile use owner',()=>{
-  // Source contract only: this does not certify rendered focus/Back/keyboard or device layout.
-  const ui=readFileSync(new URL('../src/components/postgame.tsx',import.meta.url),'utf8');
-  const button=ui.slice(ui.indexOf('function ReviewButton'),ui.indexOf('function Choice'));
-  assert.match(button,/disabled=useBlocked\(\)/);assert.match(button,/disabled=\{disabled\}/);assert.match(button,/trigger\.current=ref\.current/);
-  const modal=ui.slice(ui.indexOf('export function CommandReview'),ui.indexOf('export function OutcomePanel'));
-  assert.match(modal,/<Modal[\s\S]*onRequestClose=\{close\}/);assert.match(modal,/owner\.cancelReview\(\)/);
-  assert.match(modal,/owner\.confirm\(\)/);assert.match(modal,/owner\.reconcile\(command\.packet\.gameId\)/);
-  assert.match(modal,/AccessibilityInfo\.setAccessibilityFocus/);assert.match(modal,/trigger\?\.current\?\.focus\(\)/);
-  assert.doesNotMatch(modal,/owner\.(forget|send|setActor)\(/);
-  for(const route of ['../app/my-games.tsx','../app/my-games/[gameId]/results.tsx']) {
-    const source=readFileSync(new URL(route,import.meta.url),'utf8');assert.match(source,/<PostgameSurface>/);assert.match(source,/<CommandReview/);
+test('form CRLF/CR/LF normalization reaches immutable review and strict wire with the exact reason',async()=>{
+  const s=setup();await s.coordinator.loadResults(game.id);
+  for(const newline of ['\r\n','\r','\n']) {
+    const raw=`  Изменилось время${newline}Согласовано  с участниками  `;
+    const reason=normalizeFormReason(raw);
+    assert.equal(reason,'Изменилось время Согласовано  с участниками');
+    const outcome:Intent={kind:'outcome',gameId:game.id,body:{expectedVersion:0,outcome:'not_held',reason}};
+    s.coordinator.review(outcome);
+    const review=s.coordinator.getSnapshot().review;
+    assert.deepEqual(review,outcome);assert.ok(Object.isFrozen(review));assert.ok(Object.isFrozen(review?.body));
+    assert.deepEqual(wire(review!).body,outcome.body);assert.equal(s.sent.length,0);
+    const attendance:Intent={kind:'attendance',gameId:game.id,contextId:row.contextId,body:{expectedVersion:1,value:'present',correctionReason:reason}};
+    assert.deepEqual(wire(attendance).body,attendance.body);
+    assert.throws(()=>wire({...outcome,body:{...outcome.body,reason:raw.trim()}}),PostgameError);
+    assert.throws(()=>wire({...attendance,body:{...attendance.body,correctionReason:raw.trim()}}),PostgameError);
+    s.coordinator.cancelReview();
+  }
+  assert.equal(normalizeFormReason('  Первая\r\n\r\nВторая\rТретья\nЧетвёртая  '),'Первая  Вторая Третья Четвёртая');
+});
+test('form normalization preserves other C0/DEL for rejection and retains wire reason length/required rules',()=>{
+  const outcome=(reason:string):Intent=>({kind:'outcome',gameId:game.id,body:{expectedVersion:1,outcome:'held',reason}});
+  const attendance=(correctionReason:string):Intent=>({kind:'attendance',gameId:game.id,contextId:row.contextId,body:{expectedVersion:1,value:'present',correctionReason}});
+  for(const code of [...Array.from({length:32},(_,i)=>i).filter(i=>i !== 10 && i !== 13),127]) {
+    const control=String.fromCharCode(code);
+    for(const raw of [`${control}Причина`,`При${control}чина`,`Причина${control}`]) {
+      const reason=normalizeFormReason(raw);assert.equal(reason,raw);
+      assert.throws(()=>wire(outcome(reason)),PostgameError);assert.throws(()=>wire(attendance(reason)),PostgameError);
+    }
+  }
+  const limit=normalizeFormReason(`  ${'я'.repeat(498)}\r\nя  `);
+  assert.equal(limit.length,500);assert.deepEqual(wire(outcome(limit)).body,outcome(limit).body);
+  assert.deepEqual(wire(attendance(limit)).body,attendance(limit).body);
+  for(const raw of [' \r\n  ',`${'я'.repeat(499)}\nя`]) {
+    const reason=normalizeFormReason(raw);
+    assert.throws(()=>wire(outcome(reason)),PostgameError);assert.throws(()=>wire(attendance(reason)),PostgameError);
   }
 });

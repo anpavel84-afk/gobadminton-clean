@@ -288,6 +288,11 @@ run("#457 postgame reminders — disposable", () => {
     const durable=await pool.query("SELECT state,version FROM game_outcome_reminders WHERE id=$1",[item.id]);
     expect(durable.rows[0]).toMatchObject({state:"snoozed",version:item.version+1});
     await nativeGuards(organizer,"/v1/me/postgame-reminders","GET");await nativeGuards(organizer,url,"POST",payload);
+    const outcome = await put(organizer, `/v1/games/${g.id}/outcome`, {
+      expectedVersion: 0,
+      outcome: "held",
+    });
+    expect(outcome.statusCode).toBe(200);
   });
 
   it("repeated job ensures max 3 durable ordinals; overdue catch-up activates one card", async () => {

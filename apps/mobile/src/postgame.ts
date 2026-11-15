@@ -50,6 +50,12 @@ function array<T>(v: unknown, parse: (v: unknown) => T): T[] { return Array.isAr
 function time(v: unknown): string { const value = str(v); return Number.isFinite(Date.parse(value)) ? value : invalid(); }
 export function postgameId(v: unknown): string { const id = str(v); return /^[A-Za-z0-9_-]{1,128}$/.exec(id)?.[0] === id ? id : invalid(); }
 function hasControl(value: string): boolean { return Array.from(value).some(char => { const code = char.charCodeAt(0); return code <= 31 || code === 127; }); }
+/** Adapt ordinary multiline form input before review; retain other controls for wire rejection. */
+export function normalizeFormReason(value: string): string {
+  const normalized = value.replace(/\r\n|\r|\n/g, ' ');
+  // trim() would silently remove leading/trailing tabs and some other C0 characters.
+  return hasControl(normalized) ? normalized : normalized.trim();
+}
 export function cursor(v: unknown): string { const value = str(v); return value.length > 0 && value.length <= 2048 && !/\s/.test(value) && !hasControl(value) ? value : invalid(); }
 const sources = ['manager_explicit', 'self_attested', 'case_reviewer'] as const;
 const values = ['present', 'absent', 'unknown'] as const;
