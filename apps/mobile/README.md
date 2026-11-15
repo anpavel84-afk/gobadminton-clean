@@ -1,3 +1,11 @@
+# #522 R1b address4 — type-only ScrollView ref correction
+
+Base: 4666b3e491f7f4656d055ccec8f72e9de2294103. Import React ComponentRef as a type and use useRef<ComponentRef<typeof ScrollView>>(null) for the instance; scrollTo/ref wiring is unchanged. Root TSC and changed-file lint are PENDING; no fresh TSC/lint, tests, exports, build or native PASS is claimed here.
+
+ADDRESS3 parent 6cf91f7c remains historical FAIL (mobile TSC). Its 70 owning units, lint, two Expo exports and archive PASS are retained as history, subject to Root's exact outside-two-path/type-erasure proof. Astra closure eb654bd2 marks five findings FIXED_IN_SOURCE only, without device acceptance. Original Code FAIL 6aa3e46e and raw Astra review 4df8c864 remain unchanged; focused Code closure is PENDING.
+
+Device/native scroll, map gestures, attribution and physical Back remain NOT_TESTED. Owner APK7 FAIL, mandatory real Header/Players Radar C1c OPEN P1 and source-continuation delivery/publication HOLD remain. No Owner GO or full parity claim. All prior README bytes follow unchanged.
+
 # #522 R1b address3 — bounded source correction, DEVICE_NOT_TESTED
 
 Base supplied: eabed0464493adab25c44d08f6e369e00768468e. This private export contains only the eight admitted source/document/test deltas. No build/signing, install/resolution, DB/network operation, metadata, merge, release or publication. Existing 11.5.1 dependency/lock reuse remains model f56bdafe9611b6224360cabf9ca83a1bd5966cd0 / generated 15f0796228fd5ef02a668988686f10a1f641ef33; lock SHA256 d69f0e8f732ad0d28c4ae2aa0f664259abb2119f902806ac86859232bb355f84.

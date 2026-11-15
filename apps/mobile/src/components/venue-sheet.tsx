@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ComponentRef } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,7 +20,7 @@ export function VenueSheet({ selection, expanded, games, onExpand, onClose, onRe
 }) {
   const router = useRouter(), insets = useSafeAreaInsets(), spacing = venueSheetSpacing(insets.bottom);
   const [view,setView] = useState<'info'|'schedule'>('info'), [selectedDate,setSelectedDate] = useState('');
-  const scroll = useRef<ScrollView>(null), mounted = useRef(true);
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null), mounted = useRef(true);
   useLayoutEffect(() => {mounted.current=true;return () => {mounted.current=false;onMeasure(0);};},[onMeasure]);
   const task = useCallback(async (signal:AbortSignal) => {
     const venue = await publicApi.venue(selection.id,signal);
