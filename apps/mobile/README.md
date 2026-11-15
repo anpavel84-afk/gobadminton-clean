@@ -1,3 +1,21 @@
+# #522 R1b address3 — bounded source correction, DEVICE_NOT_TESTED
+
+Base supplied: eabed0464493adab25c44d08f6e369e00768468e. This private export contains only the eight admitted source/document/test deltas. No build/signing, install/resolution, DB/network operation, metadata, merge, release or publication. Existing 11.5.1 dependency/lock reuse remains model f56bdafe9611b6224360cabf9ca83a1bd5966cd0 / generated 15f0796228fd5ef02a668988686f10a1f641ef33; lock SHA256 d69f0e8f732ad0d28c4ae2aa0f664259abb2119f902806ac86859232bb355f84.
+
+Raw independent results remain OPEN, unmodified and not reclassified as PASS:
+- FIRST R1b CodeQA FAIL: 6aa3e46e06a62a1a6cb86a64e83a2f131b938789130a8190529b51f3167b911f (two P2).
+- Astra High UI source review: 4df8c864d889ca540932bc8b8d5ab1e76f8f1336a7fe6ce1ca43faa9df1c9037 (three P1, two P2). Compact source credit overlaps CodeQA: six unique material items.
+
+Changes follow the accepted WEB 2a0b8207b8cc28d0e56a1ec5abecc604e934faed references supplied in the task: separate white Back/purple inset and labelled filter capsules; onLayout places status/error below their actual height. Expanded map-only venue content leads with a responsive 16:9 gallery, then description/identity/info/contacts. An explicit action opens the real venue-local date-grouped schedule; it does not append full Games cards to information. Standalone VenueDetail keeps its original presentation. Create stays expanded-only, outside body scrolling, in the existing typed auth/profile/create flow. Compact uses 12dp inset, rounded corners, 64/copy/44 geometry, 17/14/13 typography, a visible illustration badge and verified primary catalog-source link. Text may grow and the body remains scrollable. Expanded X collapses; compact X dismisses.
+
+Outer-sheet onLayout supplies the actual obstruction plus safe-bottom anchoring to the real MapLibre attribution/compass positions. Context/selection/expansion generations fence late callbacks and reject stale measurements; no nominal 172dp clearance or replacement attribution overlay. Native renderer placement/readability is NOT_VERIFIED.
+
+List return preserves the existing Stack route/resource/pages/cursor. Only a bookmark captured by that mounted list can request its real scroll offset; external map entry returns to safe /games, and query changes reject the old bookmark. No offset-driven page fetching or global store. Primary framework receipt 47009139f36a0d143988ff7a4b8dcb5fdfcb297b04a43394cf4432967921f6e8 is reducer/source evidence only; supplied probe was not executed. Pagination finding disposition remains OPEN_PENDING_FOCUSED_REVIEWER_ASSESSMENT, not false-positive/closed.
+
+Self-checks: maps 16/16 and venues 7/7 passed, zero skips. They exercise the actual resource hook/cursor handler, second/third pages, end/error/abort/new-query, measured obstruction/callback fences, X handlers and timezone grouping. This is JS/source evidence only. Typecheck attempted: tsc not found; export:check attempted: expo not found. Cached dependencies are absent in this export; lint/typecheck/exports remain gates, with no installation attempted.
+
+Next: Root fresh checks, focused CodeQA for the two Code P2 + five UI items (overlap explicit) and related eight-file delta; separate bounded Astra UI closure later. All earlier normal/HOLD/exact-recovery/parent FAIL/UNKNOWN history remains below unchanged. C1a whole FAIL e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825 retained. Real Header/Players Radar P1 C1c stays mandatory OPEN. Owner APK7 FAIL, full parity, device 360/390/large text/gestures/attribution/return, Radar, swipe, UGC, OTA and iOS remain unfinished. UAT=NOT_TESTED; no delivery or acceptance claim.
+
 # #522 R1b address2 · TSC/marker source correction · delivery HOLD
 
 Bounded author continuation from Root-bound candidate

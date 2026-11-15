@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { URL } from 'node:url';
-import { adaptNativeStyle, expandedVenueCreate, gamesContext, gamesRoute, loadMapSnapshot, loadNativeStyle, mapBack, mapDataKey, mapPackForCity, markerActivation, nativeMapCamera, nativeResource, publicGamesIntent, resolveMapSelection, validMapCamera, venueMarkerLabel, venueSchedules, verifiedNativeStyle, visibleMapVenues } from '../src/maps.ts';
-import { createPublicApi } from '../src/public-api.ts';
+import { adaptNativeStyle, closeVenueSheet, expandedVenueCreate, gamesContext, gamesRoute, loadMapSnapshot, loadNativeStyle, mapBack, mapControlBottom, mapDataKey, mapPackForCity, markerActivation, nativeMapCamera, nativeResource, publicGamesIntent, resolveMapSelection, retainedGamesOffset, validMapCamera, venueMarkerLabel, venueScheduleDays, venueSchedules, verifiedNativeStyle, visibleMapVenues } from '../src/maps.ts';
+import { appendUpcomingPage } from '../src/upcoming.ts';
+import type { GamePage } from '../src/public-api.ts';
+import { createPublicApi, gamesResourceKey } from '../src/public-api.ts';
 import type { MapSnapshot, MapOverlay } from '../src/maps.ts';
 import { LatestResource } from '../src/resource.ts';
 import { parseVenue } from '../src/venues.ts';
@@ -151,13 +153,15 @@ test('owning Games handlers carry the current query/scroll into map and restore 
   const listSource=readFileSync(new URL('../app/games/index.tsx',import.meta.url),'utf8');
   const mapSource=readFileSync(new URL('../app/games/map.tsx',import.meta.url),'utf8');
   const context=gamesContext({cityId:pack.cityId,day:'2026-11-20',activity:'regular',listOffset:'735',origin:'list'})!;
-  const pushes:unknown[]=[], returns:unknown[]=[], listOffset={current:0};
+  const pushes:unknown[]=[], returns:unknown[]=[], listOffset={current:0}, mapBookmark={current:null};
+  const key=gamesResourceKey(pack.cityId,{day:context.day,activityKind:context.activity,timezone:venue.timezone});
   const onScroll=listSource.match(/onScroll=\{(.+)\} scrollEventThrottle/)![1]!;
-  const scroll=runInNewContext(`(${stripTypeScriptTypes(onScroll)})`,{listOffset}) as (event:unknown)=>void;
+  const scroll=runInNewContext(`(${stripTypeScriptTypes(onScroll)})`,{listOffset,restoreOffset:{current:null}}) as (event:unknown)=>void;
   scroll({nativeEvent:{contentOffset:{y:735}}});assert.equal(listOffset.current,735);
   const open=listSource.match(/const openMap = (.+);/)![1]!;
-  const openMap=runInNewContext(`(${stripTypeScriptTypes(open)})`,{cityId:pack.cityId,day:context.day,activityKind:context.activity,level:'',listOffset,gamesRoute,router:{push:(route:unknown)=>pushes.push(route)}}) as ()=>void;
+  const openMap=runInNewContext(`(${stripTypeScriptTypes(open)})`,{cityId:pack.cityId,day:context.day,activityKind:context.activity,level:'',listOffset,mapBookmark,key,gamesRoute,router:{push:(route:unknown)=>pushes.push(route)}}) as ()=>void;
   openMap();assert.equal(pushes.length,1);
+  assert.equal(retainedGamesOffset(mapBookmark.current,context,key),735);
   assert.deepEqual(JSON.parse(JSON.stringify(pushes[0])),gamesRoute(context,'map'));
   const callback=mapSource.slice(mapSource.indexOf('  const returnToList ='),mapSource.indexOf('  const back ='))+'\nreturn returnToList;';
   const returnToList=runInNewContext(stripTypeScriptTypes(`(function(){${callback}})()`),{
@@ -171,4 +175,135 @@ test('owning Games handlers carry the current query/scroll into map and restore 
   const restoreOffset={current:735 as number|null};
   const resized=runInNewContext(`(${stripTypeScriptTypes(onSize)})`,{restoreOffset,state:{data:{items:[]}},listRef:{current:{scrollToOffset:({offset}:{offset:number})=>{restored=offset;}}}}) as (w:number,h:number)=>void;
   resized(360,500);assert.equal(restored,null);resized(360,1500);assert.equal(restored,735);assert.equal(restoreOffset.current,null);
+});
+
+test('mounted useResource retains real second/third cursor pages and local scroll bookmark across map/back without any restore fetch', async () => {
+  const {readFileSync}=await import('node:fs');
+  const {stripTypeScriptTypes}=await import('node:module');
+  const {runInNewContext}=await import('node:vm');
+  // Execute the actual hook with a retained React-style state/effect owner.
+  // This exercises its dependencies and resource lifetime; it is not a native mount/scroll test.
+  const hooks=readFileSync(new URL('../src/hooks.ts',import.meta.url),'utf8');
+  const source=hooks.slice(hooks.indexOf('export function useResource'),hooks.indexOf('export function useReduceMotion')).replace('export function','function');
+  let owned:unknown, deps:unknown[]|undefined;
+  const lifecycle:{cleanup?:()=>void}={};
+  const hook=runInNewContext(stripTypeScriptTypes(`${source}\nuseResource;`),{
+    LatestResource,
+    useState:(initialize:()=>unknown)=>{owned ??= initialize();return [owned];},
+    useSyncExternalStore:(_subscribe:unknown,getSnapshot:()=>unknown)=>getSnapshot(),
+    useEffect:(effect:()=>()=>void,next:unknown[])=>{
+      if (!deps || next.some((value,index)=>value !== deps![index])) {lifecycle.cleanup?.();deps=next;lifecycle.cleanup=effect();}
+    },
+  }) as (key:string,task:(signal:AbortSignal)=>Promise<GamePage>)=>{state:LatestResource<GamePage>['state'];resource:LatestResource<GamePage>};
+  const calls:string[]=[], api=createPublicApi(async url=>{
+    const cursor=new URL(String(url)).searchParams.get('cursor') ?? 'first';calls.push(cursor);
+    return Response.json(cursor === 'first' ? {items:[upcoming],nextCursor:'second'} : cursor === 'second'
+      ? {items:[{...upcoming,id:'page-2'}],nextCursor:'third'} : {items:[{...upcoming,id:'page-3'}],nextCursor:null});
+  },()=>now);
+  const filters={day:'2026-11-20',activityKind:'regular' as const,timezone:venue.timezone};
+  const key=gamesResourceKey(pack.cityId,filters), task=(signal:AbortSignal)=>api.games(pack.cityId,undefined,signal,filters);
+  const initial=hook(key,task);await new Promise(resolve=>setImmediate(resolve));
+  const first=hook(key,task);assert.strictEqual(first.resource,initial.resource);assert.equal(first.state.data?.nextCursor,'second');
+  const listSource=readFileSync(new URL('../app/games/index.tsx',import.meta.url),'utf8');
+  const moreSource=listSource.slice(listSource.indexOf('  const more ='),listSource.indexOf('  const selectCity ='))+'\nmore;';
+  const more=()=>runInNewContext(stripTypeScriptTypes(moreSource),{cityId:pack.cityId,key,day:filters.day,activityKind:filters.activityKind,timezone:venue.timezone,
+    state:first.resource.state,resource:first.resource,publicApi:api,appendUpcomingPage:(old:GamePage,page:GamePage)=>appendUpcomingPage(old,page,now)}) as ()=>void;
+  more()();await new Promise(resolve=>setImmediate(resolve));more()();await new Promise(resolve=>setImmediate(resolve));
+  const loaded=hook(key,task).state.data!;
+  assert.deepEqual(loaded.items.map(item=>item.id),[upcoming.id,'page-2','page-3']);assert.equal(loaded.nextCursor,null);
+  const context=gamesContext({cityId:pack.cityId,day:filters.day,activity:filters.activityKind,listOffset:'12800',origin:'list'})!;
+  const bookmark={context,resourceKey:key};
+  // Focus changes do not change the hook key or task, so neither cleanup nor a first-page reload runs.
+  hook(key,task);const returned=hook(key,task);
+  assert.strictEqual(returned.state.data,loaded);assert.deepEqual(calls,['first','second','third']);
+  assert.equal(retainedGamesOffset(bookmark,context,key),12800);
+  assert.equal(retainedGamesOffset(null,context,key),null); // a forged origin/offset has no local authority
+  assert.equal(retainedGamesOffset(bookmark,{...context,origin:'external'},key),null);
+  assert.equal(retainedGamesOffset(bookmark,{...context,day:'2026-11-21'},key),null);
+  assert.equal(retainedGamesOffset(bookmark,{...context,activity:'trainer_led'},key),null);
+  assert.equal(retainedGamesOffset(bookmark,context,`${key}:new-generation`),null);
+  const size=listSource.match(/onContentSizeChange=\{(.+)\}/)![1]!;
+  let restored:number|null=null;const restoreOffset={current:retainedGamesOffset(bookmark,context,key)};
+  const resize=runInNewContext(`(${stripTypeScriptTypes(size)})`,{restoreOffset,state:returned.state,listRef:{current:{scrollToOffset:({offset}:{offset:number})=>{restored=offset;}}}}) as (w:number,h:number)=>void;
+  resize(360,20000);assert.equal(restored,12800);assert.equal(restoreOffset.current,null);
+  more()();await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,3); // real end cursor is final
+  // Actual hook query change aborts an in-flight old cursor and cannot publish it over the new query.
+  let oldSignal!:AbortSignal, finish!:(page:GamePage)=>void;
+  const late=returned.resource.load(key,signal=>{oldSignal=signal;return new Promise(resolve=>{finish=resolve;});},appendUpcomingPage);
+  const nextKey=gamesResourceKey(pack.cityId,{...filters,day:'2026-11-21'});
+  const nextTask=async()=>({items:[],nextCursor:null});hook(nextKey,nextTask);
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(oldSignal.aborted,true);
+  finish({items:[{...upcoming,id:'late-old-page'}],nextCursor:'old'});await late;
+  assert.equal(returned.resource.state.key,nextKey);assert.deepEqual(returned.resource.state.data,{items:[],nextCursor:null});
+  lifecycle.cleanup?.();
+});
+
+test('retained Games cursor errors preserve already loaded pages, retry stays explicit, and cancelled append never overwrites a new query', async () => {
+  const resource=new LatestResource<GamePage>(), key=gamesResourceKey(pack.cityId,{day:'2026-11-20'});
+  const page={items:[upcoming],nextCursor:'second'};
+  await resource.load(key,async()=>page);
+  await resource.load(key,async()=>({items:[{...upcoming,id:'beyond-first'}],nextCursor:'third'}),(a,b)=>appendUpcomingPage(a,b,now));
+  const loaded=resource.state.data!;
+  await resource.load(key,async()=>{throw new Error('cursor transport failed');},appendUpcomingPage);
+  assert.equal(resource.state.status,'error');assert.strictEqual(resource.state.data,loaded);assert.equal(resource.state.data?.nextCursor,'third');
+  const context=gamesContext({cityId:pack.cityId,day:'2026-11-20',listOffset:'12800',origin:'list'})!;
+  assert.equal(retainedGamesOffset({context,resourceKey:key},context,key),12800);
+  // Empty final page is a valid end; no additional page is invented to reach an offset.
+  await resource.load(key,async()=>({items:[],nextCursor:null}),(a,b)=>appendUpcomingPage(a,b,now));
+  assert.deepEqual(resource.state.data?.items,loaded.items);assert.equal(resource.state.data?.nextCursor,null);
+  let finish!:(page:GamePage)=>void, signal!:AbortSignal;
+  const old=resource.load(key,s=>{signal=s;return new Promise(resolve=>{finish=resolve;});},appendUpcomingPage);
+  resource.cancel();assert.equal(signal.aborted,true);
+  const next=gamesResourceKey(pack.cityId,{activityKind:'trainer_led'});
+  await resource.load(next,async()=>({items:[],nextCursor:null}));
+  finish({items:[upcoming],nextCursor:'stale'});await old;
+  assert.equal(resource.state.key,next);assert.deepEqual(resource.state.data,{items:[],nextCursor:null});
+});
+
+test('expanded X preserves selection; compact dismiss clears it; real measured obstruction follows growth and rejects stale owners', async () => {
+  const expanded:MapOverlay={filter:false,expanded:true,selected:id};
+  const compact=closeVenueSheet(expanded);assert.equal(compact.expanded,false);assert.equal(compact.selected,id);
+  assert.equal(closeVenueSheet(compact).selected,null);
+  assert.deepEqual(mapBack({...expanded,filter:true}),{...expanded});
+  assert.deepEqual(mapBack(expanded),compact);assert.equal(mapBack(compact)?.selected,null);
+  const compactOwner='1:query:venue:compact', expandedOwner='2:query:venue:expanded';
+  assert.equal(mapControlBottom({owner:compactOwner,height:208},compactOwner,false,34),262);
+  assert.equal(mapControlBottom({owner:compactOwner,height:340},compactOwner,false,34),394);
+  assert.equal(mapControlBottom({owner:expandedOwner,height:680},expandedOwner,true,34),688);
+  assert.equal(mapControlBottom({owner:compactOwner,height:340},expandedOwner,true,34),42);
+  assert.equal(mapControlBottom({owner:expandedOwner,height:680},null,false,34),42);
+  assert.equal(mapControlBottom({owner:compactOwner,height:340},'3:new-query:same-venue',false,34),42);
+  assert.equal(mapControlBottom({owner:compactOwner,height:NaN},compactOwner,false,0),8);
+  const {readFileSync}=await import('node:fs');
+  const {stripTypeScriptTypes}=await import('node:module');
+  const {runInNewContext}=await import('node:vm');
+  const mapSource=readFileSync(new URL('../app/games/map.tsx',import.meta.url),'utf8');
+  const measurementSource=mapSource.slice(mapSource.indexOf('  const measureSheet ='),mapSource.indexOf('  const controlBottom ='))+'\nmeasureSheet;';
+  const activeSheet={current:compactOwner as string|null};let published:unknown=null;
+  const measure=runInNewContext(stripTypeScriptTypes(measurementSource),{useCallback:(fn:unknown)=>fn,sheetOwner:compactOwner,activeSheet,
+    setSheetMeasurement:(value:unknown)=>{published=value;}}) as (height:number)=>void;
+  measure(208);assert.deepEqual(JSON.parse(JSON.stringify(published)),{owner:compactOwner,height:208});
+  measure(340);assert.deepEqual(JSON.parse(JSON.stringify(published)),{owner:compactOwner,height:340});
+  activeSheet.current=expandedOwner;published=null;measure(208);measure(0);assert.equal(published,null); // stale layout/unmount
+  activeSheet.current=null;measure(208);assert.equal(published,null); // deselect / parent unmount
+  const sheetSource=readFileSync(new URL('../src/components/venue-sheet.tsx',import.meta.url),'utf8');
+  const closeSource=sheetSource.slice(sheetSource.indexOf('  const close ='),sheetSource.indexOf('  return <View'))+'\nclose;';
+  let collapsed:boolean|null=null, dismissed=0;
+  const makeClose=(expanded:boolean)=>runInNewContext(stripTypeScriptTypes(closeSource),{closeVenueSheet,expanded,selection:venue,
+    onExpand:(value:boolean)=>{collapsed=value;},onClose:()=>{dismissed++;}}) as ()=>void;
+  makeClose(true)();assert.equal(collapsed,false);assert.equal(dismissed,0);
+  makeClose(false)();assert.equal(dismissed,1);
+
+});
+
+test('map schedule groups only the real eligible snapshot by venue-local date, preserving unavailable versus empty', () => {
+  const a={...upcoming,id:'a',startsAt:'2026-11-20T22:30:00Z',applicationDeadlineAt:'2026-11-20T21:00:00Z'};
+  const b={...a,id:'b',startsAt:'2026-11-21T21:30:00Z'}, c={...a,id:'c',startsAt:'2026-11-20T19:30:00Z'};
+  const snapshot:MapSnapshot={venues:[venue],games:[b,a,c,{...a,id:'full',availablePlaces:0}],aliases:new Map(),scheduleError:false};
+  const eligible=venueSchedules(snapshot,{},now)!.get(id)!;
+  assert.deepEqual(venueScheduleDays(eligible,venue.timezone).map(day=>({date:day.date,ids:day.games.map(g=>g.id)})),[
+    {date:'2026-11-20',ids:['c']},{date:'2026-11-21',ids:['a']},{date:'2026-11-22',ids:['b']},
+  ]);
+  assert.deepEqual(venueScheduleDays([],venue.timezone),[]);
+  assert.equal(venueSchedules({...snapshot,games:null,scheduleError:true},{},now),null);
 });

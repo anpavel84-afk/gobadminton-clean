@@ -36,9 +36,9 @@ function VenueMarker({ venue, counts, selected, onSelect }: { venue: MapVenue; c
   </Marker>;
 }
 /** Shared native basemap/marker renderer. Public browsing never asks for GPS/Radar consent. */
-export function NativeMap({ pack, venues, counts, selected, camera, onCamera, onSelect, onCatalog }: {
+export function NativeMap({ pack, venues, counts, selected, camera, controlBottom, statusTop, onCamera, onSelect, onCatalog }: {
   pack: CityMapPack; venues: readonly MapVenue[]; counts: ReadonlyMap<string,number> | null; selected: string | null;
-  camera: MapCamera | null; onCamera: (camera:MapCamera) => void; onSelect:(id:string) => void; onCatalog:() => void;
+  controlBottom:number; statusTop:number | undefined; camera: MapCamera | null; onCamera: (camera:MapCamera) => void; onSelect:(id:string) => void; onCatalog:() => void;
 }) {
   const [attempt,setAttempt] = useState(0);
   const task = useCallback((signal:AbortSignal) => loadNativeStyle(pack,digest,signal),[pack]);
@@ -59,7 +59,7 @@ export function NativeMap({ pack, venues, counts, selected, camera, onCamera, on
   const restart = () => {setPhase('loading');setNativeError('');setAttempt(n => n+1);};
   return <View style={{flex:1}}>
     {state.data && !failed && <MapLibreMap key={generation} style={StyleSheet.absoluteFill} mapStyle={state.data}
-      attribution attributionPosition={{bottom:8,left:8}}
+      attribution attributionPosition={{bottom:controlBottom,left:8}} compassPosition={{bottom:controlBottom,right:8}}
       onDidFinishLoadingMap={() => {if (active.current === generation) {loaded.current=true;setPhase('loaded');}}}
       onDidFailLoadingMap={() => {if (active.current === generation) {setPhase('error');setNativeError('Не удалось загрузить ресурсы карты.');}}}
       onRegionDidChange={event => {
@@ -71,15 +71,15 @@ export function NativeMap({ pack, venues, counts, selected, camera, onCamera, on
         maxBounds={[pack.bounds[0][0],pack.bounds[0][1],pack.bounds[1][0],pack.bounds[1][1]]} maxZoom={16} />
       {phase === 'loaded' && venues.map(venue => <VenueMarker key={venue.id} venue={venue} counts={counts} selected={selected === venue.id} onSelect={onSelect} />)}
     </MapLibreMap>}
-    {!failed && (state.status !== 'ready' || phase !== 'loaded') && <View style={mapStyles.status}><Loading title="Загружаем карту…" /></View>}
-    {failed && <View style={mapStyles.status} accessibilityRole="alert">
+    {statusTop !== undefined && !failed && (state.status !== 'ready' || phase !== 'loaded') && <View style={[mapStyles.status,{top:statusTop}]}><Loading title="Загружаем карту…" /></View>}
+    {statusTop !== undefined && failed && <View style={[mapStyles.status,{top:statusTop}]} accessibilityRole="alert">
       <Label>Карта не загрузилась</Label><Label>{nativeError || 'Не удалось проверить или получить ресурсы карты.'}</Label>
       <TextButton title="Повторить загрузку карты" onPress={restart} /><TextButton title="Площадки списком" onPress={onCatalog} />
     </View>}
   </View>;
 }
 const mapStyles = StyleSheet.create({
-  status:{margin:16,marginTop:90,padding:16,gap:8,borderRadius:16,backgroundColor:colors.card},
+  status:{position:'absolute',left:16,right:16,padding:16,gap:8,borderRadius:16,backgroundColor:colors.card},
   // WEB Games selection adds a purple 3px outline, offset 2px, to either marker.
   markerOutline:{padding:2,borderWidth:3,borderColor:'transparent',borderRadius:34},
   markerSelected:{borderColor:colors.purple},

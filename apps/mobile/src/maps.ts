@@ -242,6 +242,15 @@ export function gamesRoute(context: GamesContext, view: 'list' | 'map'): { pathn
     listOffset: String(context.listOffset), origin: context.origin, ...(view === 'map' && context.selectedVenue ? {selectedVenue:context.selectedVenue} : {}),
   } };
 }
+export type GamesListBookmark = {context:GamesContext;resourceKey:string};
+/** Only a bookmark captured by this mounted list may request a pixel restoration.
+ * Router/query offsets alone never fetch pages or manufacture a scroll position. */
+export function retainedGamesOffset(bookmark:GamesListBookmark | null, context:GamesContext | null, resourceKey:string):number | null {
+  if (!bookmark || !context || context.origin !== 'list' || bookmark.resourceKey !== resourceKey) return null;
+  const old = bookmark.context;
+  return old.cityId === context.cityId && old.day === context.day && old.activity === context.activity && old.level === context.level
+    ? old.listOffset : null;
+}
 /** Only exact public Games links are adapted; auth callbacks keep their separate verified owner. */
 export function publicGamesIntent(path: string): string | null {
   let url: URL;
@@ -267,6 +276,25 @@ export function mapBack(state: MapOverlay): MapOverlay | null {
   if (state.expanded) return {...state,expanded:false};
   if (state.selected) return {...state,selected:null};
   return null;
+}
+/** Mobile X shares the collapse semantics of hierarchical Back, without closing a filter. */
+export function closeVenueSheet(state: MapOverlay): MapOverlay {
+  return state.expanded ? {...state,expanded:false} : {...state,selected:null,expanded:false};
+}
+export type SheetMeasurement = {owner:string;height:number};
+/** Height is measured on the outer sheet, including the sticky footer and body. */
+export function mapControlBottom(measurement: SheetMeasurement | null, owner:string | null, expanded:boolean, safeBottom:number):number {
+  const safe = Number.isFinite(safeBottom) ? Math.max(0,safeBottom) : 0;
+  if (!owner || !measurement || measurement.owner !== owner || !Number.isFinite(measurement.height) || measurement.height <= 0) return safe+8;
+  return Math.max(safe,measurement.height+(expanded ? 0 : safe+12))+8;
+}
+export function venueScheduleDays(games:readonly PublicGame[], timezone:string):{date:string;games:PublicGame[]}[] {
+  const groups = new Map<string,PublicGame[]>();
+  for (const game of [...games].sort((a,b) => Date.parse(a.startsAt)-Date.parse(b.startsAt) || a.id.localeCompare(b.id))) {
+    const date = cityDate(new Date(game.startsAt),timezone);
+    const items = groups.get(date) ?? [];items.push(game);groups.set(date,items);
+  }
+  return [...groups].map(([date,games]) => ({date,games}));
 }
 export function expandedVenueCreate(expanded: boolean, venue: PublicVenue | undefined): string | null {
   return expanded && venue ? venueCreatePath(venue.id) : null;

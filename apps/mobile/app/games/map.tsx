@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
 import { AppState, BackHandler, FlatList, Pressable, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -8,8 +8,8 @@ import { useResource } from '../../src/hooks.ts';
 import { usePreferences } from '../../src/state.tsx';
 import { publicApi } from '../../src/public-api.ts';
 import { cityDate, discoveryDateLabel, nextCalendarDay } from '../../src/presentation.ts';
-import { gamesContext, gamesRoute, loadMapSnapshot, mapBack, mapDataKey, mapPackForCity, resolveMapSelection, venueMarkerLabel, venueSchedules, visibleMapVenues } from '../../src/maps.ts';
-import type { MapCamera, MapOverlay } from '../../src/maps.ts';
+import { gamesContext, gamesRoute, loadMapSnapshot, mapBack, mapControlBottom, mapDataKey, mapPackForCity, resolveMapSelection, venueMarkerLabel, venueSchedules, visibleMapVenues } from '../../src/maps.ts';
+import type { MapCamera, MapOverlay, SheetMeasurement } from '../../src/maps.ts';
 import { NativeMap } from '../../src/components/native-map.tsx';
 import { VenueSheet } from '../../src/components/venue-sheet.tsx';
 import { DiscoveryIcon } from '../../src/components/discovery-icon.tsx';
@@ -29,6 +29,8 @@ export default function GamesMap() {
   const filterTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [selectionError,setSelectionError] = useState(false), [camera,setCamera] = useState<MapCamera | null>(null);
   const [now,setNow] = useState(Date.now());
+  const [controlsBottom,setControlsBottom] = useState<number | null>(null);
+  const [sheetMeasurement,setSheetMeasurement] = useState<SheetMeasurement | null>(null);
   const filters = useMemo(() => ({day,activityKind:activity,timezone}),[day,activity,timezone]);
   const task = useCallback((signal:AbortSignal) => loadMapSnapshot(publicApi,cityId,filters,signal),[cityId,filters]);
   const {state,retry} = useResource(mapDataKey(cityId,filters),task);
@@ -53,7 +55,7 @@ export default function GamesMap() {
     if (!context) {router.replace('/games');return;}
     // A push keeps the mounted origin list and its resource/cursor/scroll owner intact.
     if (context.origin === 'list' && router.canGoBack()) router.dismissTo(gamesRoute({...context,cityId:cityId || context.cityId,day,activity},'list'));
-    else router.replace(gamesRoute({...context,cityId:cityId || context.cityId,day,activity},'list'));
+    else router.replace('/games');
   },[router,context,cityId,day,activity]);
   const back = useCallback(() => {
     const next = mapBack(overlay);
@@ -80,12 +82,28 @@ export default function GamesMap() {
   const venues = snapshot?.venues ?? [];
   const visible = pack ? visibleMapVenues(venues,counts,mode,pack) : venues;
   const selection = venues.find(v => v.id === overlay.selected);
+  const sheetContext = selection ? JSON.stringify([routeKey,state.key,selection.id,overlay.expanded,insets.bottom]) : null;
+  const sheetGeneration = useRef({context:sheetContext,revision:0});
+  if (sheetGeneration.current.context !== sheetContext) sheetGeneration.current={context:sheetContext,revision:sheetGeneration.current.revision+1};
+  const sheetOwner = sheetContext ? `${sheetGeneration.current.revision}:${sheetContext}` : null;
+  const activeSheet = useRef(sheetOwner);activeSheet.current=sheetOwner;
+  useLayoutEffect(() => {
+    activeSheet.current=sheetOwner;
+    if (!sheetOwner) setSheetMeasurement(null);
+    return () => {activeSheet.current=null;};
+  },[sheetOwner]);
+  const measureSheet = useCallback((height:number) => {
+    if (!sheetOwner || activeSheet.current !== sheetOwner) return;
+    setSheetMeasurement(Number.isFinite(height) && height > 0 ? {owner:sheetOwner,height} : null);
+  },[sheetOwner]);
+  const controlBottom = mapControlBottom(sheetMeasurement,sheetOwner,overlay.expanded,insets.bottom);
+  const statusTop = controlsBottom === null ? undefined : controlsBottom+12;
   const select = (id:string) => {setSelectionError(false);setOverlay(v => ({...v,selected:id,expanded:false}));};
   return <ScreenFrame>
     <View style={{flex:1}}>
-      {context && city && pack && !catalog && <NativeMap key={cityId} pack={pack} venues={visible} counts={counts} selected={overlay.selected} camera={camera} onCamera={setCamera} onSelect={select} onCatalog={() => setCatalog(true)} />}
+      {context && city && pack && !catalog && <NativeMap key={cityId} pack={pack} venues={visible} counts={counts} selected={overlay.selected} camera={camera} controlBottom={controlBottom} statusTop={statusTop} onCamera={setCamera} onSelect={select} onCatalog={() => setCatalog(true)} />}
       {(!pack || catalog) && <FlatList data={visible} keyExtractor={venue => venue.id}
-        contentContainerStyle={{padding:16,paddingTop:100,paddingBottom:insets.bottom+100,gap:12}}
+        contentContainerStyle={{padding:16,paddingTop:statusTop ?? 12,paddingBottom:insets.bottom+100,gap:12}}
         ListHeaderComponent={<View style={{gap:12}}><Label accessibilityRole="header" style={styles.subtitle}>Площадки списком</Label>
           {!pack && <Label>Для выбранного города карта пока недоступна.</Label>}
           {pack && <TextButton title="Повторить загрузку карты" onPress={() => setCatalog(false)} />}
@@ -94,23 +112,28 @@ export default function GamesMap() {
         renderItem={({item}) => <Pressable accessibilityRole="button" accessibilityLabel={venueMarkerLabel(item,counts)} onPress={() => select(item.id)} style={styles.card}>
           <Label style={styles.subtitle}>{item.name}</Label><Label>{item.address}</Label><Label>{venueMarkerLabel(item,counts)}</Label>
         </Pressable>} />}
-      <View style={{position:'absolute',top:8,left:8,right:8,backgroundColor:colors.card,borderRadius:16,padding:8,gap:4}}>
-        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
-          <TextButton title="К списку игр" onPress={returnToList} />
-          <Label style={{flex:1,textAlign:'center'}}>{city?.nameRu ?? 'Игры'}</Label>
-          <Pressable ref={filterTrigger} accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:overlay.filter}} onPress={() => setOverlay(v => ({...v,filter:true}))} style={{minHeight:48,minWidth:48,padding:12}}><DiscoveryIcon name="filter" /></Pressable>
-        </View>
-        <Label style={{textAlign:'center'}}>{day ? discoveryDateLabel(day) : 'Все ближайшие'} · {activity === 'all' ? 'Все' : activity === 'regular' ? 'Обычные' : 'С тренером'}</Label>
+      <View pointerEvents="box-none" onLayout={event => setControlsBottom(event.nativeEvent.layout.y+event.nativeEvent.layout.height)}
+        style={{position:'absolute',top:12,left:16,right:16,alignItems:'flex-start',gap:8}}>
+        <Pressable accessibilityRole="button" accessibilityLabel="К списку игр" onPress={returnToList}
+          style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,padding:6,paddingRight:14,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
+          <View style={{minWidth:30,minHeight:30,borderRadius:999,backgroundColor:colors.purple,alignItems:'center',justifyContent:'center'}}><Label accessible={false} style={{color:colors.onPurple}}>←</Label></View>
+          <Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>К списку</Label>
+        </Pressable>
+        <Pressable ref={filterTrigger} accessibilityRole="button" accessibilityLabel="Фильтры карты" accessibilityState={{expanded:overlay.filter}}
+          onPress={() => setOverlay(v => ({...v,filter:true}))}
+          style={{maxWidth:'100%',minHeight:44,flexDirection:'row',alignItems:'center',gap:8,paddingVertical:8,paddingHorizontal:12,borderRadius:999,borderWidth:1,borderColor:colors.line,backgroundColor:colors.card}}>
+          <DiscoveryIcon name="filter" /><Label style={{flexShrink:1,fontSize:14,lineHeight:20,fontWeight:'600'}}>Фильтры</Label>
+        </Pressable>
       </View>
-      {(!hydrated || cities.state.status === 'loading') && <View style={{position:'absolute',top:110,left:16,right:16}}><Loading title="Загружаем города…" /></View>}
-      {cities.state.status === 'error' && <View style={{position:'absolute',top:110,left:16,right:16}}><ErrorState error={cities.state.error} retry={cities.retry} /></View>}
-      {hydrated && cities.state.status === 'ready' && !city && <View style={{position:'absolute',top:110,left:16,right:16,...styles.card}}><Label>Выбранный город недоступен.</Label><TextButton title="К играм" onPress={() => router.replace('/games')} /></View>}
-      {city && state.status === 'loading' && <View style={{position:'absolute',top:110,left:16,right:16}}><Loading title="Загружаем площадки и расписания…" /></View>}
-      {city && state.status === 'error' && <View style={{position:'absolute',top:110,left:16,right:16}}><ErrorState error={state.error} retry={retry} /></View>}
-      {snapshot?.scheduleError && <View style={{position:'absolute',top:110,left:16,right:16,...styles.card}}><Label>Расписание недоступно. Количество игр не подтверждено.</Label><TextButton title="Повторить загрузку расписаний" onPress={retry} /></View>}
-      {selectionError && <View style={{position:'absolute',top:110,left:16,right:16,...styles.card}}><Label>Выбранная площадка недоступна в этом городе.</Label><TextButton title="Площадки списком" onPress={() => setCatalog(true)} /></View>}
+      {statusTop !== undefined && (!hydrated || cities.state.status === 'loading') && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><Loading title="Загружаем города…" /></View>}
+      {statusTop !== undefined && cities.state.status === 'error' && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><ErrorState error={cities.state.error} retry={cities.retry} /></View>}
+      {statusTop !== undefined && hydrated && cities.state.status === 'ready' && !city && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Выбранный город недоступен.</Label><TextButton title="К играм" onPress={() => router.replace('/games')} /></View>}
+      {statusTop !== undefined && city && state.status === 'loading' && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><Loading title="Загружаем площадки и расписания…" /></View>}
+      {statusTop !== undefined && city && state.status === 'error' && <View style={{position:'absolute',top:statusTop,left:16,right:16}}><ErrorState error={state.error} retry={retry} /></View>}
+      {statusTop !== undefined && snapshot?.scheduleError && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Расписание недоступно. Количество игр не подтверждено.</Label><TextButton title="Повторить загрузку расписаний" onPress={retry} /></View>}
+      {statusTop !== undefined && selectionError && <View style={{position:'absolute',top:statusTop,left:16,right:16,...styles.card}}><Label>Выбранная площадка недоступна в этом городе.</Label><TextButton title="Площадки списком" onPress={() => setCatalog(true)} /></View>}
       {!selection && <View style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',backgroundColor:colors.card,borderRadius:999}}><TextButton title="Обновить площадки" onPress={retry} /></View>}
-      {selection && <VenueSheet key={selection.id} selection={selection} expanded={overlay.expanded} games={schedules?.get(selection.id) ?? null}
+      {selection && <VenueSheet key={`${routeKey}:${state.key}:${selection.id}`} onMeasure={measureSheet} selection={selection} expanded={overlay.expanded} games={schedules?.get(selection.id) ?? null}
         onExpand={expanded => setOverlay(v => ({...v,expanded}))} onClose={() => setOverlay(v => ({...v,selected:null,expanded:false}))} onRetrySchedule={retry} />}
       <DiscoverySheet visible={overlay.filter} title="Фильтры карты" onClose={() => setOverlay(v => ({...v,filter:false}))} returnFocusRef={filterTrigger}>
         <Label>Когда играем</Label><DiscoveryChip title="Все ближайшие" selected={!day} onPress={() => setDay('')} />

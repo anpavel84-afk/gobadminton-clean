@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentRef } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { gamesContext, gamesRoute } from '../../src/maps.ts';
+import { gamesContext, gamesRoute, retainedGamesOffset } from '../../src/maps.ts';
+import type { GamesListBookmark } from '../../src/maps.ts';
 import { selectedCity } from '../../src/entry.ts';
 import { useResource, useUpcomingItems } from '../../src/hooks.ts';
 import { gamesResourceKey, publicApi } from '../../src/public-api.ts';
@@ -21,8 +22,8 @@ export default function GuestGames() {
   const { preferences, hydrated, storageError } = usePreferences();
   const router = useRouter(), params = useLocalSearchParams(), context = gamesContext(params);
   const routeKey = JSON.stringify(params);
-  const listRef = useRef<FlatList<PublicGame>>(null), listOffset = useRef(context?.listOffset ?? 0);
-  const restoreOffset = useRef<number | null>(context?.listOffset ?? null);
+  const listRef = useRef<FlatList<PublicGame>>(null), listOffset = useRef(0);
+  const restoreOffset = useRef<number | null>(null), mapBookmark = useRef<GamesListBookmark | null>(null);
   const [selectedDay, setSelectedDay] = useState(context?.day ?? '');
   const [activityKind, setActivityKind] = useState<NonNullable<GameFilters['activityKind']>>(context?.activity ?? 'all');
   const [level, setLevel] = useState(context?.level ?? '');
@@ -39,7 +40,12 @@ export default function GuestGames() {
     if (!next) {router.replace('/games');return;}
     if (params.view === 'map') {router.replace(gamesRoute({...next,origin:'external'},'map'));return;}
     setSelectedDay(next.day);setActivityKind(next.activity);setLevel(next.level);
-    restoreOffset.current=next.listOffset;
+    // POP_TO retains this route instance, resource, loaded pages and native list.
+    // External offsets have no local bookmark. A changed query gets a fresh list.
+    const offset = retainedGamesOffset(mapBookmark.current,next,key);
+    restoreOffset.current=offset;
+    if (offset === null) {listOffset.current=0;listRef.current?.scrollToOffset({offset:0,animated:false});}
+    mapBookmark.current=null;
   },[routeKey]);
   const today = timezone ? cityDate(new Date(), timezone) : '';
   const day = selectedDay && today && selectedDay < today ? today : selectedDay;
@@ -63,12 +69,12 @@ export default function GuestGames() {
     void resource.load(key, signal => publicApi.games(cityId, cursor, signal, { day, activityKind, timezone }), appendUpcomingPage);
   };
   const selectCity = () => {router.setParams({cityId:undefined});router.push('/city');};
-  const openMap = () => {if (cityId) router.push(gamesRoute({cityId,day,activity:activityKind,level,listOffset:listOffset.current,origin:'list'},'map'));};
+  const openMap = () => {if (cityId) {const context = {cityId,day,activity:activityKind,level,listOffset:listOffset.current,origin:'list' as const};mapBookmark.current={context,resourceKey:key};router.push(gamesRoute(context,'map'));}};
   const dayLabel = day ? discoveryDateLabel(day) : 'Все ближайшие';
   const skill = levelGuideSkillFor(level);
   const closeSheet = () => setSheet(null);
   return <ScreenFrame header={<Header />}>
-    <FlatList ref={listRef} onScroll={event => {listOffset.current=event.nativeEvent.contentOffset.y;}} scrollEventThrottle={100}
+    <FlatList ref={listRef} onScroll={event => {listOffset.current=event.nativeEvent.contentOffset.y;restoreOffset.current=null;}} scrollEventThrottle={100}
       onContentSizeChange={(_width,height) => {const offset=restoreOffset.current;if (offset !== null && state.data && height >= offset) {listRef.current?.scrollToOffset({offset,animated:false});restoreOffset.current=null;}}}
       data={city ? list.visible : noGames} keyExtractor={game => game.id}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
