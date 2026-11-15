@@ -46,7 +46,10 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
         </Label>
       </View>
       <Label accessibilityLabel={`${when.day}, ${when.time}, ${game.timezone}`} style={card.time}>{when.time}</Label>
-      <Label accessibilityRole="header" style={card.title}>{game.title}</Label>
+      <Pressable accessibilityRole="link" accessibilityLabel={game.title} onPress={onOpen}
+        style={({ pressed }) => [card.titleLink, pressed && { backgroundColor: colors.paper }]}>
+        <Label accessibilityRole="header" style={card.title}>{game.title}</Label>
+      </Pressable>
       <Label style={{ fontWeight: '600' }}>{game.venue.name}</Label>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}><DiscoveryIcon name="pin" /><Label style={[card.secondary, { flex: 1 }]}>{cityName ? `${cityName} · ` : ''}{game.venue.address}</Label></View>
       <View style={card.meta}>
@@ -62,15 +65,18 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
           <Label style={{ fontSize: 13, lineHeight: 18, fontWeight: '600' }}>{person.name}</Label>
         </View>
         {person.trainer && game.trainingDescription && <Pressable accessibilityRole="button" accessibilityLabel="Подробнее о тренировке" accessibilityState={{ expanded: trainerExpanded }} onPress={() => setTrainerExpanded(v => !v)} style={card.details}><DiscoveryIcon name="chevron" /></Pressable>}
+        {!person.trainer && <GameActions game={game} onOpen={onOpen} />}
+        {person.trainer && <Label style={[card.secondary, { width: '100%' }]}>Отзывы и история ролей пока недоступны.</Label>}
         {person.trainer && trainerExpanded && game.trainingDescription && <Label style={[card.secondary, { width: '100%' }]}>{game.trainingDescription}</Label>}
       </View>)}
-      <Label style={card.secondary}>Отзывы и история ролей пока недоступны.</Label>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Подробнее: ${game.title}`} onPress={onOpen}
-          style={({ pressed }) => [card.details, pressed && { backgroundColor: colors.paper }]}><DiscoveryArrow /></Pressable>
-        {canShareGame(game) && <GameShare gameId={game.id} />}
-      </View>
     </View>
+  </View>;
+}
+function GameActions({ game, onOpen }: { game: PublicGame; onOpen: () => void }) {
+  return <View style={card.actions}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Подробнее: ${game.title}`} onPress={onOpen}
+      style={({ pressed }) => [card.details, pressed && { backgroundColor: colors.paper }]}><DiscoveryArrow /></Pressable>
+    {canShareGame(game) && <GameShare gameId={game.id} />}
   </View>;
 }
 function GamePersonAvatar({ name, avatar, trainer }: { name: string; avatar?: PublicGame['organizer']['avatar']; trainer: boolean }) {
@@ -95,7 +101,7 @@ function GameShare({ gameId }: { gameId: string }) {
     finally { locked.current = false; }
   }
   if (!sharePath) return null;
-  return <View style={{ gap: 4 }}>
+  return <View style={{ gap: 4, flexShrink: 1 }}>
     <Pressable accessibilityRole="button" accessibilityLabel="Поделиться игрой" onPress={() => void share()} style={card.details}><ShareIcon /></Pressable>
     {notice && <Label accessibilityLiveRegion="polite" style={card.secondary}>{notice}</Label>}
     {failed && <Label selectable style={card.secondary}>{publicGameUrl(gameId)}</Label>}
@@ -112,7 +118,9 @@ const card = StyleSheet.create({
   seats: { borderRadius: 7, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: colors.limeSoft, fontWeight: '600', fontSize: 13, lineHeight: 19 },
   time: { fontSize: 19, lineHeight: 26, fontWeight: '700' },
   title: { fontSize: 21, lineHeight: 27, fontWeight: '700' },
+  titleLink: { minHeight: interaction.minHeight, justifyContent: 'center', borderRadius: 8 },
   meta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   host: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12, marginTop: 6 },
+  actions: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginLeft: 'auto', flexShrink: 1, maxWidth: '100%' },
   details: { ...interaction, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderWidth: 1, borderColor: colors.lineDark, borderRadius: 12, justifyContent: 'center' },
 });

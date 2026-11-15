@@ -1,3 +1,42 @@
+# #522 C1a ADDRESS1 · source correction only · public APK HOLD
+
+Bounded repair of supplied candidate
+`3345057ef1213b5c2b4b046e465cecec0f965f34` in this private source export.
+Pressable trigger/return refs and the sheet heading now use React ComponentRef
+instance types. The discovery bounds return type exposes optional startsBefore
+without changing date behavior. The existing async resource test reads fresh
+getSnapshot results after load, preserving its exact item/cursor expectations
+and every prior assertion.
+
+Game titles open the real game through onOpen; title, details, trainer disclosure
+and share remain separate interactive controls. Both ordinary and trainer cards
+use the same organizer-left/actions-right footer. Only the trainer band shows
+the unavailable reviews/role-history note; no reputation data or API is invented.
+Existing public-link sharing, cancellation/error notice and copyable fallback stay.
+
+Author verification: 50/50 existing tests PASS, no failures/skips/cancellations:
+`node --experimental-strip-types --test --test-isolation=none
+ test/public-api.test.ts test/presentation.test.ts test/auth.test.ts`
+from apps/mobile using Node 24.21.0. This covers query bounds, stale page fencing,
+refresh item/cursor replacement, factual roles, share eligibility and the existing
+Header/profile-return behavior; it is not a rendered GameCard or focus test.
+Typecheck/lint are unavailable in this export: no node_modules, tsc or eslint.
+No installation or package-manager download attempted. The retained parent FAIL
+was a typecheck failure, not an independent C1a QA failure. No new parent, QA,
+device or visual PASS is claimed.
+
+Changed files in this correction: app/games/index.tsx, src/components/ui.tsx,
+src/presentation.ts, test/public-api.test.ts, src/components/game-card.tsx and
+this README. src/public-api.ts needs no edit: its existing destructuring uses
+the corrected bounds return type. All other source bytes and previous README
+bytes are retained. VersionCode remains 8; no config/dependency/backend/API,
+build/Expo/device, publication, merge, deployment or history changes performed.
+Fresh parent checks and the FIRST whole cumulative independent C1a review remain
+pending. Owner APK7 UAT FAIL/publication HOLD is retained; this correction's
+native/UAT status is NOT_TESTED, and full native parity remains unfinished.
+
+All previous README bytes follow unchanged.
+
 # #522 C1a · source candidate only · public APK HOLD
 
 Private export of the supplied venue ADDRESS2 base

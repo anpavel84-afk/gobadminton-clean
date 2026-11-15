@@ -186,7 +186,7 @@ export function discoveryDateLabel(day: string) {
 
 
 /** Each request advances the lower bound; an unset day has no upper bound. */
-export function futureDiscoveryBounds(day: string, timeZone: string, now = Date.now()) {
+export function futureDiscoveryBounds(day: string, timeZone: string, now = Date.now()): { startsFrom: string; startsBefore?: string } {
   if (!day) return { startsFrom: new Date(now).toISOString() };
   const bounds = discoveryDayBounds(day, timeZone);
   return { ...bounds, startsFrom: new Date(Math.max(Date.parse(bounds.startsFrom), now)).toISOString() };

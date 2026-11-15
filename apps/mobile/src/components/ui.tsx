@@ -1,7 +1,7 @@
 import { AccessibilityInfo, findNodeHandle, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 import { useEffect, useRef } from 'react';
-import type { ComponentProps, PropsWithChildren, ReactNode, RefObject } from 'react';
+import type { ComponentProps, ComponentRef, PropsWithChildren, ReactNode, RefObject } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { usePathname, useRouter } from 'expo-router';
@@ -104,10 +104,10 @@ export function DiscoveryChip({ title, selected, onPress }: { title: string; sel
 }
 /** Native Modal consumes hardware Back before the route and isolates accessibility focus. */
 export function DiscoverySheet({ visible, title, onClose, returnFocusRef, children }: PropsWithChildren<{
-  visible: boolean; title: string; onClose: () => void; returnFocusRef: RefObject<View | null>;
+  visible: boolean; title: string; onClose: () => void; returnFocusRef: RefObject<ComponentRef<typeof Pressable> | null>;
 }>) {
   const insets = useSafeAreaInsets();
-  const heading = useRef<Text>(null), wasOpen = useRef(false);
+  const heading = useRef<ComponentRef<typeof Text>>(null), wasOpen = useRef(false);
   useEffect(() => {
     if (!visible && wasOpen.current) {
       const frame = requestAnimationFrame(() => {

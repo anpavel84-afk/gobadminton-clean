@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ComponentRef } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { selectedCity } from '../../src/entry.ts';
@@ -23,7 +24,7 @@ export default function GuestGames() {
   const [level, setLevel] = useState('');
   const [sheet, setSheet] = useState<'day' | 'level' | null>(null);
   const [levelChoices, setLevelChoices] = useState(false), [help, setHelp] = useState(false);
-  const filterTrigger = useRef<View>(null), dayTrigger = useRef<View>(null);
+  const filterTrigger = useRef<ComponentRef<typeof Pressable>>(null), dayTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [, tick] = useState(0);
   const citiesTask = useCallback((signal: AbortSignal) => publicApi.cities(signal), []);
   const cities = useResource('cities', citiesTask);
