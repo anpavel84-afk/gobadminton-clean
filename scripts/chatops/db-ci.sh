@@ -57,12 +57,14 @@ for file in "${files[@]}"; do
   export DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/$db"
   # Native Messages/management own random DBs and need the same container's admin DB.
   # Clear inherited values for every other suite; never accept an external fallback.
-  unset NATIVE_MESSAGES_TEST_DATABASE_URL NATIVE_GAME_MANAGEMENT_TEST_DATABASE_URL
+  unset NATIVE_MESSAGES_TEST_DATABASE_URL NATIVE_GAME_MANAGEMENT_TEST_DATABASE_URL NATIVE_RADAR_TEST_DATABASE_URL
   case $(basename "$file") in
     native-game-management.foundation.test.ts)
       export NATIVE_GAME_MANAGEMENT_TEST_DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/postgres" ;;
     native-messages.foundation.test.ts)
       export NATIVE_MESSAGES_TEST_DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/postgres" ;;
+    radar.unified.test.ts)
+      export NATIVE_RADAR_TEST_DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/postgres" ;;
   esac
   # These historical and native foundation suites expect an already migrated disposable schema.
   case $(basename "$file") in
