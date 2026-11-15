@@ -357,6 +357,7 @@ test('shared person marker uses safe PlayerAvatar projection, selected identity 
 });
 
 // Execute the component's actual declarations and bound event expressions without React/SDK imports.
+// Rendering only queues effects. Commit publishes layout effects; passive effects are flushed separately.
 // Native hit delivery and pan discrimination still require the code10 device check.
 async function nativeMarkerEvents() {
   const {readFileSync}=await import('node:fs'),{stripTypeScriptTypes}=await import('node:module'),{runInNewContext}=await import('node:vm');
@@ -380,13 +381,34 @@ async function nativeMarkerEvents() {
   const venueTag=source.split('\n').find(line=>line.includes('<VenueMarker key='))!;
   const ownerSource=source.slice(source.indexOf('  const markerOwner ='),source.indexOf('  const restart ='));
   const activeMarkers={current:null as object|null};
-  let cleanup:(()=>void)|undefined, clock=now;
-  const render=(input:{venues:readonly typeof venue[];people:readonly unknown[];onSelect:(id:string)=>void;onPerson:(row:unknown)=>void;phase?:string;failed?:boolean})=>{
+  type Effect=()=>void|(()=>void);
+  let layoutCleanups:(()=>void)[]=[],passiveCleanups:(()=>void)[]=[],pendingPassive:Effect[]|null=null,clock=now,unmounted=false;
+  const setup=(effects:Effect[])=>effects.map(effect=>effect()).filter((cleanup):cleanup is ()=>void=>typeof cleanup === 'function');
+  const flushPassive=()=>{
+    if(pendingPassive === null) return;
+    passiveCleanups.forEach(cleanup=>cleanup());
+    passiveCleanups=setup(pendingPassive);pendingPassive=null;
+  };
+  const render=(input:{venues:readonly typeof venue[];people:readonly unknown[];onSelect:(id:string)=>void;onPerson?:((row:unknown)=>void);phase?:string;failed?:boolean;data?:object|null})=>{
+    assert.equal(unmounted,false);
+    const layout:Effect[]=[],passive:Effect[]=[];
+    let status:'pending'|'committed'|'aborted'='pending';
     const callbacks=evaluate(`${ownerSource}\n({selectVenue,selectPerson});`,{
-      ...input,phase:input.phase ?? 'loaded',failed:input.failed ?? false,state:{data:{}},Date:{now:()=>clock,parse:Date.parse},
-      useRef:()=>activeMarkers,useEffect:(effect:()=>()=>void)=>{cleanup?.();cleanup=effect();},
+      ...input,phase:input.phase ?? 'loaded',failed:input.failed ?? false,state:{data:input.data === undefined ? {} : input.data},Date:{now:()=>clock,parse:Date.parse},
+      // The owner effect has a new token dependency on every render, so each render queues it.
+      useRef:()=>activeMarkers,useLayoutEffect:(effect:Effect)=>{layout.push(effect);},useEffect:(effect:Effect)=>{passive.push(effect);},
     }) as {selectVenue:(id:string)=>void;selectPerson:(row:unknown)=>void};
     return {
+      commit(){
+        assert.equal(status,'pending');assert.equal(unmounted,false);
+        flushPassive();
+        layoutCleanups.forEach(cleanup=>cleanup());
+        layoutCleanups=setup(layout);pendingPassive=passive;status='committed';
+        // Retain this commit's cleanup to exercise a stale cleanup after a newer commit.
+        const committedCleanups=layoutCleanups;
+        return ()=>committedCleanups.forEach(cleanup=>cleanup());
+      },
+      abort(){assert.equal(status,'pending');status='aborted';},
       venue(value:typeof venue,counts:ReadonlyMap<string,number>|null){
         const scope={venue:value,counts,onSelect:binding(venueTag,'onSelect',callbacks)};
         const declarations=venueSource.slice(0,venueSource.indexOf('  return <Marker'));
@@ -406,12 +428,16 @@ async function nativeMarkerEvents() {
       },
     };
   };
-  return {render,unmount:()=>cleanup?.(),advance:(time:number)=>{clock=time;}};
+  return {render,flushPassive,unmount:()=>{
+    flushPassive();layoutCleanups.forEach(cleanup=>cleanup());passiveCleanups.forEach(cleanup=>cleanup());
+    layoutCleanups=[];passiveCleanups=[];unmounted=true;
+  },advance:(time:number)=>{clock=time;}};
 }
 
 test('actual plain/counted Marker bindings select the closed venue once per native tap and keep explicit accessibility activation',async()=>{
   const harness=await nativeMarkerEvents(), selected:string[]=[];
   const owner=harness.render({venues:[venue,{...venue,id:alias}],people:[],onSelect:id=>selected.push(id),onPerson:()=>assert.fail('venue selected a person')});
+  owner.commit();
   const plain=owner.venue(venue,null), counted=owner.venue({...venue,id:alias},new Map([[alias,3]]));
   assert.equal(plain.counted,false);assert.equal(counted.counted,true);
   for(const marker of [plain,counted]){
@@ -433,22 +459,59 @@ test('actual plain/counted Marker bindings select the closed venue once per nati
   plain.native();assert.equal(selected.length,beforePan+1); // a native click does not consume child-only cancel state
 });
 
+test('actual marker ownership changes only at layout commit; pending/aborted renders and stale cleanup leave the committed owner intact',async()=>{
+  const harness=await nativeMarkerEvents(),selected:string[]=[],people:unknown[]=[];
+  const row={publicPlayerId:'peer',radar:{validUntil:new Date(now+1000).toISOString()}},fresh={...row};
+  const input={venues:[venue,{...venue,id:alias}],people:[row],onSelect:(id:string)=>selected.push(id),onPerson:(value:unknown)=>people.push(value)};
+  const oldOwner=harness.render(input);
+  const old=[oldOwner.venue(venue,null),oldOwner.venue({...venue,id:alias},new Map([[alias,3]])),oldOwner.person(row)];
+  const activate=(markers:typeof old)=>{for(const marker of markers){marker.native({nativeEvent:{id:'untrusted'}});marker.accessible();}};
+  activate(old);assert.deepEqual(selected,[]);assert.deepEqual(people,[]); // initial render is not a commit
+  const staleCleanup=oldOwner.commit();
+  activate(old);assert.deepEqual(selected,[id,id,alias,alias]);assert.deepEqual(people,[row,row]);
+  const nextInput={...input,venues:[{...venue,cityId:'another-city'},{...venue,id:alias,cityId:'another-city'}],people:[fresh]};
+  const prepare=()=>{
+    const owner=harness.render(nextInput);
+    return {owner,markers:[owner.venue(nextInput.venues[0]!,null),owner.venue(nextInput.venues[1]!,new Map([[alias,2]])),owner.person(fresh)]};
+  };
+  const pending=prepare();
+  selected.length=0;people.length=0;
+  activate(pending.markers);assert.deepEqual(selected,[]);assert.deepEqual(people,[]);
+  activate(old);assert.deepEqual(selected,[id,id,alias,alias]);assert.deepEqual(people,[row,row]); // while rendering new props
+  pending.owner.abort();harness.flushPassive();
+  selected.length=0;people.length=0;
+  activate(pending.markers);assert.deepEqual(selected,[]);assert.deepEqual(people,[]);
+  activate(old);assert.deepEqual(selected,[id,id,alias,alias]);assert.deepEqual(people,[row,row]); // abandoned work never owns callbacks
+  const next=prepare();next.owner.commit();
+  selected.length=0;people.length=0;
+  staleCleanup();activate(old);activate(pending.markers);
+  assert.deepEqual(selected,[]);assert.deepEqual(people,[]);
+  activate(next.markers);assert.deepEqual(selected,[id,id,alias,alias]);assert.deepEqual(people,[fresh,fresh]); // valid before passive effects
+  harness.flushPassive();
+  harness.unmount();selected.length=0;people.length=0;
+  activate(old);activate(pending.markers);activate(next.markers);
+  assert.deepEqual(selected,[]);assert.deepEqual(people,[]);
+});
+
 test('actual queued marker callbacks cannot select an old marker, city, renderer, failed map or unmounted owner',async()=>{
   const harness=await nativeMarkerEvents(),selected:string[]=[];
   const input={venues:[venue],people:[],onSelect:(id:string)=>selected.push(id),onPerson:()=>{}};
-  const old=harness.render(input).venue(venue,null);
-  const next=harness.render({...input,venues:[{...venue,id:alias,cityId:'another-city'}]}).venue({...venue,id:alias,cityId:'another-city'},null);
+  const committed=(value:Parameters<typeof harness.render>[0])=>{const owner=harness.render(value);owner.commit();return owner;};
+  const old=committed(input).venue(venue,null);
+  const next=committed({...input,venues:[{...venue,id:alias,cityId:'another-city'}]}).venue({...venue,id:alias,cityId:'another-city'},null);
   old.native();old.accessible();assert.deepEqual(selected,[]);
   next.native({nativeEvent:{id}});assert.deepEqual(selected,[alias]);
-  const retry=harness.render({...input,phase:'loading'}).venue(venue,null);
+  const retry=committed({...input,phase:'loading'}).venue(venue,null);
   next.native();retry.native();assert.deepEqual(selected,[alias]);
-  const recovered=harness.render(input).venue(venue,null);
+  const recovered=committed(input).venue(venue,null);
   retry.native();recovered.native();assert.deepEqual(selected,[alias,id]);
-  const failed=harness.render({...input,failed:true}).venue(venue,null);
+  const failed=committed({...input,failed:true}).venue(venue,null);
   recovered.native();failed.native();assert.deepEqual(selected,[alias,id]);
-  const removed=harness.render({...input,venues:[]}).venue(venue,null);
+  const removed=committed({...input,venues:[]}).venue(venue,null);
   removed.native();assert.deepEqual(selected,[alias,id]);
-  const mounted=harness.render(input).venue(venue,null);harness.unmount();mounted.native();mounted.accessible();
+  const unavailable=committed({...input,data:null}).venue(venue,null);
+  unavailable.native();unavailable.accessible();assert.deepEqual(selected,[alias,id]);
+  const mounted=committed(input).venue(venue,null);harness.unmount();mounted.native();mounted.accessible();
   assert.deepEqual(selected,[alias,id]);
 });
 
@@ -456,13 +519,17 @@ test('actual native/accessible people bindings reuse onPerson only for the curre
   const harness=await nativeMarkerEvents(),selected:unknown[]=[];
   const row={publicPlayerId:'peer',radar:{validUntil:new Date(now+1000).toISOString()}},fresh={...row,radar:{validUntil:new Date(now+2000).toISOString()}};
   const input={venues:[],people:[row],onSelect:()=>assert.fail('person selected a venue'),onPerson:(value:unknown)=>selected.push(value)};
-  const marker=harness.render(input).person(row);assert.equal(marker.childPress,undefined);
+  const committed=(value:Parameters<typeof harness.render>[0])=>{const owner=harness.render(value);owner.commit();return owner;};
+  const marker=committed(input).person(row);assert.equal(marker.childPress,undefined);
   marker.native({nativeEvent:{id:'other-player'}});assert.equal(selected.length,1);assert.strictEqual(selected[0],row);
   marker.accessible();assert.equal(selected.length,2);
   harness.advance(now+1000);marker.native();marker.accessible();assert.equal(selected.length,2);
-  const current=harness.render({...input,people:[fresh]}).person(fresh);
+  const current=committed({...input,people:[fresh]}).person(fresh);
   marker.native();current.native();assert.equal(selected.length,3);assert.strictEqual(selected[2],fresh);
+  committed({...input,people:[fresh]}).person(row).native();assert.equal(selected.length,3); // old row object has no current membership
   // The parent supplies this collection after its existing city/renderer/authority gates.
-  const hidden=harness.render({...input,people:[]}).person(fresh);
+  const hidden=committed({...input,people:[]}).person(fresh);
   current.native();hidden.native();hidden.accessible();assert.equal(selected.length,3);
+  const unauthorized=committed({...input,people:[fresh],onPerson:undefined}).person(fresh);
+  unauthorized.native();unauthorized.accessible();assert.equal(selected.length,3);
 });

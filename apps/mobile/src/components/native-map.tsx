@@ -1,7 +1,7 @@
 import { radarPlayer } from '../radar.ts';
 import type { UnifiedRow } from '../radar.ts';
 import { PlayerAvatar } from './player-card.tsx';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Map as MapLibreMap, Camera, Marker } from '@maplibre/maplibre-react-native';
 import * as Crypto from 'expo-crypto';
@@ -59,10 +59,10 @@ export function NativeMap({ pack, venues, counts, selected, camera, controlBotto
   // Capture the return camera once per renderer instance, without snapping after every pan.
   const initial = useMemo(() => validMapCamera(camera,pack),[pack,attempt]); // camera is an initial value; live updates stay native.
   const failed = state.status === 'error' || phase === 'error';
-  // A queued marker event belongs to this render's city, renderer and visible rows.
+  // Only committed city/renderer/rows own marker callbacks; pending or abandoned renders do not.
   const markerOwner = {};
-  const activeMarkers = useRef<object | null>(null); activeMarkers.current = markerOwner;
-  useEffect(() => {
+  const activeMarkers = useRef<object | null>(null);
+  useLayoutEffect(() => {
     activeMarkers.current = markerOwner;
     return () => {if (activeMarkers.current === markerOwner) activeMarkers.current = null;};
   },[markerOwner]);
