@@ -181,8 +181,12 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
     const duplicate=await app.inject({method:"POST",url:"/v1/play-interests",headers:hb,payload:{targetPublicPlayerId:a.publicPlayerId}});
     expect(duplicate.json()).toEqual(mutual.json());
     const r=mutual.json<PlayInterestReceipt>(),withdrawUrl=`/v1/play-interests/${r.interestId}/withdraw`;
+    const beforeInvalid=(await pool.query("SELECT * FROM play_interests ORDER BY id")).rows;
     const wrong=await app.inject({method:"POST",url:withdrawUrl,headers:{...hb,"idempotency-key":key()},payload:{expectedVersion:Number(r.version)}});
-    expect(wrong.statusCode).toBe(400);
+    const afterInvalid=(await pool.query("SELECT * FROM play_interests ORDER BY id")).rows;
+    expect(wrong.statusCode).toBe(422);
+    expect(wrong.json().code).toBe("PLAY_INTEREST_INPUT_INVALID");
+    expect(afterInvalid).toEqual(beforeInvalid);
     const withdrawal=await app.inject({method:"POST",url:withdrawUrl,headers:{...hb,"idempotency-key":key()},payload:{expectedVersion:r.version}});
     expect(withdrawal.statusCode).toBe(200);expect(withdrawal.json().outcome).toBe("withdrawn");
     expect((await pool.query("SELECT count(*)::int AS n FROM play_interests")).rows[0].n).toBe(before.rows[0].n);
@@ -191,7 +195,8 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
     await putBlock(a,b);
     const blocked=await app.inject({url,headers:ha});expect(blocked.statusCode).toBe(200);
     expect(blocked.json().items[0].capabilities.canSend).toBe(false);
-    const refusal=await app.inject({...sendA,headers:{...ha,"idempotency-key":key()}});expect([403,404,409]).toContain(refusal.statusCode);
+    const refusal=await app.inject({...sendA,headers:{...ha,"idempotency-key":key()}});expect(refusal.statusCode).toBe(404);
+    expect(refusal.json().code).toBe("RESOURCE_UNAVAILABLE");
     expect((await pool.query("SELECT count(*)::int AS n FROM play_interests")).rows[0].n).toBe(before.rows[0].n);
   });
 

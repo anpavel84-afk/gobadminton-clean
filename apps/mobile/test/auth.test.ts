@@ -1256,7 +1256,7 @@ test('browse own hidden profile public-avatar 404 stays isolated from the authen
   assert.equal(before.status,'ready');
   // Execute the actual route effect so removing its isolated-detail flag fails this regression.
   const route=readFileSync(new URL('../app/players/browse.tsx',import.meta.url),'utf8');
-  const effect=route.match(/useEffect\(\(\) => \{(\s*if \(focused && scope && ownId\)[\s\S]*?)\n  \}, \[focused, scope, ownId, auth.players\]\);/);
+  const effect=route.match(/useEffect\(\(\) => \{(\s*if \(focused && scope && ownId\)[\s\S]*?)\n {2}\}, \[focused, scope, ownId, auth.players\]\);/);
   assert.ok(effect);
   let pending:Promise<void>|undefined;
   const original=s.auth.players.loadDetail;
@@ -1267,7 +1267,7 @@ test('browse own hidden profile public-avatar 404 stays isolated from the authen
   assert.deepEqual(s.auth.players.getSnapshot().list.data,page);
   assert.equal(s.auth.players.getSnapshot().detail.status,'error');
   assert.equal(s.auth.players.getSnapshot().detail.data,null);
-  const mediaEffect=route.match(/useEffect\(\(\) => \{(\s*const detail = catalog.detail;[\s\S]*?)\n  \}, \[scope, ownId, own\?\.displayName, catalog.detail\]\);/);
+  const mediaEffect=route.match(/useEffect\(\(\) => \{(\s*const detail = catalog.detail;[\s\S]*?)\n {2}\}, \[scope, ownId, own\?\.displayName, catalog.detail\]\);/);
   assert.ok(mediaEffect);
   let media:unknown={avatar:'previously-public'};
   runInNewContext(stripTypeScriptTypes(`(()=>{${mediaEffect[1]}})()`),{catalog:s.auth.players.getSnapshot(),scope:s.auth.players.getSnapshot().scope,
