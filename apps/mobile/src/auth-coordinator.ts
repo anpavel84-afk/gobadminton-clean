@@ -1,3 +1,5 @@
+import type { RadarCommand, RadarRead } from './radar.ts';
+import type { PlayInterestPacket } from './play-interests.ts';
 import { SafetyCoordinator } from './safety-coordinator.ts';
 import { SafetyError } from './safety.ts';
 import { ContactCoordinator } from './contact-coordinator.ts';
@@ -48,6 +50,7 @@ export class AuthCoordinator {
   constructor(deps: AuthDependencies) {
     this.deps = deps; this.now = deps.now ?? Date.now;
     this.contact = new ContactCoordinator({
+      preview: context => this.participationRead(access => { if (!context.valid()) throw new MessagesError('private'); return deps.api.radarRead(access, { kind: 'preview', resultRef: context.resultRef, target: context.target }, deps.random()); }, context.actor),
       state: (target, actor) => this.participationRead(access => deps.api.contactState(access, target), actor),
       player: (target, actor) => this.participationRead(access => deps.api.player(access, target), actor),
       conversation: (id, actor) => this.participationRead(access => deps.api.conversation(access, id), actor),
@@ -92,7 +95,7 @@ export class AuthCoordinator {
         if (!this.matchesActor(authority)) return;
         // Replay receipts are history only. Existing reads establish current
         // authorized views without inventing either a block or an unblock.
-        if (this.contact.getSnapshot().target === context.peerId) void this.contact.open(context.peerId);
+        if (this.contact.getSnapshot().target === context.peerId) void this.contact.openComposer(context.peerId);
         if (!this.matchesActor(authority)) return;
         this.messages.rereadPeerSafety(context.peerId, context.conversationId);
         if (this.matchesActor(authority)) this.players.rereadSafety(context.peerId);
@@ -124,6 +127,22 @@ export class AuthCoordinator {
         : deps.api.withdrawParticipation(access, packet.participationId, packet.body, packet.key), packet.actor),
     }, deps.random, undefined, id => this.participationRead(access => deps.api.gameDetail(access, id)));
   }
+  /** Thin closed Radar ports. Existing token/session fences still own authentication. */
+  radarRead = (operation: RadarRead, actor: Actor) => this.participationRead(access => this.deps.api.radarRead(access, operation, this.deps.random()), actor);
+  radarCommand = (packet: RadarCommand, permit: () => boolean) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.radarCommand(access, packet);
+  }, packet.actor);
+  /** Closed play-interest ports share the existing private token and actor fences. */
+  playInterestStates = (ids: readonly string[], actor: Actor) => {
+    const capturedIds = Object.freeze([...ids]);
+    const capturedActor = Object.freeze({...actor});
+    return this.participationRead(access => this.deps.api.playInterestStates(access, capturedIds), capturedActor);
+  };
+  playInterestMutation = (packet: PlayInterestPacket, permit: () => boolean) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.playInterestMutation(access, packet);
+  }, packet.actor);
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
   private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {
     const epoch = this.epoch;

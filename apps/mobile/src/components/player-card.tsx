@@ -12,11 +12,11 @@ export function PlayerAvatar({ player, large = false }: { player: PublicPlayer; 
   const [failed, setFailed] = useState<string[]>([]);
   const sources = [player.avatar?.uploadedUrl, player.avatar?.providerUrl].map(url => playerMediaUrl(url, 'avatar'));
   const uri = sources.find(url => url && !failed.includes(url));
-  const size = large ? 96 : 64;
+  const size = large ? 96 : 46;
   return <View accessible={false} style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden',
-    alignItems: 'center', justifyContent: 'center', backgroundColor: player.trainer ? colors.lavender : '#FFF0B8' }}>
+    alignItems: 'center', justifyContent: 'center', backgroundColor: player.trainer ? colors.lavender : colors.yellow }}>
     {uri ? <Image source={{ uri }} style={{ width: size, height: size }} onError={() => setFailed(previous => [...previous, uri])} />
-      : <Label style={{ fontSize: large ? 32 : 24, lineHeight: large ? 42 : 32 }}>{playerInitials(player.displayName)}</Label>}
+      : <Label style={{ fontSize: large ? 32 : 16, lineHeight: large ? 42 : 22 }}>{playerInitials(player.displayName)}</Label>}
   </View>;
 }
 function PlayerBadges({ player }: { player: PublicPlayer }) {
@@ -28,18 +28,20 @@ function PlayerBadges({ player }: { player: PublicPlayer }) {
 }
 export function PlayerCard({ player, city, onOpen }: { player: PublicPlayer; city?: string; onOpen: () => void }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={`Профиль: ${player.displayName}`} onPress={onOpen}
-    style={({ pressed }) => [styles.card, { minHeight: 44, backgroundColor: pressed ? colors.paper : colors.card }]}>
-    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+    style={({ pressed }) => [styles.card, { padding: 17, minHeight: 48, backgroundColor: pressed ? colors.paper : colors.card }]}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
       <PlayerAvatar key={`${player.publicPlayerId}:${player.avatar?.uploadedUrl}:${player.avatar?.providerUrl}`} player={player} />
-      <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
-        <Label accessibilityRole="header" style={styles.subtitle}>{player.displayName}</Label>
-        <Label>{playerLevelLabel(player.level)}</Label>
-        {[city, player.areaKey].filter(Boolean).length > 0 && <Label style={{ color: colors.secondary }}>{[city, player.areaKey].filter(Boolean).join(' · ')}</Label>}
+      <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
+        <Label accessibilityRole="header" style={{ fontSize: 19, lineHeight: 24, fontWeight: '700' }}>{player.displayName}</Label>
+        <Label style={{ fontSize: 13, lineHeight: 18, fontWeight: '600' }}>{playerLevelLabel(player.level)}{city ? ` · ${city}` : ''}</Label>
+        {player.areaKey && <Label style={{ color: colors.secondary, fontSize: 12, lineHeight: 17 }}>Район / метро: {player.areaKey}</Label>}
       </View>
+      <View accessible={false} style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' }}><DiscoveryArrow /></View>
     </View>
-    <PlayerBadges player={player} />
-    {player.bio && <Label>{player.bio}</Label>}
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><Label style={{ fontWeight: '600' }}>Профиль</Label><DiscoveryArrow /></View>
+    {(player.bio || player.trainer || player.lookingForGame) && <View style={{ borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12, gap: 8 }}>
+      {player.bio && <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 19 }}>{player.bio}</Label>}
+      {(player.trainer || player.lookingForGame) && <PlayerBadges player={player} />}
+    </View>}
   </Pressable>;
 }
 

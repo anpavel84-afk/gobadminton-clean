@@ -1,3 +1,4 @@
+import { NativeSessionService } from "../../src/auth/native-session.service";
 import cookie from "@fastify/cookie";
 import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fastify";
 import { Test } from "@nestjs/testing";
@@ -19,7 +20,7 @@ import { buildTestCoreModule } from "./test-core.module";
 
 const DB_NAME = "gobadminton_play_interests_disposable";
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-const origin = "http://127.0.0.1:3001";
+const origin = "https://localhost:3001";
 
 /** Dedicated local DB, or the exact existing ephemeral Actions recipe. No fallback. */
 function disposableUrl(): string {
@@ -74,6 +75,7 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
   let pool: Pool;
   let env: AppEnv;
   let sessions: SessionService;
+  let native: NativeSessionService;
   const pairs = new ObservedPairs();
   let a: Actor, b: Actor, outsider: Actor;
 
@@ -112,7 +114,8 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
 
     env = loadEnv({
       NODE_ENV: "test", APP_ENV: "local", HOST: "127.0.0.1", DATABASE_URL: databaseUrl,
-      PUBLIC_API_ORIGIN: "http://127.0.0.1:3000", PUBLIC_WEB_ORIGIN: origin, COOKIE_SECURE: "false",
+      PUBLIC_API_ORIGIN: "https://localhost:3000", PUBLIC_WEB_ORIGIN: origin, COOKIE_SECURE: "true",
+      NATIVE_AUTH_ENABLED: "1", NATIVE_AUTH_CLIENTS_JSON: JSON.stringify([{clientId:"play-interest-fixture",redirectUris:["https://app.example.test/auth/callback"]}]),
       AUTH_PEPPER: "play-interest-synthetic-fixture-pepper-only",
       CONTENT_MODERATION_PROVIDER: "fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET: "play-interest-synthetic-fingerprint-only",
@@ -128,6 +131,7 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
     sessions = ref.get(SessionService);
+    native = ref.get(NativeSessionService);
   });
 
   afterAll(async () => {
@@ -155,6 +159,46 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
       cookie: `${SESSION_COOKIE}=${encodeURIComponent(issued.sessionToken)}`,
     };
   }
+
+  async function nativeHeaders(who: Actor) {
+    const issued=await native.transaction(async client=>{
+      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE",[who.userId]);
+      return native.issue(client,who.userId,"play-interest-fixture");
+    });
+    return {authorization:`Bearer ${issued.accessToken}`,"idempotency-key":`native-pi-${randomUUID()}`};
+  }
+
+  it("native bearer selected handlers: real mutual, replay, withdrawal version and private refusal without extra writes",async()=>{
+    const ha=await nativeHeaders(a),hb=await nativeHeaders(b);
+    const url=`/v1/me/play-interest-states?publicPlayerId=${b.publicPlayerId}`;
+    const initial=await app.inject({url,headers:ha});expect(initial.statusCode).toBe(200);
+    expect(initial.json().items[0].relationship).toBe("none");expect(initial.headers["cache-control"]).toBe("no-store");
+    const sendA={method:"POST" as const,url:"/v1/play-interests",headers:ha,payload:{targetPublicPlayerId:b.publicPlayerId}};
+    const first=await app.inject(sendA);expect(first.statusCode).toBe(201);expect(first.json().outcome).toBe("outgoing");
+    const mutual=await app.inject({method:"POST",url:"/v1/play-interests",headers:hb,payload:{targetPublicPlayerId:a.publicPlayerId}});
+    expect(mutual.statusCode).toBe(201);expect(mutual.json().outcome).toBe("mutual");
+    const before=await pool.query("SELECT count(*)::int AS n FROM play_interests");
+    const duplicate=await app.inject({method:"POST",url:"/v1/play-interests",headers:hb,payload:{targetPublicPlayerId:a.publicPlayerId}});
+    expect(duplicate.json()).toEqual(mutual.json());
+    const r=mutual.json<PlayInterestReceipt>(),withdrawUrl=`/v1/play-interests/${r.interestId}/withdraw`;
+    const beforeInvalid=(await pool.query("SELECT * FROM play_interests ORDER BY id")).rows;
+    const wrong=await app.inject({method:"POST",url:withdrawUrl,headers:{...hb,"idempotency-key":key()},payload:{expectedVersion:Number(r.version)}});
+    const afterInvalid=(await pool.query("SELECT * FROM play_interests ORDER BY id")).rows;
+    expect(wrong.statusCode).toBe(422);
+    expect(wrong.json().code).toBe("PLAY_INTEREST_INPUT_INVALID");
+    expect(afterInvalid).toEqual(beforeInvalid);
+    const withdrawal=await app.inject({method:"POST",url:withdrawUrl,headers:{...hb,"idempotency-key":key()},payload:{expectedVersion:r.version}});
+    expect(withdrawal.statusCode).toBe(200);expect(withdrawal.json().outcome).toBe("withdrawn");
+    expect((await pool.query("SELECT count(*)::int AS n FROM play_interests")).rows[0].n).toBe(before.rows[0].n);
+    expect((await app.inject({url,headers:{...ha,cookie:a.cookie}})).statusCode).toBe(403);
+    expect((await app.inject({url,headers:{authorization:`Bearer ${"x".repeat(43)}`}})).statusCode).toBe(401);
+    await putBlock(a,b);
+    const blocked=await app.inject({url,headers:ha});expect(blocked.statusCode).toBe(200);
+    expect(blocked.json().items[0].capabilities.canSend).toBe(false);
+    const refusal=await app.inject({...sendA,headers:{...ha,"idempotency-key":key()}});expect(refusal.statusCode).toBe(404);
+    expect(refusal.json().code).toBe("RESOURCE_UNAVAILABLE");
+    expect((await pool.query("SELECT count(*)::int AS n FROM play_interests")).rows[0].n).toBe(before.rows[0].n);
+  });
 
   const key = () => `pi-synthetic-${randomUUID()}`;
   function post(who: Actor, url: string, payload: unknown, idem = key()): Promise<Response> {

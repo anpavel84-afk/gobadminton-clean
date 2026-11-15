@@ -155,4 +155,22 @@ describe("Play interest policy and HTTP authentication", () => {
     expect(create).toHaveBeenCalledWith(a, b, "synthetic-key-123456", body);
     expect(status).toHaveBeenCalledWith(201);
   });
+  it("selected handlers accept validated native principal and preserve exact actor/session/version/key", async () => {
+    const config=env(), principal={userId:a,sessionId:b,audience:"consumer_native",transport:"bearer"};
+    const lookup=vi.fn().mockResolvedValue(principal);
+    const auth=new ConsumerAuthService(config,{} as never,{} as never,{lookup} as never);
+    const states=vi.fn().mockResolvedValue({items:[]}), create=vi.fn().mockResolvedValue({statusCode:201,body:{outcome:"mutual"}}),
+      withdraw=vi.fn().mockResolvedValue({statusCode:200,body:{outcome:"withdrawn"}});
+    const c=new PlayInterestsController(auth,new IdempotencyService({} as never,config),{states,create,withdraw} as never);
+    const headers={authorization:`Bearer ${"a".repeat(43)}`,"idempotency-key":"native-synthetic-key"};
+    const req={headers,cookies:{},body:{targetPublicPlayerId:b}};
+    await c.states(req as never,[b]);
+    await c.create(req as never,{status:vi.fn()} as never);
+    const body={expectedVersion:"9007199254740993"};
+    await c.withdraw({...req,body} as never,{status:vi.fn()} as never,interestId);
+    expect(lookup).toHaveBeenCalledTimes(3);
+    expect(states).toHaveBeenCalledWith(a,b,[b]);expect(create).toHaveBeenCalledWith(a,b,"native-synthetic-key",req.body);
+    expect(withdraw).toHaveBeenCalledWith(a,b,"native-synthetic-key",interestId,body);
+  });
+
 });

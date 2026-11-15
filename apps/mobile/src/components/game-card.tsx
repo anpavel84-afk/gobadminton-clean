@@ -2,11 +2,11 @@ import { useRef, useState } from 'react';
 import { Image, Pressable, Share, StyleSheet, View } from 'react-native';
 import { gamePath, publicGameUrl } from '../native-auth-protocol.ts';
 import type { PublicGame } from '../public-api.ts';
-import { gameCoverSources } from '../media.ts';
-import { canShareGame, cardWhen, formatLabel, levelLabel, settlementLabel, statusLabel } from '../presentation.ts';
+import { gameCoverSources, playerMediaUrl } from '../media.ts';
+import { canShareGame, cardWhen, gamePeople, playerInitials, formatLabel, levelLabel, settlementTerms, statusLabel } from '../presentation.ts';
 import { colors, interaction } from '../theme.ts';
 import { Label, TextButton } from './ui.tsx';
-import { DiscoveryArrow, ShareIcon } from './discovery-icon.tsx';
+import { DiscoveryArrow, DiscoveryIcon, ShareIcon } from './discovery-icon.tsx';
 
 export function PublicGameMedia({ game }: { game: PublicGame }) {
   const sources = gameCoverSources(game);
@@ -29,10 +29,11 @@ function CoverPhase({ sources, name }: { sources: string[]; name: string }) {
 export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityName?: string; onOpen: () => void }) {
   const when = cardWhen(game);
   const format = formatLabel(game.formatKey);
+  const [trainerExpanded, setTrainerExpanded] = useState(false);
   const hasMedia = gameCoverSources(game).length > 0;
   return <View style={card.surface}>
     <View><PublicGameMedia game={game} />
-      {hasMedia && <View style={{ position: 'absolute', top: 12, left: 12 }}><Label style={card.activity}>{game.activityKind === 'trainer_led' ? 'С тренером' : 'Обычная игра'}</Label></View>}
+      {hasMedia && <View style={{ position: 'absolute', top: 14, left: 14 }}><Label style={[card.activity, game.activityKind === 'trainer_led' && { backgroundColor: colors.lavender, color: colors.purple }]}>{game.activityKind === 'trainer_led' ? 'С тренером' : 'Обычная игра'}</Label></View>}
     </View>
     <View style={card.content}>
       {!hasMedia && <Label style={[card.activity, game.activityKind === 'trainer_led' && { backgroundColor: colors.lavender, color: colors.purple }]}>
@@ -44,34 +45,44 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
           {game.status !== 'published' ? statusLabel(game) : game.availablePlaces > 0 ? `Свободно ${game.availablePlaces} из ${game.capacity}` : 'Мест нет'}
         </Label>
       </View>
-      <Label style={card.time}>{when.time}</Label>
-      <Label style={card.secondary}>{game.timezone}</Label>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Подробнее: ${game.title}`} onPress={onOpen} style={{ minHeight: 48, justifyContent: 'center' }}>
+      <Label accessibilityLabel={`${when.day}, ${when.time}, ${game.timezone}`} style={card.time}>{when.time}</Label>
+      <Pressable accessibilityRole="link" accessibilityLabel={game.title} onPress={onOpen}
+        style={({ pressed }) => [card.titleLink, pressed && { backgroundColor: colors.paper }]}>
         <Label accessibilityRole="header" style={card.title}>{game.title}</Label>
       </Pressable>
       <Label style={{ fontWeight: '600' }}>{game.venue.name}</Label>
-      <Label style={card.secondary}>{cityName ? `${cityName} · ` : ''}{game.venue.address}</Label>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}><DiscoveryIcon name="pin" /><Label style={[card.secondary, { flex: 1 }]}>{cityName ? `${cityName} · ` : ''}{game.venue.address}</Label></View>
       <View style={card.meta}>
         <Label style={card.secondary}>Уровень: {levelLabel(game.levelRule)}</Label>
         {format && <Label style={card.secondary}>{format}</Label>}
       </View>
-      <Label style={card.secondary}>{settlementLabel(game)}</Label>
-      <View style={card.host}>
-        <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-          {game.activityKind === 'trainer_led' && <>
-            <Label style={card.secondary}>Тренер</Label>
-            <Label style={{ fontWeight: '600' }}>{game.trainer?.displayName ?? 'Профиль недоступен'}</Label>
-          </>}
-          <Label style={card.secondary}>Организатор</Label>
-          <Label style={{ fontWeight: '600' }}>{game.organizer.displayName}</Label>
+      <Label style={card.secondary}>{settlementTerms(game.settlement)}</Label>
+      {gamePeople(game).map(person => <View key={person.role} style={card.host}>
+        <GamePersonAvatar key={`${game.id}:${person.role}:${person.name}:${person.avatar?.uploadedUrl}:${person.avatar?.providerUrl}`} name={person.trainer && !game.trainer ? '' : person.name} avatar={person.avatar} trainer={person.trainer} />
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <Label style={{ color: colors.secondary, fontSize: 10, lineHeight: 14 }}>{person.role}</Label>
+          <Label style={{ fontSize: 13, lineHeight: 18, fontWeight: '600' }}>{person.name}</Label>
         </View>
-        <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto' }}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Подробнее: ${game.title}`} onPress={onOpen}
-            style={({ pressed }) => [card.details, pressed && { backgroundColor: colors.paper }]}><DiscoveryArrow /></Pressable>
-          {canShareGame(game) && <GameShare gameId={game.id} />}
-        </View>
-      </View>
+        {person.trainer && game.trainingDescription && <Pressable accessibilityRole="button" accessibilityLabel="Подробнее о тренировке" accessibilityState={{ expanded: trainerExpanded }} onPress={() => setTrainerExpanded(v => !v)} style={card.details}><DiscoveryIcon name="chevron" /></Pressable>}
+        {!person.trainer && <GameActions game={game} onOpen={onOpen} />}
+        {person.trainer && <Label style={[card.secondary, { width: '100%' }]}>Отзывы и история ролей пока недоступны.</Label>}
+        {person.trainer && trainerExpanded && game.trainingDescription && <Label style={[card.secondary, { width: '100%' }]}>{game.trainingDescription}</Label>}
+      </View>)}
     </View>
+  </View>;
+}
+function GameActions({ game, onOpen }: { game: PublicGame; onOpen: () => void }) {
+  return <View style={card.actions}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Подробнее: ${game.title}`} onPress={onOpen}
+      style={({ pressed }) => [card.details, pressed && { backgroundColor: colors.paper }]}><DiscoveryArrow /></Pressable>
+    {canShareGame(game) && <GameShare gameId={game.id} />}
+  </View>;
+}
+function GamePersonAvatar({ name, avatar, trainer }: { name: string; avatar?: PublicGame['organizer']['avatar']; trainer: boolean }) {
+  const [failed, setFailed] = useState<string[]>([]);
+  const uri = [avatar?.uploadedUrl, avatar?.providerUrl].map(value => playerMediaUrl(value, 'avatar')).find(value => value && !failed.includes(value));
+  return <View accessible={false} style={{ width: 38, height: 38, borderRadius: 19, overflow: 'hidden', backgroundColor: trainer ? colors.lavender : colors.lime, alignItems: 'center', justifyContent: 'center' }}>
+    {uri ? <Image source={{ uri }} style={{ width: 38, height: 38 }} onError={() => setFailed(values => [...values, uri])} /> : <Label style={{ fontSize: 12, lineHeight: 17 }}>{playerInitials(name)}</Label>}
   </View>;
 }
 function GameShare({ gameId }: { gameId: string }) {
@@ -89,7 +100,7 @@ function GameShare({ gameId }: { gameId: string }) {
     finally { locked.current = false; }
   }
   if (!sharePath) return null;
-  return <View style={{ gap: 4 }}>
+  return <View style={{ gap: 4, flexShrink: 1 }}>
     <Pressable accessibilityRole="button" accessibilityLabel="Поделиться игрой" onPress={() => void share()} style={card.details}><ShareIcon /></Pressable>
     {notice && <Label accessibilityLiveRegion="polite" style={card.secondary}>{notice}</Label>}
     {failed && <Label selectable style={card.secondary}>{publicGameUrl(gameId)}</Label>}
@@ -100,13 +111,15 @@ const card = StyleSheet.create({
   media: { height: 210, backgroundColor: colors.paper },
   mediaError: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
   content: { padding: 18, gap: 6 },
-  activity: { alignSelf: 'flex-start', borderRadius: 8, backgroundColor: colors.limeSoft, paddingHorizontal: 10, paddingVertical: 4, fontWeight: '600' },
+  activity: { alignSelf: 'flex-start', borderRadius: 8, backgroundColor: colors.limeSoft, paddingHorizontal: 10, paddingVertical: 4, fontWeight: '600', fontSize: 12, lineHeight: 17 },
   topline: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginTop: 6 },
-  secondary: { color: colors.secondary, fontSize: 14, lineHeight: 20 },
-  seats: { borderRadius: 7, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: colors.limeSoft, fontWeight: '600', fontSize: 14, lineHeight: 20 },
+  secondary: { color: colors.secondary, fontSize: 13, lineHeight: 19 },
+  seats: { borderRadius: 7, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: colors.limeSoft, fontWeight: '600', fontSize: 13, lineHeight: 19 },
   time: { fontSize: 19, lineHeight: 26, fontWeight: '700' },
   title: { fontSize: 21, lineHeight: 27, fontWeight: '700' },
+  titleLink: { minHeight: interaction.minHeight, justifyContent: 'center', borderRadius: 8 },
   meta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   host: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 12, marginTop: 6 },
-  details: { ...interaction, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderWidth: 1, borderColor: colors.lineDark, borderRadius: 24, justifyContent: 'center' },
+  actions: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginLeft: 'auto', flexShrink: 1, maxWidth: '100%' },
+  details: { ...interaction, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderWidth: 1, borderColor: colors.lineDark, borderRadius: 12, justifyContent: 'center' },
 });

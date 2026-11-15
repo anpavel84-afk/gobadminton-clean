@@ -74,6 +74,8 @@ export class GameManagementCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private contextRead = 0; private publishRead = 0; private contactEdited = false; private resumeKnown: { actorId: string; id: string; version: number } | null = null; private detailReads = new Map<string, number>();
   // Quarantined while identity is unavailable; never part of the guest snapshot.
   private resumePending: ManagementPacket | null = null;
+  // A domain-local continuation, fenced by identity, context generation and observed search city.
+  private ordinaryResume: { actor: Actor; serial: number; cityId: string | null } | null = null;
   private port: ManagementPort; private random: () => string; private now: () => number;
   constructor(port: ManagementPort, random: () => string, now: () => number = Date.now) { this.port = port; this.random = random; this.now = now; }
   getSnapshot = () => this.state;
@@ -90,13 +92,13 @@ export class GameManagementCoordinator {
     if (actor && this.resumePending?.actor.actorId !== actor.actorId) this.resumePending = null;
     const pending = actor && this.resumePending ? freeze({ ...this.resumePending, actor: { ...actor } }) : null;
     if (actor) this.resumePending = null;
-    this.contextRead++; this.contactEdited = false; this.detailReads.clear(); this.state = initial(); this.show({ actor: actor ? Object.freeze({ ...actor }) : null,
+    this.ordinaryResume = null; this.contextRead++; this.contactEdited = false; this.detailReads.clear(); this.state = initial(); this.show({ actor: actor ? Object.freeze({ ...actor }) : null,
       creationReference: actor && this.resumeKnown ? { id: this.resumeKnown.id, version: this.resumeKnown.version } : null,
       ...(pending ? { command: { packet: pending, status: 'unknown' as const }, notice: 'Результат прежнего действия неизвестен. Проверка повторит только его с прежними условиями и ключом; публикация после создания потребует отдельного подтверждения.' } : {}) });
   }
   /** Explicit logout wipes quarantined packets and active private data before fencing auth. */
   forgetCreation = () => {
-    this.resumeKnown = null; this.resumePending = null; this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
+    this.resumeKnown = null; this.resumePending = null; this.ordinaryResume = null; this.contextRead++; this.detailReads.clear(); this.contactEdited = false;
     this.state = initial(); this.show({});
   };
   private current(actor: Actor | null) { return sameActor(actor,this.state.actor); }
@@ -106,38 +108,84 @@ export class GameManagementCoordinator {
     if (Object.hasOwn(patch,'contact')) this.contactEdited = true;
     this.show({ form: { ...this.state.form,...patch }, preview: null, notice: undefined });
   };
-  loadContext = async (cityId: string | null) => {
+  continueOrdinaryForm = (cityId: string | null) => {
+    const actor = this.state.actor, serial = ++this.contextRead;
+    this.ordinaryResume = actor && this.state.context === 'ready' ? { actor, serial, cityId } : null;
+  };
+  mountOrdinaryForm = (cityId: string | null) => {
+    const resume = this.ordinaryResume;
+    if (resume && this.current(resume.actor) && resume.serial === this.contextRead && resume.cityId === cityId && this.state.context === 'ready') return Promise.resolve();
+    return this.loadContext(cityId);
+  };
+  /** Read locally: a contextual route must not clear the mounted ordinary form while awaiting I/O. */
+  private async readContext(cityId: string | null, valid: () => boolean, catalogRead: () => void = () => {}) {
+    const setup = { context: 'setup' as const, cityId, profile: null as CreatorProfile | null,
+      preferences: null, trainer: null, venues: [] as Venue[] };
+    let profile: CreatorProfile;
+    try { profile = parseCreatorProfile(await this.port.profile()); }
+    catch (e) { if (e instanceof ParticipationError && e.status === 404) return valid() ? setup : null; throw e; }
+    if (!valid()) return null;
+    if (!profile.cityId || !profile.displayName.trim() || !cityId) return { ...setup, profile };
+    const preferences = parsePreferences(await this.port.preferences()); if (!valid()) return null;
+    let trainer: OwnTrainer | null = null;
+    if (profile.trainer) {
+      try { trainer = await this.port.trainer(); } catch (e) { if (!(e instanceof ParticipationError && e.status === 404)) throw e; }
+      if (!valid()) return null;
+      if (trainer?.status !== 'active') trainer = null;
+    }
+    catalogRead();
+    const venues: Venue[] = [], seen = new Set<string>(); let cursor: string | undefined;
+    do { const page = await this.port.venues(cityId,cursor); if (!valid()) return null;
+      if (page.items.some(v => v.cityId !== cityId)) throw new ParticipationError('invalid');
+      venues.push(...page.items); if (page.nextCursor && seen.has(page.nextCursor)) throw new ParticipationError('invalid');
+      if (page.nextCursor) seen.add(page.nextCursor); cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return { context: 'ready' as const, cityId, profile, preferences, trainer, venues };
+  }
+  loadContext = async (cityId: string | null, options?: { preserveForm?: boolean; current?: () => boolean }) => {
     const actor = this.state.actor, serial = ++this.contextRead;
     if (!actor) return;
-    const valid = () => this.current(actor) && serial === this.contextRead;
+    const valid = () => this.current(actor) && serial === this.contextRead && (options?.current?.() ?? true);
     const changed = cityId !== this.state.cityId;
     this.show({ context: 'loading', profile: null, trainer: null, preferences: null, venues: [], cityId,
-      ...(changed && !this.locked() && !this.state.creationReference ? { form: { ...this.state.form, venueId: '' }, preview: null } : {}) });
+      ...(changed && !options?.preserveForm && !this.locked() && !this.state.creationReference ? { form: { ...this.state.form, venueId: '' }, preview: null } : {}) });
     try {
-      let profile: CreatorProfile;
-      try { profile = await this.port.profile(); }
-      catch (e) { if (e instanceof ParticipationError && e.status === 404) { if (valid()) this.show({ context: 'setup' }); return; } throw e; }
-      if (!valid()) return;
-      if (!profile.cityId || !profile.displayName.trim() || !cityId) { this.show({ profile, context: 'setup', preview: null }); return; }
-      const preferences = await this.port.preferences(); if (!valid()) return;
-      let trainer: OwnTrainer | null = null;
-      if (profile.trainer) {
-        try { trainer = await this.port.trainer(); } catch (e) { if (!(e instanceof ParticipationError && e.status === 404)) throw e; }
-        if (!valid()) return;
-        if (trainer?.status !== 'active') trainer = null;
-      }
-      const venues: Venue[] = [], seen = new Set<string>(); let cursor: string | undefined;
-      do { const page = await this.port.venues(cityId,cursor); if (!valid()) return;
-        if (page.items.some(v => v.cityId !== cityId)) throw new ParticipationError('invalid');
-        venues.push(...page.items); if (page.nextCursor && seen.has(page.nextCursor)) throw new ParticipationError('invalid');
-        if (page.nextCursor) seen.add(page.nextCursor); cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-      this.show({ context: 'ready', profile, preferences, trainer, venues,
+      const context = await this.readContext(cityId, valid);
+      if (!context || !valid()) return;
+      if (context.context === 'setup') { this.show({ ...context, ...(!options?.preserveForm ? { preview: null } : {}) }); return; }
+      this.show({ ...context,
         form: { ...this.state.form,
-          ...(!this.contactEdited ? { contact: preferences.defaultPublicGameContact ?? '' } : {}),
-          ...(!trainer && !this.locked() && !this.state.creationReference ? { activity: 'regular' as const } : {}) },
-        ...(!this.locked() && !this.state.creationReference ? { preview: null } : {}) });
+          ...(!options?.preserveForm && !this.contactEdited && !this.locked() && !this.state.creationReference ? { contact: context.preferences.defaultPublicGameContact ?? '' } : {}),
+          ...(!options?.preserveForm && !context.trainer && !this.locked() && !this.state.creationReference ? { activity: 'regular' as const } : {}) },
+        ...(!options?.preserveForm && !this.locked() && !this.state.creationReference ? { preview: null } : {}) });
     } catch { if (valid()) this.show({ context: 'error', venues: [], profile: null, preferences: null, trainer: null }); }
+  };
+  /** Only an explicit press may switch local creation city/venue. Catalog remains authoritative. */
+  selectVenue = async (venue: Venue, current: () => boolean = () => true) => {
+    const actor = this.state.actor, form = this.state.form, preview = this.state.preview;
+    if (!actor || this.locked() || this.state.creationReference || !current()) return false;
+    const serial = ++this.contextRead;
+    const valid = () => serial === this.contextRead && this.current(actor) && current() && !this.locked() &&
+      !this.state.creationReference && this.state.form === form && this.state.preview === preview;
+    const priorReady = this.state.context === 'ready';
+    let catalogRead = false;
+    try {
+      const context = await this.readContext(venue.cityId, valid, () => { catalogRead = true; });
+      if (!context || !valid()) return false;
+      if (context.context === 'setup') { this.show(context); return false; }
+      const actual = context.venues.find(v => v.id === venue.id && v.cityId === venue.cityId && v.timezone === venue.timezone);
+      if (!actual) { this.show({ ...(priorReady ? {} : { context: 'error' as const }), notice: 'Площадка или её часовой пояс не подтверждены текущим каталогом. Выбор не изменён.' }); return false; }
+      this.show({ ...context, form: { ...form, venueId: actual.id }, preview: null,
+        notice: `Выбрана площадка: ${actual.name} · ${actual.timezone}. Проверьте дату, время и условия заново.` });
+      return true;
+    } catch (e) {
+      // Catalog/read failure does not revoke an already usable context. An authoritative
+      // malformed profile/settings response still blocks new writes until refreshed.
+      if (valid()) this.show({ ...(!priorReady || !catalogRead && e instanceof ParticipationError && e.kind === 'invalid'
+        ? { context: 'error' as const, profile: null, preferences: null, trainer: null } : {}),
+        notice: 'Не удалось проверить профиль, настройки или каталог площадок. Выбор не изменён; повторите проверку.' });
+      return false;
+    }
   };
   preview = () => {
     if (this.locked() || this.state.creationReference || this.state.context !== 'ready' || !this.state.profile || !this.state.cityId) return;

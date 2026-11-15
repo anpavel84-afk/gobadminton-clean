@@ -1,3 +1,589 @@
+# #522 Native swipe — same-author source continuation from 491b9e9
+
+Authorized base: `491b9e9b820659e66eae8e1230e48b11129293f3`; scope is the original 22 paths plus only `src/auth-coordinator.ts`. The previous partial work and its history are retained below. This private export has no usable Git metadata, so no new candidate SHA, commit or source acceptance is asserted.
+
+This delta connects the Players floating «Свайп» entry to the actual filtered catalog and `/players/browse`. MainNavigation mounts one stable PlayInterestProvider above its unchanged Stack children; `_layout.tsx`, Auth/Radar/Messages ownership and native configuration remain unchanged. Closed typed AuthCoordinator read/mutation ports use the same private participationRead gate. The mutation permit is checked after token acquisition immediately before the existing native API call; actor/session/epoch fences and 401 auth failure remain in force, without automatic retry.
+
+The native deck uses the retained WEB2a dp/ms helpers with measured card dimensions, a stable RN PanResponder, Animated exits/return, explicit buttons, details/bio/games-availability pages, approved cover/real avatar fallbacks, tutorial completion per actor/guest, pagination/retry/empty states, Reduce Motion and safe edges. Guest login/cancel keeps the public filters/selected card and never sends an interest. Returning to the mounted Players list reuses its catalog/query and retained FlatList scroll. Actual scroll/layout behavior still requires device testing.
+
+The root owner keeps immutable in-flight/UNKNOWN packets across card/route changes. Current catalog/safety removal retires capabilities and event context; stale callbacks cannot target the next peer. Only a validated explicit mutual send receipt mounts the two-person «Дружеский матч» / «Партнёр найден» composition. Close/background/account changes retire the event. «Написать» explicitly rechecks the existing ordinary contact owner and routes to a validated conversation or the existing composer, without sending a DM or borrowing Radar proof.
+
+Author deterministic Node24 checks: **126/126 PASS**, zero failed/skipped/cancelled: auth 44, entry 5, play interests 8, gesture/catalog 5, unchanged contact 20, Radar 36 and native contract 8. The 62 swipe/auth/entry checks include real component handler → owner → closed auth ports → native API wiring, token-wait actor/permit races, post-reply rotation, 401/no resend, once-only receipt events, Back/undo, tutorial completion, ordinary contact reads and no automatic messages. RN hooks/layout/animation in handler tests use host stubs: these are not rendered-device proof or independent QA.
+
+Typecheck/lint could not start: dependencies and pnpm payload are absent; Corepack registry access fails EAI_AGAIN. Contracts check cannot start without @apidevtools/swagger-parser. The genuine disposable PlayInterest fixture and API unit suite are NOT_RUN (missing dependencies; Docker socket denied); no live database was used. Product CI, independent QA, Astra actual UI review, Android S23 binary evidence, DEV acceptance, APK/OTA/iOS and Owner UAT remain unverified. The prior selected-handler/controller/OpenAPI/fixture work is preserved, not claimed freshly qualified here.
+
+**SOURCE CONTINUATION / PUBLIC DELIVERY HOLD / DEVICE_NOT_TESTED / UAT=NOT_TESTED.** No source, DEV, APK, store or full #522 completion/acceptance claim. Owner APK7 FAIL, costs and every prior FAIL/UNKNOWN remain. No merge/deploy/PROD, dependency/config/version/lockfile change, model subcall or extra source helper occurred. All 491 README bytes follow unchanged.
+
+---
+
+# #522 Native swipe / friendly match — incomplete source continuation
+
+Authorized base supplied by Root: `d667139ec5f8e7d80227dd669aeb265aeaf31929`; focused Radar QA receipt `20d00659af92c11c44c05c7d37635c2fe894ca5eb7e588a8955677a94ba8e1ac`; source capsule `49451e8fdd6e447e41914b8fc5314bf09e730fd588696c2c496738aebd65d1d1`. This private export has no usable Git metadata; no new candidate SHA or source receipt is asserted.
+
+Independent source work here: native pure WEB2a gesture math in measured dp/ms, strict positional play-interest state/receipt parsers, closed bearer API operations, root-lifetime command coordinator with immutable packet/key/version, UNKNOWN retention and retired-context match suppression, ordinary-contact overlay component, exact bare browse auth/entry recovery and exact-path navigation predicate. Only the three selected API handlers opt in to existing principal guards; matching OpenAPI security entries and focused API tests are updated. Existing WEB, services, contact/Radar owners, native configuration, dependencies and lockfile are unchanged.
+
+BLOCKED / NOT A COMPLETE SWIPE CANDIDATE: the authorized 22-file set excludes `src/auth-coordinator.ts`. Its sole existing bearer/session/generation gate, `participationRead`, is private. A narrow scope addition for read/send wrappers was requested; no private-member bypass, credential extraction or alternative auth owner was introduced. The fullscreen card component, route, floating CTA and root runtime mounting are not implemented/connected. The overlay component is not mounted and has no runtime evidence. Exact browse return support therefore does not establish usable deck completion. Do not merge or release this partial continuation as #522 parity.
+
+Author deterministic Node24 verification: **54/54 PASS**, zero skipped/cancelled, covering gesture math/cancel/reversal, parser refusal, owner→actual API wire, UNKNOWN and lifecycle races, historical mutual suppression, actual login/hydration/callback/cancel and entry ordering. These are author checks, not independent QA. API unit/disposable DB tests were added but NOT RUN. Mobile typecheck could not start: dependencies/package-manager payload are absent and Corepack registry resolution fails (`EAI_AGAIN`). No successful typecheck, lint, Product CI, native build/export or device test is asserted.
+
+**SOURCE INCOMPLETE / PUBLIC DELIVERY HOLD / DEVICE_NOT_TESTED / UAT=NOT_TESTED.** No merge, deploy, APK, OTA, iOS parity or full #522 completion. Owner APK7 FAIL and all historical FAIL/UNKNOWN, costs and prior evidence remain. No live DB or PROD operation occurred. All old README bytes follow unchanged.
+
+# #522 Radar — native close/cancel late-ACK safety correction
+
+Admitted base: `1b69455ef9c1399f12f574b190a9c64c5be7bae9`; source receipt `442bda4cc6a5a61f9fec2eb6736c846a46c301e531a8204fd512d8b8f815af1d`; actual parent PASS `d6802b7dabb00b58c3ec76a49dc445a63e8dfeff4122367b71d4da201fb4e971`. Independent focused FAIL `3aa664850ba8e124effa8d61439bdef1791e3adf9c9b936d94d45b13edcb6a42` has one remaining cancel P1; this author correction awaits Root packet review, fresh owning gates and independent focused acceptance. First whole FAIL `cd791219d730f33a7ca53c040d70d7330449a809915b4b7e62a7eda16f48835a` and focused FAIL remain permanent history. Root diagnostic `1e8a8a28bf3f1e5acfaa64a1230d6eeb3caa727782307ff31dcea10a4179dc61` is input, not independent QA.
+
+`cancel()` now establishes existing safety cleanup for owned publication or an unsettled command BEFORE retiring its serial. Private rows/pins/query clear immediately. Existing late-receipt handling can settle the exact original accepted packet and capture its owned activation for the existing frozen DELETE cleanup. Pending cleanup remains honest UNKNOWN with the existing server-lease fallback until its actual ACK; no guaranteed instant stop is claimed. No new owner, workflow or transport. GET cannot acknowledge the original write; lost-response UNKNOWN remains intact. Failed cleanup retries the same packet/key, original commands never auto-replay, and actor/session authority fences remain unchanged. Confirmed cleanup allows fresh explicit consent/enable without automatic activation.
+
+Author validation: fresh Node24 radar/contact/auth/maps/native-contract **118/118 PASS**, zero failures/skips/cancellations. All prior 114 cases remain byte-for-byte; four new tests exercise the actual read-only native close handler plus real coordinator: deferred start ACK then delayed cleanup ACK and explicit reentry; owned-publication cancel/private-context retirement and failed same-packet cleanup retry; lost start response/status discovery retaining UNKNOWN; actor/session rotation with an old ACK and new pending command. The first new-test run had two fixture/assertion failures (116/118); these were corrected without changing production logic or old tests. Targeted four-case rerun and final five-file run pass. This is author validation; native rendering is not tested.
+
+Fresh TypeScript, affected lint and Android/iOS Expo export entrypoints were attempted offline but could not start: this private export has no local typescript/eslint/expo modules. These gates are NOT_RUN, not PASS; no install or resolution. Fresh archive/source inventory verifies only these three allowed files changed and old README bytes remain the exact suffix. Supplied unchanged backend/API_DB80 and Astra UI closure `5ba23647d427d5898997531da5842266b8c548efab2b30a86b054a7ef5e643d4` are reused evidence, not fresh checks. Next independent QA is focused on the remaining cancel P1, related delta and retained prior findings, after owning gates and Root review; no second whole QA or model subcall occurred.
+
+Prior 14/15 normal-run history, timeout 1, carryover, FAIL/UNKNOWN and costs remain intact; no new source receipt/count/SHA is invented in this Git-less export. **SOURCE ONLY / PUBLIC DELIVERY HOLD / DEVICE_NOT_TESTED.** Owner APK7 FAIL, full parity unfinished and swipe22 HOLD remain. No network, DB, install, native build, merge, deploy, APK, OTA, PROD or completion claim. All old README bytes follow unchanged.
+
+---
+
+# #522 Radar — actual late ACK and explicit reentry correction
+
+Admitted base: `c53772cea7d8bf5e0acf977d86fcba2601b83a4c`; prior normal source receipt `ed753a404d1df4b8663be92468095c5a4b819a7490a743fa5c49ee19045db2ca`. Actual owning parent **FAIL** `e4ed17cb07ad36b1cca011e4059bde970d54777631f057abfdef5204b57cbd84` is retained: 111 units/lint/Expo2/archive passed, but production TypeScript failed at coordinator 192/193/197/200. FIRST whole CodeQA FAIL `cd791219d730f33a7ca53c040d70d7330449a809915b4b7e62a7eda16f48835a` remains open for focused acceptance. Root diagnostic `016147beae8efc96b6722eadf90938c1ea454db617cc4a651719df0c7c3540e7` is supplied read-only evidence, not independent QA.
+
+Source correction: only the actual response to the exact frozen original command can acknowledge it after UI serial retirement, under unchanged actor/session and authority. A matched start/update/heartbeat ACK retires that command while separate cleanup remains independently pending until its real receipt. A matched original stop ACK settles its corresponding safety intent without another DELETE. Settled cleanup keeps foreground restoration suppressed until fresh explicit consent; consent then releases that guard and a new explicit enable can create a fresh packet. Late receipts do not restore private rows/pins/query or replay original packets. Already attempted cleanup is not automatically retried by a late ACK; stale discovery cannot recapture settled cleanup. GET/status discovery and genuinely lost/network replies still cannot acknowledge original UNKNOWN; existing failure/same-packet retry and actor rotation fences remain.
+
+Production typing: a bounded `currentCleanup(): Cleanup | null` read observes lifecycle mutation after the transport await, avoiding TypeScript's stale null narrowing. No casts, suppressions, fabricated debt or packet/key reordering were added. Existing P1 background safety and P2 map membership/list independence are retained; API, UI, dependencies, config and application version are unchanged.
+
+Author validation: **114/114 PASS**, zero skips/cancellations, from fresh Node24 radar/contact/auth/maps/native-contract runs. Existing 111 meanings are retained with only incorrect actual-ACK UNKNOWN expectations corrected. Controllable real coordinator coverage includes all four command kinds, original ACK then cleanup ACK (the original stop receipt itself settles stop cleanup), off/empty private state, no write/query before fresh explicit intent, successful consent/enable, unchanged old packet/key/body, reverse ACK ordering and an old actor ACK while a new actor command is pending. True lost-response/GET-only UNKNOWN, cleanup failure/retry and map regressions still pass.
+
+Full mobile TypeScript, affected lint, Expo2 and owning archive/source checks are **NOT_RUN here**: this private export has no node_modules or tsc/eslint/expo; no install or dependency resolution. Fresh owning parent gates must pass before independent focused original P1/P2 + related late-ACK delta QA. No second whole QA or model/provider/subagent call was made. Supplied API_DB80 and Astra UI source closure `5ba23647d427d5898997531da5842266b8c548efab2b30a86b054a7ef5e643d4` are retained evidence, not fresh checks.
+
+Prior 14 normal source runs, timeout 1, carryover, FAIL/UNKNOWN and costs remain history; no new normal receipt/count or source SHA is invented in this Git-less export. **SOURCE ONLY / PUBLIC DELIVERY HOLD / DEVICE_NOT_TESTED.** Owner APK7 FAIL, full parity unfinished and swipe22 hold remain. No network, DB, build, install, merge, deploy, APK, OTA, PROD or iOS completion is claimed. All old README bytes follow unchanged.
+
+---
+
+# #522 Radar FIRST CodeQA — bounded P1/P2 source repair
+
+Base: `60d4400815906d9189026242774e3ac2eda3b46a`. FIRST independent CodeQA **FAIL** `cd791219d730f33a7ca53c040d70d7330449a809915b4b7e62a7eda16f48835a` is retained; the two findings are addressed in author source and await independent focused acceptance. Supplied parent PASS `3575562048329e185a91304fbbb442b43311ca40ea521d14ff258725887125a9`, 13 normal source runs and last source receipt `ca13336e4eceb6860ae6ab88a31ed81a3cc1a1f478c5130927749a47b85dac83` remain history. Timeout/carryover and previous FAIL/UNKNOWN records below remain intact.
+
+P1: background immediately retires private rows/pins and records one safety-stop debt for the authoritative actor/session. A confirmed owned activation supplies one frozen cleanup DELETE packet; late accepted start/update/heartbeat responses can supply that identity after UI request retirement. A bounded status read can discover an activation after a lost response, but cannot acknowledge the original write. Cleanup cannot replace its UNKNOWN packet, body or key, and cannot replay start/update/heartbeat. Failed cleanup remains pending with lease fallback; restore/explicit stop uses the same cleanup packet before any ordinary publication/query can resume. An original stop UNKNOWN is never replaced or automatically replayed; only explicit retry uses its original packet, and only that actual retry receipt acknowledges it. Session/account changes retire cleanup permits and late callbacks. Returning to foreground alone never enables publication; a fresh explicit enable intent is required after confirmed cleanup.
+
+P2: each map window has a separate retirement epoch, captured from actual owner membership. Refresh/next-window/error retires pins immediately; a map proof requires the original epoch, current row membership, peer/ref and map expiry, plus existing actor/session/query/activation fences. Separately parsed list rows keep their contexts when only the map changes. Map errors preserve a still-valid list/query; mandatory privacy expiry still clears private data. No caller parameter, UI bypass, API/SQL/policy/dependency or architecture change.
+
+Author check: **111/111 PASS**, zero skips/cancellations, in radar/contact/auth/maps/native-contract: original 94 retained plus 17 targeted real-coordinator regressions. Deferred transport tests cover late acceptance, lost responses/status discovery, restore debt, cleanup failure/same-key retry, actor/session rotation, stale composer/late preview, replacement windows and list retention. This is author validation, not independent QA. Fresh mobile TypeScript, affected lint and both Expo exports are **NOT_RUN** in this export: node_modules and tsc/eslint/expo are absent; no installation/resolution. The normal parent must run those gates before independent focused P1/P2 + related-delta QA. Unchanged backend/API_DB80 evidence is reused, not rerun.
+
+Astra UI source closure `5ba23647d427d5898997531da5842266b8c548efab2b30a86b054a7ef5e643d4` is retained: this delta only changes coordinator/test/README, preserving the reviewed UI bytes. Source closure, CodeQA, native/device evidence and Owner acceptance remain separate. **SOURCE ONLY / PUBLIC DELIVERY HOLD / DEVICE_NOT_TESTED.** Owner APK7 FAIL, full parity unfinished, swipe admission paused and future-only drafts remain unchanged. No APK/full parity/OTA/iOS done claim, merge, deploy or publication. No new source SHA is claimed: this export has no usable Git history.
+
+---
+
+# #522 Radar — focused R2/R3 + actual test typing correction
+
+Admitted base: `fd392ea892babcb0810504531d78526de4c6902d`; Root capsule `7614552b203bbad6891dd1a30cfa8e8f11a1c79ff5ce3d4cb664dd068ea3231d`. Actual owning parent `4adb94f25e4e1b07f95b14c5c691e5370a47a1afbef37acb8d8fe44ac1e693b7` remains FAIL (test TypeScript). Final Astra review `dc6dda91309abaa2c24a6e12662fc7786635014e0d5b907c856900b98188ac44` closed R1/R4/R5 and retained these two P2; this correction awaits independent acceptance. Private export has no usable Git metadata; no new source SHA is claimed.
+
+R2 source: compact Header/map Radar is glyph/progress/attention only with an exact 48x48 touch area. Status caption remains in the accessible label and existing management dialog; the accepted noncompact Players text/switch and enable-only feedback remain.
+
+R3 source: collapsed person inspection contains only the fresh preview avatar/name/level/trainer/approximate-distance row and expand arrow. Expansion reads authorized detail through the existing scoped `auth.players.loadDetail(peer,true)` and renders the existing read-only PlayerProfile. The boolean isolates expected 404 from ordinary catalog clearing; it does not skip auth, privacy, generation, sequence or target validation. Unavailable/error detail shows the honest preview-only state. No guest fallback, cached private fallback or inferred public visibility. Owner/route/filter/query/selection/session/expiry checks reject retired responses, including replacement of the shared detail request. Contact/unavailable actions appear only expanded with fresh Radar capability; the existing explicit contact handler/proof fences remain unchanged and opening never sends a message. Existing sheet measurements and attribution clearance are unchanged; maps.test.ts is unchanged.
+
+Actual test typing: fixture activation returns UnifiedActivation; invalid state/model are explicit unknown parser inputs. The preview-read assertion checks count, asserts the retrieved call exists and narrows its kind before payload assertions. Original 91 tests retain their assertions/meaning, with the public-detail prohibition updated to the explicitly admitted scoped read.
+
+Author validation in this export: **94/94 PASS**, zero skips/cancellations, across radar/contact/auth/maps/native-contract. Added checks cover compact/expanded composition, genuine PlayersCoordinator hidden-404 catalog isolation, authorized detail, wrong target, selection/scope retirement, competing detail and expiry. Full TypeScript/lint/Expo exports are NOT_RUN here: dependencies/compiler are absent; no installation/resolution. Prior parent 91 units/lint/two exports/archive PASS and unchanged API/DB80 are retained supplied evidence, not fresh checks. First cumulative Code QA remains pending the actual normal parent PASS and must review 907de013 through the new cumulative candidate, including Location lock and UI5.
+
+**SOURCE ONLY / PUBLIC DELIVERY HOLD.** Native visual/device fit and Owner UAT remain NOT_TESTED; Owner APK7 FAIL is retained. Radar upcomingGames projection still drops games to []: populated upcoming-game parity remains mandatory OPEN. Real swipe/mutual flow, UGC and full native parity remain unfinished. No build, signing, install, merge, deploy, APK/OTA or PROD publication. All previous README bytes/FAIL/UNKNOWN history follow unchanged as historical records.
+
+---
+
+# #522 Radar / Players — bounded UI5 source correction
+
+Source base supplied for this export: `365ab6435dbd357f219b0a4a8591f8f6b48aef2d` (trusted generated Location lock child of model candidate `b4f1ed8b489f44d92bb735132fd801e9de66bf39`). Root capsule `36d43b5e` admits only the nine paths; actual static parent `d7099b37` FAIL and Astra UI5 `b7a728ea` remain historical evidence. This export has no usable Git metadata; no new candidate SHA is claimed here.
+
+R1–R5 source changes: Players uses shared fullscreen NativeMap, floating labelled Back/filter capsules with measured status offset, top-right real Radar control, existing filter-sheet layer choices, and a measured floating white/lime/purple map action with list scroll reserve. Public venues still require no Radar consent. Real PlayerAvatar markers retain safe media fallback and selected-person identity. List/card activation opens an authorized proof-scoped inspection, including contact-denied peers; it does not use public-profile lookup. Inspection shows avatar/name/level/trainer/approximate distance and expands available information. Separate contact actions require row capability and fresh preview before the existing explicit proof composer; no message is sent by opening a card.
+
+Radar glyph/progress/caption use authoritative ownership, finite effective authority and confirmed session expiry. The local second clock only renders UI; it cannot enable, publish, renew or request GPS. Enable-search feedback is plain accessible text in the list, still gated solely by the existing enabling episode. Venue and person sheets share mapControlBottom: measured outer height, actual compact/expanded bottom position and safe inset plus 8dp clearance. Owner revisions include route/city/filters/selection type+id/expanded/window/font scale/all insets and reject retired callbacks.
+
+Actual parent repairs: native-api read dispatch explicitly narrows query/map before reading body, retaining transport/error semantics; fixture URLs use NodeURL; maps type imports are top-level. Native contract expectations now bind foreground-only expo-location 58.0.22 and exact rationale/false background/Always/motion/service/full-accuracy options, preserving unused-permission guards and stable AuthProvider/RadarProvider/MessagesOwner/MainNavigation/Stack ownership.
+
+Author validation: 91/91 direct Node tests PASS across Radar, maps, native-contract and unchanged auth/contact suites. Five focused tests execute actual UI projections/callbacks and owner transitions; they are not native rendering evidence. Full mobile typecheck/lint are NOT_RUN here: dependencies/compiler are absent; no installation/resolution was performed. The earlier parent failures are addressed in source, not declared fresh parent PASS. Independent functional QA, separate Astra five-finding closure, mandatory CI/security checks and DEV acceptance remain pending. Old365 disposable-DB work is independent; no DB PASS is inferred.
+
+**SOURCE ONLY / NO PUBLIC DELIVERY.** Native 360/390/S23, large font, safe areas, map attribution/gestures and binary evidence remain DEVICE_NOT_TESTED. Owner APK7 FAIL is retained. Mandatory real swipe/play-interest/mutual flow, UGC and full native parity remain unfinished; OTA compatibility and iOS signing/device gates remain open. No APK build, install, signing, merge, deploy, OTA or PROD publication was performed. Prior README bytes and all timeout/carryover/UNKNOWN history below are preserved.
+
+---
+
+# #522 C1c / RadarR2 — continuation source, PARTIAL / HOLD
+
+Supplied source base: `907de013bca31775e7a2a28a5ff62a737edc000e`. This private export has no usable Git object history. The retained prior source delta was continued, not restarted; the previous timeout/HOLD receipt remains `b0cf2e7b81868c7af1f0a1cb38ef8b3a4c2a2c3e03186599cf3f6c3530f84c31`. No prior author PASS, candidate SHA or usage is inferred. VersionCode remains **8**. APK7 Owner UAT remains **FAIL**; full native parity/public delivery remain **HOLD**.
+
+Prepared: one foreground Radar owner shared by Header/Players; explicit current disclosure consent; fresh/coarse location; unified list/map windows; lifecycle/expiry fences; immutable UNKNOWN; proof-bearing contact composer re-previewing the original reference. Ordinary contact retains its three-field body. People use server coarse positions on the existing MapLibre renderer/citypacks/venue layer.
+
+Continuation fixes the four audience predicates in `unified-selection.ts`, `unified-origin.ts`, `unified-proof.ts` to accept exactly consumer_browser + consumer_native, preserving all other SQL fences. Safety receipt rereads retain explicit Radar context. Fresh preview may deny a new request while a validated existing conversation opens without sending. Owning integration fixtures include native/native and browser/native discovery, session/proof refusals, and zero conversation/message writes on denied proofs; these DB tests were NOT_RUN here.
+
+**Confirmed contract limitation, outside the 31-file scope:** `ProfilesService.contactableTargets` and `MessagingService.assertContactEligible` require directory visibility for first contact, even with discoveryProof. Radar-only peers therefore return canRequestContact=false and remain unavailable for first contact. No permission bypass/service change was made. The native-messages fixture now preserves that refusal and tests successful proof contact with a directory-visible, eligible peer. Any requirement to contact Radar-only/private peers needs separate bounded server-policy review. This source is not end-to-end acceptance of that requirement.
+
+Author checks: **78 passing tests** across direct Node mobile Radar (6), contact (20), auth/Header/runtime (36), and existing shared-map (16) suites. API security unit, disposable-DB integration, full typecheck/lint and contract tooling are NOT_RUN: this export has no node_modules/compiler. Independent QA, Product CI, generated native manifest inspection, signed Android binary/device evidence, and iOS signing/device checks remain NOT_TESTED. No network, install/resolution, DB, provider/model, build, signing, deploy or publication was performed.
+
+expo-location is pinned exactly **58.0.22** using supplied SDK58.0.25 evidence. Only foreground permission is configured; Always/background/motion/foreground-service/full-accuracy options are explicitly false. Existing map plugin/assets/lock remain unchanged. Trusted resolver generates the lock after author terminal; app.json is not native manifest proof.
+
+Swipe/play-interest/mutual and remaining #522 parity are separate mandatory unfinished slices. No APK/OTA/full-product/PROD completion is claimed.
+
+---
+
+# #522 R1b address4 — type-only ScrollView ref correction
+
+Base: 4666b3e491f7f4656d055ccec8f72e9de2294103. Import React ComponentRef as a type and use useRef<ComponentRef<typeof ScrollView>>(null) for the instance; scrollTo/ref wiring is unchanged. Root TSC and changed-file lint are PENDING; no fresh TSC/lint, tests, exports, build or native PASS is claimed here.
+
+ADDRESS3 parent 6cf91f7c remains historical FAIL (mobile TSC). Its 70 owning units, lint, two Expo exports and archive PASS are retained as history, subject to Root's exact outside-two-path/type-erasure proof. Astra closure eb654bd2 marks five findings FIXED_IN_SOURCE only, without device acceptance. Original Code FAIL 6aa3e46e and raw Astra review 4df8c864 remain unchanged; focused Code closure is PENDING.
+
+Device/native scroll, map gestures, attribution and physical Back remain NOT_TESTED. Owner APK7 FAIL, mandatory real Header/Players Radar C1c OPEN P1 and source-continuation delivery/publication HOLD remain. No Owner GO or full parity claim. All prior README bytes follow unchanged.
+
+# #522 R1b address3 — bounded source correction, DEVICE_NOT_TESTED
+
+Base supplied: eabed0464493adab25c44d08f6e369e00768468e. This private export contains only the eight admitted source/document/test deltas. No build/signing, install/resolution, DB/network operation, metadata, merge, release or publication. Existing 11.5.1 dependency/lock reuse remains model f56bdafe9611b6224360cabf9ca83a1bd5966cd0 / generated 15f0796228fd5ef02a668988686f10a1f641ef33; lock SHA256 d69f0e8f732ad0d28c4ae2aa0f664259abb2119f902806ac86859232bb355f84.
+
+Raw independent results remain OPEN, unmodified and not reclassified as PASS:
+- FIRST R1b CodeQA FAIL: 6aa3e46e06a62a1a6cb86a64e83a2f131b938789130a8190529b51f3167b911f (two P2).
+- Astra High UI source review: 4df8c864d889ca540932bc8b8d5ab1e76f8f1336a7fe6ce1ca43faa9df1c9037 (three P1, two P2). Compact source credit overlaps CodeQA: six unique material items.
+
+Changes follow the accepted WEB 2a0b8207b8cc28d0e56a1ec5abecc604e934faed references supplied in the task: separate white Back/purple inset and labelled filter capsules; onLayout places status/error below their actual height. Expanded map-only venue content leads with a responsive 16:9 gallery, then description/identity/info/contacts. An explicit action opens the real venue-local date-grouped schedule; it does not append full Games cards to information. Standalone VenueDetail keeps its original presentation. Create stays expanded-only, outside body scrolling, in the existing typed auth/profile/create flow. Compact uses 12dp inset, rounded corners, 64/copy/44 geometry, 17/14/13 typography, a visible illustration badge and verified primary catalog-source link. Text may grow and the body remains scrollable. Expanded X collapses; compact X dismisses.
+
+Outer-sheet onLayout supplies the actual obstruction plus safe-bottom anchoring to the real MapLibre attribution/compass positions. Context/selection/expansion generations fence late callbacks and reject stale measurements; no nominal 172dp clearance or replacement attribution overlay. Native renderer placement/readability is NOT_VERIFIED.
+
+List return preserves the existing Stack route/resource/pages/cursor. Only a bookmark captured by that mounted list can request its real scroll offset; external map entry returns to safe /games, and query changes reject the old bookmark. No offset-driven page fetching or global store. Primary framework receipt 47009139f36a0d143988ff7a4b8dcb5fdfcb297b04a43394cf4432967921f6e8 is reducer/source evidence only; supplied probe was not executed. Pagination finding disposition remains OPEN_PENDING_FOCUSED_REVIEWER_ASSESSMENT, not false-positive/closed.
+
+Self-checks: maps 16/16 and venues 7/7 passed, zero skips. They exercise the actual resource hook/cursor handler, second/third pages, end/error/abort/new-query, measured obstruction/callback fences, X handlers and timezone grouping. This is JS/source evidence only. Typecheck attempted: tsc not found; export:check attempted: expo not found. Cached dependencies are absent in this export; lint/typecheck/exports remain gates, with no installation attempted.
+
+Next: Root fresh checks, focused CodeQA for the two Code P2 + five UI items (overlap explicit) and related eight-file delta; separate bounded Astra UI closure later. All earlier normal/HOLD/exact-recovery/parent FAIL/UNKNOWN history remains below unchanged. C1a whole FAIL e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825 retained. Real Header/Players Radar P1 C1c stays mandatory OPEN. Owner APK7 FAIL, full parity, device 360/390/large text/gestures/attribution/return, Radar, swipe, UGC, OTA and iOS remain unfinished. UAT=NOT_TESTED; no delivery or acceptance claim.
+
+# #522 R1b address2 · TSC/marker source correction · delivery HOLD
+
+Bounded author continuation from Root-bound candidate
+`15f0796228fd5ef02a668988686f10a1f641ef33`. This private export has no
+usable Git metadata. Only Games map, native-map, maps.test and this README
+were edited. All prior 15f README bytes, including the historical 3214/5797-byte
+prefixes, follow unchanged; historical qualifications below are not new results.
+
+The actual ADDRESS1 parent `344aaa498e310b4a5105e9fd93bf928b2949aaf3149f20a07f710525c49dd9b3`
+remains FAIL (mobile TSC). Its 132/132 units, lint, two Expo exports and archive
+PASS remain historical. The original 17-minute author HOLD `2202ab79`, unchanged
+Root recovery `14b63504`/README exception `34cce018`, normal ADDRESS1
+`f56bdafe`/receipt `70ec9d75`, generated-lock receipt `0220bd25`, candidate 15f
+and genuine lock `d69f0e8f` are retained, not replayed or reclassified.
+
+GamesMap now owns a ComponentRef<typeof Pressable> ref attached to its real map
+filter trigger and passes that same ref to DiscoverySheet for close-focus return.
+The shared sheet contract is unchanged. Expo SHA-256 now receives an owned
+ArrayBuffer copy of exactly the input view's bytes, including offset/shared views;
+style hash-before-parse and resource rejection guards are unchanged. maps.test
+uses the supported any-throw/message overload with the original URL diagnostic
+and node:url URL for Node PathLike; all existing cases/assertions remain.
+
+Manual SOURCE parity correction follows WEB2a venueMarkerPresentation,
+GamesVenueMap, radar-geographic.css and NavIcon.shuttlecockElement: zero/unknown
+use a white 44px circle with the exact purple 28px shuttlecock SVG path; unknown
+keeps the honest unavailable label. Positive counts remain actual counts with
+WEB Games lime/ink, white border and purple selection outline. No fake count or
+new dependency/icon system; press/drag, coordinates, camera and generation owners
+remain intact. This does not close a QA finding or prove native appearance.
+
+Actual author self-check: Node 24.21.0 maps.test, 12/12 PASS, zero failed/skipped;
+extracted owning digest checked against real Node SHA-256 for offset/shared and
+empty inputs, owned buffer and mutation independence, PASS. These are author
+checks only. No cached node_modules are available here; fresh full TSC/lint,
+Expo checks, native build and independent QA were NOT_RUN. No install/resolution,
+package/lock/config/versionCode8 change, build/sign/publication or DB operation.
+
+Root must strictly reuse the genuine 11.5.1 package+lock+graph, create the new
+archive and run fresh owning checks, then FIRST WHOLE independent R1b QA over
+e29 -> final + Root lock, ALL19+lock (not focused QA). No independent R1b QA has
+been called. Native basemap/tiles/glyphs/attribution/gesture/device gate:
+NOT_TESTED. REAL Radar P1 stays OPEN; first whole C1a FAIL e5e892a1, Owner APK7
+FAIL, unfinished full parity and source-continuation/publication HOLD remain.
+No delivery/full C1a PASS, DEV acceptance or PROD authorization is claimed.
+
+All prior 15f README bytes follow unchanged as historical evidence.
+
+# #522 R1b address1 · recovered source correction · delivery HOLD
+
+This bounded source continuation starts from recovered `e1892d8747e8778f98e7cb35b381f0e1fccd1104`,
+not an original normal completion. The original 19-file author operation completed
+its CLI turn but ended in operator `HOLD_NO_AUTOMATIC_REPLAY`; Root recovered those
+bytes unchanged, with zero new model calls for that recovery. Its reviewed 5797-byte
+README exception and all e189 README bytes remain the exact suffix below. This
+address operation does not replay the original map implementation or erase history.
+
+Addressed the supplied manual findings using the embedded exact package 11.5.1
+declarations: Marker `lngLat`, Camera `initialViewState` center/zoom, `maxZoom`, flat
+`[west,south,east,north]` maxBounds, NativeSyntheticEvent nativeEvent center/zoom,
+and attribution corner offsets. Invalid camera updates are ignored, preserving the
+last camera; selected-pack bounds, initial-camera validation, style/resource/hash/
+absolute-PMTiles/attribution guards, marker drag and load-generation fences remain.
+
+Games now uses the accepted WEB white bordered/shadowed capsule, lime 36px inset
+and purple existing DiscoveryIcon map path. Shared icon geometry/defaults remain.
+The compact sheet has a handle, close icon, 64px cover, identity/schedule and open
+arrow, without generic text bars or expanded credits/gallery/conditions. Expanded
+VenueContent retains real gallery/source credits and contacts; create stays in its
+expanded-only safe-bottom footer. Existing query/route/scroll/Back, city/day/activity,
+schedule-unavailable/UNKNOWN and actor rules are retained. Local WEB map/preview/
+sheet components and styles were inspected; no final Astra gallery artifact was
+available in this export. This is source composition, not visual/device acceptance.
+
+Actual author self-check: Node 24.21.0 ran the five historical owning suites listed
+below with `--test-isolation=none`: 66 tests, 66 passed, zero failed/skipped/cancelled.
+All previous 65 tests/assertions remain; one pure native camera-event regression was
+added for actual event shape, invalid/nonfinite/out-of-pack values and zoom limits.
+This does not qualify source independently or prove native rendering.
+
+FIRST WHOLE independent R1b QA is still required for cumulative e29 -> address-final
+plus the trusted Root lock. No R1b QA/typecheck/native build has run here. Root owns
+genuine dependency/lock/types/owning checks after this source cut; old 7d36 evidence
+cannot qualify the new module. SDK 13.6.1 capability is documentary, not native
+linkage/device proof. Hardware/emulator gate: NOT_TESTED. No deps/install/network,
+lock/config/versionCode8/auth/native-intent/backend/permission changes, build/sign,
+merge, deploy or publication were performed in this address scope.
+
+Retained FIRST whole C1a FAIL: e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825.
+REAL Radar Header/Players P1 remains OPEN for mandatory C1c; Owner APK7 UAT remains
+FAIL and full parity is unfinished. This is neither focused-P2 closure nor full
+C1a PASS. Public delivery/APK remains HOLD; PROD is not authorized.
+
+All recovered e189 README bytes follow unchanged as historical evidence.
+
+# #522 R1b · public native Games/venue map source candidate · delivery HOLD
+
+Bounded source continuation from the supplied C1a working-source capsule:
+base `e29cb616d7b73819e36c62fd74e27d65a56a5eb3`, capsule SHA-256
+`1db023c43ed6fef86d2a89e5091a7735893527558fc57aab04ed16185408df55`.
+This private export has no usable Git metadata; the base binding comes from the
+Root-supplied immutable task, not a locally reconstructed receipt. The retained
+FIRST whole C1a verdict is FAIL (`e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825`).
+The supplied parent and focused two-P2 PASS permit this source continuation only.
+REAL Header/Players Radar P1 remains OPEN for C1c. Owner APK7 UAT remains FAIL;
+C1d swipe and remaining full parity remain mandatory. No full C1a PASS, delivery,
+DEV acceptance, binary readiness or new Owner acceptance is claimed.
+
+Source now declares only `@maplibre/maplibre-react-native` **11.5.1** and its Expo
+config plugin. Map uses the actual named `Map` export, Camera and Marker; no
+WebView, browser PMTiles protocol, canvas, image substitute, GPS request or Radar
+activation is introduced. Closed Moscow/SPb/regional pack descriptors match the
+accepted WEB catalog. The loader hashes the original response bytes before UTF-8
+JSON parsing, then copies/adapts only approved in-pack resources. PMTiles remains
+absolute `pmtiles://https://...`; glyph placeholders, sprite suffix bases, source
+layers, attribution, bounds and zoom data survive adaptation. Load/error/timeout,
+retry and a real venue-catalog fallback are wired; markers attach only following
+the native load event. These are source paths, not evidence of tiles rendered.
+
+A separate public-coordinate projection preserves the existing create catalog
+`venues()` shape. Map data consumes all real venue/game cursor pages under one
+abort/generation owner and frozen query time, deduplicates immutable IDs, proves
+older aliases through the existing public venue endpoint, and applies WEB public/
+published/availability/deadline/venue-local-day/activity eligibility. Partial or
+failed schedules stay unavailable, never a verified zero. All/with-games layers
+keep unknown schedules visible. Public venue coordinates must be finite EPSG4326
+and bound to the selected city; out-of-pack pins are not plotted.
+
+Games now accepts its bounded public query context, exposes the map pill, retains
+list cursor/scroll ownership on push, and restores current city/day/activity/level
+and offset on map-to-list return. Only exact `/games/map` hides global tabs. Exact
+public Games map intents are adapted without changing verified callback ownership;
+unsupported protocols, malformed contexts and arbitrary return destinations fail
+back to Games. Back closes filters, expanded sheet, selection, then the origin
+list. The shared renderer/helpers are reusable for future Players work.
+
+The sheet reuses the existing safe venue gallery/body/contacts and filtered real
+schedule. Its collapsed 64px-cover preview has no create/rate/discussion actions;
+only expanded verified venue detail exposes explicit sticky typed venue-create
+navigation, with a separately reserved safe bottom and scroll-body padding. No
+automatic writes or global preference mutation were added. Venue ratings,
+comments/discussion and other unfinished UGC are **absent and still mandatory**.
+The standalone venue screen and existing auth/profile/create ownership remain.
+
+Author deterministic self-check (Node 24.21.0, not independent QA): **65 tests
+PASS**, zero failures/skips/cancellations in the final run:
+
+```sh
+node --experimental-strip-types --test --test-isolation=none \
+  apps/mobile/test/maps.test.ts apps/mobile/test/public-api.test.ts \
+  apps/mobile/test/venues.test.ts apps/mobile/test/compact-layout.test.ts \
+  apps/mobile/test/auth.test.ts
+```
+
+The initial focused run found and repaired URL-encoded glyph placeholders; an
+incorrect dedup expectation and the owning-callback test wrapper were also fixed.
+All prior assertions in the owning suites remain. These tests cover resource
+transforms/refusal/hash ordering, coordinates, cursor/abort/race behavior, unavailable
+versus zero schedules, alias binding, query/list/scroll/Back callbacks, expanded-only
+create intent and old auth/UNKNOWN fences. They do not render native components.
+
+**Pending trusted checks:** there are no cached project dependencies in this
+export. Typecheck, lint, Expo exports, the actual 11.5.1 Camera/Marker prop contract,
+genuine generated lock/package graph, native linking, new standalone Android
+binary, manifest inspection and independent source QA are NOT_TESTED here. A
+read-only official documentation lookup failed DNS; no package installation,
+network dependency resolution or handwritten lock was attempted. The verified
+package export summary is not a substitute for checking the installed declarations.
+Root must run the existing trusted lock/deps and binary route on this actual source
+and address any reported binding/type errors before source qualification.
+
+Device/emulator basemap tiles/glyphs/sprites/attribution, gestures, marker→sheet→game
+return, compact safe areas/font scale, resource failure/retry and offline behavior
+are **NOT_TESTED**. No hardware was accessed and no screenshot is offered as native
+proof. iOS linking/device proof remains separate NOT_TESTED. No offline pack-download
+promise is made. No DB/backend/schema/service, build/sign/DEV/publication/model call,
+public APK or metadata release was performed. VersionCode **8**, app version/package,
+permissions/intents/deep links and assets remain as supplied, apart from the exact
+required plugin entry. Root owns genuine lock generation after this author cut;
+`pnpm-lock.yaml` is untouched.
+
+All previous README bytes follow unchanged as historical context.
+
+# #522 C1a ADDRESS2 · PARTIAL source correction · public APK HOLD
+
+The two P2 findings from the retained FIRST whole C1a QA are addressed in
+source, pending independent focused closure of those two findings and related
+delta. The FIRST whole QA remains FAIL (evidence SHA-256
+`e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825`).
+Its P1 for REAL Header/Players Radar remains OPEN for mandatory C1c and blocks
+delivery/full shell acceptance. No fake or disabled Radar entry was added.
+Owner APK7 UAT remains FAIL; publication HOLD and incomplete native parity remain.
+
+GameCard now renders one composed settlementTerms paragraph, matching accepted
+WEB2a: ordinary games show only supplied terms; trainer games show the agreed
+external-payment wording plus those terms, without adding an amount or unit.
+Existing settlementLabel consumers outside the card and their assertions remain.
+Games city/date selectors now use proportional 45/55 flex weights with the
+existing gap, minWidth, text scaling and focus/keyboard behavior. Filter/query,
+pagination, async fencing, title navigation, data, rights and actions are unchanged.
+Source geometry is not Android visual proof.
+
+Author self-check: 30/30 tests PASS, zero failures/skips/cancellations, using
+Node 24.21.0 from apps/mobile:
+`node --experimental-strip-types --test --test-isolation=none
+ test/presentation.test.ts test/public-api.test.ts test/compact-layout.test.ts
+ test/native-contract.test.ts`.
+Three pure formatter regressions cover ordinary, by-agreement and fixed-price
+settlements; all previous meaningful assertions are retained. This is not
+independent QA or a rendered-card/device check. Typecheck, lint and Expo exports
+are unavailable in this private export without dependencies; none is claimed PASS.
+No installation or package-manager download was attempted.
+
+Only app/games/index.tsx, src/components/game-card.tsx, src/presentation.ts,
+test/presentation.test.ts and this README are changed. VersionCode remains 8.
+No API/dependency/config/metadata, DB, build, signing, binary, publication or native
+device changes were made. No device/build/maps/Radar/swipe PASS is claimed;
+native visual and Owner recheck are NOT_TESTED. Next: trusted Root fresh
+typecheck/lint/owning units/exports, then independent focused two-P2/related-delta
+review retaining OPEN P1; no second whole QA or completed-shell claim.
+
+All previous README bytes follow unchanged.
+
+# #522 C1a ADDRESS1 · source correction only · public APK HOLD
+
+Bounded repair of supplied candidate
+`3345057ef1213b5c2b4b046e465cecec0f965f34` in this private source export.
+Pressable trigger/return refs and the sheet heading now use React ComponentRef
+instance types. The discovery bounds return type exposes optional startsBefore
+without changing date behavior. The existing async resource test reads fresh
+getSnapshot results after load, preserving its exact item/cursor expectations
+and every prior assertion.
+
+Game titles open the real game through onOpen; title, details, trainer disclosure
+and share remain separate interactive controls. Both ordinary and trainer cards
+use the same organizer-left/actions-right footer. Only the trainer band shows
+the unavailable reviews/role-history note; no reputation data or API is invented.
+Existing public-link sharing, cancellation/error notice and copyable fallback stay.
+
+Author verification: 50/50 existing tests PASS, no failures/skips/cancellations:
+`node --experimental-strip-types --test --test-isolation=none
+ test/public-api.test.ts test/presentation.test.ts test/auth.test.ts`
+from apps/mobile using Node 24.21.0. This covers query bounds, stale page fencing,
+refresh item/cursor replacement, factual roles, share eligibility and the existing
+Header/profile-return behavior; it is not a rendered GameCard or focus test.
+Typecheck/lint are unavailable in this export: no node_modules, tsc or eslint.
+No installation or package-manager download attempted. The retained parent FAIL
+was a typecheck failure, not an independent C1a QA failure. No new parent, QA,
+device or visual PASS is claimed.
+
+Changed files in this correction: app/games/index.tsx, src/components/ui.tsx,
+src/presentation.ts, test/public-api.test.ts, src/components/game-card.tsx and
+this README. src/public-api.ts needs no edit: its existing destructuring uses
+the corrected bounds return type. All other source bytes and previous README
+bytes are retained. VersionCode remains 8; no config/dependency/backend/API,
+build/Expo/device, publication, merge, deployment or history changes performed.
+Fresh parent checks and the FIRST whole cumulative independent C1a review remain
+pending. Owner APK7 UAT FAIL/publication HOLD is retained; this correction's
+native/UAT status is NOT_TESTED, and full native parity remains unfinished.
+
+All previous README bytes follow unchanged.
+
+# #522 C1a · source candidate only · public APK HOLD
+
+Private export of the supplied venue ADDRESS2 base
+`3233531b96e5a410744b448acf41643d810042aa`; there is no accessible Git history
+here, so the export's base/new source SHA and current DEV receipt cannot be
+independently verified or minted by this author. The embedded Root admission
+and final design handoff PASS are supplied evidence, not a new source QA PASS.
+Final audit `1df25ab5…`, implementation cuts `4757b22b…`, independent design
+handoff `1264051c…` are the supplied design references; original receipt paths,
+RootACK and remaining null admission bindings must be verified by trusted parent.
+Actual WEB PNGs were not exported here; their embedded receipt and the final
+HTML/CSS specifications were available, with no new visual evidence claimed.
+
+C1a implements white Onest shell, real own-name initials/profile action, four-tab
+geometry, Games hero → equal city/When selectors → actual create banner →
+activity chips/compact filters → count/refresh/cards, and compact 46dp Players
+avatars/cards with real profile navigation. Games selected day/activity use the
+existing public query in the catalog city's timezone; filter changes get a fresh
+resource/cursor and existing generation fences. Refresh replaces populated data.
+Players areaKey reaches both existing public and native query ports; explicit
+reset clears city/name/area/looking/trainer, preserving separate identity scopes.
+
+The native filter Modal has explicit level choice, WEB skill copy/disclaimer,
+Back dismissal and trigger focus restoration wiring. Level filters only the loaded
+upcoming list using exact ntrp v1 membership, never profile prefill/write or a
+server level query. Raw pagination stays intact; counts show `+` for nextCursor
+and loaded totals when level is active, including zero-match paging/reset.
+Game roles remain separate factual trainer/organizer bands; available organizer
+media uses the existing URL policy. Reviews/history are explicitly unavailable,
+with no clickable placeholder, invented score or stock cover.
+
+Author checks: 128 named tests PASS, zero failures/skips/cancellations with Node
+24.21.0 `--experimental-strip-types --test --test-isolation=none` over
+`public-api`, `players`, `presentation`, `compact-layout`, `auth`, `contact`,
+`messages`, `safety`, `native-contract`, `upcoming` and `resource` test files.
+Eight focused additions cover normalization/membership, local zero/count/reset,
+city/DST boundaries, actual query mapping, cursor/generation/refresh, area mapping/
+reset/fencing and role facts. The required Header test still invokes the actual
+avatar handler and profile save/return; all original refusal/zero-write assertions
+remain. Earlier 56-test and final affected/readonly 72-test author runs also passed.
+Mobile/API typecheck and affected lint are BLOCKED: no node_modules/tsc/eslint;
+pnpm's Corepack shim attempted an unavailable pnpm download (EAI_AGAIN). No package
+was installed; no further download attempted. These are NOT typecheck/lint passes.
+
+VersionCode remains **8**, with app.json and native-contract.test.ts unchanged.
+C1b real shared maps/venue map, C1c unified Radar and C1d actual swipe/receipt-backed
+mutual match remain mandatory before a public repaired binary. No map/Radar/swipe
+placeholder control is exposed. Full profile/media, role reviews/history and all
+remaining accepted parity, native 360/390 ordinary/trainer/Players + long-text/
+fontScale/keyboard/Back/TalkBack evidence, independent QA, Product/security CI,
+DEV acceptance/smoke, signed OTA and iOS gates remain pending. APK7 Owner UAT
+**FAIL** is retained; this source candidate's native/UAT checks are **NOT_TESTED**.
+No provider, build, DB, push, merge, install, deploy or public APK action performed.
+
+Exact changed paths (16, within the 17-path allowlist):
+
+```text
+apps/mobile/src/theme.ts
+apps/mobile/src/components/ui.tsx
+apps/mobile/src/components/main-navigation.tsx
+apps/mobile/src/components/game-card.tsx
+apps/mobile/src/components/player-card.tsx
+apps/mobile/src/components/discovery-icon.tsx
+apps/mobile/app/games/index.tsx
+apps/mobile/app/players/index.tsx
+apps/mobile/src/public-api.ts
+apps/mobile/src/players.ts
+apps/mobile/src/presentation.ts
+apps/mobile/test/public-api.test.ts
+apps/mobile/test/players.test.ts
+apps/mobile/test/presentation.test.ts
+apps/mobile/test/auth.test.ts
+apps/mobile/README.md
+```
+
+All prior README content/history follows unchanged.
+
+# #522 native venue ADDRESS2 · SOURCE_CANDIDATE · PARTIAL
+
+Three-finding source repair on `7ca526e29678d36af09cbe88f73939d0914d3159`:
+Continue now resumes the ordinary mount without reload/reset using actor/session,
+context-generation and observed search-city fences; explicit city changes reload.
+Failed catalog/network selection retains prior ready form/preview and reports a
+retry notice; authoritative invalid/setup still blocks writes. Header preserves
+only the exact typed venue-create return alongside its previous game returns.
+No automatic selection/create/publish/reconcile or global city/preferences writes.
+
+Author offline owning units: 66 passed, zero failures/skips/cancellations in the
+final game-management/auth runs, including actual CTA + ordinary mount/effect and
+Header → profile save → typed return handlers. Initial new regressions exposed
+two fixture errors (catalog city and incomplete own-profile DTO/cities mock),
+corrected before these final runs. This is author verification, not independent QA.
+No dependencies installed; fresh parent checks and focused independent closure of
+three findings/related delta remain pending; no second whole-review claim.
+
+First whole venue QA FAIL `d142c4a31a85c981da3293d60e51f160efa34be61b032c54faed892d23adecae`,
+parent PASS `00927510229e3a7ecefb0c523b8bcc5ee45e6036bbec3fbb88d322907c132b10`
+(85 units), two completed venue source runs, V1 e18/address1 cancellation closure,
+manual FAIL `a352e4e586281723d73088bca2b47cd6949611d2deeb2c1cbfc29cf4be84493d`
+and all prior backend/safety/FAIL/UNKNOWN history remain retained below/in supplied
+evidence. Accepted DEV alpha.92 `2a0b8207b8cc28d0e56a1ec5abecc604e934faed`
+is unchanged. Owner APK7 visual/function FAIL (different UI, maps/swipe missing)
+and S23 FAIL remain; Astra alignment is pending. No redesign, APK8 build,
+metadata93, publication or deploy. Native visual NOT_VERIFIED; full native parity,
+signed OTA and iOS remain mandatory and unfinished. UAT NOT_TESTED for this repair.
+All prior README bytes/history follow unchanged.
+
+# #522 native venue ADDRESS1 · SOURCE_CANDIDATE · PARTIAL
+
+Bounded cancellation repair on `e18d7dec9afba0a9687ce42890ce90dcef868216`.
+Venue context is read locally and committed only for the current actor/session/view,
+unchanged form/preview and latest selection. Leaving a pending selection preserves
+the mounted ordinary form's usable context, draft and preview without focus reload.
+Later edits, created references and immutable UNKNOWN packets remain protected;
+no automatic create/publish/reconcile or global city/preferences writes.
+
+Author offline: 30 owning unit checks completed; the final four focused regressions
+have zero failures/skips/cancellations and execute actual component hook wiring.
+A focused added check first failed on an incorrect published-state fixture expectation;
+its existing authoritative detail refresh returns draft v7. That assertion is corrected.
+Original normal source receipt `17617a1d…` / RootOBS `656cc0a6…` and manual P2 FAIL
+`a352e4e5…` are retained; that manual check is not independent QA. Original first
+parent and independent QA remain unrun; final cumulative review remains pending.
+Accepted DEV alpha.92 is unchanged. Source PARTIAL; S23 Owner FAIL retained;
+native visual NOT_VERIFIED; full parity, signed OTA and iOS remain unfinished.
+All prior README bytes/history follow unchanged.
+
+# #522 native venue detail/schedule · SOURCE_CANDIDATE · PARTIAL
+
+Based on actual accepted alpha.92 source `2a0b8207b8cc28d0e56a1ec5abecc604e934faed`.
+Native versionName/package/owned signing identity remain unchanged; versionCode
+7 → 8 is the exact admitted literal-only source bump, not a built or accepted APK8.
+
+- Native game → public venue facts/gallery/public contacts/credited sources →
+  upcoming public schedule → native game. The fixed create footer uses the exact
+  local `/games/create/venue/<UUID>` intent; no additional tab or browser screen.
+- Venue identity/city/timezone and allowlisted projections are validated. Optional
+  older fields remain absent honestly. Media uses only accepted venue-cover PNGs;
+  ordered max8 and attributed legacy covers retain photo/logo/illustration labels.
+  Pure accepted WEB authority/contact/credit rules precede explicit native linking.
+- Schedule freezes refresh scope/time, proves distinct older aliases through real
+  public venue reads, preserves cursors through filtered/expired-empty pages,
+  deduplicates, rejects loops and fences stale reads. Existing foreground expiry
+  removes started cards; schedule failure leaves venue facts usable.
+- Selection requires an explicit press and authoritative catalog/timezone match in
+  the venue's local city. Existing fields survive switching and stale preview is
+  invalidated only on validated selection. Existing created references and UNKNOWN
+  packets remain in their reconciliation UI. Auth/profile returns preserve the
+  exact typed intent; no mount/login/return creates, publishes or reconciles.
+
+Author offline owning checks: **71 passed, 0 failed/skipped/cancelled** across
+venues/public-api/game-management/auth. The first run retained a FAIL from the
+old static profile-return expectation; it was adapted to check the new typed
+return and existing generic fallback. Verified begin/callback/restart/cancel return
+and zero auto-writes, catalog selection, UNKNOWN preservation, aliases, paging,
+expiry, stale responses, contacts/media/credits. Node 24 used
+`--experimental-strip-types --test --test-isolation=none` with these four files.
+No dependencies were installed. Types/lint/Expo2, independent QA, Product CI7,
+DEV/readback, APK build/sign/publication and device checks remain Root-owned and
+have not run for this candidate. No network/GitHub/provider/DB/runtime action.
+
+Actual safety facts remain separate: source `8cb33c634cb0f840ae3f2dc9f7ad330cda9057dc`,
+four completed author runs (not four different authors), retained whole FAIL plus
+focused closure PASS; Product CI `43654442331`; DEV `0.1.0-alpha.92` accepted
+`2026-11-15T00:10:09Z`, release `r43655345631-a1`; public owned binary `0.1.0`/7.
+The platform SOURCE-now matrix reconciles only the supplied actual summary.
+
+PARTIAL; Owner FAIL_RECHECK_PENDING and prior Samsung S23 FAIL retained;
+native visual NOT_VERIFIED; physical venue journey NOT_TESTED;
+full native parity MANDATORY_NOT_COMPLETE; real signed OTA and iOS NOT_DONE.
+Maps/Radar/friendly matches/friends/ratings/comments/reviews/uploads/venue creation
+and remaining #522 parity are unfinished. PROD is not authorized.
+All previous README bytes/history are preserved verbatim below.
+
 # #522 native safety ADDRESS3 · SOURCE_CANDIDATE · PARTIAL
 
 Bounded repair on C3 `c78caf422480483e8674d18f0c1e967b748eaa88`.

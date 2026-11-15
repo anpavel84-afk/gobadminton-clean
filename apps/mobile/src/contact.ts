@@ -7,8 +7,13 @@ export type ContactState = { targetPublicPlayerId: string } & (
   { state: 'accepted' | 'pending_incoming' | 'pending_outgoing'; conversationId: string; version: number } |
   { state: 'terminal' | 'unavailable' }
 );
-export type ContactPacket = Readonly<{ actor: Readonly<Actor>; key: string;
-  body: Readonly<{ targetPublicPlayerId: string; text: string; clientMessageId: string }> }>;
+export type RadarContactContext = Readonly<{ kind: 'radar'; actor: Readonly<Actor>; target: string; resultRef: string;
+  queryRef: string; activationId: string; generation: number; expiresAt: number; valid: () => boolean }>;
+type OrdinaryBody = Readonly<{ targetPublicPlayerId: string; text: string; clientMessageId: string }>;
+export type ContactPacket = Readonly<{ actor: Readonly<Actor>; key: string } & (
+  { kind?: 'directory'; body: OrdinaryBody } |
+  { kind: 'radar'; context: RadarContactContext; body: OrdinaryBody & Readonly<{ discoveryProof: string }> }
+)>;
 export type ContactResult = { conversation: Conversation; receipt: {
   messageId: string; conversationId: string; seq: string; createdAt: string; outcome: 'created' | 'duplicate';
 } };

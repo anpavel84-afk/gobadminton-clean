@@ -15,14 +15,14 @@ export class PlayInterestsController {
   @Get("me/play-interest-states")
   @Header("Cache-Control", "no-store")
   async states(@Req() req: FastifyRequest, @Query("publicPlayerId") ids: unknown) {
-    const a = await this.auth.requireSession(req);
+    const a = await this.auth.requirePrincipal(req);
     return this.interests.states(a.userId, a.sessionId, ids);
   }
 
   @Post("play-interests")
   @Header("Cache-Control", "no-store")
   async create(@Req() req: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) {
-    const a = await this.auth.requireCookieMutation(req);
+    const a = await this.auth.requirePrincipalMutation(req);
     const result = await this.interests.create(
       a.userId,
       a.sessionId,
@@ -40,7 +40,7 @@ export class PlayInterestsController {
     @Res({ passthrough: true }) reply: FastifyReply,
     @Param("interestId") id: string,
   ) {
-    const a = await this.auth.requireCookieMutation(req);
+    const a = await this.auth.requirePrincipalMutation(req);
     const result = await this.interests.withdraw(
       a.userId,
       a.sessionId,

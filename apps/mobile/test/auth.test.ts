@@ -1,11 +1,19 @@
+import { RadarCoordinator } from '../src/radar-coordinator.ts';
+import { PlayInterestCoordinator } from '../src/play-interest-coordinator.ts';
+import type { PlayInterestPacket } from '../src/play-interests.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
+import { stripTypeScriptTypes } from 'node:module';
+import { runInNewContext } from 'node:vm';
+import { playerInitials } from '../src/presentation.ts';
 import { AuthCoordinator } from '../src/auth-coordinator.ts';
 import { createNativeApi } from '../src/native-api.ts';
 import { PublicApiError, publicApi } from '../src/public-api.ts';
 import { game as fixture } from './fixtures.ts';
-import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalReturnPath,
+import { NATIVE_CLIENT_ID, NATIVE_REDIRECT, SECURE_AUTH_KEY, NativeAuthError, base64Url, canonicalGamePath, canonicalReturnPath, canonicalVenueCreatePath,
   parseCallback, parseNativeMe, parseSecureEnvelope } from '../src/native-auth-protocol.ts';
 import type { PendingLogin, SecureEnvelope } from '../src/native-auth-protocol.ts';
 
@@ -880,4 +888,392 @@ test('root controlled direct private404 after safety hides private DTOs while pr
   assert.equal(sends.length, 2); assert.equal(sends[0]!.init.body, sends[1]!.init.body);
   assert.equal((sends[1]!.init.headers as Record<string,string>)['Idempotency-Key'], packet.key);
   assert.equal(s.auth.messages.getSnapshot().pending['direct:thread'], undefined);
+});
+
+test('venue-create auth intent accepts only exact typed UUID route and survives secure return parsing', async () => {
+  const route = '/games/create/venue/11111111-1111-4111-8111-111111111111';
+  assert.equal(canonicalReturnPath(route),route);
+  for (const invalid of [route+'?cityId=other',route+'#publish',route+'\n',route+'/publish',route.replace('11111111-','%31'+'1111111-'),'/games/create/venue/not-a-uuid','https://dev.gobadminton.ru'+route]) assert.equal(canonicalReturnPath(invalid),null);
+  const start = setup(); assert.ok(await start.auth.beginLogin(route));
+  const saved = parseSecureEnvelope(start.stored(),now)!;
+  assert.equal(saved.returnPath,route); assert.equal(saved.pending?.returnPath,route);
+  const resumed = setup(saved); await resumed.auth.hydrate();
+  resumed.setHandler(async path => path === '/me' ? me : credentials);
+  assert.equal(await resumed.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${saved.pending!.state}`),route);
+  assert.equal(resumed.auth.getSnapshot().status,'authenticated');
+  assert.equal(resumed.auth.gameManagement.getSnapshot().command,undefined);
+  assert.equal(resumed.auth.gameManagement.getSnapshot().preview,null);
+  assert.ok(![...start.calls,...resumed.calls].some(c => c.path === '/games' || c.path.endsWith('/publish')));
+  const cancelled = setup(); await cancelled.auth.beginLogin(route); await cancelled.auth.cancelLogin();
+  assert.equal(cancelled.auth.getSnapshot().status,'guest');
+  assert.equal(parseSecureEnvelope(cancelled.stored(),now)?.returnPath,route);
+  assert.equal(cancelled.auth.gameManagement.getSnapshot().command,undefined);
+
+});
+
+
+test('permanent Header profile action preserves only typed venue intent through real profile save and profile return handler', async t => {
+  const header = readFileSync(new URL('../src/components/ui.tsx',import.meta.url),'utf8');
+  const handler = header.match(/accessibilityLabel="Профиль" onPress=\{(.+)\}/)![1];
+  const headerBody = header.slice(header.indexOf('export function Header('),header.indexOf('  return <View style={styles.header}>'))
+    .replace('export function','function') + `  return (${handler});\n}`;
+  const route = '/games/create/venue/11111111-1111-4111-8111-111111111111';
+  function pressHeader(pathname: string) {
+    let destination: {pathname:string;params:{returnTo?:string}} | undefined;
+    const render = runInNewContext(`(${stripTypeScriptTypes(headerBody)})`, {
+      useRouter:() => ({push:(path: typeof destination) => { destination = path; }}),usePathname:() => pathname,
+      canonicalGamePath,canonicalVenueCreatePath, useAuth: () => ({ status: 'authenticated', me }), playerInitials,
+    }) as (props: object) => () => void;
+    render({})(); return destination!;
+  }
+  assert.deepEqual({...pressHeader('/games/existing').params},{returnTo:'/games/existing'});
+  assert.deepEqual({...pressHeader('/games/create').params},{returnTo:'/games/create'});
+  for (const invalid of [route+'?cityId=x',route+'#publish',route+'\n',route+'/publish',route.replace('11111111-','%31'+'1111111-'),
+    '/games/create/venue/not-a-uuid','https://dev.gobadminton.ru'+route,'//evil'+route,'/messages','/games/manage/x','/venues/11111111-1111-4111-8111-111111111111']) {
+    assert.deepEqual({...pressHeader(invalid).params},{},invalid);
+  }
+  const destination = pressHeader(route); assert.equal(destination.pathname,'/profile'); assert.equal(destination.params.returnTo,route);
+  t.mock.method(publicApi,'cities',async () => [{id:'city',nameRu:'Казань',nameEn:'Kazan',countryCode:'RU',defaultTimezone:'Europe/Moscow'}]);
+  const s = setup(sessionEnvelope()); let dto = {publicPlayerId:'own',displayName:'',cityId:null as string | null,version:0,
+    trainer:false,areaKey:null,level:null,bio:null,directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,
+    optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,lookingForGame:null};
+  s.setHandler(async (path,init) => {
+    if (path === '/me') return me;
+    if (path === '/auth/native/refresh') return credentials;
+    if (path === '/me/social-profile') {
+      if (init.method === 'PATCH') dto = {...dto,...JSON.parse(init.body as string),version:1};
+      return dto;
+    }
+    throw new Error(`Unexpected route: ${path}`);
+  });
+  await s.auth.hydrate(); await s.auth.profile.load();
+  s.auth.profile.update({displayName:'Хозяин',cityId:'city'}); await s.auth.profile.save();
+  assert.equal(s.auth.profile.getSnapshot().profile?.displayName,'Хозяин');
+  const profile = readFileSync(new URL('../app/profile.tsx',import.meta.url),'utf8');
+  const returnHandler = profile.match(/title="Вернуться к игре" onPress=\{(.+)\} \/>/)![1];
+  const profileBody = profile.slice(profile.indexOf('export default function Profile()'),profile.indexOf('  return <Page'))
+    .replace('export default function','function') + `  return (${returnHandler});\n}`;
+  const returned: string[] = [];
+  const render = runInNewContext(`(${stripTypeScriptTypes(profileBody)})`, {
+    useAuth:() => ({...s.auth.getSnapshot(),gameManagement:s.auth.gameManagement}),
+    useRouter:() => ({replace:(path: string) => returned.push(path)}),
+    usePreferences:() => ({preferences:{cityId:'search-city'}}),useLocalSearchParams:() => destination.params,
+    useState:() => [false,() => {}],useRef:() => ({current:false}),canonicalReturnPath,
+  }) as () => () => void;
+  const start = s.calls.length; render()(); await new Promise(done => setImmediate(done));
+  assert.deepEqual(returned,[route]); assert.equal(s.calls.length,start);
+  assert.equal(s.auth.gameManagement.getSnapshot().preview,null); assert.equal(s.auth.gameManagement.getSnapshot().command,undefined);
+  assert.equal(s.auth.gameManagement.getSnapshot().form.venueId,'');
+  assert.equal(s.calls.filter(c => c.path === '/games' || c.path.endsWith('/publish')).length,0);
+});
+
+test('owning public native intent adapts exact Games map context while verified auth and rejected callbacks retain their authority', async () => {
+  const {publicGamesIntent}=await import('../src/maps.ts');
+  const protocol=await import('../src/native-auth-protocol.ts');
+  const source=readFileSync(new URL('../app/+native-intent.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('export async function redirectSystemPath')).replace('export async function','async function');
+  let callbacks=0;
+  const redirect=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    URL,publicGamesIntent,...protocol,nativeAuth:{callback:async()=>{callbacks++;return '/profile';},getSnapshot:()=>({returnPath:null})},
+  }) as (input:{path:string;initial:boolean})=>Promise<string>;
+  const cityId='a0000000-0000-4000-8000-000000000001';
+  const accepted=await redirect({path:`https://dev.gobadminton.ru/games?view=map&cityId=${cityId}&day=2026-11-20&activity=trainer_led`,initial:true});
+  const url=new URL(accepted,'https://dev.gobadminton.ru');assert.equal(url.pathname,'/games/map');
+  assert.equal(url.searchParams.get('cityId'),cityId);assert.equal(url.searchParams.get('activity'),'trainer_led');assert.equal(url.searchParams.get('day'),'2026-11-20');
+  assert.equal(url.searchParams.get('origin'),'external');assert.equal(callbacks,0);
+  for (const invalid of [
+    `https://evil.example/games?view=map`,`gobadminton-dev://host/games?view=map`,`gobadminton-dev://games/map`,`gobadminton-dev://games?view=map`,
+    `/games?view=map&returnTo=https://evil.example`,`/games?view=map&cityId=${cityId}&cityId=${cityId}`,
+    `/games?view=map&day=2026-02-30`,`/games?view=map#publish`,`/games?view=map\n`,
+  ]) assert.equal(await redirect({path:invalid,initial:false}),'/games',invalid);
+  assert.equal(await redirect({path:`${NATIVE_REDIRECT}?code=${token('c')}&state=${token('s')}`,initial:true}),'/profile');assert.equal(callbacks,1);
+  assert.equal(await redirect({path:`gobadminton-dev://host/auth/native/callback?code=${token('c')}&state=${token('s')}`,initial:true}),'/profile');assert.equal(callbacks,1);
+  assert.equal(await redirect({path:'/messages/direct/thread',initial:false}),'/messages/direct/thread');
+  const venue='/games/create/venue/11111111-1111-4111-8111-111111111111';
+  assert.equal(await redirect({path:venue,initial:false}),venue);assert.equal(protocol.canonicalReturnPath(venue),venue);
+  assert.equal(protocol.canonicalReturnPath('/games/map?returnTo=https://evil.example'),null);
+});
+
+
+test('mounted Radar runtime uses existing root actor/session and foreground lifecycle, without auto-enable or replacing Header typed returns',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();
+  const runtime=readFileSync(new URL('../src/radar-runtime.tsx',import.meta.url),'utf8');
+  const body=runtime.slice(runtime.indexOf('export function RadarProvider('),runtime.indexOf('  return <Context.Provider')).replace('export function','function')+'  return owner;\n}';
+  let lifecycle:((state:string)=>void)|undefined,cleanup:(()=>void)|undefined;
+  const render=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    useState:(factory:()=>unknown)=>[factory()],useLayoutEffect:(effect:()=>()=>void)=>{cleanup=effect();},
+    RadarCoordinator,nativeAuth:s.auth,
+    Location:{getForegroundPermissionsAsync:async()=>{throw Error('No automatic location permission');},requestForegroundPermissionsAsync:async()=>{throw Error('No automatic permission prompt');},hasServicesEnabledAsync:async()=>true,getCurrentPositionAsync:async()=>{throw Error('No automatic GPS');},Accuracy:{Balanced:3}},
+    Crypto:{randomUUID:()=> 'fixture-radar-key'},AppState:{currentState:'active',addEventListener:(_event:string,fn:typeof lifecycle)=>{lifecycle=fn;return {remove:()=>{lifecycle=undefined;}};}},
+  }) as (props:object)=>RadarCoordinator;
+  const owner=render({});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(owner.getSnapshot().actor?.sessionId,me.session.id);assert.equal(owner.getSnapshot().enabling,false);
+  assert.equal(s.calls.some(c=>c.path==='/me/radar/activations'&&c.init.method==='POST'),false);
+  lifecycle!('background');assert.equal(owner.getSnapshot().rows.length,0);assert.equal(owner.getSnapshot().pins.length,0);
+  await s.auth.logout();assert.equal(owner.getSnapshot().actor,null);cleanup!();
+  const layout=readFileSync(new URL('../app/_layout.tsx',import.meta.url),'utf8');assert.equal((layout.match(/<RadarProvider>/g)??[]).length,1);
+  assert.match(layout,/<AuthProvider><RadarProvider>/);
+  const header=readFileSync(new URL('../src/components/ui.tsx',import.meta.url),'utf8');assert.match(header,/<RadarControls compact/);
+});
+
+test('real AuthCoordinator preview port and ContactEditor composer wire keep Radar proof session-bound, without ordinary player authority',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const a=s.auth.participation.getSnapshot().actor!;
+  let valid=true, blockAttempts=0;const expires=Date.now()+60000;
+  const context=Object.freeze({kind:'radar' as const,actor:a,target:'radar-peer',resultRef:'u1.original',queryRef:'query',activationId:'activation',generation:1,expiresAt:expires,valid:()=>valid});
+  const preview={player:{publicPlayerId:'radar-peer',displayName:'Radar peer',level:null,trainer:false,canRequestContact:true},proximityBand:null,upcomingGames:[],
+    radar:{consentPolicyVersion:'radar-geographic-sharing-v2',validUntil:new Date(expires).toISOString(),distance:null,geo:{latitude:55.75,longitude:37.62,crs:'EPSG:4326',model:'regional_grid_1000m_v1',gridSizeMeters:1000,uncertaintyMeters:1000,quality:'degraded',sourceTimestampBucket:new Date().toISOString(),sourceAgeSeconds:1}}};
+  s.setHandler(async path=>{
+    if(path==='/radar/results/preview')return preview;
+    if(path.startsWith('/me/contact-state?'))return {targetPublicPlayerId:'radar-peer',state:'none',canRequestContact:true};
+    if(path==='/conversations/requests')throw Error('timeout');
+    if(path==='/me/blocks/radar-peer'){if(++blockAttempts===1)throw Error('lost block receipt');return {publicPlayerId:'radar-peer',blocked:true};}
+    if(path==='/auth/native/logout')return {ok:true};
+    throw Error('Unexpected Radar-only fallback '+path);
+  });
+  assert.equal(s.auth.contact.stageRadar(context),true);await s.auth.contact.openComposer('radar-peer');assert.equal(s.auth.contact.getSnapshot().status,'ready');
+  s.auth.contact.draft('radar-peer','Proof message');await s.auth.contact.send();
+  const write=s.calls.find(c=>c.path==='/conversations/requests')!;assert.equal(JSON.parse(write.init.body as string).discoveryProof,'u1.original');
+  const packet=s.auth.contact.getSnapshot().command!.packet;valid=false;s.auth.contact.invalidateRadar();await s.auth.contact.reconcile();
+  assert.strictEqual(s.auth.contact.getSnapshot().command!.packet,packet);assert.equal(s.calls.filter(c=>c.path==='/conversations/requests').length,1);
+  // A replayed safety receipt rereads this same Radar context, even after it expired.
+  const safety=s.auth.safety;safety.open({peerId:'radar-peer',name:'Radar peer'});
+  const view=safety.getSnapshot();safety.choose('block',view.viewGeneration,view.actor);
+  await safety.submit([],view.viewGeneration,view.actor);assert.equal(safety.getSnapshot().command?.status,'unknown');
+  await safety.reconcile(view.viewGeneration,view.actor);await new Promise(done=>setImmediate(done));
+  assert.equal(s.auth.contact.getSnapshot().status,'unavailable');
+  assert.strictEqual(s.auth.contact.getSnapshot().command!.packet,packet);
+  assert.equal(s.calls.filter(c=>c.path==='/conversations/requests').length,1);
+  assert.equal(s.calls.some(c=>c.path.startsWith('/players/')),false);
+  await s.auth.logout();assert.equal(s.auth.contact.getSnapshot().actor,null);
+});
+
+test('bare browse real login → durable pending → hydrate/callback → entry; cancel never writes interest or message',async()=>{
+  const {hydratedEntryRoute,emptyPreferences}=await import('../src/entry.ts');
+  assert.equal(canonicalReturnPath('/players/browse'),'/players/browse');
+  const s=setup();await s.auth.hydrate();const login=await s.auth.beginLogin('/players/browse');assert.ok(login);
+  const secure=parseSecureEnvelope(s.stored(),now)!;assert.equal(secure.pending?.returnPath,'/players/browse');
+  const restart=setup(secure);await restart.auth.hydrate();
+  const returned=await restart.auth.callback(`${NATIVE_REDIRECT}?code=${token('c')}&state=${secure.pending!.state}`);
+  assert.equal(returned,'/players/browse');
+  assert.equal(hydratedEntryRoute(emptyPreferences,true,restart.auth.getSnapshot()),'/players/browse');
+  const cancelled=setup();await cancelled.auth.hydrate();await cancelled.auth.beginLogin('/players/browse');await cancelled.auth.cancelLogin();
+  assert.equal(cancelled.auth.getSnapshot().status,'guest');
+  for(const session of [s,restart,cancelled])assert.equal(session.calls.filter(c=>c.path.includes('play-interests')||c.path.includes('conversations')||c.path.includes('/messages')).length,0);
+  for(const path of ['/players','/players/browse/','/players/browse?name=a','/players/browse#x','/players/%62rowse','/players/browse\n','/players/browse/send','https://user:pass@dev.gobadminton.ru/players/browse','//dev.gobadminton.ru/players/browse'])assert.equal(canonicalReturnPath(path),null);
+});
+
+const interestReceipt = {interestId:'10000000-0000-4000-8000-000000000001',version:'9007199254740993',outcome:'mutual'};
+function interestPacket(auth:AuthCoordinator):PlayInterestPacket {
+  return Object.freeze({kind:'send',path:'/play-interests',target:'peer',key:'auth-interest-key',
+    actor:Object.freeze({...auth.participation.getSnapshot().actor!}),body:Object.freeze({targetPublicPlayerId:'peer'})});
+}
+test('actual closed interest wrappers read captured IDs and dispatch one frozen packet for the current actor',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const packet=interestPacket(s.auth);
+  s.setHandler(async path=>path.startsWith('/me/play-interest-states?')?{items:[]} : interestReceipt);
+  const ids=['peer'];const read=s.auth.playInterestStates(ids,packet.actor);ids[0]='changed';await read;
+  await s.auth.playInterestMutation(packet,()=>true);
+  const get=s.calls.find(c=>c.path.startsWith('/me/play-interest-states?'))!;
+  assert.equal(get.path,'/me/play-interest-states?publicPlayerId=peer');
+  const writes=s.calls.filter(c=>c.path==='/play-interests');assert.equal(writes.length,1);
+  assert.deepEqual(JSON.parse(String(writes[0]!.init.body)),{targetPublicPlayerId:'peer'});
+  assert.equal((writes[0]!.init.headers as Record<string,string>)['Idempotency-Key'],packet.key);
+});
+test('interest wrapper rechecks actor and permit after real token acquisition: stale authority makes zero POSTs',async()=>{
+  for(const change of ['actor','permit'] as const){
+    const s=setup(sessionEnvelope());await s.auth.hydrate();const packet=interestPacket(s.auth),gate=deferred<unknown>();
+    let permitted=true;
+    s.setHandler(async path=>path==='/auth/native/refresh'?gate.promise:path==='/me'?me:{ok:true});
+    const rotation=s.auth.refresh();await new Promise(done=>setImmediate(done));
+    const write=s.auth.playInterestMutation(packet,()=>permitted);const rejected=assert.rejects(write);
+    if(change==='actor')await s.auth.logout();else permitted=false;
+    gate.resolve(credentials);await rotation;await rejected;
+    assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,0,change);
+  }
+});
+test('interest wrapper rejects a reply after actor rotation and routes 401 through existing auth failure without resend',async()=>{
+  const stale=setup(sessionEnvelope());await stale.auth.hydrate();const gate=deferred<unknown>();
+  stale.setHandler(async path=>path==='/play-interests'?gate.promise:{ok:true});
+  const pending=stale.auth.playInterestMutation(interestPacket(stale.auth),()=>true);const rejected=assert.rejects(pending);
+  await new Promise(done=>setImmediate(done));await stale.auth.logout();gate.resolve(interestReceipt);await rejected;
+  assert.equal(stale.calls.filter(c=>c.path==='/play-interests').length,1);
+  const denied=setup(sessionEnvelope());await denied.auth.hydrate();
+  denied.setHandler(async()=>new Response('{}',{status:401}));
+  await assert.rejects(denied.auth.playInterestMutation(interestPacket(denied.auth),()=>true),NativeAuthError);
+  assert.equal(denied.auth.getSnapshot().status,'guest');assert.equal(denied.auth.participation.getSnapshot().actor,null);
+  await denied.auth.validate();
+  assert.equal(denied.calls.filter(c=>c.path==='/play-interests').length,1);
+});
+test('mounted interest runtime → real AuthCoordinator → native API; Close/background retire late mutual and never resend',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const gate=deferred<unknown>(),tokenGate=deferred<unknown>();
+  const none={relationship:'none',interestId:null,version:null,capabilities:{canSend:true,canWithdraw:false}};
+  s.setHandler(async path=>path==='/auth/native/refresh'?tokenGate.promise:path==='/me'?me:path.startsWith('/me/play-interest-states?')?{items:[none]}:path==='/play-interests'?gate.promise:{ok:true});
+  const runtime=readFileSync(new URL('../src/play-interest-runtime.tsx',import.meta.url),'utf8');
+  const body=runtime.slice(runtime.indexOf('export function PlayInterestProvider('),runtime.indexOf('  return <Context.Provider')).replace('export function','function')+'  return owner;\n}';
+  let lifecycle:((state:string)=>void)|undefined,cleanup:(()=>void)|undefined;
+  const render=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    useState:(factory:()=>unknown)=>[factory()],useLayoutEffect:(effect:()=>()=>void)=>{cleanup=effect();},
+    PlayInterestCoordinator,nativeAuth:s.auth,Crypto:{randomUUID:()=> 'actual-runtime-key'},
+    AppState:{currentState:'active',addEventListener:(_event:string,fn:typeof lifecycle)=>{lifecycle=fn;return {remove:()=>{lifecycle=undefined;}};}},
+  }) as (props:object)=>PlayInterestCoordinator;
+  const owner=render({});assert.equal(owner.getSnapshot().actor?.sessionId,me.session.id);
+  const peer={publicPlayerId:'peer',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true};
+  owner.stage({cityId:null,name:'',areaKey:'north',looking:true,trainer:false},{items:[peer],nextCursor:null});owner.enter();
+  await owner.refresh(['peer']);const rotation=s.auth.refresh();
+  const sending=owner.act('send','peer',owner.getSnapshot().episode,{publicPlayerId:'self',displayName:'Я'});
+  await new Promise(done=>setImmediate(done));assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,0);
+  tokenGate.resolve(credentials);await rotation;
+  await new Promise(done=>setImmediate(done));assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1);
+  owner.exit();lifecycle!('background');gate.resolve(interestReceipt);await sending;
+  assert.equal(owner.getSnapshot().match,null);lifecycle!('active');owner.enter();
+  assert.equal(owner.getSnapshot().match,null);assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1);
+  await s.auth.logout();assert.equal(owner.getSnapshot().actor,null);cleanup!();
+  const nav=readFileSync(new URL('../src/components/main-navigation.tsx',import.meta.url),'utf8');
+  assert.equal((nav.match(/<PlayInterestProvider>/g)??[]).length,1);
+  assert.match(nav,/<PlayInterestProvider><View/);
+});
+
+// Execute the actual component's hook/event body. React Native layout/animation are host stubs;
+// auth, packet owner, closed ports, HTTP parsing and business results are the real source.
+async function mountBrowseEvents(owner:PlayInterestCoordinator, options:{guest?:boolean;tutorial?:boolean}={}) {
+  const pure=await import('../src/player-browse.ts');
+  const source=readFileSync(new URL('../src/components/player-browse.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('export function PlayerBrowse('),source.indexOf('  return <ScreenFrame>')).replace('export function','function')+
+    '  return {handlers,action,vertical,undo,finishTutorial,setSize,info,tutorial,blocked,card,intent,reopenTutorial};\n}';
+  const cells:unknown[]=[],effects:{deps:unknown[];cleanup?:()=>void}[]=[];
+  const jobs:(()=>void)[]=[],writes:{key:string;value:string}[]=[],details:string[]=[];
+  let cursor=0,login=0,close=0,back:(()=>boolean)|undefined;
+  const useState=(init:unknown)=>{
+    const n=cursor++;if(!(n in cells))cells[n]=typeof init==='function'?(init as ()=>unknown)():init;
+    return [cells[n],(value:unknown)=>{cells[n]=typeof value==='function'?(value as (previous:unknown)=>unknown)(cells[n]):value;}];
+  };
+  const useRef=(value:unknown)=>{const n=cursor++;if(!(n in cells))cells[n]={current:value};return cells[n];};
+  const effect=(fn:()=>void|(()=>void),deps:unknown[])=>{
+    const n=cursor++,old=effects[n];
+    if(old && deps.length===old.deps.length && deps.every((v,i)=>Object.is(v,old.deps[i])))return;
+    jobs.push(()=>{old?.cleanup?.();const cleanup=fn();effects[n]={deps,cleanup:typeof cleanup==='function'?cleanup:undefined};});
+  };
+  class ValueXY { x={interpolate:()=>0};setValue(){}stopAnimation(){}getTranslateTransform(){return [];} }
+  const renderBody=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    ...pure,useState,useRef,useEffect:effect,useLayoutEffect:effect,useRouter:()=>({push:()=>{throw Error('Unexpected navigation');}}),
+    useReduceMotion:()=>false,useSafeAreaInsets:()=>({bottom:16}),useWindowDimensions:()=>({height:780,width:360,fontScale:1}),playerMediaUrl:()=>null,
+    findNodeHandle:()=>null,AccessibilityInfo:{announceForAccessibility:()=>{},setAccessibilityFocus:()=>{}},
+    Animated:{ValueXY,timing:()=>({start:(done?:(result:{finished:boolean})=>void)=>done?.({finished:true})})},
+    PanResponder:{create:(value:unknown)=>value},
+    BackHandler:{addEventListener:(_name:string,fn:()=>boolean)=>{back=fn;return {remove:()=>{back=undefined;}};}},
+    AsyncStorage:{getItem:async()=>options.tutorial?null:'complete',setItem:async(key:string,value:string)=>{writes.push({key,value});}},
+  }) as (props:object)=>{handlers:Record<string,(event:unknown,gesture?:unknown)=>unknown>;action:(kind:string)=>void;
+    vertical:(up:boolean)=>void;undo:()=>void;finishTutorial:()=>void;setSize:(size:object)=>void;info:number|null;tutorial:number;blocked:boolean;card?:string;intent:string|null;reopenTutorial:()=>void};
+  const render=()=>{
+    cursor=0;
+    const value=renderBody({owner,state:owner.getSnapshot(),self:options.guest?null:{publicPlayerId:'self',displayName:'Мой профиль'},focused:true,
+      status:'ready',loadingMore:false,moreError:false,onMore:()=>{},onRetry:()=>{},onClose:()=>{close++;owner.exit();},
+      onLogin:()=>{login++;},onProfileRetry:()=>{},onDetail:(id:string)=>details.push(id),detail:{id:'',status:'idle',data:null,error:null}});
+    jobs.splice(0).forEach(fn=>fn());return value;
+  };
+  let value=render();await new Promise(done=>setImmediate(done));value=render();
+  value.setSize({width:360,height:500});value=render();
+  return {render,writes,details,login:()=>login,close:()=>close,back:()=>back!(),
+    cleanup:()=>effects.forEach(e=>e.cleanup?.())};
+}
+test('real component gesture and button → mounted root owner → closed auth ports → native API; stale card cannot send',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();
+  const none={relationship:'none',interestId:null,version:null,capabilities:{canSend:true,canWithdraw:false}};
+  const gate=deferred<unknown>();
+  s.setHandler(async path=>path.startsWith('/me/play-interest-states?')?{items:[none]}:path==='/play-interests'?gate.promise:{ok:true});
+  const owner=new PlayInterestCoordinator({read:s.auth.playInterestStates,send:s.auth.playInterestMutation,random:()=> 'component-wire-key'});
+  owner.setActor(s.auth.participation.getSnapshot().actor);
+  const peer={publicPlayerId:'peer',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:'О себе',trainer:false,lookingForGame:true};
+  owner.stage({cityId:'city',name:'Парт',areaKey:'north',looking:true,trainer:false},{items:[peer,{...peer,publicPlayerId:'other'}],nextCursor:null});owner.enter();
+  const ui=await mountBrowseEvents(owner);let card=ui.render();assert.equal(card.blocked,false);
+  const start={nativeEvent:{timestamp:1000}},move={nativeEvent:{timestamp:1020}},release={nativeEvent:{timestamp:1021}};
+  card.handlers.onStartShouldSetPanResponder!(start);
+  assert.equal(card.handlers.onMoveShouldSetPanResponder!(move,{dx:30,dy:0}),true);
+  card.handlers.onPanResponderMove!(move,{dx:30,dy:0});assert.equal(ui.render().intent,'request');
+  card.handlers.onPanResponderRelease!(release,{dx:30,dy:0});assert.equal(ui.render().intent,null);
+  card.action('request');await new Promise(done=>setImmediate(done));
+  assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1);
+  assert.deepEqual(JSON.parse(String(s.calls.find(c=>c.path==='/play-interests')!.init.body)),{targetPublicPlayerId:'peer'});
+  gate.resolve(interestReceipt);await new Promise(done=>setImmediate(done));assert.equal(owner.getSnapshot().match?.peer.publicPlayerId,'peer');
+  owner.dismiss();owner.select('other');ui.render();card.action('request');
+  assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1,'retired peer callback cannot send to the new card');
+  card=ui.render();card.vertical(true);card=ui.render();assert.equal(card.info,0);assert.deepEqual(ui.details,['other']);
+  ui.back();card=ui.render();assert.equal(card.info,null);
+  card.action('skip');card=ui.render();assert.equal(card.card,undefined);card.undo();card=ui.render();assert.equal(card.card,'other');
+  ui.back();assert.equal(ui.close(),1);
+  ui.cleanup();
+});
+test('actual guest component tutorial persists only after both steps for this actor; explicit request only opens login',async()=>{
+  const owner=new PlayInterestCoordinator({read:async()=>{throw Error('Guest private read');},send:async()=>{throw Error('Guest POST');},random:()=> 'guest-key'});
+  owner.stage({cityId:null,name:'',looking:false,trainer:false},{items:[{publicPlayerId:'peer',displayName:'Гость',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true}],nextCursor:null});owner.enter();
+  const ui=await mountBrowseEvents(owner,{guest:true,tutorial:true});let card=ui.render();
+  assert.equal(card.tutorial,1);card.action('request');assert.equal(ui.login(),0);assert.equal(ui.writes.length,0);
+  card.finishTutorial();card=ui.render();assert.equal(card.tutorial,2);assert.equal(ui.writes.length,0);
+  card.finishTutorial();await new Promise(done=>setImmediate(done));card=ui.render();assert.equal(card.tutorial,0);
+  assert.deepEqual(ui.writes,[{key:'gb-player-gallery-tutorial-v3:guest',value:'complete'}]);
+  card.reopenTutorial();card=ui.render();assert.equal(card.tutorial,1);assert.equal(ui.writes.length,1);
+  ui.back();card=ui.render();assert.equal(card.tutorial,0);assert.equal(ui.writes.length,1);
+  card.action('request');assert.equal(ui.login(),1);assert.equal(owner.getSnapshot().command,null);
+  assert.equal(owner.getSnapshot().selected,'peer');ui.cleanup();
+});
+
+test('actual friendly-match contact entry rechecks ordinary ContactState only on explicit CTA, with no message send or Radar proof',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();
+  const source=readFileSync(new URL('../src/components/friendly-match.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('export async function openFriendlyContact('),source.indexOf('export function FriendlyMatch(')).replace('export async function','async function');
+  const {sameActor}=await import('../src/participation.ts');
+  const open=runInNewContext(`(${stripTypeScriptTypes(body)})`,{sameActor}) as (match:object,contact:AuthCoordinator['contact'],valid:()=>boolean)=>Promise<string|null>;
+  const peer={publicPlayerId:'peer',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true,canRequestContact:true};
+  s.setHandler(async path=>path==='/players/peer'?peer:path.startsWith('/me/contact-state?')?{targetPublicPlayerId:'peer',state:'none',canRequestContact:true}:{ok:true});
+  const match={actor:s.auth.participation.getSnapshot().actor!,episode:1,self:{publicPlayerId:'self',displayName:'Я'},peer,receipt:interestReceipt};
+  const before=s.calls.length;assert.equal(s.auth.contact.getSnapshot().target,null);
+  assert.equal(await open(match,s.auth.contact,()=>false),null);assert.equal(s.calls.length,before);
+  assert.equal(await open(match,s.auth.contact,()=>true),'/messages/new/peer');
+  assert.equal(s.calls.some(c=>c.path==='/radar/results/preview'),false);
+  assert.equal(s.calls.some(c=>c.init.method==='POST' && (c.path.includes('conversations') || c.path.includes('messages'))),false);
+  s.setHandler(async path=>path==='/players/peer'?{...peer,canRequestContact:false}:{targetPublicPlayerId:'peer',state:'none',canRequestContact:false});
+  assert.equal(await open(match,s.auth.contact,()=>true),null);
+});
+
+test('browse own hidden profile public-avatar 404 stays isolated from the authenticated catalog', async t => {
+  t.mock.method(publicApi,'cities',async()=>[]);
+  const own={publicPlayerId:'own-hidden',version:1,displayName:'Своё публичное имя',cityId:null,areaKey:null,level:null,bio:null,
+    directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,
+    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null};
+  const peer={publicPlayerId:'peer-visible',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true};
+  const page={items:[peer],nextCursor:null};
+  const s=setup(sessionEnvelope());
+  s.setHandler(async path=>{
+    if(path==='/auth/native/refresh')return credentials;
+    if(path==='/me')return me;
+    if(path==='/me/social-profile')return own;
+    if(path.startsWith('/players?'))return page;
+    if(path==='/players/own-hidden')return new Response('{}',{status:404});
+    throw new Error(`Unexpected route ${path}`);
+  });
+  await s.auth.hydrate();await s.auth.profile.load();
+  await s.auth.players.loadList({cityId:null,name:'',looking:false,trainer:false});
+  const before=s.auth.players.getSnapshot().list;
+  assert.equal(before.status,'ready');
+  // Execute the actual route effect so removing its isolated-detail flag fails this regression.
+  const route=readFileSync(new URL('../app/players/browse.tsx',import.meta.url),'utf8');
+  const effect=route.match(/useEffect\(\(\) => \{(\s*if \(focused && scope && ownId\)[\s\S]*?)\n {2}\}, \[focused, scope, ownId, auth.players\]\);/);
+  assert.ok(effect);
+  let pending:Promise<void>|undefined;
+  const original=s.auth.players.loadDetail;
+  t.mock.method(s.auth.players,'loadDetail',(id:string,isolated?:boolean)=>{pending=original(id,isolated);return pending;});
+  runInNewContext(`(()=>{${effect[1]}})()`,{focused:true,scope:s.auth.players.getSnapshot().scope,ownId:own.publicPlayerId,auth:s.auth});
+  assert.ok(pending);await pending;
+  assert.equal(s.auth.players.getSnapshot().list,before);
+  assert.deepEqual(s.auth.players.getSnapshot().list.data,page);
+  assert.equal(s.auth.players.getSnapshot().detail.status,'error');
+  assert.equal(s.auth.players.getSnapshot().detail.data,null);
+  const mediaEffect=route.match(/useEffect\(\(\) => \{(\s*const detail = catalog.detail;[\s\S]*?)\n {2}\}, \[scope, ownId, own\?\.displayName, catalog.detail\]\);/);
+  assert.ok(mediaEffect);
+  let media:unknown={avatar:'previously-public'};
+  runInNewContext(stripTypeScriptTypes(`(()=>{${mediaEffect[1]}})()`),{catalog:s.auth.players.getSnapshot(),scope:s.auth.players.getSnapshot().scope,
+    ownId:own.publicPlayerId,own,setSelfMedia:(value:unknown)=>{media=value;}});
+  assert.equal(media,null,'unavailable public media falls back to the authoritative own name');
+  assert.deepEqual(s.auth.profile.getSnapshot().profile,own);
+  assert.equal(s.auth.getSnapshot().status,'authenticated');
+  assert.deepEqual(s.calls.filter(c=>c.path==='/players/own-hidden').map(c=>c.init.method),['GET']);
 });

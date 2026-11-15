@@ -31,7 +31,7 @@ export function hydratedEntryRoute(preferences: Preferences, preferencesHydrated
   auth: { status: string; returnPath: string | null }, pathname = '/'): string | null {
   if (pathname !== '/' || !preferencesHydrated || auth.status === 'hydrating') return null;
   if (auth.status === 'signing-in') return '/profile';
-  const returnPath = canonicalGamePath(auth.returnPath);
+  const returnPath = auth.returnPath === '/players/browse' ? auth.returnPath : canonicalGamePath(auth.returnPath);
   if (returnPath) return returnPath;
   if (auth.status === 'authenticated') return '/games';
   return entryRoute(preferences);

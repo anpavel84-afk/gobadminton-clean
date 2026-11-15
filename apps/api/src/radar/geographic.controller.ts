@@ -14,7 +14,7 @@ export class GeographicRadarController {
   @Get("config")
   @Header("Cache-Control", "no-store")
   async config(@Req() request: FastifyRequest) {
-    const viewer = await this.auth.requireSession(request);
+    const viewer = await this.auth.requirePrincipal(request);
     return this.radar.config(viewer.userId, viewer.sessionId);
   }
   @Post("results/query")

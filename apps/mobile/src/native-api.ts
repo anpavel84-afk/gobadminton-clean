@@ -1,3 +1,7 @@
+import { interestWire, statesPath, parsePlayInterestReceipt, PlayInterestError } from './play-interests.ts';
+import type { PlayInterestPacket } from './play-interests.ts';
+import { RadarError, RADAR_WIRE, resultProof } from './radar.ts';
+import type { RadarRead, RadarCommand } from './radar.ts';
 import { SafetyError, parseSafetyReceipt, safetyWire } from './safety.ts';
 import type { SafetyPacket } from './safety.ts';
 import { parseContactState, parseContactResult } from './contact.ts';
@@ -16,13 +20,13 @@ import type { NativeExchangeRequest, NativeTransactionRequest } from '@gobadmint
 
 export function createNativeApi(fetcher: typeof fetch = fetch) {
   // Deliberately closed route surface: never forward caller URLs, cookies, Origin or browser bridge commands.
-  async function request(path: string, method: 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false, profile = false, safety = false): Promise<unknown> {
+  async function request(path: string, method: 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT', body?: unknown, access?: string, key?: string, participation = false, players = false, messages = false, profile = false, safety = false, radarActivation?: string): Promise<unknown> {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
         method, credentials: 'omit', redirect: 'error', signal: controller.signal,
         headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-          ...(access ? { Authorization: `Bearer ${access}` } : {}), ...(key ? { 'Idempotency-Key': key } : {}) },
+          ...(access ? { Authorization: `Bearer ${access}` } : {}), ...(key ? { 'Idempotency-Key': key } : {}), ...(radarActivation ? { 'X-Radar-Activation-Id': radarActivation } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       if (safety && !response.ok) {
@@ -57,7 +61,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
       if (players && !response.ok) throw new PlayersError(response.status === 404 ? 'unavailable' : 'server', response.status);
       if (response.status === 404 || response.status === 503) throw new NativeAuthError('unavailable');
       if (!response.ok) throw new NativeAuthError('invalid');
-      return await response.json();
+      return response.status === 204 ? undefined : await response.json();
     } catch (error) {
       if (error instanceof SafetyError || error instanceof NativeAuthError || error instanceof ParticipationError || error instanceof PlayersError || error instanceof MessagesError || error instanceof ProfileError) throw error;
       if (safety) throw new SafetyError(error instanceof SyntaxError ? 'invalid' : 'network');
@@ -69,7 +73,77 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     } finally { clearTimeout(timeout); }
   }
   const privateMessage = (path: string, access: string, body?: MessageBody, key?: string) => request(path, body === undefined ? 'GET' : 'POST', body, access, key, false, false, true);
+  const radarRequest = async (path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', access: string, body?: unknown, key?: string, activationId?: string) => {
+    try { return await request(path, method, body, access, key, false, false, true, false, false, activationId); }
+    catch (error) {
+      if (error instanceof MessagesError && error.status === 401) throw new NativeAuthError('authority');
+      if (error instanceof MessagesError) throw new RadarError(error.status >= 400 && error.status < 500 && error.code !== 'COMMAND_IN_PROGRESS' ? 'business' : error.kind === 'invalid' ? 'invalid' : 'network', error.status, error.code);
+      throw error;
+    }
+  };
+  async function interestRequest(path: string, access: string, packet?: PlayInterestPacket) {
+    const wire = packet ? interestWire(packet) : null;
+    if (wire && wire.path !== path) throw new PlayInterestError('invalid');
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetcher(`${NATIVE_ORIGIN}/v1${path}`, {
+        method: packet ? 'POST' : 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'application/json', Authorization: `Bearer ${access}`,
+          ...(packet ? {'Content-Type':'application/json','Idempotency-Key':packet.key} : {}) },
+        ...(wire ? {body:JSON.stringify(wire.body)} : {}),
+      });
+      if (response.status === 401) throw new NativeAuthError('authority');
+      if (!response.ok) {
+        let code = '';
+        try { const row = await response.json(); if (typeof row?.code === 'string' && /^[A-Z_]{1,80}$/.test(row.code)) code=row.code; } catch { /* No raw response retained. */ }
+        throw new PlayInterestError([400,403,404,409,422,429].includes(response.status) && code !== 'COMMAND_IN_PROGRESS' ? 'refused' : 'network',response.status,code);
+      }
+      return await response.json();
+    } catch (error) {
+      if(error instanceof NativeAuthError || error instanceof PlayInterestError) throw error;
+      throw new PlayInterestError(error instanceof SyntaxError ? 'invalid' : 'network');
+    } finally { clearTimeout(timeout); }
+  }
   return {
+    playInterestStates: (access: string, ids: readonly string[]) => interestRequest(statesPath([...ids]), access),
+    playInterestMutation: async (access: string, packet: PlayInterestPacket) => {
+      const wire = interestWire(packet);
+      return parsePlayInterestReceipt(await interestRequest(wire.path,access,packet),packet.kind);
+    },
+    radarRead: async (access: string, operation: RadarRead, previewKey: string) => {
+      if (operation.kind === 'config') return radarRequest('/radar/config', 'GET', access);
+      if (operation.kind === 'status') return radarRequest('/me/radar/activations/current', 'GET', access);
+      if (operation.kind !== 'preview' && operation.kind !== 'map' && operation.kind !== 'query') throw new RadarError('invalid');
+      if (operation.kind === 'preview') return radarRequest('/radar/results/preview', 'POST', access, { resultRef: resultProof(operation.resultRef) }, previewKey);
+      const input = operation.body;
+      if (input.contractVersion !== RADAR_WIRE) throw new RadarError('invalid');
+      if (operation.kind === 'map') return radarRequest('/players/query/map', 'POST', access, { contractVersion: RADAR_WIRE, queryRef: operation.body.queryRef, limit: 100,
+        ...(operation.body.mapCursor ? { mapCursor: operation.body.mapCursor } : {}) });
+      const b = operation.body;
+      const body = 'queryRef' in b ? { contractVersion: RADAR_WIRE, queryRef: b.queryRef, cursor: b.cursor, limit: 50 }
+        : { contractVersion: RADAR_WIRE, filters: { cityId: b.filters.cityId, name: b.filters.name, areaKey: b.filters.areaKey, looking: b.filters.looking, trainer: b.filters.trainer },
+          origin: b.origin.kind === 'current_activation' ? { kind: b.origin.kind, activationId: b.origin.activationId } : b.origin.kind === 'none' ? { kind: 'none' } : (() => { throw new RadarError('invalid'); })(), limit: 50 };
+      return radarRequest('/players/query', 'POST', access, body);
+    },
+    radarCommand: async (access: string, packet: RadarCommand) => {
+      const current = '/me/radar/activations/current';
+      if (packet.kind === 'stop') return radarRequest(current, 'DELETE', access, undefined, packet.key, packet.activationId);
+      const b = packet.body;
+      if (b.contractVersion !== RADAR_WIRE) throw new RadarError('invalid');
+      const common = { contractVersion: RADAR_WIRE, consentPolicyVersion: b.consentPolicyVersion };
+      const fix = (location: {latitude:number;longitude:number;accuracyMeters:number;capturedAt:string}) => ({ latitude: location.latitude, longitude: location.longitude, accuracyMeters: location.accuracyMeters, capturedAt: location.capturedAt });
+      let body: unknown;
+      if (packet.kind === 'start' || packet.kind === 'takeover') {
+        const start = packet.body;
+        body = { ...common, consent: { disclosureId: start.consent.disclosureId, disclosureHash: start.consent.disclosureHash, accepted: start.consent.accepted }, location: fix(start.location),
+          ...(start.ttlMinutes !== undefined ? { ttlMinutes: start.ttlMinutes } : {}), ...(start.radiusBucketKm !== undefined ? { radiusBucketKm: start.radiusBucketKm } : {}),
+          ...(packet.kind === 'takeover' ? { activationId: packet.body.activationId, expectedVersion: packet.body.expectedVersion, confirm: packet.body.confirm } : {}) };
+      } else if (packet.kind === 'heartbeat') body = { ...common, activationId: packet.body.activationId };
+      else body = { ...common, activationId: packet.body.activationId, expectedVersion: packet.body.expectedVersion,
+        ...(packet.body.location ? { location: fix(packet.body.location) } : {}), ...(packet.body.radiusBucketKm !== undefined ? { radiusBucketKm: packet.body.radiusBucketKm } : {}),
+        ...(packet.kind === 'renew' && packet.body.extendMinutes !== undefined ? { extendMinutes: packet.body.extendMinutes } : {}) };
+      return radarRequest(packet.kind === 'start' ? '/me/radar/activations' : packet.kind === 'update' ? current : `${current}/${packet.kind}`, packet.kind === 'update' ? 'PATCH' : 'POST', access, body, packet.key);
+    },
     safetyMutation: async (access: string, packet: SafetyPacket) => {
       const wire = safetyWire(packet);
       return parseSafetyReceipt(packet, await request(wire.path, wire.method, wire.body, access, packet.key, false, false, false, false, true));
@@ -77,6 +151,10 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
     contactState: async (access: string, target: string) => parseContactState(await privateMessage(`/me/contact-state?targetPublicPlayerId=${encodeURIComponent(messageId(target))}`, access), target),
     createContact: async (access: string, packet: ContactPacket) => parseContactResult(await request('/conversations/requests', 'POST', {
       targetPublicPlayerId: packet.body.targetPublicPlayerId, text: packet.body.text, clientMessageId: packet.body.clientMessageId,
+      ...(packet.kind === 'radar' ? (() => {
+        if (!packet.context.valid() || packet.context.target !== packet.body.targetPublicPlayerId || packet.context.resultRef !== packet.body.discoveryProof || packet.actor.actorId !== packet.context.actor.actorId || packet.actor.sessionId !== packet.context.actor.sessionId) throw new MessagesError('private');
+        return { discoveryProof: resultProof(packet.body.discoveryProof) };
+      })() : {}),
     }, access, packet.key, false, false, true), packet.body.targetPublicPlayerId),
     ownProfile: async (access: string) => parseOwnProfile(await request('/me/social-profile', 'GET', undefined, access, undefined, false, false, false, true)),
     saveOwnProfile: async (access: string, packet: ProfilePacket) => parseOwnProfile(await request('/me/social-profile', 'PATCH', {

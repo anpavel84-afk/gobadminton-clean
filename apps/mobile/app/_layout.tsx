@@ -1,3 +1,4 @@
+import { RadarProvider } from '../src/radar-runtime.tsx';
 import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -24,7 +25,7 @@ export default function RootLayout() {
   }, [attempt]);
   return <SafeAreaProvider>
     {font === 'ready' ? <PreferencesProvider>
-      <AuthProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }} /></MainNavigation></MessagesOwner></AuthProvider>
+      <AuthProvider><RadarProvider><MessagesOwner><MainNavigation><Stack screenOptions={{ headerShown: false, animation: reduceMotion || !motionPolicy.arrivalAnimated ? 'none' : 'fade' }} /></MainNavigation></MessagesOwner></RadarProvider></AuthProvider>
     </PreferencesProvider> : <Page>
       <BrandLockup launch />
       {font === 'error' && <><Label>Не удалось загрузить шрифт приложения.</Label>

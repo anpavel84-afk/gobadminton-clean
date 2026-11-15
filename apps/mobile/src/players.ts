@@ -7,7 +7,7 @@ export type PublicPlayer = {
   cover?: { uploadedUrl: string | null }; canRequestContact?: boolean;
 };
 export type PlayerPage = { items: PublicPlayer[]; nextCursor: string | null };
-export type PlayerFilters = { cityId: string | null; name: string; looking: boolean; trainer: boolean };
+export type PlayerFilters = { cityId: string | null; name: string; areaKey?: string; looking: boolean; trainer: boolean };
 export class PlayersError extends Error {
   readonly kind: 'invalid' | 'unavailable' | 'network' | 'server';
   readonly status?: number;
@@ -47,11 +47,13 @@ export function parsePlayerPage(value: unknown): PlayerPage {
   if (!Array.isArray(row.items) || !(row.nextCursor === null || typeof row.nextCursor === 'string' && row.nextCursor.length > 0)) throw new PlayersError('invalid');
   return { items: row.items.map(parsePlayer), nextCursor: row.nextCursor as string | null };
 }
-export function playerFilterKey(f: PlayerFilters): string { return JSON.stringify([f.cityId, f.name.trim(), f.looking, f.trainer]); }
+export function resetPlayerFilters(): PlayerFilters { return { cityId: null, name: '', areaKey: '', looking: false, trainer: false }; }
+export function playerFilterKey(f: PlayerFilters): string { return JSON.stringify([f.cityId, f.name.trim(), f.looking, f.trainer, f.areaKey?.trim() ?? '']); }
 export function playerQuery(f: PlayerFilters, cursor?: string): string {
   const q = new URLSearchParams({ limit: '20' });
   if (f.cityId) q.set('cityId', f.cityId);
   if (f.name.trim()) q.set('name', f.name.trim());
+  if (f.areaKey?.trim()) q.set('areaKey', f.areaKey.trim());
   if (f.looking) q.set('looking', 'true');
   if (f.trainer) q.set('trainer', 'true');
   if (cursor) q.set('cursor', cursor);

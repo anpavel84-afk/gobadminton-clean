@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PlayersCoordinator, PlayersError, appendPlayers, parsePlayer, parsePlayerPage, playerQuery } from '../src/players.ts';
+import { PlayersCoordinator, PlayersError, appendPlayers, parsePlayer, parsePlayerPage, playerQuery, playerFilterKey, resetPlayerFilters } from '../src/players.ts';
 import type { PlayerFilters, PlayerPage, PublicPlayer } from '../src/players.ts';
 import { playerMediaUrl } from '../src/media.ts';
 import { playerInitials, playerLevelLabel } from '../src/presentation.ts';
@@ -131,4 +131,33 @@ test('initial 503 is an error with no data; explicit successful retry alone esta
   fail = false; await c.loadList(filters);
   assert.equal(c.getSnapshot().list.status, 'ready');
   assert.deepEqual(c.getSnapshot().list.data, { items: [], nextCursor: null });
+});
+
+test('area query reaches public and native ports; default remains compatible and explicit reset clears filters', async () => {
+  const chosen = { ...filters, cityId: 'city', name: ' Анна ', areaKey: ' метро & район ', trainer: true, looking: true };
+  const calls: URL[] = [];
+  const fetcher: typeof fetch = async url => { calls.push(new URL(String(url))); return Response.json(page()); };
+  await createPublicApi(fetcher).players(chosen);
+  await createNativeApi(fetcher).players('access', chosen);
+  for (const url of calls) { assert.equal(url.searchParams.get('areaKey'), 'метро & район'); assert.equal(url.searchParams.get('name'), 'Анна'); }
+  assert.equal(playerFilterKey(filters), playerFilterKey({ ...filters, areaKey: '' }));
+  assert.equal(new URLSearchParams(playerQuery(filters)).has('areaKey'), false);
+  assert.deepEqual(resetPlayerFilters(), { cityId: null, name: '', areaKey: '', looking: false, trainer: false });
+  assert.equal(new URLSearchParams(playerQuery(resetPlayerFilters())).size, 1);
+});
+test('area changes fence cursor reuse and late responses across area/reset/auth generations', async () => {
+  const c = new PlayersCoordinator(), pending = deferred<PlayerPage>();
+  const calls: { filters: PlayerFilters; cursor?: string }[] = [];
+  c.setScope('guest', { list: async (f, cursor) => { calls.push({ filters: f, cursor }); return f.areaKey === 'old' && cursor ? pending.promise : page(f.areaKey || 'all', 'next'); }, detail: async () => player });
+  const old = { ...filters, areaKey: 'old' }, changed = { ...filters, areaKey: 'new' };
+  await c.loadList(old);
+  await c.loadList(changed, 'next'); assert.equal(calls.length, 1);
+  const late = c.loadList(old, 'next');
+  await c.loadList(changed); assert.equal(calls[2]?.cursor, undefined);
+  await c.loadList(resetPlayerFilters());
+  c.setScope('native:new-actor:session:2', { list: async () => page('new-actor'), detail: async () => player });
+  await c.loadList(changed);
+  pending.resolve(page('old-area-guest')); await late;
+  assert.equal(c.getSnapshot().scope, 'native:new-actor:session:2');
+  assert.equal(c.getSnapshot().list.data?.items[0]?.publicPlayerId, 'new-actor');
 });

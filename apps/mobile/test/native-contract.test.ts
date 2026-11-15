@@ -8,12 +8,10 @@ import { brandMarkXml } from '../assets/brand-mark.ts';
 import { settlementLabel, gameTime } from '../src/presentation.ts';
 import { game } from './fixtures.ts';
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
-test('native packaging blocks unused template permissions alongside microphone and location', () => {
+test('native packaging permits explicit foreground Radar only and blocks unused template permissions', () => {
   const config = JSON.parse(read('../app.json')).expo;
   for (const permission of [
     'android.permission.RECORD_AUDIO',
-    'android.permission.ACCESS_FINE_LOCATION',
-    'android.permission.ACCESS_COARSE_LOCATION',
     'android.permission.READ_EXTERNAL_STORAGE',
     'android.permission.WRITE_EXTERNAL_STORAGE',
     'android.permission.SYSTEM_ALERT_WINDOW',
@@ -24,6 +22,18 @@ test('native packaging blocks unused template permissions alongside microphone a
   assert.ok(!config.android.blockedPermissions.includes('android.permission.INTERNET'));
   assert.deepEqual(config.android.permissions, []);
   assert.ok(config.plugins.includes('expo-router'));
+  for (const permission of ['ACCESS_FINE_LOCATION','ACCESS_COARSE_LOCATION']) {
+    assert.ok(!config.android.blockedPermissions.includes(`android.permission.${permission}`));
+  }
+  assert.equal(JSON.parse(read('../package.json')).dependencies['expo-location'],'58.0.22');
+  const location = config.plugins.filter((plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-location');
+  assert.equal(location.length,1);
+  assert.deepEqual(location[0][1], {
+    locationWhenInUsePermission: 'GoBadminton использует ваше примерное местоположение для поиска ближайших игроков только при явно включённом Radar, пока приложение открыто.',
+    locationAlwaysPermission:false, locationAlwaysAndWhenInUsePermission:false, motionUsagePermission:false, locationFullAccuracyPermission:false,
+    isIosBackgroundLocationEnabled:false, isAndroidBackgroundLocationEnabled:false, isAndroidForegroundServiceEnabled:false, isAndroidMotionActivityEnabled:false,
+  });
+
 });
 test('native icon and technical splash bind the approved product icon with exact bytes', () => {
   const config = JSON.parse(read('../app.json')).expo;
@@ -103,7 +113,7 @@ test('conditions use server counts, timezone and external price terms without im
 });
 
 test('native navigation/version source binds canonical WEB order and paths while owners stay above Stack', () => {
-  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 7);
+  assert.equal(JSON.parse(read('../app.json')).expo.android.versionCode, 8);
   const nav = read('../src/components/main-navigation.tsx');
   const paths = read('../../web/src/components/consumer/nav-icon-paths.tsx');
   for (const section of ['games', 'players', 'mine', 'messages']) {
@@ -117,7 +127,8 @@ test('native navigation/version source binds canonical WEB order and paths while
   assert.match(nav, /width: 30,height: 3/);
   assert.match(nav, /selected \? colors.limeSoft/);
   const layout = read('../app/_layout.tsx');
-  assert.match(layout, /<AuthProvider><MessagesOwner><MainNavigation><Stack/);
+  assert.match(layout, /<AuthProvider><RadarProvider><MessagesOwner><MainNavigation><Stack/);
+  assert.match(layout, /<\/MainNavigation><\/MessagesOwner><\/RadarProvider><\/AuthProvider>/);
   assert.doesNotMatch(layout, /key=/);
   assert.match(nav, /paddingBottom: insets.bottom/);
 });

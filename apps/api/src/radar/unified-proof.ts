@@ -92,13 +92,13 @@ export async function redeemUnifiedProof(
  CASE WHEN o.g IS NULL THEN NULL ELSE ST_Distance(r.coarse_center,o.g,true) END dist_m,
  LEAST(r.expires_at,r.hard_expires_at,r.foreground_until,r.location_valid_until,s.expires_at) deadline
  FROM radar_presences r JOIN player_social_profiles p ON p.user_id=r.user_id JOIN users u ON u.id=r.user_id AND u.status='active'
- JOIN app_sessions s ON s.id=r.owner_session_id AND s.user_id=r.user_id AND s.revoked_at IS NULL AND s.audience='consumer_browser' AND s.expires_at>clock_timestamp()
+ JOIN app_sessions s ON s.id=r.owner_session_id AND s.user_id=r.user_id AND s.revoked_at IS NULL AND s.audience IN ('consumer_browser','consumer_native') AND s.expires_at>clock_timestamp()
  JOIN radar_consent_events e ON e.id=r.consent_evidence_id AND e.id=p.radar_consent_evidence_id AND e.user_id=r.user_id AND e.event_type='accepted' AND e.policy_version=$9 CROSS JOIN origin o
  WHERE ${unrestrictedSql(restrictionsEnabled,"r.user_id",["account.access","profile.public","social.radar"])} AND ${unrestrictedSql(restrictionsEnabled,"$1",["account.access","profile.public","social.radar"])} AND r.user_id=$3 AND r.activation_id=$4 AND r.version=$5 AND r.owner_session_id=$6 AND r.consent_evidence_id=$7 AND r.location_model=$8 AND r.policy_version=$9 AND r.region_id=$10 AND p.public_player_id=$11
  AND p.social_eligible AND p.radar_consented AND p.radar_consent_policy_version=$9 AND btrim(p.display_name)<>''
  AND LEAST(r.expires_at,r.hard_expires_at,r.foreground_until,r.location_valid_until)>clock_timestamp()
  AND NOT EXISTS(SELECT 1 FROM radar_consent_events w WHERE w.reverses_event_id=e.id)
- AND EXISTS(SELECT 1 FROM users vu JOIN app_sessions vs ON vs.user_id=vu.id WHERE vu.id=$1 AND vu.status='active' AND vs.id=$2 AND vs.revoked_at IS NULL AND vs.audience='consumer_browser' AND vs.expires_at>clock_timestamp())
+ AND EXISTS(SELECT 1 FROM users vu JOIN app_sessions vs ON vs.user_id=vu.id WHERE vu.id=$1 AND vu.status='active' AND vs.id=$2 AND vs.revoked_at IS NULL AND vs.audience IN ('consumer_browser','consumer_native') AND vs.expires_at>clock_timestamp())
  AND NOT EXISTS(SELECT 1 FROM player_social_profiles vp WHERE vp.user_id=$1 AND NOT vp.social_eligible)
  AND NOT EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id=$1 AND b.blocked_user_id=$3) OR (b.blocker_user_id=$3 AND b.blocked_user_id=$1))
  AND ($14::text IS NULL OR p.directory_visible AND p.area_key=$14)

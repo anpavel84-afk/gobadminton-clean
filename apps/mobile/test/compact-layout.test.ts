@@ -24,3 +24,11 @@ test('short landscape and large text relinquish decoration without shrinking tex
   const narrow = introArtworkSize({ width: 180, viewportHeight: 900, copyHeight: 150, actionsHeight: 112, fontScale: 1 });
   assert.ok(narrow * 1.4 <= 180 + 1e-8);
 });
+
+test('venue sheet footer reserves safe bottom separately from scroll body, and fullscreen tabs hide only exact map route', async () => {
+  const {venueSheetSpacing,fullscreenGamesMap}=await import('../src/maps.ts');
+  assert.equal(venueSheetSpacing(24).footerBottom,40);
+  assert.equal(venueSheetSpacing(0).bodyBottom,24);
+  assert.equal(fullscreenGamesMap('/games/map'),true);
+  for (const route of ['/games','/games/map/other','/games/create','/games/manage/id','/players','/players/map','/messages','/profile']) assert.equal(fullscreenGamesMap(route),false,route);
+});

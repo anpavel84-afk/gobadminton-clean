@@ -27,7 +27,7 @@ export class MeRadarController {
   @Get("activations/current")
   @Header("Cache-Control", "no-store")
   async current(@Req() request: FastifyRequest) {
-    const consumer = await this.auth.requireSession(request);
+    const consumer = await this.auth.requirePrincipal(request);
     const unified = await this.unified.status(consumer.userId,consumer.sessionId);
     if(unified) return unified;
     return this.radar.getStatus(consumer.userId, consumer.sessionId);
@@ -39,7 +39,7 @@ export class MeRadarController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       location: {
@@ -73,7 +73,7 @@ export class MeRadarController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       activationId: string;
@@ -106,7 +106,7 @@ export class MeRadarController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       activationId: string;
@@ -139,7 +139,7 @@ export class MeRadarController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as { activationId: string };
     if(request.body && typeof request.body === "object" && "contractVersion" in request.body && request.body.contractVersion === UNIFIED_WIRE) {
@@ -162,7 +162,7 @@ export class MeRadarController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const activationHeader = request.headers["x-radar-activation-id"];
     const activationId = Array.isArray(activationHeader)
@@ -184,7 +184,7 @@ export class MeRadarController {
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    const consumer = await this.auth.requireCookieMutation(request);
+    const consumer = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     const body = (request.body ?? {}) as {
       activationId: string;

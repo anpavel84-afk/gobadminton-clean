@@ -4,14 +4,14 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../auth.tsx';
 import { Header, Label, Loading, Page, PrimaryButton, TextButton, styles } from './ui.tsx';
 
-function useContact(target: string) {
+function useContact(target: string, composer = false) {
   const auth = useAuth(), owner = auth.contact;
   const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
   const actor = state.actor;
   useFocusEffect(useCallback(() => {
-    if (auth.status === 'authenticated' && actor) void owner.open(target);
+    if (auth.status === 'authenticated' && actor) void (composer ? owner.openComposer(target) : owner.open(target));
     return () => owner.blur();
-  }, [owner, target, auth.status, actor]));
+  }, [owner, target, auth.status, actor, composer]));
   return { auth, owner, state, current: state.target === target && !!state.actor };
 }
 export function NativeContactAction({ target }: { target: string }) {
@@ -28,10 +28,10 @@ export function NativeContactAction({ target }: { target: string }) {
       else router.push(`/messages/new/${target}`);
     }} />;
   }
-  return <><Label>{state.notice ?? 'Общение сейчас недоступно'}</Label><TextButton title="Проверить снова" onPress={() => { void owner.open(target); }} /></>;
+  return <><Label>{state.notice ?? 'Общение сейчас недоступно'}</Label><TextButton title="Проверить снова" onPress={() => { void owner.openComposer(target); }} /></>;
 }
 export function ContactEditor({ target }: { target: string }) {
-  const { auth, owner, state, current } = useContact(target), router = useRouter();
+  const { auth, owner, state, current } = useContact(target, true), router = useRouter();
   const conversation = current && state.status === 'existing' && !state.command ? state.conversation : null;
   useEffect(() => {
     if (auth.status === 'authenticated' && conversation && owner.getSnapshot() === state) router.replace(`/messages/direct/${conversation.id}`);
@@ -53,7 +53,7 @@ export function ContactEditor({ target }: { target: string }) {
         {ownCommand && command?.status === 'unknown' && <PrimaryButton title="Проверить результат" onPress={() => { void owner.reconcile(target, state.actor, state.viewGeneration); }} />}
         {ownCommand && command?.status === 'sending' && <Label>Отправляем…</Label>}
         {command && !ownCommand && <><Label>Сначала проверьте результат прежнего сообщения.</Label><TextButton title="К прежнему сообщению" onPress={() => router.replace(`/messages/new/${command.packet.body.targetPublicPlayerId}`)} /></>}
-        {!command && (state.status === 'error' || state.status === 'unavailable') && <TextButton title="Проверить снова" onPress={() => { void owner.open(target); }} />}
+        {!command && (state.status === 'error' || state.status === 'unavailable') && <TextButton title="Проверить снова" onPress={() => { void owner.openComposer(target); }} />}
       </>}
   </Page>;
 }

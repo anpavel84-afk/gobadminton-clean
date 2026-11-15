@@ -1,3 +1,4 @@
+import { publicGamesIntent } from '../src/maps.ts';
 import { nativeAuth } from '../src/auth-runtime.ts';
 import { canonicalMessagePath, canonicalReturnPath, isNativeCallback } from '../src/native-auth-protocol.ts';
 
@@ -12,6 +13,8 @@ export async function redirectSystemPath({ path }: { path: string; initial: bool
   // A nonapproved/custom-scheme callback cannot bypass the exact verified HTTPS tuple.
   try { if (new URL(path, 'https://dev.gobadminton.ru').pathname === '/auth/native/callback') return '/profile'; }
   catch { return '/games'; }
+  const games = publicGamesIntent(path);
+  if (games !== null) return games;
   if (path.startsWith('/messages')) return canonicalMessagePath(path) ?? '/messages';
   try {
     const url = new URL(path);
