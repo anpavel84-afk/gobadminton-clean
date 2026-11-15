@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { game } from './fixtures.ts';
-import { canShareGame, cardWhen, normalizeNtrpLevelId, gameAllowsSelectedNtrpLevel, filterGamesBySelectedNtrpLevel, discoveryListPresentation, gamePeople, discoveryDayBounds, futureDiscoveryBounds, cityDate, nextCalendarDay, discoveryCityHeading, formatLabel, levelLabel } from '../src/presentation.ts';
+import { canShareGame, cardWhen, normalizeNtrpLevelId, gameAllowsSelectedNtrpLevel, filterGamesBySelectedNtrpLevel, discoveryListPresentation, gamePeople, discoveryDayBounds, futureDiscoveryBounds, cityDate, nextCalendarDay, discoveryCityHeading, formatLabel, levelLabel, settlementTerms } from '../src/presentation.ts';
 
 test('public-link sharing requires a published public game', () => {
   assert.equal(canShareGame({ status: 'published', visibility: 'public' }), true);
@@ -41,6 +41,26 @@ test('card date/time uses the actual game timezone and city heading never substi
   assert.equal(when.time, '08:30 — 10:30');
   assert.equal(discoveryCityHeading('Казань'), '· Казань');
   assert.equal(discoveryCityHeading('Москва'), 'в Москве');
+});
+
+test('ordinary card settlement contains only the supplied terms', () => {
+  const settlement = Object.freeze({ ...game.settlement, terms: 'Аренда 800 ₽ оплачивается отдельно' });
+  assert.equal(settlementTerms(settlement), settlement.terms);
+});
+
+test('trainer card settlement composes by-agreement payment and supplied terms once', () => {
+  const settlement = Object.freeze({ mode: 'external', purpose: 'trainer_fee', priceStatus: 'by_agreement',
+    priceMinor: null, currency: null, terms: 'Свяжитесь с тренером до игры' } as const);
+  assert.equal(settlementTerms(settlement), 'Оплата тренеру по договорённости · Свяжитесь с тренером до игры');
+});
+
+test('fixed trainer card settlement preserves terms without inventing amount, currency or unit copy', () => {
+  const settlement = Object.freeze({ mode: 'external', purpose: 'trainer_fee', priceStatus: 'fixed',
+    priceMinor: '150050', currency: 'RUB', priceUnit: 'per_player_per_session', terms: 'Оплатите тренеру перед игрой' } as const);
+  assert.equal(settlementTerms(settlement), 'Внешняя оплата тренеру · Оплатите тренеру перед игрой');
+  assert.equal(settlement.priceMinor, '150050');
+  assert.equal(settlement.currency, 'RUB');
+  assert.equal(settlement.priceUnit, 'per_player_per_session');
 });
 
 test('discovery level matches only exact normalized ntrp v1 half-steps', () => {

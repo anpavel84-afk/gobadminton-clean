@@ -1,3 +1,43 @@
+# #522 C1a ADDRESS2 · PARTIAL source correction · public APK HOLD
+
+The two P2 findings from the retained FIRST whole C1a QA are addressed in
+source, pending independent focused closure of those two findings and related
+delta. The FIRST whole QA remains FAIL (evidence SHA-256
+`e5e892a14c52db13f711e286b2c7964bf2d4c917752058e3bf62fbaf8f0fb825`).
+Its P1 for REAL Header/Players Radar remains OPEN for mandatory C1c and blocks
+delivery/full shell acceptance. No fake or disabled Radar entry was added.
+Owner APK7 UAT remains FAIL; publication HOLD and incomplete native parity remain.
+
+GameCard now renders one composed settlementTerms paragraph, matching accepted
+WEB2a: ordinary games show only supplied terms; trainer games show the agreed
+external-payment wording plus those terms, without adding an amount or unit.
+Existing settlementLabel consumers outside the card and their assertions remain.
+Games city/date selectors now use proportional 45/55 flex weights with the
+existing gap, minWidth, text scaling and focus/keyboard behavior. Filter/query,
+pagination, async fencing, title navigation, data, rights and actions are unchanged.
+Source geometry is not Android visual proof.
+
+Author self-check: 30/30 tests PASS, zero failures/skips/cancellations, using
+Node 24.21.0 from apps/mobile:
+`node --experimental-strip-types --test --test-isolation=none
+ test/presentation.test.ts test/public-api.test.ts test/compact-layout.test.ts
+ test/native-contract.test.ts`.
+Three pure formatter regressions cover ordinary, by-agreement and fixed-price
+settlements; all previous meaningful assertions are retained. This is not
+independent QA or a rendered-card/device check. Typecheck, lint and Expo exports
+are unavailable in this private export without dependencies; none is claimed PASS.
+No installation or package-manager download was attempted.
+
+Only app/games/index.tsx, src/components/game-card.tsx, src/presentation.ts,
+test/presentation.test.ts and this README are changed. VersionCode remains 8.
+No API/dependency/config/metadata, DB, build, signing, binary, publication or native
+device changes were made. No device/build/maps/Radar/swipe PASS is claimed;
+native visual and Owner recheck are NOT_TESTED. Next: trusted Root fresh
+typecheck/lint/owning units/exports, then independent focused two-P2/related-delta
+review retaining OPEN P1; no second whole QA or completed-shell claim.
+
+All previous README bytes follow unchanged.
+
 # #522 C1a ADDRESS1 · source correction only · public APK HOLD
 
 Bounded repair of supplied candidate

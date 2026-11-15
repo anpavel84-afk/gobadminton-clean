@@ -3,7 +3,7 @@ import { Image, Pressable, Share, StyleSheet, View } from 'react-native';
 import { gamePath, publicGameUrl } from '../native-auth-protocol.ts';
 import type { PublicGame } from '../public-api.ts';
 import { gameCoverSources, playerMediaUrl } from '../media.ts';
-import { canShareGame, cardWhen, gamePeople, playerInitials, formatLabel, levelLabel, settlementLabel, statusLabel } from '../presentation.ts';
+import { canShareGame, cardWhen, gamePeople, playerInitials, formatLabel, levelLabel, settlementTerms, statusLabel } from '../presentation.ts';
 import { colors, interaction } from '../theme.ts';
 import { Label, TextButton } from './ui.tsx';
 import { DiscoveryArrow, DiscoveryIcon, ShareIcon } from './discovery-icon.tsx';
@@ -56,8 +56,7 @@ export function GameCard({ game, cityName, onOpen }: { game: PublicGame; cityNam
         <Label style={card.secondary}>Уровень: {levelLabel(game.levelRule)}</Label>
         {format && <Label style={card.secondary}>{format}</Label>}
       </View>
-      <Label style={card.secondary}>{settlementLabel(game)}</Label>
-      {game.settlement.terms ? <Label style={card.secondary}>{game.settlement.terms}</Label> : null}
+      <Label style={card.secondary}>{settlementTerms(game.settlement)}</Label>
       {gamePeople(game).map(person => <View key={person.role} style={card.host}>
         <GamePersonAvatar key={`${game.id}:${person.role}:${person.name}:${person.avatar?.uploadedUrl}:${person.avatar?.providerUrl}`} name={person.trainer && !game.trainer ? '' : person.name} avatar={person.avatar} trainer={person.trainer} />
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>

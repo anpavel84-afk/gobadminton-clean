@@ -63,6 +63,12 @@ export function settlementLabel(game: PublicGame) {
   const digits = settlement.priceMinor.padStart(3, '0');
   return `${digits.slice(0, -2)}.${digits.slice(-2)} ${settlement.currency} / игрока за занятие`;
 }
+/** Accepted WEB discovery copy; fixed-price facts never invent card amount/unit wording. */
+export function settlementTerms(settlement: PublicGame['settlement']): string {
+  if (settlement.purpose === 'no_trainer_fee') return settlement.terms;
+  if (settlement.priceStatus === 'by_agreement') return `Оплата тренеру по договорённости · ${settlement.terms}`;
+  return `Внешняя оплата тренеру · ${settlement.terms}`;
+}
 export function statusLabel(game: PublicGame) {
   return { published: 'Опубликована', cancelled: 'Отменена', completed: 'Завершена', draft: 'Черновик' }[game.status];
 }

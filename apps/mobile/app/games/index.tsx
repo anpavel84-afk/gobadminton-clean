@@ -66,10 +66,10 @@ export default function GuestGames() {
           <Label style={feed.body}>Настоящие люди. Большой бадминтон. Выбирайте игру или тренировку и выходите на корт.</Label>
         </View>
         <View style={feed.selectors}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Выбрать другой город" onPress={selectCity} style={feed.selector}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Выбрать другой город" onPress={selectCity} style={[feed.selector, { flex: 0.45 }]}>
             <View style={{ flex: 1, minWidth: 0 }}><Label style={feed.hint}>Где играем</Label><Label style={feed.value}>{city?.nameRu ?? (preferences.cityId ? 'Выбор недоступен' : 'Не выбран')}</Label></View><DiscoveryIcon name="chevron" />
           </Pressable>
-          <Pressable ref={dayTrigger} accessibilityRole="button" accessibilityLabel={`Когда: ${dayLabel}`} accessibilityState={{ expanded: sheet === 'day', disabled: !city }} disabled={!city} onPress={() => setSheet('day')} style={feed.selector}>
+          <Pressable ref={dayTrigger} accessibilityRole="button" accessibilityLabel={`Когда: ${dayLabel}`} accessibilityState={{ expanded: sheet === 'day', disabled: !city }} disabled={!city} onPress={() => setSheet('day')} style={[feed.selector, { flex: 0.55 }]}>
             <View style={{ flex: 1, minWidth: 0 }}><Label style={feed.hint}>Когда</Label><Label style={feed.value}>{dayLabel}</Label></View><DiscoveryIcon name="chevron" />
           </Pressable>
         </View>
