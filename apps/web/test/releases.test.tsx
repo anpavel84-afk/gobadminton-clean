@@ -1961,19 +1961,6 @@ describe("releases page current known limitations SSR (#473)", () => {
     const document = window.document.implementation.createHTMLDocument();
     document.body.innerHTML = renderToStaticMarkup(await ReleasesPage());
     const rows = [...document.querySelectorAll(".gb-releases-history > li")];
-    const alpha93 = TRUSTED_HISTORICAL_SEED.find(item => item.application_version === "0.1.0-alpha.93")!;
-    const alpha93Rows = rows.filter(item => item.querySelector("strong")?.textContent === "0.1.0-alpha.93");
-    expect(alpha93Rows).toHaveLength(2);
-    expect(alpha93Rows.map(item => item.querySelector("details")?.textContent)).toEqual([
-      expect.stringContaining("r43712227701-a1"), expect.stringContaining("r43707786262-a1"),
-    ]);
-    for (const historical of alpha93Rows) {
-      expect([...historical.querySelectorAll(".gb-releases-list-block p")].map(item => item.textContent)).toEqual([
-        ...alpha93.additions, ...alpha93.fixes,
-      ]);
-      expect(historical.querySelector("details")?.textContent).toContain("FAIL_RECHECK_PENDING");
-      expect(historical.textContent).not.toContain(CURRENT_NAMED_RELEASE.title);
-    }
     const row = rows.find(item => item.querySelector("strong")?.textContent === "0.1.0-alpha.75")!;
     expect(row).toBeDefined();
     const report = "На комментарий или ответ в обсуждении можно пожаловаться. Для отправки жалобы нужен вход в аккаунт.";
@@ -1998,6 +1985,33 @@ describe("releases page current known limitations SSR (#473)", () => {
     expect([...current.querySelectorAll(".gb-releases-list-block li")].map(item => item.textContent)).toEqual([
       ...CURRENT_NAMED_RELEASE.additions, ...CURRENT_NAMED_RELEASE.fixes,
     ]);
+  });
+
+  it("renders both accepted alpha.93 rows with stored notes and raw Owner failure in chronological order", async () => {
+    const { buildHistoryRows } = await import("../src/lib/releases-server");
+    const history = buildHistoryRows(TRUSTED_HISTORICAL_SEED, []);
+    loadReleasesPageModelMock.mockResolvedValue({
+      build: { applicationVersion: CURRENT_APPLICATION_VERSION, gitSha: "unknown" },
+      named: { ...CURRENT_NAMED_RELEASE, source_sha: null },
+      environments: [], history, checkedAt: "2026-11-15T12:21:01Z",
+    });
+    const ReleasesPage = (await import("../src/app/releases/page")).default;
+    const document = window.document.implementation.createHTMLDocument();
+    document.body.innerHTML = renderToStaticMarkup(await ReleasesPage());
+    const rows = [...document.querySelectorAll(".gb-releases-history > li")];
+    const alpha93 = TRUSTED_HISTORICAL_SEED.find(item => item.application_version === "0.1.0-alpha.93")!;
+    const alpha93Rows = rows.filter(item => item.querySelector("strong")?.textContent === "0.1.0-alpha.93");
+    expect(alpha93Rows).toHaveLength(2);
+    expect(alpha93Rows.map(item => item.querySelector("details")?.textContent)).toEqual([
+      expect.stringContaining("r43712227701-a1"), expect.stringContaining("r43707786262-a1"),
+    ]);
+    for (const historical of alpha93Rows) {
+      expect([...historical.querySelectorAll(".gb-releases-list-block p")].map(item => item.textContent)).toEqual([
+        ...alpha93.additions, ...alpha93.fixes,
+      ]);
+      expect(historical.querySelector("details")?.textContent).toContain("FAIL_RECHECK_PENDING");
+      expect(historical.textContent).not.toContain(CURRENT_NAMED_RELEASE.title);
+    }
   });
 
   it("renders alpha.94 partial native notes with API 0.44.0 and no stale release claims", async () => {

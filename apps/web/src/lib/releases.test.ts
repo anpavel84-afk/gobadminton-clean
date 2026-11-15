@@ -54,8 +54,23 @@ describe("releases current descriptor literals", () => {
     expect(limits).toMatch(/Обновления приложения по сети ещё не реализованы/);
     expect(limits).toMatch(/Для iPhone ещё не подтверждены.*физическом устройстве/);
     expect([CURRENT_NAMED_RELEASE.title, delta, limits].join(" ")).not.toMatch(
-      /device.?PASS|проверка на устройствах пройдена|полное равенство достигнуто|приёмка владельцем пройдена|APK9|Metro|arm64|receipt|ACCEPTED|публикация ожидается|22.*(?:установлен|включён)/i,
+      /device.?PASS|проверка на устройствах пройдена|полное равенство достигнуто|приёмка владельцем пройдена|APK9|Metro|arm64|receipt|ACCEPTED|публикация ожидается/i,
     );
+    const installed22Claim = /(?:^|[^0-9])22(?![0-9])[^.!?;\r\n]*(?:установлен|включ[её]н)/iu;
+    expect([CURRENT_NAMED_RELEASE.title, delta, limits].join(" ")).not.toMatch(installed22Claim);
+    for (const claim of ["22 функции установлены", "Все 22 функции установлены", "22 функции включены", "22-й модуль включён"]) {
+      expect(claim).toMatch(installed22Claim);
+    }
+    for (const text of [
+      "В #522 описана работа установленной версии.",
+      "Замечание в #522. Работа установленной версии ещё не подтверждена.",
+      "122 функции установлены",
+      "220 функций включены",
+      "Всего 22. Работа установленной версии ещё не подтверждена.",
+      "Всего 22; модуль включён отдельно.",
+    ]) {
+      expect(text).not.toMatch(installed22Claim);
+    }
     for (const field of ["native_evidence", "deployments", "accepted_at", "release_id", "api_digest", "web_digest"]) {
       expect(CURRENT_NAMED_RELEASE).not.toHaveProperty(field);
     }
