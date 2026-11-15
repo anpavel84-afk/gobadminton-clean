@@ -63,8 +63,10 @@ export class RadarCoordinator {
     this.captureCleanup(this.cleanup, activation);
   }
   private cleanupCurrent(debt: Cleanup) { return this.cleanup === debt && debt.authority === this.authority && sameActor(debt.actor, this.state.actor); }
+  // Lifecycle callbacks can create cleanup while dispatch is awaiting its transport.
+  private currentCleanup(): Cleanup | null { return this.cleanup; }
   private captureCleanup(debt: Cleanup, activation: UnifiedStatus | null) {
-    if (!this.cleanupCurrent(debt) || debt.packet || activation?.state !== 'active' || !activation.ownerHere) return;
+    if (!this.cleanupCurrent(debt) || debt.settled || debt.packet || activation?.state !== 'active' || !activation.ownerHere) return;
     const original = this.state.command;
     debt.packet = original?.kind === 'stop' && original.activationId === activation.activationId ? original
       : Object.freeze({ kind: 'stop', actor: debt.actor, key: this.ports.random(), activationId: activation.activationId });
@@ -183,23 +185,24 @@ export class RadarCoordinator {
     this.show({ command: packet, busy: true });
     try {
       const response = await this.ports.command(packet, () => this.valid(packet.actor, serial) && this.state.command === packet);
-      if (authority !== this.authority || !sameActor(packet.actor, this.state.actor)) return false;
+      if (authority !== this.authority || !sameActor(packet.actor, this.state.actor) || this.getSnapshot().command !== packet) return false;
       if (!this.valid(packet.actor, serial)) {
-        // Retired UI work cannot publish private data or settle UNKNOWN, but a real receipt
-        // under the same principal can identify the activation that must be stopped.
-        const debt = this.cleanup;
+        // A real response acknowledges this exact frozen mutation under current authority,
+        // even after UI retirement. It cannot restore foreground data or query authority.
+        const activation = packet.kind === 'stop' ? null : parseRadarStatus(response);
+        const debt = this.currentCleanup();
         if (debt) {
-          if (packet.kind === 'stop' && debt.packet === packet) {
+          if (packet.kind === 'stop' && (!debt.packet || debt.packet === packet)) {
             debt.settled = true;
             this.acceptActivation({ state: 'off', ownerHere: false, policyVersion: RADAR_POLICY, contractVersion: RADAR_WIRE });
-          } else if (packet.kind !== 'stop') {
-            this.captureCleanup(debt, parseRadarStatus(response));
-            if (!debt.attempted) {
-              await this.finishCleanup();
-              // A concurrent discovery read may have finished without seeing this late receipt.
-              if (this.cleanupCurrent(debt) && !debt.attempted) await this.finishCleanup();
-            }
-          }
+          } else this.captureCleanup(debt, activation);
+        }
+        this.pendingUnknown = null; this.clearPrivate();
+        this.show({ command: null, busy: false, enabling: false, phase: debt && !debt.settled ? 'unknown' : 'off', notice: debt && !debt.settled ? cleanupNotice : null });
+        if (debt && !debt.settled && !debt.attempted) {
+          await this.finishCleanup();
+          // A concurrent discovery read may have finished without seeing this late receipt.
+          if (this.cleanupCurrent(debt) && !debt.attempted) await this.finishCleanup();
         }
         return false;
       }
