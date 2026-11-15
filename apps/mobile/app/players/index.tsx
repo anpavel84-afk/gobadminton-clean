@@ -1,4 +1,5 @@
 import { useRadar } from '../../src/radar-runtime.tsx';
+import { usePlayInterest } from '../../src/play-interest-runtime.tsx';
 import { RadarControls } from '../../src/components/radar-controls.tsx';
 import { NativeMap } from '../../src/components/native-map.tsx';
 import { VenueSheet } from '../../src/components/venue-sheet.tsx';
@@ -76,6 +77,7 @@ export default function Players() {
   const window = useWindowDimensions();
   const routeContext = playersMapContext(params);
   const { owner: radar, state: radarState } = useRadar();
+  const { owner: browse } = usePlayInterest();
   const [focused,setFocused] = useState(false), focusedRef = useRef(false);
   useFocusEffect(useCallback(() => {focusedRef.current=true;setFocused(true);return () => {focusedRef.current=false;setFocused(false);};}, []));
   const mapOpen = routeContext?.view === 'map' && focused;
@@ -85,7 +87,7 @@ export default function Players() {
   const [mapFilter,setMapFilter] = useState(false), filterTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const personTrigger = useRef<ComponentRef<typeof Pressable>>(null);
   const [sheetMeasurement,setSheetMeasurement] = useState<SheetMeasurement | null>(null);
-  const [controlsBottom,setControlsBottom] = useState<number | null>(null), [mapEntryHeight,setMapEntryHeight] = useState(48);
+  const [controlsBottom,setControlsBottom] = useState<number | null>(null), [floatingEntryHeight,setFloatingEntryHeight] = useState(48);
   const [now,setNow] = useState(Date.now());
   const [inspectionAttempt,setInspectionAttempt] = useState(0);
   const [inspection,setInspection] = useState<{row:UnifiedRow;context:RadarContactContext;preview:UnifiedPreview | null;failed:boolean} | null>(null);
@@ -107,8 +109,9 @@ export default function Players() {
   const cities = useResource('cities', citiesTask);
   const city = cities.state.data?.find(c => c.id === cityId);
   useEffect(() => {
-    if (hydrated && snapshot.scope && validName) void coordinator.loadList(filters);
-  }, [coordinator, filters, hydrated, snapshot.scope, validName]);
+    if (focused && hydrated && snapshot.scope && validName &&
+      (snapshot.list.key !== key || snapshot.list.status === 'idle')) void coordinator.loadList(filters);
+  }, [coordinator, filters, focused, hydrated, snapshot.scope, validName, key, snapshot.list.key, snapshot.list.status]);
   useLayoutEffect(() => { radar.setFilters(filters); }, [radar, filters]);
   useEffect(() => { setSelectedPerson(null); }, [radarState.generation]);
   const mapCityId = cityId ?? radarState.query?.cityId ?? preferences.cityId ?? '';
@@ -281,7 +284,7 @@ export default function Players() {
     <DiscoverySheet visible={!mapOpen && !!person} title="Игрок Radar" onClose={() => setSelectedPerson(null)} returnFocusRef={personTrigger}>{personContent}</DiscoverySheet>
     <FlatList data={merged.ordinary} keyExtractor={p => p.publicPlayerId}
       keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentInsetAdjustmentBehavior="never"
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: mapEntryHeight+insets.bottom+48, gap: 16 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: floatingEntryHeight+insets.bottom+48, gap: 16 }}
       ListHeaderComponent={<View style={{ gap: 16 }}>
         <Label accessibilityRole="header" style={[styles.title, { fontSize: 32, lineHeight: 35 }]}>Игроки</Label>
         <Label style={{ color: colors.secondary, fontSize: 13, lineHeight: 19 }}>Найдите партнёров для хорошей игры.</Label>
@@ -347,14 +350,21 @@ export default function Players() {
         {list?.moreError != null && <><Label>Не удалось загрузить следующую страницу. Загруженные игроки сохранены.</Label><ErrorState error={list.moreError} retry={more} /></>}
         {list?.data?.nextCursor && !list.moreError && <PrimaryButton title={list.loadingMore ? 'Загружаем…' : 'Показать ещё'} disabled={list.loadingMore} onPress={more} />}
       </View>} />
+    <View onLayout={event => setFloatingEntryHeight(event.nativeEvent.layout.height)}
+      style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',width:Math.min(280,window.width-insets.left-insets.right-32),alignItems:'stretch',gap:8}}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Свайп — просмотр игроков карточками"
+      onPress={() => { browse.stage(filters,list?.data ?? null); router.push('/players/browse'); }}
+      style={{minHeight:48,borderRadius:999,paddingHorizontal:20,paddingVertical:12,backgroundColor:colors.ink,alignItems:'center',justifyContent:'center'}}>
+      <Label style={{fontWeight:'600',color:colors.card}}>Свайп</Label>
+    </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="Показать игроков и площадки на карте"
-      onLayout={event => setMapEntryHeight(event.nativeEvent.layout.height)}
       onPress={() => {setSelectedPerson(null);setExpanded(false);router.setParams({view:'map',cityId:cityId ?? '',name:filters.name,areaKey:filters.areaKey ?? '',looking:looking?'1':'0',trainer:trainer?'1':'0'});}}
-      style={{position:'absolute',bottom:insets.bottom+16,alignSelf:'center',maxWidth:'92%',minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
+      style={{minHeight:48,borderRadius:999,paddingVertical:6,paddingLeft:6,paddingRight:16,
         backgroundColor:colors.card,borderWidth:1,borderColor:colors.line,shadowColor:colors.ink,shadowOffset:{width:0,height:4},shadowOpacity:0.12,shadowRadius:12,elevation:4,
         flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10}}>
       <View style={{width:36,height:36,borderRadius:10,backgroundColor:colors.lime,alignItems:'center',justifyContent:'center'}}><DiscoveryIcon name="map" color={colors.purple} /></View>
       <Label style={{flexShrink:1,fontWeight:'600'}}>На карте</Label>
     </Pressable>
+    </View>
   </ScreenFrame>;
 }

@@ -1,3 +1,21 @@
+# #522 Native swipe — same-author source continuation from 491b9e9
+
+Authorized base: `491b9e9b820659e66eae8e1230e48b11129293f3`; scope is the original 22 paths plus only `src/auth-coordinator.ts`. The previous partial work and its history are retained below. This private export has no usable Git metadata, so no new candidate SHA, commit or source acceptance is asserted.
+
+This delta connects the Players floating «Свайп» entry to the actual filtered catalog and `/players/browse`. MainNavigation mounts one stable PlayInterestProvider above its unchanged Stack children; `_layout.tsx`, Auth/Radar/Messages ownership and native configuration remain unchanged. Closed typed AuthCoordinator read/mutation ports use the same private participationRead gate. The mutation permit is checked after token acquisition immediately before the existing native API call; actor/session/epoch fences and 401 auth failure remain in force, without automatic retry.
+
+The native deck uses the retained WEB2a dp/ms helpers with measured card dimensions, a stable RN PanResponder, Animated exits/return, explicit buttons, details/bio/games-availability pages, approved cover/real avatar fallbacks, tutorial completion per actor/guest, pagination/retry/empty states, Reduce Motion and safe edges. Guest login/cancel keeps the public filters/selected card and never sends an interest. Returning to the mounted Players list reuses its catalog/query and retained FlatList scroll. Actual scroll/layout behavior still requires device testing.
+
+The root owner keeps immutable in-flight/UNKNOWN packets across card/route changes. Current catalog/safety removal retires capabilities and event context; stale callbacks cannot target the next peer. Only a validated explicit mutual send receipt mounts the two-person «Дружеский матч» / «Партнёр найден» composition. Close/background/account changes retire the event. «Написать» explicitly rechecks the existing ordinary contact owner and routes to a validated conversation or the existing composer, without sending a DM or borrowing Radar proof.
+
+Author deterministic Node24 checks: **126/126 PASS**, zero failed/skipped/cancelled: auth 44, entry 5, play interests 8, gesture/catalog 5, unchanged contact 20, Radar 36 and native contract 8. The 62 swipe/auth/entry checks include real component handler → owner → closed auth ports → native API wiring, token-wait actor/permit races, post-reply rotation, 401/no resend, once-only receipt events, Back/undo, tutorial completion, ordinary contact reads and no automatic messages. RN hooks/layout/animation in handler tests use host stubs: these are not rendered-device proof or independent QA.
+
+Typecheck/lint could not start: dependencies and pnpm payload are absent; Corepack registry access fails EAI_AGAIN. Contracts check cannot start without @apidevtools/swagger-parser. The genuine disposable PlayInterest fixture and API unit suite are NOT_RUN (missing dependencies; Docker socket denied); no live database was used. Product CI, independent QA, Astra actual UI review, Android S23 binary evidence, DEV acceptance, APK/OTA/iOS and Owner UAT remain unverified. The prior selected-handler/controller/OpenAPI/fixture work is preserved, not claimed freshly qualified here.
+
+**SOURCE CONTINUATION / PUBLIC DELIVERY HOLD / DEVICE_NOT_TESTED / UAT=NOT_TESTED.** No source, DEV, APK, store or full #522 completion/acceptance claim. Owner APK7 FAIL, costs and every prior FAIL/UNKNOWN remain. No merge/deploy/PROD, dependency/config/version/lockfile change, model subcall or extra source helper occurred. All 491 README bytes follow unchanged.
+
+---
+
 # #522 Native swipe / friendly match — incomplete source continuation
 
 Authorized base supplied by Root: `d667139ec5f8e7d80227dd669aeb265aeaf31929`; focused Radar QA receipt `20d00659af92c11c44c05c7d37635c2fe894ca5eb7e588a8955677a94ba8e1ac`; source capsule `49451e8fdd6e447e41914b8fc5314bf09e730fd588696c2c496738aebd65d1d1`. This private export has no usable Git metadata; no new candidate SHA or source receipt is asserted.

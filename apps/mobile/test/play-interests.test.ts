@@ -78,3 +78,17 @@ test('historical mutual reads and safety invalidation cannot create/revive a mat
   const work=live.o.act('send','peer',live.o.getSnapshot().episode,self);live.o.invalidate();gate.resolve(receipt);await work;
   assert.equal(live.o.getSnapshot().match,null);assert.equal(live.calls.length,1);
 });
+
+test('catalog removal retires match/capabilities and token-wait permit, while append preserves current card and filters',async()=>{
+  let permit:(()=>boolean)|undefined;
+  const gate=deferred();
+  const o=new PlayInterestCoordinator({random:()=> 'catalog-key',read:async()=>({items:[none]}),send:async(_packet,allowed)=>{permit=allowed;return gate.promise;}});
+  o.setActor(actor);const selectedFilters={...filters,cityId:'city',areaKey:'north',name:'Реальный',looking:true,trainer:true};
+  o.stage(selectedFilters,{items:[peer],nextCursor:'next'});o.enter();await o.refresh(['peer']);
+  o.catalog({items:[peer,{...peer,publicPlayerId:'new'}],nextCursor:null});
+  assert.equal(o.getSnapshot().selected,'peer');assert.deepEqual(o.getSnapshot().filters,selectedFilters);
+  const work=o.act('send','peer',o.getSnapshot().episode,self);assert.equal(permit!(),true);
+  o.catalog({items:[{...peer,publicPlayerId:'new'}],nextCursor:null});assert.equal(permit!(),false);
+  assert.equal(o.getSnapshot().states.has('peer'),false);assert.equal(o.getSnapshot().selected,'new');
+  gate.resolve(receipt);await work;assert.equal(o.getSnapshot().match,null);
+});

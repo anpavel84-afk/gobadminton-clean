@@ -1,4 +1,5 @@
 import type { RadarCommand, RadarRead } from './radar.ts';
+import type { PlayInterestPacket } from './play-interests.ts';
 import { SafetyCoordinator } from './safety-coordinator.ts';
 import { SafetyError } from './safety.ts';
 import { ContactCoordinator } from './contact-coordinator.ts';
@@ -131,6 +132,16 @@ export class AuthCoordinator {
   radarCommand = (packet: RadarCommand, permit: () => boolean) => this.participationRead(access => {
     if (!permit()) throw new ParticipationError('stale');
     return this.deps.api.radarCommand(access, packet);
+  }, packet.actor);
+  /** Closed play-interest ports share the existing private token and actor fences. */
+  playInterestStates = (ids: readonly string[], actor: Actor) => {
+    const capturedIds = Object.freeze([...ids]);
+    const capturedActor = Object.freeze({...actor});
+    return this.participationRead(access => this.deps.api.playInterestStates(access, capturedIds), capturedActor);
+  };
+  playInterestMutation = (packet: PlayInterestPacket, permit: () => boolean) => this.participationRead(access => {
+    if (!permit()) throw new ParticipationError('stale');
+    return this.deps.api.playInterestMutation(access, packet);
   }, packet.actor);
   /** Closed authenticated operations only; never returns access credentials to UI. No mutation retry. */
   private async participationRead<T>(operation: (access: string) => Promise<T>, actor = this.participation.getSnapshot().actor): Promise<T> {

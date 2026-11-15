@@ -1,4 +1,5 @@
 import { fullscreenPlayerBrowse } from '../player-browse.ts';
+import { PlayInterestProvider } from '../play-interest-runtime.tsx';
 import { fullscreenGamesMap } from '../maps.ts';
 import type { PropsWithChildren } from 'react';
 import { Pressable, View } from 'react-native';
@@ -42,7 +43,7 @@ export function MainNavigation({ children }: PropsWithChildren) {
   const count = state.counts ? state.counts.pendingRequestCount + state.counts.pendingInvitationCount + state.counts.dmUnread + state.counts.gameChatUnread : null;
   const path = usePathname(), router = useRouter(), insets = useSafeAreaInsets();
   const visible = !fullscreenGamesMap(path) && !fullscreenPlayerBrowse(path) && /^\/(games|players|my-games|messages|profile)(\/|$)/.test(path);
-  return <View style={{ flex: 1, backgroundColor: colors.card }}>
+  return <PlayInterestProvider><View style={{ flex: 1, backgroundColor: colors.card }}>
     <View style={{ flex: 1 }}>{children}</View>
     {visible && <View accessibilityRole="tablist" accessibilityLabel="Основная навигация" style={{
       flexDirection: 'row', paddingLeft: insets.left + 4, paddingRight: insets.right + 4,
@@ -62,5 +63,5 @@ export function MainNavigation({ children }: PropsWithChildren) {
         <Label style={{ fontSize: 12, lineHeight: 18, color: selected ? colors.ink : colors.secondary, textAlign: 'center', fontWeight: '500' }}>{item.label}</Label>
       </Pressable>;
     })}</View>}
-  </View>;
+  </View></PlayInterestProvider>;
 }

@@ -1,4 +1,6 @@
 import { RadarCoordinator } from '../src/radar-coordinator.ts';
+import { PlayInterestCoordinator } from '../src/play-interest-coordinator.ts';
+import type { PlayInterestPacket } from '../src/play-interests.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -1058,4 +1060,220 @@ test('bare browse real login → durable pending → hydrate/callback → entry;
   assert.equal(cancelled.auth.getSnapshot().status,'guest');
   for(const session of [s,restart,cancelled])assert.equal(session.calls.filter(c=>c.path.includes('play-interests')||c.path.includes('conversations')||c.path.includes('/messages')).length,0);
   for(const path of ['/players','/players/browse/','/players/browse?name=a','/players/browse#x','/players/%62rowse','/players/browse\n','/players/browse/send','https://user:pass@dev.gobadminton.ru/players/browse','//dev.gobadminton.ru/players/browse'])assert.equal(canonicalReturnPath(path),null);
+});
+
+const interestReceipt = {interestId:'10000000-0000-4000-8000-000000000001',version:'9007199254740993',outcome:'mutual'};
+function interestPacket(auth:AuthCoordinator):PlayInterestPacket {
+  return Object.freeze({kind:'send',path:'/play-interests',target:'peer',key:'auth-interest-key',
+    actor:Object.freeze({...auth.participation.getSnapshot().actor!}),body:Object.freeze({targetPublicPlayerId:'peer'})});
+}
+test('actual closed interest wrappers read captured IDs and dispatch one frozen packet for the current actor',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const packet=interestPacket(s.auth);
+  s.setHandler(async path=>path.startsWith('/me/play-interest-states?')?{items:[]} : interestReceipt);
+  const ids=['peer'];const read=s.auth.playInterestStates(ids,packet.actor);ids[0]='changed';await read;
+  await s.auth.playInterestMutation(packet,()=>true);
+  const get=s.calls.find(c=>c.path.startsWith('/me/play-interest-states?'))!;
+  assert.equal(get.path,'/me/play-interest-states?publicPlayerId=peer');
+  const writes=s.calls.filter(c=>c.path==='/play-interests');assert.equal(writes.length,1);
+  assert.deepEqual(JSON.parse(String(writes[0]!.init.body)),{targetPublicPlayerId:'peer'});
+  assert.equal((writes[0]!.init.headers as Record<string,string>)['Idempotency-Key'],packet.key);
+});
+test('interest wrapper rechecks actor and permit after real token acquisition: stale authority makes zero POSTs',async()=>{
+  for(const change of ['actor','permit'] as const){
+    const s=setup(sessionEnvelope());await s.auth.hydrate();const packet=interestPacket(s.auth),gate=deferred<unknown>();
+    let permitted=true;
+    s.setHandler(async path=>path==='/auth/native/refresh'?gate.promise:path==='/me'?me:{ok:true});
+    const rotation=s.auth.refresh();await new Promise(done=>setImmediate(done));
+    const write=s.auth.playInterestMutation(packet,()=>permitted);const rejected=assert.rejects(write);
+    if(change==='actor')await s.auth.logout();else permitted=false;
+    gate.resolve(credentials);await rotation;await rejected;
+    assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,0,change);
+  }
+});
+test('interest wrapper rejects a reply after actor rotation and routes 401 through existing auth failure without resend',async()=>{
+  const stale=setup(sessionEnvelope());await stale.auth.hydrate();const gate=deferred<unknown>();
+  stale.setHandler(async path=>path==='/play-interests'?gate.promise:{ok:true});
+  const pending=stale.auth.playInterestMutation(interestPacket(stale.auth),()=>true);const rejected=assert.rejects(pending);
+  await new Promise(done=>setImmediate(done));await stale.auth.logout();gate.resolve(interestReceipt);await rejected;
+  assert.equal(stale.calls.filter(c=>c.path==='/play-interests').length,1);
+  const denied=setup(sessionEnvelope());await denied.auth.hydrate();
+  denied.setHandler(async()=>new Response('{}',{status:401}));
+  await assert.rejects(denied.auth.playInterestMutation(interestPacket(denied.auth),()=>true),NativeAuthError);
+  assert.equal(denied.auth.getSnapshot().status,'guest');assert.equal(denied.auth.participation.getSnapshot().actor,null);
+  await denied.auth.validate();
+  assert.equal(denied.calls.filter(c=>c.path==='/play-interests').length,1);
+});
+test('mounted interest runtime → real AuthCoordinator → native API; Close/background retire late mutual and never resend',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();const gate=deferred<unknown>(),tokenGate=deferred<unknown>();
+  const none={relationship:'none',interestId:null,version:null,capabilities:{canSend:true,canWithdraw:false}};
+  s.setHandler(async path=>path==='/auth/native/refresh'?tokenGate.promise:path==='/me'?me:path.startsWith('/me/play-interest-states?')?{items:[none]}:path==='/play-interests'?gate.promise:{ok:true});
+  const runtime=readFileSync(new URL('../src/play-interest-runtime.tsx',import.meta.url),'utf8');
+  const body=runtime.slice(runtime.indexOf('export function PlayInterestProvider('),runtime.indexOf('  return <Context.Provider')).replace('export function','function')+'  return owner;\n}';
+  let lifecycle:((state:string)=>void)|undefined,cleanup:(()=>void)|undefined;
+  const render=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    useState:(factory:()=>unknown)=>[factory()],useLayoutEffect:(effect:()=>()=>void)=>{cleanup=effect();},
+    PlayInterestCoordinator,nativeAuth:s.auth,Crypto:{randomUUID:()=> 'actual-runtime-key'},
+    AppState:{currentState:'active',addEventListener:(_event:string,fn:typeof lifecycle)=>{lifecycle=fn;return {remove:()=>{lifecycle=undefined;}};}},
+  }) as (props:object)=>PlayInterestCoordinator;
+  const owner=render({});assert.equal(owner.getSnapshot().actor?.sessionId,me.session.id);
+  const peer={publicPlayerId:'peer',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true};
+  owner.stage({cityId:null,name:'',areaKey:'north',looking:true,trainer:false},{items:[peer],nextCursor:null});owner.enter();
+  await owner.refresh(['peer']);const rotation=s.auth.refresh();
+  const sending=owner.act('send','peer',owner.getSnapshot().episode,{publicPlayerId:'self',displayName:'Я'});
+  await new Promise(done=>setImmediate(done));assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,0);
+  tokenGate.resolve(credentials);await rotation;
+  await new Promise(done=>setImmediate(done));assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1);
+  owner.exit();lifecycle!('background');gate.resolve(interestReceipt);await sending;
+  assert.equal(owner.getSnapshot().match,null);lifecycle!('active');owner.enter();
+  assert.equal(owner.getSnapshot().match,null);assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1);
+  await s.auth.logout();assert.equal(owner.getSnapshot().actor,null);cleanup!();
+  const nav=readFileSync(new URL('../src/components/main-navigation.tsx',import.meta.url),'utf8');
+  assert.equal((nav.match(/<PlayInterestProvider>/g)??[]).length,1);
+  assert.match(nav,/<PlayInterestProvider><View/);
+});
+
+// Execute the actual component's hook/event body. React Native layout/animation are host stubs;
+// auth, packet owner, closed ports, HTTP parsing and business results are the real source.
+async function mountBrowseEvents(owner:PlayInterestCoordinator, options:{guest?:boolean;tutorial?:boolean}={}) {
+  const pure=await import('../src/player-browse.ts');
+  const source=readFileSync(new URL('../src/components/player-browse.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('export function PlayerBrowse('),source.indexOf('  return <ScreenFrame>')).replace('export function','function')+
+    '  return {handlers,action,vertical,undo,finishTutorial,setSize,info,tutorial,blocked,card,intent,reopenTutorial};\n}';
+  const cells:unknown[]=[],effects:{deps:unknown[];cleanup?:()=>void}[]=[];
+  const jobs:(()=>void)[]=[],writes:{key:string;value:string}[]=[],details:string[]=[];
+  let cursor=0,login=0,close=0,back:(()=>boolean)|undefined;
+  const useState=(init:unknown)=>{
+    const n=cursor++;if(!(n in cells))cells[n]=typeof init==='function'?(init as ()=>unknown)():init;
+    return [cells[n],(value:unknown)=>{cells[n]=typeof value==='function'?(value as (previous:unknown)=>unknown)(cells[n]):value;}];
+  };
+  const useRef=(value:unknown)=>{const n=cursor++;if(!(n in cells))cells[n]={current:value};return cells[n];};
+  const effect=(fn:()=>void|(()=>void),deps:unknown[])=>{
+    const n=cursor++,old=effects[n];
+    if(old && deps.length===old.deps.length && deps.every((v,i)=>Object.is(v,old.deps[i])))return;
+    jobs.push(()=>{old?.cleanup?.();const cleanup=fn();effects[n]={deps,cleanup:typeof cleanup==='function'?cleanup:undefined};});
+  };
+  class ValueXY { x={interpolate:()=>0};setValue(){}stopAnimation(){}getTranslateTransform(){return [];} }
+  const renderBody=runInNewContext(`(${stripTypeScriptTypes(body)})`,{
+    ...pure,useState,useRef,useEffect:effect,useLayoutEffect:effect,useRouter:()=>({push:()=>{throw Error('Unexpected navigation');}}),
+    useReduceMotion:()=>false,useSafeAreaInsets:()=>({bottom:16}),useWindowDimensions:()=>({height:780,width:360,fontScale:1}),playerMediaUrl:()=>null,
+    findNodeHandle:()=>null,AccessibilityInfo:{announceForAccessibility:()=>{},setAccessibilityFocus:()=>{}},
+    Animated:{ValueXY,timing:()=>({start:(done?:(result:{finished:boolean})=>void)=>done?.({finished:true})})},
+    PanResponder:{create:(value:unknown)=>value},
+    BackHandler:{addEventListener:(_name:string,fn:()=>boolean)=>{back=fn;return {remove:()=>{back=undefined;}};}},
+    AsyncStorage:{getItem:async()=>options.tutorial?null:'complete',setItem:async(key:string,value:string)=>{writes.push({key,value});}},
+  }) as (props:object)=>{handlers:Record<string,(event:unknown,gesture?:unknown)=>unknown>;action:(kind:string)=>void;
+    vertical:(up:boolean)=>void;undo:()=>void;finishTutorial:()=>void;setSize:(size:object)=>void;info:number|null;tutorial:number;blocked:boolean;card?:string;intent:string|null;reopenTutorial:()=>void};
+  const render=()=>{
+    cursor=0;
+    const value=renderBody({owner,state:owner.getSnapshot(),self:options.guest?null:{publicPlayerId:'self',displayName:'Мой профиль'},focused:true,
+      status:'ready',loadingMore:false,moreError:false,onMore:()=>{},onRetry:()=>{},onClose:()=>{close++;owner.exit();},
+      onLogin:()=>{login++;},onProfileRetry:()=>{},onDetail:(id:string)=>details.push(id),detail:{id:'',status:'idle',data:null,error:null}});
+    jobs.splice(0).forEach(fn=>fn());return value;
+  };
+  let value=render();await new Promise(done=>setImmediate(done));value=render();
+  value.setSize({width:360,height:500});value=render();
+  return {render,writes,details,login:()=>login,close:()=>close,back:()=>back!(),
+    cleanup:()=>effects.forEach(e=>e.cleanup?.())};
+}
+test('real component gesture and button → mounted root owner → closed auth ports → native API; stale card cannot send',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();
+  const none={relationship:'none',interestId:null,version:null,capabilities:{canSend:true,canWithdraw:false}};
+  const gate=deferred<unknown>();
+  s.setHandler(async path=>path.startsWith('/me/play-interest-states?')?{items:[none]}:path==='/play-interests'?gate.promise:{ok:true});
+  const owner=new PlayInterestCoordinator({read:s.auth.playInterestStates,send:s.auth.playInterestMutation,random:()=> 'component-wire-key'});
+  owner.setActor(s.auth.participation.getSnapshot().actor);
+  const peer={publicPlayerId:'peer',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:'О себе',trainer:false,lookingForGame:true};
+  owner.stage({cityId:'city',name:'Парт',areaKey:'north',looking:true,trainer:false},{items:[peer,{...peer,publicPlayerId:'other'}],nextCursor:null});owner.enter();
+  const ui=await mountBrowseEvents(owner);let card=ui.render();assert.equal(card.blocked,false);
+  const start={nativeEvent:{timestamp:1000}},move={nativeEvent:{timestamp:1020}},release={nativeEvent:{timestamp:1021}};
+  card.handlers.onStartShouldSetPanResponder!(start);
+  assert.equal(card.handlers.onMoveShouldSetPanResponder!(move,{dx:30,dy:0}),true);
+  card.handlers.onPanResponderMove!(move,{dx:30,dy:0});assert.equal(ui.render().intent,'request');
+  card.handlers.onPanResponderRelease!(release,{dx:30,dy:0});assert.equal(ui.render().intent,null);
+  card.action('request');await new Promise(done=>setImmediate(done));
+  assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1);
+  assert.deepEqual(JSON.parse(String(s.calls.find(c=>c.path==='/play-interests')!.init.body)),{targetPublicPlayerId:'peer'});
+  gate.resolve(interestReceipt);await new Promise(done=>setImmediate(done));assert.equal(owner.getSnapshot().match?.peer.publicPlayerId,'peer');
+  owner.dismiss();owner.select('other');ui.render();card.action('request');
+  assert.equal(s.calls.filter(c=>c.path==='/play-interests').length,1,'retired peer callback cannot send to the new card');
+  card=ui.render();card.vertical(true);card=ui.render();assert.equal(card.info,0);assert.deepEqual(ui.details,['other']);
+  ui.back();card=ui.render();assert.equal(card.info,null);
+  card.action('skip');card=ui.render();assert.equal(card.card,undefined);card.undo();card=ui.render();assert.equal(card.card,'other');
+  ui.back();assert.equal(ui.close(),1);
+  ui.cleanup();
+});
+test('actual guest component tutorial persists only after both steps for this actor; explicit request only opens login',async()=>{
+  const owner=new PlayInterestCoordinator({read:async()=>{throw Error('Guest private read');},send:async()=>{throw Error('Guest POST');},random:()=> 'guest-key'});
+  owner.stage({cityId:null,name:'',looking:false,trainer:false},{items:[{publicPlayerId:'peer',displayName:'Гость',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true}],nextCursor:null});owner.enter();
+  const ui=await mountBrowseEvents(owner,{guest:true,tutorial:true});let card=ui.render();
+  assert.equal(card.tutorial,1);card.action('request');assert.equal(ui.login(),0);assert.equal(ui.writes.length,0);
+  card.finishTutorial();card=ui.render();assert.equal(card.tutorial,2);assert.equal(ui.writes.length,0);
+  card.finishTutorial();await new Promise(done=>setImmediate(done));card=ui.render();assert.equal(card.tutorial,0);
+  assert.deepEqual(ui.writes,[{key:'gb-player-gallery-tutorial-v3:guest',value:'complete'}]);
+  card.reopenTutorial();card=ui.render();assert.equal(card.tutorial,1);assert.equal(ui.writes.length,1);
+  ui.back();card=ui.render();assert.equal(card.tutorial,0);assert.equal(ui.writes.length,1);
+  card.action('request');assert.equal(ui.login(),1);assert.equal(owner.getSnapshot().command,null);
+  assert.equal(owner.getSnapshot().selected,'peer');ui.cleanup();
+});
+
+test('actual friendly-match contact entry rechecks ordinary ContactState only on explicit CTA, with no message send or Radar proof',async()=>{
+  const s=setup(sessionEnvelope());await s.auth.hydrate();
+  const source=readFileSync(new URL('../src/components/friendly-match.tsx',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('export async function openFriendlyContact('),source.indexOf('export function FriendlyMatch(')).replace('export async function','async function');
+  const {sameActor}=await import('../src/participation.ts');
+  const open=runInNewContext(`(${stripTypeScriptTypes(body)})`,{sameActor}) as (match:object,contact:AuthCoordinator['contact'],valid:()=>boolean)=>Promise<string|null>;
+  const peer={publicPlayerId:'peer',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true,canRequestContact:true};
+  s.setHandler(async path=>path==='/players/peer'?peer:path.startsWith('/me/contact-state?')?{targetPublicPlayerId:'peer',state:'none',canRequestContact:true}:{ok:true});
+  const match={actor:s.auth.participation.getSnapshot().actor!,episode:1,self:{publicPlayerId:'self',displayName:'Я'},peer,receipt:interestReceipt};
+  const before=s.calls.length;assert.equal(s.auth.contact.getSnapshot().target,null);
+  assert.equal(await open(match,s.auth.contact,()=>false),null);assert.equal(s.calls.length,before);
+  assert.equal(await open(match,s.auth.contact,()=>true),'/messages/new/peer');
+  assert.equal(s.calls.some(c=>c.path==='/radar/results/preview'),false);
+  assert.equal(s.calls.some(c=>c.init.method==='POST' && (c.path.includes('conversations') || c.path.includes('messages'))),false);
+  s.setHandler(async path=>path==='/players/peer'?{...peer,canRequestContact:false}:{targetPublicPlayerId:'peer',state:'none',canRequestContact:false});
+  assert.equal(await open(match,s.auth.contact,()=>true),null);
+});
+
+test('browse own hidden profile public-avatar 404 stays isolated from the authenticated catalog', async t => {
+  t.mock.method(publicApi,'cities',async()=>[]);
+  const own={publicPlayerId:'own-hidden',version:1,displayName:'Своё публичное имя',cityId:null,areaKey:null,level:null,bio:null,
+    directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,
+    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null};
+  const peer={publicPlayerId:'peer-visible',displayName:'Партнёр',cityId:null,areaKey:null,level:null,bio:null,trainer:false,lookingForGame:true};
+  const page={items:[peer],nextCursor:null};
+  const s=setup(sessionEnvelope());
+  s.setHandler(async path=>{
+    if(path==='/auth/native/refresh')return credentials;
+    if(path==='/me')return me;
+    if(path==='/me/social-profile')return own;
+    if(path.startsWith('/players?'))return page;
+    if(path==='/players/own-hidden')return new Response('{}',{status:404});
+    throw new Error(`Unexpected route ${path}`);
+  });
+  await s.auth.hydrate();await s.auth.profile.load();
+  await s.auth.players.loadList({cityId:null,name:'',looking:false,trainer:false});
+  const before=s.auth.players.getSnapshot().list;
+  assert.equal(before.status,'ready');
+  // Execute the actual route effect so removing its isolated-detail flag fails this regression.
+  const route=readFileSync(new URL('../app/players/browse.tsx',import.meta.url),'utf8');
+  const effect=route.match(/useEffect\(\(\) => \{(\s*if \(focused && scope && ownId\)[\s\S]*?)\n  \}, \[focused, scope, ownId, auth.players\]\);/);
+  assert.ok(effect);
+  let pending:Promise<void>|undefined;
+  const original=s.auth.players.loadDetail;
+  t.mock.method(s.auth.players,'loadDetail',(id:string,isolated?:boolean)=>{pending=original(id,isolated);return pending;});
+  runInNewContext(`(()=>{${effect[1]}})()`,{focused:true,scope:s.auth.players.getSnapshot().scope,ownId:own.publicPlayerId,auth:s.auth});
+  assert.ok(pending);await pending;
+  assert.equal(s.auth.players.getSnapshot().list,before);
+  assert.deepEqual(s.auth.players.getSnapshot().list.data,page);
+  assert.equal(s.auth.players.getSnapshot().detail.status,'error');
+  assert.equal(s.auth.players.getSnapshot().detail.data,null);
+  const mediaEffect=route.match(/useEffect\(\(\) => \{(\s*const detail = catalog.detail;[\s\S]*?)\n  \}, \[scope, ownId, own\?\.displayName, catalog.detail\]\);/);
+  assert.ok(mediaEffect);
+  let media:unknown={avatar:'previously-public'};
+  runInNewContext(stripTypeScriptTypes(`(()=>{${mediaEffect[1]}})()`),{catalog:s.auth.players.getSnapshot(),scope:s.auth.players.getSnapshot().scope,
+    ownId:own.publicPlayerId,own,setSelfMedia:(value:unknown)=>{media=value;}});
+  assert.equal(media,null,'unavailable public media falls back to the authoritative own name');
+  assert.deepEqual(s.auth.profile.getSnapshot().profile,own);
+  assert.equal(s.auth.getSnapshot().status,'authenticated');
+  assert.deepEqual(s.calls.filter(c=>c.path==='/players/own-hidden').map(c=>c.init.method),['GET']);
 });

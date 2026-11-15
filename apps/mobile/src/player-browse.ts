@@ -9,16 +9,26 @@ export function ordinaryBrowsePlayers(players: PublicPlayer[], ownId?: string | 
 export function browseCatalogIdentity(filters: PlayerFilters, selected: string | null, players: PublicPlayer[]) {
   return { key: playerFilterKey(filters), index: Math.max(0, players.findIndex(p => p.publicPlayerId === selected)) };
 }
-export function detailPages(player: PublicPlayer): string[] {
-  const text = (player.bio ?? '').replace(/\s+/g, ' ').trim();
-  const pages = ['Игровой профиль'];
-  let rest = text;
-  while (rest) {
-    let end = rest.length <= 360 ? rest.length : rest.lastIndexOf(' ', 360);
-    if (end <= 0) end = Math.min(360, rest.length);
-    pages.push(rest.slice(0, end)); rest = rest.slice(end).trimStart();
+export const browseBioText = (player: PublicPlayer) => (player.bio ?? '').replace(/\s+/g, ' ').trim();
+/** Break at actual native line boundaries, retaining every character and allowing one tall line to scroll. */
+export function measuredBioPages(text: string, lines: readonly {text:string;height:number}[], bodyHeight: number): string[] {
+  if (!text || !lines.length || bodyHeight <= 0) return [text || 'О себе пока ничего не написано.'];
+  const chunks: string[] = [];
+  let start = 0, cursor = 0, height = 0;
+  for (const line of lines) {
+    const found = text.indexOf(line.text.trim(), cursor);
+    const offset = found < 0 ? cursor : found;
+    if (height > 0 && height + line.height > bodyHeight && offset > start) {
+      chunks.push(text.slice(start, offset)); start = offset; height = 0;
+    }
+    height += line.height;
+    cursor = Math.min(text.length, offset + line.text.trim().length);
   }
-  return pages;
+  chunks.push(text.slice(start));
+  return chunks;
+}
+export function detailPages(player: PublicPlayer, measured?: readonly string[]): string[] {
+  return ['Игровой профиль', ...(measured?.length ? measured : [browseBioText(player) || 'О себе пока ничего не написано.'])];
 }
 /* ——— OUR mobile gesture tuning (Astra deep study reference; not Tinder private constants) ——— */
 

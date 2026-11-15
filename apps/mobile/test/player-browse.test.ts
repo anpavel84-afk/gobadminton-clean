@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BrowseGesture, browseDragRotationDeg, browseExitDurationMs, browseExitTranslationPx, classifyPointerGesture, swipeThresholdPx, swipeMinTravelPx, tutorialStorageKey, fullscreenPlayerBrowse, browseCatalogIdentity } from '../src/player-browse.ts';
+import { BrowseGesture, browseDragRotationDeg, browseExitDurationMs, browseExitTranslationPx, classifyPointerGesture, swipeThresholdPx, swipeMinTravelPx, tutorialStorageKey, fullscreenPlayerBrowse, browseCatalogIdentity, measuredBioPages, detailPages } from '../src/player-browse.ts';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 test('accepted measured-dp thresholds, axis locking, minimum flick travel and release ratio',()=>{
   assert.deepEqual([200,360,600].map(swipeThresholdPx),[72,86.39999999999999,112]);
   assert.deepEqual([200,360,600].map(swipeMinTravelPx),[18,21.599999999999998,28]);
@@ -37,4 +38,16 @@ test('chrome hides only exact bare browse and actual navigation imports the owni
   for(const path of ['/players','/players/a','/players/browse/','/players/browse?x=1','/players/browse\n'])assert.equal(fullscreenPlayerBrowse(path),false);
   const nav=readFileSync(new URL('../src/components/main-navigation.tsx',import.meta.url),'utf8');
   assert.match(nav,/!fullscreenPlayerBrowse\(path\)/);assert.match(nav,/\{children\}/);
+});
+
+test('native measured bio pages adapt to line height and body size without dropping long text',()=>{
+  const text='Первая строка Вторая строка Длинноесловобезпробелов';
+  const lines=[{text:'Первая строка ',height:24},{text:'Вторая строка ',height:24},{text:'Длинноеслово',height:24},{text:'безпробелов',height:24}];
+  const normal=measuredBioPages(text,lines,48),large=measuredBioPages(text,lines.map(l=>({...l,height:36})),48);
+  assert.equal(normal.length,2);assert.equal(large.length,4);
+  assert.equal(normal.join(''),text);assert.equal(large.join(''),text);
+  assert.equal(measuredBioPages(text,lines,12).join(''),text);
+  assert.deepEqual(measuredBioPages(text,[],0),[text]);
+  const long='Оченьдлиннаябиография'.repeat(60);
+  assert.deepEqual(detailPages({bio:long} as never),['Игровой профиль',long]);
 });

@@ -10,7 +10,7 @@ type Command = {packet:PlayInterestPacket;status:'sending'|'unknown';episode:num
 export type BrowseSnapshot = {actor:Actor|null;episode:number;active:boolean;foreground:boolean;filters:PlayerFilters;
   page:PlayerPage|null;selected:string|null;states:ReadonlyMap<string,PlayInterestView>;reading:boolean;
   command:Command|null;match:FriendlyMatch|null;notice:string|null};
-export type PlayInterestPort = {read:(ids:readonly string[],actor:Actor)=>Promise<unknown>;send:(packet:PlayInterestPacket)=>Promise<unknown>;random:()=>string};
+export type PlayInterestPort = {read:(ids:readonly string[],actor:Actor)=>Promise<unknown>;send:(packet:PlayInterestPacket,permit:()=>boolean)=>Promise<unknown>;random:()=>string};
 const identity = (p:MatchIdentity):MatchIdentity => ({publicPlayerId:p.publicPlayerId,displayName:p.displayName,...(p.avatar ? {avatar:{...p.avatar}} : {})});
 /** Root owner outlives a card and its route. Only explicit commands dispatch, never mount/login/foreground. */
 export class PlayInterestCoordinator {
@@ -18,6 +18,7 @@ export class PlayInterestCoordinator {
     states:new Map(),reading:false,command:null,match:null,notice:null};
   private listeners = new Set<()=>void>();
   private sequence = 0;
+  private authority = 0;
   private seen = new Set<string>();
   // Private packets from retired authority cannot be replayed by a later session (including same actor).
   private quarantine:Command[] = [];
@@ -29,6 +30,7 @@ export class PlayInterestCoordinator {
   setActor(actor:Actor|null) {
     if (sameActor(actor,this.state.actor) || !actor && !this.state.actor) return;
     if (this.state.command) this.quarantine.push(this.state.command);
+    this.authority++;
     this.sequence++;
     this.show({actor:actor ? {...actor} : null,episode:this.state.episode+1,states:new Map(),reading:false,
       command:null,match:null,notice:null,page:null});
@@ -36,9 +38,18 @@ export class PlayInterestCoordinator {
   stage(filters:PlayerFilters,page:PlayerPage|null) {
     const changed=playerFilterKey(filters)!==playerFilterKey(this.state.filters);
     this.show({filters:{...filters},page:page ? {items:[...page.items],nextCursor:page.nextCursor} : null,
-      selected:changed ? page?.items[0]?.publicPlayerId ?? null : this.state.selected ?? page?.items[0]?.publicPlayerId ?? null});
+      selected:changed ? page?.items[0]?.publicPlayerId ?? null : this.state.selected ?? page?.items[0]?.publicPlayerId ?? null,
+      ...(changed ? {episode:this.state.episode+1,states:new Map(),match:null} : {})});
   }
-  catalog(page:PlayerPage|null) {this.show({page,selected:this.state.selected ?? page?.items[0]?.publicPlayerId ?? null});}
+  catalog(page:PlayerPage|null) {
+    if(page===this.state.page)return;
+    const ids=new Set(page?.items.map(p=>p.publicPlayerId) ?? []);
+    const removed=this.state.page?.items.some(p=>!ids.has(p.publicPlayerId)) ?? false;
+    if(removed)this.authority++;
+    const states=new Map([...this.state.states].filter(([id])=>ids.has(id)));
+    this.show({page,states,selected:ids.has(this.state.selected ?? '') ? this.state.selected : page?.items[0]?.publicPlayerId ?? this.state.selected,
+      ...(removed ? {episode:this.state.episode+1,match:null} : {})});
+  }
   enter = () => {this.show({active:true,episode:this.state.episode+1,match:null});};
   exit = () => {this.sequence++;this.show({active:false,episode:this.state.episode+1,match:null,states:new Map(),reading:false});};
   setForeground = (foreground:boolean) => {if(foreground===this.state.foreground)return;this.sequence++;this.show({foreground,episode:this.state.episode+1,match:null,states:new Map(),reading:false});};
@@ -47,7 +58,7 @@ export class PlayInterestCoordinator {
     if(episode!==this.state.episode || !this.state.active || !this.state.page?.items.some(p=>p.publicPlayerId===selected))return;
     this.show({selected});
   };
-  invalidate = () => {this.sequence++;this.show({episode:this.state.episode+1,states:new Map(),reading:false,match:null,notice:'Доступность изменилась. Проверьте снова.'});};
+  invalidate = () => {this.authority++;this.sequence++;this.show({episode:this.state.episode+1,states:new Map(),reading:false,match:null,notice:'Доступность изменилась. Проверьте снова.'});};
   refresh = async (ids:readonly string[]) => {
     const actor=this.state.actor,episode=this.state.episode,sequence=++this.sequence;
     if(!actor || !this.state.active || !this.state.foreground || !ids.length)return;
@@ -70,7 +81,7 @@ export class PlayInterestCoordinator {
     const wire=interestCommand(view,target,kind);if(!wire)return;
     const packet=Object.freeze({...wire,actor:Object.freeze({...s.actor}),target,key:this.port.random(),body:Object.freeze({...wire.body})}) as PlayInterestPacket;
     const command:Command={packet,status:'sending',episode,self:identity(self),peer:identity(peer)};
-    this.show({command,notice:null});await this.dispatch(command);
+    this.show({command,notice:null});return await this.dispatch(command);
   };
   reconcile = async () => {
     const c=this.state.command;
@@ -80,10 +91,11 @@ export class PlayInterestCoordinator {
   };
   private async dispatch(command:Command) {
     const packet=command.packet;
+    const authority=this.authority;
     this.show({command:{...command,status:'sending'}});
     const valid=()=>sameActor(packet.actor,this.state.actor) && this.state.command?.packet===packet;
     try {
-      const receipt=parsePlayInterestReceipt(await this.port.send(packet),packet.kind);
+      const receipt=parsePlayInterestReceipt(await this.port.send(packet,()=>valid() && authority===this.authority),packet.kind);
       if(!valid()){
         this.quarantine=this.quarantine.filter(c=>c.packet!==packet);
         return;
@@ -94,6 +106,7 @@ export class PlayInterestCoordinator {
       const match=packet.kind==='send' && receipt.outcome==='mutual' && unseen && this.state.active && this.state.foreground &&
         command.episode===this.state.episode && !this.state.match ? Object.freeze({actor:packet.actor,episode:command.episode,self:command.self,peer:command.peer,receipt}) : null;
       this.show({command:null,states,match,notice:receipt.outcome==='withdrawn' ? 'Предложение отозвано.' : 'Предложение отправлено.'});
+      return receipt;
     } catch(error) {
       if(!valid())return;
       // Explicit business refusals prove no new intent was accepted. Key conflicts/ambiguous replies remain UNKNOWN.
