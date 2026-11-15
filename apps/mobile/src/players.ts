@@ -83,14 +83,32 @@ export class PlayersCoordinator {
   private generation = 0;
   private listSequence = 0;
   private detailSequence = 0;
+  /** Peer IDs removed by authoritative detail 404; cleared on scope change and list-endpoint 404. */
+  private unavailablePeerIds = new Set<string>();
+  /** In-flight list/page sequences at or below this must drop unavailable peers; newer fresh reads may recover. */
+  private unavailableBeforeListSequence = 0;
   private listeners = new Set<() => void>();
   getSnapshot = () => this.snapshot;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   private show(snapshot: PlayersSnapshot) { this.snapshot = snapshot; this.listeners.forEach(fn => fn()); }
+  private clearPeerInvalidation() {
+    this.unavailablePeerIds = new Set();
+    this.unavailableBeforeListSequence = 0;
+  }
   setScope(scope: string | null, reader: Reader | null) {
     if (scope === this.snapshot.scope) return;
     this.lastFilters = null;
+    this.clearPeerInvalidation();
     this.generation++; this.reader = reader; this.show(empty(scope));
+  }
+  /** Drop unavailable peers from responses captured at/before invalidation; fresh sequences may recover by authority. */
+  private applyPeerInvalidation(page: PlayerPage, sequence: number): PlayerPage {
+    if (this.unavailablePeerIds.size === 0) return page;
+    if (sequence > this.unavailableBeforeListSequence) {
+      for (const row of page.items) this.unavailablePeerIds.delete(row.publicPlayerId);
+      return page;
+    }
+    return { items: page.items.filter(row => !this.unavailablePeerIds.has(row.publicPlayerId)), nextCursor: page.nextCursor };
   }
   loadList = async (filters: PlayerFilters, cursor?: string) => {
     const reader = this.reader, generation = this.generation, key = playerFilterKey(filters), old = this.snapshot.list;
@@ -102,7 +120,8 @@ export class PlayersCoordinator {
     try {
       const page = await reader.list({ ...filters }, cursor);
       if (generation !== this.generation || sequence !== this.listSequence) return;
-      const data = cursor && old.data ? appendPlayers(old.data, page) : page;
+      const merged = cursor && old.data ? appendPlayers(old.data, page) : page;
+      const data = this.applyPeerInvalidation(merged, sequence);
       this.show({ ...this.snapshot, list: { key, status: 'ready', data, error: null, moreError: null, loadingMore: false } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.listSequence) return;
@@ -119,10 +138,11 @@ export class PlayersCoordinator {
       const data = await reader.detail(id);
       if (generation !== this.generation || sequence !== this.detailSequence) return;
       if (data.publicPlayerId !== id) throw new PlayersError('invalid');
+      this.unavailablePeerIds.delete(id);
       this.show({ ...this.snapshot, detail: { id, status: 'ready', data, error: null } });
     } catch (error) {
       if (generation !== this.generation || sequence !== this.detailSequence) return;
-      if (!safetyReread && error instanceof PlayersError && error.status === 404) { this.clearUnavailable(error); return; }
+      if (!safetyReread && error instanceof PlayersError && error.status === 404) { this.invalidatePeer(id, error); return; }
       this.show({ ...this.snapshot, detail: { id, status: 'error', data: null, error } });
     }
   };
@@ -131,8 +151,24 @@ export class PlayersCoordinator {
     if (this.lastFilters) void this.loadList(this.lastFilters);
     if (this.snapshot.detail.id === peer) void this.loadDetail(peer, true);
   };
+  /** Narrow detail-404: drop only that peer from accepted catalog; keep key/rows/cursor/paging and in-flight list sequences. */
+  private invalidatePeer(id: string, error: unknown) {
+    this.unavailablePeerIds.add(id);
+    this.unavailableBeforeListSequence = Math.max(this.unavailableBeforeListSequence, this.listSequence);
+    const list = this.snapshot.list;
+    const data = list.data
+      ? { items: list.data.items.filter(row => row.publicPlayerId !== id), nextCursor: list.data.nextCursor }
+      : list.data;
+    this.show({
+      ...this.snapshot,
+      list: { ...list, data },
+      detail: { id, status: 'error', data: null, error },
+    });
+  }
+  /** List-endpoint authoritative 404: retire catalog eligibility for the current scope generation. */
   private clearUnavailable(error: unknown) {
     this.generation++; this.listSequence++; this.detailSequence++;
+    this.clearPeerInvalidation();
     this.show({ scope: this.snapshot.scope,
       list: { ...this.snapshot.list, status: 'error', data: null, error, moreError: null, loadingMore: false },
       detail: { ...this.snapshot.detail, status: 'error', data: null, error } });
