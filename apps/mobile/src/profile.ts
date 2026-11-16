@@ -8,13 +8,28 @@ export class ProfileError extends Error {
   readonly code: string;
   constructor(kind: ProfileError['kind'], status = 0, code = 'UNKNOWN') { super(kind); this.kind = kind; this.status = status; this.code = code; }
 }
+/** Approved uploaded route or null; providerUrl always quarantined for own/public projection. */
+export type OwnAvatar = { uploadedUrl: string | null; providerUrl: null };
+export type AvatarReceipt = Readonly<{ version: number; avatar: OwnAvatar }>;
+export function parseOwnAvatar(value: unknown): OwnAvatar {
+  if (value == null) return { uploadedUrl: null, providerUrl: null };
+  if (typeof value !== 'object' || Array.isArray(value)) throw new ProfileError('invalid');
+  const a = value as Record<string, unknown>;
+  if (a.uploadedUrl === null || a.uploadedUrl === undefined) return { uploadedUrl: null, providerUrl: null };
+  if (typeof a.uploadedUrl !== 'string') throw new ProfileError('invalid');
+  if (!/^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/.test(a.uploadedUrl) || a.uploadedUrl.includes('..')) {
+    throw new ProfileError('invalid');
+  }
+  return { uploadedUrl: a.uploadedUrl, providerUrl: null };
+}
 export type Level = { scaleId: string; scaleVersion: number; levelId: string; provenance: 'self_declared' };
 type Looking = { version: number; state: 'active' | 'inactive'; cityId: string | null; areaKey: string | null;
   startsAt: string | null; endsAt: string | null; expiresAt: string | null; formatKeys: string[] };
 export type OwnProfile = { publicPlayerId: string | null; version: number; displayName: string; cityId: string | null;
   areaKey: string | null; level: Level | null; bio: string | null; directoryVisible: boolean; contactPolicy: 'requests' | 'closed';
   consentPolicyVersion: string | null; optedInAt: string | null; radarConsented: boolean; radarConsentPolicyVersion: string | null;
-  radarConsentedAt: string | null; socialEligible: boolean; trainer: boolean; lookingForGame: Looking | null };
+  radarConsentedAt: string | null; socialEligible: boolean; trainer: boolean; lookingForGame: Looking | null;
+  avatar: OwnAvatar };
 const row = (v: unknown): Record<string, unknown> => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new ProfileError('invalid');
   return v as Record<string, unknown>;
@@ -50,7 +65,9 @@ export function parseOwnProfile(value: unknown): OwnProfile {
     areaKey: r.areaKey as string | null, level, bio: r.bio as string | null, directoryVisible: r.directoryVisible as boolean,
     contactPolicy: r.contactPolicy as OwnProfile['contactPolicy'], consentPolicyVersion: r.consentPolicyVersion as string | null,
     optedInAt: r.optedInAt as string | null, radarConsented: r.radarConsented as boolean, radarConsentPolicyVersion: r.radarConsentPolicyVersion as string | null,
-    radarConsentedAt: r.radarConsentedAt as string | null, socialEligible: r.socialEligible as boolean, trainer: r.trainer as boolean, lookingForGame };
+    radarConsentedAt: r.radarConsentedAt as string | null, socialEligible: r.socialEligible as boolean, trainer: r.trainer as boolean, lookingForGame,
+    // Missing avatar defaults to initials; providerUrl is always quarantined to null for own receipts.
+    avatar: parseOwnAvatar(r.avatar) };
 }
 
 /** Accepted web LevelGuide identities — pure helpers in the existing profile module. */
@@ -258,7 +275,10 @@ export class ProfileCoordinator {
   private state = initial(); private listeners = new Set<() => void>(); private serial = 0;
   private quarantined: ProfilePacket | null = null;
   private readonly port: ProfilePort; private readonly random: () => string;
-  constructor(port: ProfilePort, random: () => string) { this.port = port; this.random = random; }
+  private readonly isPeerBusy: () => boolean;
+  constructor(port: ProfilePort, random: () => string, isPeerBusy: () => boolean = () => false) {
+    this.port = port; this.random = random; this.isPeerBusy = isPeerBusy;
+  }
   getSnapshot = () => this.state;
   subscribe = (f: () => void) => { this.listeners.add(f); return () => { this.listeners.delete(f); }; };
   private show(p: Partial<Snapshot>) { this.state = { ...this.state, ...p }; this.listeners.forEach(f => f()); }
@@ -274,9 +294,54 @@ export class ProfileCoordinator {
       draft: draftFromPacket(packet.body), notice: 'Результат сохранения неизвестен. Можно явно повторить только прежнее сохранение с тем же ключом и данными.' } : {}) });
   }
   forget = () => { this.quarantined = null; this.serial++; this.state = initial(); this.show({}); };
+  /** Authoritative avatar/version only — never replaces unsaved name/level/area/bio draft. Delayed older receipts cannot overwrite newer state. */
+  applyAvatarReceipt = (receipt: AvatarReceipt) => {
+    const profile = this.state.profile;
+    if (!profile || this.state.command) return;
+    if (receipt.version < profile.version) return;
+    this.show({
+      profile: { ...profile, version: receipt.version, avatar: { uploadedUrl: receipt.avatar.uploadedUrl, providerUrl: null } },
+      status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
+    });
+  };
+  /**
+   * Full authoritative GET rebase: adopt fresh baseline/pristine fields and version/avatar,
+   * while preserving each locally dirty name/city/level/area/bio draft field.
+   * Older historical receipts cannot dominate the current version authority.
+   */
+  rebaseFromAuthoritative = (fresh: OwnProfile) => {
+    const profile = this.state.profile;
+    if (!profile || this.state.command) return;
+    if (fresh.version < profile.version) return;
+    const draft = this.state.draft;
+    const baseline = form(profile);
+    const next = form(fresh);
+    const sameChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
+      if (a.kind !== b.kind) return false;
+      if (a.kind === 'none' && b.kind === 'none') return true;
+      if (a.kind === 'ntrp' && b.kind === 'ntrp') return a.levelId === b.levelId;
+      if (a.kind === 'pilot' && b.kind === 'pilot') return a.levelId === b.levelId;
+      if (a.kind === 'keep' && b.kind === 'keep') return sameFullLevelIdentity(a.level, b.level);
+      return false;
+    };
+    this.show({
+      profile: {
+        ...fresh,
+        avatar: { uploadedUrl: fresh.avatar.uploadedUrl, providerUrl: null },
+      },
+      draft: createProfileDraft(
+        draft.displayName === baseline.displayName ? next.displayName : draft.displayName,
+        draft.cityId === baseline.cityId ? next.cityId : draft.cityId,
+        draft.areaKey === baseline.areaKey ? next.areaKey : draft.areaKey,
+        draft.bio === baseline.bio ? next.bio : draft.bio,
+        sameChoice(draft.levelChoice, baseline.levelChoice) ? next.levelChoice : draft.levelChoice,
+      ),
+      status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
+    });
+  };
   load = async () => {
     const actor = this.state.actor;
-    if (!actor || this.state.command || this.state.status === 'loading') return;
+    if (!actor || this.state.command || this.state.status === 'loading' || this.isPeerBusy()) return;
     const serial = ++this.serial;
     this.show({ status: 'loading', notice: null });
     try {
@@ -288,7 +353,7 @@ export class ProfileCoordinator {
     }
   };
   update = (patch: Partial<ProfileDraft>) => {
-    if (!this.state.actor || this.state.command || this.state.status !== 'ready') return;
+    if (!this.state.actor || this.state.command || this.state.status !== 'ready' || this.isPeerBusy()) return;
     if (patch.cityId !== undefined && !this.state.cities.some(c => c.id === patch.cityId)) return;
     const d = this.state.draft;
     this.show({
@@ -303,12 +368,12 @@ export class ProfileCoordinator {
     });
   };
   cancel = () => {
-    if (this.state.command || this.state.status !== 'ready' || !this.state.profile) return;
+    if (this.state.command || this.state.status !== 'ready' || !this.state.profile || this.isPeerBusy()) return;
     this.show({ draft: form(this.state.profile), notice: 'Изменения отменены.' });
   };
   save = async () => {
     const { actor, profile, draft, cities, status, command } = this.state;
-    if (!actor || !profile || command || status !== 'ready') return;
+    if (!actor || !profile || command || status !== 'ready' || this.isPeerBusy()) return;
     const displayName = draft.displayName.trim();
     const city = cities.find(c => c.id === draft.cityId);
     if (!displayName || displayName.length > 80 || !city) {

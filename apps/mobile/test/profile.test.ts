@@ -14,7 +14,8 @@ import type { Actor } from '../src/participation.ts';
 
 export const emptyProfile: OwnProfile = { publicPlayerId: null, version: 0, displayName: '', cityId: null, areaKey: null, level: null,
   bio: null, directoryVisible: true, contactPolicy: 'requests', consentPolicyVersion: null, optedInAt: null,
-  radarConsented: false, radarConsentPolicyVersion: null, radarConsentedAt: null, socialEligible: true, trainer: false, lookingForGame: null };
+  radarConsented: false, radarConsentPolicyVersion: null, radarConsentedAt: null, socialEligible: true, trainer: false, lookingForGame: null,
+  avatar: { uploadedUrl: null, providerUrl: null } };
 const emptyDraft = createProfileDraft('', '');
 function assertDraft(actual: ProfileDraft, expected: ProfileDraft) {
   assert.equal(actual.displayName, expected.displayName);

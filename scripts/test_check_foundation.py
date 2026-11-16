@@ -251,16 +251,32 @@ class FoundationExceptionsTest(unittest.TestCase):
                     self.document['paths'][route] = {'put': op}
                 self.assert_idempotency(target, method)
 
+    def _assert_cookie_or_bearer_csrf_origin(self, parameters):
+        """Avatar dual-transport: Origin/CSRF declared string, cookie-required in description."""
+        for name in ('Origin', 'X-CSRF-Token'):
+            param = next(p for p in parameters if p.get('name') == name)
+            self.assertEqual(param.get('schema', {}).get('type'), 'string')
+            description = (param.get('description') or '').lower()
+            self.assertRegex(description, r'required(?: and validated)? for cookie')
+            self.assertIn('not required for native bearer', description)
+
     def test_delete_keys_are_required_and_bodyless(self):
         for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}', '/me/avatar']:
             with self.subTest(route=route):
                 self.document = copy.deepcopy(self.contract)
                 op = self.document['paths'][route]['delete']
                 self.assertNotIn('requestBody', op)
-                self.assertEqual(op['security'], [{'cookieSession': []}, {'NativeBearer': []}]
-                                 if route == '/me/sessions/{sessionId}' else [{'cookieSession': []}])
-                for name in ['Origin', 'X-CSRF-Token']:
-                    self.assertTrue(next(p for p in op['parameters'] if p.get('name') == name)['required'])
+                self.assertEqual(
+                    op['security'],
+                    [{'cookieSession': []}, {'NativeBearer': []}]
+                    if route in ('/me/sessions/{sessionId}', '/me/avatar')
+                    else [{'cookieSession': []}],
+                )
+                if route == '/me/avatar':
+                    self._assert_cookie_or_bearer_csrf_origin(op['parameters'])
+                else:
+                    for name in ['Origin', 'X-CSRF-Token']:
+                        self.assertTrue(next(p for p in op['parameters'] if p.get('name') == name)['required'])
                 for change in ['missing', 'optional']:
                     with self.subTest(key=change):
                         self.document = copy.deepcopy(self.contract)
@@ -279,7 +295,7 @@ class FoundationExceptionsTest(unittest.TestCase):
                 op = self.document['paths']['/me/avatar'][method]
                 self.assertIn({'$ref': '#/components/parameters/IdempotencyKey'}, op['parameters'])
                 self.assertTrue(next(p for p in op['parameters'] if p.get('name') == 'X-Profile-Version')['required'])
-                self.assertTrue(next(p for p in op['parameters'] if p.get('name') == 'X-CSRF-Token')['required'])
+                self._assert_cookie_or_bearer_csrf_origin(op['parameters'])
                 if method == 'put':
                     self.assertTrue(op['requestBody']['required'])
                     self.assertIn('image/png', op['requestBody']['content'])
@@ -287,6 +303,16 @@ class FoundationExceptionsTest(unittest.TestCase):
                     self.assertNotIn('requestBody', op)
                 op['parameters'] = [p for p in op['parameters'] if p.get('$ref') != '#/components/parameters/IdempotencyKey']
                 self.assert_idempotency('/me/avatar', method.upper())
+
+    def test_avatar_rejects_anonymous_and_and_combined_security(self):
+        for method in ('put', 'delete'):
+            with self.subTest(method=method):
+                op = self.contract['paths']['/me/avatar'][method]
+                self.assertEqual(op['security'], [{'cookieSession': []}, {'NativeBearer': []}])
+                self.assertNotIn({}, op['security'])
+                self.assertFalse(any(len(choice) > 1 for choice in op['security']))
+                description = op.get('description') or ''
+                self.assertIn('Cookie mutations still require an allowed Origin and X-CSRF-Token', description)
 
     def test_bodyless_deletes_keep_idempotency_and_csrf(self):
         for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}', '/me/avatar']:

@@ -11,14 +11,14 @@ export class AvatarController {
   @Put("me/avatar")
   @Header("Cache-Control", "no-store")
   async replace(@Req() request: FastifyRequest) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     return this.avatars.mutate(actor, key, request.headers["x-profile-version"], { body: request.body, mime: request.headers["content-type"] ?? "" });
   }
   @Delete("me/avatar")
   @Header("Cache-Control", "no-store")
   async remove(@Req() request: FastifyRequest) {
-    const actor = await this.auth.requireCookieMutation(request);
+    const actor = await this.auth.requirePrincipalMutation(request);
     const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
     return this.avatars.mutate(actor, key, request.headers["x-profile-version"]);
   }

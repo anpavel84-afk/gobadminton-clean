@@ -1,3 +1,15 @@
+## #522 P-02 — Own profile avatar change/remove (source only)
+
+Implements change/remove of the own avatar inside the existing native profile editor (web `AvatarEditor` composition authority). Manifest pins only: `expo-image-picker@58.0.10`, `expo-image-manipulator@58.0.16`, `expo-file-system@58.0.13`. **Do not treat this source as ready for native-module tests/build** until the trusted parent generates a genuine lock/deps child (isolated store, ignore-scripts, unrelated importers frozen). Author did not install/fetch/hand-edit `pnpm-lock.yaml`, run package scripts/network, or upgrade Expo/RN/React.
+
+Android `versionCode` source counter **14** (no 14→15); verified picker plugin `photosPermission/cameraPermission/microphonePermission: false`; existing `blockedPermissions` preserved. Closed raw-binary native port PUT/DELETE `/me/avatar`; AvatarController uses `requirePrincipalMutation`; OpenAPI NativeBearer on those two operations only (API **0.44.0**, schema inventory **72**, wholeNative **74** + selected **32** inherited). Behavior/parity rows are **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE**, not VERIFIED_SOURCE.
+
+ADDRESS1 (Root-review prep): AuthContext projects `avatar` coordinator; UNKNOWN Retry reachable via `!busy` while `blocksEdits` fences replacement/text; oriented crop uses EXIF-normalized size (device/Glide gap preserved); derivative oversize stays inside compression ladder; local deadline retires ownership and cleans late app-owned outputs; authoritative GET rebase preserves dirty draft fields; live runtime uses `typeof import` SDK types; plain Russian transparency guidance; API unit mock uses `requirePrincipalMutation`.
+
+Bounded blockers retained honestly: iOS picker silent PNG fallback (original-container/animation/size parity unproved); native white-flatten unproven (transparent sources fail closed); Android Glide EXIF auto-apply UNKNOWN from loader package alone (no guessed double rotate). No preview waiver, device, iOS, OTA, build, sign, PR, deploy, publication or DB run by author.
+
+---
+
 ## #522 R3 — My Games / postgame core (source only)
 
 This source slice adds the native My Games hub and `/my-games/[gameId]/results` using the existing shell, GameCard and visual tokens. Management, participation, own results and reminders remain independent sources; rows preserve their relation/context facts, buckets, selected filter and loaded own-result pages. Invitations are omitted from this bounded core; no invented invitation data or empty-coverage claim.

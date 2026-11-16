@@ -367,7 +367,8 @@ test('UNKNOWN publish still reconciles original packet after invalid profile ref
 test('explicit native profile save then read-only return refresh unblocks creation without create/publish or search-city replacement', async () => {
   let dto: OwnProfile = { publicPlayerId:null,version:0,displayName:'',cityId:null,areaKey:null,level:null,bio:null,
     directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,
-    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null };
+    radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:false,trainer:false,lookingForGame:null,
+    avatar:{uploadedUrl:null,providerUrl:null} };
   let saves = 0;
   const s = setup({profile:async () => parseCreatorProfile(dto)});
   await s.owner.loadContext('city-1'); assert.equal(s.owner.getSnapshot().context,'setup');

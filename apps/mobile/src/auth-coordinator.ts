@@ -6,6 +6,7 @@ import { SafetyCoordinator } from './safety-coordinator.ts';
 import { SafetyError } from './safety.ts';
 import { ContactCoordinator } from './contact-coordinator.ts';
 import { ProfileCoordinator, ProfileError } from './profile.ts';
+import { ProfileAvatarCoordinator } from './profile-avatar.ts';
 import { GameManagementCoordinator } from './game-management.ts';
 import { MessagesCoordinator } from './messages-coordinator.ts';
 import { MessagesError } from './messages.ts';
@@ -47,6 +48,7 @@ export class AuthCoordinator {
   readonly messages: MessagesCoordinator;
   readonly gameManagement: GameManagementCoordinator;
   readonly profile: ProfileCoordinator;
+  readonly avatar: ProfileAvatarCoordinator;
   readonly contact: ContactCoordinator;
   readonly safety: SafetyCoordinator;
   readonly postgame: PostgameCoordinator;
@@ -71,11 +73,20 @@ export class AuthCoordinator {
         }, actor);
       },
     }, deps.random);
+    this.avatar = new ProfileAvatarCoordinator({
+      mutate: (packet, authority) => this.participationRead(access => deps.api.mutateOwnAvatar(access, packet), authority),
+      reconcile: authority => this.participationRead(access => deps.api.ownProfile(access), authority),
+    }, deps.random, {
+      isTextBusy: () => !!this.profile.getSnapshot().command,
+      currentProfile: () => this.profile.getSnapshot().profile,
+      applyReceipt: receipt => this.profile.applyAvatarReceipt(receipt),
+      rebaseProfile: fresh => this.profile.rebaseFromAuthoritative(fresh),
+    });
     this.profile = new ProfileCoordinator({
       read: () => this.participationRead(access => deps.api.ownProfile(access)),
       cities: () => publicApi.cities(),
       send: (packet, authority) => this.participationRead(access => deps.api.saveOwnProfile(access, packet), authority),
-    }, deps.random);
+    }, deps.random, () => this.avatar.blocksEdits());
     this.messages = new MessagesCoordinator({
       inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
       counts: () => this.participationRead(access => deps.api.inboxCounts(access)),
@@ -192,7 +203,10 @@ export class AuthCoordinator {
       this.participation.setActor(null);
     }
     const actor = this.participation.getSnapshot().actor;
-    if (this.snapshot.status !== 'hydrating') { this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor); this.contact.setActor(actor); }
+    if (this.snapshot.status !== 'hydrating') {
+      this.messages.setActor(actor); this.gameManagement.setActor(actor); this.profile.setActor(actor);
+      this.avatar.setActor(actor); this.contact.setActor(actor);
+    }
     this.safety.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     this.postgame.setActor(this.snapshot.status === 'authenticated' ? actor : null);
     if (this.snapshot.status === 'authenticated' && actor) {
@@ -429,6 +443,7 @@ export class AuthCoordinator {
     const envelope = this.empty(); this.envelope = envelope;
     if (forgetCreation) this.gameManagement.forgetCreation();
     if (forgetCreation) this.profile.forget();
+    if (forgetCreation) this.avatar.forget();
     if (forgetCreation) this.contact.forget();
     if (forgetCreation) this.safety.forget();
     if (forgetCreation) this.postgame.forget();
