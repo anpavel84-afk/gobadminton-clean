@@ -77,7 +77,7 @@ Status labels: **VERIFIED_SOURCE** (inspected code/docs), **GAP** (confirmed mis
 | Expected | Approved uploadedUrl or initials only (`providerUrl:null`); on-device 512 derivative ≤512KiB; text draft preserved across photo ops; duplicate taps one dispatch; ambiguous write reconciles via GET `/me/social-profile` |
 | Accessibility | Labelled photo controls; busy status while saving |
 | Evidence | Scenario P2; mobile unit `profile-avatar.test.ts`; API `native-avatar.foundation.test.ts` (DB harness) |
-| Status | **SOURCE_IMPLEMENTATION_PENDING_ACTUAL_LOCK_OWNING_QA_BINARY_DEVICE** — packages pinned in manifest only; genuine lock/native modules/binary/device remain Root/QA; iOS original-container fallback and native white-flatten are bounded blockers, not parity claims |
+| Status | **SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE** — ADDRESS1 source repair against Astra/Root findings; genuine lock/native modules/binary/device remain Root/QA; iOS original-container fallback and native white-flatten are bounded blockers, not parity claims; not VERIFIED_SOURCE |
 
 ## Explicit non-claims
 

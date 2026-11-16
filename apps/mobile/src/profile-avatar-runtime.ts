@@ -1,5 +1,6 @@
 import {
   AVATAR_DERIVATIVE_MAX_BYTES,
+  AVATAR_DERIVATIVE_OVERSIZE,
   AVATAR_PREPROCESS_MS,
   AVATAR_SIZE,
   AVATAR_SOURCE_MAX_BYTES,
@@ -7,6 +8,7 @@ import {
   assertDerivativeReady,
   assertOpaqueAvatarSource,
   avatarDeadline,
+  avatarOrientedSize,
   inspectAvatarSource,
   type AvatarDerivative,
   type AvatarMetadata,
@@ -45,13 +47,15 @@ export type AvatarRuntimeDeps = {
   launchLibrary: (options: typeof AVATAR_PICKER_OPTIONS) => Promise<AvatarPickerResult>;
   openReadOnly: (uri: string) => AvatarFileHandle;
   deleteTracked: (uri: string) => Promise<void> | void;
+  /** True only for closed verified SDK/app-cache provenance — never arbitrary user/provider URIs. */
+  isOwnedCacheUri: (uri: string) => boolean;
   /**
-   * Center-crop + resize using inspected source dimensions (no guessed EXIF rotate).
-   * Platform orientation is verified on the output bytes, not assumed from package inspection.
+   * Center-crop + resize using orientation-normalized visible dimensions (one native orientation pass).
+   * Android Glide auto-EXIF remains DEVICE UNKNOWN — no guessed double rotate.
    */
   centerSquare512: (
     inputUri: string,
-    meta: Pick<AvatarMetadata, 'width' | 'height'>,
+    meta: Pick<AvatarMetadata, 'width' | 'height' | 'orientation'>,
     maxEdge: number,
   ) => Promise<{ uri: string; width: number; height: number }>;
   saveDerivative: (
@@ -66,12 +70,19 @@ export async function readBoundedAvatarBytes(
   openReadOnly: AvatarRuntimeDeps['openReadOnly'],
   uri: string,
   limit = AVATAR_SOURCE_MAX_BYTES,
+  oversizeMessage?: string,
 ): Promise<Uint8Array> {
   const handle = openReadOnly(uri);
   try {
     const bytes = await handle.readBytes(limit + 1);
     if (bytes.byteLength > limit) {
-      throw new AvatarSourceError('Фото должно быть не больше 10 МБ. Выберите фото меньшего размера.');
+      throw new AvatarSourceError(
+        oversizeMessage ??
+          (limit <= AVATAR_DERIVATIVE_MAX_BYTES
+            ? AVATAR_DERIVATIVE_OVERSIZE
+            : 'Фото должно быть не больше 10 МБ. Выберите фото меньшего размера.'),
+        'OVERSIZE',
+      );
     }
     if (!bytes.byteLength) {
       throw new AvatarSourceError('Фото повреждено или не удалось прочитать его размеры. Выберите другое фото.');
@@ -116,8 +127,8 @@ export function avatarDownsampleCrop(
 /**
  * Android quality:1 copies selected original bytes to cache, but OS/provider import may precede validation.
  * iOS may silently fall back to decoded/reencoded PNG — original-container parity is unproved.
- * No guessed Android EXIF double-rotate; output container/dimensions/orientation are inspected.
- * Transparent sources fail closed: native white-flatten is unproven without extent/backgroundColor.
+ * Crop uses orientation-normalized visible size after one native orientation fix; no guessed Android double-rotate.
+ * Transparent sources fail closed: native white-flatten is unproven.
  */
 export async function prepareOwnAvatarDerivative(
   deps: AvatarRuntimeDeps,
@@ -125,9 +136,14 @@ export async function prepareOwnAvatarDerivative(
   retired: () => boolean,
 ): Promise<AvatarDerivative> {
   const tracked: string[] = [];
+  let localRetired = false;
+  const effectivelyRetired = () => retired() || localRetired;
   const track = (uri: string) => {
-    if (uri && uri !== asset.uri) tracked.push(uri);
+    if (!uri) return;
+    if (uri === asset.uri && !deps.isOwnedCacheUri(uri)) return;
+    if (!tracked.includes(uri)) tracked.push(uri);
   };
+  if (deps.isOwnedCacheUri(asset.uri)) track(asset.uri);
   const cleanup = async () => {
     for (const uri of tracked.splice(0)) {
       try {
@@ -140,37 +156,54 @@ export async function prepareOwnAvatarDerivative(
   try {
     const work = (async () => {
       const sourceBytes = await readBoundedAvatarBytes(deps.openReadOnly, asset.uri);
-      if (retired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+      if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
       const meta = inspectAvatarSource(sourceBytes, asset.mimeType ?? '');
       assertOpaqueAvatarSource(meta);
-      const maxEdge = Math.min(2048, Math.max(meta.width, meta.height));
+      const oriented = avatarOrientedSize(meta);
+      const maxEdge = Math.min(2048, Math.max(oriented.width, oriented.height));
       const rendered = await deps.centerSquare512(asset.uri, meta, maxEdge);
       track(rendered.uri);
-      if (retired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+      if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
       if (rendered.width !== AVATAR_SIZE || rendered.height !== AVATAR_SIZE) {
         throw new AvatarSourceError('Не удалось подготовить квадрат 512×512. Выберите другое фото.');
       }
       const qualities = [0.9, 0.8, 0.65, 0.5, 0.35];
       for (const format of ['webp', 'jpeg'] as const) {
         for (const compress of qualities) {
-          if (retired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+          if (effectivelyRetired()) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
           const saved = await deps.saveDerivative(rendered.uri, format, compress);
           track(saved.uri);
-          const out = await readBoundedAvatarBytes(deps.openReadOnly, saved.uri, AVATAR_DERIVATIVE_MAX_BYTES);
+          let out: Uint8Array;
+          try {
+            out = await readBoundedAvatarBytes(
+              deps.openReadOnly,
+              saved.uri,
+              AVATAR_DERIVATIVE_MAX_BYTES,
+              AVATAR_DERIVATIVE_OVERSIZE,
+            );
+          } catch (error) {
+            if (error instanceof AvatarSourceError && error.code === 'OVERSIZE') continue;
+            throw error;
+          }
           try {
             return assertDerivativeReady(out, `image/${format}`);
           } catch (error) {
+            if (error instanceof AvatarSourceError && error.code === 'DERIVATIVE_OVERSIZE') continue;
             if (error instanceof AvatarSourceError && error.message.includes('уменьшить')) continue;
             if (error instanceof AvatarSourceError && error.code === 'WHITE_FLATTEN_UNPROVEN') throw error;
             continue;
           }
         }
       }
-      throw new AvatarSourceError('Не удалось уменьшить фото. Выберите другое фото и попробуйте ещё раз.');
+      throw new AvatarSourceError(AVATAR_DERIVATIVE_OVERSIZE, 'DERIVATIVE_OVERSIZE');
     })();
     return await avatarDeadline(
       work,
       AVATAR_PREPROCESS_MS,
+      () => {
+        localRetired = true;
+        void cleanup();
+      },
       () => {
         void cleanup();
       },
@@ -183,60 +216,64 @@ export async function prepareOwnAvatarDerivative(
   }
 }
 
-/** Live Expo 58 adapter. Structural types only; packages are pinned and locked by trusted parent. */
+/** Closed file:// prefix check against verified SDK cache root(s). Never matches content:// or arbitrary paths. */
+export function isClosedSdkAppCacheUri(uri: string, cacheRoots: readonly string[]): boolean {
+  if (!uri.startsWith('file:')) return false;
+  const normalize = (value: string) => value.replace(/\/+$/, '');
+  const target = normalize(uri);
+  for (const root of cacheRoots) {
+    if (!root.startsWith('file:')) continue;
+    const base = normalize(root);
+    if (target === base || target.startsWith(`${base}/`)) return true;
+  }
+  return false;
+}
+
+type ExpoImagePickerModule = typeof import('expo-image-picker');
+type ExpoImageManipulatorModule = typeof import('expo-image-manipulator');
+type ExpoFileSystemModule = typeof import('expo-file-system');
+
+/** Live Expo 58 adapter — genuine SDK module types for lazy require; injectable test port stays separate. */
 export function createExpoAvatarRuntime(): AvatarRuntimeDeps {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const picker = require('expo-image-picker') as {
-    launchImageLibraryAsync: (options: Record<string, unknown>) => Promise<AvatarPickerResult>;
-    UIImagePickerPreferredAssetRepresentationMode?: { Current: string };
-  };
+  const picker = require('expo-image-picker') as ExpoImagePickerModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const manipulator = require('expo-image-manipulator') as {
-    ImageManipulator: {
-      manipulate: (uri: string, options?: { maxWidth?: number; maxHeight?: number }) => {
-        crop: (rect: { originX: number; originY: number; width: number; height: number }) => {
-          resize: (size: { width: number; height: number }) => {
-            renderAsync: () => Promise<{
-              width: number;
-              height: number;
-              saveAsync: (o: { format: string; compress: number }) => Promise<{ uri: string }>;
-            }>;
-          };
-        };
-        renderAsync: () => Promise<{
-          width: number;
-          height: number;
-          saveAsync: (o: { format: string; compress: number }) => Promise<{ uri: string }>;
-        }>;
-      };
-    };
-    SaveFormat: { JPEG: string; WEBP: string };
-  };
+  const manipulator = require('expo-image-manipulator') as ExpoImageManipulatorModule;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const fs = require('expo-file-system') as {
-    File: new (uri: string) => {
-      open: (mode: unknown) => AvatarFileHandle;
-      delete: () => void | Promise<void>;
-    };
-    FileMode: { ReadOnly: unknown };
-  };
-  const preferred = picker.UIImagePickerPreferredAssetRepresentationMode?.Current ?? 'current';
+  const fs = require('expo-file-system') as ExpoFileSystemModule;
+  const preferred =
+    picker.UIImagePickerPreferredAssetRepresentationMode?.Current ??
+    ('current' as const);
+  const cacheRoots: string[] = [];
+  try {
+    const cacheUri = fs.Paths.cache.uri;
+    if (typeof cacheUri === 'string' && cacheUri.startsWith('file:')) cacheRoots.push(cacheUri);
+  } catch {
+    /* Paths.cache unavailable in non-native hosts — ownership stays closed (no deletes). */
+  }
   return {
     launchLibrary: options =>
       picker.launchImageLibraryAsync({
         ...options,
         preferredAssetRepresentationMode: preferred,
       }),
-    openReadOnly: uri => new fs.File(uri).open(fs.FileMode.ReadOnly),
+    openReadOnly: uri => {
+      const file = new fs.File(uri);
+      return file.open(fs.FileMode.ReadOnly);
+    },
     deleteTracked: async uri => {
+      // Ownership is decided at track() time (picker cache only when verified; derivatives always).
+      if (!uri.startsWith('file:')) return;
       try {
         await new fs.File(uri).delete();
       } catch {
         /* Never delete caller/user source URIs outside tracked app cache. */
       }
     },
+    isOwnedCacheUri: uri => isClosedSdkAppCacheUri(uri, cacheRoots),
     centerSquare512: async (inputUri, meta, maxEdge) => {
-      const crop = avatarDownsampleCrop(meta, maxEdge);
+      const oriented = avatarOrientedSize(meta);
+      const crop = avatarDownsampleCrop(oriented, maxEdge);
       const image = await manipulator.ImageManipulator.manipulate(inputUri, {
         maxWidth: crop.decodeMax,
         maxHeight: crop.decodeMax,

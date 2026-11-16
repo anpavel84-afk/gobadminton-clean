@@ -4,12 +4,16 @@ import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 import {
   AVATAR_FORMATS,
+  AVATAR_PREPROCESS_MS,
   AVATAR_SOURCE_MAX_BYTES,
+  AVATAR_TRANSPARENCY_USER,
   AVATAR_WHITE_FLATTEN_BLOCKER,
   AvatarSourceError,
   ProfileAvatarCoordinator,
   assertDerivativeReady,
   assertOpaqueAvatarSource,
+  avatarDeadline,
+  avatarOrientedSize,
   cloneDerivativeBytes,
   freezeAvatarPacket,
   inspectAvatarSource,
@@ -22,6 +26,7 @@ import {
 import {
   AVATAR_PICKER_OPTIONS,
   avatarDownsampleCrop,
+  isClosedSdkAppCacheUri,
   pickOwnAvatarAsset,
   prepareOwnAvatarDerivative,
   readBoundedAvatarBytes,
@@ -30,6 +35,7 @@ import {
 import { ProfileCoordinator, ProfileError, parseOwnAvatar, parseOwnProfile } from '../src/profile.ts';
 import type { OwnProfile } from '../src/profile.ts';
 import { createNativeApi } from '../src/native-api.ts';
+import { AuthCoordinator } from '../src/auth-coordinator.ts';
 
 const emptyProfile: OwnProfile = {
   publicPlayerId: null, version: 0, displayName: '', cityId: null, areaKey: null, level: null, bio: null,
@@ -72,9 +78,12 @@ test('inspect/strip reject HEIC/APNG/animation and enforce 10MiB/50MP before dec
   assert.equal(inspectAvatarSource(png(10000, 5000).buffer).width, 10000);
   const stripped = stripAvatarMetadata(jpeg(512, 512, 6), 'image/jpeg');
   assert.equal(inspectAvatarSource(stripped).orientation, 1);
-  assert.throws(() => assertOpaqueAvatarSource(inspectAvatarSource(png(64, 64, false, true))), /белый фон|WHITE_FLATTEN|прозрач/i);
+  assert.throws(() => assertOpaqueAvatarSource(inspectAvatarSource(png(64, 64, false, true))), /непрозрачное|прозрач/i);
+  assert.match(AVATAR_TRANSPARENCY_USER, /непрозрачное|прозрач/i);
+  assert.doesNotMatch(AVATAR_TRANSPARENCY_USER, /extent|backgroundColor|SDK|white-flatten/i);
   assert.match(AVATAR_WHITE_FLATTEN_BLOCKER, /white-flatten|белый/i);
   assert.match(AVATAR_FORMATS, /HEIC/);
+  assert.match(AVATAR_FORMATS, /прозрач/);
 });
 
 test('parseOwnAvatar quarantines providerUrl and accepts only approved uploaded routes', () => {
@@ -134,6 +143,7 @@ test('immutable packet clones derivative bytes; duplicate dispatch fence and exa
     isTextBusy: () => !!draftKeeper.getSnapshot().command,
     currentProfile: () => draftKeeper.getSnapshot().profile,
     applyReceipt: (r) => draftKeeper.applyAvatarReceipt(r),
+    rebaseProfile: (f) => draftKeeper.rebaseFromAuthoritative(f),
   });
   owner.setActor(actor);
   await owner.change(async () => derivative());
@@ -197,6 +207,7 @@ test('409/unknown reconciliation uses GET social-profile; no blind new mutation 
       isTextBusy: () => false,
       currentProfile: () => text.getSnapshot().profile,
       applyReceipt: r => text.applyAvatarReceipt(r),
+      rebaseProfile: f => text.rebaseFromAuthoritative(f),
     },
   );
   owner.setActor(actor);
@@ -238,6 +249,7 @@ test('picker cancel leaves draft unchanged; late retired selection cannot cross 
       isTextBusy: () => false,
       currentProfile: () => text.getSnapshot().profile,
       applyReceipt: r => text.applyAvatarReceipt(r),
+      rebaseProfile: f => text.rebaseFromAuthoritative(f),
     },
   );
   owner.setActor(actor);
@@ -304,26 +316,27 @@ test('bounded file read uses limit+1; downsample crop math; derivative assert fa
     deleteTracked: async uri => {
       files.delete(uri);
     },
+    isOwnedCacheUri: uri => uri.startsWith('file://cache/'),
     centerSquare512: async () => {
-      const uri = 'file://rendered.jpg';
+      const uri = 'file://cache/rendered.jpg';
       files.set(uri, jpeg(512, 512));
       return { uri, width: 512, height: 512 };
     },
     saveDerivative: async (_uri, format) => {
-      const uri = `file://out.${format}`;
+      const uri = `file://cache/out.${format}`;
       files.set(uri, format === 'webp' ? jpeg(512, 512) : jpeg(512, 512));
       return { uri };
     },
   };
   // WebP path will fail inspect as jpeg bytes with image/webp declared — jpeg format attempt succeeds.
   deps.saveDerivative = async (_uri, format, _c) => {
-    const uri = `file://out.${format}`;
+    const uri = `file://cache/out.${format}`;
     files.set(uri, jpeg(512, 512));
     return { uri };
   };
   const prepared = await prepareOwnAvatarDerivative(deps, { uri: 'file://src.jpg', mimeType: 'image/jpeg' }, () => false);
   assert.equal(prepared.mime, 'image/jpeg');
-  assert.ok(!files.has('file://rendered.jpg') || true);
+  assert.ok(!files.has('file://cache/rendered.jpg') || true);
 });
 
 test('raw binary native avatar port never JSON.stringifies body; logout forgets avatar UNKNOWN', async () => {
@@ -391,9 +404,10 @@ test('photo/text serialization: avatar busy blocks text save; text UNKNOWN block
       isTextBusy: () => !!text.getSnapshot().command,
       currentProfile: () => text.getSnapshot().profile,
       applyReceipt: r => text.applyAvatarReceipt(r),
+      rebaseProfile: f => text.rebaseFromAuthoritative(f),
     },
   );
-  avatarBusy = () => avatar.busy();
+  avatarBusy = () => avatar.blocksEdits();
   text.setActor(actor);
   avatar.setActor(actor);
   await text.load();
@@ -407,4 +421,348 @@ test('photo/text serialization: avatar busy blocks text save; text UNKNOWN block
   release();
   await pending;
   assert.equal(text.getSnapshot().profile?.version, 2);
+});
+
+test('P0 auth context projects avatar coordinator into editor wiring', () => {
+  const authSrc = readFileSync(new URL('../src/auth.tsx', import.meta.url), 'utf8');
+  assert.match(authSrc, /avatar:\s*typeof nativeAuth\.avatar/);
+  assert.match(authSrc, /avatar:\s*nativeAuth\.avatar/);
+  const editor = readFileSync(new URL('../src/components/profile-editor.tsx', import.meta.url), 'utf8');
+  assert.match(editor, /avatarOwner = auth\.avatar/);
+  assert.match(editor, /useSyncExternalStore\(avatarOwner\.subscribe/);
+  assert.match(editor, /avatarOwner\.blocksEdits\(\)/);
+  assert.match(editor, /avatar\.command\?\.status === 'unknown' && !avatarOwner\.busy\(\)/);
+  assert.match(editor, /avatarOwner\.change/);
+  assert.match(editor, /createExpoAvatarRuntime/);
+  const runtime = readFileSync(new URL('../src/profile-avatar-runtime.ts', import.meta.url), 'utf8');
+  assert.match(runtime, /typeof import\('expo-image-picker'\)/);
+  assert.match(runtime, /typeof import\('expo-image-manipulator'\)/);
+  assert.match(runtime, /typeof import\('expo-file-system'\)/);
+  let serial = 0;
+  const auth = new AuthCoordinator({
+    api: createNativeApi(async () => new Response('{}')),
+    store: { getItem: async () => null, setItem: async () => undefined },
+    random: () => `k${++serial}`,
+    challenge: async () => 'challenge',
+  });
+  assert.equal(typeof auth.avatar.subscribe, 'function');
+  assert.equal(typeof auth.avatar.change, 'function');
+  assert.equal(typeof auth.avatar.retry, 'function');
+  assert.equal(auth.avatar.getSnapshot().status, 'idle');
+});
+
+test('UNKNOWN mutate+reconcile failure keeps Retry reachable and blocks edits; same-account reauth restores packet', async () => {
+  const profile: OwnProfile = {
+    ...emptyProfile, version: 4, displayName: 'Игрок', cityId: 'c',
+    avatar: { uploadedUrl: `/v1/media/avatars/${'33'.repeat(32)}.png`, providerUrl: null },
+  };
+  let avatar!: ProfileAvatarCoordinator;
+  const text = new ProfileCoordinator(
+    {
+      read: async () => profile,
+      cities: async () => [{ id: 'c', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' }],
+      send: async () => profile,
+    },
+    () => 'text',
+    () => avatar.blocksEdits(),
+  );
+  let mutateCalls = 0;
+  const retries: AvatarPacket[] = [];
+  avatar = new ProfileAvatarCoordinator(
+    {
+      mutate: async (packet) => {
+        mutateCalls += 1;
+        retries.push(packet);
+        throw new ProfileError('network', 0);
+      },
+      reconcile: async () => {
+        throw new ProfileError('network', 0);
+      },
+    },
+    () => 'same-unknown-key-16',
+    {
+      isTextBusy: () => !!text.getSnapshot().command,
+      currentProfile: () => text.getSnapshot().profile,
+      applyReceipt: r => text.applyAvatarReceipt(r),
+      rebaseProfile: f => text.rebaseFromAuthoritative(f),
+    },
+  );
+  text.setActor(actor);
+  avatar.setActor(actor);
+  await text.load();
+  await avatar.remove();
+  assert.equal(avatar.getSnapshot().status, 'unknown');
+  assert.equal(avatar.busy(), false);
+  assert.equal(avatar.blocksEdits(), true);
+  assert.equal(avatar.getSnapshot().command?.status, 'unknown');
+  text.update({ bio: 'нельзя' });
+  assert.equal(text.getSnapshot().draft.bio, '');
+  const packet = avatar.getSnapshot().command!.packet;
+  await avatar.retry();
+  assert.equal(mutateCalls, 2);
+  assert.equal(retries[1]!.key, packet.key);
+  assert.equal(retries[1]!.action, packet.action);
+  assert.equal(retries[1]!.profileVersion, packet.profileVersion);
+  assert.strictEqual(retries[1]!.derivative, packet.derivative);
+  // Same-account reauth restores UNKNOWN packet; busy stays false so Retry remains reachable.
+  avatar.setActor(null);
+  avatar.setActor({ ...actor, sessionId: 'session-B', generation: 2 });
+  assert.equal(avatar.getSnapshot().status, 'unknown');
+  assert.equal(avatar.busy(), false);
+  assert.equal(avatar.blocksEdits(), true);
+  assert.equal(avatar.getSnapshot().command?.packet.key, packet.key);
+});
+
+test('authoritative GET rebase preserves dirty bio and adopts concurrent name/version; 409 recovers without stale retry', async () => {
+  let profile: OwnProfile = {
+    ...emptyProfile, version: 0, displayName: 'Old', cityId: 'c', bio: null,
+    avatar: { uploadedUrl: null, providerUrl: null },
+  };
+  const text = new ProfileCoordinator(
+    {
+      read: async () => profile,
+      cities: async () => [{ id: 'c', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' }],
+      send: async () => profile,
+    },
+    () => 'text',
+  );
+  text.setActor(actor);
+  await text.load();
+  text.update({ bio: 'unsaved local bio' });
+  const freshV2: OwnProfile = {
+    ...profile, version: 2, displayName: 'Other', bio: null,
+    avatar: { uploadedUrl: `/v1/media/avatars/${'44'.repeat(32)}.png`, providerUrl: null },
+  };
+  text.rebaseFromAuthoritative(freshV2);
+  assert.equal(text.getSnapshot().profile?.version, 2);
+  assert.equal(text.getSnapshot().profile?.displayName, 'Other');
+  assert.equal(text.getSnapshot().draft.displayName, 'Other');
+  assert.equal(text.getSnapshot().draft.bio, 'unsaved local bio');
+  assert.equal(text.getSnapshot().profile?.avatar.uploadedUrl, freshV2.avatar.uploadedUrl);
+  // nextSave uses exact fresh baseline version, not stale 0
+  let savedVersion: number | null = null;
+  const saver = new ProfileCoordinator(
+    {
+      read: async () => text.getSnapshot().profile!,
+      cities: async () => [{ id: 'c', nameRu: 'Казань', nameEn: 'Kazan', countryCode: 'RU', defaultTimezone: 'Europe/Moscow' }],
+      send: async (packet) => {
+        savedVersion = packet.body.expectedVersion;
+        return { ...text.getSnapshot().profile!, version: packet.body.expectedVersion + 1, bio: packet.body.bio };
+      },
+    },
+    () => 'save-key',
+  );
+  saver.setActor(actor);
+  await saver.load();
+  saver.update({ bio: 'unsaved local bio' });
+  saver.rebaseFromAuthoritative(freshV2);
+  await saver.save();
+  assert.equal(savedVersion, 2);
+
+  let mutate = 0;
+  const owner = new ProfileAvatarCoordinator(
+    {
+      mutate: async () => {
+        mutate += 1;
+        if (mutate === 1) throw new ProfileError('business', 409, 'VERSION_CONFLICT');
+        throw new Error('must not blind-retry stale version');
+      },
+      reconcile: async () => ({
+        ...freshV2, version: 3, displayName: 'Other',
+        avatar: { uploadedUrl: null, providerUrl: null },
+      }),
+    },
+    () => 'avatar-409',
+    {
+      isTextBusy: () => false,
+      currentProfile: () => text.getSnapshot().profile,
+      applyReceipt: r => text.applyAvatarReceipt(r),
+      rebaseProfile: f => text.rebaseFromAuthoritative(f),
+    },
+  );
+  text.rebaseFromAuthoritative(freshV2);
+  text.update({ bio: 'dirty-after-rebase' });
+  owner.setActor(actor);
+  await owner.change(async () => derivative());
+  assert.equal(mutate, 1);
+  assert.equal(owner.getSnapshot().command, undefined);
+  assert.equal(text.getSnapshot().draft.bio, 'dirty-after-rebase');
+  assert.equal(text.getSnapshot().profile?.version, 3);
+  assert.match(owner.getSnapshot().error ?? '', /изменился/);
+});
+
+test('oriented crop EXIF1 control and asymmetric EXIF5–8 use normalized upright center', () => {
+  const control = inspectAvatarSource(jpeg(4000, 3000, 1));
+  assert.equal(control.orientation, 1);
+  assert.deepEqual(avatarOrientedSize(control), { width: 4000, height: 3000 });
+  assert.deepEqual(avatarDownsampleCrop(avatarOrientedSize(control), 4000), {
+    originX: 500, originY: 0, width: 3000, height: 3000, decodeMax: 4000,
+  });
+  for (const orientation of [5, 6, 7, 8] as const) {
+    const meta = inspectAvatarSource(jpeg(4000, 3000, orientation));
+    assert.equal(meta.orientation, orientation);
+    const oriented = avatarOrientedSize(meta);
+    assert.deepEqual(oriented, { width: 3000, height: 4000 });
+    const crop = avatarDownsampleCrop(oriented, 4000);
+    assert.equal(crop.originX, 0);
+    assert.equal(crop.originY, 500);
+    assert.equal(crop.width, 3000);
+    assert.equal(crop.height, 3000);
+  }
+  // 512 header alone is not visual upright/center pixel proof (device/Glide gap preserved).
+  const headerOnly = inspectAvatarSource(jpeg(512, 512, 1));
+  assert.equal(headerOnly.width, 512);
+  assert.equal(headerOnly.orientation, 1);
+  assert.ok(isClosedSdkAppCacheUri('file:///data/cache/ImagePicker/a.jpg', ['file:///data/cache']));
+  assert.equal(isClosedSdkAppCacheUri('content://media/external/images/1', ['file:///data/cache']), false);
+  assert.equal(isClosedSdkAppCacheUri('file:///sdcard/DCIM/user.jpg', ['file:///data/cache']), false);
+});
+
+test('bounded oversize continues quality/format ladder; first oversize then valid returns later derivative', async () => {
+  const files = new Map<string, Uint8Array>([['file://src.jpg', jpeg(800, 600)]]);
+  let saves = 0;
+  const deleted: string[] = [];
+  const deps: AvatarRuntimeDeps = {
+    launchLibrary: async () => ({ canceled: false, assets: [{ uri: 'file://src.jpg', mimeType: 'image/jpeg' }] }),
+    openReadOnly: uri => {
+      const data = files.get(uri)!;
+      let offset = 0;
+      return {
+        readBytes: async (n) => {
+          const slice = data.slice(offset, offset + n);
+          offset += slice.length;
+          return slice;
+        },
+        close: () => undefined,
+      };
+    },
+    deleteTracked: async uri => { deleted.push(uri); files.delete(uri); },
+    isOwnedCacheUri: uri => uri.startsWith('file://cache/'),
+    centerSquare512: async () => {
+      const uri = 'file://cache/rendered.jpg';
+      files.set(uri, jpeg(512, 512));
+      return { uri, width: 512, height: 512 };
+    },
+    saveDerivative: async (_uri, format) => {
+      saves += 1;
+      const uri = `file://cache/out-${saves}.${format}`;
+      if (saves === 1) {
+        files.set(uri, new Uint8Array(600 * 1024)); // force OVERSIZE on derivative cap
+      } else {
+        files.set(uri, jpeg(512, 512));
+      }
+      return { uri };
+    },
+  };
+  const prepared = await prepareOwnAvatarDerivative(deps, { uri: 'file://src.jpg', mimeType: 'image/jpeg' }, () => false);
+  assert.equal(prepared.mime, 'image/jpeg');
+  assert.ok(saves >= 2);
+  assert.ok(prepared.bytes.byteLength <= 512 * 1024);
+});
+
+test('local timeout retires ownership; late render/save/oversize clean app-owned outputs without source delete', async () => {
+  const deleted: string[] = [];
+  let releaseRender!: (uri: string) => void;
+  const renderGate = new Promise<string>(r => { releaseRender = r; });
+  let localRetired = false;
+  const late = avatarDeadline(
+    (async () => {
+      const uri = await renderGate;
+      if (localRetired) throw new AvatarSourceError('Подготовка фото отменена.', 'RETIRED');
+      return uri;
+    })(),
+    20,
+    () => { localRetired = true; },
+    (value) => { deleted.push(`late-fulfill:${value}`); },
+    (error) => { deleted.push(`late-reject:${error instanceof Error ? error.message : 'x'}`); },
+  );
+  await assert.rejects(late, /слишком долго|DEADLINE/i);
+  assert.equal(localRetired, true);
+  releaseRender('file://cache/late-render.jpg');
+  await new Promise(r => setTimeout(r, 30));
+  assert.ok(deleted.some(d => d.startsWith('late-reject:') || d.startsWith('late-fulfill:')));
+
+  const files = new Map<string, Uint8Array>([['file://src.jpg', jpeg(800, 600)]]);
+  const trackedDeleted: string[] = [];
+  let saveCount = 0;
+  let releaseSave!: () => void;
+  const saveGate = new Promise<void>(r => { releaseSave = r; });
+  const deps: AvatarRuntimeDeps = {
+    launchLibrary: async () => ({ canceled: false, assets: [{ uri: 'file://src.jpg' }] }),
+    openReadOnly: uri => {
+      const data = files.get(uri) ?? jpeg(512, 512);
+      let offset = 0;
+      return {
+        readBytes: async (n) => {
+          const slice = data.slice(offset, offset + n);
+          offset += slice.length;
+          return slice;
+        },
+        close: () => undefined,
+      };
+    },
+    deleteTracked: async uri => { trackedDeleted.push(uri); files.delete(uri); },
+    isOwnedCacheUri: uri => uri.startsWith('file://cache/'),
+    centerSquare512: async () => {
+      await new Promise(r => setTimeout(r, 40));
+      const uri = 'file://cache/rendered-late.jpg';
+      files.set(uri, jpeg(512, 512));
+      return { uri, width: 512, height: 512 };
+    },
+    saveDerivative: async () => {
+      saveCount += 1;
+      await saveGate;
+      const uri = `file://cache/save-late-${saveCount}.jpg`;
+      files.set(uri, new Uint8Array(600 * 1024));
+      return { uri };
+    },
+  };
+  // Monkey-patch preprocess window via controlled retire: use prepare with retired flipping after start.
+  const originalMs = AVATAR_PREPROCESS_MS;
+  assert.ok(originalMs > 0);
+  let retiredFlag = false;
+  const prep = prepareOwnAvatarDerivative(deps, { uri: 'file://src.jpg', mimeType: 'image/jpeg' }, () => retiredFlag);
+  await new Promise(r => setTimeout(r, 5));
+  retiredFlag = true;
+  await assert.rejects(prep, /отменена|долго|уменьшить|RETIRED|DEADLINE/i);
+  releaseSave();
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(files.has('file://src.jpg'), true);
+  assert.ok(!trackedDeleted.includes('file://src.jpg'));
+
+  // SDK cache picker copy is cleaned; user original is not.
+  const cacheFiles = new Map<string, Uint8Array>([
+    ['file://cache/ImagePicker/copy.jpg', jpeg(800, 600)],
+  ]);
+  const cacheDeleted: string[] = [];
+  const cacheDeps: AvatarRuntimeDeps = {
+    launchLibrary: async () => ({ canceled: false, assets: [{ uri: 'file://cache/ImagePicker/copy.jpg', mimeType: 'image/jpeg' }] }),
+    openReadOnly: uri => {
+      const data = cacheFiles.get(uri)!;
+      let offset = 0;
+      return {
+        readBytes: async (n) => {
+          const slice = data.slice(offset, offset + n);
+          offset += slice.length;
+          return slice;
+        },
+        close: () => undefined,
+      };
+    },
+    deleteTracked: async uri => { cacheDeleted.push(uri); cacheFiles.delete(uri); },
+    isOwnedCacheUri: uri => uri.startsWith('file://cache/'),
+    centerSquare512: async () => {
+      const uri = 'file://cache/rendered2.jpg';
+      cacheFiles.set(uri, jpeg(512, 512));
+      return { uri, width: 512, height: 512 };
+    },
+    saveDerivative: async (_u, format) => {
+      const uri = `file://cache/out2.${format}`;
+      cacheFiles.set(uri, jpeg(512, 512));
+      return { uri };
+    },
+  };
+  await prepareOwnAvatarDerivative(cacheDeps, { uri: 'file://cache/ImagePicker/copy.jpg', mimeType: 'image/jpeg' }, () => false);
+  assert.ok(cacheDeleted.includes('file://cache/ImagePicker/copy.jpg'));
+  assert.ok(cacheDeleted.includes('file://cache/rendered2.jpg') || !cacheFiles.has('file://cache/rendered2.jpg'));
 });

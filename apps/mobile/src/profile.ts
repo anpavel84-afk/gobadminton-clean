@@ -304,6 +304,41 @@ export class ProfileCoordinator {
       status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
     });
   };
+  /**
+   * Full authoritative GET rebase: adopt fresh baseline/pristine fields and version/avatar,
+   * while preserving each locally dirty name/city/level/area/bio draft field.
+   * Older historical receipts cannot dominate the current version authority.
+   */
+  rebaseFromAuthoritative = (fresh: OwnProfile) => {
+    const profile = this.state.profile;
+    if (!profile || this.state.command) return;
+    if (fresh.version < profile.version) return;
+    const draft = this.state.draft;
+    const baseline = form(profile);
+    const next = form(fresh);
+    const sameChoice = (a: LevelGuideChoice, b: LevelGuideChoice) => {
+      if (a.kind !== b.kind) return false;
+      if (a.kind === 'none' && b.kind === 'none') return true;
+      if (a.kind === 'ntrp' && b.kind === 'ntrp') return a.levelId === b.levelId;
+      if (a.kind === 'pilot' && b.kind === 'pilot') return a.levelId === b.levelId;
+      if (a.kind === 'keep' && b.kind === 'keep') return sameFullLevelIdentity(a.level, b.level);
+      return false;
+    };
+    this.show({
+      profile: {
+        ...fresh,
+        avatar: { uploadedUrl: fresh.avatar.uploadedUrl, providerUrl: null },
+      },
+      draft: createProfileDraft(
+        draft.displayName === baseline.displayName ? next.displayName : draft.displayName,
+        draft.cityId === baseline.cityId ? next.cityId : draft.cityId,
+        draft.areaKey === baseline.areaKey ? next.areaKey : draft.areaKey,
+        draft.bio === baseline.bio ? next.bio : draft.bio,
+        sameChoice(draft.levelChoice, baseline.levelChoice) ? next.levelChoice : draft.levelChoice,
+      ),
+      status: this.state.status === 'idle' ? 'idle' : this.state.status === 'error' ? 'error' : this.state.status === 'stale' ? 'stale' : this.state.status === 'loading' ? 'loading' : 'ready',
+    });
+  };
   load = async () => {
     const actor = this.state.actor;
     if (!actor || this.state.command || this.state.status === 'loading' || this.isPeerBusy()) return;

@@ -80,12 +80,13 @@ export class AuthCoordinator {
       isTextBusy: () => !!this.profile.getSnapshot().command,
       currentProfile: () => this.profile.getSnapshot().profile,
       applyReceipt: receipt => this.profile.applyAvatarReceipt(receipt),
+      rebaseProfile: fresh => this.profile.rebaseFromAuthoritative(fresh),
     });
     this.profile = new ProfileCoordinator({
       read: () => this.participationRead(access => deps.api.ownProfile(access)),
       cities: () => publicApi.cities(),
       send: (packet, authority) => this.participationRead(access => deps.api.saveOwnProfile(access, packet), authority),
-    }, deps.random, () => this.avatar.busy());
+    }, deps.random, () => this.avatar.blocksEdits());
     this.messages = new MessagesCoordinator({
       inbox: (filter,cursor) => this.participationRead(access => deps.api.inbox(access,filter,cursor)),
       counts: () => this.participationRead(access => deps.api.inboxCounts(access)),

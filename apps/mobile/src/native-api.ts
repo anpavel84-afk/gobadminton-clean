@@ -227,6 +227,13 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
         const replace = packet.action === 'replace';
         if (replace && (!packet.derivative || !packet.derivative.bytes.byteLength)) throw new ProfileError('invalid');
         if (!replace && packet.derivative) throw new ProfileError('invalid');
+        // Owned ArrayBuffer-backed bytes for fetch BodyInit; packet wire copy stays immutable for retry.
+        let body: Uint8Array<ArrayBuffer> | undefined;
+        if (replace) {
+          const src = packet.derivative!.bytes;
+          body = new Uint8Array(src.byteLength);
+          body.set(src);
+        }
         const response = await fetcher(`${NATIVE_ORIGIN}/v1/me/avatar`, {
           method: replace ? 'PUT' : 'DELETE',
           credentials: 'omit',
@@ -239,7 +246,7 @@ export function createNativeApi(fetcher: typeof fetch = fetch) {
             'X-Profile-Version': String(packet.profileVersion),
             ...(replace ? { 'Content-Type': packet.derivative!.mime } : {}),
           },
-          ...(replace ? { body: packet.derivative!.bytes } : {}),
+          ...(body ? { body } : {}),
         });
         if (!response.ok) {
           let code = 'UNKNOWN';

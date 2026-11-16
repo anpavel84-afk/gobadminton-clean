@@ -11,11 +11,17 @@ export const AVATAR_PREPROCESS_MS = 12_000;
 export const AVATAR_NETWORK_MS = 20_000;
 export const AVATAR_SIZE = 512;
 export const AVATAR_FORMATS =
-  'Выберите JPEG, PNG или WebP без анимации. Если фото в HEIC/HEIF, сохраните его как JPEG.';
+  'Выберите JPEG, PNG или WebP без анимации и без прозрачности. Если фото в HEIC/HEIF, сохраните его как JPEG.';
+/** Internal evidence bookkeeping — never shown as ordinary user guidance. */
 export const AVATAR_WHITE_FLATTEN_BLOCKER =
   'Прозрачные изображения пока нельзя подготовить на устройстве: белый фон (web white-flatten) не доказан native crop/JPEG без extent/backgroundColor. Выберите непрозрачное JPEG/PNG/WebP.';
+/** Plain Russian user-facing copy for unsupported transparency. */
+export const AVATAR_TRANSPARENCY_USER =
+  'Сейчас можно выбрать только непрозрачное фото JPEG, PNG или WebP. Прозрачные изображения пока не поддерживаются.';
 export const AVATAR_IOS_ORIGINAL_UNPROVED =
   'iOS picker может молча перекодировать исходник в PNG без индикатора; original-container/animation/size parity не доказаны для каждой выборки.';
+export const AVATAR_DERIVATIVE_OVERSIZE =
+  'Не удалось уменьшить фото до допустимого размера. Выберите другое фото и попробуйте ещё раз.';
 
 export class AvatarSourceError extends Error {
   readonly code: string;
@@ -56,8 +62,6 @@ export type AvatarSnapshot = {
   error: string | null;
   blockers: string[];
 };
-
-const emptyAvatar = (): OwnAvatar => ({ uploadedUrl: null, providerUrl: null });
 
 export function cloneDerivativeBytes(bytes: Uint8Array): Uint8Array {
   const copy = new Uint8Array(bytes.byteLength);
@@ -246,7 +250,7 @@ export function stripAvatarMetadata(bytes: ArrayBuffer | Uint8Array, mime: strin
 }
 
 export function assertOpaqueAvatarSource(meta: AvatarMetadata): void {
-  if (meta.hasAlpha) throw new AvatarSourceError(AVATAR_WHITE_FLATTEN_BLOCKER, 'WHITE_FLATTEN_UNPROVEN');
+  if (meta.hasAlpha) throw new AvatarSourceError(AVATAR_TRANSPARENCY_USER, 'WHITE_FLATTEN_UNPROVEN');
 }
 
 export function assertDerivativeReady(bytes: Uint8Array, mime: string): AvatarDerivative {
@@ -254,10 +258,10 @@ export function assertDerivativeReady(bytes: Uint8Array, mime: string): AvatarDe
   if (meta.width !== AVATAR_SIZE || meta.height !== AVATAR_SIZE || meta.orientation !== 1) {
     throw new AvatarSourceError('Не удалось подготовить квадрат 512×512 без EXIF-ориентации. Выберите другое фото.');
   }
-  if (meta.hasAlpha) throw new AvatarSourceError(AVATAR_WHITE_FLATTEN_BLOCKER, 'WHITE_FLATTEN_UNPROVEN');
+  if (meta.hasAlpha) throw new AvatarSourceError(AVATAR_TRANSPARENCY_USER, 'WHITE_FLATTEN_UNPROVEN');
   const stripped = stripAvatarMetadata(bytes, meta.mime);
   if (stripped.byteLength > AVATAR_DERIVATIVE_MAX_BYTES) {
-    throw new AvatarSourceError('Не удалось уменьшить фото. Выберите другое фото и попробуйте ещё раз.');
+    throw new AvatarSourceError(AVATAR_DERIVATIVE_OVERSIZE, 'DERIVATIVE_OVERSIZE');
   }
   const verified = inspectAvatarSource(stripped, meta.mime);
   if (verified.width !== AVATAR_SIZE || verified.height !== AVATAR_SIZE || verified.orientation !== 1) {
@@ -274,6 +278,7 @@ export function avatarDeadline<T>(
   ms: number,
   retire: () => void,
   releaseLate?: (value: T) => void,
+  releaseLateRejection?: (error: unknown) => void,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -294,7 +299,10 @@ export function avatarDeadline<T>(
         resolve(value);
       },
       error => {
-        if (settled) return;
+        if (settled) {
+          releaseLateRejection?.(error);
+          return;
+        }
         settled = true;
         clearTimeout(timer);
         reject(error);
@@ -303,10 +311,20 @@ export function avatarDeadline<T>(
   });
 }
 
+/** Visible pixel size after one native orientation normalize (EXIF 5–8 swap axes). No guessed extra rotate. */
+export function avatarOrientedSize(
+  meta: Pick<AvatarMetadata, 'width' | 'height' | 'orientation'>,
+): { width: number; height: number } {
+  const swap = meta.orientation >= 5 && meta.orientation <= 8;
+  return swap ? { width: meta.height, height: meta.width } : { width: meta.width, height: meta.height };
+}
+
 type AvatarGate = {
   isTextBusy: () => boolean;
   currentProfile: () => OwnProfile | null;
   applyReceipt: (receipt: AvatarReceipt) => void;
+  /** Full authoritative GET rebase; preserves each dirty local draft field. */
+  rebaseProfile: (fresh: OwnProfile) => void;
 };
 
 const initial = (): AvatarSnapshot => ({
@@ -342,7 +360,14 @@ export class ProfileAvatarCoordinator {
   private current(actor: Actor) {
     return sameActor(actor, this.state.actor);
   }
-  busy = () => !!this.state.command || this.state.status === 'picking' || this.state.status === 'processing';
+  /** Active prepare/send only — UNKNOWN must stay !busy so explicit Retry is reachable. */
+  busy = () =>
+    this.state.status === 'picking' ||
+    this.state.status === 'processing' ||
+    this.state.command?.status === 'sending';
+  /** Blocks replacement and peer text writes while UNKNOWN or in-flight; Retry remains reachable via !busy. */
+  blocksEdits = () =>
+    this.busy() || this.state.status === 'unknown' || this.state.command?.status === 'unknown';
   setActor(actor: Actor | null) {
     if (sameActor(actor, this.state.actor) || (!actor && !this.state.actor)) return;
     if (this.state.command) this.quarantined = this.state.command.packet;
@@ -390,7 +415,7 @@ export class ProfileAvatarCoordinator {
   ) {
     const actor = this.state.actor;
     const profile = this.gate.currentProfile();
-    if (!actor || !profile || this.busy() || this.gate.isTextBusy()) return;
+    if (!actor || !profile || this.blocksEdits() || this.gate.isTextBusy()) return;
     if (action === 'remove' && !profile.avatar.uploadedUrl) return;
     const serial = ++this.serial;
     const retired = () => serial !== this.serial || !this.current(actor);
@@ -407,10 +432,7 @@ export class ProfileAvatarCoordinator {
         const fresh = await this.port.reconcile(actor);
         if (retired()) return;
         this.uncertain = false;
-        this.gate.applyReceipt({
-          version: fresh.version,
-          avatar: fresh.avatar ?? emptyAvatar(),
-        });
+        this.gate.rebaseProfile(fresh);
       }
       const prepared = await prepare(retired);
       if (retired()) return;
@@ -464,12 +486,26 @@ export class ProfileAvatarCoordinator {
       if (!valid()) return;
       if (error instanceof ProfileError && error.kind === 'business' && error.status === 409) {
         this.uncertain = false;
-        this.show({
-          command: undefined,
-          status: 'idle',
-          error: 'Профиль изменился. Обновите данные перед повтором.',
-          notice: null,
-        });
+        try {
+          const fresh = await this.port.reconcile(authority);
+          if (!valid()) return;
+          this.gate.rebaseProfile(fresh);
+          this.show({
+            command: undefined,
+            status: 'idle',
+            error:
+              'Профиль изменился на другом устройстве. Локальный черновик сохранён — проверьте поля перед новым фото.',
+            notice: null,
+          });
+        } catch {
+          if (!valid()) return;
+          this.show({
+            command: undefined,
+            status: 'idle',
+            error: 'Профиль изменился. Обновите данные перед повтором.',
+            notice: null,
+          });
+        }
         return;
       }
       if (
@@ -484,7 +520,7 @@ export class ProfileAvatarCoordinator {
           status: 'idle',
           error:
             error.status === 422 || error.status === 415
-              ? 'Фото не удалось прочитать. Выберите JPEG, PNG или WebP без анимации.'
+              ? 'Фото не удалось прочитать. Выберите JPEG, PNG или WebP без анимации и без прозрачности.'
               : 'Не удалось подтвердить сохранение фото. Проверьте соединение и попробуйте ещё раз.',
           notice: null,
         });
@@ -495,7 +531,7 @@ export class ProfileAvatarCoordinator {
         const fresh = await this.port.reconcile(authority);
         if (!valid()) return;
         this.uncertain = false;
-        this.gate.applyReceipt({ version: fresh.version, avatar: fresh.avatar ?? emptyAvatar() });
+        this.gate.rebaseProfile(fresh);
         this.show({
           command: undefined,
           status: 'idle',

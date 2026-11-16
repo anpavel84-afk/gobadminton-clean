@@ -133,7 +133,7 @@
       "action": "Change photo via OS library; cancel picker; delete uploaded; duplicate taps; rotate/invalid/animated input; lose response; retry/reconcile; logout mid-flight",
       "expect": "Uploaded or initials only; draft text preserved; one dispatch; ambiguous outcome reconciles via GET social-profile; no blind stale mutation; iOS original-container and white-flatten remain honest blockers where unproved",
       "expected_state": "profile.avatar.editor",
-      "status": "SOURCE_IMPLEMENTATION_PENDING_ACTUAL_LOCK_OWNING_QA_BINARY_DEVICE",
+      "status": "SOURCE_PENDING_FRESH_OWNING_QA_BINARY_DEVICE",
       "artifact": "step log / future device capture after code14 binary"
     }
   ],

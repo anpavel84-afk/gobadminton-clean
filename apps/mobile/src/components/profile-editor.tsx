@@ -24,7 +24,7 @@ export function ProfileEditor() {
   useEffect(() => {
     if (auth.status === 'authenticated' && owner.getSnapshot().status === 'idle') void owner.load();
   }, [owner, auth.status, actor?.actorId, actor?.sessionId, actor?.generation]);
-  const locked = !!state.command || state.status !== 'ready' || avatarOwner.busy();
+  const locked = !!state.command || state.status !== 'ready' || avatarOwner.blocksEdits();
   const selected = state.cities.find(c => c.id === state.draft.cityId);
   const preserved = state.profile?.level ?? null;
   const showPreserved = shouldOfferPreservedLevel(preserved);
@@ -59,7 +59,7 @@ export function ProfileEditor() {
               : <Label style={{ fontSize: 32, lineHeight: 42 }}>{playerInitials(displayName || 'Игрок')}</Label>}
           </View>
           <Label style={styles.subtitle}>Фото профиля</Label>
-          <Label>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации. Фото обрезается до квадрата на устройстве и доступно по ссылке. HEIC/HEIF сохраните как JPEG.</Label>
+          <Label>JPEG, PNG или WebP · до 10 МБ и 50 Мп, без анимации и без прозрачности. Фото обрезается до квадрата на устройстве и доступно по ссылке. HEIC/HEIF сохраните как JPEG.</Label>
           {!locked && <TextButton title="Изменить фото" onPress={() => {
             Keyboard.dismiss();
             const runtime = createExpoAvatarRuntime();
@@ -71,6 +71,7 @@ export function ProfileEditor() {
           }} />}
           {!locked && !!uploaded && <TextButton title="Удалить фото" onPress={() => { Keyboard.dismiss(); void avatarOwner.remove(); }} />}
           {avatarOwner.busy() && <Label accessibilityLiveRegion="polite" accessibilityState={{ busy: true }}>Сохраняем фото…</Label>}
+          {avatar.status === 'unknown' && !avatarOwner.busy() && <Label accessibilityLiveRegion="polite">Результат фото неизвестен — сохранение не продолжается автоматически.</Label>}
           {avatar.notice && <Label accessibilityLiveRegion="polite">{avatar.notice}</Label>}
           {avatar.error && <>
             <Label accessibilityRole="alert">{avatar.error}</Label>

@@ -49,7 +49,7 @@ describe("avatar command boundary", () => {
   const actor = { userId: "actor", sessionId: "session" };
   for (const method of ["replace", "remove"] as const) {
     for (const key of [undefined, "", "x".repeat(15), "x".repeat(129)]) it(`${method} rejects key length ${key?.length ?? "missing"} before service effects`, async () => {
-      const auth = { requireCookieMutation: vi.fn().mockResolvedValue(actor) };
+      const auth = { requirePrincipalMutation: vi.fn().mockResolvedValue(actor) };
       const avatars = { mutate: vi.fn() };
       const controller = new AvatarController(auth as unknown as ConsumerAuthService, avatars as unknown as AvatarService, new IdempotencyService({} as Pool, env));
       const request = { headers: { "idempotency-key": key, "x-profile-version": "7" } } as unknown as FastifyRequest;
@@ -57,7 +57,7 @@ describe("avatar command boundary", () => {
       expect(avatars.mutate).not.toHaveBeenCalled();
     });
     for (const length of [16, 128]) it(`${method} passes a valid ${length} character key and version to the service`, async () => {
-      const auth = { requireCookieMutation: vi.fn().mockResolvedValue(actor) };
+      const auth = { requirePrincipalMutation: vi.fn().mockResolvedValue(actor) };
       const result = { version: 8, avatar: { uploadedUrl: null, providerUrl: null } };
       const avatars = { mutate: vi.fn().mockResolvedValue(result) };
       const controller = new AvatarController(auth as unknown as ConsumerAuthService, avatars as unknown as AvatarService, new IdempotencyService({} as Pool, env));
