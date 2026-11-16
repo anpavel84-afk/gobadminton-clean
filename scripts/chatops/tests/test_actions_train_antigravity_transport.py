@@ -1,5 +1,5 @@
 """One-turn complete native stdin; only offline synthetic subprocesses, never AGY."""
-import copy,hashlib,json,os,shutil,subprocess,sys,tempfile,unittest
+import copy,hashlib,json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import Mock,patch
 from test_actions_train_antigravity import N,rows,wire,SHA
@@ -45,26 +45,58 @@ class Transport(unittest.TestCase):
   self.assertEqual(process.returncode,0,stderr);self.assertEqual(process._input_offset,len(payload))
   self.assertEqual(json.loads(stdout),dict(bytes=meta['stdin_bytes'],sha=meta['stdin_sha256'],messages=1))
  def test_actual_draft_baseline_closure_and_truthful_fixture_diff_fit_whole_stdin(self):
-  # #230 has no author candidate. This comment-only diff exercises existing baseline
-  # content and exact inert task draft, without claiming future candidate coverage.
+  # #230 has no author candidate. Use its exact inert draft with an explicitly
+  # synthetic, closed venue-contact baseline, never the growing repository tree.
   draft=json.loads((FIXTURES/'agy-230-inert-task-draft.json').read_text())
   with tempfile.TemporaryDirectory() as temp:
    work=Path(temp)
-   tracked=subprocess.check_output(['git','ls-files','apps/web'],cwd=ROOT,text=True).splitlines()
-   for name in tracked:
-    source=ROOT/name
-    if source.is_file():
-     target=work/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
+   types,page,contacts,test=draft['allowed_paths']
+   sources={
+    types:'export type Game = { contactPhone?: string; contactWebsite?: string; bookingNote?: string };\n'
+          +'/* Bounded offline venue-contact context: '+('漢字 🎾 "quoted" \\ context\n'*6000)+'*/\n',
+    page:"import type { Game } from '../../../lib/consumer-types';\n"
+         +"import { GameVenueContacts } from '../games/GameVenueContacts';\n"
+         +'export const GameDetailPage = (game: Game) => GameVenueContacts(game);\n',
+    contacts:"import type { Game } from '../../../lib/consumer-types';\n"
+             +'export const GameVenueContacts = (game: Game) => game.bookingNote ?? "";\n',
+    test:"import { GameDetailPage } from '../src/components/consumer/pages/GameDetailPage';\n",
+   }
+   for name,source in sources.items():
+    target=work/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source,encoding='utf-8')
    def git(*args):return subprocess.check_output(['git','-c','user.name=offline','-c','user.email=offline@example.invalid','-c','commit.gpgsign=false',*args],cwd=work).decode().strip()
    git('init','-q');git('add','.');git('commit','-qm','baseline source fixture');base=git('rev-parse','HEAD')
    for name in draft['allowed_paths'][:2]:
     with (work/name).open('a') as f:f.write('\n// Offline transport fixture comment: 漢字 🎾\n')
    git('add','.');git('commit','-qm','comment-only fixture diff');head=git('rev-parse','HEAD')
-   with self.assertRaises(N.ReviewError) as caught:
-    N.collect(work,base,head,json.dumps(draft,ensure_ascii=False))
+   # Observe the real serialized closure at enforcement; do not replace its
+   # result or relax either cap. Escapes and unicode count as delivered bytes.
+   real_popen=subprocess.Popen
+   def git_only(argv,**kwargs):
+    self.assertEqual(argv[0],'git','offline fixture must not launch a provider')
+    return real_popen(argv,**kwargs)
+   with patch.object(N,'enforce_qa_input_limit',wraps=N.enforce_qa_input_limit) as enforce, \
+        patch.object(N,'invoke') as invoke,patch.object(N.subprocess,'Popen',side_effect=git_only):
+    with self.assertRaises(N.ReviewError) as caught:
+     N.collect(work,base,head,json.dumps(draft,ensure_ascii=False))
+    invoke.assert_not_called()
+   enforce.assert_called_once()
+   stage=enforce.call_args.args[0]
+   data=json.loads(stage.split('DATA_JSON:\n')[1])
+   self.assertEqual(data['missing_context'],[])
+   self.assertEqual(data['caller_task'],json.dumps(draft,ensure_ascii=False))
+   self.assertEqual(set(data['files']),{types,page,contacts})
+   for name,source in data['files'].items():
+    self.assertEqual(source,(work/name).read_text(encoding='utf-8'))
+   self.assertEqual(data['diff'],git('diff',base,head)+'\n')
+   self.assertLess(len(stage.encode('utf-8')),512<<10)
+   self.assertLess(len(stage.encode('utf-8')),N.MAX_INPUT)
+   self.assertGreater(len(stage.encode('utf-8'))+N.qa_rules_overhead(),N.QA_INPUT_LIMIT)
    self.assertEqual(caught.exception.code,'AGY_INPUT_LIMIT')
    self.assertIn('not truncated',caught.exception.detail)
    self.assertIn('before model call',caught.exception.detail)
+   self.assertIn('no charge',caught.exception.detail)
+   print('230 bounded serialized stage bytes:',len(stage.encode('utf-8')),
+         'with rules:',len(stage.encode('utf-8'))+N.qa_rules_overhead())
   # A closure under the final-stdin cap is still delivered whole, rules included.
   with tempfile.TemporaryDirectory() as temp:
    work=Path(temp)
