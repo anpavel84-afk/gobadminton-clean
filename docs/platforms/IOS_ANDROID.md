@@ -1,6 +1,33 @@
 # iOS и Android
 
-## #522: checkpoint подготовки alpha.96 · 2026-11-16
+## #522: metadata-preparation checkpoint alpha.97 · 2026-11-16
+
+Снимок предоставленных фактов на момент подготовки metadata, без сетевой проверки runtime.
+Приложение `0.1.0-alpha.97` описывает native оценку сообщества и текстовое обсуждение внутри
+раскрытых сведений о площадке. Можно поставить/отозвать обычную оценку и пожаловаться на неё;
+написать комментарий или ответ, пожаловаться, изменить/удалить свой корневой комментарий при
+актуальном разрешении сервера. В компактной карточке UGC не монтируется. Gallery, keyboard,
+gesture/focus, header и peer handling сохранены. Native photo authoring и verified postgame
+reviews не входят в этот ограниченный результат; полная parity остаётся обязательной.
+
+| Стадия | Факт на этом checkpoint / открытая граница |
+|---|---|
+| Принятый DEV / rollback | Alpha.96, `f51b6f1741e4b6aa01bb4b1edcd7a4e065871118`, `r43791783161-a1`, принято `2026-11-16T02:28:55Z`. History seed SHA256 `18b9731a17825036d95c2b8d07584a84cafd3d46c44296bcd77ea50340b3a0ae`, 11155 bytes: все десять полей сохранены, как и все предыдущие строки, два deployment alpha.93, alpha.94/95, URL, даты и digests |
+| Native source / metadata | `3e3e3e25d5067f1acc7b5b72fe43e43efd4042f6`, versionName `0.1.0`, target versionCode **12**. Summary SHA256 `598656a45d8562b2eedd46951cc03f830b135df07166675cc18c2a50524ec24a` (1177 bytes). Native source, будущий metadata M и future merge — разные SHA; M/merge не назначены. `prepared_source_sha` указывает на native source, `source_sha: null`; alpha.97 DEV ещё не подтверждён |
+| Custody / owning evidence | Manually recovered Cursor source; original custody **HOLD retained**. RS `001bf18e5eaa8dbe0f517bf01e7a47aa9156ca77ab5118cd86d5cbcf43c463fc`; current owning PASS `d392777245f60571b6ef58833e68f4df6d4fc6bb1b30b313b216d5c0e350fd66`. Static 366/mobile15/API и fresh DB4 PASS `57697f80f3ac9ad5b5bae062e5f1d3963335a9425a8c92897fc4efff59010030` — отдельные проверки, не independent QA/device acceptance |
+| Реальная QA-цепочка | FIRST cumulative25 **FAIL** `858c5983013b4491a6ba7421d6e27b4b36034115d6ad37e3f1099dbcc5194612` → focused **FAIL** `7724bf31e196fc4ae4c111bad389ac869eaded6bef9a831238698d7cedd923f2` → corrected focused VCUX5 **PASS** `211c0c4080aee667af258a447b1cd3214d68970c014065e55fd35f96c6ac9d3e`. Полный review и оба FAIL сохранены; FIRST whole PASS не заявляется |
+| Backend / schema | Принятый alpha.96: selected installed **22**, whole NativeBearer **64**. Source UGC добавляет **8**, target selected **30** / whole **72**; эти восемь не объявляются установленными до фактического alpha.97 DEV proof. API-контракт `0.44.0` и schema **72** без изменений; число bearer routes и schema inventory различаются |
+| Android code12 | Дополнение Root к metadata-preparation checkpoint: arm64 build **20384 PASS**, SHA256 build receipt `0e7cac849f3fc384cd3d17223c059977bc911d9988bc72ca5eef658b4e4f3e86`. Root сообщил owned phone APK: SHA256 `df0c755225e7a29ef4163df1ee9deb8c01994dd76666bea4a634467625dc5d44`, **44853769 bytes**. Эти supplied факты заменяют прежний null checkpoint только для arm64; отдельный owned-sign receipt здесь не предоставлен. x86_64 на исходном checkpoint был **RUNNING**; завершение, sign receipt и paired PASS не предоставлены. Candidate APK URLs: **null**; публикация и DEV alpha.97 этим не подтверждаются. Это датированный снимок, не постоянное утверждение об отсутствии подписи или публикации |
+| Публичный binary | APK11 уже опубликован по предоставленному заданию. Существующие historical APK11 URL/receipts неизменны; новые ссылки не выводятся из target12 и не выдумываются. Исторический checkpoint alpha.96 ниже отражает состояние до публикации APK11 |
+| Устройство / UAT | Новый binary **NOT_TESTED**; прежний Owner UAT **FAIL_RECHECK_PENDING** сохранён. Raw Samsung S23/alpha.85 FAIL и Xiaomi gesture/header FAIL, marker remarks и неподтверждённая причина two-gesture PlayerSwipe error остаются в истории до фактического retest. Source/static/DB/QA не доказывают physical acceptance |
+| Дальнейшие gates | Root: три release suites, types/lint/history → независимая metadata QA → обязательный Product CI → trusted merge dev → DEV ACCEPTED / STRICT target30/whole72 и read smoke → actual paired build/sign/publication receipts. Ранее принятые STRICT/smoke SHA256 `1c4558fae68e625af00da7190175631e13bf1e92ededdcade0fbd227cc22a40f` / `03c8c39edc8a020f7ea389d0133f2756239474bacba21cb3e19dc5503baed30e` относятся к alpha.96, не приёмке alpha.97 |
+
+Полный #522 и full native parity **MANDATORY_NOT_COMPLETE**. iOS, реальный signed OTA A→B,
+physical S23 и установленный authenticated journey остаются открытыми. PROD/stores не разрешены.
+Native/backend/auth/contracts/dependencies/versionCode здесь не меняются; mobile tree сохраняется
+byteexact к qualified source. Ниже сохранены исторические checkpoints со своими границами времени.
+
+## Исторический checkpoint подготовки alpha.96 · 2026-11-16 (сохранён)
 
 Это снимок предоставленных фактов на момент подготовки metadata, без сетевой проверки runtime.
 Текущий принятый сервер — DEV `0.1.0-alpha.95`, source/rollback
@@ -116,7 +143,7 @@ Disputes/history/help и остальные закрытые сценарии э
 
 Исторический APK7: https://files.anpavel.ru/projects/gobadminton/mobile/dev/alpha92-safety-8cb33c634cb0-7c0865de47af/GoBadminton-DEV-native-0.1.0-7-arm64.apk
 
-### Реализовано в текущем native source и обязательные ограничения
+### Исторический source inventory до alpha.97 и обязательные ограничения (сохранён)
 
 | Пользовательский сценарий | Исходная реализация сейчас | Ещё требуется |
 |---|---|---|
